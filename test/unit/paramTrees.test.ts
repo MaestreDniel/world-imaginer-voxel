@@ -48,7 +48,7 @@ describe('the two leaves (SP3d spec §1.2)', () => {
 
   test('the README rows: `<format> tree, <n> nodes`, no range; scope terrain', () => {
     const rows = renderReference(SCHEMA).split('\n');
-    expect(rows.find((r) => r.startsWith('| `density.defs` |'))).toMatch(/^\| `density\.defs` \| json \| density tree, 60 nodes \|  \|  \| terrain \| Density expression: /);
+    expect(rows.find((r) => r.startsWith('| `density.defs` |'))).toMatch(/^\| `density\.defs` \| json \| density tree, 66 nodes \|  \|  \| terrain \| Density expression: /);
     expect(rows.find((r) => r.startsWith('| `surface.rules` |'))).toMatch(/^\| `surface\.rules` \| json \| surfaceRules tree, 163 nodes \|  \|  \| terrain \| Surface rules: /);
   });
 
@@ -76,7 +76,7 @@ describe('validateParamTrees (spec §1.8, D3)', () => {
   test('density issues carry `density.defs.` and the node path', () => {
     const t = densityTree();
     t['root'].b.x = { op: 'bogus' };
-    t['defs'] = { lift: { op: 'ref', name: 'nowhere' } };
+    t['defs'] = { ...t['defs'], lift: { op: 'ref', name: 'nowhere' } };
     expect(brief(validateParamTrees(trees(t)))).toEqual(['density.defs.root.b.x UNKNOWN_OP', 'density.defs.defs.lift.name UNKNOWN_REF']);
   });
 
@@ -140,7 +140,7 @@ describe('the contexts read the leaves (spec §1.6)', () => {
     expect(Object.isFrozen(dc.expr.root)).toBe(true);
     // The muted terrain tap's child is the mute value (§1.5).
     const muted = createDensityContext(ctxFor('42', { density: { defs: terrainMuted(0) } } as ParamsPatch));
-    expect(muted.expr.root).toMatchObject({ a: { a: { op: 'tap', name: 'terrain', x: { op: 'const', v: 0 } } } });
+    expect(muted.expr.root).toMatchObject({ a: { a: { a: { x: { a: { op: 'tap', name: 'terrain', x: { op: 'const', v: 0 } } } } } } });
   });
 
   test('surface: resolveRules(params.surface.rules, params), refs read from the same params', () => {

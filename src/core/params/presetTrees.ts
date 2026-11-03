@@ -124,19 +124,20 @@ const lakeFade = (k: number, d = k): JsonValue => ({ op: 'add', a: num(k), b: { 
  * and 316): Z1's overhangs reach the master's 8 %. Where lakeMask is 0 each fade is `k + (−d)·0` = k bit for bit, so
  * the tree equals the plain factors there. The corner bound of §1.2 (lakeMask in [0, 1] up to a few ulps, so the
  * factors are at most 0.9 and 2.2: σ' ≤ 57.2; corners ≤ 15.9 at y 312 and ≤ −40.6 at 320) then leaves no solid voxel
- * at y ≥ 315. 80 nodes; the new subtrees read only `col` and `const`, so they stay in their column slot.
+ * at y ≥ 315. 86 nodes (80 before SP6a's root, §1.1); the new subtrees read only `col` and `const`, so they stay in
+ * their column slot. The six paths sit in `defs.body`, the terrain body the `terrain` tap interpolates (SP6a §1.1).
  */
 export const AMPLIFIED_DENSITY_TREE: JsonValue = deriveTree(DEFAULT_DENSITY_TREE, 'density.defs', 'density', [
   {
-    path: 'root.a.a.x.x.a.a.a.a.a',
+    path: 'defs.body.a.a.a.a.a',
     was: col('offset'),
     by: { op: 'add', a: col('offset'), b: { op: 'mul', a: lakeFade(0.9), b: { op: 'max', a: num(0), b: { op: 'add', a: col('offset'), b: num(-64) } } } },
   },
-  { path: 'root.a.a.x.x.a.a.a.a.b.a', was: col('jag'), by: { op: 'mul', a: col('jag'), b: num(1.6) } },
-  { path: 'root.a.a.x.x.a.a.b.a', was: col('sigma'), by: { op: 'mul', a: col('sigma'), b: lakeFade(2.2, 1.2) } },
-  { path: 'root.a.a.x.x.a.a.b.b.knots', was: [[-64, 0], [-40, 1], [240, 1], [320, 0]], by: [[-64, 0], [-40, 1], [300, 1], [314, 0]] },
-  { path: 'root.a.a.x.x.b.x.a.v', was: 2, by: 3 },
-  { path: 'root.a.a.x.x.b.x.b.b.b.v', was: -296, by: -270 },
+  { path: 'defs.body.a.a.a.a.b.a', was: col('jag'), by: { op: 'mul', a: col('jag'), b: num(1.6) } },
+  { path: 'defs.body.a.a.b.a', was: col('sigma'), by: { op: 'mul', a: col('sigma'), b: lakeFade(2.2, 1.2) } },
+  { path: 'defs.body.a.a.b.b.knots', was: [[-64, 0], [-40, 1], [240, 1], [320, 0]], by: [[-64, 0], [-40, 1], [300, 1], [314, 0]] },
+  { path: 'defs.body.b.x.a.v', was: 2, by: 3 },
+  { path: 'defs.body.b.x.b.b.b.v', was: -296, by: -270 },
 ]);
 
 const y = (): JsonValue => ({ op: 'y' });
@@ -170,8 +171,9 @@ const ISLANDS_TERM: JsonValue = {
 
 /**
  * floating_islands (SP3e spec §3.1): the default density tree with the islands tap's child `root.b.x` (const −1e6)
- * replaced by the islands term. The root stays `max(add(tap terrain, detail), tap islands)`; the tap stays outside
- * `interpolated`, so its child is a sibling of the terrain's `interpolated` and its mute writes −1e6. 87 nodes.
+ * replaced by the islands term. The root keeps the default's shape (SP6a §1.1: `max(min(min(tap precave(add(tap
+ * terrain, detail)), caves), noodle), tap islands)`); the tap stays outside `interpolated`, so its child is a sibling
+ * of the terrain's `interpolated` and its mute writes −1e6. 93 nodes (87 before SP6a's root).
  */
 export const FLOATING_DENSITY_TREE: JsonValue = deriveTree(DEFAULT_DENSITY_TREE, 'density.defs', 'density', [
   { path: 'root.b.x', was: num(-1000000), by: ISLANDS_TERM },

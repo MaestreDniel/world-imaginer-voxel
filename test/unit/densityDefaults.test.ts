@@ -27,7 +27,13 @@ function walk(e: Expr, visit: (e: Expr) => void): void {
     if (c !== undefined && typeof c === 'object') walk(c, visit);
   }
 }
-const ops = (e: DensityExpr): Expr[] => { const out: Expr[] = []; walk(e.root, (n) => out.push(n)); return out; };
+/** The root's nodes, then each def's (SP6a §1.1: the terrain body is `defs.body`). */
+const ops = (e: DensityExpr): Expr[] => {
+  const out: Expr[] = [];
+  walk(e.root, (n) => out.push(n));
+  for (const d of Object.values(e.defs)) walk(d, (n) => out.push(n));
+  return out;
+};
 const consts = (e: DensityExpr): number[] => ops(e).flatMap((n) => (n.op === 'const' ? [n.v] : []));
 
 /** The default expression for DEFAULTS ⊕ patch: the `density.defs` default resolved (SP3d spec §1.6, §2.1). */
@@ -37,7 +43,7 @@ describe('the default expression (SP3b spec §3.1; SP3d spec §2.1: the resolved
   test('it validates against the schema density noises', () => {
     const e = defaultExpr();
     expect(validateExpr(e, densityNoiseSource(CTX))).toEqual([]);
-    expect(Object.keys(e.defs)).toEqual([]);
+    expect(Object.keys(e.defs)).toEqual(['body']);
     const noiseIds = ops(e).flatMap((n) => (n.op === 'noise2' || n.op === 'noise' ? [`${n.op}:${n.id}`] : []));
     expect(noiseIds.sort()).toEqual(['noise2:jag', 'noise:detail', 'noise:overhang']);
     const slides = ops(e).flatMap((n) => (n.op === 'slide' ? [n.knots] : []));

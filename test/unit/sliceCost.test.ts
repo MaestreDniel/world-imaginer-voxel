@@ -26,13 +26,13 @@ describe('the slice work-bound constants (SP3d spec §5.2, core/constants.ts)', 
 
 describe('the T column work and the rule node count (SP3d spec §5.2, gen/inspect/cost.ts)', () => {
   test('the default trees: density column work at the configured noise weights, rules column cost, node count', () => {
-    // Voxel placement: 20 nodes + detail (1 octave, double: 8) = 28 units; under interpolated: 37 nodes + jag and
-    // overhang (2 octaves, double: 16 each) = 69 units.
-    expect(densityColumnCost(DEFAULT_DENSITY_TREE, DEFAULTS)).toBe(28 * 98304 + 69 * 1225);
-    expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBe(14_907_917);
+    // Voxel placement: 25 nodes (SP6a §1.1: SP5c's 20 plus the precave tap, two mins and two slots) + detail (1 octave,
+    // double: 8) = 33 units; under interpolated: 37 nodes + jag and overhang (2 octaves, double: 16 each) = 69 units.
+    expect(densityColumnCost(DEFAULT_DENSITY_TREE, DEFAULTS)).toBe(33 * 98304 + 69 * 1225);
+    expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBe(15_399_437);
     expect(ruleNodeCount(DEFAULT_SURFACE_RULES)).toBe(163);
     expect(rulesColumnCost(DEFAULT_SURFACE_RULES)).toBe(2_169_856);
-    expect(tColumnCost(DEFAULTS)).toBe(2_837_037 + 2_169_856);
+    expect(tColumnCost(DEFAULTS)).toBe(3_328_557 + 2_169_856);
   });
 
   test('every noise at its static maximum weight gives the static density column cost', () => {
@@ -47,43 +47,43 @@ describe('the T column work and the rule node count (SP3d spec §5.2, gen/inspec
   test('a muted terrain tap drops its subtree from the T column work, mutes applied', () => {
     const p = withTree(terrainMuted(0));
     // The interpolated node (voxel placement) becomes the mute's const; its 69 corner units go.
-    expect(densityColumnCost(p.density.defs, p)).toBe(28 * 98304);
-    expect(tColumnCost(p)).toBe(28 * 98304 + 2_169_856);
+    expect(densityColumnCost(p.density.defs, p)).toBe(33 * 98304);
+    expect(tColumnCost(p)).toBe(33 * 98304 + 2_169_856);
   });
 });
 
 describe('sliceCostOf (SP3d spec §5.2)', () => {
-  test('the defaults: vertical 128² ≈ 13.5 M and horizontal 128² ≈ 42.9 M units', () => {
-    expect(workCost(evaluatedExpression(DEFAULTS, 'density', ''), DEFAULTS)).toBe(569);
+  test('the defaults: vertical 128² ≈ 13.6 M and horizontal 128² ≈ 43.0 M units', () => {
+    expect(workCost(evaluatedExpression(DEFAULTS, 'density', ''), DEFAULTS)).toBe(574);
     const v = sliceCostOf(DEFAULTS, 'density', '', 'vertical', 128);
     const h = sliceCostOf(DEFAULTS, 'density', '', 'horizontal', 128);
-    expect(v).toBe(128 * 569 + COLUMN_SAMPLE_COST);
-    expect(h).toBe(128 * (569 + CORNER_SAMPLE_COST));
-    expect(128 * v).toBe(13_516_800);
-    expect(128 * h).toBe(42_876_928);
-    expect(sliceCostOf(DEFAULTS, 'density', '', 'vertical', 32)).toBe(32 * 569 + COLUMN_SAMPLE_COST);
+    expect(v).toBe(128 * 574 + COLUMN_SAMPLE_COST);
+    expect(h).toBe(128 * (574 + CORNER_SAMPLE_COST));
+    expect(128 * v).toBe(13_598_720);
+    expect(128 * h).toBe(42_958_848);
+    expect(sliceCostOf(DEFAULTS, 'density', '', 'vertical', 32)).toBe(32 * 574 + COLUMN_SAMPLE_COST);
     expect(sliceCostOf(DEFAULTS, 'node', 'root', 'vertical', 128)).toBe(v);
   });
 
   test('a node inside interpolated is costed wrapped (1 + 8 × its subtree); one outside is not', () => {
-    const inside = evaluatedExpression(DEFAULTS, 'node', 'root.a.a.x.x.a');
+    const inside = evaluatedExpression(DEFAULTS, 'node', 'defs.body.a');
     expect(inside.root.op).toBe('interpolated');
     const bare = { root: (inside.root as { x: unknown }).x, defs: inside.defs };
     const c = workCost(inside, DEFAULTS);
     expect(c).toBe(1 + 8 * workCost(bare, DEFAULTS));
-    expect(sliceCostOf(DEFAULTS, 'node', 'root.a.a.x.x.a', 'vertical', 128)).toBe(128 * c + COLUMN_SAMPLE_COST);
-    expect(sliceCostOf(DEFAULTS, 'node', 'root.a.a.x.x.a', 'horizontal', 32)).toBe(32 * (c + CORNER_SAMPLE_COST));
-    const tap = evaluatedExpression(DEFAULTS, 'node', 'root.a.a');
+    expect(sliceCostOf(DEFAULTS, 'node', 'defs.body.a', 'vertical', 128)).toBe(128 * c + COLUMN_SAMPLE_COST);
+    expect(sliceCostOf(DEFAULTS, 'node', 'defs.body.a', 'horizontal', 32)).toBe(32 * (c + CORNER_SAMPLE_COST));
+    const tap = evaluatedExpression(DEFAULTS, 'node', 'root.a.a.a.x.a');
     expect(tap.root.op).toBe('tap');
-    expect(workCost(tap, DEFAULTS)).toBe(1 + workCost({ root: (tap.root as { x: unknown }).x, defs: {} }, DEFAULTS));
+    expect(workCost(tap, DEFAULTS)).toBe(1 + workCost({ root: (tap.root as { x: unknown }).x, defs: tap.defs }, DEFAULTS));
     // The detail term (voxel placement): mul(noise detail, amplitude) = 1 + 8 + its amplitude's folded nodes.
-    expect(evaluatedExpression(DEFAULTS, 'node', 'root.a.b').root.op).toBe('mul');
+    expect(evaluatedExpression(DEFAULTS, 'node', 'root.a.a.a.x.b').root.op).toBe('mul');
   });
 
   test('horizontal: a node reading col steep through the evaluated expression pays CORNER_STEEP_COST per sample', () => {
     const p = withTree(steepTree());
     const c = workCost(evaluatedExpression(p, 'density', ''), p);
-    expect(c).toBe(569 + 2);
+    expect(c).toBe(574 + 2);
     expect(sliceCostOf(p, 'density', '', 'horizontal', 128)).toBe(128 * (c + CORNER_STEEP_COST));
     expect(sliceCostOf(p, 'node', 'root.b', 'horizontal', 128)).toBe(128 * (workCost(evaluatedExpression(p, 'node', 'root.b'), p) + CORNER_STEEP_COST));
     expect(sliceCostOf(p, 'node', 'root.a', 'horizontal', 128)).toBe(128 * (workCost(evaluatedExpression(p, 'node', 'root.a'), p) + CORNER_SAMPLE_COST));
@@ -93,12 +93,12 @@ describe('sliceCostOf (SP3d spec §5.2)', () => {
   test('a steep-reading horizontal 128² slice of a default-weight tree fits REQUEST_BUDGET, and its 32² draft DRAFT_BUDGET', () => {
     // The acquisition alone must leave room in every budget: n² × CORNER_STEEP_COST = REQUEST_BUDGET at n = 128 with
     // 2^13 (every steep-reading tree refused, "limit 0"); calibrated at 5 × 2^10 (64.5 µs measured, Task 19) it leaves
-    // 3,072 units per sample for a 128² slice (5.4 × the default's 569) and 11,264 for a draft.
+    // 3,072 units per sample for a 128² slice (5.4 × the default's 574) and 11,264 for a draft.
     const room = (n: number, budget: number, perSample: number) => Math.min(Math.floor(budget / (n * n)), Math.floor(PART_BUDGET / n)) - perSample;
     expect([room(128, REQUEST_BUDGET, CORNER_STEEP_COST), room(32, DRAFT_BUDGET, CORNER_STEEP_COST)]).toEqual([3072, 11_264]);
     expect([room(128, REQUEST_BUDGET, CORNER_SAMPLE_COST), room(32, DRAFT_BUDGET, CORNER_SAMPLE_COST)]).toEqual([6144, 14_336]);
     expect(CORNER_STEEP_COST).toBeGreaterThan(CORNER_SAMPLE_COST);
-    for (const n of [32, 128]) expect(room(n, n === 32 ? DRAFT_BUDGET : REQUEST_BUDGET, CORNER_STEEP_COST), `n ${n}`).toBeGreaterThanOrEqual(4 * 569);
+    for (const n of [32, 128]) expect(room(n, n === 32 ? DRAFT_BUDGET : REQUEST_BUDGET, CORNER_STEEP_COST), `n ${n}`).toBeGreaterThanOrEqual(4 * 574);
     const p = withTree(steepTree());
     for (const [field, path] of [['density', ''], ['node', 'root.b'], ['node', 'root.b.x']] as const) {
       const c = workCost(evaluatedExpression(p, field, path), p);
@@ -121,10 +121,10 @@ describe('sliceCostOf (SP3d spec §5.2)', () => {
 
   test('the costs follow the configured params: a muted tap and the noise octaves', () => {
     const muted = withTree(terrainMuted(0));
-    expect(sliceCostOf(muted, 'node', 'root.a.a.x', 'vertical', 128)).toBe(sliceCostOf(DEFAULTS, 'node', 'root.a.a.x', 'vertical', 128));
+    expect(sliceCostOf(muted, 'node', 'root.a.a.a.x.a.x', 'vertical', 128)).toBe(sliceCostOf(DEFAULTS, 'node', 'root.a.a.a.x.a.x', 'vertical', 128));
     expect(sliceCostOf(muted, 'density', '', 'vertical', 128)).toBeLessThan(sliceCostOf(DEFAULTS, 'density', '', 'vertical', 128));
     const octaves = paramsWith({ density: { noises: { detail: { octaves: 4 } } } } as never);
-    expect(workCost(evaluatedExpression(octaves, 'density', ''), octaves)).toBe(569 - 8 + 32);
+    expect(workCost(evaluatedExpression(octaves, 'density', ''), octaves)).toBe(574 - 8 + 32);
   });
 
   test('refusals: an n outside SLICE_NS, blocks or rule on a horizontal plane, a path naming no node', () => {

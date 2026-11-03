@@ -2,7 +2,9 @@ import { describe, expect, test } from 'vitest';
 import { hex64 } from '../../src/core/hash';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULTS } from '../../src/core/params/defaults';
-import { deletePath, mapPath, migrate, MIGRATIONS, renamePath, SCHEMA_VERSION, type JsonObject } from '../../src/core/params/migrate';
+import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
+import { AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE } from '../../src/core/params/presetTrees';
+import { deletePath, mapPath, migrate, MIGRATIONS, renamePath, SCHEMA_VERSION, type JsonObject, type JsonValue } from '../../src/core/params/migrate';
 import { exportPreset, importPreset } from '../../src/core/params/presets';
 import { CURRENT_SP } from '../../src/core/ids';
 import { isProfileReady, PROFILE_IDS, PROFILES, resolveProfile } from '../../src/core/params/profiles';
@@ -10,6 +12,7 @@ import { SCHEMA } from '../../src/core/params/schema';
 import { dirtyStages, genKey, stageHashes } from '../../src/core/stage/hash';
 import { STAGES } from '../../src/core/stage/registry';
 import { randomParams } from '../harness/params';
+import { sp5cTrees, type Sp5cKind } from '../harness/sp5cTrees';
 import { testRng } from '../harness/stats';
 
 describe('profiles', () => {
@@ -66,8 +69,10 @@ describe('migrations', () => {
     const r = migrate(doc, SCHEMA_VERSION);
     expect(r.ok && r.value).toBe(doc);
   });
-  test('SCHEMA_VERSION 2 (SP3d spec §1.11): one migration, 1 → 2 the identity (the trees a v1 document lacks are the profile\'s)', () => {
-    expect([SCHEMA_VERSION, MIGRATIONS.length]).toEqual([2, 1]);
+  test('SCHEMA_VERSION 3 (SP6a D36): two migrations, 1 → 2 the identity, 2 → 3 the built-in trees', () => {
+    expect([SCHEMA_VERSION, MIGRATIONS.length]).toEqual([3, 2]);
+  });
+  test('1 → 2 (SP3d spec §1.11) is the identity (the trees a v1 document lacks are the profile\'s), and 2 → 3 keeps a document without density.defs', () => {
     const doc = { climate: { scaleMul: 2 }, density: { detailAmpLo: 0.8 } } as JsonObject;
     const r = migrate(doc, 1);
     expect(r.ok && r.value).toBe(doc);
@@ -75,6 +80,46 @@ describe('migrations', () => {
     expect(imported.ok && imported.value.params.density.defs).toBe(DEFAULTS.density.defs);
     expect(imported.ok && imported.value.params.surface.rules).toBe(DEFAULTS.surface.rules);
   });
+  describe('2 → 3 (SP6a D36, spec §12.4): SP5c\'s built-in trees become today\'s', () => {
+    const TODAY: Record<Sp5cKind, JsonValue> = { default: DEFAULT_DENSITY_TREE, amplified: AMPLIFIED_DENSITY_TREE, floating_islands: FLOATING_DENSITY_TREE };
+    const KINDS = Object.keys(TODAY) as Sp5cKind[];
+    const v2 = (defs: unknown): JsonObject => ({ climate: { scaleMul: 2 }, density: { detailAmpLo: 0.8, defs } }) as unknown as JsonObject;
+
+    test.each(KINDS)('the SP5c %s tree migrates to today\'s tree of its kind (the registered tree itself); every other leaf is kept', (kind) => {
+      const doc = v2(sp5cTrees()[kind]);
+      const r = MIGRATIONS[1]!(doc);
+      expect((r['density'] as JsonObject)['defs']).toBe(TODAY[kind]);
+      expect({ ...r, density: { ...(r['density'] as JsonObject), defs: null } }).toEqual({ climate: { scaleMul: 2 }, density: { detailAmpLo: 0.8, defs: null } });
+      const m = migrate(doc, 2);
+      expect(m.ok && (m.value['density'] as JsonObject)['defs']).toBe(TODAY[kind]);
+    });
+
+    test.each(KINDS)('the SP5c %s tree with one literal changed is kept', (kind) => {
+      // The islands const −1e6 → −10 (default, amplified), or the islands term's islandMask gate 0.25 → 0.3 (floating_islands).
+      const tree = sp5cTrees()[kind] as { root: { b: { x: Record<string, any> } } };
+      if (kind === 'floating_islands') tree.root.b.x['x'].lo = 0.3;
+      else tree.root.b.x['v'] = -10;
+      const doc = v2(tree);
+      expect(MIGRATIONS[1]!(doc)).toBe(doc);
+    });
+
+    test('a document without density.defs is the same object; today\'s tree is kept; the input is never mutated', () => {
+      const plain = { climate: { scaleMul: 2 }, density: { detailAmpLo: 0.8 } } as JsonObject;
+      expect(MIGRATIONS[1]!(plain)).toBe(plain);
+      const empty = {} as JsonObject;
+      expect(MIGRATIONS[1]!(empty)).toBe(empty);
+      const current = v2(DEFAULT_DENSITY_TREE);
+      expect(MIGRATIONS[1]!(current)).toBe(current);
+      const doc = v2(sp5cTrees().default);
+      const before = canonicalJSON(doc);
+      const out = MIGRATIONS[1]!(doc);
+      expect(out).not.toBe(doc);
+      expect(canonicalJSON(doc)).toBe(before);
+      // Non-object values at density or density.defs are left for checkParams to refuse.
+      for (const odd of [{ density: 3 }, { density: { defs: 'x' } }, { density: { defs: null } }] as JsonObject[]) expect(MIGRATIONS[1]!(odd)).toBe(odd);
+    });
+  });
+
   test('an injected v1 → v2 rename', () => {
     const toV2 = (d: JsonObject) => renamePath(d, 'climate.zoom', 'climate.scaleMul');
     const r = migrate({ climate: { zoom: 3, C: { octaves: 5 } } }, 1, [toV2]);
@@ -128,7 +173,7 @@ describe('presets', () => {
     ['reserved name', (d) => { d.name = 'large_biomes'; }, ['RESERVED_NAME @ name']],
     ['unknown profile', (d) => { d.profile = 'nope'; }, ['UNKNOWN_PROFILE @ profile']],
     ['bad schema version', (d) => { d.schemaVersion = 1.5; }, ['BAD_SCHEMA_VERSION @ schemaVersion']],
-    ['newer schema version', (d) => { d.schemaVersion = 3; }, ['NEWER_SCHEMA_VERSION @ schemaVersion']],
+    ['newer schema version', (d) => { d.schemaVersion = 4; }, ['NEWER_SCHEMA_VERSION @ schemaVersion']],
     ['params not an object', (d) => { d.params = []; }, ['NOT_OBJECT @ params']],
     ['typo in params', (d) => { d.params = { climate: { scaleMull: 4 } }; }, ['UNKNOWN_KEY @ params.climate.scaleMull']],
     ['invalid value', (d) => { d.params = { climate: { scaleMul: 99 } }; }, ['OUT_OF_RANGE @ params.climate.scaleMul']],

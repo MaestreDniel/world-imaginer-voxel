@@ -18,6 +18,7 @@ import {
 } from '../../src/ui/presets/presetFile';
 import { leafOpts } from '../../src/ui/splineEditor/model';
 import { randomParams } from '../harness/params';
+import { sp5cTrees } from '../harness/sp5cTrees';
 import { testRng } from '../harness/stats';
 import { editedPatch } from './fixtures/editedTrees';
 
@@ -87,11 +88,11 @@ describe('presetFileName', () => {
 describe('presetText', () => {
   test('pretty JSON of exportPreset in envelope order, with a final newline', () => {
     expect(presetText(' My world ', 'default', withScaleMul(2))).toBe(
-      '{\n  "format": "wi10-preset",\n  "schemaVersion": 2,\n  "name": "My world",\n  "profile": "default",\n' +
+      '{\n  "format": "wi10-preset",\n  "schemaVersion": 3,\n  "name": "My world",\n  "profile": "default",\n' +
       '  "params": {\n    "climate": {\n      "scaleMul": 2\n    }\n  }\n}\n',
     );
     expect(presetText('Big', 'large_biomes', resolveProfile('large_biomes'))).toBe(
-      '{\n  "format": "wi10-preset",\n  "schemaVersion": 2,\n  "name": "Big",\n  "profile": "large_biomes",\n  "params": {}\n}\n',
+      '{\n  "format": "wi10-preset",\n  "schemaVersion": 3,\n  "name": "Big",\n  "profile": "large_biomes",\n  "params": {}\n}\n',
     );
   });
   test('equals exportPreset for random drafts', () => {
@@ -131,6 +132,19 @@ describe('readPresetText', () => {
     if (!r.ok) return;
     expect(canonicalJSON(r.patch)).toBe('{"lakes":{"rimSigma":0}}');
   });
+  test('a schema-2 preset file holding the SP5c default tree imports with today\'s tree (SP6a D36); an edited one keeps its tree', () => {
+    const sp5c = sp5cTrees().default;
+    const r = readPresetText(doc({ schemaVersion: 2, params: { lakes: { rimSigma: 0 }, density: { defs: sp5c } } }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(canonicalJSON(r.patch)).toBe('{"lakes":{"rimSigma":0}}');
+    const imported = importPreset(JSON.parse(doc({ schemaVersion: 2, params: { density: { defs: sp5c } } })) as unknown);
+    expect(imported.ok && imported.value.params.density.defs).toBe(DEFAULT_DENSITY_TREE);
+    const edited = sp5cTrees().default as { root: { b: { x: { v: number } } } };
+    edited.root.b.x.v = -10;
+    const kept = importPreset(JSON.parse(doc({ schemaVersion: 2, params: { density: { defs: edited } } })) as unknown);
+    expect(kept.ok && canonicalJSON(kept.value.params.density.defs)).toBe(canonicalJSON(edited));
+  });
   test('JSON parse errors', () => {
     for (const text of ['', '{"format":', 'wi10']) {
       const r = readPresetText(text);
@@ -148,7 +162,7 @@ describe('readPresetText', () => {
     ]],
     ['reserved name', doc({ name: 'default' }), ['name: RESERVED_NAME — "default" is a built-in profile name']],
     ['unknown profile', doc({ profile: 'nope' }), ['profile: UNKNOWN_PROFILE — unknown profile "nope"']],
-    ['newer schema version', doc({ schemaVersion: 3 }), ['schemaVersion: NEWER_SCHEMA_VERSION — schemaVersion 3 is newer than this build (2)']],
+    ['newer schema version', doc({ schemaVersion: 4 }), ['schemaVersion: NEWER_SCHEMA_VERSION — schemaVersion 4 is newer than this build (3)']],
     ['a profile that is not ready', doc({ profile: 'cave_heavy' }), ['profile cave_heavy arrives in SP6b']],
     ['a profile that is not ready, with invalid params: import issues first', doc({ profile: 'cave_heavy', params: { climate: { scaleMull: 4 } } }), [
       'params.climate.scaleMull: UNKNOWN_KEY — unknown key "scaleMull"',
@@ -344,7 +358,7 @@ describe('edited trees and version-1 presets (SP3d spec §1.11)', () => {
     const a = open({ patch: editedPatch(), profile: 'large_biomes' });
     expect(a.initNotice).toBeNull();
     const text = presetText('Edited trees', a.state.profile, a.state.params);
-    expect(JSON.parse(text).schemaVersion).toBe(2);
+    expect(JSON.parse(text).schemaVersion).toBe(3);
     const imported = importPreset(JSON.parse(text) as unknown);
     expect(imported.ok).toBe(true);
     if (!imported.ok) return;

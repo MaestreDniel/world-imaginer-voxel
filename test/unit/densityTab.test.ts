@@ -98,7 +98,7 @@ describe('JSON editor lines (§3.5)', () => {
   test('a scroll request made while the view height is 0 is kept and applied on show', () => {
     // Below 1,200 px the Slice sub-tab hides the JSON pane: a row selected there scrolls the text when JSON is shown.
     const big = printTree(DEFAULTS.density.defs, 'density');
-    const r = big.ranges.byPath.get('root.a.a.x.x.b')!;
+    const r = big.ranges.byPath.get('defs.body.b')!;
     const line = lineIndexAt(big.text, r.start);
     expect(line).toBeGreaterThan(20);
     const hidden = { height: 0, top: 0, left: 0 };

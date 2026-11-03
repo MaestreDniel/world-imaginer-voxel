@@ -1,0 +1,239 @@
+{
+  "format": "wi10-preset",
+  "schemaVersion": 2,
+  "name": "Version 2 world",
+  "profile": "default",
+  "params": {
+    "climate": {
+      "scaleMul": 2
+    },
+    "density": {
+      "defs": {
+        "defs": {},
+        "root": {
+          "a": {
+            "a": {
+              "name": "terrain",
+              "op": "tap",
+              "x": {
+                "op": "interpolated",
+                "x": {
+                  "a": {
+                    "a": {
+                      "a": {
+                        "a": {
+                          "a": {
+                            "field": "offset",
+                            "op": "col"
+                          },
+                          "b": {
+                            "a": {
+                              "field": "jag",
+                              "op": "col"
+                            },
+                            "b": {
+                              "op": "square",
+                              "x": {
+                                "a": {
+                                  "op": "const",
+                                  "v": 1
+                                },
+                                "b": {
+                                  "op": "neg",
+                                  "x": {
+                                    "op": "abs",
+                                    "x": {
+                                      "a": {
+                                        "id": "jag",
+                                        "op": "noise2"
+                                      },
+                                      "b": {
+                                        "op": "recip",
+                                        "x": {
+                                          "op": "param",
+                                          "path": "density.noises.jag.clampSigma"
+                                        }
+                                      },
+                                      "op": "mul"
+                                    }
+                                  }
+                                },
+                                "op": "add"
+                              }
+                            },
+                            "op": "mul"
+                          },
+                          "op": "add"
+                        },
+                        "b": {
+                          "op": "neg",
+                          "x": {
+                            "op": "y"
+                          }
+                        },
+                        "op": "add"
+                      },
+                      "b": {
+                        "a": {
+                          "field": "sigma",
+                          "op": "col"
+                        },
+                        "b": {
+                          "knots": [
+                            [
+                              -64,
+                              0
+                            ],
+                            [
+                              -40,
+                              1
+                            ],
+                            [
+                              240,
+                              1
+                            ],
+                            [
+                              320,
+                              0
+                            ]
+                          ],
+                          "op": "slide",
+                          "x": {
+                            "id": "overhang",
+                            "op": "noise"
+                          }
+                        },
+                        "op": "mul"
+                      },
+                      "op": "add"
+                    },
+                    "b": {
+                      "a": {
+                        "op": "const",
+                        "v": 2
+                      },
+                      "b": {
+                        "a": {
+                          "op": "const",
+                          "v": 0
+                        },
+                        "b": {
+                          "a": {
+                            "op": "const",
+                            "v": -56
+                          },
+                          "b": {
+                            "op": "neg",
+                            "x": {
+                              "op": "y"
+                            }
+                          },
+                          "op": "add"
+                        },
+                        "op": "max"
+                      },
+                      "op": "mul"
+                    },
+                    "op": "add"
+                  },
+                  "b": {
+                    "op": "neg",
+                    "x": {
+                      "a": {
+                        "op": "const",
+                        "v": 2
+                      },
+                      "b": {
+                        "a": {
+                          "op": "const",
+                          "v": 0
+                        },
+                        "b": {
+                          "a": {
+                            "op": "y"
+                          },
+                          "b": {
+                            "op": "const",
+                            "v": -296
+                          },
+                          "op": "add"
+                        },
+                        "op": "max"
+                      },
+                      "op": "mul"
+                    }
+                  },
+                  "op": "add"
+                }
+              }
+            },
+            "b": {
+              "a": {
+                "id": "detail",
+                "op": "noise"
+              },
+              "b": {
+                "a": {
+                  "op": "param",
+                  "path": "density.detailAmpLo"
+                },
+                "b": {
+                  "a": {
+                    "a": {
+                      "op": "param",
+                      "path": "density.detailAmpHi"
+                    },
+                    "b": {
+                      "op": "neg",
+                      "x": {
+                        "op": "param",
+                        "path": "density.detailAmpLo"
+                      }
+                    },
+                    "op": "add"
+                  },
+                  "b": {
+                    "hi": 1,
+                    "lo": 0,
+                    "op": "clamp",
+                    "x": {
+                      "a": {
+                        "a": {
+                          "field": "E",
+                          "op": "col"
+                        },
+                        "b": {
+                          "op": "const",
+                          "v": 1
+                        },
+                        "op": "add"
+                      },
+                      "b": {
+                        "op": "const",
+                        "v": 0.5
+                      },
+                      "op": "mul"
+                    }
+                  },
+                  "op": "mul"
+                },
+                "op": "add"
+              },
+              "op": "mul"
+            },
+            "op": "add"
+          },
+          "b": {
+            "name": "islands",
+            "op": "tap",
+            "x": {
+              "op": "const",
+              "v": -1000000
+            }
+          },
+          "op": "max"
+        }
+      }
+    }
+  }
+}

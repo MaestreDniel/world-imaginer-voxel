@@ -9,6 +9,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import type { Seed64 } from '../../src/core/hash';
+import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import type { JsonValue } from '../../src/core/params/json';
 import type { Params } from '../../src/core/params/schema';
@@ -106,15 +107,18 @@ describe('replace op (density): children by position in SOURCE_CHILD_KEYS order,
 describe('disabled options', () => {
   test('ref while defs is empty; recip over a child that is not a const or param', () => {
     const opts = (q: Params, path: string) => Object.fromEntries(opOptions(q, D(path)).map((o) => [o.op, o.disabled]));
-    const def = opts(DEFAULTS, 'root');
+    // A tree with no def (the default has one since SP6a §1.1, its body).
+    const empty = withDensity(tree({ op: 'max', a: Y, b: C(1) }));
+    const def = opts(empty, 'root');
     expect(Object.keys(def)).toEqual([...SOURCE_OPS]);
     expect([def['ref'], def['recip']]).toEqual([true, true]);
     expect(Object.entries(def).filter(([, d]) => d).map(([o]) => o)).toEqual(['ref', 'recip']);
     expect(opts(DEFAULTS, 'root.b.x')['recip']).toBe(false);
+    expect(opts(DEFAULTS, 'root')['ref']).toBe(false);
     expect(opts(withDensity(tree({ op: 'neg', x: P('density.detailAmpLo') })), 'root')['recip']).toBe(false);
     expect(opts(withDensity(tree(Y, { d: C(1) })), 'root')['ref']).toBe(false);
-    expect(opOptions(DEFAULTS, D('root.a')).find((o) => o.current)?.op).toBe('add');
-    expect(() => replaceOp(DEFAULTS, D('root'), 'ref')).toThrow(RangeError);
+    expect(opOptions(DEFAULTS, D('root.a.a.a.x')).find((o) => o.current)?.op).toBe('add');
+    expect(() => replaceOp(empty, D('root'), 'ref')).toThrow(RangeError);
     expect(() => replaceOp(DEFAULTS, D('root'), 'recip')).toThrow(RangeError);
   });
   test('rules: every rule kind for a rule, every condition kind for a condition', () => {
@@ -207,7 +211,7 @@ describe('wrap, delete, add', () => {
   });
   test('add def (def<k> = const 0, selected) and add rule (block stone appended to a sequence, selected)', () => {
     const e = addDef(DEFAULTS);
-    expect((valueOf(e) as { defs: unknown }).defs).toEqual({ def1: C(0) });
+    expect((valueOf(e) as { defs: Record<string, unknown> }).defs).toEqual({ ...(DEFAULT_DENSITY_TREE as { defs: object }).defs, def1: C(0) });
     expect(selectOf(e)).toEqual(D('defs.def1'));
     expect((valueOf(addDef(withDensity(tree(Y, { def1: C(1), def3: C(3) })))) as { defs: Record<string, unknown> }).defs['def2']).toEqual(C(0));
     const r = addRule(withRules(seq(block('dirt'))), R('root'));
@@ -263,7 +267,7 @@ describe('the mute toggle (§1.5, D7)', () => {
     expect(muteValue(withDensity(tree({ op: 'rangeChoice', x: Y, lo: 0, hi: 1, inside: tap, outside: Y })), D('root.inside'))).toBe(0);
     expect(muteValue(withDensity(tree({ op: 'max', a: Y, b: Y }, { d: tap })), D('defs.d'))).toBe(0);
     expect(muteValue(withDensity(tree(tap)), D('root'))).toBe(0);
-    expect([muteValue(DEFAULTS, D('root.a.a')), muteValue(DEFAULTS, D('root.b'))]).toEqual([0, -1e6]);
+    expect([muteValue(DEFAULTS, D('root.a.a.a.x.a')), muteValue(DEFAULTS, D('root.b'))]).toEqual([0, -1e6]);
   });
   test('toggling writes the value, toggling again removes it; only taps', () => {
     const on = toggleMute(DEFAULTS, D('root.b'));
@@ -397,13 +401,13 @@ describe('the fields of a node', () => {
 describe('commit through the session', () => {
   test('one session.set of the leaf: one undo step, the selection followed', () => {
     const w = session();
-    const r = commitFormEdit(w, toggleMute(w.state.params, D('root.a.a')));
-    expect(r).toEqual({ ok: true, select: D('root.a.a') });
-    expect((w.state.params.density.defs as { root: { a: { a: { mute?: number } } } }).root.a.a.mute).toBe(0);
+    const r = commitFormEdit(w, toggleMute(w.state.params, D('root.a.a.a.x.a')));
+    expect(r).toEqual({ ok: true, select: D('root.a.a.a.x.a') });
+    expect((w.state.params.density.defs as { root: { a: { a: { a: { x: { a: { mute?: number } } } } } } }).root.a.a.a.x.a.mute).toBe(0);
     expect(w.modifiedCount('')).toBe(1);
     expect(w.canUndo).toBe(true);
     w.undo();
-    expect((w.state.params.density.defs as { root: { a: { a: { mute?: number } } } }).root.a.a.mute).toBeUndefined();
+    expect((w.state.params.density.defs as { root: { a: { a: { a: { x: { a: { mute?: number } } } } } } }).root.a.a.a.x.a.mute).toBeUndefined();
   });
   test('a tier-2-invalid candidate is never sent; a session refusal lists its issues', () => {
     const w = session();
@@ -459,10 +463,10 @@ describe('the Density tab\'s commits (§3.2, §3.3: as the parameter panel\'s va
   test('a row mute keeps the current selection; the form mute keeps the tap', () => {
     const w = session();
     const before = w.state.params;
-    const r = commitFormEdit(w, toggleMute(before, D('root.a.a')));
+    const r = commitFormEdit(w, toggleMute(before, D('root.a.a.a.x.a')));
     if (!r.ok) throw new Error('refused');
     // The form's own mute acts on the selected tap and keeps it; the row's checkbox keeps whatever was selected.
-    expect(selectionAfterCommit('form', D('root.a.a'), r.select)).toEqual(D('root.a.a'));
+    expect(selectionAfterCommit('form', D('root.a.a.a.x.a'), r.select)).toEqual(D('root.a.a.a.x.a'));
     expect(selectionAfterCommit('row', D('root'), r.select)).toEqual(D('root'));
     expect(selectionAfterCommit('row', D('root.b.x'), r.select)).toEqual(D('root.b.x'));
     expect(selectionAfterCommit('row', R('root.rules[1]'), r.select)).toEqual(R('root.rules[1]'));
@@ -471,7 +475,7 @@ describe('the Density tab\'s commits (§3.2, §3.3: as the parameter panel\'s va
     const ctx1 = createGenContext(seedFromInput('42'), w.state.params);
     const at = (ctx: typeof ctx0, path: string) => probeField(ctx, 'node', path, 5, 70, -9, () => false);
     expect(at(ctx1, 'root')).not.toBe(at(ctx0, 'root'));
-    expect(at(ctx1, 'root.a.a')).toBe(at(ctx0, 'root.a.a'));
+    expect(at(ctx1, 'root.a.a.a.x.a')).toBe(at(ctx0, 'root.a.a.a.x.a'));
   });
 });
 
@@ -488,10 +492,10 @@ describe('the two lints (§3.3)', () => {
     expect(treeLints(withRules(seq(iff({ kind: 'biome', biomes: ['plains'] }, block('stone')))))).toEqual([LINT_NO_FAST_PATH]);
     expect(treeLints(withRules(seq(block('stone'))))).toEqual([]);
   });
-  test('density cost above 4 × the default root’s work cost (569 at the defaults)', () => {
+  test('density cost above 4 × the default root’s work cost (574 at the defaults)', () => {
     // interpolated(add of k overhang noises): 1 + 8 × (16k + k − 1).
     expect(treeLints(withDensity(tree(noises(16))))).toEqual([]);
-    expect(treeLints(withDensity(tree(noises(20))))).toEqual([densityCostLint(2713 / 569)]);
-    expect(densityCostLint(2713 / 569)).toBe('density cost ≈ 4.8 × the default');
+    expect(treeLints(withDensity(tree(noises(20))))).toEqual([densityCostLint(2713 / 574)]);
+    expect(densityCostLint(2713 / 574)).toBe('density cost ≈ 4.7 × the default');
   });
 });

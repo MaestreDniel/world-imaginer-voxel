@@ -560,7 +560,14 @@ class Mutator {
         return true;
       }
       case 'wrap': {
-        if (slot === undefined) return false;
+        if (slot === undefined) {
+          // Every slot gone (an earlier `wrongType` replaced the top rule, or the density root and every def, by a
+          // non-node): wrap the top value itself, so `wrap` always applies. Draws nothing from `next`.
+          if (!density) { define(t.holder, 'v', { kind: 'sequence', rules: [t.value] }); return true; }
+          if (!isObj(t.value)) return false;
+          define(t.value, 'root', { op: 'tap', name: this.fresh('w'), x: own(t.value, 'root') ?? null });
+          return true;
+        }
         const n = getSlot(slot);
         if (density) setSlot(slot, { op: 'tap', name: this.fresh('w'), x: n });
         else if (slot.role === 'cond') setSlot(slot, { kind: 'not', if: { kind: 'not', if: n } });

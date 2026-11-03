@@ -391,10 +391,10 @@ describe('validateDensitySource: whole-tree bounds (SP3d spec §1.7 steps 2-5)',
   });
 
   test('the default tree and the U2 / uiSmoke variants pass (terrain muted; islands −10)', () => {
-    const copy = (): { root: Record<string, Record<string, Record<string, unknown>>> } => JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE));
+    const copy = (): { root: Record<string, any> } => JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE));
     const muted = copy();
-    expect(muted.root['a']!['a']!['name']).toBe('terrain');
-    muted.root['a']!['a']!['mute'] = 0;
+    expect(muted.root['a'].a.a.x.a['name']).toBe('terrain');
+    muted.root['a'].a.a.x.a['mute'] = 0;
     const islands = copy();
     expect(islands.root['b']!['name']).toBe('islands');
     (islands.root['b']!['x'] as Record<string, unknown>)['v'] = -10;

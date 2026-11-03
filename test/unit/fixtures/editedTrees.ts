@@ -10,7 +10,10 @@ type Tree = Record<string, any>;
 
 const copy = (v: unknown): Tree => JSON.parse(JSON.stringify(v)) as Tree;
 
-/** The default density tree (a mutable copy). Its terrain tap is `root.a.a`, its islands tap `root.b`. */
+/**
+ * The default density tree (a mutable copy). Its terrain tap is `root.a.a.a.x.a` (inside the `precave` tap, SP6a §1.1),
+ * its detail term `root.a.a.a.x.b`, its islands tap `root.b`.
+ */
 export const densityTree = (): Tree => copy(DEFAULT_DENSITY_TREE);
 /** The default rule tree (a mutable copy). Its deepslate gradient is the condition `rules[2].if`. */
 export const rulesTree = (): Tree => copy(DEFAULT_SURFACE_RULES);
@@ -25,12 +28,12 @@ export function islandsAt(v: number): Tree {
 /** uiSmoke step 3 and U2's density variant (spec §6, §7): the terrain tap muted to `mute`. */
 export function terrainMuted(mute = 0): Tree {
   const t = densityTree();
-  t['root'].a.a.mute = mute;
+  t['root'].a.a.a.x.a.mute = mute;
   return t;
 }
 
 /**
- * A tree that reads `col steep` at the default's weight (work cost 569 + 2): the islands const replaced by
+ * A tree that reads `col steep` at the default's weight (work cost 574 + 2): the islands const replaced by
  * add(const −1e6, col steep), so its horizontal slices take corner samples with steep (spec §4.4, §5.2).
  */
 export function steepTree(): Tree {
@@ -70,11 +73,11 @@ export function gradientTop(top = 12): Tree {
  */
 export function editedDensity(): Tree {
   const t = densityTree();
-  t['defs'] = { lift: { op: 'mul', a: { op: 'const', v: 2 }, b: { op: 'param', path: 'density.detailAmpLo' } } };
+  t['defs'] = { ...t['defs'], lift: { op: 'mul', a: { op: 'const', v: 2 }, b: { op: 'param', path: 'density.detailAmpLo' } } };
   t['root'].b.x = { op: 'add', a: { op: 'ref', name: 'lift' }, b: { op: 'const', v: -1000000 } };
-  t['root'].a.a.mute = 0.5;
-  const clamp = t['root'].a.b.b.b.b;
-  if (clamp.op !== 'clamp') throw new Error('the default density tree moved: no clamp at root.a.b.b.b.b');
+  t['root'].a.a.a.x.a.mute = 0.5;
+  const clamp = t['root'].a.a.a.x.b.b.b.b;
+  if (clamp.op !== 'clamp') throw new Error('the default density tree moved: no clamp at root.a.a.a.x.b.b.b.b');
   clamp.lo = { param: 'density.detailAmpLo', neg: true };
   return t;
 }

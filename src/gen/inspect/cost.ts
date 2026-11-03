@@ -181,7 +181,8 @@ function noiseWeight(params: Params, id: unknown): number {
 /**
  * The work cost of the evaluated expression `expr` = {root, defs} (§5.2) under `params`: the structural cost with every
  * `noise` / `noise2` weighted by its configured leaf (a default `jag` or `overhang` costs 16, `detail` 8); saturating at
- * 2^31. The default root costs 569 at the default noises (322 structural units, 17 of them noise evaluations).
+ * 2^31. The default root costs 574 at the default noises (327 structural units, 17 of them noise evaluations; 569 and
+ * 322 before SP6a's root slots).
  */
 export function workCost(expr: unknown, params: Params): number {
   if (!isRec(expr)) return 0;

@@ -424,7 +424,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
   const density = (n: number, v = n): FieldSliceResult => ({ n, field: 'density', values: new Float64Array(n * n).fill(v), fluid: null });
   const VERT: SliceState = { plane: 'vertical', field: 'density', y: 63, extent: 2048, cx: 0, cz: 0 };
   const HORI: SliceState = { ...VERT, plane: 'horizontal', cx: 100, cz: -200, extent: 512 };
-  const TAP_TERRAIN: Selection = { leaf: 'density.defs', path: 'root.a.a' };
+  const TAP_TERRAIN: Selection = { leaf: 'density.defs', path: 'root.a.a.a.x.a' };
   const TAP_ISLANDS: Selection = { leaf: 'density.defs', path: 'root.b' };
   const want = (state: SliceState = VERT, line: Segment | null = LINE, selection: Selection = TAP_TERRAIN): SliceWant => ({ state, line, selection });
 
@@ -447,7 +447,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     expect([r.shown?.sessionEpoch, r.shown?.key, fieldSliceView(r, 7)]).toEqual([7, r.key, 'fresh']);
     expect(calls).toHaveLength(2);
     expect(calls[1]!.req).toEqual({ ...calls[0]!.req, n: 128 });
-    expect(calls[1]!.opts).toEqual({ priority: 500, columnCost: 105_600, budget: REQUEST_BUDGET });
+    expect(calls[1]!.opts).toEqual({ priority: 500, columnCost: 106_240, budget: REQUEST_BUDGET });
     expect(r.pending).toEqual({ sessionEpoch: 7, key: r.key, n: 128 });
     const f = density(128);
     calls[1]!.resolve(f);
@@ -466,7 +466,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     const { r, calls } = harness();
     r.request(want(HORI, LINE));
     expect(calls[0]!.req).toEqual({ plane: 'horizontal', cx: 100, cz: -200, extent: 512, y: 63, n: 32, field: 'density', path: '' });
-    expect(calls[0]!.opts.columnCost).toBe(32 * (569 + CORNER_SAMPLE_COST));
+    expect(calls[0]!.opts.columnCost).toBe(32 * (574 + CORNER_SAMPLE_COST));
     expect(fieldSliceSpec(HORI, null, 'node', 'root.b', 128)).toEqual({ plane: 'horizontal', cx: 100, cz: -200, extent: 512, y: 63, n: 128, field: 'node', path: 'root.b' });
   });
 
@@ -581,9 +581,9 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     r.request(want({ ...VERT, field: 'selected' }, LINE, TAP_TERRAIN));
     r.request(want({ ...VERT, field: 'selected' }, LINE, TAP_ISLANDS));
     r.request(want({ ...VERT, field: 'selected' }, LINE, RULE_SEL));
-    expect(calls.slice(2).map((c) => [c.req.field, c.req.path])).toEqual([['node', 'root.a.a'], ['node', 'root.b'], ['rule', 'root.rules[1]']]);
+    expect(calls.slice(2).map((c) => [c.req.field, c.req.path])).toEqual([['node', 'root.a.a.a.x.a'], ['node', 'root.b'], ['rule', 'root.rules[1]']]);
     expect(calls.map((c) => c.cancelled)).toEqual([true, true, true, true, false]);
-    expect(calls[2]!.opts.columnCost).toBe(sliceCostOf(DEFAULTS, 'node', 'root.a.a', 'vertical', 32));
+    expect(calls[2]!.opts.columnCost).toBe(sliceCostOf(DEFAULTS, 'node', 'root.a.a.a.x.a', 'vertical', 32));
     expect(calls[4]!.opts.columnCost).toBe(sliceCostOf(DEFAULTS, 'rule', 'root.rules[1]', 'vertical', 32));
     // The keys: y is part of a horizontal plane's key only.
     expect(sliceRequestKey(VERT, LINE, 'density', 'root.b')).toBe(sliceRequestKey(VERT, LINE, 'density', ''));
@@ -659,18 +659,18 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       const { r, calls } = harness(steep);
       r.request(want(HORI));
       expect(calls).toHaveLength(1);
-      expect(calls[0]!.opts).toEqual({ priority: 2, columnCost: 32 * (571 + CORNER_STEEP_COST), budget: DRAFT_BUDGET });
+      expect(calls[0]!.opts).toEqual({ priority: 2, columnCost: 32 * (576 + CORNER_STEEP_COST), budget: DRAFT_BUDGET });
       calls[0]!.resolve(density(32));
       await flush();
       expect(calls).toHaveLength(2);
-      expect([calls[1]!.req.n, calls[1]!.opts]).toEqual([128, { priority: 500, columnCost: 128 * (571 + CORNER_STEEP_COST), budget: REQUEST_BUDGET }]);
+      expect([calls[1]!.req.n, calls[1]!.opts]).toEqual([128, { priority: 500, columnCost: 128 * (576 + CORNER_STEEP_COST), budget: REQUEST_BUDGET }]);
       const f = density(128);
       calls[1]!.resolve(f);
       await flush();
       expect([r.shown?.result, r.pending, r.notice]).toEqual([f, null, null]);
       // The notice a heavier steep tree would get: the limit is the largest work cost accepted, 3 072 (11 264 for a draft).
-      expect(tooHeavyText('full', steep, 'density', '', 128, sliceCostOf(steep, 'density', '', 'horizontal', 128), 2 ** 20)).toBe('node too heavy for a 128² slice (cost 571, limit 3 072)');
-      expect(tooHeavyText('draft', steep, 'density', '', 32, sliceCostOf(steep, 'density', '', 'horizontal', 32), 2 ** 19)).toBe('node too heavy to slice (cost 571, limit 11 264)');
+      expect(tooHeavyText('full', steep, 'density', '', 128, sliceCostOf(steep, 'density', '', 'horizontal', 128), 2 ** 20)).toBe('node too heavy for a 128² slice (cost 576, limit 3 072)');
+      expect(tooHeavyText('draft', steep, 'density', '', 32, sliceCostOf(steep, 'density', '', 'horizontal', 32), 2 ** 19)).toBe('node too heavy to slice (cost 576, limit 11 264)');
     });
 
     test('a SliceTooHeavy from the pool gives the same notice; tooHeavyText converts planFieldSlice\'s column-cost limit', async () => {
@@ -678,8 +678,8 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       r.request(want());
       calls[0]!.reject(new SliceTooHeavy(calls[0]!.opts.columnCost, 2 ** 19));
       await flush();
-      expect(r.notice).toBe('node too heavy to slice (cost 569, limit 15 360)');
-      expect(tooHeavyText('full', DEFAULTS, 'density', '', 128, 105_600, 2 ** 20)).toBe('node too heavy for a 128² slice (cost 569, limit 7 936)');
+      expect(r.notice).toBe('node too heavy to slice (cost 574, limit 15 360)');
+      expect(tooHeavyText('full', DEFAULTS, 'density', '', 128, 106_240, 2 ** 20)).toBe('node too heavy for a 128² slice (cost 574, limit 7 936)');
     });
   });
 

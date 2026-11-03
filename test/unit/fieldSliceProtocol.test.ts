@@ -116,14 +116,14 @@ describe('planFieldSlice: the one split and refusal math (SP3d spec §5.2, P3)',
       .toEqual([core.COLUMN_SAMPLE_COST, core.CORNER_SAMPLE_COST, core.CORNER_STEEP_COST, core.PART_BUDGET, core.DRAFT_BUDGET, core.REQUEST_BUDGET, core.SLICE_RULE_NA]);
     expect([PART_BUDGET, DRAFT_BUDGET, REQUEST_BUDGET]).toEqual([2 ** 23, 2 ** 24, 2 ** 27]);
   });
-  test('at the defaults (c = 569): k = 79 vertical and 25 horizontal; parts max(poolSize, ⌈n / k⌉), equal contiguous ranges of at most k', () => {
-    const v = accepted(planFieldSlice(128, vertical(128, 569), 6, REQUEST_BUDGET));
-    expect([vertical(128, 569), v.k, v.ranges]).toEqual([105_600, 79, [[0, 21], [21, 42], [42, 64], [64, 85], [85, 106], [106, 128]]]);
-    expect(accepted(planFieldSlice(128, vertical(128, 569), 1, REQUEST_BUDGET)).ranges).toEqual([[0, 64], [64, 128]]);
-    const h = accepted(planFieldSlice(128, horizontal(128, 569), 2, REQUEST_BUDGET));
-    expect([horizontal(128, 569), h.k, h.ranges.length]).toEqual([334_976, 25, 6]);
+  test('at the defaults (c = 574 since SP6a\'s root slots): k = 78 vertical and 24 horizontal; parts max(poolSize, ⌈n / k⌉), equal contiguous ranges of at most k', () => {
+    const v = accepted(planFieldSlice(128, vertical(128, 574), 6, REQUEST_BUDGET));
+    expect([vertical(128, 574), v.k, v.ranges]).toEqual([106_240, 78, [[0, 21], [21, 42], [42, 64], [64, 85], [85, 106], [106, 128]]]);
+    expect(accepted(planFieldSlice(128, vertical(128, 574), 1, REQUEST_BUDGET)).ranges).toEqual([[0, 64], [64, 128]]);
+    const h = accepted(planFieldSlice(128, horizontal(128, 574), 2, REQUEST_BUDGET));
+    expect([horizontal(128, 574), h.k, h.ranges.length]).toEqual([335_616, 24, 6]);
     expect(h.ranges).toEqual([[0, 21], [21, 42], [42, 64], [64, 85], [85, 106], [106, 128]]);
-    expect(accepted(planFieldSlice(32, vertical(32, 569), 3, DRAFT_BUDGET)).ranges).toEqual([[0, 10], [10, 21], [21, 32]]);
+    expect(accepted(planFieldSlice(32, vertical(32, 574), 3, DRAFT_BUDGET)).ranges).toEqual([[0, 10], [10, 21], [21, 32]]);
   });
   test('refusal limits: a 128² slice above c = 7,936 vertical / 6,144 horizontal, a draft above 15,360 / 14,336; the limit is the largest column cost accepted', () => {
     for (const [n, budget, cost, c] of [
@@ -139,9 +139,9 @@ describe('planFieldSlice: the one split and refusal math (SP3d spec §5.2, P3)',
   test('a steep-reading tree of default weight: its horizontal 128² slice and draft are planned, never refused with limit 0', () => {
     const steep = (n: number, c: number) => n * (c + CORNER_STEEP_COST);
     const p = paramsWith({ density: { defs: steepTree() } } as never);
-    expect(workCost(evaluatedExpression(p, 'density', ''), p)).toBe(571);
+    expect(workCost(evaluatedExpression(p, 'density', ''), p)).toBe(576);
     const full = accepted(planFieldSlice(128, sliceCostOf(p, 'density', '', 'horizontal', 128), 4, REQUEST_BUDGET));
-    expect([sliceCostOf(p, 'density', '', 'horizontal', 128), full.k, full.ranges.length]).toEqual([steep(128, 571), 11, 12]);
+    expect([sliceCostOf(p, 'density', '', 'horizontal', 128), full.k, full.ranges.length]).toEqual([steep(128, 576), 11, 12]);
     expect(accepted(planFieldSlice(32, sliceCostOf(p, 'node', 'root.b', 'horizontal', 32), 4, DRAFT_BUDGET)).ranges.length).toBe(4);
     // The steep refusal limits: 3,072 per sample for a 128² slice, 11,264 for a draft; above them the limit is planFieldSlice's.
     for (const [n, budget, c] of [[128, REQUEST_BUDGET, 3072], [32, DRAFT_BUDGET, 11_264]] as const) {
@@ -157,9 +157,9 @@ describe('planFieldSlice: the one split and refusal math (SP3d spec §5.2, P3)',
   });
   test('budget null (blocks, rule) is never refused: k = 1 and one part per sample column above PART_BUDGET / 2', () => {
     expect(['density', 'node', 'blocks', 'rule'].map((f) => isRefusableField(f as never))).toEqual([true, true, false, false]);
-    const t = accepted(planFieldSlice(32, 5_006_893, 6, null));
+    const t = accepted(planFieldSlice(32, 5_498_413, 6, null));
     expect([t.k, t.ranges.length, t.ranges[31]]).toEqual([1, 32, [31, 32]]);
-    expect(accepted(planFieldSlice(128, 64 * 5_006_893, 2, null)).ranges.length).toBe(128);
+    expect(accepted(planFieldSlice(128, 64 * 5_498_413, 2, null)).ranges.length).toBe(128);
   });
   test('the parts are contiguous, cover [0, n), never exceed k, and each passes the handler\'s bound check', () => {
     for (const n of [32, 128]) {
@@ -183,11 +183,11 @@ describe('planFieldSlice: the one split and refusal math (SP3d spec §5.2, P3)',
     }
   });
   test('the handler\'s bound: a density or node part of w columns above PART_BUDGET, a blocks or rule part of more than k columns', () => {
-    expect(fieldSlicePartProblem(79, 105_600, 'density')).toBeNull();
-    expect(fieldSlicePartProblem(80, 105_600, 'node')).toBe(`too heavy: 80 × 105600 work units exceed the part budget ${PART_BUDGET}`);
+    expect(fieldSlicePartProblem(78, 106_240, 'density')).toBeNull();
+    expect(fieldSlicePartProblem(79, 106_240, 'node')).toBe(`too heavy: 79 × 106240 work units exceed the part budget ${PART_BUDGET}`);
     expect(fieldSlicePartProblem(1, PART_BUDGET + 1, 'density')).toMatch(/^too heavy: /);
     expect(fieldSlicePartProblem(1, 2 ** 31, 'blocks')).toBeNull();
-    expect(fieldSlicePartProblem(2, 5_006_893, 'rule')).toBe('too heavy: 2 sample columns of cost 5006893, at most 1 per part');
+    expect(fieldSlicePartProblem(2, 5_498_413, 'rule')).toBe('too heavy: 2 sample columns of cost 5498413, at most 1 per part');
     expect(fieldSlicePartProblem(3, 2_000_000, 'blocks')).toBeNull();
     expect(fieldSlicePartProblem(5, 2_000_000, 'blocks')).toMatch(/^too heavy: /);
   });

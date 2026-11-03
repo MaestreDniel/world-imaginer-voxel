@@ -142,12 +142,12 @@ describe('resolveDensity (§1.6)', () => {
   test('paths are preserved: every surviving node keeps its source path', () => {
     const e = resolveDensity(DEFAULT_DENSITY_TREE, P);
     const at = (v: unknown, path: string): Record<string, unknown> => path.split('.').reduce<Record<string, unknown>>((n, k) => n[k] as Record<string, unknown>, v as Record<string, unknown>);
-    const recipPath = 'root.a.a.x.x.a.a.a.a.b.b.x.b.x.x.b';
+    const recipPath = 'defs.body.a.a.a.a.b.b.x.b.x.x.b';
     expect(at(DEFAULT_DENSITY_TREE, recipPath)['op']).toBe('recip');
     expect(at(e, recipPath)).toEqual({ op: 'const', v: 1 / P.density.noises.jag.clampSigma });
-    expect(at(e, 'root.a.b.b.a')).toEqual({ op: 'const', v: P.density.detailAmpLo });
-    expect(at(e, 'root.a.b.b.b.a')).toEqual({ op: 'const', v: P.density.detailAmpHi - P.density.detailAmpLo });
-    expect(at(e, 'root.a.a')['op']).toBe('tap');
+    expect(at(e, 'root.a.a.a.x.b.b.a')).toEqual({ op: 'const', v: P.density.detailAmpLo });
+    expect(at(e, 'root.a.a.a.x.b.b.b.a')).toEqual({ op: 'const', v: P.density.detailAmpHi - P.density.detailAmpLo });
+    expect(at(e, 'root.a.a.a.x.a')['op']).toBe('tap');
     expect(at(e, 'root.b')).toEqual({ op: 'tap', name: 'islands', x: C(-1e6) });
   });
 
@@ -189,12 +189,17 @@ describe('resolveDensity (§1.6)', () => {
   });
 });
 
-/** The resolved default and the legacy builder's tree for `p`: equal hash and −0-aware deep equality. */
+/**
+ * The resolved default against the legacy builder's tree for `p` (value identity since SP6a §1.1, which moved the body
+ * into `defs.body` and gave the root its precave tap and cave slots): the resolved `defs.body` is the legacy terrain
+ * body (`root.a.x.x`) and the detail term (`root.a.a.a.x.b`) the legacy `root.a.b`, both −0-aware.
+ */
 function checkIdentity(p: Params, what: string): DensityExpr {
   const e = resolveDensity(DEFAULT_DENSITY_TREE, p);
-  const legacy = legacyDefaultDensityExpr(p.density);
-  expect(exprHash(e.root), what).toBe(exprHash(legacy.root));
-  expect(sameTree(e, legacy), what).toBeNull();
+  const legacy = legacyDefaultDensityExpr(p.density) as unknown as { root: { a: { a: { x: { x: unknown } }; b: unknown } } };
+  expect(sameTree(e.defs['body'], legacy.root.a.a.x.x), what).toBeNull();
+  const detail = ((((rootOf(e)['a'] as Record<string, unknown>)['a'] as Record<string, unknown>)['a'] as Record<string, unknown>)['x'] as Record<string, unknown>)['b'];
+  expect(sameTree(detail, legacy.root.a.b), what).toBeNull();
   return e;
 }
 
@@ -204,9 +209,11 @@ function checkCompiled(seedText: string, patch: ParamsPatch, what: string, voxel
   const a = createDensityContext(c);
   const b = createDensityContext(c, legacyDefaultDensityExpr(c.params.density));
   const shape = (dc: DensityContext): number[] => [dc.compiled.nodes.length, dc.compiled.positionSlotCount, dc.compiled.columnSlotCount, dc.compiled.interpolatedSlotCount];
-  expect(shape(a), what).toEqual(shape(b));
-  // §2.1: 51 nodes, 2 position slots, 2 column slots (at clampSigma 1 the constant 1 / 1 merges with the 1 of J: 50).
-  if (seedText === '42' && Object.keys(patch).length === 0) expect(shape(a)).toEqual([51, 2, 2, 1]);
+  // The legacy tree's slots; the resolved default adds voxel-level nodes only (SP6a §1.1).
+  expect(shape(a).slice(1), what).toEqual(shape(b).slice(1));
+  // SP3d §2.1's 51 nodes (the legacy tree), plus SP6a's precave tap, two mins and one shared 1e6 const: 55; 2 position
+  // slots, 2 column slots, 1 interpolated slot (at clampSigma 1 the constant 1 / 1 merges with the 1 of J: one less).
+  if (seedText === '42' && Object.keys(patch).length === 0) expect([shape(a), shape(b)]).toEqual([[55, 2, 2, 1], [51, 2, 2, 1]]);
   const eq = (dc: DensityContext, cx: number, cz: number): void => { dc.column(cx, cz); };
   for (const [cx, cz] of COLUMNS) {
     eq(a, cx, cz);
@@ -229,14 +236,19 @@ function checkCompiled(seedText: string, patch: ParamsPatch, what: string, voxel
   }
 }
 
-describe('§2.1 bit-identity: the resolved default is the legacy builder\'s tree', () => {
-  test('at DEFAULTS and at clampSigma ∈ {1, 3, 7.3, 8}: equal exprHash, −0-aware equality, equal compiled values at every corner and voxel', () => {
+describe('§2.1 value identity: the resolved default computes the legacy builder\'s values (SP6a §1.1)', () => {
+  test('at DEFAULTS and at clampSigma ∈ {1, 3, 7.3, 8}: defs.body and the detail term −0-aware equal to the legacy\'s, equal compiled values at every corner and voxel', () => {
     checkIdentity(P, 'DEFAULTS');
     checkCompiled('42', {}, 'DEFAULTS', 1);
     for (const cs of [1, 3, 7.3, 8]) {
       const patch: ParamsPatch = { density: { noises: { jag: { clampSigma: cs } } } };
       checkIdentity(paramsWith(patch), `clampSigma ${cs}`);
       checkCompiled('42', patch, `clampSigma ${cs}`, 1);
+    }
+    for (const [lo, hi] of [[0, 0], [0, 8], [8, 0], [0.35, 1.05]] as const) {
+      const patch: ParamsPatch = { density: { detailAmpLo: lo, detailAmpHi: hi } };
+      checkIdentity(paramsWith(patch), `detailAmp ${lo}, ${hi}`);
+      checkCompiled('42', patch, `detailAmp ${lo}, ${hi}`, 1);
     }
   });
 
@@ -260,7 +272,8 @@ describe('§2.1 bit-identity: the resolved default is the legacy builder\'s tree
 
   test('the default DensityContext compiles the resolved default (one frozen tree)', () => {
     const dc = createDensityContext(ctxFor('42'));
-    expect(exprHash(dc.expr.root)).toBe(exprHash(legacyDefaultDensityExpr(DEFAULTS.density).root));
+    expect(sameTree(dc.expr, resolveDensity(DEFAULT_DENSITY_TREE, DEFAULTS))).toBeNull();
+    expect(exprHash(dc.expr.root)).toBe(exprHash(resolveDensity(DEFAULT_DENSITY_TREE, DEFAULTS).root));
     expect(dc.compiled.expr).toBe(dc.expr);
     expect(frozenEverywhere(dc.expr)).toBe(true);
   });
@@ -269,8 +282,8 @@ describe('§2.1 bit-identity: the resolved default is the legacy builder\'s tree
 describe('resolveDensityNode (§3.4)', () => {
   /** The default tree with the terrain tap muted to 0 (U2's density perturbation). */
   const muted = (() => {
-    const t = JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE)) as { root: { a: { a: Record<string, unknown> } } };
-    t.root.a.a['mute'] = 0;
+    const t = JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE)) as { root: { a: { a: { a: { x: { a: Record<string, unknown> } } } } } };
+    t.root.a.a.a.x.a['mute'] = 0;
     return t as unknown as DensitySource;
   })();
   const ctx = ctxFor('42');
@@ -278,12 +291,12 @@ describe('resolveDensityNode (§3.4)', () => {
 
   test('a node under a muted tap is evaluated from the source: the muted terrain tap and its interpolated sum give the unmuted terrain', () => {
     const full = createDensityReference(resolveDensity(DEFAULT_DENSITY_TREE, P), dc.noises);
-    const tapNode = resolveDensityNode(muted, 'root.a.a', P);
+    const tapNode = resolveDensityNode(muted, 'root.a.a.a.x.a', P);
     expect(rootOf(tapNode)['op']).toBe('tap');
     expect(rootOf(tapNode)['x']).toMatchObject({ op: 'interpolated' });
-    const inner = resolveDensityNode(muted, 'root.a.a.x.x', P);
+    const inner = resolveDensityNode(muted, 'defs.body', P);
     expect(rootOf(inner)['op']).toBe('interpolated'); // wrapped: it has an interpolated ancestor
-    expect(sameTree(rootOf(inner)['x'], (rootOf(resolveDensity(DEFAULT_DENSITY_TREE, P))['a'] as { a: { x: { x: unknown } } }).a.x.x)).toBeNull();
+    expect(sameTree(rootOf(inner)['x'], resolveDensity(DEFAULT_DENSITY_TREE, P).defs['body'])).toBeNull();
     const rTap = createDensityReference(tapNode, dc.noises), rInner = createDensityReference(inner, dc.noises);
     const mutedRoot = createDensityReference(resolveDensity(muted, P), dc.noises);
     const next = testRng(809);
@@ -300,14 +313,17 @@ describe('resolveDensityNode (§3.4)', () => {
 
   test('the root is the final density (its own mute applies there); a node with no interpolated ancestor is not wrapped', () => {
     expect(sameTree(resolveDensityNode(muted, 'root', P), resolveDensity(muted, P))).toBeNull();
-    const detail = resolveDensityNode(muted, 'root.a.b', P);
-    expect(sameTree(detail.root, (rootOf(resolveDensity(DEFAULT_DENSITY_TREE, P))['a'] as { b: unknown }).b)).toBeNull();
+    const detail = resolveDensityNode(muted, 'root.a.a.a.x.b', P);
+    const resolved = rootOf(resolveDensity(DEFAULT_DENSITY_TREE, P)) as unknown as { a: { a: { a: { x: { b: unknown } } } } };
+    expect(sameTree(detail.root, resolved.a.a.a.x.b)).toBeNull();
     expect(detail.defs).toEqual({});
     // An interpolated node itself is not wrapped again.
-    expect(rootOf(resolveDensityNode(muted, 'root.a.a.x', P))['op']).toBe('interpolated');
-    expect((rootOf(resolveDensityNode(muted, 'root.a.a.x', P))['x'] as { op: string }).op).toBe('add');
+    expect(rootOf(resolveDensityNode(muted, 'root.a.a.a.x.a.x', P))['op']).toBe('interpolated');
+    // Its child is the ref to the body (SP6a §1.1), which the resolved node carries with its def.
+    expect((rootOf(resolveDensityNode(muted, 'root.a.a.a.x.a.x', P))['x'] as { op: string }).op).toBe('ref');
+    expect(resolveDensityNode(muted, 'root.a.a.a.x.a.x', P).defs['body']).toMatchObject({ op: 'add' });
     // A param operand of recip is a node too: its value.
-    expect(resolveDensityNode(DEFAULT_DENSITY_TREE, 'root.a.a.x.x.a.a.a.a.b.b.x.b.x.x.b.x', P).root)
+    expect(resolveDensityNode(DEFAULT_DENSITY_TREE, 'defs.body.a.a.a.a.b.b.x.b.x.x.b.x', P).root)
       .toEqual({ op: 'interpolated', x: C(P.density.noises.jag.clampSigma) });
   });
 
@@ -345,7 +361,7 @@ describe('resolveDensityNode (§3.4)', () => {
 
   test('a path that names no node throws a RangeError; an invalid source throws ExprValidationError', () => {
     expect(() => resolveDensityNode(DEFAULT_DENSITY_TREE, 'root.q', P)).toThrow(RangeError);
-    expect(() => resolveDensityNode(DEFAULT_DENSITY_TREE, 'root.a.b.b.b.b.lo', P)).toThrow(RangeError);
+    expect(() => resolveDensityNode(DEFAULT_DENSITY_TREE, 'root.a.a.a.x.b.b.b.b.lo', P)).toThrow(RangeError);
     expect(() => resolveDensityNode(DEFAULT_DENSITY_TREE, 'defs.nope', P)).toThrow(RangeError);
     expect(() => resolveDensityNode(DEFAULT_DENSITY_TREE, '', P)).toThrow(RangeError);
     expect(() => resolveDensityNode(src({ op: 'bogus' }), 'root', P)).toThrow(ExprValidationError);

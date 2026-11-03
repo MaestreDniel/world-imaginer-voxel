@@ -6,13 +6,18 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import { checkJson, countTreeNodes, type JsonFormat, type JsonValue } from '../../src/core/params/json';
 import type { Issue } from '../../src/core/params/kit';
 import type { DensityParams, SurfaceParams } from '../../src/core/params/schema';
+import { ctxFor } from '../harness/gen';
 import { legacyDefaultDensityExpr, legacyDefaultSurfaceRules } from '../harness/legacyTrees';
+import { columnDiff, SP5C_COLUMNS, sp5cPair, sp5cTrees } from '../harness/sp5cTrees';
 
 const FIXTURE = new URL('../fixtures/sp3c-default-rules.json', import.meta.url);
 const fixture = (): unknown => JSON.parse(readFileSync(FIXTURE, 'utf8')) as unknown;
 
 type Rec = Record<string, unknown>;
 const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** The node at a dotted path (`root.a.b`, `defs.body.x`). */
+const nodeAt = (v: unknown, path: string): unknown => path.split('.').reduce<unknown>((n, k) => (n as Rec)[k], v);
 
 /** Every container (object or array) of a value, the value included. */
 function containers(v: unknown): object[] {
@@ -152,32 +157,58 @@ describe('the default trees as data (SP3d spec §2)', () => {
     expect(() => { (tree as Rec)['x'] = 1; }).toThrow(TypeError);
   });
 
-  test('DEFAULT_DENSITY_TREE is the whole expression {root, defs} with no defs', () => {
+  test('DEFAULT_DENSITY_TREE is the whole expression {root, defs} with the one def body (SP6a §1.1)', () => {
     expect(Object.keys(DEFAULT_DENSITY_TREE)).toEqual(['defs', 'root']);
-    expect((DEFAULT_DENSITY_TREE as Rec)['defs']).toEqual({});
+    expect(Object.keys((DEFAULT_DENSITY_TREE as Rec)['defs'] as Rec)).toEqual(['body']);
   });
 
-  test('DEFAULT_DENSITY_TREE with its three substitutions undone equals legacyDefaultDensityExpr at DEFAULTS (Object.is on every number)', () => {
-    const { tree, undone } = densityUndone(DEFAULT_DENSITY_TREE, DEFAULTS.density);
-    expect(undone).toBe(3);
-    expect(treeDiff(tree, legacyDefaultDensityExpr(DEFAULTS.density))).toBeNull();
+  test('defs.body is the SP5c default\'s terrain body (its root.a.a.x.x), unchanged', () => {
+    expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'defs.body'), nodeAt(sp5cTrees().default, 'root.a.a.x.x'))).toBeNull();
+  });
+
+  test('the root: max(min(min(tap precave(add(tap terrain(interpolated(ref body)), detail)), caves slot), noodle slot), tap islands)', () => {
+    const sp5c = sp5cTrees().default;
+    const op = (path: string): unknown => (nodeAt(DEFAULT_DENSITY_TREE, path) as Rec)['op'];
+    expect([op('root'), op('root.a'), op('root.a.a')]).toEqual(['max', 'min', 'min']);
+    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a')).toMatchObject({ op: 'tap', name: 'precave' });
+    expect(Object.keys(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a') as Rec)).toEqual(['name', 'op', 'x']);
+    expect(op('root.a.a.a.x')).toBe('add');
+    expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a.x.a'), { op: 'tap', name: 'terrain', x: { op: 'interpolated', x: { op: 'ref', name: 'body' } } })).toBeNull();
+    expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a.x.b'), nodeAt(sp5c, 'root.a.b')), 'the detail term').toBeNull();
+    expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b'), { op: 'const', v: 1e6 }), 'the caves slot').toBeNull();
+    expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.b'), { op: 'const', v: 1e6 }), 'the noodle slot').toBeNull();
+    expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'root.b'), nodeAt(sp5c, 'root.b')), 'the islands tap').toBeNull();
+  });
+
+  test('defs.body and the detail term with their three substitutions undone equal legacyDefaultDensityExpr\'s at DEFAULTS (Object.is on every number)', () => {
+    const legacy = legacyDefaultDensityExpr(DEFAULTS.density);
+    const body = densityUndone(nodeAt(DEFAULT_DENSITY_TREE, 'defs.body'), DEFAULTS.density);
+    const detail = densityUndone(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a.x.b'), DEFAULTS.density);
+    expect(body.undone + detail.undone).toBe(3);
+    expect(treeDiff(body.tree, nodeAt(legacy, 'root.a.a.x.x'))).toBeNull();
+    expect(treeDiff(detail.tree, nodeAt(legacy, 'root.a.b'))).toBeNull();
   });
 
   test.each([1, 3, 7.3, 8])('… and at density.noises.jag.clampSigma %s', (cs) => {
     const p = withDensity({}, cs);
-    expect(treeDiff(densityUndone(DEFAULT_DENSITY_TREE, p).tree, legacyDefaultDensityExpr(p))).toBeNull();
+    expect(treeDiff(densityUndone(nodeAt(DEFAULT_DENSITY_TREE, 'defs.body'), p).tree, nodeAt(legacyDefaultDensityExpr(p), 'root.a.a.x.x'))).toBeNull();
   });
 
   test.each([[0, 0], [0, 8], [8, 0], [0.35, 1.05]])('… and at detailAmpLo %s, detailAmpHi %s', (lo, hi) => {
     const p = withDensity({ detailAmpLo: lo, detailAmpHi: hi });
-    expect(treeDiff(densityUndone(DEFAULT_DENSITY_TREE, p).tree, legacyDefaultDensityExpr(p))).toBeNull();
+    expect(treeDiff(densityUndone(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a.x.b'), p).tree, nodeAt(legacyDefaultDensityExpr(p), 'root.a.b'))).toBeNull();
   });
 
-  test('DEFAULT_DENSITY_TREE has 4 nodes more than the legacy tree (recip + param for one const; add, param, neg, param for one)', () => {
+  test.each(SP5C_COLUMNS)('the resolved default equals the SP5c default at every voxel and every bounds decision of column (%i, %i)', (cx, cz) => {
+    const { today, sp5c } = sp5cPair(ctxFor('42'), DEFAULT_DENSITY_TREE, 'default');
+    expect(columnDiff(today, sp5c, cx, cz)).toBeNull();
+  });
+
+  test('DEFAULT_DENSITY_TREE\'s node count (SP6a: the SP5c tree\'s 60 plus precave, ref, the two mins and the two slots)', () => {
     // Nodes as the README counts them (every occurrence; the legacy builder's three `y` are one shared object).
-    const legacy = legacyDefaultDensityExpr(DEFAULTS.density);
-    expect(countTreeNodes(legacy as unknown as JsonValue, 'density')).toBe(56);
-    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(60);
+    expect(countTreeNodes(legacyDefaultDensityExpr(DEFAULTS.density) as unknown as JsonValue, 'density')).toBe(56);
+    expect(countTreeNodes(sp5cTrees().default as JsonValue, 'density')).toBe(60);
+    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(66);
   });
 
   test('DEFAULT_SURFACE_RULES holds exactly §2.2\'s 15 refs', () => {

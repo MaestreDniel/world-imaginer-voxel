@@ -13,7 +13,8 @@ import { canonicalJSON } from '../../src/core/params/canonical';
 import { checkParams, diffParams } from '../../src/core/params/kit';
 import type { JsonObject } from '../../src/core/params/migrate';
 import { resolveProfile } from '../../src/core/params/profiles';
-import { SCHEMA } from '../../src/core/params/schema';
+import { SCHEMA, type Params } from '../../src/core/params/schema';
+import { seedFromInput } from '../../src/core/seed';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
 import { TIME_SPEEDS } from '../../src/daynight/dayNight';
 import { WorldSession } from '../../src/engine/session';
@@ -31,6 +32,7 @@ import { normalizeHotbar } from '../../src/player/hotbar';
 import { NO_ENTRY } from '../../src/sim/diffStore';
 import { Y_MAX, Y_MIN } from '../../src/ui/world/query';
 import { REGISTRY } from '../../src/world/blocks';
+import { sp5cTrees, type Sp5cKind } from '../harness/sp5cTrees';
 
 const FIXTURE = new URL('../fixtures/sp5bWorldParams.json', import.meta.url);
 const fixture = (): { schemaVersion: number; profile: 'default'; params: JsonObject } =>
@@ -100,8 +102,8 @@ describe('loadParams (D33)', () => {
     }
   });
 
-  test('`schemaVersion` 3 → a `MIGRATION_FAILED` issue', () => {
-    const r = loadParams({ ...fixture(), schemaVersion: 3 });
+  test('`schemaVersion` 4 → a `MIGRATION_FAILED` issue', () => {
+    const r = loadParams({ ...fixture(), schemaVersion: 4 });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.issues.map((i) => i.code)).toContain('MIGRATION_FAILED');
   });
@@ -440,6 +442,50 @@ describe('olderGenerator (D8)', () => {
     const pageKey = hex64(genKey(s.seed, stageHashes(s.params)));
     const w = { ...record(pageKey), seedText: 'hello', seed: [s.seed[0], s.seed[1]] as [number, number], params: withoutDefs(f.params) };
     expect(hex64(genKey(w.seed, stageHashes(p.value)))).toBe(pageKey);
+    expect(olderGenerator(w, p.value)).toBe(false);
+  });
+});
+
+describe('GV5 worlds open with today\'s built-in trees (SP6a D36, spec §12.4)', () => {
+  const KINDS: readonly Sp5cKind[] = ['default', 'amplified', 'floating_islands'];
+  /** The seed of seed text 's', so the page's session (which derives its seed from the text) agrees with the record. */
+  const seed: Seed64 = seedFromInput('s');
+  /** A GV5 world record of `profile`: schema 2, its profile's params with `density.defs` = `defs`, the genKey a GV5 build stored. */
+  const gv5 = (profile: Sp5cKind, defs: unknown): WorldRecord => {
+    const params = JSON.parse(canonicalJSON(resolveProfile(profile))) as Record<string, any>;
+    params['density'].defs = defs;
+    const key = hex64(genKey(seed, stageHashes(params as unknown as Params)));
+    return {
+      id: `w-${profile}`, name: profile, seedText: 's', seed: [seed[0], seed[1]], profile, params: params as JsonObject, schemaVersion: 2,
+      paramsHash: '0123456789abcdef', generatorVersion: 5, genKey: key, stateTable: todayStateTable(), created: 1, backupOf: null,
+    };
+  };
+  /** The genKey the world page computes for `p` (a session over the profile with `p`'s patch). */
+  const pageKey = (w: WorldRecord, p: Params): string => {
+    const session = new WorldSession(() => [w.seed[0], w.seed[1]], { seedText: w.seedText, profile: w.profile, patch: diffParams(SCHEMA, resolveProfile(w.profile), p) });
+    return hex64(genKey(session.state.seed, stageHashes(session.state.params)));
+  };
+
+  test.each(KINDS)('the %s world holding the SP5c tree opens with today\'s tree; the badge and the page agree; olderGenerator is true', (kind) => {
+    const w = gv5(kind, sp5cTrees()[kind]);
+    const p = loadParams(w);
+    if (!p.ok) throw new Error(JSON.stringify(p.issues));
+    expect(p.value.density.defs).toBe(resolveProfile(kind).density.defs);
+    expect(canonicalJSON(p.value)).toBe(canonicalJSON(resolveProfile(kind)));
+    expect(hex64(genKey(w.seed, stageHashes(p.value)))).toBe(pageKey(w, p.value));
+    expect(olderGenerator(w, p.value)).toBe(true);
+  });
+
+  test.each(KINDS)('the %s world holding an edited tree keeps it', (kind) => {
+    const tree = sp5cTrees()[kind] as { root: { b: { x: Record<string, any> } } };
+    if (kind === 'floating_islands') tree.root.b.x['x'].lo = 0.3;
+    else tree.root.b.x['v'] = -10;
+    const w = gv5(kind, tree);
+    const p = loadParams(w);
+    if (!p.ok) throw new Error(JSON.stringify(p.issues));
+    expect(canonicalJSON(p.value.density.defs)).toBe(canonicalJSON(tree));
+    expect(hex64(genKey(w.seed, stageHashes(p.value)))).toBe(pageKey(w, p.value));
+    // Today's genKey of the same params is the stored one while GENERATOR_VERSION is 5 (Task 6 bumps it).
     expect(olderGenerator(w, p.value)).toBe(false);
   });
 });

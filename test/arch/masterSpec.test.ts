@@ -583,7 +583,7 @@ describe('master spec amendments (SP3e §12, §13, exit)', () => {
     && resolveProfile('floating_islands').surface.rules === (presetTrees as Record<string, unknown>).FLOATING_SURFACE_RULES;
   const amp = presetTrees.AMPLIFIED_DENSITY_TREE;
   const v = (path: string): number => nodeAt(amp, path) as number;
-  const knots = nodeAt(amp, 'root.a.a.x.x.a.a.b.b.knots') as Array<[number, number]>;
+  const knots = nodeAt(amp, 'defs.body.a.a.b.b.knots') as Array<[number, number]>;
   const slideFrom = knots[2]![0], slideTo = knots[3]![0];
   // The islands term (SP3e spec §3.1): the m gate, the y window [lo, hi) and BODY's literals.
   const gate = nodeAt(presetTrees.FLOATING_DENSITY_TREE, 'root.b.x.x') as { lo: number };
@@ -613,19 +613,19 @@ describe('master spec amendments (SP3e §12, §13, exit)', () => {
 
   test('SP3e\'s "Received from SP3a" states amplified\'s final slide and ceiling knee', () => {
     const line = spEntry('SP3e', 'SP4a').split('\n').find((l) => l.startsWith('- Received from SP3a'));
-    expect(line).toContain(`(delivered: in the density tree, with the slide at ${slideFrom}-${slideTo} and a soft ceiling from ${-v('root.a.a.x.x.b.x.b.b.b.v')}).`);
+    expect(line).toContain(`(delivered: in the density tree, with the slide at ${slideFrom}-${slideTo} and a soft ceiling from ${-v('defs.body.b.x.b.b.b.v')}).`);
   });
 
   test('§3.15\'s title names the code SP3e adds; its draft rows state the final constants of the preset trees and overlays', () => {
     expect(text).toContain('### 3.15 Extreme presets (data only: splines + climate params + DAG terms; SP3e adds the island cluster mask, water v0\'s island rule and the sky-open run under islands as code)');
     const a = presetRow('amplified');
     // The amplification and σ's factor fade with lakeMask: k + (−d)·lakeMask (the SP3e Review Focus).
-    const factor = v('root.a.a.x.x.a.a.a.a.a.b.a.a.v'), knee = -v('root.a.a.x.x.a.a.a.a.a.b.b.b.b.v');
-    expect(-v('root.a.a.x.x.a.a.a.a.a.b.a.b.a.v'), 'the offset fade is k·(1 − lakeMask)').toBe(factor);
+    const factor = v('defs.body.a.a.a.a.a.b.a.a.v'), knee = -v('defs.body.a.a.a.a.a.b.b.b.b.v');
+    expect(-v('defs.body.a.a.a.a.a.b.a.b.a.v'), 'the offset fade is k·(1 − lakeMask)').toBe(factor);
     expect(a).toContain(`\`offset' = offset + ${factor}·(1 − lakeMask)·max(0, offset − ${knee})\``);
-    const sigma = v('root.a.a.x.x.a.a.b.a.b.a.v'), sigmaFade = -v('root.a.a.x.x.a.a.b.a.b.b.a.v');
-    expect(a).toContain(`σ ×${sigma} (${sigma} − ${sigmaFade}·lakeMask: the default's σ in a lake basin); jag ×${v('root.a.a.x.x.a.a.a.a.b.a.b.v')}; slide ${slideFrom}-${slideTo}`);
-    expect(a).toContain(`ceiling \`−${v('root.a.a.x.x.b.x.a.v')}·max(0, y − ${-v('root.a.a.x.x.b.x.b.b.b.v')})\``);
+    const sigma = v('defs.body.a.a.b.a.b.a.v'), sigmaFade = -v('defs.body.a.a.b.a.b.b.a.v');
+    expect(a).toContain(`σ ×${sigma} (${sigma} − ${sigmaFade}·lakeMask: the default's σ in a lake basin); jag ×${v('defs.body.a.a.a.a.b.a.b.v')}; slide ${slideFrom}-${slideTo}`);
+    expect(a).toContain(`ceiling \`−${v('defs.body.b.x.a.v')}·max(0, y − ${-v('defs.body.b.x.b.b.b.v')})\``);
     expect(a).toContain('in `density.defs`');
     const arch = resolveProfile('archipelago');
     const r = presetRow('archipelago');

@@ -244,7 +244,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b and SP5c k
   });
   // SP3d §9: the slice rows, one thread, in-process, 9 timed runs after one warm-up each, a fresh GenContext per slice.
   // slice.vertical128: field density at n = 128 on uiSmoke's mountain line A (−1664, 8) → B (−640, 8), split as the
-  // pool of one worker splits it (k = 79 sample columns per part: 2 parts).
+  // pool of one worker splits it (k = 78 sample columns per part: 2 parts).
   const vSpec: FieldSliceSpec = { plane: 'vertical', ax: -1664, az: 8, bx: -640, bz: 8, y: 63, n: 128, field: 'density', path: '' };
   const vRanges = poolOfOne(DEFAULTS, vSpec);
   const vRun = await measure('slice.vertical128', 1, () => { sink += slice(DEFAULTS, vSpec, vRanges); }, 9);

@@ -25,7 +25,7 @@ import { noiseSumTree, PART_WORST_LEAVES, partWorstParams } from '../harness/sli
  * test/integration/fieldSliceCalibration.test.ts`): one thread, in-process, p50 of 9 runs, each on a fresh GenContext
  * (cold caches: the case right after an edit). It measures the unit (ns per work unit of reference evaluation, the
  * ColumnSamples already cached) on the default tree and on partWorst's tree, the time of a part at PART_BUDGET (the
- * default's 128² vertical part of k = 79 sample columns, its 128² horizontal part at extent 8192 of k = 25 rows, and
+ * default's 128² vertical part of k = 78 sample columns, its 128² horizontal part at extent 8192 of k = 24 rows, and
  * partWorst's one 32-sample column), and the three acquisition costs (a ColumnSample per chunk column along the mountain
  * line; a corner sample without and with steep at extent 8192, where no two samples share a corner) in units of the
  * default tree's unit. It prints `MEASUREMENT:` lines and fails — the spec's STOP — when a part at PART_BUDGET takes more
@@ -80,8 +80,8 @@ const HORIZONTAL_8192: SliceGeometry = { plane: 'horizontal', n: 128, cx: 0, cz:
 
 interface Part { readonly name: string; readonly params: Params; readonly geometry: SliceGeometry; readonly to: number }
 const PARTS: readonly Part[] = [
-  { name: 'default vertical 128² part [0, 79)', params: DEFAULTS, geometry: vertical(128), to: 79 },
-  { name: 'default horizontal 128² part at extent 8192 [0, 25)', params: DEFAULTS, geometry: HORIZONTAL_8192, to: 25 },
+  { name: 'default vertical 128² part [0, 78)', params: DEFAULTS, geometry: vertical(128), to: 78 },
+  { name: 'default horizontal 128² part at extent 8192 [0, 24)', params: DEFAULTS, geometry: HORIZONTAL_8192, to: 24 },
   { name: `partWorst (${PART_WORST_LEAVES} leaves) vertical 32² part [0, 1)`, params: partWorstParams(), geometry: vertical(32), to: 1 },
 ];
 

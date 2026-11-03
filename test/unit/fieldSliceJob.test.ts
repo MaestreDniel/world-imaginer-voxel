@@ -38,9 +38,9 @@ describe('the fieldSlice job (SP3d spec §5.1)', () => {
 
   test.each([
     ['vertical density', vMsg(MOUNTAIN, 'density', '', 0, 32), vGeom(MOUNTAIN)],
-    ['vertical node under the terrain tap', vMsg(MOUNTAIN, 'node', 'root.a.a.x.x', 5, 17), vGeom(MOUNTAIN)],
+    ['vertical node under the terrain tap', vMsg(MOUNTAIN, 'node', 'defs.body', 5, 17), vGeom(MOUNTAIN)],
     ['horizontal density', hMsg('density', '', 0, 32), hGeom],
-    ['horizontal node', hMsg('node', 'root.a.b', 11, 32), hGeom],
+    ['horizontal node', hMsg('node', 'root.a.a.a.x.b', 11, 32), hGeom],
   ] as const)('%s replies with gen\'s evaluation of its range, the values transferred, at the job\'s epoch', (_name, msg, g) => {
     const h = createTaskHandler();
     h.handle(configure(3));
@@ -99,9 +99,10 @@ describe('the fieldSlice job (SP3d spec §5.1)', () => {
     bad(vMsg(MOUNTAIN, 'node', 'constructor', 0, 8), 'path "constructor" names no node of density.defs');
     bad(vMsg(MOUNTAIN, 'rule', 'root.rules[99]', 0, 1), 'path "root.rules[99]" names no rule or condition of surface.rules');
     for (const [from, to] of [[5, 5], [0, 33], [1.5, 3], [-1, 2], [Number.NaN, 2]]) bad(vMsg(MOUNTAIN, 'density', '', from!, to!), `samples [${from}, ${to}) are not integers with 0 ≤ from < to ≤ 32`);
-    bad(vMsg(MOUNTAIN, 'density', '', 0, 128, 128), `too heavy: 128 × 105600 work units exceed the part budget ${PART_BUDGET}`);
-    bad(vMsg(MOUNTAIN, 'blocks', '', 0, 2), 'too heavy: 2 sample columns of cost 5006893, at most 1 per part');
-    expect(h.handle(vMsg(MOUNTAIN, 'density', '', 0, 79, 128)).msg.type).toBe('fieldSliceResult');
+    bad(vMsg(MOUNTAIN, 'density', '', 0, 128, 128), `too heavy: 128 × 106240 work units exceed the part budget ${PART_BUDGET}`);
+    bad(vMsg(MOUNTAIN, 'blocks', '', 0, 2), 'too heavy: 2 sample columns of cost 5498413, at most 1 per part');
+    expect(h.handle(vMsg(MOUNTAIN, 'density', '', 0, 78, 128)).msg.type).toBe('fieldSliceResult');
+    bad(vMsg(MOUNTAIN, 'density', '', 0, 79, 128), `too heavy: 79 × 106240 work units exceed the part budget ${PART_BUDGET}`);
   });
   test('before configure NOT_CONFIGURED, at another epoch STALE_EPOCH; with epoch cells a fieldSlice whose epoch the cell has left replies ABORTED', () => {
     const sab = new SharedArrayBuffer(16);
@@ -112,7 +113,7 @@ describe('the fieldSlice job (SP3d spec §5.1)', () => {
     h.handle(configure(3, sab));
     expect(errOf(h.handle({ ...vMsg(MOUNTAIN, 'density', '', 0, 8), epoch: 2 }).msg).slice(0, 3)).toEqual(['STALE_EPOCH', 9, 2]);
     Atomics.store(cell, 0, 4);
-    for (const m of [vMsg(MOUNTAIN, 'density', '', 0, 8), hMsg('node', 'root.a.b', 0, 8), vMsg(COAST, 'blocks', '', 3, 4), vMsg(COAST, 'rule', 'root.rules[2]', 3, 4)]) {
+    for (const m of [vMsg(MOUNTAIN, 'density', '', 0, 8), hMsg('node', 'root.a.a.a.x.b', 0, 8), vMsg(COAST, 'blocks', '', 3, 4), vMsg(COAST, 'rule', 'root.rules[2]', 3, 4)]) {
       const r = h.handle(m);
       expect(errOf(r.msg).slice(0, 3), m.field).toEqual(['ABORTED', 9, 3]);
       expect(r.transfer).toEqual([]);
@@ -133,7 +134,7 @@ describe('the fieldProbe job (SP3d spec §5.3)', () => {
     const seen = new Set<number>();
     for (const [c, k] of [[0, 0], [3, 20], [9, 31], [17, 12], [30, 25], [31, 31], [12, 16]] as const) {
       const [x, y, z] = sliceSampleVoxel(g, c, k);
-      for (const [field, path] of [['density', ''], ['node', 'root.a.a.x.x'], ['rule', 'root.rules[2]'], ['rule', 'root.rules[1].if']] as const) {
+      for (const [field, path] of [['density', ''], ['node', 'defs.body'], ['rule', 'root.rules[2]'], ['rule', 'root.rules[1].if']] as const) {
         const r = h.handle(pMsg(field, path, x, y, z));
         expect(r.msg, `${field} (${x}, ${y}, ${z})`).toEqual({ type: 'fieldProbeResult', jobId: 5, epoch: 3, value: probeField(ctx, field, path, x, y, z, NEVER) });
         expect(r.transfer).toEqual([]);

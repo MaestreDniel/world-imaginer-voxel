@@ -92,15 +92,16 @@ describe('evaluateFieldSlice: density (SP3d spec §4.1, §5.1)', () => {
 });
 
 describe('evaluateFieldSlice: node (SP3d spec §3.4)', () => {
-  // The terrain tap muted to 0: its subtree leaves the resolved tree, but the inspector evaluates it from the source.
+  // The terrain tap muted to 0: its subtree (and defs.body, read only under it) leaves the resolved tree, but the inspector
+  // evaluates it from the source.
   const tree = terrainMuted(0);
   const ctx = ctxWith(tree);
   const noises = surfaceContextOf(ctx).density.noises;
-  const path = 'root.a.a.x.x.a';
+  const path = 'defs.body.a';
 
   /** The source subtree at `path` of the source tree, resolved on its own (inside interpolated, so wrapped). */
   const separately = createDensityReference(
-    resolveDensity({ root: { op: 'interpolated', x: tree['root'].a.a.x.x.a }, defs: {} }, ctx.params),
+    resolveDensity({ root: { op: 'interpolated', x: tree['defs'].body.a }, defs: {} }, ctx.params),
     noises,
   );
 
@@ -123,7 +124,7 @@ describe('evaluateFieldSlice: node (SP3d spec §3.4)', () => {
   test('a selected muted tap shows its subtree: equal to the unmuted tree\'s tap', () => {
     const plain = ctxFor('42');
     const g = vertical(MOUNTAIN);
-    expect(bytes(run(ctx, g, 'node', 'root.a.a'))).toEqual(bytes(run(plain, g, 'node', 'root.a.a')));
+    expect(bytes(run(ctx, g, 'node', 'root.a.a.a.x.a'))).toEqual(bytes(run(plain, g, 'node', 'root.a.a.a.x.a')));
     // While the density of the muted tree is the islands floor everywhere (terrain 0 + detail, max −1e6).
     expect(bytes(run(ctx, g, 'density'))).not.toEqual(bytes(run(plain, g, 'density')));
   });
@@ -214,8 +215,8 @@ describe('evaluateFieldSlice: parts and stop (SP3d spec §5.1, §5.2)', () => {
   const cases: Array<[string, SliceGeometry, SliceField, string]> = [
     ['density vertical', vertical(MOUNTAIN), 'density', ''],
     ['density horizontal', horizontal(32, 512, 100, -300, 70), 'density', ''],
-    ['node vertical', vertical(MOUNTAIN), 'node', 'root.a.a.x.x.b'],
-    ['node horizontal', horizontal(32, 512, 100, -300, 70), 'node', 'root.a.b'],
+    ['node vertical', vertical(MOUNTAIN), 'node', 'defs.body.b'],
+    ['node horizontal', horizontal(32, 512, 100, -300, 70), 'node', 'root.a.a.a.x.b'],
     ['blocks vertical', vertical(COAST), 'blocks', ''],
     ['rule vertical', vertical(COAST), 'rule', 'root.rules[1].then'],
   ];
@@ -300,8 +301,8 @@ describe('probeField (SP3d spec §5.3): one sample, exactly as the slice', () =>
   test.each([
     ['density', 'vertical', vertical(MOUNTAIN), ''],
     ['density', 'horizontal', horizontal(32, 4096, 0, 0, 40), ''],
-    ['node', 'vertical', vertical(MOUNTAIN), 'root.a.a.x.x.a'],
-    ['node', 'horizontal', horizontal(32, 4096, 0, 0, 40), 'root.a.a.x'],
+    ['node', 'vertical', vertical(MOUNTAIN), 'defs.body.a'],
+    ['node', 'horizontal', horizontal(32, 4096, 0, 0, 40), 'root.a.a.a.x.a.x'],
     ['rule', 'vertical', vertical(COAST), 'root.rules[1].then'],
     ['rule', 'vertical', vertical(COAST), 'root.rules[2].if'],
   ] as const)('%s on a %s plane', (field, _plane, g, path) => {
@@ -350,7 +351,7 @@ describe('field problems and argument checks (SP3d spec §5.1)', () => {
 
   test('fieldSliceProblem', () => {
     expect(fieldSliceProblem(ctx, 'density', '', 'horizontal')).toBeNull();
-    expect(fieldSliceProblem(ctx, 'node', 'root.a.b.b', 'horizontal')).toBeNull();
+    expect(fieldSliceProblem(ctx, 'node', 'root.a.a.a.x.b.b', 'horizontal')).toBeNull();
     expect(fieldSliceProblem(ctx, 'node', 'defs.x', 'vertical')).toBe('path "defs.x" names no node of density.defs');
     expect(fieldSliceProblem(ctx, 'node', 'root.b.x.v', 'vertical')).toBe('path "root.b.x.v" names no node of density.defs');
     expect(fieldSliceProblem(ctx, 'node', 'constructor', 'vertical')).toBe('path "constructor" names no node of density.defs');
@@ -383,7 +384,7 @@ describe('DensityReference memos (SP3d spec §5.1, §5.3)', () => {
 
   test('nodeReferenceOf: per (context, path), an LRU of 8 paths', () => {
     const ctx = ctxFor('42');
-    const paths = ['root', 'root.a', 'root.b', 'root.b.x', 'root.a.a', 'root.a.b', 'root.a.b.a', 'root.a.b.b', 'root.a.a.x'];
+    const paths = ['root', 'root.a', 'root.b', 'root.b.x', 'root.a.a.a.x.a', 'root.a.a.a.x.b', 'root.a.a.a.x.b.a', 'root.a.a.a.x.b.b', 'root.a.a.a.x.a.x'];
     const first = new Map(paths.slice(0, 8).map((p) => [p, nodeReferenceOf(ctx, p)]));
     for (const p of paths.slice(0, 8)) expect(nodeReferenceOf(ctx, p)).toBe(first.get(p));
     expect(nodeReferenceOf(ctx, paths[8]!)).toBe(nodeReferenceOf(ctx, paths[8]!));

@@ -170,9 +170,12 @@ describe('perturbations', () => {
   test('json (SP3d spec §7): density.defs mutes the terrain tap to 0, surface.rules moves the deepslate gradient top 8 → 12; nothing else changes', () => {
     const tree = DEFAULTS.density.defs as Record<string, any>;
     const [muted] = perturbations(leaf('density.defs'), tree) as Record<string, any>[];
-    expect(muted!.root.a.a).toEqual({ ...tree.root.a.a, mute: 0 });
-    expect(canonicalJSON({ ...muted, root: { ...muted!.root, a: { ...muted!.root.a, a: tree.root.a.a } } })).toBe(canonicalJSON(tree));
-    expect(tree.root.a.a.mute).toBeUndefined();
+    expect(muted!.root.a.a.a.x.a).toEqual({ ...tree.root.a.a.a.x.a, mute: 0 });
+    // The terrain tap sits at root.a.a.a.x.a, inside the precave tap (SP6a §1.1); with it put back the trees are equal.
+    const back = JSON.parse(JSON.stringify(muted)) as Record<string, any>;
+    back['root'].a.a.a.x.a = tree.root.a.a.a.x.a;
+    expect(canonicalJSON(back)).toBe(canonicalJSON(tree));
+    expect(tree.root.a.a.a.x.a.mute).toBeUndefined();
     const rules = DEFAULTS.surface.rules as Record<string, any>;
     const [higher] = perturbations(leaf('surface.rules'), rules) as Record<string, any>[];
     expect(rules.rules[2].if).toMatchObject({ kind: 'verticalGradient', trueAtAndBelow: 0, falseAtAndAbove: 8 });

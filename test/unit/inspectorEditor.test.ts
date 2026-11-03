@@ -92,7 +92,7 @@ describe('the buffer and validation as you type', () => {
 
   test('tier-1 issues (−0, a "__proto__" def, Infinity) at node paths; syntax errors with line and column', () => {
     const { model, clock } = open(session());
-    model.edit(DENSITY_TEXT.replace('"defs": {}', '"defs": { "__proto__": { "op": "y" } }').replace(ISLANDS, '{ "op": "const", "v": -0 }'), 0);
+    model.edit(DENSITY_TEXT.replace('"defs": {\n', '"defs": {\n    "__proto__": { "op": "y" },\n').replace(ISLANDS, '{ "op": "const", "v": -0 }'), 0);
     clock.advance(EDITOR_DEBOUNCE_MS);
     expect(model.state.issues.map((i) => `${i.path} ${i.code}`)).toEqual(['defs."__proto__" BAD_KEY', 'root.b.x.v NEGATIVE_ZERO']);
     model.edit(DENSITY_TEXT.replace(ISLANDS, '{ "op": "const", "v": 1e999 }'), 0);
@@ -234,14 +234,14 @@ describe('Apply, Reset and Escape', () => {
     model.apply();
     const at = model.state.text.indexOf('"name": "terrain"');
     model.setCaret(at, at);
-    expect(nodeAt(model.state.ranges!, at)).toBe('root.a.a');
+    expect(nodeAt(model.state.ranges!, at)).toBe('root.a.a.a.x.a');
     expect(model.reset()).toBe(true);
     expect(w.state.params.density.defs).toBe(DEFAULT_DENSITY_TREE);
     expect(w.modified('density.defs')).toBe(false);
     const s = model.state;
     expect([s.text, s.clean, s.stale]).toEqual([DENSITY_TEXT, true, false]);
     expect(s.caret).toBe(DENSITY_TEXT.indexOf('"name": "terrain"'));
-    expect(nodeAt(s.ranges!, s.scrollAnchor)).toBe('root.a.a');
+    expect(nodeAt(s.ranges!, s.scrollAnchor)).toBe('root.a.a.a.x.a');
   });
 
   test('Escape reverts a dirty buffer, broken or not, to the current tree', () => {

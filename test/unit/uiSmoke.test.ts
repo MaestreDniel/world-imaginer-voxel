@@ -421,9 +421,9 @@ describe('UI smoke test: the Density tab steps\' pure parts (SP3d spec §6)', ()
     const r = applyPatch(SCHEMA, resolveProfile('default'), {});
     if (!r.ok) throw new Error('bad params');
     // The default tree, and the tree the smoke has at that step: islands -10, terrain muted to 0.
-    const stepTree = JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE)) as { root: { a: { a: Record<string, unknown> }; b: { x: { v: number } } } };
+    const stepTree = JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE)) as { root: { a: { a: { a: { x: { a: Record<string, unknown> } } } }; b: { x: { v: number } } } };
     stepTree.root.b.x.v = -10;
-    stepTree.root.a.a['mute'] = 0;
+    stepTree.root.a.a.a.x.a['mute'] = 0;
     for (const tree of [DEFAULT_DENSITY_TREE, stepTree]) {
       const text = printTree(tree, 'density').text;
       const broken = brokenIslandsJson(text);

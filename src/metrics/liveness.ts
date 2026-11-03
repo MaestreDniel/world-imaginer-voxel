@@ -218,7 +218,7 @@ function scaleBoxes(t: BoxTable, dir: number): BoxTable {
 /**
  * U2's one variant of each `json` leaf (SP3d spec §7, D15): the node at JSON path `at` inside the leaf value must have
  * the fields of `is`; the variant sets its field `key` to `value`. `density.defs`: the `terrain` tap muted to 0 (its
- * toggle's value under `add`); `surface.rules`: the deepslate gradient's `falseAtAndAbove` 8 → 12 (rule id
+ * toggle's value under `add`; at `root.a.a.a.x.a`, inside the `precave` tap, SP6a §1.1); `surface.rules`: the deepslate gradient's `falseAtAndAbove` 8 → 12 (rule id
  * `root.rules[2].if`), which keeps the tree's fast path. Both are decided on the land column (`intendedClass`).
  */
 interface JsonVariant {
@@ -228,7 +228,7 @@ interface JsonVariant {
   readonly value: number;
 }
 const JSON_VARIANTS: ReadonlyMap<string, JsonVariant> = new Map<string, JsonVariant>([
-  ['density.defs', { at: ['root', 'a', 'a'], is: { op: 'tap', name: 'terrain' }, key: 'mute', value: 0 }],
+  ['density.defs', { at: ['root', 'a', 'a', 'a', 'x', 'a'], is: { op: 'tap', name: 'terrain' }, key: 'mute', value: 0 }],
   ['surface.rules', { at: ['rules', 2, 'if'], is: { kind: 'verticalGradient', falseAtAndAbove: 8 }, key: 'falseAtAndAbove', value: 12 }],
 ]);
 

@@ -33,7 +33,7 @@ const harness = () => {
   return { model, probes, shown, h };
 };
 
-const NODE: HoverTarget = { field: 'node', leaf: 'density.defs', path: 'root.a.a' };
+const NODE: HoverTarget = { field: 'node', leaf: 'density.defs', path: 'root.a.a.a.x.a' };
 const OTHER: HoverTarget = { field: 'node', leaf: 'density.defs', path: 'root.b' };
 const RULE: HoverTarget = { field: 'rule', leaf: 'surface.rules', path: 'root.rules[1]' };
 const v = (x: number, y: number, z: number): HoverVoxel => ({ x, y, z });
@@ -73,7 +73,7 @@ describe('the probe stream (one in flight, the latest wins)', () => {
     expect(HOVER_WAITING).toBe('…');
     expect(t.model.hover(v(1, 70, 2), NODE)).toBe(HOVER_WAITING);
     expect(t.model.hover(v(1, 70, 2), NODE)).toBe(HOVER_WAITING);
-    expect(t.probes.map(at)).toEqual([['node', 'root.a.a', 1, 70, 2]]);
+    expect(t.probes.map(at)).toEqual([['node', 'root.a.a.a.x.a', 1, 70, 2]]);
     expect(t.probes[0]!.priority).toBeUndefined();
     t.probes[0]!.resolve(0.25);
     await flush();
@@ -87,11 +87,11 @@ describe('the probe stream (one in flight, the latest wins)', () => {
     t.model.hover(v(1, 1, 1), NODE);
     t.model.hover(v(2, 2, 2), NODE);
     t.model.hover(v(3, 3, 3), NODE);
-    expect(t.probes.map(at)).toEqual([['node', 'root.a.a', 1, 1, 1]]);
+    expect(t.probes.map(at)).toEqual([['node', 'root.a.a.a.x.a', 1, 1, 1]]);
     t.probes[0]!.resolve(1);
     await flush();
     expect(t.shown).toEqual([]);
-    expect(t.probes.map(at)).toEqual([['node', 'root.a.a', 1, 1, 1], ['node', 'root.a.a', 3, 3, 3]]);
+    expect(t.probes.map(at)).toEqual([['node', 'root.a.a.a.x.a', 1, 1, 1], ['node', 'root.a.a.a.x.a', 3, 3, 3]]);
     t.probes[1]!.resolve(-3);
     await flush();
     expect(t.shown).toEqual([[key(NODE, v(3, 3, 3)), '-3']]);
@@ -104,7 +104,7 @@ describe('the probe stream (one in flight, the latest wins)', () => {
     t.probes[0]!.resolve(1);
     await flush();
     expect(t.shown).toEqual([]);
-    expect(t.probes.map(at)).toEqual([['node', 'root.a.a', 5, 6, 7], ['node', 'root.b', 5, 6, 7]]);
+    expect(t.probes.map(at)).toEqual([['node', 'root.a.a.a.x.a', 5, 6, 7], ['node', 'root.b', 5, 6, 7]]);
     t.model.hover(v(5, 6, 7), RULE);
     t.probes[1]!.resolve(2);
     await flush();
@@ -151,7 +151,7 @@ describe('the probe stream (one in flight, the latest wins)', () => {
     await flush();
     expect(t.shown).toEqual([]);
     expect(t.model.refresh()).toBe(HOVER_WAITING);
-    expect(t.probes.map(at)).toEqual([['node', 'root.a.a', 1, 1, 1], ['node', 'root.a.a', 1, 1, 1]]);
+    expect(t.probes.map(at)).toEqual([['node', 'root.a.a.a.x.a', 1, 1, 1], ['node', 'root.a.a.a.x.a', 1, 1, 1]]);
     t.probes[1]!.resolve(2);
     await flush();
     expect(t.shown).toEqual([[key(NODE, v(1, 1, 1), 8), '2']]);
@@ -165,7 +165,7 @@ describe('the probe stream (one in flight, the latest wins)', () => {
     expect(t.probes).toHaveLength(3);
     t.probes[2]!.resolve(3);
     await flush();
-    expect(t.probes.map(at).at(-1)).toEqual(['node', 'root.a.a', 4, 4, 4]);
+    expect(t.probes.map(at).at(-1)).toEqual(['node', 'root.a.a.a.x.a', 4, 4, 4]);
     expect(t.probes).toHaveLength(4);
     t.probes[3]!.resolve(5);
     await flush();
@@ -177,11 +177,11 @@ describe('the probe stream (one in flight, the latest wins)', () => {
     t.model.hover(v(5, 6, 7), NODE);
     t.probes[0]!.reject(new JobCancelled());
     await flush();
-    expect([t.shown, t.probes.map(at)]).toEqual([[], [['node', 'root.a.a', 5, 6, 7], ['node', 'root.a.a', 5, 6, 7]]]);
-    t.probes[1]!.reject(new Error('BAD_ARGS: path "root.a.a" names no node of density.defs'));
+    expect([t.shown, t.probes.map(at)]).toEqual([[], [['node', 'root.a.a.a.x.a', 5, 6, 7], ['node', 'root.a.a.a.x.a', 5, 6, 7]]]);
+    t.probes[1]!.reject(new Error('BAD_ARGS: path "root.a.a.a.x.a" names no node of density.defs'));
     await flush();
-    expect(t.shown).toEqual([[key(NODE, v(5, 6, 7)), 'failed: BAD_ARGS: path "root.a.a" names no node of density.defs']]);
-    expect(t.model.hover(v(5, 6, 7), NODE)).toBe('failed: BAD_ARGS: path "root.a.a" names no node of density.defs');
+    expect(t.shown).toEqual([[key(NODE, v(5, 6, 7)), 'failed: BAD_ARGS: path "root.a.a.a.x.a" names no node of density.defs']]);
+    expect(t.model.hover(v(5, 6, 7), NODE)).toBe('failed: BAD_ARGS: path "root.a.a.a.x.a" names no node of density.defs');
     expect(t.probes).toHaveLength(2);
     // JobCancelled at another epoch is dropped: the hover at the new epoch asks on its own.
     t.model.hover(v(1, 1, 1), NODE);

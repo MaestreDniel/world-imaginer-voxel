@@ -2,15 +2,18 @@ import { describe, expect, test } from 'vitest';
 import { DENSITY_COLUMN_COST_MAX, RULES_COLUMN_COST_MAX } from '../../src/core/constants';
 import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
 import { DEFAULTS } from '../../src/core/params/defaults';
+import { AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE } from '../../src/core/params/presetTrees';
 import { countTreeNodes } from '../../src/core/params/json';
 import type { Params } from '../../src/core/params/schema';
 import { EXPR_CHILD_KEYS, type DensityExpr, type Expr } from '../../src/gen/density/expr';
+import { resolveDensity } from '../../src/gen/density/source';
 import { densityColumnCost, rulesColumnCost, structuralCost, workCost } from '../../src/gen/inspect/cost';
 import { surfaceFastPath } from '../../src/gen/surface/compile';
 import type { Rule } from '../../src/gen/surface/rules';
 import { randomDensityExpr, SCHEMA_DENSITY_NOISES } from '../harness/densityFuzz';
 import { legacyDefaultDensityExpr, legacyDefaultSurfaceRules } from '../harness/legacyTrees';
 import { paramsWith } from '../harness/gen';
+import { sp5cTrees } from '../harness/sp5cTrees';
 import { testRng } from '../harness/stats';
 import { randomSurfaceRules, withRegisteredBlocks } from '../harness/surfaceFuzz';
 
@@ -18,7 +21,7 @@ type Rec = Record<string, unknown>;
 const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
 /** A mutable deep copy of a JSON value. */
 const copy = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
-/** The object at a dotted path with `[i]` items (`root.a.a`, `rules[2].if`). */
+/** The object at a dotted path with `[i]` items (`root.a.a.a.x.a`, `rules[2].if`). */
 function at(v: unknown, path: string): Rec {
   let x: unknown = v;
   for (const part of path.split('.')) {
@@ -59,19 +62,26 @@ function oracle(e: unknown, defs: Readonly<Record<string, unknown>>, mode: 'stru
 }
 
 describe('structural and work costs (SP3d spec §1.7, §5.2)', () => {
-  test('the default root costs 333 as source and 322 as the legacy-built tree', () => {
-    expect(structuralCost(src.root, src.defs)).toBe(333);
+  test('the default root costs 338 as source and 327 resolved (SP6a: the SP5c tree\'s 333 and the legacy-built 322, plus 5 voxel nodes)', () => {
+    // SP6a §1.1: the body moved into defs.body (a ref costs its def) and the root gained the precave tap, two mins and two slots.
+    expect(structuralCost(src.root, src.defs)).toBe(338);
+    const resolved = resolveDensity(DEFAULT_DENSITY_TREE, DEFAULTS);
+    expect(structuralCost(resolved.root, resolved.defs)).toBe(327);
     const legacy = legacyDefaultDensityExpr(DEFAULTS.density);
     expect(structuralCost(legacy.root, legacy.defs)).toBe(322);
+    const sp5c = sp5cTrees().default as { root: unknown; defs: unknown };
+    expect(structuralCost(sp5c.root, sp5c.defs)).toBe(333);
   });
 
-  test('the default work cost is 569 at DEFAULTS: 322 units, 17 of them noises (8 jag, 8 overhang corners, 1 detail)', () => {
-    const legacy = legacyDefaultDensityExpr(DEFAULTS.density);
-    expect(workCost(legacy, DEFAULTS)).toBe(569);
-    expect(322 - 17 + 8 * 16 + 8 * 16 + 8).toBe(569);
+  test('the default work cost is 574 at DEFAULTS: 327 units, 17 of them noises (8 jag, 8 overhang corners, 1 detail)', () => {
+    const resolved = resolveDensity(DEFAULT_DENSITY_TREE, DEFAULTS);
+    expect(workCost(resolved, DEFAULTS)).toBe(574);
+    expect(327 - 17 + 8 * 16 + 8 * 16 + 8).toBe(574);
+    // The legacy-built tree (SP5c's values without the root's slots) stays at 569.
+    expect(workCost(legacyDefaultDensityExpr(DEFAULTS.density), DEFAULTS)).toBe(569);
     // The configured leaf: 3 octaves of a single-stack jag weigh 12 each.
     const p = paramsWith({ density: { noises: { jag: { octaves: 3, double: false } } } });
-    expect(workCost(legacy, p)).toBe(569 - 8 * 16 + 8 * 12);
+    expect(workCost(resolveDensity(DEFAULT_DENSITY_TREE, p), p)).toBe(574 - 8 * 16 + 8 * 12);
   });
 
   test('a ref costs its def; interpolated 1 + 8 × child; a muted tap counts its child; mutes ignored', () => {
@@ -150,12 +160,17 @@ describe('structural and work costs (SP3d spec §1.7, §5.2)', () => {
 });
 
 describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost maxima")', () => {
-  const DENSITY_DEFAULT = 14_907_917;
+  /** SP6a's default: SP3d's 14,907,917 plus 5 voxel-level nodes (the precave tap, two mins, two slots) × 98,304. */
+  const DENSITY_DEFAULT = 15_399_437;
+  /** The SP3d default tree's column cost, which `DENSITY_COLUMN_COST_MAX` stays pinned to (SP6a D24). */
+  const SP3D_DENSITY_DEFAULT = 14_907_917;
   const RULES_DEFAULT = 163 * 256 * (1 + 4 + SD_MAX_STATIC);
 
-  test('the default density column cost: 148 units × 98,304 outside interpolated, 293 × 1,225 inside', () => {
+  test('the default density column cost: 153 units × 98,304 outside interpolated, 293 × 1,225 inside', () => {
     expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBe(DENSITY_DEFAULT);
-    expect(148 * VOXELS + 293 * CORNERS).toBe(DENSITY_DEFAULT);
+    expect(153 * VOXELS + 293 * CORNERS).toBe(DENSITY_DEFAULT);
+    expect(densityColumnCost(sp5cTrees().default)).toBe(SP3D_DENSITY_DEFAULT);
+    expect(148 * VOXELS + 293 * CORNERS).toBe(SP3D_DENSITY_DEFAULT);
     expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBe(oracle(src.root, src.defs as Rec, 'column'));
   });
 
@@ -169,8 +184,10 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
     expect(rulesColumnCost(resolved)).toBe(RULES_DEFAULT);
   });
 
-  test('the maxima are 64 × the defaults and below the saturation', () => {
-    expect(DENSITY_COLUMN_COST_MAX).toBe(64 * densityColumnCost(DEFAULT_DENSITY_TREE));
+  test('the maxima are 64 × the SP3d default density tree (SP6a D24) and 64 × the default rules, below the saturation', () => {
+    expect(DENSITY_COLUMN_COST_MAX).toBe(64 * SP3D_DENSITY_DEFAULT);
+    expect(DENSITY_COLUMN_COST_MAX).toBe(64 * 14_907_917);
+    expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBeLessThanOrEqual(DENSITY_COLUMN_COST_MAX);
     expect(RULES_COLUMN_COST_MAX).toBe(64 * rulesColumnCost(DEFAULT_SURFACE_RULES));
     expect(DENSITY_COLUMN_COST_MAX).toBeLessThan(2 ** 31);
     expect(RULES_COLUMN_COST_MAX).toBeLessThan(2 ** 31);
@@ -178,8 +195,8 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
 
   test('U2 variants and uiSmoke trees stay within the maxima', () => {
     const muted = copy(DEFAULT_DENSITY_TREE);
-    expect(at(muted, 'root.a.a')['name']).toBe('terrain');
-    at(muted, 'root.a.a')['mute'] = 0;
+    expect(at(muted, 'root.a.a.a.x.a')['name']).toBe('terrain');
+    at(muted, 'root.a.a.a.x.a')['mute'] = 0;
     const islands = copy(DEFAULT_DENSITY_TREE);
     expect(at(islands, 'root.b')['name']).toBe('islands');
     at(islands, 'root.b.x')['v'] = -10;
@@ -190,7 +207,7 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
     expect(densityColumnCost(muted)).toBe(DENSITY_DEFAULT - 293 * CORNERS);
     expect(densityColumnCost(islands)).toBe(DENSITY_DEFAULT);
     expect(rulesColumnCost(gradient)).toBe(RULES_DEFAULT);
-    for (const t of [muted, islands]) expect(densityColumnCost(t)).toBeLessThanOrEqual(DENSITY_COLUMN_COST_MAX);
+    for (const t of [muted, islands, AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE]) expect(densityColumnCost(t)).toBeLessThanOrEqual(DENSITY_COLUMN_COST_MAX);
     expect(rulesColumnCost(gradient)).toBeLessThanOrEqual(RULES_COLUMN_COST_MAX);
   });
 

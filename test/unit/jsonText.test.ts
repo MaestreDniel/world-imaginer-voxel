@@ -78,9 +78,10 @@ describe('printTree', () => {
   test('the default density tree: op first, scalars, children in evaluation order, leaf nodes and knots on one line', () => {
     const { text } = printTree(DEFAULT_DENSITY_TREE, 'density');
     const lines = text.split('\n');
-    expect(lines.slice(0, 5)).toEqual(['{', '  "root": {', '    "op": "max",', '    "a": {', '      "op": "add",']);
-    expect(lines.at(-2)).toBe('  "defs": {}');
-    expect(lines.at(-1)).toBe('}');
+    expect(lines.slice(0, 5)).toEqual(['{', '  "root": {', '    "op": "max",', '    "a": {', '      "op": "min",']);
+    // SP6a §1.1: the terrain body is the one def, printed after the root.
+    expect(text).toContain('\n  "defs": {\n    "body": {\n      "op": "add",');
+    expect(lines.slice(-2)).toEqual(['  }', '}']);
     expect(text).toContain('"knots": [[-64, 0], [-40, 1], [240, 1], [320, 0]]');
     expect(text).toMatch(/"op": "recip",\n\s*"x": \{ "op": "param", "path": "density.noises.jag.clampSigma" \}/);
     expect(text).toContain('"a": { "op": "col", "field": "offset" }');

@@ -119,9 +119,9 @@ describe('the spawn y under another density tree (SP3e spec §1.2, Review Focus)
   test('the default tree, also as a copy (a worker\'s params), keeps ⌊surfaceEst⌋ + 1; a tree with no terrain tap too', () => {
     const copy = JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE)) as JsonValue;
     expect(copy).not.toBe(DEFAULT_DENSITY_TREE);
-    const tap = ((AMPLIFIED_DENSITY_TREE as Record<string, JsonValue>)['root'] as { a: { a: Record<string, JsonValue> } }).a.a;
+    const tap = ((AMPLIFIED_DENSITY_TREE as Record<string, JsonValue>)['root'] as { a: { a: { a: { x: { a: Record<string, JsonValue> } } } } }).a.a.a.x.a;
     const noTerrain = deriveTree(AMPLIFIED_DENSITY_TREE, 'density.defs', 'density', [
-      { path: 'root.a.a', was: { op: 'tap', name: 'terrain' }, by: { ...tap, name: 'ground' } },
+      { path: 'root.a.a.a.x.a', was: { op: 'tap', name: 'terrain' }, by: { ...tap, name: 'ground' } },
     ]);
     for (const defs of [copy, noTerrain]) {
       const ctx = ctxFor('7', { density: { defs } });
@@ -138,9 +138,9 @@ describe('landingSurface (SP4c spec §3.2, D12)', () => {
     ({ flat: Math.floor(columnPoint(ctx, x, z).surfaceEst), est3: surfaceEst3(dc, x, z) });
   /** The no-`terrain` variant of the amplified tree (its tap renamed), as the spawn tests build it. */
   const noTerrainTree = (): JsonValue => {
-    const tap = ((AMPLIFIED_DENSITY_TREE as Record<string, JsonValue>)['root'] as { a: { a: Record<string, JsonValue> } }).a.a;
+    const tap = ((AMPLIFIED_DENSITY_TREE as Record<string, JsonValue>)['root'] as { a: { a: { a: { x: { a: Record<string, JsonValue> } } } } }).a.a.a.x.a;
     return deriveTree(AMPLIFIED_DENSITY_TREE, 'density.defs', 'density', [
-      { path: 'root.a.a', was: { op: 'tap', name: 'terrain' }, by: { ...tap, name: 'ground' } },
+      { path: 'root.a.a.a.x.a', was: { op: 'tap', name: 'terrain' }, by: { ...tap, name: 'ground' } },
     ]);
   };
   /**

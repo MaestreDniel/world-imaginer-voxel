@@ -1439,6 +1439,14 @@ const SV_FIELD = '.sv > .sv-controls > label:nth-of-type(2) > select';
 const SV_EXTENT = '.sv > .sv-controls > label:nth-of-type(4) > select';
 const SV_BOX = '.sv > .sv-body .sv-box';
 const ROW = (path: string) => `.it-row[title="density.defs.${path}"]`;
+/** The default tree's terrain tap (SP6a §1.1: inside the precave tap, under the root's two cave-slot mins). */
+const TERRAIN_ROW = 'root.a.a.a.x.a';
+/** Opens the collapsed rows above the terrain tap (depth 2 and below start collapsed) so its row is shown. */
+async function showTerrainRow(p: Page): Promise<void> {
+  for (const path of ['root.a.a', 'root.a.a.a', 'root.a.a.a.x']) {
+    if (await p.eval<string>(`document.querySelector(${JSON.stringify(`${ROW(path)} .it-toggle`)}).textContent`) === '▸') await p.click(`${ROW(path)} .it-toggle`);
+  }
+}
 const FORM_V = '.it-fields input.it-input[aria-label="v"]';
 const JE_TEXT = '.je-text';
 const DENSITY_SHOWN = `!document.querySelector('.map-drawer').hidden && document.getElementById('map-drawer-tab-density').getAttribute('aria-selected') === 'true'`;
@@ -2122,12 +2130,13 @@ async function runDensity(t: Smoke): Promise<void> {
   await p.until(Page.fresh(128, `document.querySelector('.it-path').textContent === 'density.defs.root'`), 'a fresh slice of the selected root');
   const s1sel = await p.slice();
   t.check(s1sel.stats === s1.stats, `the selected root's slice is the density's: ${s1sel.stats.replace(/\n/g, ' · ')}`, s1sel.stats);
+  await showTerrainRow(p);
   before = await p.hash();
-  await p.click(`${ROW('root.a.a')} .it-mute`);
+  await p.click(`${ROW(TERRAIN_ROW)} .it-mute`);
   const n2 = await p.changed(before, 'the mute');
-  const tree2 = (patchOf(n2)['density'] as { defs?: { root?: { a?: { a?: { mute?: unknown } }; b?: { x?: { v?: unknown } } } } } | undefined)?.defs;
-  t.check(tree2?.root?.a?.a?.mute === 0 && tree2.root.b?.x?.v === -10, 'the patch mutes terrain to 0 (its parent is an add) and keeps islands -10', tree2);
-  t.check(await p.eval<boolean>(`document.querySelector(${JSON.stringify(ROW('root.a.a'))}).classList.contains('it-muted')`), `the row reads muted: ${await p.eval<string>(`document.querySelector(${JSON.stringify(ROW('root.a.a'))}).textContent`)}`);
+  const tree2 = (patchOf(n2)['density'] as { defs?: { root?: { a?: { a?: { a?: { x?: { a?: { mute?: unknown } } } } }; b?: { x?: { v?: unknown } } } } } | undefined)?.defs;
+  t.check(tree2?.root?.a?.a?.a?.x?.a?.mute === 0 && tree2.root.b?.x?.v === -10, 'the patch mutes terrain to 0 (its parent is an add) and keeps islands -10', tree2);
+  t.check(await p.eval<boolean>(`document.querySelector(${JSON.stringify(ROW(TERRAIN_ROW))}).classList.contains('it-muted')`), `the row reads muted: ${await p.eval<string>(`document.querySelector(${JSON.stringify(ROW(TERRAIN_ROW))}).textContent`)}`);
   const current = await p.eval<string | null>(`document.querySelector('.it-node[aria-current]')?.closest('.it-row')?.title ?? null`);
   t.check(current === 'density.defs.root' && await p.eval<string>(`document.querySelector('.it-path').textContent`) === 'density.defs.root',
     `the row's mute keeps the selection on the root (the current row: ${current ?? 'none'})`);
@@ -4881,9 +4890,10 @@ async function runShots(p: Page, dir: string): Promise<string[]> {
   // The terrain tap selected and muted from its row (the row's mute keeps the selection, so the form shows the tap):
   // the slice is the detail noise alone; the pointer back on the same voxel.
   await p.mouse('mouseMoved', 5, 5);
-  await p.click(`${ROW('root.a.a')} .it-node`);
-  await p.click(`${ROW('root.a.a')} .it-mute`);
-  await p.until(Page.fresh(128, `document.querySelector(${JSON.stringify(ROW('root.a.a'))}).classList.contains('it-muted')`), 'the slice of the muted terrain');
+  await showTerrainRow(p);
+  await p.click(`${ROW(TERRAIN_ROW)} .it-node`);
+  await p.click(`${ROW(TERRAIN_ROW)} .it-mute`);
+  await p.until(Page.fresh(128, `document.querySelector(${JSON.stringify(ROW(TERRAIN_ROW))}).classList.contains('it-muted')`), 'the slice of the muted terrain');
   const mh = await hoverSlice(p, 51.5 / 128, fy, false);
   console.log(`  muted hover: ${mh?.readout ?? '-'} | ${mh?.hover ?? '-'}`);
   await sleep(500);

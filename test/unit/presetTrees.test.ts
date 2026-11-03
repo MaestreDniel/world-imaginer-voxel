@@ -38,6 +38,7 @@ import { validateParamTrees } from '../../src/gen/trees';
 import { fillColumnT } from '../../src/metrics/region';
 import { treeLints } from '../../src/ui/inspector/form';
 import { AIR } from '../../src/world/blocks/index';
+import { columnDiff, SP5C_COLUMNS, sp5cPair } from '../harness/sp5cTrees';
 import { createStore } from '../../src/world/store/store';
 
 type Rec = Record<string, unknown>;
@@ -65,8 +66,8 @@ function nodeAt(tree: unknown, path: string): unknown {
 }
 
 const AMPLIFIED_PATHS = [
-  'root.a.a.x.x.a.a.a.a.a', 'root.a.a.x.x.a.a.a.a.b.a', 'root.a.a.x.x.a.a.b.a', 'root.a.a.x.x.a.a.b.b.knots',
-  'root.a.a.x.x.b.x.a.v', 'root.a.a.x.x.b.x.b.b.b.v',
+  'defs.body.a.a.a.a.a', 'defs.body.a.a.a.a.b.a', 'defs.body.a.a.b.a', 'defs.body.a.a.b.b.knots',
+  'defs.body.b.x.a.v', 'defs.body.b.x.b.b.b.v',
 ];
 
 describe('deriveTree (SP3e spec §1.1, D12)', () => {
@@ -175,22 +176,23 @@ describe('AMPLIFIED_DENSITY_TREE (SP3e spec §1.2, D1, D2, user point 2)', () =>
       expect(canonicalJSON(nodeAt(DEFAULT_DENSITY_TREE, p)), p).toBe(canonicalJSON(expected[i]![0]));
       expect(canonicalJSON(nodeAt(AMPLIFIED_DENSITY_TREE, p)), p).toBe(canonicalJSON(expected[i]![1]));
     });
-    // The root shape is the default's (U2 mutes root.a.a; the islands tap is untouched), and the default is unchanged.
-    expect(nodeAt(AMPLIFIED_DENSITY_TREE, 'root.a.a')).toMatchObject({ op: 'tap', name: 'terrain' });
+    // The root shape is the default's (U2 mutes root.a.a.a.x.a; the islands tap is untouched), and the default is unchanged.
+    expect(nodeAt(AMPLIFIED_DENSITY_TREE, 'root.a.a.a.x.a')).toMatchObject({ op: 'tap', name: 'terrain' });
     expect(nodeAt(AMPLIFIED_DENSITY_TREE, 'root.b')).toEqual({ op: 'tap', name: 'islands', x: { op: 'const', v: -1e6 } });
     expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.b.x')).toEqual({ op: 'const', v: -1e6 });
   });
 
-  test('80 nodes; tier 2 []; static costs: structural 493, column 14,932,417, work 729 (the default 333, 14,907,917, 569)', () => {
-    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(60);
-    expect(countTreeNodes(AMPLIFIED_DENSITY_TREE, 'density')).toBe(80);
+  test('86 nodes; tier 2 []; static costs: structural 498, column 15,423,937, work 734 (the default 338, 15,399,437, 574)', () => {
+    // SP6a §1.1 adds 6 nodes to every tree (precave, ref, two mins, two slots) and 5 voxel units to its costs.
+    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(66);
+    expect(countTreeNodes(AMPLIFIED_DENSITY_TREE, 'density')).toBe(86);
     expect(validateParamTrees(amplified)).toEqual([]);
     const t = AMPLIFIED_DENSITY_TREE as unknown as { root: unknown; defs: unknown };
-    expect(structuralCost(t.root, t.defs)).toBe(493);
-    expect(densityColumnCost(AMPLIFIED_DENSITY_TREE)).toBe(14_932_417);
+    expect(structuralCost(t.root, t.defs)).toBe(498);
+    expect(densityColumnCost(AMPLIFIED_DENSITY_TREE)).toBe(15_423_937);
     const work = (tree: unknown, p: Params) => workCost(resolveDensity(tree, p), p);
-    expect(work(DEFAULT_DENSITY_TREE, DEFAULTS)).toBe(569);
-    expect(work(AMPLIFIED_DENSITY_TREE, amplified)).toBe(729);
+    expect(work(DEFAULT_DENSITY_TREE, DEFAULTS)).toBe(574);
+    expect(work(AMPLIFIED_DENSITY_TREE, amplified)).toBe(734);
   });
 
   test('the inspector\'s cost lint does not fire (work ≤ 4 × the default) and the rules keep their fast path', () => {
@@ -200,10 +202,10 @@ describe('AMPLIFIED_DENSITY_TREE (SP3e spec §1.2, D1, D2, user point 2)', () =>
   test('§1.2\'s corner bound, computed from the tree\'s literals, leaves no solid voxel at y ≥ 315 (§1.5 step 5\'s invariant: ≥ 316)', () => {
     const v = (path: string): number => nodeAt(AMPLIFIED_DENSITY_TREE, path) as number;
     // The fades' k (their value where lakeMask is 0, the largest since lakeMask ≥ 0 up to a few ulps).
-    const offsetFactor = v('root.a.a.x.x.a.a.a.a.a.b.a.a.v'), offsetKnee = -v('root.a.a.x.x.a.a.a.a.a.b.b.b.b.v');
-    const jagFactor = v('root.a.a.x.x.a.a.a.a.b.a.b.v'), sigmaFactor = v('root.a.a.x.x.a.a.b.a.b.a.v');
-    const knots = nodeAt(AMPLIFIED_DENSITY_TREE, 'root.a.a.x.x.a.a.b.b.knots') as Array<[number, number]>;
-    const slope = v('root.a.a.x.x.b.x.a.v'), knee = -v('root.a.a.x.x.b.x.b.b.b.v');
+    const offsetFactor = v('defs.body.a.a.a.a.a.b.a.a.v'), offsetKnee = -v('defs.body.a.a.a.a.a.b.b.b.b.v');
+    const jagFactor = v('defs.body.a.a.a.a.b.a.b.v'), sigmaFactor = v('defs.body.a.a.b.a.b.a.v');
+    const knots = nodeAt(AMPLIFIED_DENSITY_TREE, 'defs.body.a.a.b.b.knots') as Array<[number, number]>;
+    const slope = v('defs.body.b.x.a.v'), knee = -v('defs.body.b.x.b.b.b.v');
     expect([offsetFactor, offsetKnee, jagFactor, sigmaFactor, slope, knee]).toEqual([0.9, 64, 1.6, 2.2, 3, 270]);
     // The shape splines' largest knots (shapeDefaults.ts: offset 210, jag 55, σ 26), J ≤ 1, |N| ≤ clampSigma (3), and
     // the detail term ≤ detailAmpHi × its clampSigma (1.5 × 3), outside `interpolated`.
@@ -394,8 +396,8 @@ describe('amplified lakes hold water (seed 42; SP3e spec §1.2, Review Focus)', 
 
   test('where lakeMask is 0 the fades are the plain factors bit for bit (0.9 and 2.2)', () => {
     const plain = deriveTree(AMPLIFIED_DENSITY_TREE, 'density.defs', 'density', [
-      { path: 'root.a.a.x.x.a.a.a.a.a.b.a', was: { op: 'add' }, by: { op: 'const', v: 0.9 } },
-      { path: 'root.a.a.x.x.a.a.b.a.b', was: { op: 'add' }, by: { op: 'const', v: 2.2 } },
+      { path: 'defs.body.a.a.a.a.a.b.a', was: { op: 'add' }, by: { op: 'const', v: 0.9 } },
+      { path: 'defs.body.a.a.b.a.b', was: { op: 'add' }, by: { op: 'const', v: 2.2 } },
     ]);
     const dc = createDensityContext(ctx);
     const dp = createDensityContext(createGenContext(seedFromInput('42'), { ...amplified, density: { ...amplified.density, defs: plain } }));
@@ -450,24 +452,36 @@ describe('FLOATING_DENSITY_TREE (SP3e spec §3.1, §3.3, §3.4, D3, D4, D12, D13
     expect(treeDiff(DEFAULT_DENSITY_TREE, FLOATING_DENSITY_TREE)).toEqual(['root.b.x']);
     expect(canonicalJSON(nodeAt(FLOATING_DENSITY_TREE, 'root.b.x'))).toBe(canonicalJSON(ISLANDS_TERM));
     expect(nodeAt(FLOATING_DENSITY_TREE, 'root')).toMatchObject({ op: 'max' });
-    expect(nodeAt(FLOATING_DENSITY_TREE, 'root.a.a')).toMatchObject({ op: 'tap', name: 'terrain' });
+    expect(nodeAt(FLOATING_DENSITY_TREE, 'root.a.a.a.x.a')).toMatchObject({ op: 'tap', name: 'terrain' });
     expect(nodeAt(FLOATING_DENSITY_TREE, 'root.b')).toMatchObject({ op: 'tap', name: 'islands' });
     // 0.025 is the double nearest 1/40, the one recip(const 40) gives (§3.1).
     expect(0.025).toBe(1 / 40);
     expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.b.x')).toEqual({ op: 'const', v: -1e6 });
   });
 
-  test('87 nodes (BODY 21, the replacement 28); tier 2 []; the inspector\'s cost lint does not fire', () => {
+  test('93 nodes (BODY 21, the replacement 28); tier 2 []; the inspector\'s cost lint does not fire', () => {
     expect(countTreeNodes(ISLANDS_BODY as JsonValue, 'density')).toBe(21);
-    expect(countTreeNodes(FLOATING_DENSITY_TREE, 'density')).toBe(87);
+    expect(countTreeNodes(FLOATING_DENSITY_TREE, 'density')).toBe(93);
     expect(validateParamTrees(floating)).toEqual([]);
     expect(treeLints(floating)).toEqual([]);
   });
 
-  test('static costs: structural 549, column 15,096,567, work 905 (§3.4\'s computed figures, measured)', () => {
+  test('static costs: structural 554, column 15,588,087, work 910 (§3.4\'s computed figures 549, 15,096,567, 905, plus SP6a\'s 5 voxel nodes)', () => {
     const t = FLOATING_DENSITY_TREE as unknown as { root: unknown; defs: unknown };
-    expect(structuralCost(t.root, t.defs)).toBe(549);
-    expect(densityColumnCost(FLOATING_DENSITY_TREE)).toBe(15_096_567);
-    expect(workCost(resolveDensity(FLOATING_DENSITY_TREE, floating), floating)).toBe(905);
+    expect(structuralCost(t.root, t.defs)).toBe(554);
+    expect(densityColumnCost(FLOATING_DENSITY_TREE)).toBe(15_588_087);
+    expect(workCost(resolveDensity(FLOATING_DENSITY_TREE, floating), floating)).toBe(910);
+  });
+});
+
+describe('the preset trees keep the SP5c values (SP6a §1.1: the body as a def, the precave tap and the cave slots)', () => {
+  test.each(SP5C_COLUMNS)('amplified equals the SP5c amplified tree at every voxel and every bounds decision of column (%i, %i)', (cx, cz) => {
+    const { today, sp5c } = sp5cPair(createGenContext(seedFromInput('42'), resolveProfile('amplified')), AMPLIFIED_DENSITY_TREE, 'amplified');
+    expect(columnDiff(today, sp5c, cx, cz)).toBeNull();
+  });
+
+  test.each(SP5C_COLUMNS)('floating_islands equals the SP5c floating_islands tree at every voxel and every bounds decision of column (%i, %i)', (cx, cz) => {
+    const { today, sp5c } = sp5cPair(createGenContext(seedFromInput('42'), resolveProfile('floating_islands')), FLOATING_DENSITY_TREE, 'floating_islands');
+    expect(columnDiff(today, sp5c, cx, cz)).toBeNull();
   });
 });

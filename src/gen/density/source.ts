@@ -23,7 +23,8 @@
  * `resolveDensity` (§1.6) runs tier 2 first (an ExprValidationError with the source paths when it fails), then builds a
  * fresh, deep-frozen `DensityExpr`: params and ref-valued fields become numbers (`0 − v` for `neg`), a muted tap yields
  * `const(mute)`, `recip` becomes `const(1 / c)`, and all-constant `add`/`mul`/`min`/`max`/`neg`/`abs`/`square`/`clamp`
- * nodes fold with nodes.ts's value functions, so the resolved default is the very tree SP3b's builder made (§2.1); its
+ * nodes fold with nodes.ts's value functions, so the resolved default's `defs.body` is the tree SP3b's builder made
+ * under `root.a.a.x.x` (§2.1; SP6a §1.1 moved it into a def), and its values are bit-equal to that tree's; its
  * recursion runs on validated trees only (expanded depth ≤ 128). `resolveDensityNode` (§3.4) resolves one node's source
  * subtree on its own, with its placement, for the inspector; `freezeTree` deep-freezes an explicit tree in place for the
  * DensityContext (D10). Follows the gen determinism rules.

@@ -85,9 +85,9 @@ function inProcess(params: Params, r: FieldSliceSpec, from = 0, to = r.n): Field
 
 const REQUESTS: Array<[string, FieldSliceSpec]> = [
   ['vertical density', vReq(MOUNTAIN, 'density')],
-  ['vertical node', vReq(MOUNTAIN, 'node', 'root.a.a.x.x')],
+  ['vertical node', vReq(MOUNTAIN, 'node', 'defs.body')],
   ['horizontal density', hReq('density')],
-  ['horizontal node', hReq('node', 'root.a.b')],
+  ['horizontal node', hReq('node', 'root.a.a.a.x.b')],
   ['vertical blocks', vReq(COAST, 'blocks')],
   ['vertical rule', vReq(COAST, 'rule', 'root.rules[1].then')],
 ];
@@ -123,16 +123,19 @@ const stall = (ms: number) => { Atomics.wait(new Int32Array(new SharedArrayBuffe
 const configure = (epoch: number, params: Params, epochs: SharedArrayBuffer | null) => ({ type: 'configure', epoch, seedText: '42', params, epochs });
 
 describe('a configure stops an in-flight fieldSlice part within 50 ms (SP3d spec §4.5, §10)', () => {
-  // A part as large as the work bound allows: the default tree's 128² vertical part of k = 79 sample columns
-  // (8,342,400 units), and partWorst's one 32-sample column (8,387,616 units, one sample ≈ 2 ms).
+  // A part as large as the work bound allows: the default tree's 128² vertical part of k = 78 sample columns
+  // (8,286,720 units; 79 since SP6a's root slots exceed PART_BUDGET), and partWorst's one 32-sample column (8,387,616
+  // units, one sample ≈ 2 ms).
   const CASES: Array<[string, Params, FieldSliceSpec, number]> = [
-    ['the default tree, a 128² vertical part of 79 sample columns', DEFAULTS, vReq(MOUNTAIN, 'density', '', 128), 79],
+    ['the default tree, a 128² vertical part of 78 sample columns', DEFAULTS, vReq(MOUNTAIN, 'density', '', 128), 78],
     ['partWorst\'s tree at the part bound, one 32-sample column', partWorstParams(), vReq(MOUNTAIN, 'density', '', 32), 1],
   ];
 
   test.each(CASES)('%s: ABORTED within 50 ms of Atomics.store; the next epoch\'s part equals the in-process evaluation', { retry: 2, timeout: 120_000 }, async (_name, params, req, to) => {
     expect(sliceCostOf(params, 'density', '', 'vertical', req.n) * to).toBeLessThanOrEqual(PART_BUDGET);
-    expect(sliceCostOf(params, 'density', '', 'vertical', req.n) * to).toBeGreaterThan(PART_BUDGET * 0.99);
+    // The largest part the bound admits: one sample column more exceeds it.
+    expect(sliceCostOf(params, 'density', '', 'vertical', req.n) * (to + 1)).toBeGreaterThan(PART_BUDGET);
+    expect(sliceCostOf(params, 'density', '', 'vertical', req.n) * to).toBeGreaterThan(PART_BUDGET * 0.98);
     const cell = new Int32Array(new SharedArrayBuffer(16));
     const w = start(stamped);
     Atomics.store(cell, 0, 1);
