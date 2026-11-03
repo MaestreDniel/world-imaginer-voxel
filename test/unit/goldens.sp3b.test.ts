@@ -98,8 +98,11 @@ describe('sp3b.density.ops (§9)', () => {
 describe('sp3b.density.default (§9)', () => {
   const values = densityDefaultValues();
 
-  /** The default tree's interpolated slots: 1 before SP6a's cave terms, 4 with them (terrain, entrances, cheese, pillars). */
-  const SLOTS = 4;
+  /**
+   * The default tree's interpolated slots: 1 before SP6a's cave terms, 4 with entrances, cheese and pillars (Task 6), 10
+   * with spaghetti 3D and 2D and the noodle's four (Task 7).
+   */
+  const SLOTS = 10;
 
   test('1225 corners per interpolated slot then 98,304 voxels of column (0, 0), seed 42, default profile; the key hashes them', () => {
     expect(createDensityContext(CTX).compiled.interpolatedSlotCount).toBe(SLOTS);
@@ -117,7 +120,7 @@ describe('sp3b.density.default (§9)', () => {
     // terrain's slot).
     const inner = new Map<number, Expr>();
     for (const n of interpolatedNodes(e)) if (!inner.has(dc.compiled.interpolatedSlot(n))) inner.set(dc.compiled.interpolatedSlot(n), n.x);
-    expect([...inner.keys()].sort()).toEqual([0, 1, 2, 3]);
+    expect([...inner.keys()].sort((a, b) => a - b)).toEqual([...Array(SLOTS).keys()]);
     const s = buildColumnSample(CTX, 0, 0, newColumnSample());
     const bad: string[] = [];
     for (let slot = 0; slot < SLOTS; slot++) {

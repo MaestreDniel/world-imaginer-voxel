@@ -10,8 +10,9 @@ import { fnv1a32, hex64 } from '../../src/core/hash';
 import { latticeIndex } from '../../src/gen/column/columnStage';
 import { biomeName } from '../../src/gen/biomes/registry';
 import {
-  caveColumn, caveFamilyCounts, caveLeaves, cellProbe, findWitness, intendedClass, islandColumn, islandLeaves, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
-  SURFACE_CLASSES, surfacePrefilter, surfaceSlotLeaves, u2Leaves,
+  CAVE_SLOTS, caveColumn, caveFamilyCounts, caveLeaves, caveSlotLeaves, cellProbe, findWitness, intendedClass, islandColumn, islandLeaves, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
+  scaleBandCarves, scaleWitness, SURFACE_CLASSES, surfacePrefilter, surfaceSlotLeaves, u2Leaves,
+  type CaveSlot,
   type LivenessClass,
   type LivenessColumn,
   type SurfaceClass,
@@ -29,10 +30,19 @@ import { ctxFor } from '../harness/gen';
 /** SP3e's island class column at seed 42 (spec §5.6) and its index among the U2.islands draws. */
 const ISLAND_PIN: LivenessColumn = { cx: 975, cz: -735, cls: 'island' };
 const ISLAND_DRAW = 33;
-/** SP6a's cave class column at seed 42 (its spec §4) and its index among the sp6a.liveness.caves draws. */
-const CAVE_PIN: LivenessColumn = { cx: 546, cz: 25857, cls: 'cave' };
-/** The leaves of SP6a Task 6 (the caves group so far): U2 covers 73 + 19 = 92 leaves. */
-const U2_LEAVES = 92;
+/** SP6a's cave class columns at seed 42 (its spec §4), one per scan slot, and their indices among the sp6a.liveness.caves draws. */
+const CAVE_PINS: Readonly<Record<CaveSlot, readonly [LivenessColumn, number]>> = {
+  caverns: [{ cx: 546, cz: 25857, cls: 'cave' }, 7],
+  tunnels: [{ cx: 4705, cz: -24478, cls: 'cave' }, 224],
+};
+/** The leaves of SP6a Tasks 6 and 7 (the caves group so far): U2 covers 73 + 19 + 30 = 122 leaves. */
+const U2_LEAVES = 122;
+/** The spaghetti scale leaves (SP6a Task 7), decided on the class columns or on their bounded witness search (ruling P5). */
+const SCALE_LEAVES = [
+  'caves.spaghetti3d.scales.s0', 'caves.spaghetti3d.scales.s1', 'caves.spaghetti3d.scales.s2', 'caves.spaghetti3d.scales.s3',
+  'caves.spaghetti2d.scales.s0', 'caves.spaghetti2d.scales.s1', 'caves.spaghetti2d.scales.s2', 'caves.spaghetti2d.scales.s3',
+  'caves.spaghetti2d.scales.s4',
+] as const;
 
 const leaf = (path: string) => {
   const info = SCHEMA.leaves.find((l) => l.path === path);
@@ -303,7 +313,7 @@ describe('class columns', () => {
     for (const p of ['surface.noises.depth', 'surface.depthMul']) expect(intendedClass(p), p).toBe('land');
     expect(intendedClass('surface.noises.bandOffset')).toBe('badlands');
     for (const p of ['density.noises.islands', 'islands.enabled', 'islands.noise', 'islands.lo', 'islands.hi']) expect(intendedClass(p), p).toBe('island');
-    for (const p of ['caves.cheese.offset', 'caves.pillars.threshold', 'caves.limits.surfaceDepth', 'caves.noises.entrance']) expect(intendedClass(p), p).toBe('cave');
+    for (const p of ['caves.cheese.offset', 'caves.pillars.threshold', 'caves.limits.surfaceDepth', 'caves.noises.entrance', 'caves.spaghetti3d.scales.s2', 'caves.noodles.regional', 'caves.noises.noodleToggle']) expect(intendedClass(p), p).toBe('cave');
   });
 });
 
@@ -513,41 +523,80 @@ describe('the islands base (SP3e spec §5.6)', () => {
   });
 });
 
-describe('the cave class column (SP6a spec §4)', () => {
-  let found: LivenessColumn | null | undefined;
-  /** The cave class column of seed 42 on the default base (searched once per file). */
-  const cave = (): LivenessColumn => {
-    if (found === undefined) found = caveColumn(CTX);
-    expect(found, 'no cave column').not.toBeNull();
-    return found!;
+describe('the cave class columns (SP6a spec §4)', () => {
+  const found = new Map<CaveSlot, LivenessColumn | null>();
+  /** The cave class column of seed 42 on the default base for `slot` (searched once per file). */
+  const cave = (slot: CaveSlot): LivenessColumn => {
+    if (!found.has(slot)) found.set(slot, caveColumn(CTX, slot));
+    expect(found.get(slot), `no cave column (${slot})`).not.toBeNull();
+    return found.get(slot)!;
   };
+  const caves = (): LivenessColumn[] => CAVE_SLOTS.map(cave);
 
-  test('the caves leaves are the caves.* group, in schema order, after the islands leaves', () => {
+  test('the caves leaves are the caves.* group, in schema order, after the islands leaves; the slots share them but the scale leaves', () => {
     expect(caveLeaves().map((l) => l.path)).toEqual(SCHEMA.leaves.filter((l) => l.path.startsWith('caves.')).map((l) => l.path));
-    expect(caveLeaves().length).toBe(19);
+    expect(caveLeaves().length).toBe(49);
+    expect(CAVE_SLOTS).toEqual(['caverns', 'tunnels']);
+    const tunnels = caveSlotLeaves('tunnels').map((l) => l.path);
+    expect(tunnels).toEqual([
+      'caves.spaghetti3d.thickness', 'caves.spaghetti3d.thicknessVar', 'caves.spaghetti3d.regional',
+      'caves.spaghetti2d.thickness', 'caves.spaghetti2d.layerAmp',
+      'caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional',
+      'caves.noises.spag3dA', 'caves.noises.spag3dB', 'caves.noises.spag3dRarity', 'caves.noises.spag3dThickness',
+      'caves.noises.spagRegional', 'caves.noises.spag2d', 'caves.noises.spag2dElevation', 'caves.noises.spag2dThickness',
+      'caves.noises.spag2dRarity', 'caves.noises.noodleToggle', 'caves.noises.noodleThickness', 'caves.noises.noodleRidgeA',
+      'caves.noises.noodleRidgeB',
+    ]);
+    // Task 6's 19 leaves are the caverns' (its cave column is unchanged).
+    expect(caveSlotLeaves('caverns').length).toBe(19);
+    const slotted = new Set([...caveSlotLeaves('caverns'), ...caveSlotLeaves('tunnels')].map((l) => l.path));
+    expect(caveLeaves().map((l) => l.path).filter((p) => !slotted.has(p))).toEqual(SCALE_LEAVES);
   });
 
-  test('the cave column: the first land column of sp6a.liveness.caves where every family acts and every caves leaf changes the T column', () => {
-    const c = cave();
-    expect(c).toEqual(CAVE_PIN);
+  test('each slot\'s column: the first land column of sp6a.liveness.caves where its families act and every leaf of its slot changes the T column', () => {
     const pts = samplePoints('sp6a.liveness.caves', 4096);
-    let n = 0;
-    while (Math.floor(pts.x[n]! / 16) !== c.cx || Math.floor(pts.z[n]! / 16) !== c.cz) n++;
-    expect(n).toBeLessThan(4096);
-    const f = caveFamilyCounts(createDensityContext(CTX), DEFAULTS.caves.pillars.threshold, c.cx, c.cz);
-    expect(f.entrances).toBeGreaterThan(0);
-    expect(f.cheese).toBeGreaterThan(0);
-    expect(f.pillars).toBeGreaterThan(0);
-    // A land column: no water on its lattice (SP2b's land test).
-    const s = buildColumnSample(CTX, c.cx, c.cz, newColumnSample());
-    expect(Array.from(s.f.surfaceWaterLevel).every((w) => w === -Infinity)).toBe(true);
+    const dc = createDensityContext(CTX);
+    for (const slot of CAVE_SLOTS) {
+      const c = cave(slot);
+      const [pin, draw] = CAVE_PINS[slot];
+      expect(c, slot).toEqual(pin);
+      let n = 0;
+      while (Math.floor(pts.x[n]! / 16) !== c.cx || Math.floor(pts.z[n]! / 16) !== c.cz) n++;
+      expect([slot, n]).toEqual([slot, draw]);
+      const f = caveFamilyCounts(dc, DEFAULTS.caves.pillars.threshold, c.cx, c.cz);
+      const families = slot === 'caverns' ? [f.entrances, f.cheese, f.pillars] : [f.spag3d, f.spag2d, f.noodle];
+      for (const v of families) expect(v, slot).toBeGreaterThan(0);
+      // A land column: no water on its lattice (SP2b's land test).
+      const s = buildColumnSample(CTX, c.cx, c.cz, newColumnSample());
+      expect(Array.from(s.f.surfaceWaterLevel).every((w) => w === -Infinity)).toBe(true);
+    }
+    // No draw up to the tunnels' column holds the tunnels' families and accepts every leaf of both slots (none of the
+    // first 4096 draws holds every family and accepts every leaf, a 7 s scan left out here), hence the two slots.
+    expect(caveColumn(CTX, 'tunnels', [...caveSlotLeaves('caverns'), ...caveSlotLeaves('tunnels')], CAVE_PINS.tunnels[1] + 1)).toBeNull();
   });
 
-  test('every caves leaf is live on the cave column (the class it is meant for), and only through the T stage', () => {
-    const c = cave();
-    for (const l of caveLeaves()) {
+  test('every caves leaf but the scale leaves is live on a cave column (the class it is meant for), and only through the T stage', () => {
+    const cs = caves();
+    for (const l of caveLeaves().filter((x) => !(SCALE_LEAVES as readonly string[]).includes(x.path))) {
       expect(intendedClass(l.path)).toBe('cave');
-      expect(leafLiveness(CTX, l.path, [...columns(), c]), l.path).toEqual({ path: l.path, live: true, via: `cave column (${c.cx}, ${c.cz})`, cls: 'cave' });
+      const r = leafLiveness(CTX, l.path, [...columns(), ...cs]);
+      expect([l.path, r.live, r.cls]).toEqual([l.path, true, 'cave']);
+      expect(cs.map((c) => `cave column (${c.cx}, ${c.cz})`)).toContain(r.via);
+    }
+  });
+
+  test('every spaghetti scale leaf is live on a class column or on its bounded witness (ruling P5)', () => {
+    const all = [...columns(), ...caves()];
+    for (const p of SCALE_LEAVES) {
+      const r = leafLiveness(CTX, p, all);
+      expect([p, r.live]).toEqual([p, true]);
+      // Wherever it is decided, its own witness search finds a column too: one where band k meets rock the family carves.
+      const w = scaleWitness(CTX, p, all);
+      expect(w.via, p).toMatch(/^witness column \(-?\d+, -?\d+\)$/);
+      const [cx, cz] = w.via!.slice('witness column ('.length, -1).split(', ').map(Number) as [number, number];
+      expect(scaleBandCarves(createDensityContext(CTX), p, cx, cz), p).toBeGreaterThan(0);
+      expect(w.checks, p).toBeLessThanOrEqual(64);
+      expect(findWitness(CTX, p, all)).toBe(w.via);
     }
   });
 
@@ -555,7 +604,8 @@ describe('the cave class column (SP6a spec §4)', () => {
     const terrain: readonly LivenessClass[] = ['land', 'coast', ...SURFACE_CLASSES];
     const others = columns().filter((c) => !terrain.includes(c.cls));
     expect(leafLiveness(CTX, 'caves.pillars.threshold', others)).toEqual({ path: 'caves.pillars.threshold', live: false, via: null, cls: 'cave' });
-    expect(caveColumn(CTX, caveLeaves(), 0)).toBeNull();
+    expect(caveColumn(CTX, 'caverns', caveSlotLeaves('caverns'), 0)).toBeNull();
+    expect(() => scaleWitness(CTX, 'caves.noodles.regional')).toThrow('not a spaghetti scale leaf');
   });
 });
 

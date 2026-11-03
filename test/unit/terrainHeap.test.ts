@@ -63,4 +63,6 @@ test(`the T stage's hot path: heap growth over ${COLUMNS} warm columns < ${HEAP_
   const growth = used() - before;
   expect(committed).toBe(2 * COLUMNS);
   expect(growth, `heap growth ${growth} bytes`).toBeLessThan(HEAP_GROWTH_MAX);
-}, 60_000);
+  // SP6a's cave terms make a T column dearer (spec §1.6): the 2,000 fills take about 21 s alone with spaghetti and the
+  // noodle and more than 60 s beside the full suite.
+}, 180_000);

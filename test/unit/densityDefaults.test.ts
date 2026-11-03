@@ -44,30 +44,44 @@ describe('the default expression (SP3b spec §3.1; SP3d spec §2.1: the resolved
     const e = defaultExpr();
     expect(validateExpr(e, densityNoiseSource(CTX))).toEqual([]);
     expect(Object.keys(e.defs)).toEqual(['body', 'pillars']);
-    const noiseIds = ops(e).flatMap((n) => (n.op === 'noise2' || n.op === 'noise' ? [`${n.op}:${n.id}`] : []));
-    // SP6a's cave terms read the caves.noises ids (pillarThickness twice: the cube is square(x)·x).
+    const noiseIds = ops(e).flatMap((n) => (n.op === 'noise2' || n.op === 'noise' || n.op === 'noiseScaled' ? [`${n.op}:${n.id}`] : []));
+    const times = (id: string, n: number): string[] => Array.from({ length: n }, () => id);
+    // SP6a's cave terms read the caves.noises ids (pillarThickness twice: the cube is square(x)·x). Task 7: rough is read
+    // by the entrances and spaghetti 3D; each spaghetti rarity blend reads its rarity noise once per band's rangeChoice and
+    // once per step of its weights (3D: 10 per blend, two blends; 2D: 13) and noiseScaled once per band; S2 reads tm three
+    // times (0.083·tm and the cube's two copies) and Nel twice; Nrb is read by spaghetti 3D and the noodle.
     expect(noiseIds.sort()).toEqual([
-      'noise2:cheeseRegional', 'noise2:jag', 'noise:cheese', 'noise:detail', 'noise:entrance', 'noise:entranceA', 'noise:entranceB', 'noise:layer',
-      'noise:overhang', 'noise:pillar', 'noise:pillarRare', 'noise:pillarThickness', 'noise:pillarThickness', 'noise:roughness', 'noise:roughnessMod',
+      'noise2:cheeseRegional', 'noise2:jag', ...times('noise2:spag2dElevation', 2), ...times('noise2:spagRegional', 2),
+      'noise:cheese', 'noise:detail', 'noise:entrance', 'noise:entranceA', 'noise:entranceB', 'noise:layer',
+      'noise:noodleRidgeA', 'noise:noodleRidgeB', 'noise:noodleThickness', 'noise:noodleToggle',
+      'noise:overhang', 'noise:pillar', 'noise:pillarRare', 'noise:pillarThickness', 'noise:pillarThickness',
+      ...times('noise:roughness', 2), ...times('noise:roughnessMod', 2),
+      ...times('noise:spag2dRarity', 13), ...times('noise:spag2dThickness', 3), ...times('noise:spag3dRarity', 20), 'noise:spag3dThickness',
+      ...times('noiseScaled:spag2d', 5), ...times('noiseScaled:spag3dA', 4), ...times('noiseScaled:spag3dB', 4),
     ]);
     const slides = ops(e).flatMap((n) => (n.op === 'slide' ? [n.knots] : []));
-    // The body's slide and the entrances' yGrad(−10 → 0.3, 30 → 0) (SP6a §1.2).
-    expect(slides.sort()).toEqual([[[-10, 0.3], [30, 0]], [[-64, 0], [-40, 1], [240, 1], [320, 0]]].sort());
+    // The body's slide, the entrances' yGrad(−10 → 0.3, 30 → 0) and spaghetti 2D's yGrad(−64 → 8, 320 → −40), twice
+    // (the cube's two copies) (SP6a §1.2).
+    expect(slides.sort()).toEqual([[[-10, 0.3], [30, 0]], [[-64, 0], [-40, 1], [240, 1], [320, 0]], [[-64, 8], [320, -40]], [[-64, 8], [320, -40]]].sort());
   });
 
   test('taps: terrain outside interpolated (its value is the interpolated field), islands −1e6; the cave family taps outside interpolated', () => {
     const e = defaultExpr();
     expect(findTap(e, 'terrain')).toMatchObject({ inside: false, node: { x: { op: 'interpolated' } } });
     expect(findTap(e, 'islands')).toMatchObject({ inside: false, node: { x: { op: 'const', v: -1e6 } } });
-    for (const name of ['entrances', 'cheese', 'pillars']) expect(findTap(e, name), name).toMatchObject({ inside: false, node: { x: { op: 'interpolated' } } });
-    // The terrain's, detailG's (the same structure), entrances', cheese's and pillars' (SP6a §1.1).
-    expect(interpolatedNodes(e)).toHaveLength(5);
+    for (const name of ['entrances', 'cheese', 'spag3d', 'spag2d', 'pillars']) expect(findTap(e, name), name).toMatchObject({ inside: false, node: { x: { op: 'interpolated' } } });
+    // The noodle tap is combined at voxel level from its four slots (SP6a §1.1).
+    expect(findTap(e, 'noodle')).toMatchObject({ inside: false, node: { x: { op: 'max' } } });
+    // The terrain's, detailG's (the same structure), entrances', cheese's, spaghetti 3D's and 2D's, pillars' and the
+    // noodle's four (SP6a §1.1).
+    expect(interpolatedNodes(e)).toHaveLength(11);
   });
 
-  test('placement: four interpolated slots (detailG\'s interpolated(ref body) shares the terrain\'s); detail is VOXEL and reads amp from a position slot (bilinear E)', () => {
+  test('placement: ten interpolated slots (detailG\'s interpolated(ref body) shares the terrain\'s); detail is VOXEL and reads amp from a position slot (bilinear E)', () => {
     const dc = createDensityContext(CTX);
     const c = dc.compiled;
-    expect(c.interpolatedSlotCount).toBe(4);
+    // The terrain's, entrances', cheese's, pillars', spaghetti 3D's and 2D's and the noodle's four (SP6a §1.6's ten).
+    expect(c.interpolatedSlotCount).toBe(10);
     const detail = c.nodes.find((n) => n.op === 'noise' && (n.expr as { id: string }).id === 'detail')!;
     expect([detail.cls, detail.inside]).toEqual(['voxel', false]);
     const parent = c.nodes.find((n) => n.op === 'mul' && n.kids.includes(c.nodes.indexOf(detail)))!;
@@ -161,11 +175,12 @@ describe('probe (spec §2.3)', () => {
           const x = 16 * cx + 4 * i, y = cornerY(k), z = 16 * cz + 4 * j;
           const h = byHand(s, i, k, j);
           expect(probe(dc, x, y, z, 'precave'), `(${x}, ${y}, ${z})`).toBe(h.final);
-          // The root: the pre-cave density, min'd with the caves slot max(min(E, C), keep) (SP6a §1.1).
+          // The root: the pre-cave density, min'd with the caves slot max(min(E, C, S3, S2), keep) and the noodle (SP6a §1.1).
           const P = probe(dc, x, y, z, 'pillars');
           const keep = P * 0.0625 < DEFAULTS.caves.pillars.threshold ? -1e6 : P;
-          const caves = Math.max(Math.min(probe(dc, x, y, z, 'entrances'), probe(dc, x, y, z, 'cheese')), keep);
-          expect(probe(dc, x, y, z), `(${x}, ${y}, ${z})`).toBe(Math.max(Math.min(Math.min(h.final, caves), 1e6), -1e6));
+          const fam = (name: string): number => probe(dc, x, y, z, name);
+          const caves = Math.max(Math.min(Math.min(Math.min(fam('entrances'), fam('cheese')), fam('spag3d')), fam('spag2d')), keep);
+          expect(probe(dc, x, y, z), `(${x}, ${y}, ${z})`).toBe(Math.max(Math.min(Math.min(h.final, caves), fam('noodle')), -1e6));
           expect(probe(dc, x, y, z, 'terrain'), `terrain (${x}, ${y}, ${z})`).toBe(h.terrain);
           expect(probe(dc, x, y, z, 'islands')).toBe(-1e6);
           checked++;
@@ -242,11 +257,13 @@ describe('early-outs of the default expression (spec §3.2) and the driver on it
                   masked += mask[v]!;
                   solids += solid[v]!;
                   if (low > 1e-3) {
-                    // The caves slot max(min(E, C), keep) at the voxel (SP6a §1.1), from the family taps.
+                    // The caves slot max(min(E, C, S3, S2), keep) and the noodle at the voxel (SP6a §1.1), from the family taps.
                     const x = 16 * cx + lx, z = 16 * cz + lz;
                     const P = probe(dc, x, y, z, 'pillars');
                     const keep = P * 0.0625 < DEFAULTS.caves.pillars.threshold ? -1e6 : P;
-                    if (Math.max(Math.min(probe(dc, x, y, z, 'entrances'), probe(dc, x, y, z, 'cheese')), keep) > 0) rock++;
+                    const fam = (name: string): number => probe(dc, x, y, z, name);
+                    const caves = Math.max(Math.min(Math.min(Math.min(fam('entrances'), fam('cheese')), fam('spag3d')), fam('spag2d')), keep);
+                    if (Math.min(caves, fam('noodle')) > 0) rock++;
                   }
                 }
               }

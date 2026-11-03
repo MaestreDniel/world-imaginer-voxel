@@ -71,11 +71,11 @@ describe('rows and summaries', () => {
     const t = inspectorTree(DEFAULTS, NO_EXPANSION, null);
     expect(t.groups.map((g) => [g.leaf, g.label])).toEqual([['density.defs', 'Density'], ['surface.rules', 'Surface rules']]);
     expect(rowsOf(t, 'density.defs').map(brief)).toEqual([
-      // SP6a §1.1: max(min(min(tap precave(…), caves slot), noodle slot), tap islands), then the def body.
+      // SP6a §1.1: max(min(min(tap precave(…), caves slot), tap noodle), tap islands), then the def body.
       '0 root | root | max [-]',
       '1 root.a | a | min [-]',
       '2 root.a.a | a | min [+]',
-      '2 root.a.b | b | const 1000000',
+      '2 root.a.b | b | tap noodle [+]',
       '1 root.b | b | tap islands [-]',
       '2 root.b.x | x | const -1000000',
       '0 defs.body | defs.body | add [-]',
@@ -126,10 +126,13 @@ describe('rows and summaries', () => {
     expect(sum.get('root.a.a.a.x.b.inside.b.a')).toBe('param density.detailAmpLo = 0.6');
     expect(sum.get('root.a.a.a.x.b.inside.b.b.b')).toBe('clamp 0 … 1');
     expect(sum.get('root.a.a.a.x.b.inside.b.b.b.x.b')).toBe('const 0.5');
-    // SP6a's cave terms: detailG, a family tap, a cave param, keep's ref bound.
+    // SP6a's cave terms: detailG, the family taps, a cave param, keep's ref bound.
     expect(sum.get('root.a.a.a.x.b')).toBe('rangeChoice -1000000000 … 16');
-    expect(sum.get('root.a.a.b.a.a')).toBe('tap entrances');
-    expect(sum.get('root.a.a.b.a.a.x.x.a.b.a.a.b')).toBe('param caves.entrances.offset = 0.37');
+    expect(sum.get('root.a.a.b.a.a.a.a')).toBe('tap entrances');
+    expect(sum.get('root.a.a.b.a.a.a.a.x.x.a.b.a.a.b')).toBe('param caves.entrances.offset = 0.37');
+    expect(sum.get('root.a.a.b.a.a.b')).toBe('tap spag3d');
+    expect(sum.get('root.a.a.b.a.b')).toBe('tap spag2d');
+    expect(sum.get('root.a.b')).toBe('tap noodle');
     const rules = new Map(r.map((x) => [x.path, x.summary]));
     const sky = 'root.rules[1].then.rules';
     expect(rules.get(`${sky}[0]`)).toBe('if not');
@@ -269,11 +272,13 @@ describe('expansion, expand to selection and the indentation cap', () => {
     const copy = withDensity(JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE)));
     expect(inspectorTree(copy, NO_EXPANSION, null).key).toBe(a.key);
     // A change below the collapsed rows is not shown: same key.
-    // (SP6a §1.1: the precave tap, at depth 3 under the collapsed root.a.a, gets a plain y as its detail term.)
+    // (SP6a §1.1: the precave tap, at depth 3 under the collapsed root.a.a, gets a plain y as its detail term, and the
+    // caves slot beside it a const; the noodle tap, shown at depth 2, is kept.)
     const terrain = { op: 'tap', name: 'terrain', x: { op: 'interpolated', x: { op: 'ref', name: 'body' } } };
     const slot = { op: 'const', v: 1000000 };
+    const noodle = (DEFAULT_DENSITY_TREE as { root: { a: { b: object } } }).root.a.b;
     const deep = withDensity({ ...(DEFAULT_DENSITY_TREE as { root: object }), root: { op: 'max',
-      a: { op: 'min', a: { op: 'min', a: { op: 'tap', name: 'precave', x: { op: 'add', a: terrain, b: { op: 'y' } } }, b: slot }, b: slot },
+      a: { op: 'min', a: { op: 'min', a: { op: 'tap', name: 'precave', x: { op: 'add', a: terrain, b: { op: 'y' } } }, b: slot }, b: noodle },
       b: { op: 'tap', name: 'islands', x: { op: 'const', v: -1000000 } } } });
     expect(inspectorTree(deep, NO_EXPANSION, null).key).toBe(a.key);
     expect(inspectorTree(DEFAULTS, NO_EXPANSION, DEFAULT_SELECTION).key).not.toBe(a.key);
@@ -349,8 +354,9 @@ describe('caret → node and selection → highlight', () => {
     m.setCaret(ranges.byPath.get(overhang)!.start + 3);
     expect(caretTarget(m.state, w.state.params)).toEqual({ highlight: overhang, select: { leaf: 'density.defs', path: overhang } });
     // On a field of a node: that node.
-    // The body's slide (SP6a's entrances print their yGrad slide's knots earlier, under the root).
-    m.setCaret(density(text, '"knots": [[-64'));
+    // The body's slide (SP6a's entrances and spaghetti 2D print their yGrad slides' knots earlier, under the root; spaghetti
+    // 2D's also starts at y −64).
+    m.setCaret(text.indexOf('"knots": [[-64', density(text, '"defs"')));
     expect(caretTarget(m.state, w.state.params).select).toEqual({ leaf: 'density.defs', path: 'defs.body.a.a.b.b' });
     // Outside every node (the value's own braces, the "defs" key): nothing.
     m.setCaret(0);

@@ -131,7 +131,9 @@ describe('the analyser and the worker handler on real columns', () => {
     const analyse = createSurfaceColumnAnalyser(SEED, ctx);
     const store = createStore({ shared: false, maxBlockBytes: 8 << 20, maxByteBytes: 8 << 20 });
     const uniform = new Set<number>();
-    for (const [cx, cz] of COLS) {
+    // (0, 3) holds uniform stone and deepslate sections: since SP6a's spaghetti and noodles, the three COLS have no uniform
+    // rock section left.
+    for (const [cx, cz] of [...COLS, [0, 3] as const]) {
       fillColumnT(store, ctx, cx, cz, () => false);
       const view = store.proto(cx, cz)!;
       const dense: ColumnView = {

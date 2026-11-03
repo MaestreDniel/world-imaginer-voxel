@@ -408,14 +408,15 @@ describe('islands.enabled on trees that do not match it (amplified\'s window, se
     }
     // Unticking the flag removes the islands (the mask is 0, so the term's gate gives −1e6) and their water rule, not
     // the preset's rules: 47 of the 64 columns keep the islands palette on their peaks (mostly stone → dirt or grass).
-    // SP6a's caves hollow the peaks, so more runs are topped above y 180 (D31, accepted until SP12): 49 columns, 37,106
-    // voxels (23,585 before).
-    expect({ solidity, fluid, outside, changed, columns }).toEqual({ solidity: 0, fluid: 0, outside: 0, changed: 37106, columns: 49 });
+    // SP6a's caves hollow the peaks, so more runs are topped above y 180 (D31, accepted until SP12): 49 columns, 37,417
+    // voxels with spaghetti and the noodle (37,106 with entrances, cheese and pillars; 23,585 before SP6a).
+    expect({ solidity, fluid, outside, changed, columns }).toEqual({ solidity: 0, fluid: 0, outside: 0, changed: 37417, columns: 49 });
   }, 120_000);
 
   // SP6a's caves detach more runs above y 180 under peaks (default 5,953 voxels, 1,373 positions, 34 columns; amplified
-  // 9,705, 2,073, 41 and 1,613 snow → stone before them).
-  test.each([['default', 7536, 1948, 37, 0], ['amplified', 15860, 4903, 45, 4224]] as const)('%s with the flag on: the same solidity and water; states change only where a run lies above y 180, stage == reference == compiled.state there', (id, wantVoxels, wantPositions, wantColumns, wantSnowToStone) => {
+  // 9,705, 2,073, 41 and 1,613 snow → stone before them; with entrances, cheese and pillars default 7,536, 1,948, 37 and
+  // amplified 15,860, 4,903, 45, 4,224).
+  test.each([['default', 7538, 1949, 37, 0], ['amplified', 15994, 4970, 45, 4291]] as const)('%s with the flag on: the same solidity and water; states change only where a run lies above y 180, stage == reference == compiled.state there', (id, wantVoxels, wantPositions, wantColumns, wantSnowToStone) => {
     const params = resolveProfile(id);
     const on = withFlag(params, true), off = withFlag(params, false);
     const probeSc = createSurfaceContext(on);

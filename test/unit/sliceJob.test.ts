@@ -286,6 +286,7 @@ describe('slice job: a line whose columns all share torus record 0 (SP3a spec §
     const v = ref.proto(32704, 0)!;
     for (let y = -64; y <= 319; y++) expect(first.blocks[sliceIndex(511, y)]).toBe(v.block(0, y, 0));
     expect(colKey(32704, 0)).toBe(colKey(cols[511]![0], cols[511]![1]));
-    // 5,120 columns generated: ≈ 6 s alone, several times that while the whole suite loads the CPU.
-  }, 120_000);
+    // 5,120 columns generated: ≈ 6 s alone before SP6a, ≈ 53 s alone with its spaghetti and noodles (about 10 ms a T
+    // column, spec §1.6), several times that while the whole suite loads the CPU.
+  }, 360_000);
 });

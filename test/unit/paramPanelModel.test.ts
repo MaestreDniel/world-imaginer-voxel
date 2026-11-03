@@ -65,11 +65,19 @@ describe('panel tree', () => {
   test('SP6a spec §4 (D9): the Caves section, last, with its sub-sections in the spec\'s order and sizes first', () => {
     const caves = panelTree().sections.at(-1)!;
     expect([caves.path, caves.label, caves.controls]).toEqual(['caves', 'Caves', []]);
-    // Task 6's sub-groups (Spaghetti 3D, Spaghetti 2D and Noodles join between Cheese and Pillars, the carvers before Limits).
+    // Tasks 6 and 7's sub-groups (the carvers join before Limits).
     expect(caves.sections.map((s) => [s.path, s.label])).toEqual([
-      ['caves.cheese', 'Cheese'], ['caves.pillars', 'Pillars'], ['caves.entrances', 'Entrances'], ['caves.limits', 'Limits'], ['caves.noises', 'Cave noises'],
+      ['caves.cheese', 'Cheese'], ['caves.spaghetti3d', 'Spaghetti 3D'], ['caves.spaghetti2d', 'Spaghetti 2D'], ['caves.noodles', 'Noodles'],
+      ['caves.pillars', 'Pillars'], ['caves.entrances', 'Entrances'], ['caves.limits', 'Limits'], ['caves.noises', 'Cave noises'],
     ]);
     expect(caves.sections[0]!.controls.map((c) => c.path)).toEqual(['caves.cheese.offset', 'caves.cheese.regional', 'caves.cheese.layerAmp', 'caves.cheese.roofDepth']);
+    // The spaghetti families' sizes first, then their band scales as a sub-section.
+    const s3 = caves.sections[1]!, s2 = caves.sections[2]!;
+    expect(s3.controls.map((c) => c.path)).toEqual(['caves.spaghetti3d.thickness', 'caves.spaghetti3d.thicknessVar', 'caves.spaghetti3d.regional']);
+    expect(s3.sections.map((s) => [s.path, s.label, s.controls.map((c) => c.path.split('.').at(-1))])).toEqual([['caves.spaghetti3d.scales', 'Scales', ['s0', 's1', 's2', 's3']]]);
+    expect(s2.controls.map((c) => c.path)).toEqual(['caves.spaghetti2d.thickness', 'caves.spaghetti2d.layerAmp']);
+    expect(s2.sections.map((s) => [s.path, s.label, s.controls.map((c) => c.path.split('.').at(-1))])).toEqual([['caves.spaghetti2d.scales', 'Scales', ['s0', 's1', 's2', 's3', 's4']]]);
+    expect(caves.sections[3]!.controls.map((c) => c.path)).toEqual(['caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional']);
     for (const c of controlsOf(caves)) expect([c.path, c.scope]).toEqual([c.path, 'terrain']);
   });
 
@@ -99,8 +107,13 @@ describe('panel tree', () => {
     const log = controlsOf(panelTree()).filter((c) => c.scale === 'log').map((c) => c.path);
     expect(log.sort()).toEqual([
       'caves.noises.cheese', 'caves.noises.cheeseRegional', 'caves.noises.entrance', 'caves.noises.entranceA', 'caves.noises.entranceB',
-      'caves.noises.layer', 'caves.noises.pillar', 'caves.noises.pillarRare', 'caves.noises.pillarThickness', 'caves.noises.roughness',
-      'caves.noises.roughnessMod',
+      'caves.noises.layer', 'caves.noises.noodleRidgeA', 'caves.noises.noodleRidgeB', 'caves.noises.noodleThickness', 'caves.noises.noodleToggle',
+      'caves.noises.pillar', 'caves.noises.pillarRare', 'caves.noises.pillarThickness', 'caves.noises.roughness', 'caves.noises.roughnessMod',
+      'caves.noises.spag2d', 'caves.noises.spag2dElevation', 'caves.noises.spag2dRarity', 'caves.noises.spag2dThickness', 'caves.noises.spag3dA',
+      'caves.noises.spag3dB', 'caves.noises.spag3dRarity', 'caves.noises.spag3dThickness', 'caves.noises.spagRegional',
+      // The spaghetti band scales, 1/16 … 16 (SP6a Task 7).
+      'caves.spaghetti2d.scales.s0', 'caves.spaghetti2d.scales.s1', 'caves.spaghetti2d.scales.s2', 'caves.spaghetti2d.scales.s3', 'caves.spaghetti2d.scales.s4',
+      'caves.spaghetti3d.scales.s0', 'caves.spaghetti3d.scales.s1', 'caves.spaghetti3d.scales.s2', 'caves.spaghetti3d.scales.s3',
       'climate.C', 'climate.E', 'climate.H', 'climate.R', 'climate.T', 'climate.W', 'climate.scaleMul',
       'climate.warp.C.noise', 'climate.warp.R.noise', 'climate.warp.shift.noise',
       'density.noises.detail', 'density.noises.islands', 'density.noises.jag', 'density.noises.overhang',
@@ -346,8 +359,8 @@ describe('panel controls (Task 17): kinds, slider positions, typed values, issue
   test('on a linear stepped slider every keyboard step moves to the next value of the step grid', () => {
     const linear = [...sliders(), ...NOISE_NUMBER_FIELDS.map((f) => noiseFieldControl(control('climate.C'), f))].filter((c) => c.scale === 'linear');
     // 34 before SP3c, + the 7 number and int leaves of the surface group, + islands.lo and islands.hi (SP3e), + SP6a's 8
-    // caves number leaves (Task 6).
-    expect(linear.length).toBe(51);
+    // caves number leaves (Task 6), + its 8 linear spaghetti and noodle leaves (Task 7; the band scales are log).
+    expect(linear.length).toBe(59);
     for (const c of linear) {
       const n = sliderPositions(c);
       expect(n).toBe(Math.round((c.max! - c.min!) / c.step!));

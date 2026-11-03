@@ -43,13 +43,27 @@ describe('the source model (SP3d spec §1.3, §1.4)', () => {
       'surface.patchThreshold',
       // SP6a spec §4 (Task 6; Tasks 7, 8, 9 and 27 grow it): the caves group's number and int leaves and cave noises.
       'caves.cheese.offset', 'caves.cheese.regional', 'caves.cheese.layerAmp', 'caves.cheese.roofDepth',
+      // Task 7: spaghetti 3D and 2D (with their band scales) and the noodles, between the cheese and the pillars.
+      'caves.spaghetti3d.thickness', 'caves.spaghetti3d.thicknessVar', 'caves.spaghetti3d.regional',
+      'caves.spaghetti3d.scales.s0', 'caves.spaghetti3d.scales.s1', 'caves.spaghetti3d.scales.s2', 'caves.spaghetti3d.scales.s3',
+      'caves.spaghetti2d.thickness', 'caves.spaghetti2d.layerAmp',
+      'caves.spaghetti2d.scales.s0', 'caves.spaghetti2d.scales.s1', 'caves.spaghetti2d.scales.s2', 'caves.spaghetti2d.scales.s3',
+      'caves.spaghetti2d.scales.s4',
+      'caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional',
       'caves.pillars.threshold', 'caves.entrances.offset', 'caves.entrances.threshold', 'caves.limits.surfaceDepth',
       'caves.noises.cheese.clampSigma', 'caves.noises.layer.clampSigma', 'caves.noises.cheeseRegional.clampSigma',
       'caves.noises.pillar.clampSigma', 'caves.noises.pillarRare.clampSigma', 'caves.noises.pillarThickness.clampSigma',
       'caves.noises.roughness.clampSigma', 'caves.noises.roughnessMod.clampSigma', 'caves.noises.entrance.clampSigma',
       'caves.noises.entranceA.clampSigma', 'caves.noises.entranceB.clampSigma',
+      'caves.noises.spag3dA.clampSigma', 'caves.noises.spag3dB.clampSigma', 'caves.noises.spag3dRarity.clampSigma',
+      'caves.noises.spag3dThickness.clampSigma', 'caves.noises.spagRegional.clampSigma', 'caves.noises.spag2d.clampSigma',
+      'caves.noises.spag2dElevation.clampSigma', 'caves.noises.spag2dThickness.clampSigma', 'caves.noises.spag2dRarity.clampSigma',
+      'caves.noises.noodleToggle.clampSigma', 'caves.noises.noodleThickness.clampSigma', 'caves.noises.noodleRidgeA.clampSigma',
+      'caves.noises.noodleRidgeB.clampSigma',
     ]);
     expect(ALLOWED_REF_TARGETS.get('caves.cheese.offset')).toEqual({ kind: 'number', lo: -0.5, hi: 1 });
+    // A band scale's whole static range lies inside noiseScaled's [1/16, 16] (SP6a §1.5), so `s: {param}` validates.
+    expect(ALLOWED_REF_TARGETS.get('caves.spaghetti2d.scales.s4')).toEqual({ kind: 'number', lo: 0.0625, hi: 16 });
     expect(ALLOWED_REF_TARGETS.get('caves.noises.cheese.clampSigma')).toEqual({ kind: 'number', lo: 1, hi: 8 });
     expect(ALLOWED_REF_TARGETS.get(CS)).toEqual({ kind: 'number', lo: 1, hi: 8 });
     expect(ALLOWED_REF_TARGETS.get('density.noises.islands.clampSigma')).toEqual({ kind: 'number', lo: 1, hi: 8 });

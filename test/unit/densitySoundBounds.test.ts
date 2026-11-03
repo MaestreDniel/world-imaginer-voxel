@@ -373,12 +373,15 @@ describe('the default world is unchanged (SP3d spec §1.9 D: proven, not only cl
 
   test('fillDensityColumn\'s mask and solid arrays over 32 seed-\'42\' columns hash as at main (9fababa), SP6a\'s carving cave taps muted', () => {
     // Computed with main's code (2ffec6a = 9fababa's code) in a detached worktree, by this same loop. SP6a's tree with the
-    // entrances and cheese taps muted (`cavesMuted`: the caves slot is 1e6) keeps every bounds decision and solid voxel.
+    // carving family taps muted (`cavesMuted`: the caves slot and the noodle are 1e6) keeps every bounds decision and
+    // solid voxel.
     const c = ctxFor('42');
     expect(hashed(createDensityContext(c, resolveDensity(cavesMuted(DEFAULT_DENSITY_TREE), c.params)))).toBe('1e25082c8ed7a949 167808 1040924');
   });
 
-  test('… and with SP6a\'s cave terms (entrances, cheese, pillars; recorded at their commit): more voxels evaluated, fewer solid', () => {
-    expect(hashed(createDensityContext(ctxFor('42')))).toBe('6a825c0535036c45 411264 984610');
+  test('… and with SP6a\'s cave terms (recorded at each commit): more voxels evaluated, fewer solid', () => {
+    // Entrances, cheese and pillars (Task 6): '6a825c0535036c45 411264 984610'; with spaghetti 3D and 2D and the noodle
+    // (Task 7):
+    expect(hashed(createDensityContext(ctxFor('42')))).toBe('a511599d09a0595f 619136 982594');
   });
 });

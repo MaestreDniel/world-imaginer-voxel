@@ -8,6 +8,7 @@
  * it from its cache, and the resolvers' memo (keyed by the frozen source) hits on every context. The literals below are
  * written with `op` / `kind` first for reading; key order is not semantic.
  */
+import { SPAGHETTI_BANDS, type SpaghettiBands } from '../constants';
 import { checkJson, type JsonFormat, type JsonValue } from './json';
 import type { Issue } from './kit';
 
@@ -35,6 +36,8 @@ const max = (a: JsonValue, b: JsonValue): JsonValue => ({ op: 'max', a, b });
 const neg = (x: JsonValue): JsonValue => ({ op: 'neg', x });
 const abs = (x: JsonValue): JsonValue => ({ op: 'abs', x });
 const square = (x: JsonValue): JsonValue => ({ op: 'square', x });
+/** x³ as `mul(square(x), x)` (the pillars' thickness factor's form), each x a fresh copy from `x()`. */
+const cube = (x: () => JsonValue): JsonValue => mul(square(x()), x());
 const clamp = (x: JsonValue, lo: number, hi: number): JsonValue => ({ op: 'clamp', x, lo, hi });
 /** `rangeChoice(x, lo, hi, a, b)`: `a` where lo ≤ x < hi, else `b`; `hi` a literal or a parameter ref. */
 const rangeChoice = (x: JsonValue, lo: number, hi: number | { readonly param: string }, inside: JsonValue, outside: JsonValue): JsonValue =>
@@ -92,8 +95,80 @@ const pillars = (): JsonValue => tap('pillars', interpolated(mul(
  */
 const keep = (): JsonValue => rangeChoice(mul(ref('pillars'), c(0.0625)), -1e9, { param: 'caves.pillars.threshold' }, c(-1000000), ref('pillars'));
 
-/** The caves slot (SP6a §1.1): max(min(E, C), keep). */
-const caves = (): JsonValue => max(min(entrances(), cheese()), keep());
+/**
+ * The rarity blend of a spaghetti family (SP6a §1.3): `rmS(N) = Σ_k w_k(r)·m_k·|noiseScaled(N, m_k)|` over the bands of
+ * its rarity noise r, m_k the leaf `<scales>.s<k>`. Each band edge e is written as its blend zone [e − 0.05, e + 0.05)
+ * (`SPAGHETTI_BANDS`' literals, so no rounding moves an edge); with `step_e(r) = clamp((r − (e − 0.05))·10, 0, 1)` (0
+ * below the zone, 1 from its top, linear inside), w_0 = 1 − step_1, w_k = step_k − step_{k+1} and w_last = step_last: w_k is 1 inside band
+ * k, the two neighbours blend linearly within ±0.05 of an edge and the weights sum to 1. Each band's term sits under
+ * `rangeChoice(r, lo_k, hi_k, (w_k·m_k)·|noiseScaled(N, m_k)|, 0)` on band k widened by 0.05 on each side, exactly where
+ * its weight can be non-zero, so its `noiseScaled` is evaluated only there ("both evaluated only there"); the terms add
+ * left-nested, and outside every blend zone the sum is the band's plain value m_k·|noiseScaled(N, m_k)| bit for bit.
+ */
+const rarityBlend = (id: string, bands: SpaghettiBands): JsonValue => {
+  const zones = bands.zones;
+  const r = (): JsonValue => noise(bands.rarity);
+  const step = (z: number): JsonValue => clamp(mul(add(r(), c(-zones[z]![0])), c(10)), 0, 1);
+  const n = zones.length + 1;
+  let sum: JsonValue | null = null;
+  for (let k = 0; k < n; k++) {
+    const w = k === 0 ? add(c(1), neg(step(0))) : k === n - 1 ? step(k - 1) : add(step(k - 1), neg(step(k)));
+    const m = `${bands.scales}.s${k}`;
+    const lo = k === 0 ? -1e9 : zones[k - 1]![0], hi = k === n - 1 ? 1e9 : zones[k]![1];
+    const term = rangeChoice(r(), lo, hi, mul(mul(w, param(m)), abs({ op: 'noiseScaled', id, s: { param: m } })), c(0));
+    sum = sum === null ? term : add(sum, term);
+  }
+  return sum!;
+};
+const S3_BANDS = SPAGHETTI_BANDS.spaghetti3d;
+const S2_BANDS = SPAGHETTI_BANDS.spaghetti2d;
+
+/**
+ * S3 = tap spag3d(interpolated(sky(fl(16·(rough + clamp(max(rmS(S1), rmS(S2)) − thickness − thicknessVar·thk_s −
+ * regional·Nrb, −1, 1))) + ramp))): Minecraft's 3D spaghetti with continuous rarity bands (SP6a §1.2-§1.3); S1 and S2
+ * share the rarity noise.
+ */
+const spag3d = (): JsonValue => tap(S3_BANDS.tap, interpolated(sky(add(fl(mul(c(16), add(rough(), clamp(add(add(add(
+  max(
+    rarityBlend(S3_BANDS.noises[0]!, S3_BANDS),
+    rarityBlend(S3_BANDS.noises[1]!, S3_BANDS),
+  ),
+  neg(param('caves.spaghetti3d.thickness'))),
+  neg(mul(param('caves.spaghetti3d.thicknessVar'), noise('spag3dThickness')))),
+  neg(mul(param('caves.spaghetti3d.regional'), noise2('spagRegional')))), -1, 1)))), ramp()))));
+
+/** tm = −thickness − 0.35·Nthk, spaghetti 2D's thickness term (spec §1.2's `−0.95 − 0.35·Nthk`, 0.95 the leaf). */
+const spag2dTm = (): JsonValue => add(neg(param('caves.spaghetti2d.thickness')), mul(c(-0.35), noise('spag2dThickness')));
+/**
+ * S2 = tap spag2d(interpolated(sky(fl(16·clamp(max(rmS2(S2d) + 0.083·tm, (|layerAmp·Nel + yGrad(−64 → 8, 320 → −40)| +
+ * tm)³), −1, 1)) + ramp))): flat tunnels along a layer that slopes down by one block in eight (SP6a §1.2).
+ */
+const spag2d = (): JsonValue => tap(S2_BANDS.tap, interpolated(sky(add(fl(mul(c(16), clamp(max(
+  add(rarityBlend(S2_BANDS.noises[0]!, S2_BANDS), mul(c(0.083), spag2dTm())),
+  cube(() => add(abs(add(mul(param('caves.spaghetti2d.layerAmp'), noise2('spag2dElevation')), { op: 'slide', x: c(1), knots: [[-64, 8], [320, -40]] })), spag2dTm())),
+), -1, 1))), ramp()))));
+
+/**
+ * nb(N, c) = rangeChoice(y − maxY_n, −1e9, 40, rangeChoice(minY_n − y, −1e9, 40, N, c), c): a noodle noise only at
+ * corners within 40 blocks of the noodle band (lever 3, SP6a §1.1; 40 = bandSpan's static maximum 32 + 8), the constant
+ * c (which closes the tube) outside. The band is y −60 … 64, literals until the noodles' minY / maxY leaves land.
+ */
+const nb = (x: JsonValue, cst: number): JsonValue =>
+  rangeChoice(add({ op: 'y' }, c(-64)), -1e9, 40, rangeChoice(add(c(-60), neg({ op: 'y' })), -1e9, 40, x, c(cst)), c(cst));
+/**
+ * noodle = tap noodle(fl(16·(−thickness − 0.025·Kn + ridgeMul·max(|An|, |Bn|) + 4·max(0, −Nn)))), combined at voxel level
+ * (outside `interpolated`) from four slots: Nn = interpolated(nb(Nt − regional·Nrb, −1)), Kn = interpolated(nb(thk_n,
+ * 0)), An = interpolated(nb(Ra, 1)), Bn = interpolated(nb(Rb, 1)). The toggle `+ 4·max(0, −Nn)` narrows the tube and
+ * closes it by Nn ≈ −0.019 (SP6a §1.3).
+ */
+const noodle = (): JsonValue => tap('noodle', fl(mul(c(16), add(add(add(
+  neg(param('caves.noodles.thickness')),
+  mul(c(-0.025), interpolated(nb(noise('noodleThickness'), 0)))),
+  mul(param('caves.noodles.ridgeMul'), max(abs(interpolated(nb(noise('noodleRidgeA'), 1))), abs(interpolated(nb(noise('noodleRidgeB'), 1)))))),
+  mul(c(4), max(c(0), neg(interpolated(nb(add(noise('noodleToggle'), neg(mul(param('caves.noodles.regional'), noise2('spagRegional')))), -1)))))))));
+
+/** The caves slot (SP6a §1.1): max(min(E, C, S3, S2), keep), the mins left-nested in that order. */
+const caves = (): JsonValue => max(min(min(min(entrances(), cheese()), spag3d()), spag2d()), keep());
 
 /**
  * The default density expression `{root, defs}` (SP3d spec §2.1; SP3b spec §3.1; SP6a spec §1.1). `defs.body` is the
@@ -104,11 +179,11 @@ const caves = (): JsonValue => max(min(entrances(), cheese()), keep());
  * written order (IEEE addition is not associative). `SLIDE`, the floor and ceiling terms and `islands` = −1e6 are data.
  *
  * The root (SP6a §1.1, D17) is
- * `max(min(min(tap precave(add(tap terrain(interpolated(ref body)), detail)), caves), noodle), tap islands(−1e6))`:
- * `root.a.a.a` is the `precave` tap (the pre-cave density T + detail that the cave tag reads, SP6a §3.2),
- * `root.a.a.a.x.a` the `terrain` tap, `root.a.a.a.x.b` the detail term, `root.a.a.b` the caves slot and `root.a.b`
- * the noodle slot, each `const 1e6` until its term lands, and `root.b` the islands tap. `min(v, 1e6)` is `v` for every
- * value a valid tree reaches, so the values, the bounds decisions and the generated world are SP5c's.
+ * `max(min(min(tap precave(add(tap terrain(interpolated(ref body)), detailG)), caves), noodle), tap islands(−1e6))`:
+ * `root.a.a.a` is the `precave` tap (the pre-cave density T + detailG that the cave tag reads, SP6a §3.2),
+ * `root.a.a.a.x.a` the `terrain` tap, `root.a.a.a.x.b` detailG (the detail term is its `inside`), `root.a.a.b` the caves
+ * slot max(min(E, C, S3, S2), keep) (the taps `entrances` `root.a.a.b.a.a.a.a`, `cheese` `root.a.a.b.a.a.a.b`, `spag3d`
+ * `root.a.a.b.a.a.b`, `spag2d` `root.a.a.b.a.b`), `root.a.b` the `noodle` tap and `root.b` the islands tap.
  */
 export const DEFAULT_DENSITY_TREE: JsonValue = registeredTree(
   {
@@ -144,7 +219,7 @@ export const DEFAULT_DENSITY_TREE: JsonValue = registeredTree(
           },
           b: caves(),
         },
-        b: { op: 'const', v: 1000000 },
+        b: noodle(),
       },
       b: { op: 'tap', name: 'islands', x: { op: 'const', v: -1000000 } },
     },

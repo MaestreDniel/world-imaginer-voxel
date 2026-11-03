@@ -45,6 +45,9 @@ const caveNoise = (label: string, doc: string, def: { readonly dims: 2 | 3; read
   return noise({ double: false, ...noiseDef, clampSigma }, { ...TERRAIN, label, doc, wavelength: range, dims, remapNone: true });
 };
 const CAVE_WAVELENGTH = { min: 16, max: 8192 } as const;
+/** A spaghetti band's tunnel scale rm (SP6a spec §1.3, §4): the `noiseScaled` s of its band, 1/16 … 16 (the op's range). */
+const scale = (def: number, label: string, doc: string) =>
+  num(def, { ...TERRAIN, label, doc, min: 0.0625, max: 16, step: 0.0625 });
 const amp = (def: number, label: string, doc: string) =>
   num(def, { ...TERRAIN, label, doc, unit: 'blocks', min: 0, max: 8, step: 0.05 });
 
@@ -163,6 +166,33 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       layerAmp: num(4, { ...TERRAIN, label: 'Layer amplitude', doc: 'Weight of the squared layer noise L², which closes caverns between flat layers.', min: 0, max: 8, step: 0.05 }),
       roofDepth: num(12, { ...TERRAIN, label: 'Roof depth', doc: 'Caverns close within about this depth below the terrain surface: + clamp((roofDepth − T) / 24, 0, 0.5).', unit: 'blocks', min: 0, max: 48, step: 1 }),
     }),
+    spaghetti3d: group('Spaghetti 3D', 'Winding tunnels: 16·(rough + clamp(max(rm·|S1(p/rm)|, rm·|S2(p/rm)|) − thickness − thicknessVar·thk − regional·Nrb, −1, 1)), carved where it is below 0; rm is the scale of the rarity band (SP6a spec §1.2-§1.3).', {
+      thickness: num(0.0765, { ...TERRAIN, label: 'Thickness', doc: 'Subtracted from the tunnel noise: higher → wider tunnels.', min: 0, max: 0.3, step: 0.0005 }),
+      thicknessVar: num(0.0115, { ...TERRAIN, label: 'Thickness variation', doc: 'Times the thickness noise thk: how much the tunnel width varies along a tunnel.', min: 0, max: 0.1, step: 0.0005 }),
+      regional: num(0.05, { ...TERRAIN, label: 'Regional swing', doc: 'Times the regional noise Nrb (λ 1024): tunnels are wider where Nrb is high, narrower where it is low.', min: 0, max: 0.2, step: 0.005 }),
+      scales: group('Scales', 'The tunnel scale rm of each band of the rarity noise r (r < −0.5, < 0, < 0.5, else), blended linearly within ±0.05 of each band edge: larger → larger, sparser tunnels.', {
+        s0: scale(0.75, 'Scale, r < −0.5', 'The tunnel scale where the rarity noise is below −0.5.'),
+        s1: scale(1, 'Scale, −0.5 ≤ r < 0', 'The tunnel scale where the rarity noise is in −0.5 … 0.'),
+        s2: scale(1.5, 'Scale, 0 ≤ r < 0.5', 'The tunnel scale where the rarity noise is in 0 … 0.5.'),
+        s3: scale(2, 'Scale, r ≥ 0.5', 'The tunnel scale where the rarity noise is 0.5 or above.'),
+      }),
+    }),
+    spaghetti2d: group('Spaghetti 2D', 'Flat winding tunnels along a sloping layer: 16·clamp(max(rm·|S2d(p/rm)| + 0.083·tm, (|layerAmp·Nel + yGrad| + tm)³), −1, 1), tm = −thickness − 0.35·Nthk; rm is the scale of the rarity band (SP6a spec §1.2-§1.3).', {
+      thickness: num(0.95, { ...TERRAIN, label: 'Thickness', doc: 'The constant of tm = −thickness − 0.35·Nthk: higher → wider and taller tunnels.', min: 0.5, max: 1.5, step: 0.01 }),
+      layerAmp: num(8, { ...TERRAIN, label: 'Layer amplitude', doc: 'Times the elevation noise Nel: how far the tunnel layer rises and falls around its sloping height.', min: 0, max: 32, step: 0.25 }),
+      scales: group('Scales', 'The tunnel scale rm of each band of the rarity noise r (r < −0.75, < −0.5, < 0.5, < 0.75, else), blended linearly within ±0.05 of each band edge.', {
+        s0: scale(0.5, 'Scale, r < −0.75', 'The tunnel scale where the rarity noise is below −0.75.'),
+        s1: scale(0.75, 'Scale, −0.75 ≤ r < −0.5', 'The tunnel scale where the rarity noise is in −0.75 … −0.5.'),
+        s2: scale(1, 'Scale, −0.5 ≤ r < 0.5', 'The tunnel scale where the rarity noise is in −0.5 … 0.5.'),
+        s3: scale(2, 'Scale, 0.5 ≤ r < 0.75', 'The tunnel scale where the rarity noise is in 0.5 … 0.75.'),
+        s4: scale(3, 'Scale, r ≥ 0.75', 'The tunnel scale where the rarity noise is 0.75 or above.'),
+      }),
+    }),
+    noodles: group('Noodles', 'Thin tubes: 16·(−thickness − 0.025·Kn + ridgeMul·max(|An|, |Bn|) + 4·max(0, −Nn)), carved where it is below 0; they narrow and close where the toggle noise Nn is below 0 (SP6a spec §1.1-§1.3).', {
+      thickness: num(0.075, { ...TERRAIN, label: 'Thickness', doc: 'Subtracted from the ridges: higher → wider noodles.', min: 0, max: 0.3, step: 0.0025 }),
+      ridgeMul: num(1.5, { ...TERRAIN, label: 'Ridge multiplier', doc: 'Times the ridge noises max(|An|, |Bn|): higher → thinner noodles.', min: 0.5, max: 4, step: 0.05 }),
+      regional: num(0.1, { ...TERRAIN, label: 'Regional swing', doc: 'Lowers the toggle noise by this × the regional noise Nrb (λ 1024), so noodles close together where Nrb is high.', min: 0, max: 0.4, step: 0.01 }),
+    }),
     pillars: group('Pillars', 'Rock pillars kept inside caverns: P = 16·(2·Np − 1 − rare)·(0.55 + 0.55·thickness)³.', {
       threshold: num(0.03, { ...TERRAIN, label: 'Threshold', doc: 'Rock is kept where P / 16 is at least this (lower → more and thicker pillars).', min: 0, max: 0.5, step: 0.005 }),
     }),
@@ -185,6 +215,19 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       entrance: caveNoise('Entrance noise', 'Ne of the entrances (amplitudes 0.4, 0.5, 1.0).', { dims: 3, wavelength: 128, octaves: 3, amplitudes: [0.4, 0.5, 1.0] }, 3, CAVE_WAVELENGTH),
       entranceA: caveNoise('Entrance tunnel noise A', 'E1 of the entrance tunnels max(|E1|, |E2|).', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
       entranceB: caveNoise('Entrance tunnel noise B', 'E2 of the entrance tunnels max(|E1|, |E2|).', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      spag3dA: caveNoise('Spaghetti 3D noise A', 'S1 of the 3D tunnels max(rm·|S1(p/rm)|, rm·|S2(p/rm)|).', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      spag3dB: caveNoise('Spaghetti 3D noise B', 'S2 of the 3D tunnels max(rm·|S1(p/rm)|, rm·|S2(p/rm)|).', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      spag3dRarity: caveNoise('Spaghetti 3D rarity noise', 'r of the 3D tunnels: its band picks the tunnel scale rm (Spaghetti 3D, Scales).', { dims: 3, wavelength: 128, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      spag3dThickness: caveNoise('Spaghetti 3D thickness noise', 'thk of the 3D tunnels, times the thickness variation.', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      spagRegional: caveNoise('Spaghetti regional noise', 'Nrb (2D): widens the 3D tunnels and closes the noodles where it is high.', { dims: 2, wavelength: 1024, octaves: 2 }, 3, CAVE_WAVELENGTH),
+      spag2d: caveNoise('Spaghetti 2D noise', 'S2d of the flat tunnels rm·|S2d(p/rm)|.', { dims: 3, wavelength: 128, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      spag2dElevation: caveNoise('Spaghetti 2D elevation noise', 'Nel (2D): raises and lowers the flat tunnels\' layer, times the layer amplitude.', { dims: 2, wavelength: 256, octaves: 2 }, 3, CAVE_WAVELENGTH),
+      spag2dThickness: caveNoise('Spaghetti 2D thickness noise', 'Nthk of tm = −thickness − 0.35·Nthk.', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      spag2dRarity: caveNoise('Spaghetti 2D rarity noise', 'r of the flat tunnels: its band picks the tunnel scale rm (Spaghetti 2D, Scales).', { dims: 3, wavelength: 128, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      noodleToggle: caveNoise('Noodle toggle noise', 'Nn of the noodles: they narrow and close where Nn − regional·Nrb is below 0.', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      noodleThickness: caveNoise('Noodle thickness noise', 'Kn of the noodles, times 0.025.', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      noodleRidgeA: caveNoise('Noodle ridge noise A', 'An of the noodle ridges max(|An|, |Bn|).', { dims: 3, wavelength: 18, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      noodleRidgeB: caveNoise('Noodle ridge noise B', 'Bn of the noodle ridges max(|An|, |Bn|).', { dims: 3, wavelength: 18, octaves: 1 }, 3, CAVE_WAVELENGTH),
     }),
   }),
 });

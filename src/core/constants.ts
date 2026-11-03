@@ -110,6 +110,36 @@ export const RULES_COLUMN_COST_MAX = 138_870_784;
 export const NOISE_SCALE_MIN = 1 / 16;
 export const NOISE_SCALE_MAX = 16;
 
+/** One spaghetti family's rarity bands (SP6a spec §1.2-§1.3). */
+export interface SpaghettiBands {
+  /** The family's tap in the default density tree. */
+  readonly tap: string;
+  /** The rarity noise r (an id under `caves.noises.`) whose band picks the scale. */
+  readonly rarity: string;
+  /** The noises scaled by the band's scale (`noiseScaled`). */
+  readonly noises: readonly string[];
+  /** The scale leaves' group: band k's scale is `<scales>.s<k>`. */
+  readonly scales: string;
+  /** Each band edge e as its blend zone [e − 0.05, e + 0.05), in increasing order: one fewer than the bands. */
+  readonly zones: readonly (readonly [lo: number, hi: number])[];
+}
+
+/**
+ * The rarity bands of the two spaghetti families (SP6a spec §1.2-§1.3), shared by the default tree's builder
+ * (`core/params/defaultTrees.ts`) and U2's scale witnesses (`metrics/liveness.ts`): spaghetti 3D's edges −0.5, 0, 0.5 over
+ * its scales s0-s3, spaghetti 2D's −0.75, −0.5, 0.5, 0.75 over s0-s4. The zones are literals, so no rounding moves an edge.
+ */
+export const SPAGHETTI_BANDS: Readonly<Record<'spaghetti3d' | 'spaghetti2d', SpaghettiBands>> = Object.freeze({
+  spaghetti3d: Object.freeze({
+    tap: 'spag3d', rarity: 'spag3dRarity', noises: Object.freeze(['spag3dA', 'spag3dB']), scales: 'caves.spaghetti3d.scales',
+    zones: Object.freeze([bound(-0.55, -0.45), bound(-0.05, 0.05), bound(0.45, 0.55)]),
+  }),
+  spaghetti2d: Object.freeze({
+    tap: 'spag2d', rarity: 'spag2dRarity', noises: Object.freeze(['spag2d']), scales: 'caves.spaghetti2d.scales',
+    zones: Object.freeze([bound(-0.8, -0.7), bound(-0.55, -0.45), bound(0.45, 0.55), bound(0.7, 0.8)]),
+  }),
+});
+
 /**
  * The slice viewer's sizes and extents (SP3d spec §4.2, `gen/inspect/fieldSlice.ts`): n × n samples, a 32² draft then
  * the 128² slice; a horizontal plane's side E in blocks. Every allowed E and n give integer sample coordinates

@@ -1977,7 +1977,7 @@ describe('master spec amendments (SP6a §13)', () => {
     const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
     expect(u2, 'no U2 row in §6.4').toBeDefined();
     const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
-    expect(n).toBe(92);
+    expect(n).toBe(122);
     expect(u2).toContain(`; SP6a: the caves.* leaves are decided on the cave class column or a bounded witness; U2 covers ${n} leaves (amended by SP6a)`);
   });
 

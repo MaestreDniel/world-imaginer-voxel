@@ -13,7 +13,7 @@ const copy = (v: unknown): Tree => JSON.parse(JSON.stringify(v)) as Tree;
 /**
  * The default density tree (a mutable copy). Its terrain tap is `root.a.a.a.x.a` (inside the `precave` tap, SP6a §1.1),
  * `detailG` `root.a.a.a.x.b` (the detail term is its `inside`, `root.a.a.a.x.b.inside`), the caves slot `root.a.a.b`,
- * its islands tap `root.b`.
+ * the noodle tap `root.a.b`, its islands tap `root.b`.
  */
 export const densityTree = (): Tree => copy(DEFAULT_DENSITY_TREE);
 /** The default rule tree (a mutable copy). Its deepslate gradient is the condition `rules[2].if`. */
@@ -35,12 +35,13 @@ export function terrainMuted(mute = 0): Tree {
 
 /**
  * The default tree without SP6a's cave terms (its root slots kept, §1.1): detailG replaced by its detail term, the caves
- * slot by `const 1e6`, `defs.pillars` dropped; the SP5c world's values, work cost 574.
+ * slot and the noodle slot by `const 1e6`, `defs.pillars` dropped; the SP5c world's values, work cost 574.
  */
 export function caveFreeTree(): Tree {
   const t = densityTree();
   t['root'].a.a.a.x.b = t['root'].a.a.a.x.b.inside;
   t['root'].a.a.b = { op: 'const', v: 1000000 };
+  t['root'].a.b = { op: 'const', v: 1000000 };
   delete t['defs'].pillars;
   return t;
 }
@@ -49,7 +50,7 @@ export function caveFreeTree(): Tree {
  * A tree that reads `col steep` at the weight of the default without its cave terms (work cost 574 + 2): `caveFreeTree`
  * with the islands const replaced by add(const −1e6, col steep), so its horizontal slices take corner samples with steep
  * (spec §4.4, §5.2). SP3d's work bound was calibrated on that weight (P3); today's default with SP6a's cave terms weighs
- * 4,366 (`steepDefaultTree`).
+ * 11,332 (`steepDefaultTree`).
  */
 export function steepTree(): Tree {
   const t = caveFreeTree();
@@ -57,7 +58,7 @@ export function steepTree(): Tree {
   return t;
 }
 
-/** `steepTree`'s edit on today's default tree (SP6a's cave terms: work cost 4,366 + 2). */
+/** `steepTree`'s edit on today's default tree (SP6a's cave terms: work cost 11,332 + 2). */
 export function steepDefaultTree(): Tree {
   const t = densityTree();
   t['root'].b.x = { op: 'add', a: { op: 'const', v: -1000000 }, b: { op: 'col', field: 'steep' } };

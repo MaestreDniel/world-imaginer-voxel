@@ -33,7 +33,7 @@ import {
 import { planFieldSlice, type FieldSliceSpec } from '../../src/workers/protocol';
 import { partWorstParams } from '../harness/sliceTrees';
 import { paramsWith } from '../harness/gen';
-import { steepTree } from './fixtures/editedTrees';
+import { caveFreeTree, steepTree } from './fixtures/editedTrees';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, REGISTRY, STONE } from '../../src/world/blocks/index';
 
@@ -392,10 +392,16 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     cancelled: boolean;
   }
   /**
+   * The session's params for the request-stream mechanics: the default tree without SP6a's cave terms (`caveFreeTree`,
+   * work cost 574), whose 128² density slice fits the work bound. The default tree's own 128² slices are refused since
+   * SP6a Task 7 (work cost 11,332 > 7,936 per vertical sample; its test below).
+   */
+  const SLICED: Params = paramsWith({ density: { defs: caveFreeTree() } } as never);
+  /**
    * A fake pool of deferred promises: `cancel()` only records the cancellation (the real pool rejects JobCancelled at
    * once; here the stream's token must discard a result that still lands, as a running part's does, P1).
    */
-  const harness = (params: Params = DEFAULTS) => {
+  const harness = (params: Params = SLICED) => {
     const calls: Call[] = [];
     const pool = {
       size: 3,
@@ -434,7 +440,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     r.request(want());
     expect(calls).toHaveLength(1);
     expect(calls[0]!.req).toEqual({ plane: 'vertical', ax: -1664, az: 8, bx: -640, bz: 8, y: 63, n: 32, field: 'density', path: '' });
-    expect(calls[0]!.opts).toEqual({ priority: 2, columnCost: sliceCostOf(DEFAULTS, 'density', '', 'vertical', 32), budget: DRAFT_BUDGET });
+    expect(calls[0]!.opts).toEqual({ priority: 2, columnCost: sliceCostOf(SLICED, 'density', '', 'vertical', 32), budget: DRAFT_BUDGET });
     expect(r.key).toBe(sliceRequestKey(VERT, LINE, 'density', ''));
     expect(r.pending).toEqual({ sessionEpoch: 7, key: r.key, n: 32 });
     expect([r.shown, r.notice, fieldSliceView(r, 7)]).toEqual([null, null, 'none']);
@@ -447,8 +453,8 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     expect([r.shown?.sessionEpoch, r.shown?.key, fieldSliceView(r, 7)]).toEqual([7, r.key, 'fresh']);
     expect(calls).toHaveLength(2);
     expect(calls[1]!.req).toEqual({ ...calls[0]!.req, n: 128 });
-    // 128 × 4,366 + COLUMN_SAMPLE_COST with SP6a's cave terms (106,240 before).
-    expect(calls[1]!.opts).toEqual({ priority: 500, columnCost: 591_616, budget: REQUEST_BUDGET });
+    // 128 × 574 + COLUMN_SAMPLE_COST (the default tree with Task 6's cave terms: 591,616).
+    expect(calls[1]!.opts).toEqual({ priority: 500, columnCost: 106_240, budget: REQUEST_BUDGET });
     expect(r.pending).toEqual({ sessionEpoch: 7, key: r.key, n: 128 });
     const f = density(128);
     calls[1]!.resolve(f);
@@ -467,7 +473,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     const { r, calls } = harness();
     r.request(want(HORI, LINE));
     expect(calls[0]!.req).toEqual({ plane: 'horizontal', cx: 100, cz: -200, extent: 512, y: 63, n: 32, field: 'density', path: '' });
-    expect(calls[0]!.opts.columnCost).toBe(32 * (4366 + CORNER_SAMPLE_COST));
+    expect(calls[0]!.opts.columnCost).toBe(32 * (574 + CORNER_SAMPLE_COST));
     expect(fieldSliceSpec(HORI, null, 'node', 'root.b', 128)).toEqual({ plane: 'horizontal', cx: 100, cz: -200, extent: 512, y: 63, n: 128, field: 'node', path: 'root.b' });
   });
 
@@ -478,7 +484,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     expect([calls.length, r.pending]).toEqual([0, null]);
     expect(r.key).toBe(sliceRequestKey(VERT, LINE, 'density', ''));
     // A configure is in flight (the pool's epoch is past the resolved one): wait for its resolution.
-    h.cfg = { poolEpoch: 5, sessionEpoch: 7, params: DEFAULTS };
+    h.cfg = { poolEpoch: 5, sessionEpoch: 7, params: SLICED };
     h.pool.epoch = 6;
     r.request(want());
     expect(calls).toHaveLength(0);
@@ -495,7 +501,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     expect(calls).toHaveLength(2);
     expect(fieldSliceView(r, 8)).toBe('stale');
     // The configure of 8 resolves: a draft for 8.
-    h.cfg = { poolEpoch: 6, sessionEpoch: 8, params: DEFAULTS };
+    h.cfg = { poolEpoch: 6, sessionEpoch: 8, params: SLICED };
     h.pool.epoch = 6;
     r.request(want());
     expect(calls).toHaveLength(3);
@@ -547,7 +553,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     r.request(want());
     expect(calls).toHaveLength(2);
     // The next session epoch asks again and clears the notice; a failure of the full slice keeps the draft.
-    h.cfg = { poolEpoch: 4, sessionEpoch: 8, params: DEFAULTS };
+    h.cfg = { poolEpoch: 4, sessionEpoch: 8, params: SLICED };
     h.session.state.epoch = 8;
     r.request(want());
     expect([calls.length, r.notice]).toEqual([3, null]);
@@ -558,7 +564,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     await flush();
     expect([r.shown?.result, r.notice, r.pending, fieldSliceView(r, 8)]).toEqual([d, 'failed: worker 2 of 3 failed: boom', null, 'fresh']);
     // JobCancelled during the full slice: the draft stays, the next request starts again with a draft.
-    h.cfg = { poolEpoch: 4, sessionEpoch: 9, params: DEFAULTS };
+    h.cfg = { poolEpoch: 4, sessionEpoch: 9, params: SLICED };
     r.request(want());
     calls[4]!.resolve(density(32, 9));
     await flush();
@@ -584,8 +590,8 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     r.request(want({ ...VERT, field: 'selected' }, LINE, RULE_SEL));
     expect(calls.slice(2).map((c) => [c.req.field, c.req.path])).toEqual([['node', 'root.a.a.a.x.a'], ['node', 'root.b'], ['rule', 'root.rules[1]']]);
     expect(calls.map((c) => c.cancelled)).toEqual([true, true, true, true, false]);
-    expect(calls[2]!.opts.columnCost).toBe(sliceCostOf(DEFAULTS, 'node', 'root.a.a.a.x.a', 'vertical', 32));
-    expect(calls[4]!.opts.columnCost).toBe(sliceCostOf(DEFAULTS, 'rule', 'root.rules[1]', 'vertical', 32));
+    expect(calls[2]!.opts.columnCost).toBe(sliceCostOf(SLICED, 'node', 'root.a.a.a.x.a', 'vertical', 32));
+    expect(calls[4]!.opts.columnCost).toBe(sliceCostOf(SLICED, 'rule', 'root.rules[1]', 'vertical', 32));
     // The keys: y is part of a horizontal plane's key only.
     expect(sliceRequestKey(VERT, LINE, 'density', 'root.b')).toBe(sliceRequestKey(VERT, LINE, 'density', ''));
     expect(sliceRequestKey(VERT, LINE, 'blocks', 'root.b')).toBe(sliceRequestKey(VERT, LINE, 'blocks', ''));
@@ -679,8 +685,19 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       r.request(want());
       calls[0]!.reject(new SliceTooHeavy(calls[0]!.opts.columnCost, 2 ** 19));
       await flush();
-      expect(r.notice).toBe('node too heavy to slice (cost 4 366, limit 15 360)');
-      expect(tooHeavyText('full', DEFAULTS, 'density', '', 128, 591_616, 2 ** 20)).toBe('node too heavy for a 128² slice (cost 4 366, limit 7 936)');
+      expect(r.notice).toBe('node too heavy to slice (cost 574, limit 15 360)');
+      expect(tooHeavyText('full', DEFAULTS, 'density', '', 128, 1_483_264, 2 ** 20)).toBe('node too heavy for a 128² slice (cost 11 332, limit 7 936)');
+    });
+
+    test('the default tree (SP6a Task 7, work cost 11,332): the 32² draft, then its 128² slice refused by the work bound with the notice, the draft kept', async () => {
+      const { r, calls } = harness(DEFAULTS);
+      r.request(want());
+      expect(calls[0]!.opts).toEqual({ priority: 2, columnCost: 32 * 11332 + COLUMN_SAMPLE_COST, budget: DRAFT_BUDGET });
+      const d = density(32);
+      calls[0]!.resolve(d);
+      await flush();
+      expect(calls).toHaveLength(1);
+      expect([r.shown?.result, r.pending, r.notice]).toEqual([d, null, 'node too heavy for a 128² slice (cost 11 332, limit 7 936)']);
     });
   });
 
@@ -758,7 +775,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       expect(x.calls).toHaveLength(4);
       expect(pins.pins.map((p) => fieldSliceView(p.requests, 8))).toEqual(['stale', 'stale']);
       // The configure of 8 resolves: each pin supersedes its run of 7 (queued parts cancelled) and drafts again.
-      x.h.cfg = { poolEpoch: 4, sessionEpoch: 8, params: DEFAULTS };
+      x.h.cfg = { poolEpoch: 4, sessionEpoch: 8, params: SLICED };
       pins.update();
       expect(x.calls.map((c) => c.cancelled)).toEqual([false, false, true, true, false, false]);
       expect(x.calls.slice(4).map((c) => [c.req.plane, c.req.field, c.req.path, c.req.n])).toEqual([
@@ -769,7 +786,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       expect(pins.pins.map((p) => [p.requests.shown?.sessionEpoch, fieldSliceView(p.requests, 8)])).toEqual([[8, 'fresh'], [7, 'stale']]);
       // A hidden tab asks nothing.
       x.h.visible = false;
-      x.h.cfg = { poolEpoch: 4, sessionEpoch: 9, params: DEFAULTS };
+      x.h.cfg = { poolEpoch: 4, sessionEpoch: 9, params: SLICED };
       const before = x.calls.length;
       pins.update();
       expect(x.calls).toHaveLength(before);
@@ -791,7 +808,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       expect(x.calls).toHaveLength(2);
       expect(pin.requests.notice).toMatch(/^failed: /);
       expect([pin.requests.pending, pin.requests.shown?.sessionEpoch, fieldSliceView(pin.requests, 8)]).toEqual([null, 7, 'stale']);
-      x.h.cfg = { poolEpoch: 4, sessionEpoch: 9, params: DEFAULTS };
+      x.h.cfg = { poolEpoch: 4, sessionEpoch: 9, params: SLICED };
       x.h.session.state.epoch = 9;
       pins.update();
       expect([x.calls.length, x.calls[2]!.req.path, pin.requests.notice]).toEqual([3, 'root.b', null]);

@@ -500,9 +500,9 @@ describe('terrainDensityDebug (§2.3, the DT2 hook)', () => {
     }
     expect(bad.slice(0, 10)).toEqual([]);
     // Some cells straddle 0 and most early-out (Task 5: about 4 % of the cells evaluate voxels; with SP6a's cave walls
-    // 21-23 % on these fixtures).
+    // 21-23 % on these fixtures with entrances, cheese and pillars, 30.3 % at most with spaghetti and the noodle).
     expect(set).toBeGreaterThan(0);
-    expect(set).toBeLessThan(0.3 * 98304);
+    expect(set).toBeLessThan(0.4 * 98304);
     expect(set % 128).toBe(0);
   });
 

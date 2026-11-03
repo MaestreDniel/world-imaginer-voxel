@@ -62,33 +62,41 @@ function oracle(e: unknown, defs: Readonly<Record<string, unknown>>, mode: 'stru
 }
 
 describe('structural and work costs (SP3d spec §1.7, §5.2)', () => {
-  test('the default root costs 2,522 as source and 2,455 resolved (SP6a: the SP5c tree\'s 333 and the legacy-built 322, plus the cave terms)', () => {
+  test('the default root costs 7,025 as source and 6,893 resolved (SP6a: the SP5c tree\'s 333 and the legacy-built 322, plus the cave terms)', () => {
     // SP6a §1.1: the body moved into defs.body (a ref costs its def), the root gained the precave tap, two mins and two
-    // slots (338 and 327 before the cave terms), and the cave terms (Task 6): E, C, keep with defs.pillars, detailG.
-    expect(structuralCost(src.root, src.defs)).toBe(2522);
+    // slots (338 and 327 before the cave terms), and the cave terms: E, C, keep with defs.pillars, detailG (Task 6: 2,522
+    // and 2,455), then spaghetti 3D and 2D with their rarity blends and the noodle's four slots (Task 7).
+    expect(structuralCost(src.root, src.defs)).toBe(7025);
     const resolved = resolveDensity(DEFAULT_DENSITY_TREE, DEFAULTS);
-    expect(structuralCost(resolved.root, resolved.defs)).toBe(2455);
+    expect(structuralCost(resolved.root, resolved.defs)).toBe(6893);
     const legacy = legacyDefaultDensityExpr(DEFAULTS.density);
     expect(structuralCost(legacy.root, legacy.defs)).toBe(322);
     const sp5c = sp5cTrees().default as { root: unknown; defs: unknown };
     expect(structuralCost(sp5c.root, sp5c.defs)).toBe(333);
   });
 
-  test('the default work cost is 4,366 at DEFAULTS: 2,455 units, 209 of them noises (the body\'s jag and overhang at 5 corner reads)', () => {
+  test('the default work cost is 11,332 at DEFAULTS: 6,893 units, 753 of them noises (the body\'s jag and overhang at 9 corner reads)', () => {
     const resolved = resolveDensity(DEFAULT_DENSITY_TREE, DEFAULTS);
-    expect(workCost(resolved, DEFAULTS)).toBe(4366);
+    expect(workCost(resolved, DEFAULTS)).toBe(11332);
     // SP5c's 574: 327 units, 17 of them noises (8 jag, 8 overhang corners, 1 detail).
     expect(327 - 17 + 8 * 16 + 8 * 16 + 8).toBe(574);
-    // SP6a: `ref body` is read at the corners by the terrain tap, detailG, cheese's sky, roof and ramp (5 × 8 jag and
-    // overhang corners); the cave noises at their corners: entrance (12), roughnessMod, roughness, entranceA, entranceB,
-    // layer (4 each), cheese (32), cheeseRegional (8), 8 each; pillar and pillarRare 16, pillarThickness 32 (4 each).
-    const noiseUnits = 40 * 16 + 40 * 16 + 8 + 8 * 12 + 5 * 8 * 4 + 8 * 32 + 8 * 8 + 16 * 4 + 16 * 4 + 32 * 4;
-    expect(2455 - 209 + noiseUnits).toBe(4366);
+    // SP6a: `ref body` is read at the corners by the terrain tap, detailG, cheese's sky, roof and ramp and each spaghetti
+    // slot's sky and ramp (9 × 8 jag and overhang corners); the cave noises at their corners: entrance (12),
+    // roughnessMod and roughness (read by the entrances and spaghetti 3D, 16 each), entranceA, entranceB, layer (4
+    // each), cheese (32), cheeseRegional (8), 8 each; pillar and pillarRare 16, pillarThickness 32 (4 each) (Task 6:
+    // 4,366, 2,455 units, 209 of them noises, 5 body reads). Task 7, at 4 units (1 octave, single) unless noted:
+    // spag3dRarity 160 corners (10 reads per blend, two blends), spag3dA and spag3dB 32 each (four bands), spag3dThickness
+    // 8, spagRegional 16 at 8 (two octaves; spaghetti 3D and the noodle), spag2dRarity 104 (13 reads), spag2d 40 (five
+    // bands), spag2dThickness 24 (tm three times), spag2dElevation 16 at 8 (two octaves; the cube's two copies), and the
+    // noodle's four noises 8 each.
+    const task6Units = 72 * 16 + 72 * 16 + 8 + 8 * 12 + (16 + 16 + 8 + 8 + 8) * 4 + 8 * 32 + 8 * 8 + 16 * 4 + 16 * 4 + 32 * 4;
+    const task7Units = (160 + 32 + 32 + 8) * 4 + 16 * 8 + (104 + 40 + 24) * 4 + 16 * 8 + 4 * 8 * 4;
+    expect(6893 - 753 + task6Units + task7Units).toBe(11332);
     // The legacy-built tree (SP5c's values without the root's slots) stays at 569.
     expect(workCost(legacyDefaultDensityExpr(DEFAULTS.density), DEFAULTS)).toBe(569);
     // The configured leaf: 3 octaves of a single-stack jag weigh 12 each.
     const p = paramsWith({ density: { noises: { jag: { octaves: 3, double: false } } } });
-    expect(workCost(resolveDensity(DEFAULT_DENSITY_TREE, p), p)).toBe(4366 - 40 * 16 + 40 * 12);
+    expect(workCost(resolveDensity(DEFAULT_DENSITY_TREE, p), p)).toBe(11332 - 72 * 16 + 72 * 12);
   });
 
   test('a ref costs its def; interpolated 1 + 8 × child; a muted tap counts its child; mutes ignored', () => {
@@ -184,16 +192,18 @@ describe('structural and work costs (SP3d spec §1.7, §5.2)', () => {
 describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost maxima")', () => {
   /**
    * SP6a's default: SP3d's 14,907,917 plus 5 voxel-level nodes (the precave tap, two mins, two slots) × 98,304 (15,399,437
-   * before the cave terms), then the cave terms (Task 6): 16 more voxel-level nodes and 3,319 more corner units.
+   * before the cave terms), then the cave terms (Task 6): 16 more voxel-level nodes and 3,319 more corner units
+   * (21,038,076), then spaghetti 3D and 2D and the noodle (Task 7): 31 more voxel-level nodes and 9,195 more corner
+   * units.
    */
-  const DENSITY_DEFAULT = 21_038_076;
+  const DENSITY_DEFAULT = 35_349_375;
   /** The SP3d default tree's column cost, which `DENSITY_COLUMN_COST_MAX` stays pinned to (SP6a D24). */
   const SP3D_DENSITY_DEFAULT = 14_907_917;
   const RULES_DEFAULT = 163 * 256 * (1 + 4 + SD_MAX_STATIC);
 
-  test('the default density column cost: 169 units × 98,304 outside interpolated, 3,612 × 1,225 inside', () => {
+  test('the default density column cost: 200 units × 98,304 outside interpolated, 12,807 × 1,225 inside', () => {
     expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBe(DENSITY_DEFAULT);
-    expect(169 * VOXELS + 3612 * CORNERS).toBe(DENSITY_DEFAULT);
+    expect(200 * VOXELS + 12807 * CORNERS).toBe(DENSITY_DEFAULT);
     expect(densityColumnCost(sp5cTrees().default)).toBe(SP3D_DENSITY_DEFAULT);
     expect(148 * VOXELS + 293 * CORNERS).toBe(SP3D_DENSITY_DEFAULT);
     expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBe(oracle(src.root, src.defs as Rec, 'column'));

@@ -13,13 +13,18 @@
  * leaves and `density.noises.islands` (NI), dead on the default base (the mask is off, no default tree reads NI), are
  * decided on a floating_islands base at an island class column found by its own stream (NI through the T column's
  * region hash), so the 21 class columns and their stream stay.
- * SP6a (its spec §4): the `caves.*` leaves are decided first on a `cave` class column, a land column of seed 42 on the
- * default base where every cave family of the default tree acts (entrances and cheese carve pre-cave rock, pillars keep
- * rock a family carves) and every `caves.*` leaf changes the T column, found by its own stream
- * (`samplePoints('sp6a.liveness.caves', …)`), so the 21 class columns and their stream stay; it joins the columns a
- * `terrain` leaf is tried on.
+ * SP6a (its spec §4): the `caves.*` leaves are decided first on the `cave` class columns, land columns of seed 42 on
+ * the default base found by their own stream (`samplePoints('sp6a.liveness.caves', …)`), so the 21 class columns and
+ * their stream stay; they join the columns a `terrain` leaf is tried on. The class has two scan slots: `caverns`, where
+ * entrances and cheese carve pre-cave rock and pillars keep rock a family carves, and every `caves.*` leaf but the
+ * tunnels' changes the T column; `tunnels`, where spaghetti 3D, spaghetti 2D and the noodle carve pre-cave rock and
+ * every leaf of theirs (`caves.spaghetti3d.*`, `caves.spaghetti2d.*`, `caves.noodles.*` and their noises) changes it
+ * (one column holding every family and accepting every leaf is rarer than 1 in 4096 draws). The spaghetti scale leaves
+ * (`caves.spaghetti3d.scales.*`, `caves.spaghetti2d.scales.*`) act only where their rarity band meets carved rock, so
+ * they are left out of both slots' acceptance and, dead on the class columns, decided on a bounded witness search (SP6a
+ * spec §1.5's witness mechanism, ruling P5).
  */
-import { SEA_LEVEL } from '../core/constants';
+import { SEA_LEVEL, SPAGHETTI_BANDS } from '../core/constants';
 import { fnv1a32, hash4, hashF64, hex64 } from '../core/hash';
 import type { NoiseDef } from '../core/noise/types';
 import { canonicalJSON, q15 } from '../core/params/canonical';
@@ -46,6 +51,7 @@ import { samplePoints } from './noiseStats';
 import { fillColumnT, regionHash } from './region';
 
 const SEA = SEA_LEVEL;
+const BANDS = SPAGHETTI_BANDS;
 const FNV32 = fnv1a32;
 const Rng = Xoshiro128;
 const H4 = hash4;
@@ -174,8 +180,26 @@ const CAVE_STREAM = 'sp6a.liveness.caves';
 const CAVE_DRAWS = 4096;
 const isCaveLeaf = (path: string): boolean => path.startsWith('caves.');
 /** The cave family taps of the default tree that carve (SP6a §1.1); the pillars tap keeps rock. */
-const CARVING_TAPS = ['entrances', 'cheese'] as const;
+const CARVING_TAPS = ['entrances', 'cheese', 'spag3d', 'spag2d', 'noodle'] as const;
 const PILLAR_SCALE = 0.0625;
+
+/**
+ * SP6a ruling P5: the spaghetti scale leaves `caves.<family>.scales.s<k>`, decided on a bounded witness search when the
+ * class columns leave them dead: up to `SCALE_CHECKS` columns of `samplePoints('sp6a.liveness.scales', SCALE_DRAWS)` where
+ * band k of the family's rarity noise meets rock the family carves (`scaleBandCarves`), the first whose T column output a
+ * step of the leaf changes.
+ */
+const SCALE_LEAF = /^caves\.(spaghetti3d|spaghetti2d)\.scales\.s(\d+)$/;
+const SCALE_STREAM = 'sp6a.liveness.scales';
+const SCALE_DRAWS = 4096;
+const SCALE_CHECKS = 64;
+const isScaleLeaf = (path: string): boolean => SCALE_LEAF.test(path);
+
+/** The cave class column's scan slots (SP6a spec §4): the caverns' families, then the tunnels'. */
+export type CaveSlot = 'caverns' | 'tunnels';
+export const CAVE_SLOTS: readonly CaveSlot[] = ['caverns', 'tunnels'];
+/** The tunnels' leaves: spaghetti 3D, spaghetti 2D, the noodles and their noises (`spag*`, `noodle*`). */
+const TUNNEL_LEAF = /^caves\.(?:spaghetti3d\.|spaghetti2d\.|noodles\.|noises\.(?:spag|noodle))/;
 
 /** The class whose columns are meant to exercise a leaf (named when the leaf is dead). */
 export function intendedClass(path: string): LivenessClass {
@@ -827,20 +851,37 @@ export function caveLeaves(): readonly LeafInfo[] {
   return u2Leaves().filter((l) => isCaveLeaf(l.path));
 }
 
+/**
+ * The leaves a cave class column's slot must accept (SP6a spec §4), in schema order: the tunnels' leaves for `tunnels`,
+ * every other `caves.*` leaf for `caverns`; never a spaghetti scale leaf, decided on its bounded witness search when
+ * the class columns leave it dead (ruling P5).
+ */
+export function caveSlotLeaves(slot: CaveSlot): readonly LeafInfo[] {
+  return caveLeaves().filter((l) => !isScaleLeaf(l.path) && TUNNEL_LEAF.test(l.path) === (slot === 'tunnels'));
+}
+
 /** How often each cave family acts on a column (SP6a spec §4's cave class column), at the corner-lattice voxels. */
-export interface CaveFamilyCounts { readonly entrances: number; readonly cheese: number; readonly pillars: number }
+export interface CaveFamilyCounts {
+  readonly entrances: number;
+  readonly cheese: number;
+  readonly spag3d: number;
+  readonly spag2d: number;
+  readonly noodle: number;
+  readonly pillars: number;
+}
 
 /**
  * The cave families of the default tree acting on column (cx, cz) of `dc` (a DensityContext over a tree with the
- * `precave`, `entrances`, `cheese` and `pillars` taps), counted at the 16 × 48 voxels of the corner lattice (lx, lz ∈
- * {0, 4, 8, 12}, y = −64 + 8k, k < 48): `entrances` and `cheese`, voxels the pre-cave density holds solid (`precave`
- * > 0) where the family's tap is ≤ 0 (it carves rock); `pillars`, such carved voxels where the pillars keep rock
- * (P / 16 ≥ `threshold`, the `keep` term's test).
+ * `precave`, `entrances`, `cheese`, `spag3d`, `spag2d`, `noodle` and `pillars` taps), counted at the 16 × 48 voxels of
+ * the corner lattice (lx, lz ∈ {0, 4, 8, 12}, y = −64 + 8k, k < 48): each carving family, voxels the pre-cave density
+ * holds solid (`precave` > 0) where the family's tap is ≤ 0 (it carves rock); `pillars`, voxels a family of the caves
+ * slot (entrances, cheese, spaghetti 3D or 2D) carves where the pillars keep rock (P / 16 ≥ `threshold`, the `keep`
+ * term's test).
  */
 export function caveFamilyCounts(dc: DensityContext, threshold: number, cx: number, cz: number): CaveFamilyCounts {
   dc.column(cx, cz);
   const c = dc.compiled;
-  let entrances = 0, cheese = 0, pillars = 0;
+  let entrances = 0, cheese = 0, spag3d = 0, spag2d = 0, noodle = 0, pillars = 0;
   for (let k = 0; k < 48; k++) {
     const y = -64 + 8 * k;
     for (let lz = 0; lz < 16; lz += 4) {
@@ -848,22 +889,106 @@ export function caveFamilyCounts(dc: DensityContext, threshold: number, cx: numb
         if (!(c.tapFn('precave', lx, y, lz) > 0)) continue;
         const e = c.tapFn(CARVING_TAPS[0], lx, y, lz) <= 0;
         const ch = c.tapFn(CARVING_TAPS[1], lx, y, lz) <= 0;
+        const s3 = c.tapFn(CARVING_TAPS[2], lx, y, lz) <= 0;
+        const s2 = c.tapFn(CARVING_TAPS[3], lx, y, lz) <= 0;
         if (e) entrances++;
         if (ch) cheese++;
-        if ((e || ch) && c.tapFn('pillars', lx, y, lz) * PILLAR_SCALE >= threshold) pillars++;
+        if (s3) spag3d++;
+        if (s2) spag2d++;
+        if (c.tapFn(CARVING_TAPS[4], lx, y, lz) <= 0) noodle++;
+        if ((e || ch || s3 || s2) && c.tapFn('pillars', lx, y, lz) * PILLAR_SCALE >= threshold) pillars++;
       }
     }
   }
-  return { entrances, cheese, pillars };
+  return { entrances, cheese, spag3d, spag2d, noodle, pillars };
+}
+
+/** A spaghetti scale leaf's family bands and band index k (ruling P5), or null for any other path. */
+function scaleBand(path: string): { readonly bands: (typeof BANDS)[keyof typeof BANDS]; readonly k: number } | null {
+  const m = SCALE_LEAF.exec(path);
+  return m === null ? null : { bands: BANDS[m[1] as keyof typeof BANDS], k: Number(m[2]) };
 }
 
 /**
- * The cave class column of `base` (SP6a spec §4; the default base): chunk columns of `samplePoints('sp6a.liveness.caves',
- * draws)` (x, z → the chunk holding them), the first that is a land column (SP2b's `land` lattice test: no water within
- * 64 blocks), on which every cave family acts (`caveFamilyCounts` > 0 for each) and every leaf of `leaves` changes the
- * T column's output (SP3c's acceptance rule, as the island column); null after `draws` draws (4096 in U2).
+ * The corner-lattice voxels of column (cx, cz) (as `caveFamilyCounts`) where band k of the spaghetti family's rarity
+ * noise meets rock the family carves (ruling P5): the pre-cave density holds the voxel solid, the family's tap is ≤ 0
+ * there, and the rarity noise r at the voxel lies in band k widened by its blend zones ([e_k − 0.05, e_{k+1} + 0.05),
+ * where band k's weight can be non-zero). `path` names a scale leaf (`caves.spaghetti3d.scales.s<k>` or
+ * `caves.spaghetti2d.scales.s<k>`).
  */
-export function caveColumn(base: GenContext, leaves: readonly LeafInfo[] = caveLeaves(), draws = CAVE_DRAWS): LivenessColumn | null {
+export function scaleBandCarves(dc: DensityContext, path: string, cx: number, cz: number): number {
+  const sb = scaleBand(path);
+  if (sb === null) throw new Error(`${path} is not a spaghetti scale leaf`);
+  const { bands, k } = sb;
+  const zones = bands.zones;
+  const lo = k === 0 ? -Infinity : zones[k - 1]![0], hi = k === zones.length ? Infinity : zones[k]![1];
+  const rarity = dc.noises(bands.rarity);
+  if (rarity === undefined) throw new Error(`no cave noise ${bands.rarity}`);
+  dc.column(cx, cz);
+  const c = dc.compiled;
+  let n = 0;
+  for (let k8 = 0; k8 < 48; k8++) {
+    const y = -64 + 8 * k8;
+    for (let lz = 0; lz < 16; lz += 4) {
+      for (let lx = 0; lx < 16; lx += 4) {
+        const r = rarity.z3(16 * cx + lx, y, 16 * cz + lz);
+        if (!(r >= lo && r < hi)) continue;
+        if (c.tapFn('precave', lx, y, lz) > 0 && c.tapFn(bands.tap, lx, y, lz) <= 0) n++;
+      }
+    }
+  }
+  return n;
+}
+
+/** The figures of a scale leaf's bounded witness search (ruling P5): stream draws taken and band columns checked. */
+export interface ScaleWitnessScan { readonly via: string | null; readonly draws: number; readonly checks: number }
+
+function scaleWitnessOf(base: GenContext, info: LeafInfo, variants: readonly GenContext[], skip: readonly LivenessColumn[], baseHash: BaseHash): ScaleWitnessScan {
+  const stage = stageOf(info);
+  const dc = CREATE_DENSITY(base);
+  const pts = POINTS(SCALE_STREAM, SCALE_DRAWS);
+  const seen = new Set<number>(skip.map((c) => (c.cx + 32768) * 65536 + (c.cz + 32768)));
+  let checks = 0, n = 0;
+  for (; n < SCALE_DRAWS && checks < SCALE_CHECKS; n++) {
+    const cx = Math.floor(pts.x[n]! / 16);
+    const cz = Math.floor(pts.z[n]! / 16);
+    const key = (cx + 32768) * 65536 + (cz + 32768);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (scaleBandCarves(dc, info.path, cx, cz) === 0) continue;
+    checks++;
+    const h = baseHash(stage, cx, cz);
+    if (variants.some((v) => stageOutputHash(v, stage, cx, cz) !== h)) return { via: `witness column (${cx}, ${cz})`, draws: n + 1, checks };
+  }
+  return { via: null, draws: n, checks };
+}
+
+/**
+ * A spaghetti scale leaf's bounded witness search (ruling P5; SP6a spec §1.5's witness mechanism) over the columns not
+ * in `skip`: the deciding column (`witness column (cx, cz)`) or null, with the draws taken and the band columns checked.
+ */
+export function scaleWitness(base: GenContext, path: string, skip: readonly LivenessColumn[] = []): ScaleWitnessScan {
+  const info = leafInfo(path);
+  if (!isScaleLeaf(path)) throw new Error(`${path} is not a spaghetti scale leaf`);
+  return scaleWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
+}
+
+/** The families each slot's column must hold (`caveFamilyCounts` > 0). */
+const SLOT_FAMILIES: Readonly<Record<CaveSlot, readonly (keyof CaveFamilyCounts)[]>> = {
+  caverns: ['entrances', 'cheese', 'pillars'],
+  tunnels: ['spag3d', 'spag2d', 'noodle'],
+};
+
+/**
+ * The cave class column of `base` for `slot` (SP6a spec §4; the default base): chunk columns of
+ * `samplePoints('sp6a.liveness.caves', draws)` (x, z → the chunk holding them), the first that is a land column (SP2b's
+ * `land` lattice test: no water within 64 blocks), on which the slot's cave families act (`caveFamilyCounts` > 0 for
+ * each: entrances, cheese and pillars for `caverns`; spaghetti 3D, spaghetti 2D and the noodle for `tunnels`) and every
+ * leaf of `leaves` (default `caveSlotLeaves(slot)`) changes the T column's output (SP3c's acceptance rule, as the island
+ * column); null after `draws` draws (4096 in U2).
+ */
+export function caveColumn(base: GenContext, slot: CaveSlot = 'caverns', leaves: readonly LeafInfo[] = caveSlotLeaves(slot), draws = CAVE_DRAWS): LivenessColumn | null {
+  const families = SLOT_FAMILIES[slot];
   const pts = POINTS(CAVE_STREAM, draws);
   const dc = CREATE_DENSITY(base);
   const threshold = base.params.caves.pillars.threshold;
@@ -884,7 +1009,7 @@ export function caveColumn(base: GenContext, leaves: readonly LeafInfo[] = caveL
     seen.add(key);
     if (!isLand(base, evalLattice(base, cx, cz, L), cx, cz)) continue;
     const f = caveFamilyCounts(dc, threshold, cx, cz);
-    if (f.entrances === 0 || f.cheese === 0 || f.pillars === 0) continue;
+    if (families.some((name) => f[name] === 0)) continue;
     const acts = (info: LeafInfo): boolean => {
       const stage = stageOf(info);
       const h = baseHash(stage, cx, cz);
@@ -964,10 +1089,12 @@ function witnessOf(base: GenContext, info: LeafInfo, variants: readonly GenConte
  * The witness search of spec §7 for a leaf dead on the class columns. Lake-gate leaves: lake cells in a spiral
  * from (0, 0), up to 16 384, whose cellEligible differs between the base and a variant; the column holding the
  * cell centre is the witness if its hash changes, else the spiral goes on. Other leaves: the stream columns that
- * are not in `skip`, up to 2048. Returns the deciding column's description, or null.
+ * are not in `skip`, up to 2048. A spaghetti scale leaf: `scaleWitness` (ruling P5). Returns the deciding column's
+ * description, or null.
  */
 export function findWitness(base: GenContext, path: string, skip: readonly LivenessColumn[] = []): string | null {
   const info = leafInfo(path);
+  if (isScaleLeaf(path)) return scaleWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base)).via;
   return witnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
 }
 
@@ -979,14 +1106,15 @@ function decide(base: GenContext, info: LeafInfo, columns: readonly LivenessColu
   const order = [...tried.filter((c) => c.cls === intended), ...tried.filter((c) => c.cls !== intended)];
   const hit = order.find((c) => variants.some((v) => stageOutputHash(v, stage, c.cx, c.cz) !== baseHash(stage, c.cx, c.cz)));
   if (hit !== undefined) return { path: info.path, live: true, via: `${hit.cls} column (${hit.cx}, ${hit.cz})`, cls: hit.cls };
-  const w = stage === 'terrain' ? null : witnessOf(base, info, variants, columns, baseHash);
+  const w = stage !== 'terrain' ? witnessOf(base, info, variants, columns, baseHash)
+    : isScaleLeaf(info.path) ? scaleWitnessOf(base, info, variants, columns, baseHash).via : null;
   return w !== null ? { path: info.path, live: true, via: w, cls: null } : { path: info.path, live: false, via: null, cls: intended };
 }
 
 /**
  * One leaf's U2 verdict over `columns` (the class columns of `base`): its stage output hash on the class columns (the
- * intended class first; a `terrain` leaf only on the land, coast and surface ones), then, except for a `terrain` leaf,
- * the witness search.
+ * intended class first; a `terrain` leaf only on the land, coast, surface, island and cave ones), then, except for a
+ * `terrain` leaf, the witness search; a spaghetti scale leaf (a `terrain` leaf) has its own (ruling P5).
  */
 export function leafLiveness(base: GenContext, path: string, columns: readonly LivenessColumn[]): LivenessResult {
   return decide(base, leafInfo(path), columns, baseHasher(base));
@@ -1033,14 +1161,21 @@ export function islandColumn(base: GenContext, leaves: readonly LeafInfo[] = isl
  * U2 for every leaf of `u2Leaves()`: live when a perturbation changes the leaf's stage output hash on a class
  * column (its intended class first) or on its witness. value = live leaves / those leaves. The islands leaves are
  * decided on `RESOLVE('floating_islands')` at its island class column (SP3e spec §5.6); none found: "no island column".
- * The cave class column (SP6a spec §4) joins the class columns; none found: "no cave column".
+ * The cave class columns (SP6a spec §4, one per slot) join the class columns; none found for a slot with leaves: "no
+ * cave column (<slot>)". The spaghetti scale leaves dead on the class columns are decided on their bounded witness
+ * search (ruling P5).
  */
 export function u2(seedText = '42'): { readonly value: number; readonly results: readonly LivenessResult[] } {
   const base = CREATE(SEED(seedText), RESOLVE('default'));
-  const caves = caveLeaves();
-  const cave = caves.length > 0 ? caveColumn(base, caves) : null;
-  if (caves.length > 0 && cave === null) throw new Error('U2: no cave column');
-  const columns = cave === null ? livenessColumns(base) : [...livenessColumns(base), cave];
+  const caves: LivenessColumn[] = [];
+  for (const slot of CAVE_SLOTS) {
+    const leaves = caveSlotLeaves(slot);
+    if (leaves.length === 0) continue;
+    const cave = caveColumn(base, slot, leaves);
+    if (cave === null) throw new Error(`U2: no cave column (${slot})`);
+    caves.push(cave);
+  }
+  const columns = [...livenessColumns(base), ...caves];
   const baseHash = baseHasher(base);
   const islands = islandLeaves();
   let decideIsland = (info: LeafInfo): LivenessResult => { throw new Error(`U2: ${info.path} has no islands base`); };

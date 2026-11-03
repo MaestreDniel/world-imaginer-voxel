@@ -61,16 +61,20 @@ export function columnDiff(a: DensityContext, b: DensityContext, cx: number, cz:
 }
 
 /**
- * A plain copy of the source tree `tree` (one with SP6a's cave terms, §1.1) with the two carving family taps,
- * `entrances` (`root.a.a.b.a.a`) and `cheese` (`root.a.a.b.a.b`), muted to 1e6: the caves slot max(min(E, C), keep) is
- * then 1e6 (keep is −1e6 or P, far below), so the root is the pre-cave density's.
+ * A plain copy of the source tree `tree` (one with SP6a's cave terms, §1.1) with the carving family taps muted to 1e6:
+ * `entrances`, `cheese`, `spag3d` and `spag2d` in the caves slot max(min(min(min(E, C), S3), S2), keep) (`root.a.a.b`),
+ * which is then 1e6 (keep is −1e6 or P, far below), and the `noodle` tap (`root.a.b`), so the root is the pre-cave
+ * density's.
  */
 export function cavesMuted(tree: unknown): unknown {
-  const t = JSON.parse(JSON.stringify(tree)) as { root: { a: { a: { b: { a: { a: Record<string, unknown>; b: Record<string, unknown> } } } } } };
-  const slot = t.root.a.a.b.a;
-  if (slot.a['name'] !== 'entrances' || slot.b['name'] !== 'cheese') throw new Error('no entrances and cheese taps at root.a.a.b.a');
-  slot.a['mute'] = 1e6;
-  slot.b['mute'] = 1e6;
+  type Node = Record<string, unknown>;
+  const t = JSON.parse(JSON.stringify(tree)) as { root: { a: { a: { b: { a: Node } }; b: Node } } };
+  const mins = t.root.a.a.b.a as { a: { a: { a: Node; b: Node }; b: Node }; b: Node };
+  const taps: Array<[Node, string]> = [[mins.a.a.a, 'entrances'], [mins.a.a.b, 'cheese'], [mins.a.b, 'spag3d'], [mins.b, 'spag2d'], [t.root.a.b, 'noodle']];
+  for (const [node, name] of taps) {
+    if (node['op'] !== 'tap' || node['name'] !== name) throw new Error(`no ${name} tap where the caves slot and the noodle slot hold it`);
+    node['mute'] = 1e6;
+  }
   return t;
 }
 
