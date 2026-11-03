@@ -123,7 +123,7 @@ world-imaginer-voxel/          (repository root)
                                 (SP3d: + source.ts, the source model of the `density.defs` leaf (param refs, recip, tap mutes),
                                 its tier-2 validation, resolveDensity and resolveDensityNode; the default expression is data,
                                 so the builder module of SP3b is removed; amended by SP3d)
-      caves/carvers.ts carverCache.ts
+      caves/carvers.ts carverCache.ts carve.ts tags.ts (SP6a)
       fluids/aquifer.ts settle.ts
       inspect/cost.ts fieldSlice.ts   (SP3d) cost.ts: the structural, work and column costs of density and surface-rule
                                 trees, one function each, shared by tier-2 validation, the inspector and the worker; fieldSlice.ts:
@@ -692,7 +692,7 @@ final     = max( min( min( tap('precave', T + detailG), caves + S_w ), N + S_w )
 - The cheese roof term keeps big caverns about 12 blocks below the surface; entrances, noodles and carvers still breach it.
 - `islands` is `−1e6` except in the floating_islands preset (SP3e) (SP3e spec §3).
 - `beard` is the structure term (3.13), evaluated per voxel only near pieces.
-- `terrain`, `precave` and `islands` are taps, and every cave family is a tap (SP6a: the shared terms, roughness, the ramp, the caps and the wet roof, are not, so the inspector mutes and probes a family, not a shared term). In the harness, a debug channel records the winning cave term per carved voxel.
+- `terrain`, `precave` and `islands` are taps, and every cave family is a tap (SP6a: the shared terms, roughness, the ramp, the caps and the wet roof, are not, so the inspector mutes and probes a family, not a shared term). T writes the winning kind per carved voxel into the `cave` channel (SP6a).
 
 **As built by SP3b** (amended by SP3b; the SP3b spec §1-§3 hold the exact rules):
 - **Ops.** `const`, `y`, `col`, `noise2`, `noise`, `add`, `mul`, `min`, `max`, `neg`, `abs`, `square`, `clamp`, `slide`, `interpolated`, `rangeChoice`, `tap` and `ref`; caves add their ops on the same base in SP6a. `slide` is `x · s(y)` with s piecewise linear over half-open segments [y_k, y_{k+1}), constant outside the knots.

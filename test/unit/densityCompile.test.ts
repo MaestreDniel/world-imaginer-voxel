@@ -2,7 +2,8 @@ import { describe, expect, test } from 'vitest';
 import { buildColumnSample, latticeIndex, newColumnSample, readField, SAMPLE_FIELDS, type ColumnSample } from '../../src/gen/column/columnStage';
 import { colValueIndex, compileDensity, cornerValueIndex, posValueIndex, type CompiledDensity } from '../../src/gen/density/compile';
 import { exprChildren, exprHash, ExprValidationError, type DensityExpr, type DensityNoise, type DensityNoiseSource, type Expr, type InterpolatedExpr } from '../../src/gen/density/expr';
-import { densityNoiseSource } from '../../src/gen/density/context';
+import { fillDensityColumn } from '../../src/gen/density/bounds';
+import { createDensityContext, densityNoiseSource } from '../../src/gen/density/context';
 import { createDensityReference, interpolatedNodes } from '../../src/gen/density/reference';
 import { fuzzNoiseSource, randomDensityExpr } from '../harness/densityFuzz';
 import { ctxFor } from '../harness/gen';
@@ -428,5 +429,150 @@ describe('compileDensity: noiseScaled (SP6a §1.5, D18)', () => {
     expect(c.nodes.filter((n) => n.op === 'noise').length).toBe(1);
     const k = compileDensity(only(add(ns('detail', 0.75), interp(ns('detail', 0.75)))), noises);
     expect(k.nodes.filter((n) => n.op === 'noiseScaled').map((n) => n.inside)).toEqual([false, true]);
+  });
+});
+
+describe('compileDensity: tapReader and atVoxel (SP6a §3.2)', () => {
+  /** The taps of the default tree (SP6a §1.1). */
+  const DEFAULT_TAPS = ['precave', 'terrain', 'entrances', 'cheese', 'spag3d', 'spag2d', 'pillars', 'noodle', 'islands'];
+  /** Column (0, 0) and the caverns' cave class column of seed 42 (pinned in test/unit/liveness.test.ts). */
+  const COLUMNS: ReadonlyArray<readonly [number, number]> = [[0, 0], [546, 25857]];
+  const tap = (name: string, x: Expr): Expr => ({ op: 'tap', name, x });
+
+  test('after voxelFn, every tap of the default tree read through tapReader equals tapFn bit for bit, on every voxel of column (0, 0) and of a cave class column', () => {
+    const dc = createDensityContext(ctxFor('42'));
+    const c = dc.compiled;
+    const readers = DEFAULT_TAPS.map((name) => c.tapReader(name));
+    for (const r of readers) expect(r).not.toBeNull();
+    expect(c.tapReader('precave')).toBe(readers[0]);
+    const got = new Float64Array(DEFAULT_TAPS.length);
+    let checked = 0;
+    for (const [cx, cz] of COLUMNS) {
+      dc.column(cx, cz);
+      for (let y = -64; y < 320; y++) {
+        for (let lz = 0; lz < 16; lz++) {
+          for (let lx = 0; lx < 16; lx++) {
+            c.voxelFn(lx, y, lz);
+            for (let t = 0; t < readers.length; t++) got[t] = readers[t]!();
+            for (let t = 0; t < readers.length; t++) {
+              const want = c.tapFn(DEFAULT_TAPS[t]!, lx, y, lz);
+              if (!Object.is(got[t], want)) throw new Error(`(${cx}, ${cz}) voxel (${lx}, ${y}, ${lz}) tap ${DEFAULT_TAPS[t]}: reader ${got[t]} ≠ tapFn ${want}`);
+              checked++;
+            }
+          }
+        }
+      }
+    }
+    expect(checked).toBe(2 * 98304 * DEFAULT_TAPS.length);
+  });
+
+  test('after atVoxel in cells decided air after their corners (no voxelFn there), the same; fillDensityColumn\'s cells marks those cells', () => {
+    const dc = createDensityContext(ctxFor('42'));
+    const c = dc.compiled;
+    const readers = DEFAULT_TAPS.map((name) => c.tapReader(name)!);
+    const [cx, cz] = COLUMNS[1]!;
+    const solid = new Uint8Array(98304), mask = new Uint8Array(98304), cells = new Uint8Array(768).fill(7);
+    fillDensityColumn(dc.bounds, dc.columns.get(cx, cz), solid, null, mask, () => false, cells);
+    let airCells = 0, checked = 0;
+    for (let cell = 0; cell < 768; cell++) {
+      expect([0, 1]).toContain(cells[cell]);
+      const ci = cell & 3, cj = (cell >> 2) & 3, ck = cell >> 4;
+      const voxels: number[] = [];
+      for (let y = -64 + 8 * ck; y < -56 + 8 * ck; y++) {
+        for (let lz = 4 * cj; lz < 4 * cj + 4; lz++) for (let lx = 4 * ci; lx < 4 * ci + 4; lx++) voxels.push(((y + 64) * 16 + lz) * 16 + lx);
+      }
+      // A cell with an evaluated voxel had its corners first (cells 1).
+      if (voxels.some((v) => mask[v] === 1)) expect(cells[cell]).toBe(1);
+      if (cells[cell] !== 1 || voxels.some((v) => mask[v] === 1 || solid[v] === 1)) continue;
+      airCells++;
+      for (const v of voxels) {
+        const lx = v & 15, lz = (v >> 4) & 15, y = (v >> 8) - 64;
+        c.atVoxel(lx, y, lz);
+        const got = readers.map((r) => r());
+        for (let t = 0; t < readers.length; t++) {
+          const want = c.tapFn(DEFAULT_TAPS[t]!, lx, y, lz);
+          if (!Object.is(got[t], want)) throw new Error(`voxel (${lx}, ${y}, ${lz}) tap ${DEFAULT_TAPS[t]}: reader ${got[t]} ≠ tapFn ${want}`);
+          checked++;
+        }
+      }
+    }
+    expect(airCells).toBeGreaterThan(0);
+    expect(checked).toBe(airCells * 128 * DEFAULT_TAPS.length);
+  });
+
+  test('a tap not reachable from the root reads null', () => {
+    const c = compileDensity(only(add(tap('a', Y), C(1)), { d: tap('b', Y) }), source({}));
+    expect(c.tapReader('a')).not.toBeNull();
+    expect(c.tapReader('b')).toBeNull();
+    expect(c.tapReader('nope')).toBeNull();
+    expect(createDensityContext(ctxFor('42')).compiled.tapReader('nope')).toBeNull();
+  });
+
+  test('reads memoise per voxel: a second read and a shared subterm cost no second evaluation (a counting noise stub)', () => {
+    const log: number[][] = [];
+    const q = fake(3, (x, y, z) => x - 2 * y + 3 * z, log);
+    const sq: Expr = { op: 'square', x: n3('q') };
+    const c = compileDensity(only(add(tap('a', add(sq, C(1))), tap('b', mul(sq, C(2))))), source({ q }));
+    begin(c, handSample());
+    const a = c.tapReader('a')!, b = c.tapReader('b')!;
+    const v = c.voxelFn(1, 2, 3);
+    log.length = 0;
+    expect(a() + b()).toBe(v);
+    expect(a()).toBe(c.tapFn('a', 1, 2, 3));
+    c.voxelFn(1, 2, 3);
+    log.length = 0;
+    a(); b(); a(); b();
+    expect(log).toEqual([]);
+    // atVoxel starts a new point: the shared square(noise q) is evaluated once for both taps, and each tap once.
+    c.atVoxel(5, 70, 9);
+    expect(log).toEqual([]);
+    const va = a(), vb = b();
+    a(); b();
+    expect(log).toEqual([[X0 + 5, 70, Z0 + 9]]);
+    expect([va, vb]).toEqual([c.tapFn('a', 5, 70, 9), c.tapFn('b', 5, 70, 9)]);
+  });
+
+  test('a tap read once in the tree is memoised too: tapReader(\'precave\')() after voxelFn evaluates the detail noise zero more times', () => {
+    const log: number[][] = [];
+    const detail = fake(3, (x, y, z) => 0.01 * (x + y + z), log);
+    const precave = tap('precave', add(tap('terrain', interp(add(col('offset'), mul(Y, C(-0.25))))), mul(n3('detail'), C(0.5))));
+    const c = compileDensity(only({ op: 'min', a: precave, b: C(3) }), source({ detail }));
+    begin(c, handSample());
+    const r = c.tapReader('precave')!;
+    for (const [lx, y, lz] of [[0, -64, 0], [5, 3, 9], [15, 100, 15]] as const) {
+      c.voxelFn(lx, y, lz);
+      log.length = 0;
+      const v = r();
+      expect(log).toEqual([]);
+      expect(v).toBe(c.tapFn('precave', lx, y, lz));
+    }
+  });
+
+  test('one tap inside interpolated and two VOXEL taps: reading voxel, inside, voxel at every voxel of a column equals tapFn for each (ruling P14)', () => {
+    const a = fake(3, (x, y, z) => Math.sin(x * 0.1) + 0.01 * y - Math.cos(z * 0.07));
+    const b = fake(3, (x, y, z) => 0.002 * x * z - 0.03 * y);
+    const shared = mul(n3('a'), col('E'));
+    const e = only(add(add(tap('v1', add(shared, Y)), interp(tap('in', add(n3('b'), mul(Y, col('offset')))))), tap('v2', mul(shared, n3('b')))));
+    const c = compileDensity(e, source({ a, b }));
+    expect(c.nodes.find((n) => n.op === 'tap' && (n.expr as { name: string }).name === 'in')!.inside).toBe(true);
+    const s = handSample();
+    begin(c, s);
+    const v1 = c.tapReader('v1')!, inR = c.tapReader('in')!, v2 = c.tapReader('v2')!;
+    for (let y = -64; y < 320; y++) {
+      for (let lz = 0; lz < 16; lz++) {
+        for (let lx = 0; lx < 16; lx++) {
+          const root = c.voxelFn(lx, y, lz);
+          const got = [v1(), inR(), v2(), inR(), v1()];
+          const want = [c.tapFn('v1', lx, y, lz), c.tapFn('in', lx, y, lz), c.tapFn('v2', lx, y, lz)];
+          const exp = [want[0], want[1], want[2], want[1], want[0]];
+          for (let k = 0; k < 5; k++) {
+            if (!Object.is(got[k], exp[k])) throw new Error(`voxel (${lx}, ${y}, ${lz}) read ${k}: ${got[k]} ≠ tapFn ${exp[k]}`);
+          }
+          // The inside reader restored the voxel registers: atVoxel's reads after it agree as well.
+          c.atVoxel(lx, y, lz);
+          if (!Object.is(inR(), want[1]) || !Object.is(v2(), want[2]) || !Object.is(v1() + inR() + v2(), root)) throw new Error(`voxel (${lx}, ${y}, ${lz}) after atVoxel`);
+        }
+      }
+    }
   });
 });

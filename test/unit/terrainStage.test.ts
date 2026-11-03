@@ -7,6 +7,8 @@ import {
   buildColumnSample, latticeIndex, newColumnSample, readBiome, readField, readLevel, type ColumnSample,
 } from '../../src/gen/column/columnStage';
 import type { GenContext } from '../../src/gen/context';
+import { caveReadersOf, tagColumn } from '../../src/gen/caves/tags';
+import { fillDensityColumn } from '../../src/gen/density/bounds';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import { probe } from '../../src/gen/density/probe';
 import { columnWaterV0, terrainDensityDebug, terrainStage, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
@@ -392,6 +394,37 @@ describe('sections (§4: each channel uniform or dense)', () => {
   });
 });
 
+describe('the cave channel (SP6a spec §3.1-§3.2, D20)', () => {
+  /** The caverns' cave class column of seed 42 (pinned in test/unit/liveness.test.ts). */
+  const CAVERNS = [546, 25857] as const;
+
+  test('a column\'s proto cave sections equal tagColumn\'s output after the density fill, section by section', () => {
+    for (const col of [CAVERNS, LAND, COAST]) {
+      const { view } = generate(ctx, col[0], col[1]);
+      const dc = createDensityContext(ctx);
+      const solid = new Uint8Array(98304), cells = new Uint8Array(768), tags = new Uint8Array(98304);
+      expect(fillDensityColumn(dc.bounds, dc.columns.get(col[0], col[1]), solid, null, null, NEVER, cells)).toBe(true);
+      tagColumn(dc.compiled, caveReadersOf(dc.compiled), ctx.params.caves.pillars.threshold, solid, cells, tags, dc.bounds);
+      let dense = 0;
+      for (let sy = 0; sy < 24; sy++) {
+        const want = tags.subarray(4096 * sy, 4096 * (sy + 1));
+        const got = view.sectionCave(sy);
+        if (typeof got === 'number') expect(want.every((k) => k === got), `(${col[0]}, ${col[1]}) section ${sy} uniform ${got}`).toBe(true);
+        else {
+          expect(got, `(${col[0]}, ${col[1]}) section ${sy}`).toEqual(want);
+          dense++;
+        }
+      }
+      if (col === CAVERNS) expect(dense).toBeGreaterThan(0);
+    }
+  });
+
+  test('a column with no cave is uniform 0 in every section', () => {
+    const { view } = generate(ctxNoCaves, ...LAND);
+    for (let sy = 0; sy < 24; sy++) expect(view.sectionCave(sy), `section ${sy}`).toBe(0);
+  });
+});
+
 /** A writer that records the calls (no store). */
 function spyWriter(): { w: ColumnWriter; sections: number[]; aux: number; auxB: number; commits: number } {
   const log = { sections: [] as number[], aux: 0, auxB: 0, commits: 0 };
@@ -403,8 +436,8 @@ function spyWriter(): { w: ColumnWriter; sections: number[]; aux: number; auxB: 
   const auxBView: AuxBView = { caveBiomeQ: new Uint8Array(1536), surfaceBiomeQ: new Uint8Array(16) };
   const w: ColumnWriter = {
     cx: 0, cz: 0,
-    setProto(sy, blocks, fluid) {
-      expect([blocks.length, fluid.length]).toEqual([4096, 4096]);
+    setProto(sy, blocks, fluid, cave) {
+      expect([blocks.length, fluid.length, cave?.length]).toEqual([4096, 4096, 4096]);
       log.sections.push(sy);
     },
     setFinal() { throw new Error('the T stage writes no final set'); },

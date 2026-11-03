@@ -116,7 +116,8 @@ src/core/stage/registry.ts              terrain stage v4, params ['density', 'su
 src/gen/caves/carvers.ts                sourceRoll, wormPath, ravinePath → CarverPath (§2.1-§2.3)
 src/gen/caves/carverCache.ts            the per-worker LRU of 1024 paths, memoised per GenContext (§2.5)
 src/gen/caves/carve.ts                  carveColumn (T), carvedAt (point probes) (§2.4)
-src/gen/caves/tags.ts                   the tag rule: tagColumn (T), caveTagAt (point), CAVE_KIND ids (§3.2)
+src/gen/caves/tags.ts                   the tag rule: tagColumn (T), caveTagAt (point) (§3.2); gen/caves/* exports functions and types only
+src/core/constants.ts                   CAVE_KIND, CAVE_FILM_KIND, CARVER_WINDOW_R, CARVER_CACHE_PATHS (gen exports no numeric data)
 src/gen/pipeline/terrainStage.ts        the carve step and the tag write (§3.1)
 src/gen/density/probe.ts gen/surface/probe.ts   solidAt; the surface probe carves (§3.4)
 src/world/store/*                       the cave channel: proto and final sets, padded view, record layout (§3.3)
@@ -268,13 +269,13 @@ Density fill → **carve** (new; one `stop()` poll before it; it first takes eac
 
 ### 3.2 The tag (D17, D20)
 
-`CAVE_KIND`: 0 none, 1 cheese, 2 spaghetti 3D, 3 spaghetti 2D, 4 noodle, 5 entrance, 6 worm, 7 ravine, 8 underground worm, 9 other density air (air that no family tap present in the tree explains); 10-15 reserved (the mesh's film uses 15 in the X-ray pack, never in the store); the high 4 bits reserved, 0. The rule, a pure function of the voxel:
+`CAVE_KIND` (in `src/core/constants.ts`, with `CAVE_FILM_KIND` 15, since gen exports no numeric data): 0 none, 1 cheese, 2 spaghetti 3D, 3 spaghetti 2D, 4 noodle, 5 entrance, 6 worm, 7 ravine, 8 underground worm, 9 other density air (air that no family tap present in the tree explains); 10-15 reserved (the mesh's film uses 15 in the X-ray pack, never in the store); the high 4 bits reserved, 0. The rule, a pure function of the voxel:
 1. if the final block is solid, 0;
 2. else if the `precave` tap's value `T + detailG ≤ 0` (not pre-cave solid), 0;
 3. else if the density made it air: the candidates are E, C, S3 and S2 when `caves ≤ 0` (which needs `keep ≤ 0`), and the noodle when `noodle ≤ 0`; the tag is the candidate with the lowest value, ties in the order E, C, S3, S2, noodle. A voxel inside pillar rock (keep > 0) that a noodle opens is therefore a noodle, never the lowest of the four families that `keep` overrides;
 4. else (a carver carved it) the kind of the first source, in the window's fixed row order, whose ellipsoid carved it.
 
-Where the values come from (`fillDensityColumn`, `src/gen/density/bounds.ts:271-282`): a cell decided before its corners is decided by T + detailG alone, since the cave taps' intervals straddle 0 everywhere underground; one decided air there is sky, and its voxels get 0 without evaluation (a unit test asserts no such cell holds a pre-cave-solid voxel). A cell evaluated voxel by voxel has the family values from `voxelFn`. A cell decided air after its corners (a cave interior, which `voxelFn` skips) has its corners, and the tag trilerps the family slots there per voxel; that work is in §1.6's voxel estimate. The values are read through a new compiled `tapReader(name)`, resolved once per compile, which reads a tap's value at the voxel registers that `voxelFn` (or `setVoxel`) has set, with no Map lookup and no epoch bump (`tapFn` does both per call, `src/gen/density/compile.ts:419-425`, which would defeat the memo of shared subterms).
+Where the values come from (`fillDensityColumn`, `src/gen/density/bounds.ts:271-282`): a cell decided before its corners is decided by T + detailG alone, since the cave taps' intervals straddle 0 everywhere underground; one decided air there is sky, and its voxels get 0 without evaluation (a unit test asserts no such cell holds a pre-cave-solid voxel). A cell evaluated voxel by voxel has the family values from `voxelFn`. A cell decided air after its corners (a cave interior, which `voxelFn` skips) has its corners, and the tag trilerps the family slots there per voxel; that work is in §1.6's voxel estimate. The values are read through a new compiled `tapReader(name)`, resolved once per compile, which reads a tap's value at the voxel registers that `voxelFn` (or `atVoxel`) has set, with no Map lookup and no epoch bump (`tapFn` does both per call, `src/gen/density/compile.ts:419-425`, which would defeat the memo of shared subterms); a tap inside `interpolated` (only in an edited tree) is read as `tapFn` reads it, one epoch per corner, and then sets the voxel registers again.
 
 **Trees without the family taps** (a user-edited tree, D36): with no `precave` tap, step 2 reads the `terrain` tap (pre-cave solid where T > 0); with neither, density air gets 0 (pre-cave solidity is unknown) and only carver kinds are tagged; with some family taps missing, the candidates of step 3 are the taps present, and density air that none of them explains gets 9. DT2's `tagProbe` runs on `treeMutator` trees too.
 

@@ -4,6 +4,9 @@
  * - Density phase: the column's ColumnSample, then `fillDensityColumn` (columnFn, positionFn, then the 48 cell layers
  *   bottom up with bounds and early-outs) into a column-wide solidity scratch; `stop()` is polled before every 8 cell
  *   layers (6 polls). No section is written in this phase: water needs the whole column's `top`.
+ * - The cave tag (SP6a spec §3.1-§3.2): `tagColumn` right after the fill, from its solidity and its per-cell record of
+ *   the cells whose corners (or voxels) it evaluated, through the compiled tap readers, into a column-wide tag scratch
+ *   (the noise kinds and 9; 0 for rock, sky and surface air).
  * - Water v0: `top` is the y of the highest solid voxel per position (−64 when there is none above bedrock); air with
  *   `top − 12 < y ≤ surfaceWaterLevel` (nearest quart corner, as SP3a) becomes a water source, recorded in a
  *   column-wide water scratch. Air under an overhang near the water line fills; deeper enclosed air stays dry
@@ -14,7 +17,8 @@
  * - Surface pass (SP3c §3, `surfacePass`): after a `stop()` poll (the 7th), the whole-column scan and the compiled
  *   rules (fast path included) give every solid voxel at y −63 … 319 its final state in a column-wide state scratch.
  * - Fill: y = −64 bedrock; a solid voxel its surface state; anything else air (with its water).
- * - Sections 0 … 23 go to `setProto` in order (each channel uniform or dense), `stop()` before each (24 polls). On a
+ * - Sections 0 … 23 go to `setProto` in order with their cave tags (each channel uniform or dense), `stop()` before each
+ *   (24 polls). On a
  *   true `stop()` in any phase the stage returns false at once, without aux.
  * - Aux A: `worldSurfaceWG`, `oceanFloorWG` (SP3a §3.4 predicates) and `surfaceBiome` (the step's biome buffer).
  * - Aux B: `surfaceBiomeQ[qz·4 + qx]` is the 2D biome of lattice point (qx, qz), qx, qz ∈ 0 … 3, before the zoom;
@@ -29,6 +33,7 @@ import { ISLAND_RUN_MIN_BOTTOM, MIN_Y } from '../../core/constants';
 import { WATER_SOURCE } from '../../world/blocks/fluid';
 import { AIR, BEDROCK } from '../../world/blocks/index';
 import type { TerrainWriter } from '../../world/store/api';
+import { caveReadersOf, tagColumn } from '../caves/tags';
 import { buildColumnSample, latticeIndex, newColumnSample, readLevel, type ColumnSample } from '../column/columnStage';
 import type { GenContext } from '../context';
 import { fillDensityColumn } from '../density/bounds';
@@ -49,6 +54,8 @@ const FILL = fillDensityColumn;
 const SURFACE_CONTEXT = surfaceContextOf;
 const SURFACE_PASS = surfacePass;
 const SURFACE_BIOMES = fillSurfaceBiomes;
+const READERS = caveReadersOf;
+const TAG_COLUMN = tagColumn;
 
 /** Highest y of the world (MIN_Y + 384 − 1); water tops are clamped to [Y0 − 1, TOP_Y], which changes no comparison. */
 const TOP_Y = Y0 + 383;
@@ -58,6 +65,10 @@ const WATER_DEPTH = 12;
 const SAMPLE = NEW_SAMPLE();
 /** Solidity per voxel `((y + 64)·16 + lz)·16 + lx` (fillDensityColumn's order): section sy is 4096·sy … + 4095. */
 const SOLID = new Uint8Array(98304);
+/** The cave tag per voxel (same index; SP6a spec §3.2): `tagColumn`'s output. */
+const TAG = new Uint8Array(98304);
+/** Per cell `(ck·4 + cj)·4 + ci`: 1 where the fill evaluated the cell's corners or voxels (`fillDensityColumn`'s cells). */
+const CELLS = new Uint8Array(768);
 /** Water v0 per voxel (same index): 1 where the stage writes a water source. */
 const WATER_V = new Uint8Array(98304);
 /** The surface pass's final state per solid voxel (same index; other entries stale). */
@@ -71,6 +82,7 @@ const WATER_TOP = new Int32Array(256);
 const BASE = new Int32Array(256);
 const BLOCKS = new Uint16Array(4096);
 const FLUID = new Uint8Array(4096);
+const CAVE = new Uint8Array(4096);
 
 const NEVER = (): boolean => false;
 
@@ -141,7 +153,10 @@ export function columnWaterV0(
 export function terrainStage(ctx: GenContext, cx: number, cz: number, w: TerrainWriter, stop: () => boolean): boolean {
   const sc = SURFACE_CONTEXT(ctx);
   const s = BUILD(ctx, cx, cz, SAMPLE);
-  if (!FILL(sc.density.bounds, s, SOLID, null, null, stop)) return false;
+  const bounds = sc.density.bounds;
+  if (!FILL(bounds, s, SOLID, null, null, stop, CELLS)) return false;
+  const c = bounds.compiled;
+  TAG_COLUMN(c, READERS(c), ctx.params.caves.pillars.threshold, SOLID, CELLS, TAG, bounds);
   columnWaterV0(s, SOLID, TOP, WATER_TOP, WATER_V, ctx.params.islands.enabled);
   SURFACE_BIOMES(s, ctx, BIOMES);
   if (stop()) return false;
@@ -151,6 +166,7 @@ export function terrainStage(ctx: GenContext, cx: number, cz: number, w: Terrain
     const base = 4096 * sy;
     for (let i = 0; i < 4096; i++) {
       const j = base + i;
+      CAVE[i] = TAG[j]!;
       if (j < 256) {
         BLOCKS[i] = BEDROCK_;
         FLUID[i] = 0;
@@ -162,7 +178,7 @@ export function terrainStage(ctx: GenContext, cx: number, cz: number, w: Terrain
         FLUID[i] = WATER_V[j] !== 0 ? WATER : 0;
       }
     }
-    w.setProto(sy, BLOCKS, FLUID);
+    w.setProto(sy, BLOCKS, FLUID, CAVE);
   }
   const aux = w.aux();
   for (let p = 0; p < 256; p++) {

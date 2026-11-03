@@ -117,7 +117,9 @@
  * as built, whose cave lines state the schema defaults of `DEFAULTS.caves` (offsets, thicknesses, regional amplitudes,
  * layer amplitudes, the pillars' threshold, the band ends, the limits and each cave noise's wavelengths, octaves and
  * amplitudes), so a retune must amend the master, as SP3b's rule for the density noises; and §2.4's `wetMask` with
- * item 7's D19 sentence as ruling R8 words it.
+ * item 7's D19 sentence as ruling R8 words it. The tag commit (Task 11) pins item 11's debug-channel sentence (§3.6: T
+ * writes the winning kind into the `cave` channel) and item 8's `gen/caves/*` token, §1 naming each SP6a module in its
+ * entry, which exists (`SP6A_MODULES`, its first row added with `tags.ts`; Tasks 17, 18, 21, 24, 26 and 43 append theirs).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2050,6 +2052,31 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(block).toContain('| 136-207 | proto descriptors (24 × 3) |');
     expect(text).toContain('interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Array, cave?:Uint8Array): void');
     expect(text).toContain('sectionCave(sy:number): Uint8Array|number; cave(lx:number, y:number, lz:number): number /* SP6a: the cave channel; a proto view reads the proto set */');
+  });
+
+  /** [§1 entry head, the token its entry holds, the file on disk]; each later task that creates a module appends its row. */
+  const SP6A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
+    [/^\s+caves\/carvers\.ts /, 'carve.ts tags.ts (SP6a)', 'src/gen/caves/tags.ts'],
+  ];
+
+  test('§1 names each SP6a module in its entry, which exists; the line under gen/ names carve.ts and tags.ts (SP6a spec §13 item 8)', () => {
+    expect(SP6A_MODULES.length, 'SP6A_MODULES has no rows').toBeGreaterThan(0);
+    for (const [head, token, file] of SP6A_MODULES) {
+      const entry = layoutEntry(head);
+      expect(entry, `§1 has no entry matching ${head}`).not.toBe('');
+      expect(entry, `§1's ${head} entry does not name ${token}`).toContain(token);
+      expect(existsSync(`${ROOT_DIR}${file}`), `${file} does not exist`).toBe(true);
+    }
+    expect(text.split('\n')).toContain('      caves/carvers.ts carverCache.ts carve.ts tags.ts (SP6a)');
+  });
+
+  test('§3.6\'s debug-channel sentence: T writes the winning kind per carved voxel into the `cave` channel (SP6a spec §13 item 11)', () => {
+    const lines = text.split('\n');
+    const from = lines.findIndex((l) => l.startsWith('**Default expression (the `density.defs` leaf\'s default since SP3d'));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('**As built by SP3b**'));
+    const block = lines.slice(from, to).join('\n');
+    expect(block).toContain('T writes the winning kind per carved voxel into the `cave` channel (SP6a)');
+    expect(text).not.toContain('In the harness, a debug channel records the winning cave term per carved voxel.');
   });
 
   test('§6.4\'s T5 row compares surfaceEst3 with the pre-cave top, its thresholds unchanged (SP6a spec §13 item 21)', () => {

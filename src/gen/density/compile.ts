@@ -17,8 +17,15 @@
  * - `voxelFn(lx, y, lz)`: the root at one voxel (an `interpolated` node is the trilinear interpolation of its slot's
  *   corner values).
  * A `const` never takes a slot: its readers use the value. Within one point (a corner column, a position, a corner or
- * a voxel) a node read more than once is evaluated once (an epoch-stamped memo); a `rangeChoice` evaluates only its
+ * a voxel) a node read more than once is evaluated once (an epoch-stamped memo), and so is every tap reachable from the
+ * root, whatever its readers, so that `tapReader` reads it again for nothing; a `rangeChoice` evaluates only its
  * chosen branch, so a VOXEL or CELL branch costs nothing when not chosen (COLUMN slots are filled eagerly).
+ *
+ * Tap readers (SP6a spec §3.2). `tapReader(name)` is resolved once per compile and reads the tap at the voxel registers
+ * of the last `voxelFn` or `atVoxel` call (`atVoxel` sets them without evaluating anything): a tap outside `interpolated`
+ * returns its node's memoised value, evaluating it once if the point is new (no Map lookup, no epoch bump); a tap inside
+ * evaluates its 8 corners as `tapFn` does (one epoch each), interpolates them, and sets the voxel registers again (a
+ * fresh epoch, so the reads that follow stay exact; SP6a ruling P14).
  *
  * Scratch. One CompiledDensity owns the scratch of one column (its slot values, its corner cache and its point
  * registers); compile again for an independent one. Nothing is allocated per column, corner or voxel.
@@ -105,6 +112,20 @@ export interface CompiledDensity {
   tapFn(name: string, lx: number, y: number, lz: number): number;
   /** The interpolated slot of a source `interpolated` node reachable from the root (by identity), else −1. */
   interpolatedSlot(e: InterpolatedExpr): number;
+  /**
+   * Sets the voxel registers to (lx, y, lz) of the current column (as `voxelFn` does before the root) and starts a new
+   * point (one epoch bump); evaluates nothing. The cell's corners must be ready (`cellCorners`) when a tap read next
+   * needs them. Integers, unchecked.
+   */
+  atVoxel(lx: number, y: number, lz: number): void;
+  /**
+   * The reader of tap `name` (SP6a spec §3.2), or null when no tap of that name is reachable from the root; resolved
+   * once per compile (the same function on every call). It reads the tap at the voxel registers of the last `voxelFn`
+   * or `atVoxel` call, with `tapFn`'s value there: outside `interpolated` its node's memoised value (evaluated once if
+   * the point is new; no Map lookup, no epoch bump), inside the trilinear interpolation of its 8 corner values, after
+   * which the voxel registers are set again (a new point).
+   */
+  tapReader(name: string): (() => number) | null;
 }
 
 /** Index of column slot `slot` at corner column (i, j) in `colValues`. */
@@ -227,9 +248,12 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
     }
   }
   readFromOutside(root);
+  /** The tap nodes a reader may name: memoised whatever their call count (a tap read once has one parent). */
+  const tapIds = new Set<number>();
   for (const t of tapNodes.values()) {
     const n = nodes[t.node]!;
     if (n.cls === 'column') needSlot(t.node);
+    tapIds.add(t.node);
   }
 
   // ---- 3. Scratch. ----
@@ -241,9 +265,12 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
   const memoVal = new Float64Array(nodes.length);
   const memoStamp = new Float64Array(nodes.length);
   const tmp = new Float64Array(8);
+  const tmpReader = new Float64Array(8);
   // Point registers: world (x, y, z); lat = lattice index and cc = j·5 + i of the corner column; p = lz·16 + lx; the
   // voxel's cell base index (k·5 + j)·5 + i and fractions; the memo epoch.
   let px = 0, py = 0, pz = 0, lat = 0, cc = 0, p = 0, cIdx = 0, tx = 0, ty = 0, tz = 0, epoch = 0;
+  // The voxel of the last setVoxel (voxelFn, atVoxel, tapFn outside), which an inside tap's reader sets again.
+  let vlx = 0, vy = 0, vlz = 0;
   let sample: ColumnSample | null = null;
   let x0 = 0, z0 = 0, colCx = 0, colCz = 0, colSet = false, posSet = false;
 
@@ -313,7 +340,7 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
       case 'tap': { const x = kid(0); f = () => x(); break; }
       case 'ref': throw new Error('unreachable: refs are resolved');
     }
-    if (calls[id]! > 1) {
+    if (calls[id]! > 1 || tapIds.has(id)) {
       const raw = f;
       f = () => {
         if (memoStamp[id] === epoch) return memoVal[id]!;
@@ -402,6 +429,9 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
   /** Sets the voxel registers (after any corner work, which overwrites them). Fractions as nodes.ts fracXZ/fracY. */
   const setVoxel = (lx: number, y: number, lz: number): void => {
     const ci = lx >> 2, ck = (y + 64) >> 3, cj = lz >> 2;
+    vlx = lx;
+    vy = y;
+    vlz = lz;
     px = x0 + lx;
     py = y;
     pz = z0 + lz;
@@ -443,6 +473,30 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
       (lx - 4 * ci) / 4, (y + 64 - 8 * ck) / 8, (lz - 4 * cj) / 4);
   };
 
+  // Tap readers, resolved once (SP6a spec §3.2; ruling P14 for a tap inside interpolated).
+  const tapReaders = new Map<string, Thunk>();
+  for (const [name, t] of tapFns) {
+    const f = t.f;
+    if (!t.inside) { tapReaders.set(name, f); continue; }
+    tapReaders.set(name, () => {
+      const lx = vlx, y = vy, lz = vlz;
+      const ci = lx >> 2, ck = (y + 64) >> 3, cj = lz >> 2;
+      for (let c = 0; c < 8; c++) {
+        const i = ci + (c & 1), j = cj + ((c >> 1) & 1), k = ck + (c >> 2);
+        cc = j * 5 + i;
+        px = x0 + 4 * i;
+        py = CORNER_Y(k);
+        pz = z0 + 4 * j;
+        epoch++;
+        tmpReader[c] = f();
+      }
+      const v = TRILERP(tmpReader[0]!, tmpReader[1]!, tmpReader[2]!, tmpReader[3]!, tmpReader[4]!, tmpReader[5]!, tmpReader[6]!,
+        tmpReader[7]!, (lx - 4 * ci) / 4, (y + 64 - 8 * ck) / 8, (lz - 4 * cj) / 4);
+      setVoxel(lx, y, lz);
+      return v;
+    });
+  }
+
   const interpBySource = new Map<Expr, number>();
   for (const [src, id] of bySource[0]!) if (src.op === 'interpolated') interpBySource.set(src, nodes[id]!.interpSlot);
 
@@ -466,5 +520,7 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
     voxelFn,
     tapFn,
     interpolatedSlot: (e) => interpBySource.get(e) ?? -1,
+    atVoxel: setVoxel,
+    tapReader: (name) => tapReaders.get(name) ?? null,
   };
 }

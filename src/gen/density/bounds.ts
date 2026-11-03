@@ -86,6 +86,12 @@ export interface DensityBounds {
    * values (widened). Needs `compiled.cellCorners(ci, ck, cj)` and a cellInterval call for the same cell first.
    */
   cellIntervalCorners(ci: number, ck: number, cj: number, out: Float64Array, k: number): void;
+  /**
+   * Node `node`'s interval over cell (ci, ck, cj) into `out[k]`, `out[k + 1]`, as `cellInterval` gives it (no corners),
+   * running only the instructions of the nodes up to `node` (a node's sub-tree has smaller indices): the cave tag's
+   * pre-cave check (SP6a spec §3.2), cheaper than the root's whole program. Updates `nodeIntervals` of those nodes only.
+   */
+  nodeInterval(ci: number, ck: number, cj: number, node: number, out: Float64Array, k: number): void;
 }
 
 /** Creates the bounds of `c`; `noises` must be the source `c` was compiled with (for each noise's clampSigma). */
@@ -140,6 +146,17 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
     if (inside) cellCount = codes.length;
   }
   const count = codes.length;
+  // Per node: the end of the cell program's and of the voxel program's instructions of the nodes up to it.
+  const endIn = new Int32Array(n), endOut = new Int32Array(n);
+  {
+    let a = 0, b = cellCount;
+    for (let id = 0; id < n; id++) {
+      while (a < cellCount && dst[a]! <= id) a++;
+      while (b < count && dst[b]! <= id) b++;
+      endIn[id] = a;
+      endOut[id] = b;
+    }
+  }
   const code = Int32Array.from(codes), out0 = Int32Array.from(dst), A = Int32Array.from(ka), B = Int32Array.from(kb);
   const K3 = Int32Array.from(kc), P0 = Float64Array.from(pa), P1 = Float64Array.from(pb);
 
@@ -246,6 +263,12 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
       out[k] = iv[2 * root]!;
       out[k + 1] = iv[2 * root + 1]!;
     },
+    nodeInterval: (ci, ck, cj, node, out, k) => {
+      run(0, endIn[node]!, ci, ck, cj, false);
+      run(cellCount, endOut[node]!, ci, ck, cj, false);
+      out[k] = iv[2 * node]!;
+      out[k + 1] = iv[2 * node + 1]!;
+    },
   };
 }
 
@@ -257,17 +280,21 @@ const IV = new Float64Array(2);
  * returns false at once (the outputs are then partial). `solid[((y + 64)·16 + lz)·16 + lx]` (98,304 entries, the T
  * stage's section order) becomes 1 where the density is > 0, else 0. A non-null `mask` is cleared, then set to 1 at
  * each voxel `voxelFn` evaluated; a non-null `values` receives those voxels' values (its other entries are left as they
- * were). Nothing is allocated.
+ * were). A non-null `cells` (768 entries, cell `(ck·4 + cj)·4 + ci`) is cleared, then set to 1 at each cell the root's
+ * interval did not decide before its corners: its corners were evaluated (a tree with `interpolated`) or, without
+ * slots, its voxels were (SP6a spec §3.2: a cell left 0 was decided solid or air by its interval alone). Nothing is
+ * allocated.
  */
 export function fillDensityColumn(
   b: DensityBounds, s: ColumnSample, solid: Uint8Array, values: Float64Array | null, mask: Uint8Array | null,
-  stop: () => boolean,
+  stop: () => boolean, cells: Uint8Array | null = null,
 ): boolean {
   const c = b.compiled;
   c.columnFn(s);
   c.positionFn(s);
   b.beginColumn();
   if (mask !== null) mask.fill(0);
+  if (cells !== null) cells.fill(0);
   const corners = c.interpolatedSlotCount > 0;
   for (let ck = 0; ck < 48; ck++) {
     if ((ck & 7) === 0 && stop()) return false;
@@ -276,6 +303,7 @@ export function fillDensityColumn(
       for (let ci = 0; ci < 4; ci++) {
         b.cellInterval(ci, ck, cj, IV, 0);
         let fill = IV[1]! < 0 ? 0 : IV[0]! > 0 ? 1 : -1;
+        if (fill < 0 && cells !== null) cells[(ck * 4 + cj) * 4 + ci] = 1;
         if (fill < 0 && corners) {
           c.cellCorners(ci, ck, cj);
           b.cellIntervalCorners(ci, ck, cj, IV, 0);

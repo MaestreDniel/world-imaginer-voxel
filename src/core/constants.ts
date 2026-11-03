@@ -166,5 +166,19 @@ export const PART_BUDGET = 8_388_608;
 export const DRAFT_BUDGET = 16_777_216;
 export const REQUEST_BUDGET = 134_217_728;
 
+/**
+ * The cave kinds of the store's `cave` channel (SP6a spec §3.2, D17, D20): bits 0-3 of the byte, bits 4-7 reserved
+ * (0). 0 none (rock, sky and surface air, edits); the noise kinds cheese 1, spaghetti 3D 2, spaghetti 2D 3, noodle 4 and
+ * entrance 5, which T writes from the density's family taps; the carver kinds worm 6, ravine 7 and underground worm 8;
+ * 9 other density air (pre-cave rock opened by air that no family tap present in the tree explains); 10-14 reserved.
+ * Here rather than in `gen/caves/tags.ts`, which exports functions and types only (gen exports no numeric data): gen,
+ * mesh, render, the UI and the metrics all read the ids.
+ */
+export const CAVE_KIND = Object.freeze({
+  none: 0, cheese: 1, spaghetti3d: 2, spaghetti2d: 3, noodle: 4, entrance: 5, worm: 6, ravine: 7, undergroundWorm: 8, other: 9,
+});
+/** The X-ray's surface film (SP6a spec §5.1): a kind in the X-ray pack only, never stored in the `cave` channel. */
+export const CAVE_FILM_KIND = 15;
+
 /** The `rule` slice field's value on a voxel the rules never evaluate (air, water, the bedrock at y −64): n/a (§4.1). */
 export const SLICE_RULE_NA = 255;
