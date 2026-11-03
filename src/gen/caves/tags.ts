@@ -13,11 +13,14 @@
  * a cell the fill evaluated voxel by voxel or decided air after its corners has its corners, and a cell decided air
  * before them is sky wherever the pre-cave tap's interval there is ≤ 0 (its voxels 0 without evaluation); otherwise (a
  * tree whose muted taps decide cells air before their corners) the tag evaluates the cell's corners first.
+ * `caveTagAt` is the rule at one voxel (SP6a spec §3.4, D22), equal to T's stored tag voxel for voxel (DT2's `tagProbe`).
  * Follows the gen determinism rules.
  */
 import { CAVE_KIND } from '../../core/constants';
 import type { DensityBounds } from '../density/bounds';
 import type { CompiledDensity } from '../density/compile';
+import type { DensityContext } from '../density/context';
+import { probe } from '../density/probe';
 import { findTap } from '../density/reference';
 
 const KIND = CAVE_KIND;
@@ -28,6 +31,7 @@ const K_NOODLE: number = KIND.noodle;
 const K_ENTRANCE: number = KIND.entrance;
 const K_OTHER: number = KIND.other;
 const FIND_TAP = findTap;
+const PROBE = probe;
 
 /** The interval scratch of `tagColumn`'s pre-cave check. */
 const IV = new Float64Array(2);
@@ -174,4 +178,17 @@ export function tagColumn(
       }
     }
   }
+}
+
+/**
+ * The cave tag of world voxel (x, y, z) (SP6a spec §3.2 steps 1-3, §3.4, D22): 0 at y −64 and where the final density is
+ * > 0 (`probe` on `dc`, which makes the column current and readies the voxel's cell corners), else `tagVoxel` with `dc`'s
+ * `caves.pillars.threshold`. Equals the T stage's stored tag at every voxel. Integers only, y in −64 … 319, (x, z) in the
+ * world window, as `probe` (a RangeError otherwise).
+ */
+export function caveTagAt(dc: DensityContext, x: number, y: number, z: number): number {
+  const v = PROBE(dc, x, y, z);
+  if (y === -64 || v > 0) return 0;
+  const c = dc.compiled;
+  return tagVoxel(c, resolve(c).readers, dc.ctx.params.caves.pillars.threshold, x & 15, y, z & 15);
 }

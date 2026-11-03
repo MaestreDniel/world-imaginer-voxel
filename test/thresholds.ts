@@ -69,6 +69,8 @@ export const THRESHOLDS: ThresholdTable = {
     presetSurfaceProbeBulk: { max: 0, activeFrom: 'SP3e' }, presetSurfaceReference: { max: 0, activeFrom: 'SP3e' },
     presetNonFinite: { max: 0, activeFrom: 'SP3e' }, presetHeightmaps: { max: 0, activeFrom: 'SP3e' },
     presetNoFeatureColumn: { max: 0, activeFrom: 'SP3e' },
+    // SP6a spec §10.3, D22: the stored cave tag against `caveTagAt`, on the default tree and on edited trees.
+    tagProbe: { max: 0, activeFrom: 'SP6a' },
   },
   // SP4a spec §9.1 (D26): `grassSky0`, the master's grass at sky 0, recorded from SP4a (`light.metric.ts`), gated by SP6a.
   S1: {

@@ -1,5 +1,5 @@
 {
-  "sha256": "3de32c8d93c33d5a01688b037a6179c08e503b3b0413c2143111e9fa9350308d",
+  "sha256": "a2244249c7935022e1bbe36bece7a906d41ad6d29a698c507de103335078c23f",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -206,6 +206,10 @@
         },
         "surfaceReference": {
           "activeFrom": "SP3c",
+          "max": 0
+        },
+        "tagProbe": {
+          "activeFrom": "SP6a",
           "max": 0
         }
       },

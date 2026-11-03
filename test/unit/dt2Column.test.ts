@@ -7,7 +7,10 @@ import { createGenContext, type GenContext } from '../../src/gen/context';
 import { cornerValueIndex } from '../../src/gen/density/compile';
 import { createDensityContext } from '../../src/gen/density/context';
 import { probe } from '../../src/gen/density/probe';
-import { createDensityReference, interpolatedNodes } from '../../src/gen/density/reference';
+import type { Expr } from '../../src/gen/density/expr';
+import { createDensityReference, findTap, interpolatedNodes } from '../../src/gen/density/reference';
+import { caveTagAt } from '../../src/gen/caves/tags';
+import { CAVE_KIND } from '../../src/core/constants';
 import { terrainDensityDebug, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf } from '../../src/gen/surface/context';
 import { surfaceProbe } from '../../src/gen/surface/probe';
@@ -141,6 +144,8 @@ describe('dt2Column (SP3e spec §5.1, D18)', () => {
     expect(acc.maskedVoxels).toBeGreaterThan(0);
     expect(acc.corners).toBeGreaterThan(0);
     expect(indices).toEqual(inline.indices);
+    expect(acc.tagProbe).toBe(0);
+    expect(acc.tagVoxels).toBe(DT2_VOXELS_PER_COLUMN);
     const next = a.r.nextU32();
     expect(b.r.nextU32()).toBe(next);
     expect(next).toBe(PINNED_NEXT);
@@ -289,6 +294,114 @@ describe('dt2Column\'s optional trailing argument (SP3e spec §5.2: DT2.presets)
     for (const extra of [{ count: 1, yLo: -64, yHi: 0 }, { count: 1, yLo: 300, yHi: 320 }, { count: 1, yLo: 10, yHi: 9 }, { count: 1.5, yLo: 0, yHi: 1 }]) {
       expect(() => dt2Column(ctx, cx, cz, r, newDt2Acc(LABEL), { extra })).toThrow(/extra voxels/);
     }
+  });
+});
+
+/** The caverns' cave class column of seed 42 (pinned in test/unit/liveness.test.ts). */
+const CAVERNS: readonly [number, number] = [546, 25857];
+/** The four carving families' taps (SP6a spec §3.2). */
+const FAMILY_TAPS = ['entrances', 'cheese', 'spag3d', 'spag2d'] as const;
+
+/**
+ * The cave interval of cell (ci, ck, cj) of the current column, from the reference interpreter's corners: the hull of
+ * caves = max(min(E, C, S3, S2), keep) over the cell's 8 corners per family (each tap's `interpolated` child), keep
+ * = −1e6 where P·(1/16) < threshold, else P (non-decreasing in P).
+ */
+function caveIntervalByReference(ctx: GenContext, cx: number, cz: number, ci: number, ck: number, cj: number): [number, number] {
+  const dc = createDensityContext(ctx);
+  const ref = createDensityReference(dc.expr, dc.noises);
+  const s = dc.column(cx, cz);
+  const hull = (name: string): [number, number] => {
+    const t = findTap(dc.expr, name)!;
+    const x = t.node.x as Extract<Expr, { op: 'interpolated' }>;
+    expect(x.op).toBe('interpolated');
+    let lo = Infinity, hi = -Infinity;
+    for (let d = 0; d < 8; d++) {
+      const v = ref.corner(s, x.x, ci + (d & 1), ck + ((d >> 2) & 1), cj + ((d >> 1) & 1));
+      lo = Math.min(lo, v);
+      hi = Math.max(hi, v);
+    }
+    return [lo, hi];
+  };
+  let lo = Infinity, hi = Infinity;
+  for (const name of FAMILY_TAPS) {
+    const [a, b] = hull(name);
+    lo = Math.min(lo, a);
+    hi = Math.min(hi, b);
+  }
+  const th = ctx.params.caves.pillars.threshold;
+  const keep = (p: number): number => (p * 0.0625 < th ? -1e6 : p);
+  const [pa, pb] = hull('pillars');
+  return [Math.max(lo, keep(pa)), Math.max(hi, keep(pb))];
+}
+
+describe('DT2 tagProbe and the straddle stratum (SP6a spec §10.3, D22; Task 12)', () => {
+  it('ext.straddle: only cells whose cave interval straddles 0, at least 1 voxel per column that holds a cave; the 16 and DT2\'s stream unchanged; tagProbe 0', () => {
+    const ctx = ctxOf();
+    let holding = 0, straddle = 0;
+    for (let n = 0; n < 8; n++) {
+      const cx = CAVERNS[0] - 1 + (n & 3), cz = CAVERNS[1] + (n >> 2);
+      const a = new Xoshiro128(100 + n), b = new Xoshiro128(100 + n);
+      const plain = dt2Column(ctx, cx, cz, a, newDt2Acc(LABEL));
+      const acc = newDt2Acc(LABEL);
+      const seen: Dt2Voxel[] = [];
+      let holds = false;
+      const idx = dt2Column(ctx, cx, cz, b, acc, {
+        straddle: 6,
+        voxel: (v) => seen.push(v),
+        column: (view) => {
+          for (let y = -63; y < 320 && !holds; y++) {
+            for (let p = 0; p < 256; p++) {
+              const k = view.cave(p & 15, y, p >> 4);
+              if (k === CAVE_KIND.cheese || k === CAVE_KIND.spaghetti3d || k === CAVE_KIND.spaghetti2d || k === CAVE_KIND.entrance) { holds = true; break; }
+            }
+          }
+        },
+      });
+      expect(acc.problems).toEqual([]);
+      expect([...failures(acc), acc.tagProbe]).toEqual([0, 0, 0, 0, 0]);
+      expect(idx.slice(0, DT2_VOXELS_PER_COLUMN)).toEqual(plain);
+      expect(b.nextU32(), 'the stratum draws from its own stream').toBe(a.nextU32());
+      const picked = seen.filter((v) => v.stratum === 'straddle');
+      expect(idx.slice(DT2_VOXELS_PER_COLUMN)).toEqual(picked.map((v) => v.index));
+      expect(acc.straddleVoxels).toBe(picked.length);
+      expect(acc.voxels).toBe(DT2_VOXELS_PER_COLUMN + picked.length);
+      expect(acc.tagVoxels).toBe(acc.voxels);
+      if (holds) {
+        holding++;
+        expect(picked.length, `column (${cx}, ${cz}) holds a cave`).toBe(6);
+      }
+      for (const v of picked) {
+        expect(v.y).toBeGreaterThanOrEqual(-63);
+        const [lo, hi] = caveIntervalByReference(ctx, cx, cz, (v.x - 16 * cx) >> 2, (v.y + 64) >> 3, (v.z - 16 * cz) >> 2);
+        expect(lo <= 0 && hi > 0, `(${v.x}, ${v.y}, ${v.z}): cave interval [${lo}, ${hi}]`).toBe(true);
+        straddle++;
+      }
+    }
+    expect(holding).toBeGreaterThan(0);
+    expect(straddle).toBeGreaterThan(0);
+  });
+
+  it('the stratum\'s draws are its own stream\'s: the same column twice picks the same voxels', () => {
+    const ctx = ctxOf();
+    const one = dt2Column(ctx, ...CAVERNS, new Xoshiro128(1), newDt2Acc(LABEL), { straddle: 4 });
+    const two = dt2Column(ctx, ...CAVERNS, new Xoshiro128(2), newDt2Acc(LABEL), { straddle: 4 });
+    expect(one.slice(DT2_VOXELS_PER_COLUMN)).toEqual(two.slice(DT2_VOXELS_PER_COLUMN));
+    expect(one.length).toBe(DT2_VOXELS_PER_COLUMN + 4);
+  });
+
+  it('an injected mismatch is counted in its own part: a wrong caveTagAt → tagProbe', () => {
+    const ctx = ctxOf();
+    const setup = dt2Setup(ctx, LABEL);
+    const dc = setup.dc;
+    setup.tagAt = (x, y, z) => caveTagAt(dc, x, y, z) + 1;
+    const { r, cx, cz } = firstColumn();
+    const acc = newDt2Acc(LABEL);
+    dt2Column(ctx, cx, cz, r, acc);
+    expect(acc.tagProbe).toBe(DT2_VOXELS_PER_COLUMN);
+    expect(failures(acc)).toEqual([0, 0, 0, 0]);
+    expect(acc.problems).toHaveLength(DT2_VOXELS_PER_COLUMN);
+    expect(acc.problems[0]).toMatch(new RegExp(`^profile default, seed '42', column \\(${cx}, ${cz}\\): \\(-?\\d+, -?\\d+, -?\\d+\\) stored tag \\d+ ≠ caveTagAt \\d+$`));
   });
 });
 
