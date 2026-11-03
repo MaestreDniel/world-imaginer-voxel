@@ -113,7 +113,11 @@
  * (the "amended by" list's pin moved here from the SP3e describe); the cave terms commit (Task 6) pins item 16's §5.1
  * (Terrain scope's "caves (`caves.*`)") and item 20, §6.4's U2 row with the schema's U2 leaf count (moved from the SP3e
  * describe, which keeps SP3e's 73 as history), which Tasks 7, 8, 9 and 27 rewrite, and item 21, §6.4's T5 row read on
- * the pre-cave top.
+ * the pre-cave top. The wet roof commit (Task 9) pins item 11 but its debug-channel sentence: §3.6's default expression
+ * as built, whose cave lines state the schema defaults of `DEFAULTS.caves` (offsets, thicknesses, regional amplitudes,
+ * layer amplitudes, the pillars' threshold, the band ends, the limits and each cave noise's wavelengths, octaves and
+ * amplitudes), so a retune must amend the master, as SP3b's rule for the density noises; and §2.4's `wetMask` with
+ * item 7's D19 sentence as ruling R8 words it.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1925,8 +1929,9 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(line('| meta |')).toContain('SP6b decides whether the meta holds it');
     expect(line('**Aux slot B:**')).toContain('leaves `caveBiomeQ` 0 until SP6b');
     expect(line('- **Ops.**')).toContain('caves add their ops on the same base in SP6a.');
-    expect(line('- **Interval rules.**')).toContain('(no cave taps before SP6a)');
-    expect(line('- **`col`**')).toContain('SP6a\'s wet roof reads `lakeMask`, `riverStrength` and `offset`, so no level-field rule is needed (amended by SP6a)');
+    // Item 11's early-out line (Task 9) and item 7's D19 sentence as ruling R8 words it (the wet roof reads `wetMask`).
+    expect(line('- **Interval rules.**')).toContain('(SP6a: the cave taps\' intervals come from their noises\' ±clampSigma, so underground cells need their corners)');
+    expect(line('- **`col`**')).toContain('SP6a\'s wet roof reads `wetMask` (1 where `surfaceWaterLevel` is finite), so no level-field rule is needed (amended by SP6a)');
     // Moved from the SP4c describe (§3.7's caching line).
     expect(line('- Caching on the quart lattice comes with its first consumer')).toContain('(aquifers, structures: SP7-SP9; spawn and teleport query one point each and need none, SP4c)');
     expect(line('**Conditions:**')).toContain('`caveBiome` stays SP6b\'s');
@@ -1977,10 +1982,58 @@ describe('master spec amendments (SP6a §13)', () => {
     const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
     expect(u2, 'no U2 row in §6.4').toBeDefined();
     const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
-    expect(n).toBe(134);
+    expect(n).toBe(135);
     // Task 8: the two scan slots (Task 7) and the amplified base of three maxY leaves (ruling P3); Task 9: capTop's
-    // floating_islands base.
-    expect(u2).toContain(`; SP6a: the caves.* leaves are decided on the cave class columns (two scan slots) or a bounded witness, the maxY leaves of cheese, spaghetti 3D and the entrances on an amplified base, the island cap's \`caves.limits.capTop\` on a floating_islands base; U2 covers ${n} leaves (amended by SP6a)`);
+    // floating_islands base and waterDepth's coast class column.
+    expect(u2).toContain(`; SP6a: the caves.* leaves are decided on the cave class columns (two scan slots) or a bounded witness, the maxY leaves of cheese, spaghetti 3D and the entrances on an amplified base, the island cap's \`caves.limits.capTop\` on a floating_islands base, the wet roof's \`caves.limits.waterDepth\` on the coast class column; U2 covers ${n} leaves (amended by SP6a)`);
+  });
+
+  test('§3.6 holds the default expression as built, with the schema defaults of DEFAULTS.caves; §2.4 names wetMask (SP6a spec §13 items 7 and 11)', () => {
+    const c = DEFAULTS.caves;
+    const n = c.noises;
+    const lines = text.split('\n');
+    const from = lines.findIndex((l) => l.startsWith('**Default expression (the `density.defs` leaf\'s default since SP3d'));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('**As built by SP3b**'));
+    expect(from, 'no default expression in §3.6').toBeGreaterThanOrEqual(0);
+    const block = lines.slice(from, to).join('\n');
+    expect(lines[from]).toContain('the cave terms as built by SP6a, its spec §1, amended by SP6a');
+    const xz = (id: keyof typeof n): string => `λxz ${n[id].wavelength} λy ${Math.round(n[id].wavelength / n[id].yScale)}`;
+    const lam = (id: keyof typeof n): string => {
+      expect(Math.round(n[id].wavelength / n[id].yScale), `${id} is isotropic`).toBe(n[id].wavelength);
+      return `λ ${n[id].wavelength}`;
+    };
+    expect([n.cheese.double, n.cheese.octaves, n.layer.octaves, n.cheeseRegional.octaves, n.spagRegional.octaves, n.spag2dElevation.octaves]).toEqual([true, 4, 1, 2, 2, 2]);
+    expect([n.entrance.octaves, n.entrance.amplitudes]).toEqual([3, [0.4, 0.5, 1.0]]);
+    const s3 = c.spaghetti3d.scales, s2 = c.spaghetti2d.scales;
+    const want = [
+      `ramp = clamp((${c.limits.surfaceDepth} − T)·2, 0, 32)`,
+      `rough     = (−0.05 − 0.05·Nrm)·(−0.4 + |Nr|)                                            Nr ${lam('roughness')}, Nrm ${lam('roughnessMod')}, 1 oct`,
+      `cheese    = ${c.cheese.layerAmp}·L² + clamp(Nch + ${c.cheese.offset} − ${c.cheese.regional}·Nra, −1, 1) + clamp((${c.cheese.roofDepth} − T)/24, 0, 0.5)     Nch ${xz('cheese')}, ${n.cheese.octaves} oct, double; L ${xz('layer')}, 1 oct; Nra 2D ${lam('cheeseRegional')}, 2 oct`,
+      `pillars   = (2·Np − 1 − rare)·(0.55 + 0.55·thk)³                                       Np ${xz('pillar')}; rare, thk ${xz('pillarRare')}`,
+      `spag3D    = rough + clamp(rm·max(|S1|, |S2|) − ${c.spaghetti3d.thickness} − ${c.spaghetti3d.thicknessVar}·thk − ${c.spaghetti3d.regional}·Nrb, −1, 1)  S1, S2 ${lam('spag3dA')} at p/rm, rm ${s3.s0}, ${s3.s1}, ${s3.s2}, ${s3.s3} by rarity ${lam('spag3dRarity')}; thk ${lam('spag3dThickness')}; Nrb 2D ${lam('spagRegional')}, 2 oct`,
+      `spag2D    = clamp(max(rm·|S| + 0.083·tm, (|${c.spaghetti2d.layerAmp}·Nel + yGrad(−64→8, 320→−40)| + tm)³), −1, 1), tm = −${c.spaghetti2d.thickness} − 0.35·thk   S ${lam('spag2d')} at p/rm, rm ${s2.s0}, ${s2.s1}, ${s2.s2}, ${s2.s3}, ${s2.s4} by rarity ${lam('spag2dRarity')}; Nel 2D ${lam('spag2dElevation')}, 2 oct; thk ${lam('spag2dThickness')}`,
+      `noodle    = −${c.noodles.thickness} − 0.025·thk + ${c.noodles.ridgeMul}·max(|Ra|, |Rb|) + 4·max(0, −(Nt − ${c.noodles.regional}·Nrb))      Nt ${lam('noodleToggle')}, thk ${lam('noodleThickness')}, Ra/Rb ${lam('noodleRidgeA')}; each noise its own interpolated slot, combined per voxel`,
+      `entr      = min(Ne·(1/6) + ${c.entrances.offset} + yGrad(−10→0.3, 30→0), rough + clamp(max(|E1|,|E2|) − ${c.entrances.threshold}, −1, 1))   Ne ${lam('entrance')}, amps [0.4,0.5,1.0]; E1, E2 ${lam('entranceA')}`,
+      `P         = tap('pillars', interpolated( 16·pillars ))      keep = rangeChoice(P·(1/16), −1e9, ${c.pillars.threshold}, −1e6, P)`,
+      'caves     = max( min(E, C, S3, S2), keep )',
+      'cap_f     = G_f·min(1, g_f + g_w + g_i) + 128·min(1, h_f + h_i)                        G_f 16 (entrances, cheese), 2.4 (spaghetti, noodle)',
+      'S_w       = 128·h_w                                                                     (the wet roof\'s steep part, VOXEL)',
+      'final     = max( min( min( tap(\'precave\', T + detailG), caves + S_w ), N + S_w ), islands ) + beard',
+    ];
+    for (const w of want) expect(block, `§3.6 lacks: ${w}`).toContain(w);
+    expect([n.spag3dA.wavelength, n.entranceA.wavelength, n.noodleRidgeA.wavelength, n.pillarRare.wavelength]).toEqual([n.spag3dB.wavelength, n.entranceB.wavelength, n.noodleRidgeB.wavelength, n.pillarThickness.wavelength]);
+    // §1.4's floors and caps, wet roof and island cap with the schema defaults; §1.3's continuity rule.
+    const s = c.limits.bandSpan, dw = c.limits.waterDepth;
+    expect(block).toContain(`With s = \`caves.limits.bandSpan\` ${s}, a family's depth band`);
+    expect(block).toContain(`the bands are cheese ${c.cheese.minY} … ${c.cheese.maxY}, spaghetti 3D ${c.spaghetti3d.minY} … ${c.spaghetti3d.maxY}, spaghetti 2D ${c.spaghetti2d.minY} … ${c.spaghetti2d.maxY}, noodle ${c.noodles.minY} … ${c.noodles.maxY}, entrances ${c.entrances.minY} … ${c.entrances.maxY}.`.replace(/-(\d)/g, '−$1'));
+    expect(block).toContain(`wet′ = clamp(4·col.wetMask, 0, 1), g_w = wet′·clamp((${dw} + 8 + s − T)/s, 0, 1) in each cap and h_w = wet′·clamp((${dw} + 8 − T)/8, 0, 1) in S_w`);
+    expect(block).toContain(`with ${dw} = \`caves.limits.waterDepth\`. Under a lake, a river or a sea caves are closed within ${dw + 4} blocks of the bed, narrow over the ${s} below and are fully open from ${dw + 8 + s}`);
+    expect(block).toContain(`capTop = \`caves.limits.capTop\` ${c.limits.capTop}, which has no effect while s ≤ 16; floating_islands sets ${resolveProfile('floating_islands').caves.limits.capTop}`);
+    expect(block).toContain('- **Continuity (§1.3 of the SP6a spec).** The master\'s five hard switches are continuous');
+    expect(block).toContain('every cave family is a tap (SP6a: the shared terms, roughness, the ramp, the caps and the wet roof, are not, so the inspector mutes and probes a family, not a shared term)');
+    expect(block).not.toContain('lakeRoof  =');
+    // §2.4's derived fields name wetMask (R8).
+    expect(text).toContain('`wetMask` is 1 where `surfaceWaterLevel` is finite (a lake, a river\'s wet flag or the sea) and 0 elsewhere: the finite field the wet roof reads (§3.6) (amended by SP6a).');
   });
 
   test('§6.4\'s T5 row compares surfaceEst3 with the pre-cave top, its thresholds unchanged (SP6a spec §13 item 21)', () => {

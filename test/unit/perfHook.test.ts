@@ -149,7 +149,9 @@ describe('instrumented pool (SP2b spec §2.8)', () => {
     expect(await pool.surfaceProbe(0, -64, 0)).toEqual({ state: 2, path: [] });
     expect((await pool.surfaceProbe(0, -30, 0)).path).toEqual(['root', 'root.rules[2]', 'root.rules[2].then']);
     // And fieldSlice and fieldProbe jobs (SP3d spec §5.1, §5.3).
-    const slice = await pool.fieldSlice({ plane: 'horizontal', cx: 0, cz: 0, y: 63, extent: 256, n: 32, field: 'density', path: '' }, { priority: 500, columnCost: 2 ** 19, budget: 2 ** 24 }).promise;
+    // A client cost of 2^20 (parts of 8): the default's 32-sample horizontal column costs 627,040 since SP6a Task 9's wet
+    // roof, so the worker refuses parts of 16.
+    const slice = await pool.fieldSlice({ plane: 'horizontal', cx: 0, cz: 0, y: 63, extent: 256, n: 32, field: 'density', path: '' }, { priority: 500, columnCost: 2 ** 20, budget: 2 ** 25 }).promise;
     expect(slice.values.length).toBe(32 * 32);
     expect(await pool.fieldProbe({ field: 'density', path: '', x: 4, y: 63, z: 4 })).toBe(slice.values[16 * 32 + 16]);
     pool.terminate();

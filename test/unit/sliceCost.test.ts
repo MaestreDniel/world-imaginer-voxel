@@ -35,15 +35,19 @@ describe('the T column work and the rule node count (SP3d spec §5.2, gen/inspec
     // terrain tap, detailG, cheese's sky, roof and ramp, each spaghetti slot's sky and ramp), plus the cave terms' corner
     // nodes and noises, 802 units (203 with Task 6's): 1,423 (548 with Task 6's). Task 8: the noodle's cap, 48 voxel nodes
     // (128 units), and the four slots' caps (4 × 48) with nb's 4 at the corners (998 units, 1,619). Task 9: the island cap,
-    // 23 nodes in each cap: 23 more voxel nodes (151 units) and 4 × 23 more corner units (1,090, 1,711).
-    expect(densityColumnCost(DEFAULT_DENSITY_TREE, DEFAULTS)).toBe(151 * 98304 + 1711 * 1225);
-    expect(1711).toBe(9 * 69 + 1090);
+    // 23 nodes in each cap: 23 more voxel nodes (151 units) and 4 × 23 more corner units (1,090, 1,711). Task 9's wet
+    // roof: 52 more voxel nodes (the noodle cap's g_w, its add and its `interpolated`, 18; S_w's 16 through each of its
+    // two refs; the root's two adds: 203 units) and at the corners each slot cap's g_w and add (17) and seven more reads
+    // of the body's 69 (the four slots' g_w, the noodle cap's and S_w's two: 1,158 cave units, 2,262).
+    expect(densityColumnCost(DEFAULT_DENSITY_TREE, DEFAULTS)).toBe(203 * 98304 + 2262 * 1225);
+    expect(2262).toBe(16 * 69 + 1158);
     expect(998 - 802).toBe(4 * 48 + 4);
     expect([151 - 128, 1090 - 998]).toEqual([23, 4 * 23]);
-    expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBe(42_681_759);
+    expect([203 - 151, 1158 - 1090]).toEqual([18 + 2 * 16 + 2, 4 * 17]);
+    expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBe(50_389_342);
     expect(ruleNodeCount(DEFAULT_SURFACE_RULES)).toBe(163);
     expect(rulesColumnCost(DEFAULT_SURFACE_RULES)).toBe(2_169_856);
-    expect(tColumnCost(DEFAULTS)).toBe(16_939_879 + 2_169_856);
+    expect(tColumnCost(DEFAULTS)).toBe(22_726_662 + 2_169_856);
   });
 
   test('every noise at its static maximum weight gives the static density column cost', () => {
@@ -62,26 +66,30 @@ describe('the T column work and the rule node count (SP3d spec §5.2, gen/inspec
     const p = withTree(terrainMuted(0));
     // The interpolated node (voxel placement) becomes the mute's const; its 69 corner units go (detailG and the cave
     // terms still read the body at the corners).
-    expect(densityColumnCost(p.density.defs, p)).toBe(151 * 98304 + (1711 - 69) * 1225);
-    expect(tColumnCost(p)).toBe(151 * 98304 + 1642 * 1225 + 2_169_856);
+    expect(densityColumnCost(p.density.defs, p)).toBe(203 * 98304 + (2262 - 69) * 1225);
+    expect(tColumnCost(p)).toBe(203 * 98304 + 2193 * 1225 + 2_169_856);
   });
 });
 
 describe('sliceCostOf (SP3d spec §5.2)', () => {
-  test('the defaults: vertical 128² ≈ 222.3 M and horizontal 128² ≈ 251.7 M units (211.5 M and 240.8 M with Task 8\'s caps, 189.9 M and 219.2 M with Task 7\'s cave terms, 75.7 M and 105.1 M with Task 6\'s, 13.6 M and 43.0 M before them)', () => {
-    expect(workCost(evaluatedExpression(DEFAULTS, 'density', ''), DEFAULTS)).toBe(13312);
+  test('the defaults: vertical 128² ≈ 291.7 M and horizontal 128² ≈ 321.0 M units (222.3 M and 251.7 M with the island cap, 211.5 M and 240.8 M with Task 8\'s caps, 189.9 M and 219.2 M with Task 7\'s cave terms, 75.7 M and 105.1 M with Task 6\'s, 13.6 M and 43.0 M before them)', () => {
+    expect(workCost(evaluatedExpression(DEFAULTS, 'density', ''), DEFAULTS)).toBe(17547);
     const v = sliceCostOf(DEFAULTS, 'density', '', 'vertical', 128);
     const h = sliceCostOf(DEFAULTS, 'density', '', 'horizontal', 128);
-    expect(v).toBe(128 * 13312 + COLUMN_SAMPLE_COST);
-    expect(h).toBe(128 * (13312 + CORNER_SAMPLE_COST));
-    expect(128 * v).toBe(222_298_112);
-    expect(128 * h).toBe(251_658_240);
+    expect(v).toBe(128 * 17547 + COLUMN_SAMPLE_COST);
+    expect(h).toBe(128 * (17547 + CORNER_SAMPLE_COST));
+    expect(128 * v).toBe(291_684_352);
+    expect(128 * h).toBe(321_044_480);
     // SP6a Task 7: both exceed their request budget (2^27 = 134,217,728: 7,936 work units per vertical sample, 6,144 per
     // horizontal one), so the 128² slices of the default are refused and drawn as their 32² drafts, which fit
     // DRAFT_BUDGET; every sample column fits the part budget.
     expect([128 * v <= REQUEST_BUDGET, 128 * h <= REQUEST_BUDGET, v <= PART_BUDGET, h <= PART_BUDGET]).toEqual([false, false, true, true]);
-    expect(sliceCostOf(DEFAULTS, 'density', '', 'vertical', 32)).toBe(32 * 13312 + COLUMN_SAMPLE_COST);
-    expect([32 * sliceCostOf(DEFAULTS, 'density', '', 'vertical', 32), 32 * sliceCostOf(DEFAULTS, 'density', '', 'horizontal', 32)].every((c) => c <= DRAFT_BUDGET)).toBe(true);
+    expect(sliceCostOf(DEFAULTS, 'density', '', 'vertical', 32)).toBe(32 * 17547 + COLUMN_SAMPLE_COST);
+    // SP6a Task 9's wet roof: the 32² drafts exceed DRAFT_BUDGET too (17,547 > 15,360 work units per vertical sample,
+    // 14,336 per horizontal one), so every density slice of the default is refused by the static bound until Task 13's
+    // memo-aware bound (ruling R7) counts an interpolated child once per distinct corner.
+    expect([32 * sliceCostOf(DEFAULTS, 'density', '', 'vertical', 32), 32 * sliceCostOf(DEFAULTS, 'density', '', 'horizontal', 32)].map((c) => c <= DRAFT_BUDGET)).toEqual([false, false]);
+    expect([32 * sliceCostOf(DEFAULTS, 'density', '', 'vertical', 32) - DRAFT_BUDGET, 32 * sliceCostOf(DEFAULTS, 'density', '', 'horizontal', 32) - DRAFT_BUDGET]).toEqual([2_239_488, 3_288_064]);
     expect(sliceCostOf(DEFAULTS, 'node', 'root', 'vertical', 128)).toBe(v);
   });
 
@@ -101,7 +109,7 @@ describe('sliceCostOf (SP3d spec §5.2)', () => {
     expect(evaluatedExpression(DEFAULTS, 'node', 'root.a.a.a.x.b').root.op).toBe('rangeChoice');
     expect(evaluatedExpression(DEFAULTS, 'node', 'root.a.a.a.x.b.inside').root.op).toBe('mul');
     // A cave family's slot child (SP6a §1.1) is costed wrapped: the interpolated entrances slot's child.
-    const e = evaluatedExpression(DEFAULTS, 'node', 'root.a.a.b.a.a.a.a.x.x');
+    const e = evaluatedExpression(DEFAULTS, 'node', 'root.a.a.b.a.a.a.a.a.x.x');
     expect(e.root.op).toBe('interpolated');
     expect(workCost(e, DEFAULTS)).toBe(1 + 8 * workCost({ root: (e.root as { x: unknown }).x, defs: e.defs }, DEFAULTS));
   });
@@ -137,18 +145,18 @@ describe('sliceCostOf (SP3d spec §5.2)', () => {
     }
   });
 
-  test('SP6a: the steep edit of today\'s default (13,312 + 2) is refused at a horizontal 128² slice (room 3,072) and, since Task 7, at its 32² draft (room 11,264), as the plain default is at 128²', () => {
+  test('SP6a: the steep edit of today\'s default (17,547 + 2) is refused at a horizontal 128² slice (room 3,072) and, since Task 7, at its 32² draft (room 11,264), as the plain default is at 128²', () => {
     const p = withTree(steepDefaultTree());
     const c = workCost(evaluatedExpression(p, 'density', ''), p);
-    expect(c).toBe(13312 + 2);
+    expect(c).toBe(17547 + 2);
     expect(128 * sliceCostOf(p, 'density', '', 'horizontal', 128)).toBeGreaterThan(REQUEST_BUDGET);
-    // 32 × 32 × (13,314 + 5,120) = 18,876,416: 2,099,200 units above DRAFT_BUDGET (Task 6's 4,368 fitted; Task 7's
-    // 11,334 was 71,680 above, Task 8's 12,654 1,423,360).
-    expect(32 * sliceCostOf(p, 'density', '', 'horizontal', 32)).toBe(18_876_416);
-    expect(32 * sliceCostOf(p, 'density', '', 'horizontal', 32) - DRAFT_BUDGET).toBe(2_099_200);
-    // Its vertical 128² slice samples columns (no corner steep): refused too since Task 7 (13,314 > 7,936 per sample).
+    // 32 × 32 × (17,549 + 5,120) = 23,213,056: 6,435,840 units above DRAFT_BUDGET (Task 6's 4,368 fitted; Task 7's
+    // 11,334 was 71,680 above, Task 8's 12,654 1,423,360, the island cap's 13,314 2,099,200).
+    expect(32 * sliceCostOf(p, 'density', '', 'horizontal', 32)).toBe(23_213_056);
+    expect(32 * sliceCostOf(p, 'density', '', 'horizontal', 32) - DRAFT_BUDGET).toBe(6_435_840);
+    // Its vertical 128² slice samples columns (no corner steep): refused too since Task 7 (17,549 > 7,936 per sample).
     expect(128 * sliceCostOf(p, 'density', '', 'vertical', 128)).toBeGreaterThan(REQUEST_BUDGET);
-    // The plain default's horizontal 128² slice: 13,312 > 6,144 per sample (it fitted at Task 6's 4,366).
+    // The plain default's horizontal 128² slice: 17,547 > 6,144 per sample (it fitted at Task 6's 4,366).
     expect(128 * sliceCostOf(DEFAULTS, 'density', '', 'horizontal', 128)).toBeGreaterThan(REQUEST_BUDGET);
   });
 
@@ -165,10 +173,10 @@ describe('sliceCostOf (SP3d spec §5.2)', () => {
     expect(sliceCostOf(muted, 'node', 'root.a.a.a.x.a.x', 'vertical', 128)).toBe(sliceCostOf(DEFAULTS, 'node', 'root.a.a.a.x.a.x', 'vertical', 128));
     expect(sliceCostOf(muted, 'density', '', 'vertical', 128)).toBeLessThan(sliceCostOf(DEFAULTS, 'density', '', 'vertical', 128));
     const octaves = paramsWith({ density: { noises: { detail: { octaves: 4 } } } } as never);
-    expect(workCost(evaluatedExpression(octaves, 'density', ''), octaves)).toBe(13312 - 8 + 32);
+    expect(workCost(evaluatedExpression(octaves, 'density', ''), octaves)).toBe(17547 - 8 + 32);
     // A cave noise's octaves count too (SP6a §1.5): entrance 3 → 5 octaves at its 8 corner reads.
     const cave = paramsWith({ caves: { noises: { entrance: { octaves: 5, amplitudes: null } } } } as never);
-    expect(workCost(evaluatedExpression(cave, 'density', ''), cave)).toBe(13312 - 8 * 12 + 8 * 20);
+    expect(workCost(evaluatedExpression(cave, 'density', ''), cave)).toBe(17547 - 8 * 12 + 8 * 20);
   });
 
   test('refusals: an n outside SLICE_NS, blocks or rule on a horizontal plane, a path naming no node', () => {

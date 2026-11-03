@@ -43,7 +43,8 @@ describe('the default expression (SP3b spec §3.1; SP3d spec §2.1: the resolved
   test('it validates against the schema density noises', () => {
     const e = defaultExpr();
     expect(validateExpr(e, densityNoiseSource(CTX))).toEqual([]);
-    expect(Object.keys(e.defs)).toEqual(['body', 'pillars']);
+    // SP6a Task 9: the wet roof's steep part S_w, `defs.wetSteep`.
+    expect(Object.keys(e.defs)).toEqual(['body', 'pillars', 'wetSteep']);
     const noiseIds = ops(e).flatMap((n) => (n.op === 'noise2' || n.op === 'noise' || n.op === 'noiseScaled' ? [`${n.op}:${n.id}`] : []));
     const times = (id: string, n: number): string[] => Array.from({ length: n }, () => id);
     // SP6a's cave terms read the caves.noises ids (pillarThickness twice: the cube is square(x)·x). Task 7: rough is read
@@ -73,8 +74,8 @@ describe('the default expression (SP3b spec §3.1; SP3d spec §2.1: the resolved
     // The noodle tap is combined at voxel level from its four slots, its floor plus its cap (SP6a §1.1, §1.4).
     expect(findTap(e, 'noodle')).toMatchObject({ inside: false, node: { x: { op: 'add', a: { op: 'max' } } } });
     // The terrain's, detailG's (the same structure), entrances', cheese's, spaghetti 3D's and 2D's, pillars' and the
-    // noodle's four (SP6a §1.1).
-    expect(interpolatedNodes(e)).toHaveLength(11);
+    // noodle's four (SP6a §1.1); the wet roof's two `interpolated(ref body)`, the noodle cap's d and S_w's (Task 9).
+    expect(interpolatedNodes(e)).toHaveLength(13);
   });
 
   test('placement: ten interpolated slots (detailG\'s interpolated(ref body) shares the terrain\'s); detail is VOXEL and reads amp from a position slot (bilinear E)', () => {

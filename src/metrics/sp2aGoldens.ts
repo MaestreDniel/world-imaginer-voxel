@@ -38,7 +38,12 @@ const NEW_SAMPLE = newColumnSample;
 const SPAWN = findSpawn;
 const PAINT = paintTile;
 const LEVELS = MAP_LEVELS;
-const FIELDS = SAMPLE_FIELDS;
+/**
+ * The SP2a sample digest's fields: every continuous field but SP6a's `wetMask` (derived from `surfaceWaterLevel`, which
+ * the digest already hashes), so `sp2a.sample` stays SP2a's (SP6a spec §12.3: every sp2a.* golden unchanged).
+ */
+const ALL_SAMPLE_FIELDS = SAMPLE_FIELDS;
+const FIELDS = ALL_SAMPLE_FIELDS.filter((f) => f !== 'wetMask');
 const LEVEL_F = LEVEL_FIELDS;
 const SP1 = computeSp1;
 const SP1_KEYS = sp1Keys;

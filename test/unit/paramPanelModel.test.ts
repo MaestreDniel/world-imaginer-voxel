@@ -80,7 +80,7 @@ describe('panel tree', () => {
     expect(s2.sections.map((s) => [s.path, s.label, s.controls.map((c) => c.path.split('.').at(-1))])).toEqual([['caves.spaghetti2d.scales', 'Scales', ['s0', 's1', 's2', 's3', 's4']]]);
     expect(caves.sections[3]!.controls.map((c) => c.path)).toEqual(['caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional', 'caves.noodles.minY', 'caves.noodles.maxY']);
     expect(caves.sections[5]!.controls.map((c) => c.path)).toEqual(['caves.entrances.offset', 'caves.entrances.threshold', 'caves.entrances.minY', 'caves.entrances.maxY']);
-    expect(caves.sections[6]!.controls.map((c) => c.path)).toEqual(['caves.limits.surfaceDepth', 'caves.limits.bandSpan', 'caves.limits.capTop']);
+    expect(caves.sections[6]!.controls.map((c) => c.path)).toEqual(['caves.limits.surfaceDepth', 'caves.limits.waterDepth', 'caves.limits.bandSpan', 'caves.limits.capTop']);
     for (const c of controlsOf(caves)) expect([c.path, c.scope]).toEqual([c.path, 'terrain']);
   });
 
@@ -365,8 +365,8 @@ describe('panel controls (Task 17): kinds, slider positions, typed values, issue
     const linear = [...sliders(), ...NOISE_NUMBER_FIELDS.map((f) => noiseFieldControl(control('climate.C'), f))].filter((c) => c.scale === 'linear');
     // 34 before SP3c, + the 7 number and int leaves of the surface group, + islands.lo and islands.hi (SP3e), + SP6a's 8
     // caves number leaves (Task 6), + its 8 linear spaghetti and noodle leaves (Task 7; the band scales are log), + the 10
-    // band ends minY and maxY (Task 8; the band span 1 … 32 is log), + capTop (Task 9).
-    expect(linear.length).toBe(70);
+    // band ends minY and maxY (Task 8; the band span 1 … 32 is log), + capTop and waterDepth (Task 9).
+    expect(linear.length).toBe(71);
     for (const c of linear) {
       const n = sliderPositions(c);
       expect(n).toBe(Math.round((c.max! - c.min!) / c.step!));

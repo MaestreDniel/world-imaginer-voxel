@@ -37,11 +37,12 @@ describe('the fieldSlice job (SP3d spec §5.1)', () => {
   const ctx = ctxFor('42');
 
   test.each([
-    // A density part within the part budget: since SP6a Task 9 a 32-sample column of the default costs 32 × 13,312 +
-    // COLUMN_SAMPLE_COST (vertical; 32 × (13,312 + CORNER_SAMPLE_COST) horizontal), so a part holds at most 18 (17).
-    ['vertical density', vMsg(MOUNTAIN, 'density', '', 0, 16), vGeom(MOUNTAIN)],
+    // A density part within the part budget: since SP6a Task 9's wet roof a 32-sample column of the default costs
+    // 32 × 17,547 + COLUMN_SAMPLE_COST = 594,272 (vertical; 32 × (17,547 + CORNER_SAMPLE_COST) = 627,040 horizontal), so a
+    // part holds at most 14 (13) (18 and 17 with the island cap).
+    ['vertical density', vMsg(MOUNTAIN, 'density', '', 0, 14), vGeom(MOUNTAIN)],
     ['vertical node under the terrain tap', vMsg(MOUNTAIN, 'node', 'defs.body', 5, 17), vGeom(MOUNTAIN)],
-    ['horizontal density', hMsg('density', '', 16, 32), hGeom],
+    ['horizontal density', hMsg('density', '', 19, 32), hGeom],
     ['horizontal node', hMsg('node', 'root.a.a.a.x.b', 11, 32), hGeom],
   ] as const)('%s replies with gen\'s evaluation of its range, the values transferred, at the job\'s epoch', (_name, msg, g) => {
     const h = createTaskHandler();
@@ -101,13 +102,14 @@ describe('the fieldSlice job (SP3d spec §5.1)', () => {
     bad(vMsg(MOUNTAIN, 'node', 'constructor', 0, 8), 'path "constructor" names no node of density.defs');
     bad(vMsg(MOUNTAIN, 'rule', 'root.rules[99]', 0, 1), 'path "root.rules[99]" names no rule or condition of surface.rules');
     for (const [from, to] of [[5, 5], [0, 33], [1.5, 3], [-1, 2], [Number.NaN, 2]]) bad(vMsg(MOUNTAIN, 'density', '', from!, to!), `samples [${from}, ${to}) are not integers with 0 ≤ from < to ≤ 32`);
-    // A 128² vertical density sample column: 128 × 13,312 + COLUMN_SAMPLE_COST = 1,736,704 with SP6a's cave terms, caps
-    // and island cap (1,652,224 with Task 8's caps, 1,483,264 with Task 7's, 591,616 with Task 6's, 106,240 before them),
-    // so a part holds at most 4 of them (5 with Task 8's and Task 7's, 14 with Task 6's, 78 before).
-    bad(vMsg(MOUNTAIN, 'density', '', 0, 128, 128), `too heavy: 128 × 1736704 work units exceed the part budget ${PART_BUDGET}`);
-    bad(vMsg(MOUNTAIN, 'blocks', '', 0, 2), 'too heavy: 2 sample columns of cost 19109735, at most 1 per part');
-    expect(h.handle(vMsg(MOUNTAIN, 'density', '', 0, 4, 128)).msg.type).toBe('fieldSliceResult');
-    bad(vMsg(MOUNTAIN, 'density', '', 0, 5, 128), `too heavy: 5 × 1736704 work units exceed the part budget ${PART_BUDGET}`);
+    // A 128² vertical density sample column: 128 × 17,547 + COLUMN_SAMPLE_COST = 2,278,784 with SP6a's cave terms, caps,
+    // island cap and wet roof (1,736,704 with the island cap, 1,652,224 with Task 8's caps, 1,483,264 with Task 7's,
+    // 591,616 with Task 6's, 106,240 before them), so a part holds at most 3 of them (4 with the island cap, 5 with Task
+    // 8's and Task 7's, 14 with Task 6's, 78 before).
+    bad(vMsg(MOUNTAIN, 'density', '', 0, 128, 128), `too heavy: 128 × 2278784 work units exceed the part budget ${PART_BUDGET}`);
+    bad(vMsg(MOUNTAIN, 'blocks', '', 0, 2), 'too heavy: 2 sample columns of cost 24896518, at most 1 per part');
+    expect(h.handle(vMsg(MOUNTAIN, 'density', '', 0, 3, 128)).msg.type).toBe('fieldSliceResult');
+    bad(vMsg(MOUNTAIN, 'density', '', 0, 4, 128), `too heavy: 4 × 2278784 work units exceed the part budget ${PART_BUDGET}`);
   });
   test('before configure NOT_CONFIGURED, at another epoch STALE_EPOCH; with epoch cells a fieldSlice whose epoch the cell has left replies ABORTED', () => {
     const sab = new SharedArrayBuffer(16);

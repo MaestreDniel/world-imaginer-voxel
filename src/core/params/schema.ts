@@ -225,8 +225,9 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     }),
     limits: group('Limits', 'Where the cave families may reach (SP6a spec §1.4).', {
       surfaceDepth: num(8, { ...TERRAIN, label: 'Surface depth', doc: 'The deep families fade out above this depth: + clamp((surfaceDepth − T)·2, 0, 32) (0 at T ≥ surfaceDepth, 16 at the surface).', unit: 'blocks', min: 0, max: 32, step: 1 }),
+      waterDepth: int(16, { ...TERRAIN, label: 'Water depth', doc: 'The wet roof: under lakes, rivers and seas (where water v0 fills the column) caves are closed within waterDepth + 4 blocks of the bed, narrow over the band span below waterDepth + 8 and are fully open from waterDepth + 8 + band span blocks down.', unit: 'blocks', min: 8, max: 48 }),
       bandSpan: int(16, { ...TERRAIN, label: 'Band span', doc: 'Outside its depth band (minY … maxY) a family narrows over this many blocks (the gentle part of its cap), then closes over the next 8.', unit: 'blocks', min: 1, max: 32 }),
-      capTop: int(344, { ...TERRAIN, label: 'Cap top', doc: 'The island cap: caves narrow over the band span below capTop − 8 and are closed from capTop − 4 up (344, above the world\'s top, has no effect; 180 in floating_islands, so no cave air lies at y ≥ 176).', unit: 'y', min: 180, max: 344 }),
+      capTop: int(344, { ...TERRAIN, label: 'Cap top', doc: 'The island cap: caves narrow over the band span below capTop − 8 and are closed from capTop − 4 up (344, above the world\'s top, has no effect while the band span is at most 16; 180 in floating_islands, so no cave air lies at y ≥ 176).', unit: 'y', min: 180, max: 344 }),
     }),
     noises: group('Cave noises', 'Noises read by the cave terms (noise2 / noise ops), at unscaled world block coordinates.', {
       cheese: caveNoise('Cheese noise', 'Nch of the cheese caverns (λxz 96, λy 144, double).', { dims: 3, wavelength: 96, octaves: 4, yScale: 96 / 144, double: true }, 3, CAVE_WAVELENGTH),

@@ -35,8 +35,11 @@ const CAVE_PINS: Readonly<Record<CaveSlot, readonly [LivenessColumn, number]>> =
   caverns: [{ cx: 546, cz: 25857, cls: 'cave' }, 7],
   tunnels: [{ cx: 4705, cz: -24478, cls: 'cave' }, 224],
 };
-/** The leaves of SP6a Tasks 6, 7, 8 and 9 (the caves group so far): U2 covers 73 + 19 + 30 + 11 + 1 = 134 leaves. */
-const U2_LEAVES = 134;
+/**
+ * The leaves of SP6a Tasks 6, 7, 8 and 9 (the caves group so far): U2 covers 73 + 19 + 30 + 11 + 1 + 1 = 135 leaves
+ * (Task 9: the island cap's capTop, then the wet roof's waterDepth).
+ */
+const U2_LEAVES = 135;
 /** The spaghetti scale leaves (SP6a Task 7), decided on the class columns or on their bounded witness search (ruling P5). */
 const SCALE_LEAVES = [
   'caves.spaghetti3d.scales.s0', 'caves.spaghetti3d.scales.s1', 'caves.spaghetti3d.scales.s2', 'caves.spaghetti3d.scales.s3',
@@ -75,6 +78,8 @@ const ONE_STEP = ['caves.cheese.maxY', 'caves.spaghetti3d.maxY', 'caves.spaghett
 
 /** The island cap's top (SP6a Task 9), decided on a floating_islands base at its own witness. */
 const CAP_TOP = 'caves.limits.capTop';
+/** The wet roof's depth (SP6a Task 9), meant for the coast class column (it acts under water only). */
+const WATER_DEPTH = 'caves.limits.waterDepth';
 /** capTop's witness at seed 42: its column and the scan's figures (draws of sp6a.liveness.capTop, examined, hashed). */
 const CAP_TOP_PIN = { via: 'floating_islands witness column (28062, -9459)', draws: 350, examined: 17, checks: 1 } as const;
 
@@ -575,7 +580,7 @@ describe('the cave class columns (SP6a spec §4)', () => {
 
   test('the caves leaves are the caves.* group, in schema order, after the islands leaves; the slots share them but the scale leaves', () => {
     expect(caveLeaves().map((l) => l.path)).toEqual(SCHEMA.leaves.filter((l) => l.path.startsWith('caves.')).map((l) => l.path));
-    expect(caveLeaves().length).toBe(61);
+    expect(caveLeaves().length).toBe(62);
     expect(CAVE_SLOTS).toEqual(['caverns', 'tunnels']);
     const tunnels = caveSlotLeaves('tunnels').map((l) => l.path);
     expect(tunnels).toEqual([
@@ -591,9 +596,9 @@ describe('the cave class columns (SP6a spec §4)', () => {
     expect(caveSlotLeaves('caverns').length).toBe(20);
     expect(caveSlotLeaves('caverns').map((l) => l.path)).toContain('caves.limits.bandSpan');
     const slotted = new Set([...caveSlotLeaves('caverns'), ...caveSlotLeaves('tunnels')].map((l) => l.path));
-    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES, CAP_TOP];
+    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES, CAP_TOP, WATER_DEPTH];
     expect(caveLeaves().map((l) => l.path).filter((p) => !slotted.has(p))).toEqual(caveLeaves().map((l) => l.path).filter((p) => apart.includes(p)));
-    expect(apart.length).toBe(20);
+    expect(apart.length).toBe(21);
   });
 
   test('each slot\'s column: the first land column of sp6a.liveness.caves where its families act and every leaf of its slot changes the T column', () => {
@@ -618,15 +623,26 @@ describe('the cave class columns (SP6a spec §4)', () => {
     expect(caveColumn(CTX, 'tunnels', [...caveSlotLeaves('caverns'), ...caveSlotLeaves('tunnels')], CAVE_PINS.tunnels[1] + 1)).toBeNull();
   });
 
-  test('every caves leaf but the scale and band leaves and capTop is live on a cave column (the class it is meant for), and only through the T stage', () => {
+  test('every caves leaf but the scale and band leaves, capTop and waterDepth is live on a cave column (the class it is meant for), and only through the T stage', () => {
     const cs = caves();
-    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES, CAP_TOP];
+    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES, CAP_TOP, WATER_DEPTH];
     for (const l of caveLeaves().filter((x) => !apart.includes(x.path))) {
       expect(intendedClass(l.path)).toBe('cave');
       const r = leafLiveness(CTX, l.path, [...columns(), ...cs]);
       expect([l.path, r.live, r.cls]).toEqual([l.path, true, 'cave']);
       expect(cs.map((c) => `cave column (${c.cx}, ${c.cz})`)).toContain(r.via);
     }
+  });
+
+  test('the wet roof\'s waterDepth is meant for the coast class column and live on it, through the T stage (SP6a §1.4, Task 9)', () => {
+    expect(intendedClass(WATER_DEPTH)).toBe('coast');
+    const coast = columns().filter((c) => c.cls === 'coast');
+    expect(coast.length).toBe(2);
+    const r = leafLiveness(CTX, WATER_DEPTH, [...columns(), ...caves()]);
+    expect([r.live, r.cls]).toEqual([true, 'coast']);
+    expect(coast.map((c) => `coast column (${c.cx}, ${c.cz})`)).toContain(r.via);
+    // U2's steps of 16 (int, 8 … 48): 14 and 18.
+    expect(perturbations(leaf(WATER_DEPTH), DEFAULTS.caves.limits.waterDepth)).toEqual([14, 18]);
   });
 
   test('every spaghetti scale leaf is live on a class column or on its bounded witness (ruling P5)', () => {

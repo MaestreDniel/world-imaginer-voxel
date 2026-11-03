@@ -71,11 +71,11 @@ describe('rows and summaries', () => {
     const t = inspectorTree(DEFAULTS, NO_EXPANSION, null);
     expect(t.groups.map((g) => [g.leaf, g.label])).toEqual([['density.defs', 'Density'], ['surface.rules', 'Surface rules']]);
     expect(rowsOf(t, 'density.defs').map(brief)).toEqual([
-      // SP6a §1.1: max(min(min(tap precave(…), caves slot), tap noodle), tap islands), then the def body.
+      // SP6a §1.1: max(min(min(tap precave(…), add(caves slot, S_w)), add(tap noodle, S_w)), tap islands), then the def body.
       '0 root | root | max [-]',
       '1 root.a | a | min [-]',
       '2 root.a.a | a | min [+]',
-      '2 root.a.b | b | tap noodle [+]',
+      '2 root.a.b | b | add [+]',
       '1 root.b | b | tap islands [-]',
       '2 root.b.x | x | const -1000000',
       '0 defs.body | defs.body | add [-]',
@@ -88,6 +88,12 @@ describe('rows and summaries', () => {
       '0 defs.pillars | defs.pillars | tap pillars [-]',
       '1 defs.pillars.x | x | interpolated [-]',
       '2 defs.pillars.x.x | x | mul [+]',
+      // SP6a Task 9's wet roof: S_w = 128·(wet′·clamp(…)) (the caves slot and the noodle read it).
+      '0 defs.wetSteep | defs.wetSteep | mul [-]',
+      '1 defs.wetSteep.a | a | const 128',
+      '1 defs.wetSteep.b | b | mul [-]',
+      '2 defs.wetSteep.b.a | a | clamp 0 … 1 [+]',
+      '2 defs.wetSteep.b.b | b | clamp 0 … 1 [+]',
     ]);
     expect(rowsOf(t, 'surface.rules').map(brief)).toEqual([
       '0 root | root | sequence 3 [-]',
@@ -128,15 +134,19 @@ describe('rows and summaries', () => {
     expect(sum.get('root.a.a.a.x.b.inside.b.b.b.x.b')).toBe('const 0.5');
     // SP6a's cave terms: detailG, the family taps, a cave param, keep's ref bound.
     expect(sum.get('root.a.a.a.x.b')).toBe('rangeChoice -1000000000 … 16');
-    expect(sum.get('root.a.a.b.a.a.a.a')).toBe('tap entrances');
-    expect(sum.get('root.a.a.b.a.a.a.a.x.x.a.a.b.a.a.b')).toBe('param caves.entrances.offset = 0.37');
-    // Task 8: the entrances' cap after the floor, reading its band leaves (Task 9: its gentle sum is add(g_f, g_i)).
-    expect(sum.get('root.a.a.b.a.a.a.a.x.x.b.a.b.b.a.a.x.a.a')).toBe('param caves.entrances.minY = -64');
-    // Task 9: the island cap's g_i reads capTop.
-    expect(sum.get('root.a.a.b.a.a.a.a.x.x.b.a.b.b.b.x.a.a.a.b.x')).toBe('param caves.limits.capTop = 344');
-    expect(sum.get('root.a.a.b.a.a.b')).toBe('tap spag3d');
-    expect(sum.get('root.a.a.b.a.b')).toBe('tap spag2d');
-    expect(sum.get('root.a.b')).toBe('tap noodle');
+    // (Task 9's wet roof: the caves slot is `root.a.a.b.a` and the noodle `root.a.b.a`, under add(…, ref wetSteep).)
+    expect(sum.get('root.a.a.b.a.a.a.a.a')).toBe('tap entrances');
+    expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.a.a.b.a.a.b')).toBe('param caves.entrances.offset = 0.37');
+    // Task 8: the entrances' cap after the floor, reading its band leaves (Task 9: its gentle sum is add(add(g_f, g_w), g_i)).
+    expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.b.a.b.b.a.a.a.x.a.a')).toBe('param caves.entrances.minY = -64');
+    // Task 9: the island cap's g_i reads capTop; the wet roof's g_w reads waterDepth and wetMask.
+    expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.b.a.b.b.b.x.a.a.a.b.x')).toBe('param caves.limits.capTop = 344');
+    expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.b.a.b.b.a.b.b.x.a.a.a.a')).toBe('param caves.limits.waterDepth = 16');
+    expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.b.a.b.b.a.b.a.x.b')).toBe('col wetMask');
+    expect(sum.get('root.a.a.b.a.a.a.b')).toBe('tap spag3d');
+    expect(sum.get('root.a.a.b.a.a.b')).toBe('tap spag2d');
+    expect(sum.get('root.a.b.a')).toBe('tap noodle');
+    expect([sum.get('root.a.a.b.b'), sum.get('root.a.b.b')]).toEqual(['ref wetSteep', 'ref wetSteep']);
     const rules = new Map(r.map((x) => [x.path, x.summary]));
     const sky = 'root.rules[1].then.rules';
     expect(rules.get(`${sky}[0]`)).toBe('if not');
@@ -223,7 +233,7 @@ describe('expansion, expand to selection and the indentation cap', () => {
     const rootRows = (e: Expansion): string[] => rowsOf(inspectorTree(DEFAULTS, e, null), 'density.defs').map((r) => r.path).filter((p) => p.startsWith('root'));
     let e = toggleExpansion(NO_EXPANSION, 'density.defs', 'root', 0);
     expect(rootRows(e)).toEqual(['root']);
-    expect(rowsOf(inspectorTree(DEFAULTS, e, null), 'density.defs').filter((r) => r.path.startsWith('defs.'))).toHaveLength(9);
+    expect(rowsOf(inspectorTree(DEFAULTS, e, null), 'density.defs').filter((r) => r.path.startsWith('defs.'))).toHaveLength(14);
     expect(rowsOf(inspectorTree(DEFAULTS, e, null), 'surface.rules')).toHaveLength(10);
     e = toggleExpansion(e, 'density.defs', 'root.a.a', 2);
     expect(rootRows(e)).toEqual(['root']);
@@ -233,7 +243,7 @@ describe('expansion, expand to selection and the indentation cap', () => {
       '1 root.a | a | min [-]',
       '2 root.a.a | a | min [-]',
       '3 root.a.a.a | a | tap precave [+]',
-      '3 root.a.a.b | b | max [+]',
+      '3 root.a.a.b | b | add [+]',
     ]);
     expect(NO_EXPANSION.size).toBe(0);
   });

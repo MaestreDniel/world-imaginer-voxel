@@ -16,6 +16,7 @@
     "caves.limits.bandSpan": "int",
     "caves.limits.capTop": "int",
     "caves.limits.surfaceDepth": "number",
+    "caves.limits.waterDepth": "int",
     "caves.noises.cheese": "noise",
     "caves.noises.cheeseRegional": "noise",
     "caves.noises.entrance": "noise",

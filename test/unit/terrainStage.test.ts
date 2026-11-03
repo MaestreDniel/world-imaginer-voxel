@@ -700,7 +700,8 @@ describe('water v0 under island runs (SP3e spec §3.5, D5)', () => {
     let wet = 0;
     for (let p = 0; p < 256; p++) {
       const first = scan.runFirst[p]!;
-      // The slab, then the sea floor under 63 with water above its top (SP6a's caves under the sea floor add runs below).
+      // The slab, then the sea floor under 63 with water above its top (SP6a's caves under the sea floor add runs below:
+      // the wet roof closes them within 20 blocks of the bed and leaves them open from 40 down, D7, so a third run stays).
       expect(scan.runFirst[p + 1]! - first).toBeGreaterThanOrEqual(2);
       expect([scan.runTop[first], scan.runBottom[first]]).toEqual([210, 200]);
       if (scan.runWaterAbove[first + 1] === 1 && scan.runWaterTop[first + 1] === 63) wet++;

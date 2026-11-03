@@ -48,7 +48,7 @@ describe('the two leaves (SP3d spec §1.2)', () => {
 
   test('the README rows: `<format> tree, <n> nodes`, no range; scope terrain', () => {
     const rows = renderReference(SCHEMA).split('\n');
-    expect(rows.find((r) => r.startsWith('| `density.defs` |'))).toMatch(/^\| `density\.defs` \| json \| density tree, 975 nodes \|  \|  \| terrain \| Density expression: /);
+    expect(rows.find((r) => r.startsWith('| `density.defs` |'))).toMatch(/^\| `density\.defs` \| json \| density tree, 1087 nodes \|  \|  \| terrain \| Density expression: /);
     expect(rows.find((r) => r.startsWith('| `surface.rules` |'))).toMatch(/^\| `surface\.rules` \| json \| surfaceRules tree, 163 nodes \|  \|  \| terrain \| Surface rules: /);
   });
 

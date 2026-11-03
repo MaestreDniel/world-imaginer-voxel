@@ -186,8 +186,9 @@ describe('compiled == reference and probe == bulk on island columns (SP3e spec Â
     const c = dc.compiled;
     const interp = interpolatedNodes(dc.expr).map((n) => ({ inner: n.x, slot: c.interpolatedSlot(n) }));
     // The terrain's and the islands term's, plus SP6a's detailG (sharing the terrain's slot), entrances, cheese, pillars,
-    // spaghetti 3D and 2D and the noodle's four.
-    expect(interp).toHaveLength(12);
+    // spaghetti 3D and 2D and the noodle's four, and the wet roof's two `interpolated(ref body)` (the noodle cap's d and
+    // S_w's, both sharing the terrain's slot).
+    expect(interp).toHaveLength(14);
     const out = new Float64Array(98304);
     const mask = new Uint8Array(98304);
     const r = new Xoshiro128(fnv1a32('floatingIslands.compiled'));
@@ -235,7 +236,7 @@ describe('compiled == reference and probe == bulk on island columns (SP3e spec Â
     }
     expect(voxels).toBe(2 * (89 * 256 + 512));
     expect(masked).toBeGreaterThan(0);
-    expect(corners).toBe(2 * 11 * 16 * 12 * 8);
+    expect(corners).toBe(2 * 11 * 16 * 14 * 8);
     expect(islandVoxels).toBeGreaterThan(0);
   });
 });

@@ -1,6 +1,6 @@
 /**
  * The point reference (SP2a spec §2.6): climate → shape → steep → rivers → lakes → water level →
- * surfaceEst → islandMask (SP3e spec §2.3) → biome, in this order, at one world position. samplePoint writes into a reused record
+ * surfaceEst → islandMask (SP3e spec §2.3) → wetMask (SP6a spec §1.4) → biome, in this order, at one world position. samplePoint writes into a reused record
  * (map tiles skip steep); columnPoint returns a fresh record with steep. buildColumnSample must
  * reproduce every field bit for bit at quart corners.
  */
@@ -37,6 +37,8 @@ export interface PointRecord {
   lakeMask: number; lakeLevel: number; lakeFloor: number;
   offset: number; sigma: number; jag: number;
   surfaceWaterLevel: number; surfaceEst: number; islandMask: number;
+  /** 1 where `surfaceWaterLevel` is finite (a lake, a river's wet flag or the sea), else 0 (SP6a §1.4: the wet roof's wet′). */
+  wetMask: number;
   biome: number;
 }
 export type ColumnPoint = Readonly<PointRecord>;
@@ -44,13 +46,21 @@ export type ColumnPoint = Readonly<PointRecord>;
 export const newPointRecord = (): PointRecord => ({
   x: 0, z: 0, C: 0, E: 0, W: 0, T: 0, H: 0, R: 0, PV: 0, offset0: 0, sigma0: 0, jag0: 0, steep: Number.NaN,
   riverDist: 0, riverStrength: 0, riverWet: false, gorge: false, lakeMask: 0, lakeLevel: -Infinity, lakeFloor: -Infinity,
-  offset: 0, sigma: 0, jag: 0, surfaceWaterLevel: -Infinity, surfaceEst: 0, islandMask: 0, biome: 0,
+  offset: 0, sigma: 0, jag: 0, surfaceWaterLevel: -Infinity, surfaceEst: 0, islandMask: 0, wetMask: 0, biome: 0,
 });
 
 /** Master §3.7: sea level for ocean (below sea level) and river columns, Lw inside a lake, else −∞. */
 export function waterLevel(offset: number, riverWet: boolean, lakeMask: number, lakeLevel: number): number {
   if (lakeMask === 1) return lakeLevel;
   return riverWet || offset < SEA ? SEA : -Infinity;
+}
+
+/**
+ * The wet mask of a water level (SP6a spec §1.4, D19): 1 where the level is finite (water v0 fills the position's
+ * column from it), else 0; a finite `col` field the wet roof reads, so no level-field −∞ rule is needed.
+ */
+export function wetMaskOf(level: number): number {
+  return Number.isFinite(level) ? 1 : 0;
 }
 
 const C_ = NEW_CLIMATE();
@@ -74,6 +84,7 @@ export function samplePoint(ctx: GenContext, x: number, z: number, withSteep: bo
   out.surfaceWaterLevel = waterLevel(l.offset, r.wet, l.lakeMask, l.lakeLevel);
   out.surfaceEst = l.offset;
   out.islandMask = ISLAND_MASK(ctx, x, z);
+  out.wetMask = wetMaskOf(out.surfaceWaterLevel);
   out.biome = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, s.offset0, r.wet);
   return out;
 }
@@ -99,6 +110,7 @@ export function sampleCoarse(ctx: GenContext, x: number, z: number, out: PointRe
   out.surfaceWaterLevel = waterLevel(s.offset0, false, 0, -Infinity);
   out.surfaceEst = s.offset0;
   out.islandMask = ISLAND_MASK(ctx, x, z);
+  out.wetMask = wetMaskOf(out.surfaceWaterLevel);
   out.biome = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, s.offset0, false);
   return out;
 }

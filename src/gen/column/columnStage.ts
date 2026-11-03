@@ -9,7 +9,7 @@ import { pickBiome } from '../biomes/picker';
 import { zoomQuart } from '../biomes/zoom';
 import type { GenContext } from '../context';
 import { newClimate, sampleClimate, type ClimateOut } from './climate';
-import { newPointRecord, samplePoint, waterLevel, type ColumnPoint } from './columnPoint';
+import { newPointRecord, samplePoint, waterLevel, wetMaskOf, type ColumnPoint } from './columnPoint';
 import { islandMaskAt } from './islands';
 import { newLake, sampleLakes } from './lakes';
 import { newRiver, sampleRivers } from './rivers';
@@ -27,6 +27,7 @@ const NEW_RIVER = newRiver;
 const LAKES = sampleLakes;
 const NEW_LAKE = newLake;
 const WATER = waterLevel;
+const WET_MASK = wetMaskOf;
 const SAMPLE_POINT = samplePoint;
 const NEW_POINT = newPointRecord;
 const PICK = pickBiome;
@@ -36,7 +37,7 @@ const ISLAND_MASK = islandMaskAt;
 /** Continuous fields: bilinear between quart corners. */
 export const SAMPLE_FIELDS = [
   'C', 'E', 'W', 'T', 'H', 'R', 'PV', 'offset0', 'sigma0', 'jag0', 'steep', 'riverDist', 'riverStrength',
-  'lakeMask', 'offset', 'sigma', 'jag', 'surfaceEst', 'islandMask',
+  'lakeMask', 'offset', 'sigma', 'jag', 'surfaceEst', 'islandMask', 'wetMask',
 ] as const;
 /** Level fields (may be −∞): read from the nearest quart corner. */
 export const LEVEL_FIELDS = ['lakeLevel', 'lakeFloor', 'surfaceWaterLevel'] as const;
@@ -103,6 +104,7 @@ export function buildColumnSample(ctx: GenContext, cx: number, cz: number, out: 
       f.surfaceWaterLevel[k] = WATER(l.offset, r.wet, l.lakeMask, l.lakeLevel);
       f.surfaceEst[k] = l.offset;
       f.islandMask[k] = ISLAND_MASK(ctx, x, z);
+      f.wetMask[k] = WET_MASK(f.surfaceWaterLevel[k]!);
       out.flags[k] = (r.wet ? 1 : 0) | (r.gorge ? 2 : 0);
       out.biome[k] = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, o[k]!, r.wet);
     }

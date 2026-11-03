@@ -28,7 +28,8 @@
  * U2's step 272, on an amplified base (the default params with the amplified profile's overlay). The island cap's
  * `caves.limits.capTop` (Task 9; its default 344 lies above the world, so it is dead on the default base) is decided on
  * a floating_islands base (capTop 180, U2's one effective step 207) at its own witness (`capTopWitness`), not on the
- * island class column, which the island noise picks.
+ * island class column, which the island noise picks. The wet roof's `caves.limits.waterDepth` (Task 9) acts under water
+ * only: it is left out of the slots' acceptance and meant for the coast class column (`LEAF_CLASS`).
  */
 import { SEA_LEVEL, SPAGHETTI_BANDS } from '../core/constants';
 import { fnv1a32, hash4, hashF64, hex64 } from '../core/hash';
@@ -167,6 +168,8 @@ const LEAF_CLASS: ReadonlyMap<string, LivenessClass> = new Map<string, LivenessC
   ['lakes.rimWidth', 'rim'], ['lakes.rimRise', 'rim'], ['lakes.rimSigma', 'rim'],
   ['rivers.gorgeDepth', 'gorge'], ['rivers.altFadeLo', 'gorge'], ['rivers.altFadeHi', 'gorge'],
   ['rivers.coastFadeLo', 'coast'], ['rivers.coastFadeHi', 'coast'],
+  // SP6a spec §1.4 (Task 9): the wet roof acts under water, so its depth is meant for the coast class column.
+  ['caves.limits.waterDepth', 'coast'],
   ['surface.cliffMinY', 'cliffY'], ['surface.cliffSteep', 'cliffSteep'],
   ['surface.snowline', 'snowline'], ['surface.lapse', 'snowline'], ['surface.lapseBase', 'snowline'],
   ['surface.noises.patch', 'patch'], ['surface.patchThreshold', 'patch'],
@@ -241,6 +244,8 @@ const isBandLeaf = (path: string): boolean => BAND_LEAF.test(path);
  * the base's capTop, and whose T column the step changes.
  */
 const CAP_TOP_PATH = 'caves.limits.capTop';
+/** SP6a spec §1.4 (Task 9): the wet roof's depth, left out of the slots' acceptance (it acts under water only). */
+const WATER_DEPTH_PATH = 'caves.limits.waterDepth';
 const CAP_STREAM = 'sp6a.liveness.capTop';
 const CAP_DRAWS = 32768;
 const CAP_EXAMINED = 2048;
@@ -910,10 +915,11 @@ export function caveLeaves(): readonly LeafInfo[] {
  * The leaves a cave class column's slot must accept (SP6a spec §4), in schema order: the tunnels' leaves for `tunnels`,
  * every other `caves.*` leaf for `caverns`; never a spaghetti scale leaf (ruling P5), a depth-band leaf (`minY`,
  * `maxY`; Task 8) or `caves.limits.capTop` (Task 9), each decided on its bounded witness search when the class columns
- * leave it dead.
+ * leave it dead, and never `caves.limits.waterDepth` (Task 9), the wet roof's depth, decided on the coast class column
+ * (it acts under water only, and the cave columns are land columns).
  */
 export function caveSlotLeaves(slot: CaveSlot): readonly LeafInfo[] {
-  return caveLeaves().filter((l) => !isScaleLeaf(l.path) && !isBandLeaf(l.path) && l.path !== CAP_TOP_PATH
+  return caveLeaves().filter((l) => !isScaleLeaf(l.path) && !isBandLeaf(l.path) && l.path !== CAP_TOP_PATH && l.path !== WATER_DEPTH_PATH
     && TUNNEL_LEAF.test(l.path) === (slot === 'tunnels'));
 }
 

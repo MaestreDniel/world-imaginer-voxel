@@ -157,9 +157,11 @@ describe('the default trees as data (SP3d spec §2)', () => {
     expect(() => { (tree as Rec)['x'] = 1; }).toThrow(TypeError);
   });
 
-  test('DEFAULT_DENSITY_TREE is the whole expression {root, defs} with the defs body and pillars (SP6a §1.1)', () => {
+  test('DEFAULT_DENSITY_TREE is the whole expression {root, defs} with the defs body, pillars and wetSteep (SP6a §1.1, §1.4)', () => {
     expect(Object.keys(DEFAULT_DENSITY_TREE)).toEqual(['defs', 'root']);
-    expect(Object.keys((DEFAULT_DENSITY_TREE as Rec)['defs'] as Rec)).toEqual(['body', 'pillars']);
+    expect(Object.keys((DEFAULT_DENSITY_TREE as Rec)['defs'] as Rec)).toEqual(['body', 'pillars', 'wetSteep']);
+    // S_w = 128·h_w at voxel level (SP6a §1.4, Spec correction 14; test/unit/caveTerms.test.ts checks its terms).
+    expect(nodeAt(DEFAULT_DENSITY_TREE, 'defs.wetSteep')).toMatchObject({ op: 'mul', a: { op: 'const', v: 128 }, b: { op: 'mul' } });
     expect(nodeAt(DEFAULT_DENSITY_TREE, 'defs.pillars')).toMatchObject({ op: 'tap', name: 'pillars', x: { op: 'interpolated' } });
   });
 
@@ -167,7 +169,7 @@ describe('the default trees as data (SP3d spec §2)', () => {
     expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'defs.body'), nodeAt(sp5cTrees().default, 'root.a.a.x.x'))).toBeNull();
   });
 
-  test('the root: max(min(min(tap precave(add(tap terrain(interpolated(ref body)), detailG)), caves slot), noodle slot), tap islands)', () => {
+  test('the root: max(min(min(tap precave(add(tap terrain(interpolated(ref body)), detailG)), add(caves slot, ref wetSteep)), add(noodle slot, ref wetSteep)), tap islands)', () => {
     const sp5c = sp5cTrees().default;
     const op = (path: string): unknown => (nodeAt(DEFAULT_DENSITY_TREE, path) as Rec)['op'];
     expect([op('root'), op('root.a'), op('root.a.a')]).toEqual(['max', 'min', 'min']);
@@ -181,13 +183,16 @@ describe('the default trees as data (SP3d spec §2)', () => {
     expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a.x.b.inside'), nodeAt(sp5c, 'root.a.b')), 'the detail term').toBeNull();
     // The caves slot max(min(min(min(E, C), S3), S2), keep) and the noodle (SP6a §1.1; test/unit/caveTerms.test.ts checks
     // their terms).
-    expect([op('root.a.a.b'), op('root.a.a.b.a'), op('root.a.a.b.a.a'), op('root.a.a.b.a.a.a')]).toEqual(['max', 'min', 'min', 'min']);
-    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b.a.a.a.a')).toMatchObject({ op: 'tap', name: 'entrances' });
-    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b.a.a.a.b')).toMatchObject({ op: 'tap', name: 'cheese' });
-    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b.a.a.b')).toMatchObject({ op: 'tap', name: 'spag3d' });
-    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b.a.b')).toMatchObject({ op: 'tap', name: 'spag2d' });
-    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b.b')).toMatchObject({ op: 'rangeChoice', outside: { op: 'ref', name: 'pillars' } });
-    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.b')).toMatchObject({ op: 'tap', name: 'noodle' });
+    // Each under the wet roof's steep part (Task 9): add(caves slot, ref wetSteep), add(noodle, ref wetSteep).
+    expect([op('root.a.a.b'), op('root.a.b')]).toEqual(['add', 'add']);
+    expect([nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b.b'), nodeAt(DEFAULT_DENSITY_TREE, 'root.a.b.b')]).toEqual([{ op: 'ref', name: 'wetSteep' }, { op: 'ref', name: 'wetSteep' }]);
+    expect([op('root.a.a.b.a'), op('root.a.a.b.a.a'), op('root.a.a.b.a.a.a'), op('root.a.a.b.a.a.a.a')]).toEqual(['max', 'min', 'min', 'min']);
+    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b.a.a.a.a.a')).toMatchObject({ op: 'tap', name: 'entrances' });
+    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b.a.a.a.a.b')).toMatchObject({ op: 'tap', name: 'cheese' });
+    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b.a.a.a.b')).toMatchObject({ op: 'tap', name: 'spag3d' });
+    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b.a.a.b')).toMatchObject({ op: 'tap', name: 'spag2d' });
+    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b.a.b')).toMatchObject({ op: 'rangeChoice', outside: { op: 'ref', name: 'pillars' } });
+    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.b.a')).toMatchObject({ op: 'tap', name: 'noodle' });
     expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'root.b'), nodeAt(sp5c, 'root.b')), 'the islands tap').toBeNull();
   });
 
@@ -232,8 +237,12 @@ describe('the default trees as data (SP3d spec §2)', () => {
     // const (+78): 616. Task 8: each family's cap `+ G·min(1, g) + 128·min(1, h)` is 48 nodes (g 17, h 21, their mins,
     // muls and constants 9, the add joining it 1) in each of the five families (+240), and `nb`'s maxY test reads
     // `neg(param)` in place of a const (+1 in each of the noodle's four slots): 860. Task 9: the island cap's g_i (12
-    // nodes) and h_i (9), and the two adds joining them to g_f and h_f, in each of the five caps (+115): 975 (README's row).
-    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(975);
+    // nodes) and h_i (9), and the two adds joining them to g_f and h_f, in each of the five caps (+115): 975. Task 9's wet
+    // roof: g_w = wet′·clamp((waterDepth + 8 + s − d)·recip(s), 0, 1) is 17 nodes with d = `ref body` (wet′ =
+    // clamp(4·wetMask) 4 of them) and 18 with the noodle's d = interpolated(ref body), plus the add joining it to g_f, in
+    // each of the five caps (+91); defs.wetSteep = 128·wet′·clamp((waterDepth + 8 − d)·0.125, 0, 1) (+17); the root's two
+    // `add(…, ref wetSteep)` (+4): 1087 (README's row).
+    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(1087);
   });
 
   test('DEFAULT_SURFACE_RULES holds exactly §2.2\'s 15 refs', () => {

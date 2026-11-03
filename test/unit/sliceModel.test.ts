@@ -686,18 +686,18 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       calls[0]!.reject(new SliceTooHeavy(calls[0]!.opts.columnCost, 2 ** 19));
       await flush();
       expect(r.notice).toBe('node too heavy to slice (cost 574, limit 15 360)');
-      expect(tooHeavyText('full', DEFAULTS, 'density', '', 128, 1_736_704, 2 ** 20)).toBe('node too heavy for a 128² slice (cost 13 312, limit 7 936)');
+      expect(tooHeavyText('full', DEFAULTS, 'density', '', 128, 2_278_784, 2 ** 20)).toBe('node too heavy for a 128² slice (cost 17 547, limit 7 936)');
     });
 
-    test('the default tree (SP6a Task 7, work cost 13,312 since Task 9): the 32² draft, then its 128² slice refused by the work bound with the notice, the draft kept', async () => {
+    test('the default tree (SP6a Task 7; work cost 17,547 since Task 9\'s wet roof): its 32² draft is refused by the work bound with the notice, before any job, until Task 13\'s memo-aware bound (ruling R7)', async () => {
+      // Task 7 to Task 9's island cap: the 32² draft (32 × 13,312 + COLUMN_SAMPLE_COST, within DRAFT_BUDGET), then its
+      // 128² slice refused with the notice, the draft kept. Since the wet roof the draft exceeds DRAFT_BUDGET too.
+      expect(32 * 17547 + COLUMN_SAMPLE_COST).toBeGreaterThan(DRAFT_BUDGET / 32);
       const { r, calls } = harness(DEFAULTS);
       r.request(want());
-      expect(calls[0]!.opts).toEqual({ priority: 2, columnCost: 32 * 13312 + COLUMN_SAMPLE_COST, budget: DRAFT_BUDGET });
-      const d = density(32);
-      calls[0]!.resolve(d);
       await flush();
-      expect(calls).toHaveLength(1);
-      expect([r.shown?.result, r.pending, r.notice]).toEqual([d, null, 'node too heavy for a 128² slice (cost 13 312, limit 7 936)']);
+      expect(calls).toHaveLength(0);
+      expect([r.shown?.result ?? null, r.pending, r.notice]).toEqual([null, null, 'node too heavy to slice (cost 17 547, limit 15 360)']);
     });
   });
 

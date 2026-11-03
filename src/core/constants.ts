@@ -83,6 +83,9 @@ export const COL_FIELD_BOUNDS = Object.freeze({
    * smoothstep(lo, hi, u) = t·t·(3 − 2t) with t clamped to [0, 1] (t·t ≥ +0, 3 − 2t ≥ 1), capped by `s > 1 ? 1 : s`,
    * or the literals 0 and 1 of the step when lo ≥ hi: within [0, 1] by construction. */
   islandMask: bound(0, 1),
+  /** wetMask (SP6a spec §1.4, `gen/column/columnPoint.ts` wetMaskOf): the literals 0 and 1, 1 where `surfaceWaterLevel`
+   * is finite. */
+  wetMask: bound(0, 1),
 });
 
 /**

@@ -87,9 +87,13 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
     const pool = createWorkerPool(size, () => fakeWorker(log));
     await pool.configure('42', DEFAULTS);
     for (const [name, req] of REQUESTS) {
-      // The real column cost within the draft budget, then a client cost PART_BUDGET / 4 (over a budget that admits it)
-      // that forces parts of 4 sample columns.
-      for (const [columnCost, budget] of [[costOf(req), DRAFT_BUDGET], [req.field === 'density' || req.field === 'node' ? PART_BUDGET / 4 : null, 2 ** 40]] as const) {
+      // The real column cost within a budget that admits it (the draft budget, but for the default's density, whose 32²
+      // draft exceeds it since SP6a Task 9's wet roof, 594,272 per vertical sample column against 524,288, until Task 13's
+      // memo-aware bound, ruling R7), then a client cost PART_BUDGET / 4 (over a budget that admits it) that forces parts
+      // of 4 sample columns.
+      const draft = req.field === 'density' ? 2 ** 40 : DRAFT_BUDGET;
+      if (req.field === 'density' || req.field === 'node') expect([name, costOf(req) > DRAFT_BUDGET / 32]).toEqual([name, req.field === 'density']);
+      for (const [columnCost, budget] of [[costOf(req), draft], [req.field === 'density' || req.field === 'node' ? PART_BUDGET / 4 : null, 2 ** 40]] as const) {
         if (columnCost === null) continue;
         log.length = 0;
         const r = await pool.fieldSlice(req, { priority: 500, columnCost, budget }).promise;
@@ -104,19 +108,19 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
     }
     pool.terminate();
   }, 120_000);
-  test('a 128² vertical density slice at the defaults: refused by REQUEST_BUDGET since SP6a Task 7 (1,736,704 per sample column since Task 9, limit 1,048,576); under a budget admitting it, 32 parts of at most k = 4 sample columns on 6 workers (26 of k = 5 with Task 7\'s and 8\'s, 10 parts of k = 14 with Task 6\'s cave terms, 6 of k = 78 before)', async () => {
+  test('a 128² vertical density slice at the defaults: refused by REQUEST_BUDGET since SP6a Task 7 (2,278,784 per sample column since Task 9\'s wet roof, limit 1,048,576); under a budget admitting it, 43 parts of at most k = 3 sample columns on 6 workers (32 of k = 4 with the island cap, 26 of k = 5 with Task 7\'s and 8\'s, 10 parts of k = 14 with Task 6\'s cave terms, 6 of k = 78 before)', async () => {
     const log: ToWorker[] = [];
     const pool = createWorkerPool(6, () => fakeWorker(log));
     await pool.configure('42', DEFAULTS);
     const req = vReq(MOUNTAIN, 'density', '', 128);
-    expect(costOf(req)).toBe(1_736_704);
+    expect(costOf(req)).toBe(2_278_784);
     const e = await settle(pool.fieldSlice(req, { priority: 500, columnCost: costOf(req), budget: REQUEST_BUDGET }).promise);
     expect([e instanceof SliceTooHeavy, (e as SliceTooHeavy).limit, log.filter((m) => m.type === 'fieldSlice').length]).toEqual([true, 1_048_576, 0]);
     const r = await pool.fieldSlice(req, { priority: 500, columnCost: costOf(req), budget: 2 ** 40 }).promise;
     const parts = partsOf(log);
-    expect(parts.length).toBe(32);
-    expect(Math.max(...parts.map(([a, b]) => b - a))).toBe(4);
-    expect(parts).toEqual(Array.from({ length: 32 }, (_, i) => [Math.floor((i * 128) / 32), Math.floor(((i + 1) * 128) / 32)]));
+    expect(parts.length).toBe(43);
+    expect(Math.max(...parts.map(([a, b]) => b - a))).toBe(3);
+    expect(parts).toEqual(Array.from({ length: 43 }, (_, i) => [Math.floor((i * 128) / 43), Math.floor(((i + 1) * 128) / 43)]));
     expect(bytes(r.values).equals(bytes(single(req).values))).toBe(true);
     pool.terminate();
   }, 120_000);
@@ -129,7 +133,8 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
       return w;
     });
     const ready = pool.configure('42', DEFAULTS);
-    const req = vReq(MOUNTAIN, 'density');
+    // The terrain body's node (the default's density holds at most 14 sample columns per part since SP6a Task 9).
+    const req = vReq(MOUNTAIN, 'node', 'defs.body');
     const jobs = [pool.tile({ layer: 'C', level: 256, tx: 3, tz: 0 }, 3), pool.fieldSlice(req, { priority: 2, columnCost: PART_BUDGET / 16, budget: DRAFT_BUDGET }).promise,
       pool.tile({ layer: 'C', level: 256, tx: 0, tz: 0 }, 0), pool.tile({ layer: 'C', level: 256, tx: 1, tz: 0 }, 1)];
     await ready;
@@ -157,7 +162,7 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
   test('the worker\'s bound check refuses a client column cost below its own (BAD_ARGS, too heavy), and a bad request rejects with its BAD_ARGS', async () => {
     const pool = createWorkerPool(1, () => fakeWorker([]));
     await pool.configure('42', DEFAULTS);
-    await expect(pool.fieldSlice(vReq(MOUNTAIN, 'density', '', 128), { priority: 500, columnCost: 1, budget: REQUEST_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: too heavy: 128 × 1736704/);
+    await expect(pool.fieldSlice(vReq(MOUNTAIN, 'density', '', 128), { priority: 500, columnCost: 1, budget: REQUEST_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: too heavy: 128 × 2278784/);
     await expect(pool.fieldSlice(vReq(MOUNTAIN, 'node', 'root.nope'), { priority: 500, columnCost: 1, budget: DRAFT_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: path "root.nope" names no node/);
     await expect(pool.fieldSlice(hReq('blocks'), { priority: 500, columnCost: 1, budget: DRAFT_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: field blocks has no horizontal slice/);
     pool.terminate();
@@ -182,28 +187,31 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
     expect(replies.map((r) => (r as { type: string }).type).filter((t) => t !== 'ready')).toEqual(['fieldSliceResult', 'fieldSliceResult']);
     expect([pool.probe().busy, partsOf(log).length]).toEqual([0, 2]);
     h.cancel();
-    const next = pool.fieldSlice(req, { priority: 500, columnCost: costOf(req), budget: DRAFT_BUDGET });
-    await new Promise((r) => setTimeout(r, 0));
-    for (const w of held) w.flush();
-    expect(bytes((await next.promise).values).equals(bytes(single(req).values))).toBe(true);
+    // Three parts of at most 14 sample columns on two workers (SP6a Task 9): flush until the group ends.
+    const next = pool.fieldSlice(req, { priority: 500, columnCost: costOf(req), budget: 2 ** 40 });
+    const flushing = setInterval(() => { for (const w of held) w.flush(); }, 1);
+    const values = (await next.promise).values;
+    clearInterval(flushing);
+    expect(bytes(values).equals(bytes(single(req).values))).toBe(true);
     pool.terminate();
   });
   test('each part reply is checked against its request (n, field, range); a reply failing its guard rejects with BAD_MESSAGE and frees the worker', async () => {
     const req = vReq(MOUNTAIN, 'density');
     const tamper = (edit: (r: Record<string, unknown>) => unknown) => createWorkerPool(1, () => fakeWorker([], (r) => (r['type'] === 'fieldSliceResult' ? edit(r) : r)));
-    const opts = { priority: 500, columnCost: PART_BUDGET / 16, budget: DRAFT_BUDGET };
+    // Parts of 8 (the default's density holds at most 14 sample columns per part since SP6a Task 9's wet roof).
+    const opts = { priority: 500, columnCost: PART_BUDGET / 8, budget: 2 ** 40 };
     const relabelled = tamper((r) => ({ ...r, field: 'node' }));
     await relabelled.configure('42', DEFAULTS);
-    await expect(relabelled.fieldSlice(req, opts).promise).rejects.toThrow(/^fieldSlice part: n 32, field node, samples \[0, 16\); expected n 32, field density, samples \[0, 16\)$/);
-    const shifted = tamper((r) => ({ ...r, from: (r['from'] as number) + 16, to: (r['to'] as number) + 16 }));
+    await expect(relabelled.fieldSlice(req, opts).promise).rejects.toThrow(/^fieldSlice part: n 32, field node, samples \[0, 8\); expected n 32, field density, samples \[0, 8\)$/);
+    const shifted = tamper((r) => ({ ...r, from: (r['from'] as number) + 8, to: (r['to'] as number) + 8 }));
     await shifted.configure('42', DEFAULTS);
-    await expect(shifted.fieldSlice(req, opts).promise).rejects.toThrow(/^fieldSlice part: n 32, field density, samples \[16, 32\)/);
+    await expect(shifted.fieldSlice(req, opts).promise).rejects.toThrow(/^fieldSlice part: n 32, field density, samples \[8, 16\)/);
     const log: ToWorker[] = [];
     const truncated = createWorkerPool(1, () => fakeWorker(log, (r) => (r['type'] === 'fieldSliceResult' ? { ...r, values: (r['values'] as ArrayBuffer).slice(8) } : r)));
     await truncated.configure('42', DEFAULTS);
-    await expect(truncated.fieldSlice(req, opts).promise).rejects.toThrow('BAD_MESSAGE: fieldSliceResult: values of 4088 bytes, expected 4096');
-    // The second part was dropped with the group; the freed worker answers the next job.
-    expect(partsOf(log)).toEqual([[0, 16]]);
+    await expect(truncated.fieldSlice(req, opts).promise).rejects.toThrow('BAD_MESSAGE: fieldSliceResult: values of 2040 bytes, expected 2048');
+    // The other parts were dropped with the group; the freed worker answers the next job.
+    expect(partsOf(log)).toEqual([[0, 8]]);
     expect((await truncated.point(1, 2)).z).toBe(2);
     for (const p of [relabelled, shifted, truncated]) p.terminate();
   });
