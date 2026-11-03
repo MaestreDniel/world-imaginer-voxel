@@ -678,7 +678,7 @@ C, S3, S2 = tap('cheese' | 'spag3d' | 'spag2d', interpolated( sky( fl(16·f) + r
 P         = tap('pillars', interpolated( 16·pillars ))      keep = rangeChoice(P·(1/16), −1e9, 0.03, −1e6, P)
 caves     = max( min(E, C, S3, S2), keep )
 N         = tap('noodle', fl(16·noodle) + cap_n)                                       (VOXEL combine)
-cap_f     = G_f·min(1, g_f + g_w + g_i) + 128·min(1, h_f + h_i)                        G_f 16 (entrances, cheese), 2.4 (spaghetti, noodle)
+cap_f     = G_f·min(1, g_f + g_w + g_i) + 128·min(1, h_f + h_i)                        G_f 0.4 (entrances), 5.8 (cheese), 0.5 (spaghetti 3D), 0.3 (spaghetti 2D), 0.4 (noodle)
 S_w       = 128·h_w                                                                     (the wet roof's steep part, VOXEL)
 final     = max( min( min( tap('precave', T + detailG), caves + S_w ), N + S_w ), islands ) + beard
 ```

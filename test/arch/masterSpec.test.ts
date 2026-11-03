@@ -2019,7 +2019,7 @@ describe('master spec amendments (SP6a §13)', () => {
       `entr      = min(Ne·(1/6) + ${c.entrances.offset} + yGrad(−10→0.3, 30→0), rough + clamp(max(|E1|,|E2|) − ${c.entrances.threshold}, −1, 1))   Ne ${lam('entrance')}, amps [0.4,0.5,1.0]; E1, E2 ${lam('entranceA')}`,
       `P         = tap('pillars', interpolated( 16·pillars ))      keep = rangeChoice(P·(1/16), −1e9, ${c.pillars.threshold}, −1e6, P)`,
       'caves     = max( min(E, C, S3, S2), keep )',
-      'cap_f     = G_f·min(1, g_f + g_w + g_i) + 128·min(1, h_f + h_i)                        G_f 16 (entrances, cheese), 2.4 (spaghetti, noodle)',
+      'cap_f     = G_f·min(1, g_f + g_w + g_i) + 128·min(1, h_f + h_i)                        G_f 0.4 (entrances), 5.8 (cheese), 0.5 (spaghetti 3D), 0.3 (spaghetti 2D), 0.4 (noodle)',
       'S_w       = 128·h_w                                                                     (the wet roof\'s steep part, VOXEL)',
       'final     = max( min( min( tap(\'precave\', T + detailG), caves + S_w ), N + S_w ), islands ) + beard',
     ];

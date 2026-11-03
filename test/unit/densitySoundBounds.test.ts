@@ -384,6 +384,8 @@ describe('the default world is unchanged (SP3d spec §1.9 D: proven, not only cl
     // (Task 7): 'a511599d09a0595f 619136 982594'; with the depth bands' caps (Task 8: the noodle closed outside y −60 …
     // 64, cheese and spaghetti 3D narrowed below −56): '68f1c4658652f66d 610176 983082'; with the wet roof (Task 9: caves
     // closed within 20 blocks of lake, river and sea beds, so more cells there are decided solid without corners):
-    expect(hashed(createDensityContext(ctxFor('42')))).toBe('e757035f5c1f15a1 568704 986564');
+    // 'e757035f5c1f15a1 568704 986564'; with the caps' gentle rises from D25's measurement (Task 14: G_f 0.4, 5.8, 0.5,
+    // 0.3, 0.4, so the caps narrow the families less):
+    expect(hashed(createDensityContext(ctxFor('42')))).toBe('a89dd9967f37f513 590080 985254');
   });
 });

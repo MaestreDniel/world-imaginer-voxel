@@ -90,11 +90,11 @@ const CAP = {
 } as const;
 /** Each family's band leaves' group and G_f, the gentle rise of its cap (tree literals, SP6a §1.4). */
 const BANDS = {
-  entrances: ['entrances', 16],
-  cheese: ['cheese', 16],
-  spag3d: ['spaghetti3d', 2.4],
-  spag2d: ['spaghetti2d', 2.4],
-  noodle: ['noodles', 2.4],
+  entrances: ['entrances', 0.4],
+  cheese: ['cheese', 5.8],
+  spag3d: ['spaghetti3d', 0.5],
+  spag2d: ['spaghetti2d', 0.3],
+  noodle: ['noodles', 0.4],
 } as const;
 
 describe('the caves group (SP6a spec §4)', () => {

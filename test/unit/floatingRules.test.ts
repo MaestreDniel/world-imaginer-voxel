@@ -411,9 +411,10 @@ describe('islands.enabled on trees that do not match it (amplified\'s window, se
     // Unticking the flag removes the islands (the mask is 0, so the term's gate gives −1e6) and their water rule, not
     // the preset's rules: 47 of the 64 columns keep the islands palette on their peaks (mostly stone → dirt or grass).
     // SP6a's caves hollow the peaks, so more runs are topped above y 180 (D31, accepted until SP12); the island cap closes
-    // them from y 176 up: 48 columns, 31,584 voxels (49 and 37,136 with the depth bands' caps, 37,417 with spaghetti and
-    // the noodle, 37,106 with entrances, cheese and pillars; 23,585 before SP6a).
-    expect({ solidity, fluid, outside, changed, columns }).toEqual({ solidity: 0, fluid: 0, outside: 0, changed: 31584, columns: 48 });
+    // them from y 176 up: 48 columns, 31,717 voxels with the caps' gentle rises from D25 (Task 14; 31,584 before them,
+    // 49 and 37,136 with the depth bands' caps, 37,417 with spaghetti and the noodle, 37,106 with entrances, cheese and
+    // pillars; 23,585 before SP6a).
+    expect({ solidity, fluid, outside, changed, columns }).toEqual({ solidity: 0, fluid: 0, outside: 0, changed: 31717, columns: 48 });
   }, 120_000);
 
   // SP6a's caves detach more runs above y 180 under peaks (default 5,953 voxels, 1,373 positions, 34 columns; amplified

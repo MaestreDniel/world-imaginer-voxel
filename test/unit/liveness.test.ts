@@ -65,7 +65,7 @@ const BAND_PINS: Readonly<Record<(typeof BAND_LEAVES)[number], string>> = {
   'caves.spaghetti3d.maxY': 'amplified witness column (-1430, 31644)',
   'caves.spaghetti2d.minY': 'cave column (4705, -24478)',
   'caves.spaghetti2d.maxY': 'witness column (-8539, 19151)',
-  'caves.noodles.minY': 'cave column (4705, -24478)',
+  'caves.noodles.minY': 'land column (-15542, -30245)',
   'caves.noodles.maxY': 'cave column (546, 25857)',
   'caves.entrances.minY': 'badlands column (-26426, -31088)',
   'caves.entrances.maxY': 'amplified witness column (9157, 4188)',
@@ -742,7 +742,7 @@ describe('the depth-band leaves (SP6a Task 8; rulings P3, P4, R5)', () => {
   test('P4: each minY leaf (and the noodle\'s maxY) also has its own band witness off the class columns, near the bottom', () => {
     const pins: Array<[string, string, number]> = [
       ['caves.cheese.minY', 'witness column (-26773, -930)', 2],
-      ['caves.spaghetti3d.minY', 'witness column (8300, 13717)', 18],
+      ['caves.spaghetti3d.minY', 'witness column (-13387, -13851)', 23],
       ['caves.spaghetti2d.minY', 'witness column (-17888, 14467)', 8],
       ['caves.noodles.minY', 'witness column (-26773, -930)', 2],
       ['caves.entrances.minY', 'witness column (10701, -27440)', 13],

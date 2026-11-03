@@ -63,9 +63,11 @@ const recip = (x: JsonValue): JsonValue => ({ op: 'recip', x });
 const bandSpan = (): JsonValue => param('caves.limits.bandSpan');
 /**
  * The gentle rise G_f of each family's cap (SP6a §1.4; tree literals, about the family's typical air depth: its value
- * at the median carved voxel): the blobby families' air values are about −5 to −16, the ridged ones' −1 to −3.
+ * at the median carved voxel). Set from D25's measurement (SP6a Task 14: the median slot value at the voxels each family
+ * tags over 256 columns, seed 42: entrances −0.413, cheese −5.836, spaghetti 3D −0.483, spaghetti 2D −0.339, noodle
+ * −0.397, each rounded to 0.1); re-set at tuning.
  */
-const CAP_GENTLE = { entrances: 16, cheese: 16, spaghetti3d: 2.4, spaghetti2d: 2.4, noodles: 2.4 } as const;
+const CAP_GENTLE = { entrances: 0.4, cheese: 5.8, spaghetti3d: 0.5, spaghetti2d: 0.3, noodles: 0.4 } as const;
 const col = (field: string): JsonValue => ({ op: 'col', field });
 /**
  * wet′ = clamp(4·wetMask, 0, 1) (SP6a §1.4, D7, D19): `wetMask` is the finite `col` field that is 1 at a lattice point

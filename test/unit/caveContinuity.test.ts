@@ -27,7 +27,7 @@ type Family = 'entrances' | 'cheese' | 'spaghetti3d' | 'spaghetti2d' | 'noodles'
 const FAMILIES: readonly Family[] = ['entrances', 'cheese', 'spaghetti3d', 'spaghetti2d', 'noodles'];
 const TAP: Readonly<Record<Family, string>> = { entrances: 'entrances', cheese: 'cheese', spaghetti3d: 'spag3d', spaghetti2d: 'spag2d', noodles: 'noodle' };
 /** G_f, the tree's literals (SP6a §1.4). */
-const GENTLE: Readonly<Record<Family, number>> = { entrances: 16, cheese: 16, spaghetti3d: 2.4, spaghetti2d: 2.4, noodles: 2.4 };
+const GENTLE: Readonly<Record<Family, number>> = { entrances: 0.4, cheese: 5.8, spaghetti3d: 0.5, spaghetti2d: 0.3, noodles: 0.4 };
 const S = DEFAULTS.caves.limits.bandSpan;
 /** The cave class columns of seed 42 (pinned in test/unit/liveness.test.ts): caverns, then tunnels. */
 const CAVERNS: readonly [number, number] = [546, 25857];
@@ -300,17 +300,13 @@ describe('the closure distance of each cap (SP6a spec §1.4; ruling P6)', () => 
     }
   });
 
-  test.each(FAMILIES.filter((f) => f !== 'entrances').flatMap((f) => [[f, 'maxY'], [f, 'minY']] as const))(
+  // One test per family and edge, the entrances' two included: at G_e 16 (before SP6a Task 14) they closed within 1 and
+  // 2 blocks, since their air (the tube arm's and the scaled arm's, ruling R6) lies above −3 and the gentle part 16·g
+  // closed it at g ≈ 3/16; D25's G_f rule set G_e to 0.4, the magnitude of their median tagged value.
+  test.each(FAMILIES.flatMap((f) => [[f, 'maxY'], [f, 'minY']] as const))(
     'with G_f and bandSpan at their defaults, the carve rate of %s falls from 9 to 1 tenths of its band value over ≥ 4 blocks across its %s edge',
     (f, end) => {
       expect(closure(f, end).span).toBeGreaterThanOrEqual(4);
     },
   );
-
-  // The entrances at G_e 16 close within 1 to 2 blocks: since the arm Ne·(1/6) (ruling R6) their air is the tube arm's
-  // and the scaled arm's, all of it above −3 (spec §1.2), so the gentle part 16·g closes it at g ≈ 3/16. Task 14's G_f
-  // rule sets G_e from the median tagged value (D25); this check then passes and becomes a plain test.
-  test.fails('with G_e 16 the entrances\' closure distance is ≥ 4 blocks (fails until Task 14\'s G_f rule)', () => {
-    for (const end of ['maxY', 'minY'] as const) expect(closure('entrances', end).span).toBeGreaterThanOrEqual(4);
-  });
 });
