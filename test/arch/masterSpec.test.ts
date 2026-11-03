@@ -134,7 +134,7 @@ import { MAX_STEP_EDITS, SUB_BATCH } from '../../src/sim/edits';
 import { PIN_MAX } from '../../src/ui/inspector/sliceModel';
 import { MAX_HISTORY_EDITS } from '../../src/ui/world/blockHistory';
 import { REGISTRY } from '../../src/world/blocks';
-import { BENCH_ROWS, LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P99_MAX_MS, TERRAIN_P50_MAX_MS } from '../bench/gates';
+import { BENCH_ROWS, LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P99_MAX_MS } from '../bench/gates';
 import { THRESHOLDS } from '../thresholds';
 import { SP_DEPS } from '../harness/sp';
 import { DET_FILES } from './rules/banned';
@@ -546,7 +546,8 @@ describe('master spec amendments (SP3e §11, §13)', () => {
     const line = text.split('\n').find((l) => l.startsWith('- **Measured in SP3e** (amended by SP3e):'));
     expect(line, 'no `- **Measured in SP3e** (amended by SP3e): …` line in §7').toBeDefined();
     expect(line).toContain('`terrain.islands`');
-    expect(line).toContain(`p50 ≤ ${TERRAIN_P50_MAX_MS} ms on cluster columns`);
+    // The SP3e line is history (SP3e's gate was 4 ms); SP6a's 10 ms (`TERRAIN_P50_MAX_MS`) is pinned with SP6a §13 item 19.
+    expect(line).toContain('p50 ≤ 4 ms on cluster columns');
     expect(line).toContain('`TERRAIN_P50_MAX_MS`');
     const rows: readonly string[] = BENCH_ROWS;
     expect(rows).toContain('terrain.islands');

@@ -5,14 +5,17 @@ import {
   absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, CALIBRATION_SPREAD_MAX, calibrationSpread, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS,
   D31_LIT_P50_MAX_MS, D31_MAX_P99_MAX_MS, gateFailures, ISLANDS_COLUMNS, ISLANDS_RUN, KILL_RATIO_MAX,
   LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, LIGHT_RUN, MESH_P50_MAX_MS, MESH_P99_MAX_MS, MESH_RUN, measureBracketed, P1_MAX_REGRESSION, parseBenchExempt,
-  PASTE_LIT_P99_MAX_MS, PASTE_LIT_RUN, PASTE_MAX_P99_MAX_MS, PASTE_RUN, PERSIST_FLUSH_P99_MAX_MS, PERSIST_RUN, ratioOf, RELIGHT_P95_MAX_MS, RELIGHT_RUN, ROW_ATTEMPTS_MAX, SESSION_COMMIT_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, type Baselines,
+  PASTE_LIT_P99_MAX_MS, PASTE_LIT_RUN, PASTE_MAX_P99_MAX_MS, PASTE_RUN, PERSIST_FLUSH_P99_MAX_MS, PERSIST_RUN, ratioOf, RELIGHT_P95_MAX_MS, RELIGHT_RUN, ROW_ATTEMPTS_MAX, SESSION_COMMIT_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS, type Baselines,
 } from '../bench/gates';
 
 const base: Baselines = { machine: 'm', node: 'v24', date: '2026-09-27', killRatio: 1.2, kernels: { a: { nsPerEval: 10, ratio: 2 }, b: { nsPerEval: 5, ratio: 1 } } };
 
 test('constants', () => {
   expect([P1_MAX_REGRESSION, KILL_RATIO_MAX]).toEqual([1.3, 1.6]);
-  expect([COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS, TERRAIN_P50_MAX_MS]).toEqual([0.7, 1.2, 4]);
+  expect([COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS]).toEqual([0.7, 1.2]);
+  // SP6a §10.5 (D24, the master's P1): the real T column with caves, p50 ≤ 10 ms (SP3b's 4 before) and p99 ≤ 20 ms, for
+  // terrain.real and terrain.islands.
+  expect([TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS]).toEqual([10, 20]);
   // SP3d §9 (master §7): the vertical 128² slice, a slice part at PART_BUDGET, a slider commit with two capped trees.
   expect([SLICE_V128_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SESSION_COMMIT_P50_MAX_MS]).toEqual([300, 250, 4]);
   // SP4a §9.3 (master §7's L and Mesh rows): one light job per column, one non-trivial section's copy and mesh.
@@ -29,18 +32,36 @@ test('constants', () => {
 
 /** Latencies within every absolute gate, at their bounds. */
 const AT_GATES = {
-  columnP50: 0.7, columnP95: 1.2, terrainP50: 4, sliceV128P50: 300, slicePartP50: 250, sessionCommitP50: 4, islandsP50: 4,
+  columnP50: 0.7, columnP95: 1.2, terrainP50: 10, terrainP99: 20, sliceV128P50: 300, slicePartP50: 250, sessionCommitP50: 4, islandsP50: 10, islandsP99: 20,
   lightP50: 4, lightP99: 8, meshP50: 1.0, meshP99: 2.5, relightP95: 3, persistFlushP99: 2, pasteMaxP99: 800, pasteLitP99: 1600,
 };
 
-test('absolute gates: column p50 / p95 (P1, SP2a) and the real T column p50 (SP3b §10), inclusive', () => {
+test('absolute gates: column p50 / p95 (P1, SP2a) and the real T column p50 (SP3b §10; 10 ms since SP6a), inclusive', () => {
   expect(absoluteGateFailures(AT_GATES)).toEqual([]);
-  expect(absoluteGateFailures({ ...AT_GATES, columnP50: 0.71, columnP95: 1.21, terrainP50: 4.01 })).toEqual([
+  expect(absoluteGateFailures({ ...AT_GATES, columnP50: 0.71, columnP95: 1.21, terrainP50: 10.01 })).toEqual([
     'P1 column p50 0.710 ms > 0.7 ms',
     'P1 column p95 1.210 ms > 1.2 ms',
-    'terrain.real p50 4.010 ms > 4 ms',
+    'terrain.real p50 10.010 ms > 10 ms',
   ]);
-  expect(absoluteGateFailures({ ...AT_GATES, columnP50: 0.3, columnP95: 0.5, terrainP50: 4.5 })).toEqual(['terrain.real p50 4.500 ms > 4 ms']);
+  expect(absoluteGateFailures({ ...AT_GATES, columnP50: 0.3, columnP95: 0.5, terrainP50: 10.5 })).toEqual(['terrain.real p50 10.500 ms > 10 ms']);
+});
+
+test('absolute gates (SP6a §10.5, D24): terrain.real and terrain.islands p50 ≤ 10 ms and p99 ≤ 20 ms, inclusive, each on its own line', () => {
+  // A p99 of 20.1 ms on either row is a miss; its p50 within its gate does not hide it.
+  expect(absoluteGateFailures({ ...AT_GATES, terrainP99: 20.1 })).toEqual(['terrain.real p99 20.100 ms > 20 ms']);
+  expect(absoluteGateFailures({ ...AT_GATES, islandsP99: 20.1 })).toEqual(['terrain.islands p99 20.100 ms > 20 ms']);
+  // A p50 of 10.1 ms likewise.
+  expect(absoluteGateFailures({ ...AT_GATES, terrainP50: 10.1 })).toEqual(['terrain.real p50 10.100 ms > 10 ms']);
+  expect(absoluteGateFailures({ ...AT_GATES, islandsP50: 10.1 })).toEqual(['terrain.islands p50 10.100 ms > 10 ms']);
+  // SP3b's 4 ms and an SP6a-like column pass.
+  expect(absoluteGateFailures({ ...AT_GATES, terrainP50: 6.2, terrainP99: 14, islandsP50: 7.5, islandsP99: 19.9 })).toEqual([]);
+  // Each row's p50 line, then its p99 line, in the order the gates are listed.
+  expect(absoluteGateFailures({ ...AT_GATES, terrainP50: 10.1, terrainP99: 20.1, islandsP50: 10.1, islandsP99: 20.1 })).toEqual([
+    'terrain.real p50 10.100 ms > 10 ms',
+    'terrain.real p99 20.100 ms > 20 ms',
+    'terrain.islands p50 10.100 ms > 10 ms',
+    'terrain.islands p99 20.100 ms > 20 ms',
+  ]);
 });
 
 test('absolute gates (SP3d §9): slice.vertical128 ≤ 300 ms, slice.partWorst ≤ 250 ms, session.commitMaxTree ≤ 4 ms p50, inclusive', () => {
@@ -53,15 +74,15 @@ test('absolute gates (SP3d §9): slice.vertical128 ≤ 300 ms, slice.partWorst �
   expect(absoluteGateFailures({ ...AT_GATES, sliceV128P50: 187, slicePartP50: 65, sessionCommitP50: 0.2 })).toEqual([]);
 });
 
-test('absolute gate (SP3e §7): terrain.islands p50 ≤ TERRAIN_P50_MAX_MS (4 ms) on cluster columns, inclusive, after the slice rows', () => {
+test('absolute gate (SP3e §7): terrain.islands p50 ≤ TERRAIN_P50_MAX_MS (10 ms since SP6a) on cluster columns, inclusive, after the slice rows', () => {
   expect(absoluteGateFailures({ ...AT_GATES, islandsP50: 3.5 })).toEqual([]);
-  expect(absoluteGateFailures({ ...AT_GATES, islandsP50: 4.01 })).toEqual(['terrain.islands p50 4.010 ms > 4 ms']);
+  expect(absoluteGateFailures({ ...AT_GATES, islandsP50: 10.01 })).toEqual(['terrain.islands p50 10.010 ms > 10 ms']);
   // terrain.real's gate does not cover it: each row has its own line, in the order the gates are listed.
-  expect(absoluteGateFailures({ ...AT_GATES, terrainP50: 2.4, islandsP50: 4.5 })).toEqual(['terrain.islands p50 4.500 ms > 4 ms']);
-  expect(absoluteGateFailures({ ...AT_GATES, terrainP50: 4.01, slicePartP50: 251, islandsP50: 4.2, sessionCommitP50: 4.01 })).toEqual([
-    'terrain.real p50 4.010 ms > 4 ms',
+  expect(absoluteGateFailures({ ...AT_GATES, terrainP50: 2.4, islandsP50: 10.5 })).toEqual(['terrain.islands p50 10.500 ms > 10 ms']);
+  expect(absoluteGateFailures({ ...AT_GATES, terrainP50: 10.01, slicePartP50: 251, islandsP50: 10.2, sessionCommitP50: 4.01 })).toEqual([
+    'terrain.real p50 10.010 ms > 10 ms',
     'slice.partWorst p50 251.000 ms > 250 ms',
-    'terrain.islands p50 4.200 ms > 4 ms',
+    'terrain.islands p50 10.200 ms > 10 ms',
     'session.commitMaxTree p50 4.010 ms > 4 ms',
   ]);
 });
@@ -78,8 +99,8 @@ test('absolute gates (SP4a §9.3): light.column p50 ≤ 4 ms, p99 ≤ 8 ms; mesh
   expect(absoluteGateFailures({ ...AT_GATES, lightP50: 2, lightP99: 9 })).toEqual(['light.column p99 9.000 ms > 8 ms']);
   expect(absoluteGateFailures({ ...AT_GATES, meshP50: 1.2, meshP99: 2 })).toEqual(['mesh.section p50 1.200 ms > 1 ms']);
   // They follow the earlier rows' lines.
-  expect(absoluteGateFailures({ ...AT_GATES, terrainP50: 4.01, sessionCommitP50: 4.01, meshP99: 3 })).toEqual([
-    'terrain.real p50 4.010 ms > 4 ms',
+  expect(absoluteGateFailures({ ...AT_GATES, terrainP50: 10.01, sessionCommitP50: 4.01, meshP99: 3 })).toEqual([
+    'terrain.real p50 10.010 ms > 10 ms',
     'session.commitMaxTree p50 4.010 ms > 4 ms',
     'mesh.section p99 3.000 ms > 2.5 ms',
   ]);

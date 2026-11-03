@@ -5,10 +5,12 @@ export const KILL_RATIO_MAX = 1.6;
 export const COLUMN_P50_MAX_MS = 0.7;
 export const COLUMN_P95_MAX_MS = 1.2;
 /**
- * SP3b exit (master §10, SP3b spec §10): the real T stage's `terrain.real` p50 in ms per column, its ColumnSample included;
- * SP3e §7 gates `terrain.islands` (floating_islands cluster columns) at the same bound.
+ * The real T stage's `terrain.real` p50 in ms per column, its ColumnSample included (SP3b §10 at 4 ms); SP3e §7 gates
+ * `terrain.islands` (floating_islands cluster columns) at the same bound. SP6a §10.5 (D24, the master's P1) raises it to
+ * 10 ms with the caves in T (the cave families, their caps and the tag) and adds `TERRAIN_P99_MAX_MS`, 20 ms, on both rows.
  */
-export const TERRAIN_P50_MAX_MS = 4;
+export const TERRAIN_P50_MAX_MS = 10;
+export const TERRAIN_P99_MAX_MS = 20;
 /**
  * SP3d (its spec §9, master §7): the vertical 128² density slice on one thread (`slice.vertical128`), one slice part at
  * PART_BUDGET of the heaviest noise tree (`slice.partWorst`, which pins the work unit of spec §5.2) and one slider commit
@@ -248,12 +250,16 @@ export interface AbsoluteLatencies {
   readonly columnP50: number;
   readonly columnP95: number;
   readonly terrainP50: number;
+  /** SP6a §10.5 (D24): `terrain.real` p99, gated at TERRAIN_P99_MAX_MS. */
+  readonly terrainP99: number;
   /** SP3d §9: `slice.vertical128`, `slice.partWorst` and `session.commitMaxTree` p50. */
   readonly sliceV128P50: number;
   readonly slicePartP50: number;
   readonly sessionCommitP50: number;
   /** SP3e §7: `terrain.islands` p50 (floating_islands cluster columns), gated at TERRAIN_P50_MAX_MS. */
   readonly islandsP50: number;
+  /** SP6a §10.5 (D24): `terrain.islands` p99, gated at TERRAIN_P99_MAX_MS. */
+  readonly islandsP99: number;
   /** SP4a §9.3: `light.column` and `mesh.section` p50 and p99 (p99 bounds p95 from above). */
   readonly lightP50: number;
   readonly lightP99: number;
@@ -269,8 +275,9 @@ export interface AbsoluteLatencies {
 }
 
 /**
- * The absolute gates (P1 column budget, SP2a; the real T budget, SP3b; the slice and session commit budgets, SP3d; the
- * light and mesh budgets, SP4a; the relight budget, SP5a; the flush's synchronous part, SP5b; the maximum pastes, SP5c): checked by
+ * The absolute gates (P1 column budget, SP2a; the real T budget, SP3b, its p50 and p99 with caves, SP6a; the slice and
+ * session commit budgets, SP3d; the light and mesh budgets, SP4a; the relight budget, SP5a; the flush's synchronous part,
+ * SP5b; the maximum pastes, SP5c): checked by
  * `npm run bench` and before `npm run bench:record` writes, so a record refuses to write when one fails.
  */
 export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
@@ -278,9 +285,11 @@ export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
   if (l.columnP50 > COLUMN_P50_MAX_MS) out.push(`P1 column p50 ${l.columnP50.toFixed(3)} ms > ${COLUMN_P50_MAX_MS} ms`);
   if (l.columnP95 > COLUMN_P95_MAX_MS) out.push(`P1 column p95 ${l.columnP95.toFixed(3)} ms > ${COLUMN_P95_MAX_MS} ms`);
   if (l.terrainP50 > TERRAIN_P50_MAX_MS) out.push(`terrain.real p50 ${l.terrainP50.toFixed(3)} ms > ${TERRAIN_P50_MAX_MS} ms`);
+  if (l.terrainP99 > TERRAIN_P99_MAX_MS) out.push(`terrain.real p99 ${l.terrainP99.toFixed(3)} ms > ${TERRAIN_P99_MAX_MS} ms`);
   if (l.sliceV128P50 > SLICE_V128_P50_MAX_MS) out.push(`slice.vertical128 p50 ${l.sliceV128P50.toFixed(3)} ms > ${SLICE_V128_P50_MAX_MS} ms`);
   if (l.slicePartP50 > SLICE_PART_P50_MAX_MS) out.push(`slice.partWorst p50 ${l.slicePartP50.toFixed(3)} ms > ${SLICE_PART_P50_MAX_MS} ms`);
   if (l.islandsP50 > TERRAIN_P50_MAX_MS) out.push(`terrain.islands p50 ${l.islandsP50.toFixed(3)} ms > ${TERRAIN_P50_MAX_MS} ms`);
+  if (l.islandsP99 > TERRAIN_P99_MAX_MS) out.push(`terrain.islands p99 ${l.islandsP99.toFixed(3)} ms > ${TERRAIN_P99_MAX_MS} ms`);
   if (l.sessionCommitP50 > SESSION_COMMIT_P50_MAX_MS) out.push(`session.commitMaxTree p50 ${l.sessionCommitP50.toFixed(3)} ms > ${SESSION_COMMIT_P50_MAX_MS} ms`);
   if (l.lightP50 > LIGHT_P50_MAX_MS) out.push(`light.column p50 ${l.lightP50.toFixed(3)} ms > ${LIGHT_P50_MAX_MS} ms`);
   if (l.lightP99 > LIGHT_P99_MAX_MS) out.push(`light.column p99 ${l.lightP99.toFixed(3)} ms > ${LIGHT_P99_MAX_MS} ms`);

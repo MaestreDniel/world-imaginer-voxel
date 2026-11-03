@@ -41,7 +41,9 @@ import { fluidDepths, meshFluid } from '../../src/mesh/fluid';
 import { meshSolid, type MeshOptions } from '../../src/mesh/greedy';
 import type { NeighborhoodReader } from '../../src/world/store/api';
 import { copyLightRegion, copyPaddedSection } from '../../src/world/store/padded';
-import { PART_BUDGET, REQUEST_BUDGET } from '../../src/core/constants';
+import { CAVE_KIND, PART_BUDGET, REQUEST_BUDGET } from '../../src/core/constants';
+import { caveReadersOf, tagColumn } from '../../src/gen/caves/tags';
+import { fillDensityColumn } from '../../src/gen/density/bounds';
 import type { Params } from '../../src/core/params/schema';
 import { sliceCostOf } from '../../src/gen/inspect/fieldSlice';
 import { runFieldSlice } from '../../src/workers/fieldSliceJob';
@@ -568,6 +570,97 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b and SP5c k
   expect(pasteLit.stats.calls, 'paste.maxLit: one probe, one warm-up and 8 timed calls').toBe(1 + PASTE_LIT_RUN.warmupIterations + PASTE_LIT_RUN.iterations);
   expect(worldStore.limboCount(worldStore.thread), 'the paste rows leave the limbo empty').toBe(0);
 
+  // SP6a D25's prototype (Task 14; spec §1.6, §1.4, §3.3): figures printed beside the rows, measured after every row and
+  // outside their timing. On terrain.real's first D25_COLUMNS candidate columns, each on a GenContext and a store of
+  // their own (so no cache is warm from the rows): the column's T time (fillColumnT, as the row runs it) and the cave
+  // channel's dense sections in its proto set (a section with no carved voxel is uniform and holds no slot); then the
+  // density phase again as T runs it (`fillDensityColumn`): the corners it evaluated (`cornerReady`) and the voxels
+  // (`voxelFn`, the mask); then the voxel phase timed with the column's corners ready (`voxelFn` at every evaluated
+  // voxel, then `tagColumn`, which reads the family slots), against the column's T time; and at every voxel the tag
+  // gives a noise family's kind, that family's slot value (its tap reader at `atVoxel`), whose median the G_f rule reads
+  // (§1.4: G_f is about the family's typical air depth). Then 64 amplified mountain columns (`offset` ≥ 150 at the
+  // centre block, liveness' CAP_OFFSET; terrain.real's candidate sequence on the amplified profile), each timed once
+  // after 4 warm-up columns, for their p99.
+  const D25_COLUMNS = 256;
+  const AMPLIFIED_COLUMNS = 64;
+  const MOUNTAIN_OFFSET = 150;
+  const q = (sorted: ArrayLike<number>, p: number): number => sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)]!;
+  const sortedOf = (a: readonly number[]): Float64Array => Float64Array.from(a).sort();
+  const candidate = (t: number): readonly [number, number] => [(t * 7919) % 60000 - 30000, (t * 104729) % 60000 - 30000];
+  const pGen = createGenContext(seedFromInput('42'), DEFAULTS);
+  const pStore = createStore({ shared: true, maxBlockBytes: 32 << 20, maxByteBytes: 16 << 20 });
+  const pBounds = surfaceContextOf(pGen).density.bounds;
+  const pSample = newColumnSample();
+  const pSolid = new Uint8Array(98304);
+  const pMask = new Uint8Array(98304);
+  const pCells = new Uint8Array(768);
+  const pTag = new Uint8Array(98304);
+  const families = [
+    ['entrances', CAVE_KIND.entrance], ['cheese', CAVE_KIND.cheese], ['spaghetti3d', CAVE_KIND.spaghetti3d],
+    ['spaghetti2d', CAVE_KIND.spaghetti2d], ['noodles', CAVE_KIND.noodle],
+  ] as const;
+  const tagged = new Map<number, number[]>(families.map(([, k]) => [k, []]));
+  const d25 = { tMs: [] as number[], voxelMs: [] as number[], corners: [] as number[], voxels: [] as number[], denseCave: [] as number[] };
+  for (let t = 1; t <= D25_COLUMNS; t++) {
+    const [pcx, pcz] = candidate(t);
+    const t0 = performance.now();
+    if (!fillColumnT(pStore, pGen, pcx, pcz, never)) throw new Error('D25: a column stopped');
+    d25.tMs.push(performance.now() - t0);
+    const view = pStore.proto(pcx, pcz)!;
+    let dense = 0;
+    for (let ssy = 0; ssy < 24; ssy++) if (typeof view.sectionCave(ssy) !== 'number') dense++;
+    d25.denseCave.push(dense);
+    pStore.freeColumn(pcx, pcz);
+    const c = pBounds.compiled;
+    fillDensityColumn(pBounds, buildColumnSample(pGen, pcx, pcz, pSample), pSolid, null, pMask, never, pCells);
+    let corners = 0;
+    for (let i = 0; i < 1225; i++) corners += c.cornerReady[i]!;
+    d25.corners.push(corners);
+    let voxels = 0;
+    const v0 = performance.now();
+    for (let i = 256; i < 98304; i++) {
+      if (pMask[i] === 0) continue;
+      voxels++;
+      sink += c.voxelFn(i & 15, (i >> 8) - 64, (i >> 4) & 15);
+    }
+    const readers = caveReadersOf(c);
+    tagColumn(c, readers, DEFAULTS.caves.pillars.threshold, pSolid, pCells, pTag, pBounds);
+    d25.voxelMs.push(performance.now() - v0);
+    d25.voxels.push(voxels);
+    const readerOf: Readonly<Record<number, (() => number) | null>> = {
+      [CAVE_KIND.entrance]: readers.entrances, [CAVE_KIND.cheese]: readers.cheese, [CAVE_KIND.spaghetti3d]: readers.spaghetti3d,
+      [CAVE_KIND.spaghetti2d]: readers.spaghetti2d, [CAVE_KIND.noodle]: readers.noodle,
+    };
+    for (let i = 256; i < 98304; i++) {
+      const values = tagged.get(pTag[i]!);
+      const read = readerOf[pTag[i]!];
+      if (values === undefined || read === undefined || read === null) continue;
+      c.atVoxel(i & 15, (i >> 8) - 64, (i >> 4) & 15);
+      values.push(read());
+    }
+  }
+  expect(pStore.blockPool.slotCount() - pStore.blockPool.freeCount(), 'D25: the prototype\'s store leaks no slot').toBe(0);
+  const ampParams = resolveProfile('amplified');
+  const ampGen = createGenContext(seedFromInput('42'), ampParams);
+  const ampProbe = createGenContext(seedFromInput('42'), ampParams);
+  const ampCols: (readonly [number, number])[] = [];
+  const ampWarm: (readonly [number, number])[] = [];
+  let ampTried = 0;
+  for (let t = 1; ampCols.length < AMPLIFIED_COLUMNS; t++) {
+    ampTried++;
+    const [acx, acz] = candidate(t);
+    if (columnPoint(ampProbe, 16 * acx + 8, 16 * acz + 8).offset >= MOUNTAIN_OFFSET) ampCols.push([acx, acz]);
+    else if (ampWarm.length < 4) ampWarm.push([acx, acz]);
+  }
+  const ampMs: number[] = [];
+  for (const [acx, acz] of [...ampWarm, ...ampCols]) {
+    const t0 = performance.now();
+    if (!fillColumnT(pStore, ampGen, acx, acz, never)) throw new Error('D25: an amplified column stopped');
+    ampMs.push(performance.now() - t0);
+    pStore.freeColumn(acx, acz);
+  }
+  const ampSorted = sortedOf(ampMs.slice(ampWarm.length));
+
   let solidVoxels = 0;
   for (let i = 256; i < 98304; i++) solidVoxels += sCol.solid[i]!;
   expect(evaluated, 'surface.column evaluates part of the column (the fast path takes the rest)').toBeGreaterThan(0);
@@ -587,7 +680,26 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b and SP5c k
   })));
   console.log(`killRatio ${killRatio}`);
   console.log(`column.sample p50 ${columnRun.latency.p50.toFixed(3)} ms, p99 (≥ p95) ${columnP95.toFixed(3)} ms`);
-  console.log(`terrain.real p50 ${terrainRun.latency.p50.toFixed(3)} ms, p99 ${terrainRun.latency.p99.toFixed(3)} ms`);
+  console.log(`terrain.real p50 ${terrainRun.latency.p50.toFixed(3)} ms, p99 ${terrainRun.latency.p99.toFixed(3)} ms (${terrainRun.latency.samplesCount} columns)`);
+  {
+    const f3 = (v: number): string => v.toFixed(3);
+    const cs = sortedOf(d25.corners), vs = sortedOf(d25.voxels), ts = sortedOf(d25.tMs), xs = sortedOf(d25.voxelMs), ds = sortedOf(d25.denseCave);
+    const sum = (a: readonly number[]): number => a.reduce((x, y) => x + y, 0);
+    console.log(`D25 corners per column (${D25_COLUMNS} columns of terrain.real's sequence): median ${q(cs, 0.5)}, p90 ${q(cs, 0.9)}, max ${q(cs, 1)}; voxels evaluated per column: median ${q(vs, 0.5)}, p90 ${q(vs, 0.9)}`);
+    console.log(
+      `D25 voxel phase (voxelFn at the evaluated voxels, corners ready, then the tag): median ${f3(q(xs, 0.5))} ms, p90 ${f3(q(xs, 0.9))} ms per column; `
+      + `${((100 * sum(d25.voxelMs)) / sum(d25.tMs)).toFixed(1)} % of the same columns' T time (median ${f3(q(ts, 0.5))} ms, p99 ${f3(q(ts, 0.99))} ms)`,
+    );
+    console.log(`D25 amplified mountain columns (offset ≥ ${MOUNTAIN_OFFSET} at the centre; ${AMPLIFIED_COLUMNS} of ${ampTried} candidates): p50 ${f3(q(ampSorted, 0.5))} ms, p99 ${f3(q(ampSorted, 0.99))} ms`);
+    console.log(
+      `D25 cave channel: dense cave sections per column median ${q(ds, 0.5)}, mean ${(sum(d25.denseCave) / D25_COLUMNS).toFixed(2)}, p90 ${q(ds, 0.9)}, max ${q(ds, 1)}; `
+      + `bytes per column median ${4096 * q(ds, 0.5)}, mean ${Math.round((4096 * sum(d25.denseCave)) / D25_COLUMNS)}`,
+    );
+    console.log(`D25 each family's slot value at the median voxel it tags (${D25_COLUMNS} columns): ${families.map(([name, k]) => {
+      const v = sortedOf(tagged.get(k)!);
+      return `${name} ${v.length === 0 ? 'none' : `${f3(q(v, 0.5))} (${v.length} voxels; p10 ${f3(q(v, 0.1))}, p90 ${f3(q(v, 0.9))})`}`;
+    }).join('; ')}`);
+  }
   console.log(`surface.column p50 ${surfaceRun.latency.p50.toFixed(3)} ms, p99 ${surfaceRun.latency.p99.toFixed(3)} ms (column (0, 0): ${evaluated} of ${solidVoxels} solid voxels evaluated)`);
   const ms = (r: { latency: { p50: number; p99: number } }): string => `p50 ${r.latency.p50.toFixed(3)} ms, p99 ${r.latency.p99.toFixed(3)} ms`;
   console.log(`slice.vertical128 ${ms(vRun)} (${vRanges.length} parts at pool size 1: ${JSON.stringify(vRanges)})`);
@@ -620,9 +732,9 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b and SP5c k
   );
   // Before the record: bench:record refuses to write when an absolute gate fails.
   expect(absoluteGateFailures({
-    columnP50: columnRun.latency.p50, columnP95, terrainP50: terrainRun.latency.p50,
+    columnP50: columnRun.latency.p50, columnP95, terrainP50: terrainRun.latency.p50, terrainP99: terrainRun.latency.p99,
     sliceV128P50: vRun.latency.p50, slicePartP50: wRun.latency.p50, sessionCommitP50: commitRun.latency.p50,
-    islandsP50: islandsRun.latency.p50,
+    islandsP50: islandsRun.latency.p50, islandsP99: islandsRun.latency.p99,
     lightP50: lightRun.latency.p50, lightP99: lightRun.latency.p99, meshP50: meshRun.latency.p50, meshP99: meshRun.latency.p99,
     relightP95: relightRun.latency.p99, persistFlushP99: persistRun.latency.p99,
     pasteMaxP99: pasteMax.run.latency.p99, pasteLitP99: pasteLit.run.latency.p99,
