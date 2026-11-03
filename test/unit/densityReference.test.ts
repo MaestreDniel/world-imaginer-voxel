@@ -4,7 +4,9 @@ import { ExprValidationError } from '../../src/gen/density/expr';
 import { cellXZ, cellY, cornerY, fracXZ, fracY, lerp, trilerp } from '../../src/gen/density/nodes';
 import { compileDensity } from '../../src/gen/density/compile';
 import { densityNoiseSource } from '../../src/gen/density/context';
-import { createDensityReference, findTap, interpolatedNodes } from '../../src/gen/density/reference';
+import { createCornerMemo, createDensityReference, findTap, interpolatedNodes } from '../../src/gen/density/reference';
+import { surfaceContextOf } from '../../src/gen/surface/context';
+import { steepDefaultTree } from './fixtures/editedTrees';
 import { buildColumnSample, latticeIndex, newColumnSample, readField, SAMPLE_FIELDS, type ColumnSample } from '../../src/gen/column/columnStage';
 import { fuzzNoiseSource, randomDensityExpr } from '../harness/densityFuzz';
 import { ctxFor } from '../harness/gen';
@@ -309,5 +311,108 @@ describe('reference interpreter: noiseScaled on real columns (SP6a §1.5, D18)',
       }
     }
     for (let k = 0; k <= 48; k += 4) expect(Object.is(a.corner(sm, ns('detail', 1), 2, k, 3), b.corner(sm, n3('detail'), 2, k, 3))).toBe(true);
+  });
+});
+
+describe('the slice reference\'s corner memo (SP6a §7.4)', () => {
+  /** Every voxel of four (lx, lz) lines of the column (cx, cz), each y −64 … 319. */
+  const LINES = [[0, 0], [5, 9], [15, 15], [3, 12]] as const;
+  const COLUMNS = [[0, 0], [-104, 0], [5, -7], [-1700, -2000]] as const;
+
+  /** Compares r.voxel with and without a memo on LINES of each column; one memo per column, and one for them all. */
+  function sameWithMemo(r: ReturnType<typeof createDensityReference>, sampleOf: (cx: number, cz: number) => ColumnSample): number {
+    const shared = createCornerMemo();
+    let n = 0;
+    for (const [cx, cz] of COLUMNS) {
+      const sm = sampleOf(cx, cz);
+      const memo = createCornerMemo();
+      for (const [lx, lz] of LINES) {
+        const x = 16 * cx + lx, z = 16 * cz + lz;
+        for (let y = -64; y < 320; y++) {
+          const want = r.voxel(sm, x, y, z);
+          const a = r.voxel(sm, x, y, z, undefined, memo);
+          const b = r.voxel(sm, x, y, z, undefined, shared);
+          if (!Object.is(a, want) || !Object.is(b, want)) throw new Error(`(${x}, ${y}, ${z}): plain ${want}, memo ${a}, shared memo ${b}`);
+          n++;
+        }
+      }
+      // A cleared memo recomputes the same values.
+      memo.clear();
+      expect(Object.is(r.voxel(sm, 16 * cx + 7, 40, 16 * cz + 2, undefined, memo), r.voxel(sm, 16 * cx + 7, 40, 16 * cz + 2))).toBe(true);
+    }
+    return n;
+  }
+
+  test('the default tree (ten interpolated slots and more): with and without a memo, bit for bit on 4 columns', () => {
+    const ctx = ctxFor('42');
+    const dc = surfaceContextOf(ctx).density;
+    expect(interpolatedNodes(dc.expr).length).toBeGreaterThanOrEqual(10);
+    const r = createDensityReference(dc.expr, dc.noises);
+    expect(sameWithMemo(r, (cx, cz) => dc.columns.get(cx, cz))).toBe(4 * 4 * 384);
+  });
+
+  test('an edited tree (the steep edit of the default) and fuzzed trees with defs: with and without a memo, bit for bit', () => {
+    const ctx = ctxFor('42', { density: { defs: steepDefaultTree() } } as never);
+    const dc = surfaceContextOf(ctx).density;
+    expect(sameWithMemo(createDensityReference(dc.expr, dc.noises), (cx, cz) => dc.columns.get(cx, cz))).toBe(4 * 4 * 384);
+    // Random trees (refs to defs, nested placements) on two real columns, every 7th y of a line, one memo per tree.
+    const fz = fuzzNoiseSource();
+    const real = ctxFor('42');
+    const samples = [buildColumnSample(real, 3, -2, newColumnSample()), buildColumnSample(real, -9, 11, newColumnSample())];
+    const next = testRng(305);
+    let withDefs = 0;
+    for (let t = 0; t < 60; t++) {
+      const e = randomDensityExpr(next);
+      if (Object.keys(e.defs).length > 0) withDefs++;
+      const r = createDensityReference(e, fz);
+      const memo = createCornerMemo();
+      for (const sm of samples) {
+        for (let y = -64; y < 320; y += 7) {
+          const x = 16 * sm.cx + (y & 15), z = 16 * sm.cz + ((y * 5) & 15);
+          const want = r.voxel(sm, x, y, z);
+          const got = r.voxel(sm, x, y, z, undefined, memo);
+          if (!Object.is(got, want)) throw new Error(`tree ${t} (${x}, ${y}, ${z}): plain ${want}, memo ${got}`);
+        }
+      }
+    }
+    expect(withDefs).toBeGreaterThan(10);
+  });
+
+  test('a corner read through the memo equals the plain corner, refs included', () => {
+    const ctx = ctxFor('42');
+    const dc = surfaceContextOf(ctx).density;
+    const r = createDensityReference(dc.expr, dc.noises);
+    const sm = dc.columns.get(-104, 0);
+    const memo = createCornerMemo();
+    for (const node of interpolatedNodes(dc.expr)) {
+      for (const [i, k, j] of [[0, 0, 0], [4, 24, 1], [2, 48, 4]] as const) {
+        expect(Object.is(r.corner(sm, node.x, i, k, j, memo), r.corner(sm, node.x, i, k, j))).toBe(true);
+      }
+    }
+  });
+
+  test('a 128-sample vertical line of the default tree: with a memo, fewer than 1/5 of the noise evaluations (a counting noise stub)', () => {
+    const ctx = ctxFor('42');
+    const dc = surfaceContextOf(ctx).density;
+    let calls = 0;
+    const counting: DensityNoiseSource = (id) => {
+      const n = dc.noises(id);
+      if (n === undefined) return undefined;
+      return { ...n, z2: (x, z) => { calls++; return n.z2(x, z); }, z3: (x, y, z) => { calls++; return n.z3(x, y, z); } };
+    };
+    const r = createDensityReference(dc.expr, counting);
+    const sm = dc.columns.get(-80, 0);
+    const x = -1280 + 9, z = 6;
+    const rows = Array.from({ length: 128 }, (_, k) => 319 - Math.floor(((2 * k + 1) * 384) / 256));
+    const run = (memo?: ReturnType<typeof createCornerMemo>): number[] => rows.map((y) => r.voxel(sm, x, y, z, undefined, memo));
+    calls = 0;
+    const plain = run();
+    const without = calls;
+    calls = 0;
+    const memoised = run(createCornerMemo());
+    const withMemo = calls;
+    expect(memoised.every((v, k) => Object.is(v, plain[k]))).toBe(true);
+    console.log(`MEASUREMENT: a 128-sample vertical line of the default tree: ${without} noise evaluations without the memo, ${withMemo} with it (${(withMemo / without).toFixed(3)})`);
+    expect(withMemo).toBeLessThan(without / 5);
   });
 });

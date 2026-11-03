@@ -90,7 +90,7 @@ function slice(params: Params, spec: FieldSliceSpec, ranges: readonly (readonly 
 }
 /** The pool's split at pool size 1 of a whole n × n density slice (`planFieldSlice` with REQUEST_BUDGET): its ranges. */
 function poolOfOne(params: Params, spec: FieldSliceSpec): readonly (readonly [number, number])[] {
-  const plan = planFieldSlice(spec.n, sliceCostOf(params, spec.field, spec.path, spec.plane, spec.n), 1, REQUEST_BUDGET);
+  const plan = planFieldSlice(spec.n, sliceCostOf(params, spec.field, spec.path, spec.plane, spec.n, spec.plane === 'horizontal' ? spec.extent : undefined), 1, REQUEST_BUDGET);
   if (plan.refused) throw new Error(`the ${spec.plane} ${spec.n}² slice is refused (limit ${plan.limit})`);
   return plan.ranges;
 }
@@ -244,17 +244,23 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b and SP5c k
   });
   // SP3d §9: the slice rows, one thread, in-process, 9 timed runs after one warm-up each, a fresh GenContext per slice.
   // slice.vertical128: field density at n = 128 on uiSmoke's mountain line A (−1664, 8) → B (−640, 8), split as the
-  // pool of one worker splits it (k = 78 sample columns per part: 2 parts).
+  // pool of one worker splits it (k = 30 sample columns per part under SP6a §7.4's memo-aware bound: 5 parts; 78 and 2
+  // before SP6a).
   const vSpec: FieldSliceSpec = { plane: 'vertical', ax: -1664, az: 8, bx: -640, bz: 8, y: 63, n: 128, field: 'density', path: '' };
   const vRanges = poolOfOne(DEFAULTS, vSpec);
   const vRun = await measure('slice.vertical128', 1, () => { sink += slice(DEFAULTS, vSpec, vRanges); }, 9);
-  // slice.horizontal128: the XZ plane at y 63 centred on (0, 0), extent 8192, from corner samples (k = 25: 6 parts).
-  const hSpec: FieldSliceSpec = { plane: 'horizontal', cx: 0, cz: 0, extent: 8192, y: 63, n: 128, field: 'density', path: '' };
+  // slice.horizontal128: the XZ plane at y 63 centred on (0, 0), from corner samples, at extent 512 since SP6a Task 13
+  // (ruling R7 (c)): its step of 4 blocks is the cell width, so neighbouring samples share corners and the reference's
+  // corner memo (§7.4) admits the default tree's 128² slice (k = 8 rows per part: 16 parts). At extent 8192 (step 64,
+  // SP3d's line; k = 25: 6 parts before SP6a) no two samples share a corner, and the default's 128² slice is refused
+  // (the UI shows its 32² draft).
+  const hSpec: FieldSliceSpec = { plane: 'horizontal', cx: 0, cz: 0, extent: 512, y: 63, n: 128, field: 'density', path: '' };
   const hRanges = poolOfOne(DEFAULTS, hSpec);
   const hRun = await measure('slice.horizontal128', 1, () => { sink += slice(DEFAULTS, hSpec, hRanges); }, 9);
   // slice.partWorst: one part at PART_BUDGET — one 32-sample vertical column of the interpolated add of
-  // PART_WORST_LEAVES 16-octave double `noise detail` leaves (Task 19's calibration tree) — below the request check
-  // (planFieldSlice refuses the whole slice; the handler's part bound accepts this part).
+  // PART_WORST_LEAVES 16-octave double `noise detail` leaves (Task 19's calibration tree; 330 leaves under SP6a §7.4's
+  // memo-aware bound, 253 before) — below the request check (planFieldSlice refuses the whole slice; the handler's part
+  // bound accepts this part).
   const worst = partWorstParams();
   const wSpec: FieldSliceSpec = { ...vSpec, n: 32 };
   const wCost = sliceCostOf(worst, 'density', '', 'vertical', 32);

@@ -1,15 +1,25 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
+import { seedFromInput } from '../../src/core/seed';
 import { createWorkerPool, type WorkerLike } from '../../src/engine/workerPool';
+import { createGenContext } from '../../src/gen/context';
+import { densityReferenceOf, evaluateFieldSlice, sliceRowY, sliceSampleVoxel, type SliceGeometry } from '../../src/gen/inspect/fieldSlice';
+import { surfaceContextOf } from '../../src/gen/surface/context';
+import { segmentPointAt, type Segment } from '../../src/metrics/crossSection';
 import { COLUMN_SAMPLE_COST, PART_BUDGET } from '../../src/workers/protocol';
 import { createTaskHandler } from '../../src/workers/taskHandler';
 
 // Tier 2's column-cost bound keeps every valid tree's per-sample work cost far below PART_BUDGET (about 6.2 M units at
-// most under `interpolated`), so the worker's bound (P3) is reached here by a work cost forced to PART_BUDGET.
+// most under `interpolated`), so the worker's bound (P3) is reached here by a work cost forced to PART_BUDGET: the
+// probe's `workCost` and the slice's `memoWorkCost` (its voxel part; SP6a §7.4).
 const HEAVY = vi.hoisted(() => ({ on: false }));
 vi.mock('../../src/gen/inspect/cost', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../src/gen/inspect/cost')>();
-  return { ...real, workCost: (...args: Parameters<typeof real.workCost>) => (HEAVY.on ? 8_388_608 : real.workCost(...args)) };
+  return {
+    ...real,
+    workCost: (...args: Parameters<typeof real.workCost>) => (HEAVY.on ? 8_388_608 : real.workCost(...args)),
+    memoWorkCost: (...args: Parameters<typeof real.memoWorkCost>) => (HEAVY.on ? { voxel: 8_388_608, corner: 0 } : real.memoWorkCost(...args)),
+  };
 });
 
 afterEach(() => { HEAVY.on = false; });
@@ -40,4 +50,22 @@ describe('the worker refuses a probe or a part above PART_BUDGET (SP3d spec §5.
     await expect(pool.fieldProbe({ field: 'node', path: 'root.a', x: 0, y: 70, z: 0 })).rejects.toThrow(/^BAD_ARGS: too heavy: /);
     pool.terminate();
   });
+});
+
+describe('the slice job\'s corner memo (SP6a §7.4)', () => {
+  test('a vertical 128² density slice of the default tree is byte-identical to the plain reference, sample by sample', () => {
+    const ctx = createGenContext(seedFromInput('42'), DEFAULTS);
+    const MOUNTAIN: Segment = { ax: -1664, az: 8, bx: -640, bz: 8 };
+    const g: SliceGeometry = { plane: 'vertical', n: 128, pointAt: (i) => segmentPointAt(MOUNTAIN, i, 128) };
+    const r = evaluateFieldSlice(ctx, { geometry: g, field: 'density', path: '', from: 0, to: 128 }, () => false);
+    if (r === null || r.field !== 'density') throw new Error('no density values');
+    const ref = densityReferenceOf(ctx);
+    const columns = surfaceContextOf(ctx).density.columns;
+    const want = new Float64Array(128 * 128);
+    for (let c = 0; c < 128; c++) {
+      const [x, , z] = sliceSampleVoxel(g, c, 0);
+      for (let k = 0; k < 128; k++) want[c * 128 + k] = ref.voxel(columns.get(x >> 4, z >> 4), x, sliceRowY(k, 128), z);
+    }
+    expect(Buffer.from(r.values.buffer).equals(Buffer.from(want.buffer))).toBe(true);
+  }, 60_000);
 });

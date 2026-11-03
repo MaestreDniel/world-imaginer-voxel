@@ -34,9 +34,8 @@ import { DRAFT_BUDGET, HEIGHT, MIN_Y, REQUEST_BUDGET, SEA_LEVEL, SLICE_EXTENTS, 
 import { MAX_Y, WINDOW_HALF } from '../../core/coords';
 import type { Params } from '../../core/params/schema';
 import { JobCancelled, SliceTooHeavy, type FieldSliceHandle, type FieldSliceResult, type WorkerPool } from '../../engine/workerPool';
-import { workCost } from '../../gen/inspect/cost';
 import {
-  evaluatedExpression, sliceCostOf, sliceGeometryProblem, sliceRowY, sliceSampleVoxel, type SliceField, type SliceGeometry,
+  sliceAcquisitionCost, sliceCostOf, sliceGeometryProblem, sliceRowY, sliceSampleVoxel, type SliceField, type SliceGeometry,
 } from '../../gen/inspect/fieldSlice';
 import { segmentLength, segmentPointAt, segmentProblem, type Segment } from '../../metrics/crossSection';
 import { fluidType } from '../../world/blocks/fluid';
@@ -557,13 +556,18 @@ export function fieldSliceSpec(s: SliceState, line: Segment | null, field: Slice
 
 /**
  * The refusal notice of a density or node slice whose column cost exceeds `limit` (`planFieldSlice`'s, in column-cost
- * units), in §5.2's per-sample units: c = the evaluated expression's work cost, L = the largest c accepted =
- * c + ⌊(limit − columnCost) / n⌋ (the column cost is n × c plus the acquisition, linear in c). The draft's (`draft`)
- * reads "node too heavy to slice", the full slice's "node too heavy for a 128² slice".
+ * units), in §5.2's per-sample units: c = the column's evaluation work per sample, ⌈(columnCost − a) / n⌉ with a the
+ * column's acquisition (`sliceAcquisitionCost`; c is the evaluated expression's work cost when it has no
+ * `interpolated`, and less with one, whose corners the memo shares, SP6a §7.4), and L = the largest c accepted,
+ * ⌊(limit − a) / n⌋. The draft's (`draft`) reads "node too heavy to slice", the full slice's "node too heavy for a 128²
+ * slice".
  */
-export function tooHeavyText(stage: 'draft' | 'full', params: Params, field: 'density' | 'node', path: string, n: number, columnCost: number, limit: number): string {
-  const c = workCost(evaluatedExpression(params, field, path), params);
-  const l = c + Math.floor((limit - columnCost) / n);
+export function tooHeavyText(
+  stage: 'draft' | 'full', params: Params, field: 'density' | 'node', path: string, plane: SliceGeometry['plane'], n: number, columnCost: number, limit: number,
+): string {
+  const a = sliceAcquisitionCost(params, field, path, plane, n);
+  const c = Math.ceil((columnCost - a) / n);
+  const l = Math.floor((limit - a) / n);
   const what = stage === 'draft' ? 'node too heavy to slice' : `node too heavy for a ${SLICE_FULL_N}² slice`;
   return `${what} (cost ${countText(c)}, limit ${countText(l)})`;
 }
@@ -665,19 +669,30 @@ export function createFieldSliceRequests(src: FieldSliceSource): FieldSliceReque
     const g = sliceGeometryOf(state, line, n);
     if (!g.ok) { finish(r, g.problem); return; }
     let cost: number;
+    let fullCost = 0;
+    const draft = n === SLICE_DRAFT_N;
     try {
-      cost = sliceCostOf(cfg.params, field, path, state.plane, n);
+      cost = sliceCostOf(cfg.params, field, path, state.plane, n, state.extent);
+      if (draft && isRefusableField(field)) fullCost = sliceCostOf(cfg.params, field, path, state.plane, SLICE_FULL_N, state.extent);
     } catch (e) {
       finish(r, `failed: ${messageOf(e)}`);
       return;
     }
-    const draft = n === SLICE_DRAFT_N;
     const budget = draft ? DRAFT_BUDGET : REQUEST_BUDGET;
     const heavy = (limit: number): string =>
-      tooHeavyText(draft ? 'draft' : 'full', cfg.params, field as 'density' | 'node', path, n, cost, limit);
+      tooHeavyText(draft ? 'draft' : 'full', cfg.params, field as 'density' | 'node', path, state.plane, n, cost, limit);
     if (isRefusableField(field)) {
       const plan = planFieldSlice(n, cost, src.pool.size, budget);
-      if (plan.refused) { finish(r, heavy(plan.limit)); return; }
+      if (plan.refused) {
+        // SP6a ruling R9: a draft the bound refuses while it admits the full slice (whose samples share more corners,
+        // §7.4) is skipped: the full slice is requested instead of drawing nothing.
+        if (draft && !planFieldSlice(SLICE_FULL_N, fullCost, src.pool.size, REQUEST_BUDGET).refused) {
+          stage(r, want, cfg, field, path, SLICE_FULL_N);
+          return;
+        }
+        finish(r, heavy(plan.limit));
+        return;
+      }
     }
     r.n = n;
     const handle = src.pool.fieldSlice(fieldSliceSpec(state, line, field, path, n), {

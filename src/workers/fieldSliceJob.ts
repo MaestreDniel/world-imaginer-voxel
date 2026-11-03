@@ -59,7 +59,7 @@ export function fieldSliceArgs(ctx: GenContext, m: FieldSliceMsg): SliceGeometry
   if (typeof g === 'string') return g;
   const { from, to, n } = m;
   if (!(Number.isInteger(from) && Number.isInteger(to) && from >= 0 && from < to && to <= n)) return `samples [${from}, ${to}) are not integers with 0 ≤ from < to ≤ ${n}`;
-  return FIELD_PROBLEM(ctx, m.field, m.path, m.plane) ?? PART_PROBLEM(to - from, SLICE_COST(ctx.params, m.field, m.path, m.plane, n), m.field) ?? g;
+  return FIELD_PROBLEM(ctx, m.field, m.path, m.plane) ?? PART_PROBLEM(to - from, SLICE_COST(ctx.params, m.field, m.path, m.plane, n, m.plane === 'horizontal' ? m.extent : undefined), m.field) ?? g;
 }
 
 /** Runs a fieldSlice job in `ctx`: its reply (values, and fluid for blocks, transferred), its BAD_ARGS, or null when stopped. */

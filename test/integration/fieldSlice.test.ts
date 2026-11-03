@@ -101,10 +101,10 @@ describe('fieldSlice in real worker threads (SP3d spec §5.2, §10)', () => {
     for (const [name, req] of REQUESTS) {
       const refusable = req.field === 'density' || req.field === 'node';
       // The real column cost, then (density and node) a client cost PART_BUDGET / 4 that forces parts of 4 sample columns.
-      for (const columnCost of refusable ? [sliceCostOf(DEFAULTS, req.field, req.path, req.plane, req.n), PART_BUDGET / 4] : [sliceCostOf(DEFAULTS, req.field, req.path, req.plane, req.n)]) {
-        // The default's density draft exceeds DRAFT_BUDGET since SP6a Task 9's wet roof (until Task 13's memo-aware
-        // bound, ruling R7): its real cost runs over a budget that admits it.
-        const budget = columnCost === PART_BUDGET / 4 || req.field === 'density' ? 2 ** 40 : DRAFT_BUDGET;
+      const real = sliceCostOf(DEFAULTS, req.field, req.path, req.plane, req.n, req.plane === 'horizontal' ? req.extent : undefined);
+      for (const columnCost of refusable ? [real, PART_BUDGET / 4] : [real]) {
+        // Every 32² draft of the default fits DRAFT_BUDGET under SP6a Task 13's memo-aware bound (rulings R7, R9).
+        const budget = columnCost === PART_BUDGET / 4 ? 2 ** 40 : DRAFT_BUDGET;
         const plan = planFieldSlice(req.n, columnCost, size, refusable ? budget : null);
         if (plan.refused) throw new Error(`${name}: refused`);
         const r = await pool.fieldSlice(req, { priority: 500, columnCost, budget }).promise;
@@ -125,15 +125,13 @@ const stall = (ms: number) => { Atomics.wait(new Int32Array(new SharedArrayBuffe
 const configure = (epoch: number, params: Params, epochs: SharedArrayBuffer | null) => ({ type: 'configure', epoch, seedText: '42', params, epochs });
 
 describe('a configure stops an in-flight fieldSlice part within 50 ms (SP3d spec §4.5, §10)', () => {
-  // A part as large as the work bound allows: the default tree's 128² vertical part of k = 3 sample columns
-  // (6,836,352 units of 2,278,784 each with SP6a's cave terms, caps, island cap and wet roof, 81 % of PART_BUDGET: one
-  // sample column is 27 % of it; 4 of 1,736,704 with the island cap, 83 %; 5 of 1,652,224 with Task 8's caps, 98 %; 5 of
-  // 1,483,264 with Task 7's terms, 88 %; 14 of
-  // 589,568 with Task 6's terms, 78 of 106,240 before them, 79 since SP6a's root slots exceed PART_BUDGET), and
-  // partWorst's one 32-sample column (8,387,616 units, one sample ≈ 2 ms).
+  // A part as large as the work bound allows: the default tree's 128² vertical part of k = 30 sample columns under the
+  // corner memo's bound (SP6a §7.4, Task 13: 8,232,480 units of 274,416 each, 98 % of PART_BUDGET; 3 of 2,278,784
+  // without it, at Tasks 9-12; 78 of 106,240 before SP6a), and partWorst's one 32-sample column (330 leaves: 8,376,324
+  // units, 99.9 %; one sample ≈ 2 ms).
   const CASES: Array<[string, Params, FieldSliceSpec, number, number]> = [
-    ['the default tree, a 128² vertical part of 3 sample columns', DEFAULTS, vReq(MOUNTAIN, 'density', '', 128), 3, 0.81],
-    ['partWorst\'s tree at the part bound, one 32-sample column', partWorstParams(), vReq(MOUNTAIN, 'density', '', 32), 1, 0.98],
+    ['the default tree, a 128² vertical part of 30 sample columns', DEFAULTS, vReq(MOUNTAIN, 'density', '', 128), 30, 0.98],
+    ['partWorst\'s tree at the part bound, one 32-sample column', partWorstParams(), vReq(MOUNTAIN, 'density', '', 32), 1, 0.99],
   ];
 
   test.each(CASES)('%s: ABORTED within 50 ms of Atomics.store; the next epoch\'s part equals the in-process evaluation', { retry: 2, timeout: 120_000 }, async (_name, params, req, to, fill) => {

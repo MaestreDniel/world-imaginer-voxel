@@ -5,7 +5,7 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
 import { createGenContext, type GenContext } from '../../src/gen/context';
-import { workCost } from '../../src/gen/inspect/cost';
+import { memoWorkCost, workCost } from '../../src/gen/inspect/cost';
 import { createCornerSampler, evaluatedExpression, evaluateFieldSlice, horizontalCoord, sliceCostOf, type SliceGeometry } from '../../src/gen/inspect/fieldSlice';
 import { surfaceContextOf } from '../../src/gen/surface/context';
 import { validateParamTrees } from '../../src/gen/trees';
@@ -18,14 +18,14 @@ import { noiseSumTree, PART_WORST_LEAVES, partWorstParams } from '../harness/sli
  * The work bound's calibration (SP3d spec §5.2 "Calibration", §9 `slice.partWorst`).
  *
  * Always run: `slice.partWorst`'s tree (`test/harness/sliceTrees.ts`) — an `interpolated` `add` of PART_WORST_LEAVES
- * `noise detail` leaves at 16 octaves, double — passes tier 2, and 253 is the largest leaf count whose 32-sample vertical
- * column fits PART_BUDGET.
+ * `noise detail` leaves at 16 octaves, double — passes tier 2, and 330 is the largest leaf count whose 32-sample vertical
+ * column fits PART_BUDGET under the corner memo's bound (SP6a §7.4; 253 before it).
  *
  * Run on demand on a quiet machine (`SLICE_CALIBRATION=1 npx vitest run --project integration
  * test/integration/fieldSliceCalibration.test.ts`): one thread, in-process, p50 of 9 runs, each on a fresh GenContext
  * (cold caches: the case right after an edit). It measures the unit (ns per work unit of reference evaluation, the
  * ColumnSamples already cached) on the default tree and on partWorst's tree, the time of a part at PART_BUDGET (the
- * default's 128² vertical part of k = 78 sample columns, its 128² horizontal part at extent 8192 of k = 24 rows, and
+ * default's 128² vertical part of k = 30 sample columns, its 128² horizontal part at extent 512 of k = 8 rows, and
  * partWorst's one 32-sample column), and the three acquisition costs (a ColumnSample per chunk column along the mountain
  * line; a corner sample without and with steep at extent 8192, where no two samples share a corner) in units of the
  * default tree's unit. It prints `MEASUREMENT:` lines and fails — the spec's STOP — when a part at PART_BUDGET takes more
@@ -39,6 +39,8 @@ const PART_P50_MAX_MS = 250;
 
 /** A sample column's work cost per sample of partWorst's tree with L leaves: 1 + 8 × (L − 1 adds + 128 L). */
 const worstSampleCost = (leaves: number) => 1 + 8 * (leaves - 1 + 128 * leaves);
+/** Its 32-sample vertical column under the corner memo (SP6a §7.4): 1 per sample, L − 1 + 128 L at each of 196 corners. */
+const worstColumnCost = (leaves: number) => 32 * 1 + 196 * (leaves - 1 + 128 * leaves) + COLUMN_SAMPLE_COST;
 
 describe('slice.partWorst\'s tree (SP3d spec §9)', () => {
   test(`${PART_WORST_LEAVES} leaves: passes tier 2, and is the largest count whose 32-sample vertical column fits PART_BUDGET`, () => {
@@ -46,13 +48,14 @@ describe('slice.partWorst\'s tree (SP3d spec §9)', () => {
     expect(validateParamTrees(p)).toEqual([]);
     expect(p.density.noises.detail).toMatchObject({ octaves: 16, double: true });
     expect(workCost(evaluatedExpression(p, 'density', ''), p)).toBe(worstSampleCost(PART_WORST_LEAVES));
-    expect(worstSampleCost(PART_WORST_LEAVES)).toBe(261_089);
-    expect(sliceCostOf(p, 'density', '', 'vertical', 32)).toBe(32 * 261_089 + COLUMN_SAMPLE_COST);
-    expect(sliceCostOf(p, 'density', '', 'vertical', 32)).toBe(8_387_616);
+    expect(worstSampleCost(PART_WORST_LEAVES)).toBe(340_553);
+    expect(memoWorkCost(evaluatedExpression(p, 'density', ''), p)).toEqual({ voxel: 1, corner: 42_569 });
+    expect(sliceCostOf(p, 'density', '', 'vertical', 32)).toBe(worstColumnCost(PART_WORST_LEAVES));
+    expect(sliceCostOf(p, 'density', '', 'vertical', 32)).toBe(8_376_324);
     expect(sliceCostOf(p, 'density', '', 'vertical', 32)).toBeLessThanOrEqual(PART_BUDGET);
     const more = partWorstParams(PART_WORST_LEAVES + 1);
     expect(validateParamTrees(more)).toEqual([]);
-    expect(sliceCostOf(more, 'density', '', 'vertical', 32)).toBe(8_420_640);
+    expect(sliceCostOf(more, 'density', '', 'vertical', 32)).toBe(8_401_608);
     expect(sliceCostOf(more, 'density', '', 'vertical', 32)).toBeGreaterThan(PART_BUDGET);
   });
   test('the tree is a balanced add: its depth is ⌈log2 L⌉ adds under the interpolated', () => {
@@ -68,7 +71,7 @@ describe('slice.partWorst\'s tree (SP3d spec §9)', () => {
       if (next.length > 0) depth++;
       level = next;
     }
-    expect([leaves, depth]).toEqual([PART_WORST_LEAVES, 8]);
+    expect([leaves, depth]).toEqual([PART_WORST_LEAVES, 9]);
   });
 });
 
@@ -76,12 +79,12 @@ const now = () => Number(process.hrtime.bigint()) / 1e6;
 const p50 = (xs: number[]): number => [...xs].sort((a, b) => a - b)[(xs.length - 1) >> 1]!;
 const fresh = (params: Params): GenContext => createGenContext(seedFromInput('42'), params);
 const vertical = (n: number): SliceGeometry => ({ plane: 'vertical', n, pointAt: (i) => segmentPointAt(MOUNTAIN, i, n) });
-const HORIZONTAL_8192: SliceGeometry = { plane: 'horizontal', n: 128, cx: 0, cz: 0, y: 63, extent: 8192 };
+const HORIZONTAL_512: SliceGeometry = { plane: 'horizontal', n: 128, cx: 0, cz: 0, y: 63, extent: 512 };
 
 interface Part { readonly name: string; readonly params: Params; readonly geometry: SliceGeometry; readonly to: number }
 const PARTS: readonly Part[] = [
-  { name: 'default vertical 128² part [0, 78)', params: DEFAULTS, geometry: vertical(128), to: 78 },
-  { name: 'default horizontal 128² part at extent 8192 [0, 24)', params: DEFAULTS, geometry: HORIZONTAL_8192, to: 24 },
+  { name: 'default vertical 128² part [0, 30)', params: DEFAULTS, geometry: vertical(128), to: 30 },
+  { name: 'default horizontal 128² part at extent 512 [0, 8)', params: DEFAULTS, geometry: HORIZONTAL_512, to: 8 },
   { name: `partWorst (${PART_WORST_LEAVES} leaves) vertical 32² part [0, 1)`, params: partWorstParams(), geometry: vertical(32), to: 1 },
 ];
 
@@ -139,12 +142,14 @@ describe.runIf(CALIBRATE)('calibration of the work unit and the acquisition cost
     const partP50: Record<string, number> = {};
     for (const part of PARTS) {
       const runs = Array.from({ length: RUNS }, () => timePart(part));
-      const columnCost = sliceCostOf(part.params, 'density', '', part.geometry.plane, part.geometry.n);
-      const c = workCost(evaluatedExpression(part.params, 'density', ''), part.params);
+      const g = part.geometry;
+      const columnCost = sliceCostOf(part.params, 'density', '', g.plane, g.n, g.plane === 'horizontal' ? g.extent : undefined);
       const cold = p50(runs.map((r) => r.cold));
       partP50[part.name] = cold;
       lines.push(`${part.name}: ${part.to} × ${columnCost} = ${part.to * columnCost} units (${((100 * part.to * columnCost) / PART_BUDGET).toFixed(1)} % of PART_BUDGET), cold p50 ${cold.toFixed(1)} ms (min ${Math.min(...runs.map((r) => r.cold)).toFixed(1)}, max ${Math.max(...runs.map((r) => r.cold)).toFixed(1)})`);
-      if (part.geometry.plane === 'vertical') {
+      if (g.plane === 'vertical') {
+        // The evaluation's work per sample under the corner memo: the column cost less its acquisition, over n.
+        const c = (columnCost - COLUMN_SAMPLE_COST) / g.n;
         const warm = p50(runs.map((r) => r.warm));
         const evalUnits = part.to * part.geometry.n * c;
         units[part.name] = (warm * 1e6) / evalUnits;

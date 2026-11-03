@@ -62,7 +62,7 @@ const hReq = (field: SliceField, path = '', n = 32): FieldSliceSpec => ({ plane:
 const geometryOf = (r: FieldSliceSpec): SliceGeometry => (r.plane === 'vertical'
   ? { plane: 'vertical', n: r.n, pointAt: (i) => segmentPointAt(r, i, r.n) }
   : { plane: 'horizontal', n: r.n, cx: r.cx, cz: r.cz, y: r.y, extent: r.extent });
-const costOf = (r: FieldSliceSpec) => sliceCostOf(DEFAULTS, r.field, r.path, r.plane, r.n);
+const costOf = (r: FieldSliceSpec) => sliceCostOf(DEFAULTS, r.field, r.path, r.plane, r.n, r.plane === 'horizontal' ? r.extent : undefined);
 
 /** The whole slice evaluated in one piece in-process (the single-worker reference). */
 const single = (r: FieldSliceSpec): FieldSliceValues => {
@@ -87,12 +87,11 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
     const pool = createWorkerPool(size, () => fakeWorker(log));
     await pool.configure('42', DEFAULTS);
     for (const [name, req] of REQUESTS) {
-      // The real column cost within a budget that admits it (the draft budget, but for the default's density, whose 32²
-      // draft exceeds it since SP6a Task 9's wet roof, 594,272 per vertical sample column against 524,288, until Task 13's
-      // memo-aware bound, ruling R7), then a client cost PART_BUDGET / 4 (over a budget that admits it) that forces parts
-      // of 4 sample columns.
-      const draft = req.field === 'density' ? 2 ** 40 : DRAFT_BUDGET;
-      if (req.field === 'density' || req.field === 'node') expect([name, costOf(req) > DRAFT_BUDGET / 32]).toEqual([name, req.field === 'density']);
+      // The real column cost within the draft budget, which admits every 32² draft of the default since SP6a Task 13's
+      // memo-aware bound (rulings R7, R9: 257,232 per vertical sample column, 356,960 per horizontal row, against
+      // 524,288), then a client cost PART_BUDGET / 4 (over a budget that admits it) that forces parts of 4 sample columns.
+      const draft = DRAFT_BUDGET;
+      if (req.field === 'density' || req.field === 'node') expect([name, costOf(req) > DRAFT_BUDGET / 32]).toEqual([name, false]);
       for (const [columnCost, budget] of [[costOf(req), draft], [req.field === 'density' || req.field === 'node' ? PART_BUDGET / 4 : null, 2 ** 40]] as const) {
         if (columnCost === null) continue;
         log.length = 0;
@@ -108,19 +107,23 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
     }
     pool.terminate();
   }, 120_000);
-  test('a 128² vertical density slice at the defaults: refused by REQUEST_BUDGET since SP6a Task 7 (2,278,784 per sample column since Task 9\'s wet roof, limit 1,048,576); under a budget admitting it, 43 parts of at most k = 3 sample columns on 6 workers (32 of k = 4 with the island cap, 26 of k = 5 with Task 7\'s and 8\'s, 10 parts of k = 14 with Task 6\'s cave terms, 6 of k = 78 before)', async () => {
+  test('a 128² vertical density slice at the defaults: admitted by REQUEST_BUDGET since SP6a Task 13\'s memo-aware bound (274,416 per sample column, limit 1,048,576; 2,278,784 and refused at Tasks 7-12), 6 parts on 6 workers, k = 30 sample columns (6 of k = 78 before SP6a)', async () => {
     const log: ToWorker[] = [];
     const pool = createWorkerPool(6, () => fakeWorker(log));
     await pool.configure('42', DEFAULTS);
     const req = vReq(MOUNTAIN, 'density', '', 128);
-    expect(costOf(req)).toBe(2_278_784);
-    const e = await settle(pool.fieldSlice(req, { priority: 500, columnCost: costOf(req), budget: REQUEST_BUDGET }).promise);
-    expect([e instanceof SliceTooHeavy, (e as SliceTooHeavy).limit, log.filter((m) => m.type === 'fieldSlice').length]).toEqual([true, 1_048_576, 0]);
-    const r = await pool.fieldSlice(req, { priority: 500, columnCost: costOf(req), budget: 2 ** 40 }).promise;
+    expect(costOf(req)).toBe(274_416);
+    const plan = planFieldSlice(128, costOf(req), 6, REQUEST_BUDGET);
+    if (plan.refused) throw new Error('refused');
+    expect(plan.k).toBe(30);
+    const r = await pool.fieldSlice(req, { priority: 500, columnCost: costOf(req), budget: REQUEST_BUDGET }).promise;
     const parts = partsOf(log);
-    expect(parts.length).toBe(43);
-    expect(Math.max(...parts.map(([a, b]) => b - a))).toBe(3);
-    expect(parts).toEqual(Array.from({ length: 43 }, (_, i) => [Math.floor((i * 128) / 43), Math.floor(((i + 1) * 128) / 43)]));
+    expect(parts.length).toBe(6);
+    expect(parts).toEqual(Array.from({ length: 6 }, (_, i) => [Math.floor((i * 128) / 6), Math.floor(((i + 1) * 128) / 6)]));
+    // A budget below it refuses it before any job.
+    log.length = 0;
+    const e = await settle(pool.fieldSlice(req, { priority: 500, columnCost: costOf(req), budget: 128 * 274_415 }).promise);
+    expect([e instanceof SliceTooHeavy, (e as SliceTooHeavy).limit, log.filter((m) => m.type === 'fieldSlice').length]).toEqual([true, 274_415, 0]);
     expect(bytes(r.values).equals(bytes(single(req).values))).toBe(true);
     pool.terminate();
   }, 120_000);
@@ -162,7 +165,7 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
   test('the worker\'s bound check refuses a client column cost below its own (BAD_ARGS, too heavy), and a bad request rejects with its BAD_ARGS', async () => {
     const pool = createWorkerPool(1, () => fakeWorker([]));
     await pool.configure('42', DEFAULTS);
-    await expect(pool.fieldSlice(vReq(MOUNTAIN, 'density', '', 128), { priority: 500, columnCost: 1, budget: REQUEST_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: too heavy: 128 × 2278784/);
+    await expect(pool.fieldSlice(vReq(MOUNTAIN, 'density', '', 128), { priority: 500, columnCost: 1, budget: REQUEST_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: too heavy: 128 × 274416/);
     await expect(pool.fieldSlice(vReq(MOUNTAIN, 'node', 'root.nope'), { priority: 500, columnCost: 1, budget: DRAFT_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: path "root.nope" names no node/);
     await expect(pool.fieldSlice(hReq('blocks'), { priority: 500, columnCost: 1, budget: DRAFT_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: field blocks has no horizontal slice/);
     pool.terminate();

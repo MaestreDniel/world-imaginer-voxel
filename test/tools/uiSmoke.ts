@@ -45,10 +45,12 @@
  *     row selected there, then the JSON sub-tab: the node's highlighted text is inside the editor's view (§3.2, the
  *     scroll owed while the text was hidden), and stays there across a Slice/JSON switch;
  *   - density horizontal: the horizontal plane; a map click moves its centre (the square's centre cross follows on the
- *     map, a fresh slice arrives); a cut line drawn while Density is shown keeps it shown;
+ *     map, a fresh draft arrives: the default tree's 128² horizontal slice at 2048 is refused by the work bound, SP6a
+ *     §7.4, so the 32² draft stays with the notice); a cut line drawn while Density is shown keeps it shown;
  *   - density drag: the biome-size slider dragged 5 → 6, held, → 7: at least one 32² draft is drawn during the drag;
- *   - density times: the browser wall times of the vertical 128² slice and of the horizontal one at extent 8192 (a
- *     control change, and three tree edits each, to the fresh 128²), and the URL length;
+ *   - density times: the browser wall times of the vertical 128² slice (a control change, and three tree edits, to the
+ *     fresh 128²) and of the horizontal plane at extent 8192 (the same, to the fresh 32² draft and its refusal notice),
+ *     and the URL length;
  * - preset profiles (SP3e spec §8): archipelago, amplified and floating_islands, each opened by URL
  *   (`mapHash({...START, profile, view})`) on its 1,024-block line along x centred on its golden window's centre
  *   (`sp3eWindow`, seed 42; the review slice is the line's middle half): the profile select shows it among the five
@@ -1626,6 +1628,16 @@ class Page {
     return `document.querySelector('.sv > .sv-status').textContent === ${JSON.stringify(`${n}²`)} && (${extra})`;
   }
 
+  /**
+   * The page expression "the slice view shows the fresh 32² draft with nothing in flight and the full slice's refusal
+   * notice", and `extra`: what the default tree gets on a horizontal plane from extent 1024, whose 128² samples share no
+   * corner, so the work bound refuses its 128² slice (SP6a §7.4, rulings R7 (d) and R9 (4)); its vertical planes and its
+   * horizontal ones at 256 and 512 get the 128² slice (`fresh(128)`).
+   */
+  static draftRefused(extra = 'true'): string {
+    return `${Page.fresh(32, extra)} && document.querySelector('.sv > .sv-notice').textContent.startsWith(${JSON.stringify(`node too heavy for a 128² slice`)})`;
+  }
+
   slice(): Promise<SliceRead> { return this.eval('__wiSmoke.slice()'); }
   choose(selector: string, value: string): Promise<boolean> { return this.eval(`__wiSmoke.choose(${JSON.stringify(selector)}, ${JSON.stringify(value)})`); }
 
@@ -2219,7 +2231,9 @@ async function runDensity(t: Smoke): Promise<void> {
   t.step('density horizontal: the horizontal plane, a map click moves its centre, a cut line drawn with Density shown');
   await p.choose(SV_PLANE, 'horizontal');
   const sq0 = squareLabels(Math.floor(mv.x), Math.floor(mv.z), 2048);
-  await p.until(Page.fresh(128, `document.querySelector('.sv > .sv-body > .sv-ends > span').textContent === ${JSON.stringify(sq0.left)}`), 'a fresh horizontal slice at the view centre');
+  // The default tree's horizontal 128² slice at extent 2048 is refused by the work bound (SP6a §7.4): its 32² draft and the notice.
+  await p.until(Page.draftRefused(`document.querySelector('.sv > .sv-body > .sv-ends > span').textContent === ${JSON.stringify(sq0.left)}`), 'the horizontal draft and its notice at the view centre');
+  t.check(true, `the horizontal plane at 2048: ${(await p.slice()).status} · ${(await p.slice()).notice}`);
   t.check(sameJson(sliceLabels(await p.slice()), sq0), `the square of 2048 at the view's centre (${Math.floor(mv.x)}, ${Math.floor(mv.z)})`, sliceLabels(await p.slice()));
   const mapBox = await p.eval<{ x: number; y: number; width: number; height: number }>(`(() => { const c = document.querySelector('.map-canvas'); const r = c.getBoundingClientRect(); return { x: r.left, y: r.top, width: c.width, height: c.height }; })()`);
   const mid = [mapBox.x + mapBox.width / 2, mapBox.y + mapBox.height / 2] as const;
@@ -2233,8 +2247,8 @@ async function runDensity(t: Smoke): Promise<void> {
   const centre = clickCentre(mv, mapBox, click[0], click[1], 2048);
   const sq1 = squareLabels(centre[0], centre[1], 2048);
   await p.clickAt(click[0], click[1]);
-  await p.until(Page.fresh(128, `document.querySelector('.sv > .sv-body > .sv-ends > span').textContent === ${JSON.stringify(sq1.left)}`), 'a fresh slice at the clicked centre');
-  t.check(sameJson(sliceLabels(await p.slice()), sq1), `the click moves the centre to (${centre[0]}, ${centre[1]}) and a fresh 128² slice arrives`, sliceLabels(await p.slice()));
+  await p.until(Page.draftRefused(`document.querySelector('.sv > .sv-body > .sv-ends > span').textContent === ${JSON.stringify(sq1.left)}`), 'the draft at the clicked centre');
+  t.check(sameJson(sliceLabels(await p.slice()), sq1), `the click moves the centre to (${centre[0]}, ${centre[1]}) and a fresh draft arrives`, sliceLabels(await p.slice()));
   await sleep(300);
   const crossNew = await cross(click[0], click[1]);
   const crossOld = await cross(mid[0], mid[1]);
@@ -2277,38 +2291,43 @@ async function runDensity(t: Smoke): Promise<void> {
   const during = (await p.eval<Array<{ t: number; n: number }>>('__wiSmoke.draws()')).filter((d) => d.t > pressedAt && d.t < releasedAt);
   t.check(sameJson(patchOf(s6), { climate: { scaleMul: SIZE_7 } }), `the patch gains climate.scaleMul ${SIZE_7}`, s6.patch);
   t.check(during.some((d) => d.n === 32), `drafts drawn during the drag: ${during.filter((d) => d.n === 32).length} of 32², ${during.filter((d) => d.n === 128).length} of 128²${draftAt === null ? '' : `; the first draft ${Math.round(draftAt - at6)} ms after the slider reached 6`}`, during);
-  await p.until(Page.fresh(128), 'a fresh slice after the drag');
+  await p.until(Page.draftRefused(), 'a fresh horizontal draft after the drag');
 
   t.step('density times: the URL length and the browser wall times of the 128² slices');
   const workers = /workers (\d+)/.exec(await p.eval<string>('__wiSmoke.world()'))?.[1] ?? '?';
   await p.click(`${ROW('root.b.x')} .it-node`);
-  /** The time from a control change to the fresh 128² slice (the draft first), in the page's clock. */
-  const timeChange = async (selector: string, value: string, extra: string): Promise<number> => {
+  /**
+   * What the default tree's slice ends at: the fresh 128² slice (the draft first) on a vertical plane; on the horizontal
+   * one at 2048 and 8192, the fresh 32² draft with the 128² slice's refusal notice (SP6a §7.4, rulings R7 (d), R9 (4)).
+   */
+  const settledOn = (plane: 'vertical' | 'horizontal', extra = 'true'): string => (plane === 'vertical' ? Page.fresh(128, extra) : Page.draftRefused(extra));
+  /** The time from a control change to the plane's settled slice, in the page's clock. */
+  const timeChange = async (plane: 'vertical' | 'horizontal', selector: string, value: string, extra: string): Promise<number> => {
     const t0 = await p.eval<number>(`(() => { const t0 = performance.now(); __wiSmoke.choose(${JSON.stringify(selector)}, ${JSON.stringify(value)}); return t0; })()`);
-    return (await p.untilAt(Page.fresh(128, extra), `a fresh 128² slice after ${selector} = ${value}`)) - t0;
+    return (await p.untilAt(settledOn(plane, extra), `the settled ${plane} slice after ${selector} = ${value}`)) - t0;
   };
-  /** The time from a typed islands value (Enter) to the fresh 128² slice of the new session epoch. */
-  const timeEdit = async (v: string): Promise<number> => {
+  /** The time from a typed islands value (Enter) to the plane's settled slice of the new session epoch. */
+  const timeEdit = async (plane: 'vertical' | 'horizontal', v: string): Promise<number> => {
     await p.typeInto(FORM_V, v);
     const t0 = await p.now();
     await p.enter();
-    await p.until(`!(${Page.fresh(128)})`, 'the slice going stale after the edit', 5000);
-    return (await p.untilAt(Page.fresh(128), `a fresh 128² slice after islands ${v}`)) - t0;
+    await p.until(`!(${settledOn(plane)})`, 'the slice going stale after the edit', 5000);
+    return (await p.untilAt(settledOn(plane), `the settled ${plane} slice after islands ${v}`)) - t0;
   };
   // The vertical slice on the mountain line again (the line of the bench's slice.vertical128), drawn with Density shown.
   await drawMountainLine(p);
   const mountain = await p.eval<string>(`document.querySelector('.cs-line').textContent`);
   t.check(await p.eval<boolean>(DENSITY_SHOWN) && mountain.startsWith(`A (${a[0]}, ${a[1]}) → B (${b[0]}, ${b[1]})`), `the mountain line again: ${mountain}`, mountain);
-  const vSwitch = await timeChange(SV_PLANE, 'vertical', `document.querySelector('.sv > .sv-body > .sv-ends > span').textContent === ${JSON.stringify(`A (${a[0]}, ${a[1]})`)}`);
+  const vSwitch = await timeChange('vertical', SV_PLANE, 'vertical', `document.querySelector('.sv > .sv-body > .sv-ends > span').textContent === ${JSON.stringify(`A (${a[0]}, ${a[1]})`)}`);
   const vEdits: number[] = [];
-  for (const v of ['-999999', '-1000000', '-999999']) vEdits.push(await timeEdit(v));
+  for (const v of ['-999999', '-1000000', '-999999']) vEdits.push(await timeEdit('vertical', v));
   await p.choose(SV_PLANE, 'horizontal');
-  await p.until(Page.fresh(128), 'a fresh horizontal slice');
+  await p.until(settledOn('horizontal'), 'the horizontal draft and its notice');
   const sq8 = squareLabels(centre[0], centre[1], 8192);
-  const hSwitch = await timeChange(SV_EXTENT, '8192', `document.querySelector('.sv > .sv-body > .sv-ends > span').textContent === ${JSON.stringify(sq8.left)}`);
+  const hSwitch = await timeChange('horizontal', SV_EXTENT, '8192', `document.querySelector('.sv > .sv-body > .sv-ends > span').textContent === ${JSON.stringify(sq8.left)}`);
   const hEdits: number[] = [];
-  for (const v of ['-1000000', '-999999', '-1000000']) hEdits.push(await timeEdit(v));
-  t.check(true, `browser wall times with ${workers} workers, change → fresh 128² (32² draft first, frame-polled): vertical along ${mountain}: plane switch ${Math.round(vSwitch)} ms, after an edit ${timesText(vEdits)}; horizontal extent 8192 at (${centre[0]}, ${centre[1]}): extent switch ${Math.round(hSwitch)} ms, after an edit ${timesText(hEdits)}`);
+  for (const v of ['-1000000', '-999999', '-1000000']) hEdits.push(await timeEdit('horizontal', v));
+  t.check(true, `browser wall times with ${workers} workers, frame-polled: vertical along ${mountain}, change → fresh 128² (32² draft first): plane switch ${Math.round(vSwitch)} ms, after an edit ${timesText(vEdits)}; horizontal extent 8192 at (${centre[0]}, ${centre[1]}), change → the 32² draft and the 128² refusal notice (the default's 128² samples there share no corner): extent switch ${Math.round(hSwitch)} ms, after an edit ${timesText(hEdits)}`);
   // The page writes the URL 200 ms after the last change.
   await sleep(600);
   const href7 = await p.eval<string>('location.href');
@@ -4918,7 +4937,8 @@ async function runShots(p: Page, dir: string): Promise<string[]> {
   await p.click(`${ROW('root')} .it-node`);
   await p.choose(SV_PLANE, 'horizontal');
   await p.choose(SV_EXTENT, '8192');
-  await p.until(Page.fresh(128, `document.querySelector('.sv > .sv-body > .sv-ends > span').textContent === 'x -5248'`), 'a fresh horizontal slice at extent 8192');
+  // The default's horizontal 128² slice at 8192 is refused by the work bound (SP6a §7.4): its 32² draft is shown.
+  await p.until(Page.draftRefused(`document.querySelector('.sv > .sv-body > .sv-ends > span').textContent === 'x -5248'`), 'the horizontal draft at extent 8192');
   const hh = await hoverSlice(p, 0.5, 0.5, false);
   console.log(`  horizontal hover: ${hh?.readout ?? '-'} | ${hh?.hover ?? '-'}`);
   await sleep(500);

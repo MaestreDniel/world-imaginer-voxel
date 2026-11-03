@@ -17,7 +17,8 @@
  * voxels), and an expression that reads one takes full samples instead.
  *
  * Fields (§4.1): `density` (the resolved tree's root) and `node` (§3.4's evaluated expression of a density node,
- * `resolveDensityNode`) by the reference evaluator, on both planes; `blocks` (the T stage's state and fluid, read from
+ * `resolveDensityNode`) by the reference evaluator, on both planes, with one corner memo per part (SP6a spec §7.4: each
+ * interpolated node's child and each def evaluated once per corner of a column the part reads; bit-identical); `blocks` (the T stage's state and fluid, read from
  * an injected T-column source, since gen cannot reach the worker's store) and `rule` (1 when the voxel's rule path
  * passes through the selected rule, or the selected condition holds there; 0 otherwise; `SLICE_RULE_NA` on voxels the
  * rules never evaluate) on vertical planes only. A part covers the sample columns [from, to) and holds each sample
@@ -26,8 +27,8 @@
  * samples equal bit for bit), polling `stop()` before acquiring its column and before evaluating. The DensityReferences
  * are memoised per GenContext: one for `density`, and an LRU of 8 node paths for `node`.
  *
- * `evaluatedExpression` and `sliceCostOf` give the work bound's column cost (§5.2) from params alone, for the UI and
- * the worker alike; they live here rather than in `cost.ts`, which `gen/density/source.ts` imports (tier 2's costs)
+ * `evaluatedExpression` and `sliceCostOf` give the work bound's column cost (§5.2) from params and the plane's geometry
+ * (n, and a horizontal square's extent) alone, for the UI and the worker alike; they live here rather than in `cost.ts`, which `gen/density/source.ts` imports (tier 2's costs)
  * while they need source.ts's resolvers.
  *
  * Follows the gen determinism rules; every lookup keyed by tree content is own-property only.
@@ -42,12 +43,12 @@ import { newPointRecord, samplePoint, type ColumnPoint, type PointRecord } from 
 import { buildCornerSample, newColumnSample, type ColumnSample, type SampleField } from '../column/columnStage';
 import type { GenContext } from '../context';
 import { EXPR_CHILD_KEYS, type DensityExpr, type Expr } from '../density/expr';
-import { createDensityReference, type DensityReference } from '../density/reference';
+import { createCornerMemo, createDensityReference, type DensityReference } from '../density/reference';
 import { resolveDensity, resolveDensityNode } from '../density/source';
 import { surfaceContextOf, type SurfaceContext, type SurfaceProbeColumn } from '../surface/context';
 import { surfaceProbeColumn } from '../surface/probe';
 import type { RuleNodeRef } from '../surface/reference';
-import { ruleNodeCount, tColumnCost, workCost } from './cost';
+import { memoWorkCost, ruleNodeCount, tColumnCost } from './cost';
 
 const HEIGHT_ = HEIGHT;
 const MIN_Y_ = MIN_Y;
@@ -66,11 +67,12 @@ const CORNER_COST = CORNER_SAMPLE_COST;
 const STEEP_COST = CORNER_STEEP_COST;
 const RULE_NA = SLICE_RULE_NA;
 const REFERENCE = createDensityReference;
+const CORNER_MEMO = createCornerMemo;
 const RESOLVE = resolveDensity;
 const RESOLVE_NODE = resolveDensityNode;
 const SURFACE_CONTEXT = surfaceContextOf;
 const PROBE_COLUMN = surfaceProbeColumn;
-const WORK_COST = workCost;
+const MEMO_WORK = memoWorkCost;
 const T_COLUMN_COST = tColumnCost;
 const RULE_NODES = ruleNodeCount;
 
@@ -411,6 +413,7 @@ export function evaluateFieldSlice(ctx: GenContext, req: FieldSliceRequest, stop
     const { ref, sampling } = field === 'density' ? densityEntry(ctx) : nodeEntry(ctx, path);
     const values = new Float64Array(size);
     const columns = sc.density.columns;
+    const memo = CORNER_MEMO();
     if (g.plane === 'vertical') {
       for (let c = from; c < to; c++) {
         const [x, , z] = sliceSampleVoxel(g, c, 0);
@@ -418,7 +421,7 @@ export function evaluateFieldSlice(ctx: GenContext, req: FieldSliceRequest, stop
         const base = (c - from) * n;
         for (let k = 0; k < n; k++) {
           if (stop()) return null;
-          values[base + k] = ref.voxel(s, x, ys[k]!, z);
+          values[base + k] = ref.voxel(s, x, ys[k]!, z, undefined, memo);
         }
       }
     } else {
@@ -431,7 +434,7 @@ export function evaluateFieldSlice(ctx: GenContext, req: FieldSliceRequest, stop
           if (stop()) return null;
           const x = xs[k]!;
           const s = sampler === null ? columns.get(x >> 4, z >> 4) : sampler.sample(x, z);
-          values[base + k] = ref.voxel(s, x, y, z);
+          values[base + k] = ref.voxel(s, x, y, z, undefined, memo);
         }
       }
     }
@@ -519,26 +522,73 @@ export function evaluatedExpression(params: Params, field: 'density' | 'node', p
   return field === 'density' ? RESOLVE(params.density.defs, params) : RESOLVE_NODE(params.density.defs, path, params);
 }
 
+/** The corner layers k (cellY and cellY + 1) a vertical plane's n rows read: 49 at n = 128 and at 32. */
+function rowLayers(n: number): number {
+  const layers = new Set<number>();
+  for (let r = 0; r < n; r++) {
+    const ck = (sliceRowY(r, n) + 64) >> 3;
+    layers.add(ck);
+    layers.add(ck + 1);
+  }
+  return layers.size;
+}
+
 /**
- * The work-bound cost of one sample column of a slice (§5.2): n × (c + perSample) + perColumn, saturating at 2^31.
- * `density` / `node`: c = the evaluated expression's work cost (`workCost`); vertical perColumn `COLUMN_SAMPLE_COST`;
- * horizontal perSample `CORNER_SAMPLE_COST`, `CORNER_STEEP_COST` when the expression reads `col steep`, or
- * `COLUMN_SAMPLE_COST` when it takes full samples. `blocks`: perColumn one T column (`tColumnCost`); `rule`: the same
- * plus n × the rule tree's node count. The UI passes it to the pool and the worker recomputes it from its configured
- * params. Throws a RangeError for n ∉ SLICE_NS or `blocks` / `rule` on a horizontal plane, and as
+ * The most distinct (chunk column, corner i) pairs a horizontal row of n samples on a square of side `extent` reads,
+ * over every alignment of the square to the chunk grid (its west edge mod 16): each sample reads corners ci and
+ * ci + 1 of its chunk column. 2n when no two samples share a corner (E / n ≥ 8), fewer below.
+ */
+function rowCornersXZ(extent: number, n: number): number {
+  let most = 0;
+  for (let o = 0; o < 16; o++) {
+    const keys = new Set<number>();
+    for (let i = 0; i < n; i++) {
+      const x = o + Math.floor(((2 * i + 1) * extent) / (2 * n));
+      const key = (x >> 4) * 8 + ((x & 15) >> 2);
+      keys.add(key);
+      keys.add(key + 1);
+    }
+    if (keys.size > most) most = keys.size;
+  }
+  return most;
+}
+
+/**
+ * The distinct corners one sample column of a slice reads (SP6a spec §7.4: the corner memo evaluates each once per part):
+ * vertical, the 4 corners of its cell column at each corner layer its n rows read (`rowLayers`); horizontal, the row's
+ * (chunk column, i) pairs (`rowCornersXZ`) × its 2 corner rows j × 2 corner layers k. At most 8n (no sharing).
+ * Corners shared with the part's other sample columns are counted in each, so the sum bounds the part's.
+ */
+export function sliceColumnCorners(plane: SliceGeometry['plane'], n: number, extent?: number): number {
+  checkN(n);
+  if (plane === 'vertical') return 4 * rowLayers(n);
+  if (plane !== 'horizontal') throw new RangeError(`sliceColumnCorners: unknown plane ${JSON.stringify(plane)}`);
+  const e = extentProblem(extent ?? Number.NaN);
+  if (e !== null) throw new RangeError(`sliceColumnCorners: ${e}`);
+  return 4 * rowCornersXZ(extent!, n);
+}
+
+/**
+ * The work-bound cost of one sample column of a slice (§5.2): its evaluation plus its acquisition, saturating at 2^31.
+ * `density` / `node`: the evaluated expression's `memoWorkCost` (SP6a spec §7.4, the reference's corner memo),
+ * n × voxel + K × corner with K = `sliceColumnCorners(plane, n, extent)`, so each def and each interpolated child is
+ * counted once per distinct corner the sample column reads; the acquisition, vertical `COLUMN_SAMPLE_COST` per column,
+ * horizontal n × `CORNER_SAMPLE_COST`, `CORNER_STEEP_COST` when the expression reads `col steep`, or `COLUMN_SAMPLE_COST`
+ * when it takes full samples (`sliceAcquisitionCost`). `blocks`: one T column (`tColumnCost`); `rule`: the same plus
+ * n × the rule tree's node count. The UI passes it to the pool and the worker recomputes it from its configured params.
+ * `extent` is the horizontal square's side (ignored on a vertical plane). Throws a RangeError for n ∉ SLICE_NS, a
+ * horizontal density or node slice without an extent of SLICE_EXTENTS, `blocks` / `rule` on a horizontal plane, and as
  * `evaluatedExpression` for a bad node path.
  */
-export function sliceCostOf(params: Params, field: SliceField, path: string, plane: SliceGeometry['plane'], n: number): number {
+export function sliceCostOf(params: Params, field: SliceField, path: string, plane: SliceGeometry['plane'], n: number, extent?: number): number {
   checkN(n);
   if (plane !== 'vertical' && plane !== 'horizontal') throw new RangeError(`sliceCostOf: unknown plane ${JSON.stringify(plane)}`);
   switch (field) {
     case 'density': case 'node': {
       const e = evaluatedExpression(params, field, path);
-      const c = WORK_COST(e, params);
-      if (plane === 'vertical') return satCost(satCost(n * c) + COLUMN_COST);
-      const mode = horizontalSampling(e);
-      const per = mode === 'full' ? COLUMN_COST : mode === 'cornerSteep' ? STEEP_COST : CORNER_COST;
-      return satCost(n * (c + per));
+      const w = MEMO_WORK(e, params);
+      const k = sliceColumnCorners(plane, n, extent);
+      return satCost(satCost(satCost(n * w.voxel) + satCost(k * w.corner)) + acquisitionOf(e, plane, n));
     }
     case 'blocks': case 'rule': {
       if (plane !== 'vertical') throw new RangeError(`sliceCostOf: field ${field} has no ${plane} slice`);
@@ -548,4 +598,21 @@ export function sliceCostOf(params: Params, field: SliceField, path: string, pla
     default:
       throw new RangeError(`sliceCostOf: unknown field ${JSON.stringify(field)}`);
   }
+}
+
+/** A density or node sample column's acquisition cost (§5.2): see `sliceCostOf`. */
+function acquisitionOf(e: DensityExpr, plane: SliceGeometry['plane'], n: number): number {
+  if (plane === 'vertical') return COLUMN_COST;
+  const mode = horizontalSampling(e);
+  return satCost(n * (mode === 'full' ? COLUMN_COST : mode === 'cornerSteep' ? STEEP_COST : CORNER_COST));
+}
+
+/**
+ * The acquisition part of a density or node slice's column cost (`sliceCostOf`): vertical `COLUMN_SAMPLE_COST`;
+ * horizontal n × the per-sample corner or full sample cost. Throws as `sliceCostOf`.
+ */
+export function sliceAcquisitionCost(params: Params, field: 'density' | 'node', path: string, plane: SliceGeometry['plane'], n: number): number {
+  checkN(n);
+  if (plane !== 'vertical' && plane !== 'horizontal') throw new RangeError(`sliceAcquisitionCost: unknown plane ${JSON.stringify(plane)}`);
+  return acquisitionOf(evaluatedExpression(params, field, path), plane, n);
 }

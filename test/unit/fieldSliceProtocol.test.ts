@@ -140,9 +140,10 @@ describe('planFieldSlice: the one split and refusal math (SP3d spec §5.2, P3)',
     const steep = (n: number, c: number) => n * (c + CORNER_STEEP_COST);
     const p = paramsWith({ density: { defs: steepTree() } } as never);
     expect(workCost(evaluatedExpression(p, 'density', ''), p)).toBe(576);
-    const full = accepted(planFieldSlice(128, sliceCostOf(p, 'density', '', 'horizontal', 128), 4, REQUEST_BUDGET));
-    expect([sliceCostOf(p, 'density', '', 'horizontal', 128), full.k, full.ranges.length]).toEqual([steep(128, 576), 11, 12]);
-    expect(accepted(planFieldSlice(32, sliceCostOf(p, 'node', 'root.b', 'horizontal', 32), 4, DRAFT_BUDGET)).ranges.length).toBe(4);
+    // At extent 8192 no two samples share a corner, so the memo-aware column cost (SP6a §7.4) is n × (576 + CORNER_STEEP_COST).
+    const full = accepted(planFieldSlice(128, sliceCostOf(p, 'density', '', 'horizontal', 128, 8192), 4, REQUEST_BUDGET));
+    expect([sliceCostOf(p, 'density', '', 'horizontal', 128, 8192), full.k, full.ranges.length]).toEqual([steep(128, 576), 11, 12]);
+    expect(accepted(planFieldSlice(32, sliceCostOf(p, 'node', 'root.b', 'horizontal', 32, 8192), 4, DRAFT_BUDGET)).ranges.length).toBe(4);
     // The steep refusal limits: 3,072 per sample for a 128² slice, 11,264 for a draft; above them the limit is planFieldSlice's.
     for (const [n, budget, c] of [[128, REQUEST_BUDGET, 3072], [32, DRAFT_BUDGET, 11_264]] as const) {
       expect(planFieldSlice(n, steep(n, c), 6, budget).refused, `${n} c ${c}`).toBe(false);

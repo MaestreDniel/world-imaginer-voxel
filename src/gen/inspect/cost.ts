@@ -7,6 +7,9 @@
  * - `workCost(expr, params)`: the structural cost of an evaluated expression with every `noise` / `noise2` (and SP6a's
  *   `noiseScaled`, its spec §1.5) weighted 4 × octaves × (double ? 2 : 1) of its configured `density.noises.<id>` leaf,
  *   else its `caves.noises.<id>` leaf (SP6a spec §1.5) (§5.2).
+ * - `memoWorkCost(expr, params)` (SP6a spec §7.4): `workCost` split for the slice reference's corner memo, the voxel
+ *   part of one sample (every `interpolated` node costing 1, its child left to the corners) and the corner part of one
+ *   memoised corner (each distinct `interpolated` node's child and each def reachable at corner placement once).
  * - `densityColumnCost(source)`: the source structure with mutes applied and refs expanded (no value is read), every
  *   noise at its static maximum weight (16 octaves, double), every node at voxel placement counted 98,304 times (a
  *   chunk column) and every node under `interpolated` 1,225 times (25 × 49 quart corners).
@@ -198,6 +201,73 @@ export function workCost(expr: unknown, params: Params): number {
     mutes: false,
   };
   return treeCost(Object.hasOwn(expr, 'root') ? expr['root'] : undefined, Object.hasOwn(expr, 'defs') ? expr['defs'] : undefined, model);
+}
+
+/** `memoWorkCost`'s parts: one sample's voxel work and one memoised corner's work. */
+export interface MemoWork {
+  readonly voxel: number;
+  readonly corner: number;
+}
+
+/**
+ * The work of the evaluated expression `expr` = {root, defs} under the slice reference's corner memo (SP6a spec §7.4),
+ * with `workCost`'s weights (noise leaves, mutes ignored), saturating at 2^31:
+ * - `voxel`: one sample's work at voxel placement, `workCost` with every `interpolated` node costing 1 and its child
+ *   nothing (refs expanded per read, as the reference walks them);
+ * - `corner`: one memoised corner's work, the child of each distinct `interpolated` node (by identity) reachable at
+ *   voxel placement plus each def reachable from them at corner placement, every one counted once (a `ref` there costs
+ *   nothing beyond its def's single count; a ref to a missing def costs 1, as in `workCost`).
+ * A sample column whose samples read K distinct corners costs at most n × voxel + K × corner (`sliceCostOf`), never
+ * more than `workCost`'s n × (voxel + 8 × the children's expanded cost). The default root: 179 per sample and 1,116
+ * per corner at the default noises (`workCost` 17,547 = 179 + 8 × 2,171: the CSE of its defs at a corner).
+ */
+export function memoWorkCost(expr: unknown, params: Params): MemoWork {
+  if (!isRec(expr)) return { voxel: 0, corner: 0 };
+  const root = Object.hasOwn(expr, 'root') ? expr['root'] : undefined;
+  const defs = Object.hasOwn(expr, 'defs') ? expr['defs'] : undefined;
+  const weigh = (n: Rec, op: string | undefined): number => (isNoise(op) ? noiseWeight(params, n['id']) : 1);
+  const voxel = treeCost(root, defs, { own: weigh, factor: (op) => (op === 'interpolated' ? 0 : 1), mutes: false });
+  const hasDef = (name: unknown): name is string => typeof name === 'string' && isRec(defs) && Object.hasOwn(defs, name);
+  const defOf = (name: string): unknown => (defs as Rec)[name];
+  // The distinct interpolated nodes reachable at voxel placement (through refs, each def entered once).
+  const nodes = new Set<Rec>();
+  const entered = new Set<string>();
+  const stack: unknown[] = [root];
+  while (stack.length > 0) {
+    const v = stack.pop();
+    if (!isRec(v)) continue;
+    const op = opOf(v);
+    if (op === 'interpolated') { nodes.add(v); continue; }
+    if (op === 'ref') {
+      const name = v['name'];
+      if (hasDef(name) && !entered.has(name)) { entered.add(name); stack.push(defOf(name)); }
+      continue;
+    }
+    for (const k of (op === undefined ? undefined : CHILD_KEYS.get(op)) ?? NO_KEYS) if (Object.hasOwn(v, k)) stack.push(v[k]);
+  }
+  // Each node's child, then each def met at corner placement, walked once; refs queue their def.
+  let corner = 0;
+  const queued = new Set<string>();
+  const defsToCost: string[] = [];
+  const walk = (start: unknown): void => {
+    const st: unknown[] = [start];
+    while (st.length > 0) {
+      const v = st.pop();
+      if (!isRec(v)) continue;
+      const op = opOf(v);
+      if (op === 'ref') {
+        const name = v['name'];
+        if (!hasDef(name)) corner = sat(corner + weigh(v, op));
+        else if (!queued.has(name)) { queued.add(name); defsToCost.push(name); }
+        continue;
+      }
+      corner = sat(corner + weigh(v, op));
+      for (const k of (op === undefined ? undefined : CHILD_KEYS.get(op)) ?? NO_KEYS) if (Object.hasOwn(v, k)) st.push(v[k]);
+    }
+  };
+  for (const node of nodes) walk(Object.hasOwn(node, 'x') ? node['x'] : undefined);
+  for (let i = 0; i < defsToCost.length; i++) walk(defOf(defsToCost[i]!));
+  return { voxel, corner };
 }
 
 const DENSITY_COLUMN: Model = {

@@ -16,7 +16,8 @@ import { WINDOW_HALF } from '../../src/core/coords';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import type { Params } from '../../src/core/params/schema';
 import { JobCancelled, SliceTooHeavy, type FieldSliceOptions, type FieldSliceResult } from '../../src/engine/workerPool';
-import { horizontalCoord, sliceCostOf, sliceRowY, sliceSampleVoxel, squareProblem } from '../../src/gen/inspect/fieldSlice';
+import { memoWorkCost } from '../../src/gen/inspect/cost';
+import { evaluatedExpression, horizontalCoord, sliceCostOf, sliceRowY, sliceSampleVoxel, squareProblem } from '../../src/gen/inspect/fieldSlice';
 import { segmentPointAt, segmentProblem, type Segment } from '../../src/metrics/crossSection';
 import { voxelRgb } from '../../src/ui/crossSection/voxels';
 import type { Selection } from '../../src/ui/inspector/model';
@@ -393,8 +394,8 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
   }
   /**
    * The session's params for the request-stream mechanics: the default tree without SP6a's cave terms (`caveFreeTree`,
-   * work cost 574), whose 128² density slice fits the work bound. The default tree's own 128² slices are refused since
-   * SP6a Task 7 (work cost 13,312 since Task 9 > 7,936 per vertical sample; its test below).
+   * work cost 574), whose 128² density slices fit the work bound. The default tree's own slices: its test below (SP6a
+   * Task 13's memo-aware bound, rulings R7 and R9).
    */
   const SLICED: Params = paramsWith({ density: { defs: caveFreeTree() } } as never);
   /**
@@ -453,8 +454,10 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     expect([r.shown?.sessionEpoch, r.shown?.key, fieldSliceView(r, 7)]).toEqual([7, r.key, 'fresh']);
     expect(calls).toHaveLength(2);
     expect(calls[1]!.req).toEqual({ ...calls[0]!.req, n: 128 });
-    // 128 × 574 + COLUMN_SAMPLE_COST (the default tree with Task 6's cave terms: 591,616).
-    expect(calls[1]!.opts).toEqual({ priority: 500, columnCost: 106_240, budget: REQUEST_BUDGET });
+    // 128 × 30 + 196 × 68 + COLUMN_SAMPLE_COST under the corner memo (SP6a §7.4; 128 × 574 + COLUMN_SAMPLE_COST = 106,240
+    // without it).
+    expect(calls[1]!.opts).toEqual({ priority: 500, columnCost: 49_936, budget: REQUEST_BUDGET });
+    expect(sliceCostOf(SLICED, 'density', '', 'vertical', 128)).toBe(49_936);
     expect(r.pending).toEqual({ sessionEpoch: 7, key: r.key, n: 128 });
     const f = density(128);
     calls[1]!.resolve(f);
@@ -473,7 +476,9 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     const { r, calls } = harness();
     r.request(want(HORI, LINE));
     expect(calls[0]!.req).toEqual({ plane: 'horizontal', cx: 100, cz: -200, extent: 512, y: 63, n: 32, field: 'density', path: '' });
+    // No two samples of a 32² draft share a corner: 32 × (30 + CORNER_SAMPLE_COST) + 256 × 68 = 32 × (574 + 2,048).
     expect(calls[0]!.opts.columnCost).toBe(32 * (574 + CORNER_SAMPLE_COST));
+    expect(calls[0]!.opts.columnCost).toBe(sliceCostOf(SLICED, 'density', '', 'horizontal', 32, 512));
     expect(fieldSliceSpec(HORI, null, 'node', 'root.b', 128)).toEqual({ plane: 'horizontal', cx: 100, cz: -200, extent: 512, y: 63, n: 128, field: 'node', path: 'root.b' });
   });
 
@@ -622,14 +627,22 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
   });
 
   describe('the work bound\'s notices, with planFieldSlice\'s limits (P3)', () => {
-    // An interpolated sum of L 16-octave double detail noises: work cost 1 + 8 × (129·L − 1) per sample.
-    const P8 = partWorstParams(8);
-    const P16 = partWorstParams(16);
+    /**
+     * A voxel-level sum of L 16-octave double detail noises (no interpolated): 129·L − 1 per sample on both planes
+     * (tier 2's column cost admits L ≤ 75). P16: partWorst's interpolated sum of 41 noises, 1 per sample and 5,288 per
+     * corner, whose draft and 128² slice are refused on both planes.
+     */
+    const flatSum = (leaves: number): Params => {
+      const p = partWorstParams(leaves);
+      return paramsWith({ density: { noises: { detail: { octaves: 16, double: true } }, defs: { root: (p.density.defs as { root: { x: unknown } }).root.x, defs: {} } } } as never);
+    };
+    const P8 = flatSum(64);
+    const P16 = partWorstParams(41);
 
     test('the full slice refused: the draft is kept with "node too heavy for a 128² slice" (vertical limit 7 936, horizontal 6 144)', async () => {
       for (const [state, limit] of [[VERT, 7936], [HORI, 6144]] as const) {
         const { r, calls } = harness(P8);
-        const plan = planFieldSlice(128, sliceCostOf(P8, 'density', '', state.plane, 128), 3, REQUEST_BUDGET);
+        const plan = planFieldSlice(128, sliceCostOf(P8, 'density', '', state.plane, 128, state.extent), 3, REQUEST_BUDGET);
         if (!plan.refused) throw new Error('expected a refusal');
         expect(state.plane === 'vertical' ? (plan.limit - COLUMN_SAMPLE_COST) / 128 : plan.limit / 128 - CORNER_SAMPLE_COST).toBe(limit);
         r.request(want(state));
@@ -639,21 +652,22 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
         await flush();
         expect(calls).toHaveLength(1);
         expect([r.shown?.result, r.pending]).toEqual([d, null]);
-        expect(r.notice).toBe(`node too heavy for a 128² slice (cost 8 249, limit ${limit === 7936 ? '7 936' : '6 144'})`);
+        expect(r.notice).toBe(`node too heavy for a 128² slice (cost 8 255, limit ${limit === 7936 ? '7 936' : '6 144'})`);
         r.request(want(state));
         expect(calls).toHaveLength(1);
       }
     });
 
     test('the draft refused: no job and "node too heavy to slice" (vertical limit 15 360, horizontal 14 336)', () => {
-      for (const [state, limit] of [[VERT, '15 360'], [HORI, '14 336']] as const) {
+      // Vertical ⌈(32 + 196 × 5,288) / 32⌉ = 32,390 per sample; horizontal (no corner shared) ⌈(32 + 256 × 5,288) / 32⌉ = 42,305.
+      for (const [state, limit, cost] of [[VERT, '15 360', '32 390'], [HORI, '14 336', '42 305']] as const) {
         const { r, calls } = harness(P16);
         r.request(want(state));
         expect([calls.length, r.pending, r.shown]).toEqual([0, null, null]);
-        expect(r.notice).toBe(`node too heavy to slice (cost 16 505, limit ${limit})`);
+        expect(r.notice).toBe(`node too heavy to slice (cost ${cost}, limit ${limit})`);
         // The selected node of the same tree (its root) is refused alike; a blocks slice never is.
         r.request(want({ ...state, field: 'selected' }, LINE, { leaf: 'density.defs', path: 'root' }));
-        expect(r.notice).toBe(`node too heavy to slice (cost 16 505, limit ${limit})`);
+        expect(r.notice).toBe(`node too heavy to slice (cost ${cost}, limit ${limit})`);
         if (state.plane === 'vertical') {
           r.request(want({ ...state, field: 'blocks' }));
           expect([calls.length, calls[0]!.opts.budget, r.notice]).toEqual([1, DRAFT_BUDGET, null]);
@@ -667,17 +681,21 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       r.request(want(HORI));
       expect(calls).toHaveLength(1);
       expect(calls[0]!.opts).toEqual({ priority: 2, columnCost: 32 * (576 + CORNER_STEEP_COST), budget: DRAFT_BUDGET });
+      expect(calls[0]!.opts.columnCost).toBe(sliceCostOf(steep, 'density', '', 'horizontal', 32, 512));
       calls[0]!.resolve(density(32));
       await flush();
       expect(calls).toHaveLength(2);
-      expect([calls[1]!.req.n, calls[1]!.opts]).toEqual([128, { priority: 500, columnCost: 128 * (576 + CORNER_STEEP_COST), budget: REQUEST_BUDGET }]);
+      // 128 × (32 + CORNER_STEEP_COST) + 644 × 68: the 128² samples at extent 512 share corners (SP6a §7.4).
+      expect([calls[1]!.req.n, calls[1]!.opts]).toEqual([128, { priority: 500, columnCost: 128 * (32 + CORNER_STEEP_COST) + 644 * 68, budget: REQUEST_BUDGET }]);
       const f = density(128);
       calls[1]!.resolve(f);
       await flush();
       expect([r.shown?.result, r.pending, r.notice]).toEqual([f, null, null]);
-      // The notice a heavier steep tree would get: the limit is the largest work cost accepted, 3 072 (11 264 for a draft).
-      expect(tooHeavyText('full', steep, 'density', '', 128, sliceCostOf(steep, 'density', '', 'horizontal', 128), 2 ** 20)).toBe('node too heavy for a 128² slice (cost 576, limit 3 072)');
-      expect(tooHeavyText('draft', steep, 'density', '', 32, sliceCostOf(steep, 'density', '', 'horizontal', 32), 2 ** 19)).toBe('node too heavy to slice (cost 576, limit 11 264)');
+      // The notice a heavier steep tree would get: the limit is the largest work per sample accepted, 3 072 (11 264 for a
+      // draft); the cost, the column's evaluation work per sample (⌈(128 × 32 + 644 × 68) / 128⌉ = 375 at 128², whose
+      // samples share corners; 576 at 32², whose samples share none).
+      expect(tooHeavyText('full', steep, 'density', '', 'horizontal', 128, sliceCostOf(steep, 'density', '', 'horizontal', 128, 512), 2 ** 20)).toBe('node too heavy for a 128² slice (cost 375, limit 3 072)');
+      expect(tooHeavyText('draft', steep, 'density', '', 'horizontal', 32, sliceCostOf(steep, 'density', '', 'horizontal', 32, 512), 2 ** 19)).toBe('node too heavy to slice (cost 576, limit 11 264)');
     });
 
     test('a SliceTooHeavy from the pool gives the same notice; tooHeavyText converts planFieldSlice\'s column-cost limit', async () => {
@@ -685,19 +703,59 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       r.request(want());
       calls[0]!.reject(new SliceTooHeavy(calls[0]!.opts.columnCost, 2 ** 19));
       await flush();
-      expect(r.notice).toBe('node too heavy to slice (cost 574, limit 15 360)');
-      expect(tooHeavyText('full', DEFAULTS, 'density', '', 128, 2_278_784, 2 ** 20)).toBe('node too heavy for a 128² slice (cost 17 547, limit 7 936)');
+      // ⌈(32 × 30 + 196 × 68) / 32⌉ = 447 per sample under the corner memo (the 196 corners of 49 layers shared by its rows).
+      expect(r.notice).toBe('node too heavy to slice (cost 447, limit 15 360)');
+      // The default's 128² vertical column: ⌈(128 × 179 + 196 × 1,116) / 128⌉ = 1,888 (17,547 without the memo).
+      expect(tooHeavyText('full', DEFAULTS, 'density', '', 'vertical', 128, sliceCostOf(DEFAULTS, 'density', '', 'vertical', 128), 2 ** 20)).toBe('node too heavy for a 128² slice (cost 1 888, limit 7 936)');
+      // A tree without interpolated: its work cost per sample, as before the memo.
+      expect(tooHeavyText('draft', P8, 'density', '', 'vertical', 32, sliceCostOf(P8, 'density', '', 'vertical', 32), 2 ** 19)).toBe('node too heavy to slice (cost 8 255, limit 15 360)');
     });
 
-    test('the default tree (SP6a Task 7; work cost 17,547 since Task 9\'s wet roof): its 32² draft is refused by the work bound with the notice, before any job, until Task 13\'s memo-aware bound (ruling R7)', async () => {
-      // Task 7 to Task 9's island cap: the 32² draft (32 × 13,312 + COLUMN_SAMPLE_COST, within DRAFT_BUDGET), then its
-      // 128² slice refused with the notice, the draft kept. Since the wet roof the draft exceeds DRAFT_BUDGET too.
-      expect(32 * 17547 + COLUMN_SAMPLE_COST).toBeGreaterThan(DRAFT_BUDGET / 32);
-      const { r, calls } = harness(DEFAULTS);
-      r.request(want());
+    test('the default tree (ruling R9 (3)): vertical, its 32² draft then its 128² slice; horizontal at 256 and 512 the same; from 1024 the draft and the notice', async () => {
+      for (const [state, full] of [[VERT, true], [{ ...HORI, extent: 256 }, true], [HORI, true], [{ ...HORI, extent: 1024 }, false], [{ ...HORI, extent: 8192 }, false]] as const) {
+        const { r, calls } = harness(DEFAULTS);
+        r.request(want(state));
+        expect(calls.map((c) => [c.req.n, c.opts.budget]), `${state.plane} ${state.extent}`).toEqual([[32, DRAFT_BUDGET]]);
+        expect(calls[0]!.opts.columnCost).toBe(sliceCostOf(DEFAULTS, 'density', '', state.plane, 32, state.extent));
+        const d = density(32);
+        calls[0]!.resolve(d);
+        await flush();
+        if (full) {
+          expect(calls.map((c) => [c.req.n, c.opts.budget]), `${state.plane} ${state.extent}`).toEqual([[32, DRAFT_BUDGET], [128, REQUEST_BUDGET]]);
+          const f = density(128);
+          calls[1]!.resolve(f);
+          await flush();
+          expect([r.shown?.result, r.pending, r.notice]).toEqual([f, null, null]);
+        } else {
+          // The full slice is refused before any job: the draft stays with the notice (⌈(128 × 2,227 + 1,024 × 1,116 −
+          // 128 × 2,048) / 128⌉ = 9,107 per sample against 6,144).
+          expect(calls).toHaveLength(1);
+          expect([r.shown?.result, r.pending, r.notice]).toEqual([d, null, 'node too heavy for a 128² slice (cost 9 107, limit 6 144)']);
+        }
+      }
+    });
+
+    test('a draft refused while the full slice is admitted (ruling R9 (2)): the 128² slice is requested at once, with no draft', async () => {
+      // An interpolated sum of 15 noises (1,934 per corner): its horizontal 32² draft shares no corner (32 × 2,049 + 256
+      // × 1,934 = 560,672 per row > 524,288), its 128² slice at extent 256 shares them (128 × 2,049 + 328 × 1,934 =
+      // 896,624 ≤ 1,048,576); at extent 512 both are refused (the draft's notice: ⌈(32 + 256 × 1,934) / 32⌉ = 15,473).
+      const p = partWorstParams(15);
+      expect(memoWorkCost(evaluatedExpression(p, 'density', ''), p)).toEqual({ voxel: 1, corner: 1934 });
+      const { r, calls } = harness(p);
+      r.request(want({ ...HORI, extent: 256 }));
+      expect(calls.map((c) => [c.req.n, c.opts])).toEqual([[128, { priority: SLICE_FULL_PRIORITY, columnCost: 896_624, budget: REQUEST_BUDGET }]]);
+      expect([r.notice, r.pending?.n]).toEqual([null, 128]);
+      const f = density(128);
+      calls[0]!.resolve(f);
       await flush();
-      expect(calls).toHaveLength(0);
-      expect([r.shown?.result ?? null, r.pending, r.notice]).toEqual([null, null, 'node too heavy to slice (cost 17 547, limit 15 360)']);
+      expect([r.shown?.result, r.pending, r.notice, calls.length]).toEqual([f, null, null, 1]);
+      const wide = harness(p);
+      wide.r.request(want(HORI));
+      expect([wide.calls.length, wide.r.shown, wide.r.notice]).toEqual([0, null, 'node too heavy to slice (cost 15 473, limit 14 336)']);
+      // The vertical draft shares its rows' corners: 32 × 1 + 196 × 1,934 + COLUMN_SAMPLE_COST, within DRAFT_BUDGET.
+      const v = harness(p);
+      v.r.request(want(VERT));
+      expect(v.calls.map((c) => [c.req.n, c.opts.columnCost])).toEqual([[32, 32 + 196 * 1934 + COLUMN_SAMPLE_COST]]);
     });
   });
 
