@@ -32,7 +32,7 @@ export const PROFILES: Readonly<Record<ProfileId, Profile>> = {
   },
   amplified: { overlay: { density: { defs: AMPLIFIED_DENSITY_TREE } }, readyFrom: 'SP3e' },
   floating_islands: {
-    overlay: { islands: { enabled: true }, density: { defs: FLOATING_DENSITY_TREE }, surface: { rules: FLOATING_SURFACE_RULES } },
+    overlay: { islands: { enabled: true }, density: { defs: FLOATING_DENSITY_TREE }, surface: { rules: FLOATING_SURFACE_RULES }, caves: { limits: { capTop: 180 } } },
     readyFrom: 'SP3e',
   },
   cave_heavy: { overlay: {}, readyFrom: 'SP6b' },

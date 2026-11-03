@@ -231,8 +231,9 @@ describe('the default trees as data (SP3d spec §2)', () => {
     // spaghetti rarity blend is 78 (3D, four bands) or 101 (2D, five bands) nodes) and the noodle tap's 79 in place of its
     // const (+78): 616. Task 8: each family's cap `+ G·min(1, g) + 128·min(1, h)` is 48 nodes (g 17, h 21, their mins,
     // muls and constants 9, the add joining it 1) in each of the five families (+240), and `nb`'s maxY test reads
-    // `neg(param)` in place of a const (+1 in each of the noodle's four slots): 860 (README's row).
-    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(860);
+    // `neg(param)` in place of a const (+1 in each of the noodle's four slots): 860. Task 9: the island cap's g_i (12
+    // nodes) and h_i (9), and the two adds joining them to g_f and h_f, in each of the five caps (+115): 975 (README's row).
+    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(975);
   });
 
   test('DEFAULT_SURFACE_RULES holds exactly §2.2\'s 15 refs', () => {

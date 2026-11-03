@@ -10,7 +10,7 @@ import { fnv1a32, hex64 } from '../../src/core/hash';
 import { latticeIndex } from '../../src/gen/column/columnStage';
 import { biomeName } from '../../src/gen/biomes/registry';
 import {
-  amplifiedBandWitness, bandWindow, bandWitness, CAVE_SLOTS, caveColumn, caveFamilyCounts, caveLeaves, caveSlotLeaves, cellProbe, findWitness, intendedClass, islandColumn, islandLeaves, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
+  amplifiedBandWitness, bandWindow, bandWitness, capTopWitness, CAVE_SLOTS, caveColumn, caveFamilyCounts, caveLeaves, caveSlotLeaves, cellProbe, findWitness, intendedClass, islandColumn, islandLeaves, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
   scaleBandCarves, scaleWitness, SURFACE_CLASSES, surfacePrefilter, surfaceSlotLeaves, u2Leaves,
   type CaveSlot,
   type LivenessClass,
@@ -35,8 +35,8 @@ const CAVE_PINS: Readonly<Record<CaveSlot, readonly [LivenessColumn, number]>> =
   caverns: [{ cx: 546, cz: 25857, cls: 'cave' }, 7],
   tunnels: [{ cx: 4705, cz: -24478, cls: 'cave' }, 224],
 };
-/** The leaves of SP6a Tasks 6, 7 and 8 (the caves group so far): U2 covers 73 + 19 + 30 + 11 = 133 leaves. */
-const U2_LEAVES = 133;
+/** The leaves of SP6a Tasks 6, 7, 8 and 9 (the caves group so far): U2 covers 73 + 19 + 30 + 11 + 1 = 134 leaves. */
+const U2_LEAVES = 134;
 /** The spaghetti scale leaves (SP6a Task 7), decided on the class columns or on their bounded witness search (ruling P5). */
 const SCALE_LEAVES = [
   'caves.spaghetti3d.scales.s0', 'caves.spaghetti3d.scales.s1', 'caves.spaghetti3d.scales.s2', 'caves.spaghetti3d.scales.s3',
@@ -67,8 +67,16 @@ const BAND_PINS: Readonly<Record<(typeof BAND_LEAVES)[number], string>> = {
   'caves.entrances.minY': 'badlands column (-26426, -31088)',
   'caves.entrances.maxY': 'amplified witness column (9157, 4188)',
 };
-/** The band leaves whose default sits at a range end, so U2 has one step for them (320 → 272; −64 → −54). */
-const ONE_STEP = ['caves.cheese.maxY', 'caves.spaghetti3d.maxY', 'caves.spaghetti2d.minY', 'caves.entrances.minY', 'caves.entrances.maxY'];
+/**
+ * The leaves whose default sits at a range end, so U2 has one step for them: the band leaves (320 → 272; −64 → −54)
+ * and the island cap's top (344 → 292; Task 9).
+ */
+const ONE_STEP = ['caves.cheese.maxY', 'caves.spaghetti3d.maxY', 'caves.spaghetti2d.minY', 'caves.entrances.minY', 'caves.entrances.maxY', 'caves.limits.capTop'];
+
+/** The island cap's top (SP6a Task 9), decided on a floating_islands base at its own witness. */
+const CAP_TOP = 'caves.limits.capTop';
+/** capTop's witness at seed 42: its column and the scan's figures (draws of sp6a.liveness.capTop, examined, hashed). */
+const CAP_TOP_PIN = { via: 'floating_islands witness column (28062, -9459)', draws: 350, examined: 17, checks: 1 } as const;
 
 const leaf = (path: string) => {
   const info = SCHEMA.leaves.find((l) => l.path === path);
@@ -567,7 +575,7 @@ describe('the cave class columns (SP6a spec §4)', () => {
 
   test('the caves leaves are the caves.* group, in schema order, after the islands leaves; the slots share them but the scale leaves', () => {
     expect(caveLeaves().map((l) => l.path)).toEqual(SCHEMA.leaves.filter((l) => l.path.startsWith('caves.')).map((l) => l.path));
-    expect(caveLeaves().length).toBe(60);
+    expect(caveLeaves().length).toBe(61);
     expect(CAVE_SLOTS).toEqual(['caverns', 'tunnels']);
     const tunnels = caveSlotLeaves('tunnels').map((l) => l.path);
     expect(tunnels).toEqual([
@@ -583,9 +591,9 @@ describe('the cave class columns (SP6a spec §4)', () => {
     expect(caveSlotLeaves('caverns').length).toBe(20);
     expect(caveSlotLeaves('caverns').map((l) => l.path)).toContain('caves.limits.bandSpan');
     const slotted = new Set([...caveSlotLeaves('caverns'), ...caveSlotLeaves('tunnels')].map((l) => l.path));
-    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES];
+    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES, CAP_TOP];
     expect(caveLeaves().map((l) => l.path).filter((p) => !slotted.has(p))).toEqual(caveLeaves().map((l) => l.path).filter((p) => apart.includes(p)));
-    expect(apart.length).toBe(19);
+    expect(apart.length).toBe(20);
   });
 
   test('each slot\'s column: the first land column of sp6a.liveness.caves where its families act and every leaf of its slot changes the T column', () => {
@@ -610,9 +618,9 @@ describe('the cave class columns (SP6a spec §4)', () => {
     expect(caveColumn(CTX, 'tunnels', [...caveSlotLeaves('caverns'), ...caveSlotLeaves('tunnels')], CAVE_PINS.tunnels[1] + 1)).toBeNull();
   });
 
-  test('every caves leaf but the scale and band leaves is live on a cave column (the class it is meant for), and only through the T stage', () => {
+  test('every caves leaf but the scale and band leaves and capTop is live on a cave column (the class it is meant for), and only through the T stage', () => {
     const cs = caves();
-    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES];
+    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES, CAP_TOP];
     for (const l of caveLeaves().filter((x) => !apart.includes(x.path))) {
       expect(intendedClass(l.path)).toBe('cave');
       const r = leafLiveness(CTX, l.path, [...columns(), ...cs]);
@@ -729,6 +737,51 @@ describe('the depth-band leaves (SP6a Task 8; rulings P3, P4, R5)', () => {
       expect([p, w.via, w.draws]).toEqual([p, via, draws]);
       expect(w.checks).toBeLessThanOrEqual(64);
     }
+  });
+});
+
+describe('the island cap\'s capTop (SP6a Task 9; spec §1.4, §4)', () => {
+  const FLOATING = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
+  /** Noise-cave air of (cx, cz) in y 176 … 200 on `ctx`: the pre-cave density holds the voxel solid, the root does not. */
+  const caveAir = (ctx: GenContext, cx: number, cz: number): number => {
+    const dc = createDensityContext(ctx);
+    dc.column(cx, cz);
+    let n = 0;
+    for (let y = 176; y <= 200; y++) {
+      for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
+        if (dc.compiled.tapFn('precave', lx, y, lz) > 0 && !(dc.compiled.voxelFn(lx, y, lz) > 0)) n++;
+      }
+    }
+    return n;
+  };
+
+  test('capTop is live on its floating_islands witness, not on the default base\'s class columns or the island class column', () => {
+    expect(intendedClass(CAP_TOP)).toBe('cave');
+    // Its default 344 lies above the world: U2's one step (292) changes no class column of the default base.
+    expect(perturbations(leaf(CAP_TOP), 344)).toEqual([292]);
+    const all = [...columns(), ...CAVE_SLOTS.map((slot) => caveColumn(CTX, slot)!)];
+    const r = leafLiveness(CTX, CAP_TOP, all);
+    expect(r).toEqual({ path: CAP_TOP, live: true, via: CAP_TOP_PIN.via, cls: null });
+    expect(capTopWitness(CTX)).toEqual(CAP_TOP_PIN);
+    // On floating_islands capTop is 180; its lower step clamps back to 180, so 207 is U2's one effective step.
+    expect(FLOATING.params.caves.limits.capTop).toBe(180);
+    expect(perturbations(leaf(CAP_TOP), 180)).toEqual([207]);
+    const [cx, cz] = CAP_TOP_PIN.via.slice(CAP_TOP_PIN.via.indexOf('(') + 1, -1).split(', ').map(Number) as [number, number];
+    expect([cx, cz]).not.toEqual([ISLAND_PIN.cx, ISLAND_PIN.cz]);
+    // The witness: noise-cave air in y 176 … 200 at capTop 207, none at 180, and a pre-cave top at y ≥ 200.
+    const at207 = createGenContext(FLOATING.seed, (() => {
+      const p = applyPatch(SCHEMA, FLOATING.params, { caves: { limits: { capTop: 207 } } });
+      if (!p.ok) throw new Error('bad capTop patch');
+      return p.value;
+    })());
+    expect(caveAir(at207, cx, cz)).toBeGreaterThan(0);
+    expect(caveAir(FLOATING, cx, cz)).toBe(0);
+    const dc = createDensityContext(FLOATING);
+    dc.column(cx, cz);
+    let top = -64;
+    for (let y = 319; y >= -63 && top === -64; y--) for (let p = 0; p < 256; p++) if (dc.compiled.tapFn('precave', p & 15, y, p >> 4) > 0) { top = y; break; }
+    expect(top).toBeGreaterThanOrEqual(200);
+    expect(stageOutputHash(at207, 'terrain', cx, cz)).not.toBe(stageOutputHash(FLOATING, 'terrain', cx, cz));
   });
 });
 

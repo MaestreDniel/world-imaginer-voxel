@@ -25,7 +25,10 @@
  * spec §1.5's witness mechanism, ruling P5). So are the depth-band leaves (`caves.<family>.minY`, `.maxY`; Task 8,
  * rulings P3, P4, R5): dead on the class columns, each is decided on its bounded band witness (`bandWitness`) on the
  * default base, and the maxY 320 of cheese, spaghetti 3D and the entrances, whose air the default base never holds above
- * U2's step 272, on an amplified base (the default params with the amplified profile's overlay).
+ * U2's step 272, on an amplified base (the default params with the amplified profile's overlay). The island cap's
+ * `caves.limits.capTop` (Task 9; its default 344 lies above the world, so it is dead on the default base) is decided on
+ * a floating_islands base (capTop 180, U2's one effective step 207) at its own witness (`capTopWitness`), not on the
+ * island class column, which the island noise picks.
  */
 import { SEA_LEVEL, SPAGHETTI_BANDS } from '../core/constants';
 import { fnv1a32, hash4, hashF64, hex64 } from '../core/hash';
@@ -226,6 +229,26 @@ const FILL_HI = 319;
 /** The maxY leaves decided on an amplified base when the default base has no witness (ruling P3). */
 const AMPLIFIED_BAND: ReadonlySet<string> = new Set(['caves.cheese.maxY', 'caves.spaghetti3d.maxY', 'caves.entrances.maxY']);
 const isBandLeaf = (path: string): boolean => BAND_LEAF.test(path);
+
+/**
+ * SP6a spec §1.4, §4 (Task 9): the island cap's `caves.limits.capTop`, left out of the slots' acceptance and decided on a
+ * floating_islands base (the default params with its profile's overlay, capTop 180) at a bounded witness
+ * (`capTopWitness`): up to `CAP_DRAWS` draws of `samplePoints('sp6a.liveness.capTop', …)`, a column examined when one of
+ * its 25 quart corners has `offset` ≥ `CAP_OFFSET` (ground that may reach the cap's band), up to `CAP_EXAMINED` examined
+ * and `CAP_CHECKS` T columns hashed; the witness is the first examined column whose pre-cave top is ≥ `CAP_TOP_MIN`
+ * (the `precave` tap > 0 somewhere at y ≥ 200) and that holds noise-cave air (`precave` > 0, the root ≤ 0) in y
+ * `CAP_AIR_LO` … `CAP_AIR_HI` at a step of the leaf (207: 180's lower step clamps back to 180, `numberSteps`) but not at
+ * the base's capTop, and whose T column the step changes.
+ */
+const CAP_TOP_PATH = 'caves.limits.capTop';
+const CAP_STREAM = 'sp6a.liveness.capTop';
+const CAP_DRAWS = 32768;
+const CAP_EXAMINED = 2048;
+const CAP_CHECKS = 64;
+const CAP_OFFSET = 150;
+const CAP_TOP_MIN = 200;
+const CAP_AIR_LO = 176;
+const CAP_AIR_HI = 200;
 
 /** The cave class column's scan slots (SP6a spec §4): the caverns' families, then the tunnels'. */
 export type CaveSlot = 'caverns' | 'tunnels';
@@ -885,11 +908,13 @@ export function caveLeaves(): readonly LeafInfo[] {
 
 /**
  * The leaves a cave class column's slot must accept (SP6a spec §4), in schema order: the tunnels' leaves for `tunnels`,
- * every other `caves.*` leaf for `caverns`; never a spaghetti scale leaf (ruling P5) or a depth-band leaf (`minY`,
- * `maxY`; Task 8), each decided on its bounded witness search when the class columns leave it dead.
+ * every other `caves.*` leaf for `caverns`; never a spaghetti scale leaf (ruling P5), a depth-band leaf (`minY`,
+ * `maxY`; Task 8) or `caves.limits.capTop` (Task 9), each decided on its bounded witness search when the class columns
+ * leave it dead.
  */
 export function caveSlotLeaves(slot: CaveSlot): readonly LeafInfo[] {
-  return caveLeaves().filter((l) => !isScaleLeaf(l.path) && !isBandLeaf(l.path) && TUNNEL_LEAF.test(l.path) === (slot === 'tunnels'));
+  return caveLeaves().filter((l) => !isScaleLeaf(l.path) && !isBandLeaf(l.path) && l.path !== CAP_TOP_PATH
+    && TUNNEL_LEAF.test(l.path) === (slot === 'tunnels'));
 }
 
 /** How often each cave family acts on a column (SP6a spec §4's cave class column), at the corner-lattice voxels. */
@@ -1164,6 +1189,88 @@ export function amplifiedBandWitness(base: GenContext, path: string): BandWitnes
   return bandWitnessOf(ab, info, variantContexts(ab, info), [], hash, 'amplified witness column');
 }
 
+// ---------------------------------------------------------------- the island cap's witness (SP6a Task 9)
+
+const FLOATING_MEMO = new WeakMap<GenContext, { readonly fb: GenContext; readonly hash: BaseHash }>();
+/** The floating_islands base of `base`: `base`'s params with the floating_islands profile's overlay, and its hasher. */
+function floatingOf(base: GenContext): { readonly fb: GenContext; readonly hash: BaseHash } {
+  let m = FLOATING_MEMO.get(base);
+  if (m === undefined) {
+    const r = APPLY(SCHEMA_, base.params, PROFILES_.floating_islands.overlay);
+    if (!r.ok) throw new Error(`U2: the floating_islands overlay is invalid: ${r.issues.map((i) => `${i.path} ${i.code}`).join(', ')}`);
+    const fb = CREATE(base.seed, r.value);
+    m = { fb, hash: baseHasher(fb) };
+    FLOATING_MEMO.set(base, m);
+  }
+  return m;
+}
+
+/** Whether the pre-cave density of `dc`'s current column holds rock at some y ≥ `from` (the `precave` tap > 0). */
+function preCaveTopAtLeast(dc: DensityContext, from: number): boolean {
+  const c = dc.compiled;
+  for (let y = FILL_HI; y >= from; y--) {
+    for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) if (c.tapFn('precave', lx, y, lz) > 0) return true;
+  }
+  return false;
+}
+
+/** Noise-cave air of `dc`'s current column in y lo … hi: voxels the pre-cave density holds solid where the root is ≤ 0. */
+function caveAirIn(dc: DensityContext, lo: number, hi: number): number {
+  const c = dc.compiled;
+  let n = 0;
+  for (let y = lo; y <= hi; y++) {
+    for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) if (c.tapFn('precave', lx, y, lz) > 0 && !(c.voxelFn(lx, y, lz) > 0)) n++;
+  }
+  return n;
+}
+
+/** The figures of capTop's witness search: the deciding column, the draws taken, the columns examined and hashed. */
+export interface CapTopWitnessScan { readonly via: string | null; readonly draws: number; readonly examined: number; readonly checks: number }
+
+function capTopWitnessOf(fb: GenContext, info: LeafInfo, variants: readonly GenContext[], baseHash: BaseHash): CapTopWitnessScan {
+  const stage = stageOf(info);
+  const pts = POINTS(CAP_STREAM, CAP_DRAWS);
+  const dc = CREATE_DENSITY(fb);
+  const vdc = variants.map((v) => CREATE_DENSITY(v));
+  const seen = new Set<number>();
+  let examined = 0, checks = 0, n = 0;
+  for (; n < CAP_DRAWS && examined < CAP_EXAMINED && checks < CAP_CHECKS; n++) {
+    const cx = Math.floor(pts.x[n]! / 16);
+    const cz = Math.floor(pts.z[n]! / 16);
+    const key = (cx + 32768) * 65536 + (cz + 32768);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const off = BUILD(fb, cx, cz, SAMPLE).f.offset;
+    let high = false;
+    for (let j = 0; j <= 4 && !high; j++) for (let i = 0; i <= 4; i++) if (off[LATTICE(i, j)]! >= CAP_OFFSET) { high = true; break; }
+    if (!high) continue;
+    examined++;
+    dc.column(cx, cz);
+    if (!preCaveTopAtLeast(dc, CAP_TOP_MIN) || caveAirIn(dc, CAP_AIR_LO, CAP_AIR_HI) > 0) continue;
+    let open = false;
+    for (const v of vdc) {
+      v.column(cx, cz);
+      if (caveAirIn(v, CAP_AIR_LO, CAP_AIR_HI) > 0) { open = true; break; }
+    }
+    if (!open) continue;
+    checks++;
+    const h = baseHash(stage, cx, cz);
+    if (variants.some((v) => stageOutputHash(v, stage, cx, cz) !== h)) return { via: `floating_islands witness column (${cx}, ${cz})`, draws: n + 1, examined, checks };
+  }
+  return { via: null, draws: n, examined, checks };
+}
+
+/**
+ * `caves.limits.capTop`'s bounded witness search (SP6a Task 9) on the floating_islands base of `base` (capTop 180):
+ * the deciding column (`floating_islands witness column (cx, cz)`) or null, with the draws taken and the columns
+ * examined and hashed (see `CAP_STREAM`).
+ */
+export function capTopWitness(base: GenContext): CapTopWitnessScan {
+  const info = leafInfo(CAP_TOP_PATH);
+  const { fb, hash } = floatingOf(base);
+  return capTopWitnessOf(fb, info, variantContexts(fb, info), hash);
+}
+
 /** The families each slot's column must hold (`caveFamilyCounts` > 0). */
 const SLOT_FAMILIES: Readonly<Record<CaveSlot, readonly (keyof CaveFamilyCounts)[]>> = {
   caverns: ['entrances', 'cheese', 'pillars'],
@@ -1299,7 +1406,8 @@ function decide(base: GenContext, info: LeafInfo, columns: readonly LivenessColu
   if (hit !== undefined) return { path: info.path, live: true, via: `${hit.cls} column (${hit.cx}, ${hit.cz})`, cls: hit.cls };
   const w = stage !== 'terrain' ? witnessOf(base, info, variants, columns, baseHash)
     : isScaleLeaf(info.path) ? scaleWitnessOf(base, info, variants, columns, baseHash).via
-      : isBandLeaf(info.path) ? bandVia(base, info, variants, columns, baseHash) : null;
+      : isBandLeaf(info.path) ? bandVia(base, info, variants, columns, baseHash)
+        : info.path === CAP_TOP_PATH ? capTopWitness(base).via : null;
   return w !== null ? { path: info.path, live: true, via: w, cls: null } : { path: info.path, live: false, via: null, cls: intended };
 }
 
@@ -1314,7 +1422,8 @@ function bandVia(base: GenContext, info: LeafInfo, variants: readonly GenContext
 /**
  * One leaf's U2 verdict over `columns` (the class columns of `base`): its stage output hash on the class columns (the
  * intended class first; a `terrain` leaf only on the land, coast, surface, island and cave ones), then, except for a
- * `terrain` leaf, the witness search; a spaghetti scale leaf (a `terrain` leaf) has its own (ruling P5).
+ * `terrain` leaf, the witness search; a spaghetti scale leaf, a depth-band leaf and `caves.limits.capTop` (`terrain`
+ * leaves) have their own (ruling P5; Task 8's `bandWitness`; Task 9's `capTopWitness`).
  */
 export function leafLiveness(base: GenContext, path: string, columns: readonly LivenessColumn[]): LivenessResult {
   return decide(base, leafInfo(path), columns, baseHasher(base));
@@ -1363,7 +1472,8 @@ export function islandColumn(base: GenContext, leaves: readonly LeafInfo[] = isl
  * decided on `RESOLVE('floating_islands')` at its island class column (SP3e spec §5.6); none found: "no island column".
  * The cave class columns (SP6a spec §4, one per slot) join the class columns; none found for a slot with leaves: "no
  * cave column (<slot>)". The spaghetti scale leaves dead on the class columns are decided on their bounded witness
- * search (ruling P5), the depth-band leaves on their band witness, then (three maxY leaves) on the amplified base (P3).
+ * search (ruling P5), the depth-band leaves on their band witness, then (three maxY leaves) on the amplified base (P3),
+ * and `caves.limits.capTop` on its floating_islands witness (`capTopWitness`, Task 9).
  */
 export function u2(seedText = '42'): { readonly value: number; readonly results: readonly LivenessResult[] } {
   const base = CREATE(SEED(seedText), RESOLVE('default'));

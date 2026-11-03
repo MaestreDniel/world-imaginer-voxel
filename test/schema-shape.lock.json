@@ -14,6 +14,7 @@
     "caves.entrances.offset": "number",
     "caves.entrances.threshold": "number",
     "caves.limits.bandSpan": "int",
+    "caves.limits.capTop": "int",
     "caves.limits.surfaceDepth": "number",
     "caves.noises.cheese": "noise",
     "caves.noises.cheeseRegional": "noise",

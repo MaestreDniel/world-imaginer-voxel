@@ -3,7 +3,8 @@
  * density tree: entrances E, cheese C and pillars P with `keep`, the shared `fl`, `sky`, `ramp` and `rough`, and
  * `detailG` in place of the detail term. SP6a Task 7 (spec §1.1-§1.3): spaghetti 3D (S3) and 2D (S2) with their
  * continuous rarity blends, and the noodle with its four slots and `nb`. SP6a Task 8 (spec §1.4, §4): each family's
- * depth band (`minY`, `maxY`, `caves.limits.bandSpan`) and its cap, a gentle part then a steep part.
+ * depth band (`minY`, `maxY`, `caves.limits.bandSpan`) and its cap, a gentle part then a steep part. SP6a Task 9 (spec
+ * §1.4, D8): the island cap `caves.limits.capTop` in every family's cap.
  */
 import { describe, expect, test } from 'vitest';
 import { SPAGHETTI_BANDS, type SpaghettiBands } from '../../src/core/constants';
@@ -15,6 +16,9 @@ import { createDensityContext, type DensityContext } from '../../src/gen/density
 import type { DensityExpr, DensityNoise, DensityNoiseSource, Expr, TapExpr } from '../../src/gen/density/expr';
 import { createDensityReference } from '../../src/gen/density/reference';
 import { resolveDensity, validateDensitySource } from '../../src/gen/density/source';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { seedFromInput } from '../../src/core/seed';
+import { createGenContext } from '../../src/gen/context';
 import { ctxFor, paramsWith } from '../harness/gen';
 
 type Rec = Record<string, unknown>;
@@ -121,9 +125,11 @@ describe('the caves group (SP6a spec §4)', () => {
       ['caves.entrances.maxY', 320, -64, 320],
       ['caves.limits.surfaceDepth', 8, 0, 32],
       ['caves.limits.bandSpan', 16, 1, 32],
+      // Task 9: the island cap's top (344, above the world, has no effect; 180 in floating_islands' overlay).
+      ['caves.limits.capTop', 344, 180, 344],
     ]);
-    // The band ends and the band span are ints (blocks).
-    for (const l of leaves.filter((x) => /\.(minY|maxY|bandSpan)$/.test(x.path))) expect([l.path, l.leaf.kind]).toEqual([l.path, 'int']);
+    // The band ends, the band span and the cap top are ints (y, blocks).
+    for (const l of leaves.filter((x) => /\.(minY|maxY|bandSpan|capTop)$/.test(x.path))) expect([l.path, l.leaf.kind]).toEqual([l.path, 'int']);
     for (const l of SCHEMA.leaves.filter((x) => x.path.startsWith('caves.'))) {
       expect([l.path, l.meta.scope, l.meta.stage]).toEqual([l.path, 'terrain', 'terrain']);
     }
@@ -621,7 +627,10 @@ describe('the noodle (SP6a spec §1.1, §1.3)', () => {
   });
 });
 
-/** cap_f of SP6a §1.4 as data, written from the spec: G·min(1, g) + 128·min(1, h) over the family's band leaves. */
+/**
+ * cap_f of SP6a §1.4 as data, written from the spec: G·min(1, g + g_i) + 128·min(1, h + h_i) over the family's band
+ * leaves, `bandSpan` and `capTop` (the island cap, D8).
+ */
 function capExpr(group: string, gentle: number): unknown {
   const p = (path: string) => ({ op: 'param', path });
   const y = { op: 'y' };
@@ -632,13 +641,16 @@ function capExpr(group: string, gentle: number): unknown {
   const minY = p(`caves.${group}.minY`), maxY = p(`caves.${group}.maxY`), s = p('caves.limits.bandSpan');
   const g = add(clamp01(mul(add(minY, neg(y)), { op: 'recip', x: s })), clamp01(mul(add(y, neg(maxY)), { op: 'recip', x: s })));
   const h = add(clamp01(mul(add(add(minY, neg(s)), neg(y)), { op: 'const', v: 0.125 })), clamp01(mul(add(add(y, neg(maxY)), neg(s)), { op: 'const', v: 0.125 })));
-  return add(mul({ op: 'const', v: gentle }, { op: 'min', a: { op: 'const', v: 1 }, b: g }), mul({ op: 'const', v: 128 }, { op: 'min', a: { op: 'const', v: 1 }, b: h }));
+  const top = p('caves.limits.capTop');
+  const gi = clamp01(mul(add(add(add(y, neg(top)), { op: 'const', v: 8 }), s), { op: 'recip', x: s }));
+  const hi = clamp01(mul(add(add(y, neg(top)), { op: 'const', v: 8 }), { op: 'const', v: 0.125 }));
+  return add(mul({ op: 'const', v: gentle }, { op: 'min', a: { op: 'const', v: 1 }, b: add(g, gi) }), mul({ op: 'const', v: 128 }, { op: 'min', a: { op: 'const', v: 1 }, b: add(h, hi) }));
 }
-/** The cap of §1.4 in numbers: G·min(1, g) + 128·min(1, h) at y. */
-function capAt(gentle: number, minY: number, maxY: number, s: number, y: number): number {
+/** The cap of §1.4 in numbers: G·min(1, g + g_i) + 128·min(1, h + h_i) at y (capTop 344 by default: no island cap). */
+function capAt(gentle: number, minY: number, maxY: number, s: number, y: number, capTop = 344): number {
   const c01 = (v: number) => Math.min(1, Math.max(0, v));
-  const g = c01((minY - y) / s) + c01((y - maxY) / s);
-  const h = c01((minY - s - y) / 8) + c01((y - maxY - s) / 8);
+  const g = c01((minY - y) / s) + c01((y - maxY) / s) + c01((y - capTop + 8 + s) / s);
+  const h = c01((minY - s - y) / 8) + c01((y - maxY - s) / 8) + c01((y - capTop + 8) / 8);
   return gentle * Math.min(1, g) + 128 * Math.min(1, h);
 }
 /** The steep fraction h_f of §1.4 at y. */
@@ -652,7 +664,7 @@ const bandPatch = (name: CapFamily, minY: number, maxY: number, extra: ParamsPat
   ({ ...extra, caves: { ...extra.caves, [BANDS[name][0]]: { ...(extra.caves as Record<string, object> | undefined)?.[BANDS[name][0]], minY, maxY } } }) as ParamsPatch;
 
 describe('the depth bands and their caps (SP6a spec §1.4)', () => {
-  test('each family\'s cap is G_f·min(1, g_f) + 128·min(1, h_f) over its minY, maxY and bandSpan, after the floor (and the ramp)', () => {
+  test('each family\'s cap is G_f·min(1, g_f + g_i) + 128·min(1, h_f + h_i) over its minY, maxY, bandSpan and capTop, after the floor (and the ramp)', () => {
     for (const name of CAPPED) {
       const [group, gentle] = BANDS[name];
       expect([name, at(DEFAULT_DENSITY_TREE, CAP[name])]).toEqual([name, capExpr(group, gentle)]);
@@ -666,9 +678,12 @@ describe('the depth bands and their caps (SP6a spec §1.4)', () => {
     expect(at(DEFAULT_DENSITY_TREE, `${P.noodle}.x.a`)).toMatchObject({ op: 'max', b: { op: 'const', v: -48 } });
   });
 
-  test('the cap evaluates to §1.4\'s formula at every y, for the defaults, a narrow span and an inverted band', () => {
-    const cases: Array<[ParamsPatch, number]> = [[{}, 16], [{ caves: { limits: { bandSpan: 1 } } }, 1], [{ caves: { limits: { bandSpan: 32 } } }, 32]];
-    for (const [patch, s] of cases) {
+  test('the cap evaluates to §1.4\'s formula at every y, for the defaults, a narrow span, an inverted band and the island cap', () => {
+    const cases: Array<[ParamsPatch, number, number]> = [
+      [{}, 16, 344], [{ caves: { limits: { bandSpan: 1 } } }, 1, 344], [{ caves: { limits: { bandSpan: 32 } } }, 32, 344],
+      [{ caves: { limits: { capTop: 180 } } }, 16, 180], [{ caves: { limits: { capTop: 207, bandSpan: 5 } } }, 5, 207],
+    ];
+    for (const [patch, s, top] of cases) {
       for (const name of CAPPED) {
         const [group, gentle] = BANDS[name];
         for (const [minY, maxY] of [[DEFAULTS.caves[group].minY, DEFAULTS.caves[group].maxY], [0, 100], [40, 20]] as const) {
@@ -680,7 +695,7 @@ describe('the depth bands and their caps (SP6a spec §1.4)', () => {
           const sample = dc.column(0, 0);
           const ref = createDensityReference(dc.expr, dc.noises);
           for (let y = -64; y < 320; y++) {
-            const got = ref.voxel(sample, 0, y, 0, capNode), want = capAt(gentle, minY, maxY, s, y);
+            const got = ref.voxel(sample, 0, y, 0, capNode), want = capAt(gentle, minY, maxY, s, y, top);
             if (Math.abs(got - want) > 1e-9) throw new Error(`${name} [${minY}, ${maxY}] s ${s} y ${y}: cap ${got}, §1.4 ${want}`);
           }
         }
@@ -782,5 +797,94 @@ describe('the depth bands and their caps (SP6a spec §1.4)', () => {
       });
     }
     expect(SCHEMA.leaves.find((l) => l.path === 'caves.limits.bandSpan')!.leaf.max).toBe(32);
+  });
+});
+
+/** g_i and h_i in a cap node (`add(mul(G, min(1, add(g_f, g_i))), mul(128, min(1, add(h_f, h_i))))`). */
+const islandTerms = (capNode: Expr): readonly [Expr, Expr] => {
+  const c = capNode as unknown as { a: { b: { b: { b: Expr } } }; b: { b: { b: { b: Expr } } } };
+  return [c.a.b.b.b, c.b.b.b.b];
+};
+
+describe('the island cap (SP6a spec §1.4, D8)', () => {
+  test('at capTop 344 (the default) g_i and h_i are 0 at every y ≤ 320 of every cap, so they move no default output', () => {
+    expect(DEFAULTS.caves.limits.capTop).toBe(344);
+    const dc = createDensityContext(CTX);
+    const ref = createDensityReference(dc.expr, dc.noises);
+    const sample = dc.column(0, 0);
+    for (const name of CAPPED) {
+      const [gi, hi] = islandTerms(at(dc.expr, CAP[name]) as Expr);
+      expect(gi).toMatchObject({ op: 'clamp', lo: 0, hi: 1 });
+      expect(hi).toMatchObject({ op: 'clamp', lo: 0, hi: 1 });
+      // Every voxel (y −64 … 319) and every corner (y −64 … 320, k 0 … 48).
+      for (let y = -64; y < 320; y++) {
+        const g = ref.voxel(sample, 0, y, 0, gi), h = ref.voxel(sample, 0, y, 0, hi);
+        if (!Object.is(g, 0) || !Object.is(h, 0)) throw new Error(`${name} y ${y}: g_i ${g}, h_i ${h}`);
+      }
+      for (let k = 0; k <= 48; k++) {
+        const g = ref.corner(sample, gi, 2, k, 3), h = ref.corner(sample, hi, 2, k, 3);
+        if (!Object.is(g, 0) || !Object.is(h, 0)) throw new Error(`${name} corner k ${k}: g_i ${g}, h_i ${h}`);
+      }
+    }
+  });
+
+  test('at capTop 180 every corner at y ≥ 176 of every family is > 0 over the leaves\' static ranges (bounds.ts: ≥ −48 + 64; the noodle per voxel)', () => {
+    let decided = 0;
+    for (const s of [1, 16, 32]) {
+      const full: ParamsPatch = { ...WORST, caves: { ...WORST.caves, limits: { ...WORST.caves!.limits, bandSpan: s, capTop: 180 } } };
+      const params = paramsWith(full);
+      const dc = createDensityContext(ctxFor('42', full), resolveDensity(params.density.defs, params));
+      const c = dc.compiled;
+      for (const name of CAPPED) {
+        const tapId = c.nodes.findIndex((n) => n.op === 'tap' && (n.expr as TapExpr).name === name);
+        const node = name === 'noodle' ? tapId : c.nodes[c.nodes[tapId]!.kids[0]!]!.kids[0]!;
+        const iv = new Float64Array(2);
+        for (const [cx, cz] of [[0, 0], CAVE_COLUMN, TUNNEL_COLUMN] as const) {
+          dc.column(cx, cz);
+          dc.bounds.beginColumn();
+          // Cell ck spans y −64 + 8·ck … + 8: from ck 30 (y 176) up, both ends lie at y ≥ 176, where h_i ≥ 1/2.
+          for (let ck = 30; ck < 48; ck++) {
+            dc.bounds.cellInterval(2, ck, 1, iv, 0);
+            const lo = dc.bounds.nodeIntervals[2 * node]!;
+            if (!(lo >= 16 * (1 - 1e-9))) throw new Error(`${name} s ${s} cell ${ck} of (${cx}, ${cz}): lower bound ${lo}`);
+            decided++;
+          }
+        }
+      }
+    }
+    expect(decided).toBe(3 * 5 * 3 * 18);
+  });
+
+  test('on floating_islands (capTop 180) every corner of each slot and every noodle voxel at y ≥ 176 is > 0, and the caps rise from y 156', () => {
+    const fl = resolveProfile('floating_islands');
+    expect(fl.caves.limits.capTop).toBe(180);
+    const dc = createDensityContext(createGenContext(seedFromInput('42'), fl));
+    const ref = createDensityReference(dc.expr, dc.noises);
+    for (const [cx, cz] of COLUMNS) {
+      const sample = dc.column(cx, cz);
+      for (const name of CAPPED) {
+        if (name === 'noodle') {
+          for (let y = 176; y < 320; y++) {
+            const v = dc.compiled.tapFn('noodle', 5, y, 9);
+            if (!(v > 0)) throw new Error(`noodle (${cx}, ${cz}) y ${y}: ${v}`);
+          }
+          continue;
+        }
+        const slot = at(dc.expr, `${P[name]}.x.x`) as Expr;
+        for (let k = 30; k <= 48; k++) {
+          for (let j = 0; j <= 4; j++) for (let i = 0; i <= 4; i++) {
+            const v = ref.corner(sample, slot, i, k, j);
+            if (!(v > 0)) throw new Error(`${name} (${cx}, ${cz}) corner (${i}, y ${-64 + 8 * k}, ${j}): ${v}`);
+          }
+        }
+      }
+    }
+    // The caps rise from y 156 = capTop − 8 − bandSpan (the families whose band holds y 156 … 172 at the defaults).
+    const sample = dc.column(0, 0);
+    for (const name of ['entrances', 'cheese', 'spag3d', 'spag2d'] as const) {
+      const capNode = at(dc.expr, CAP[name]) as Expr;
+      const v = (y: number) => ref.voxel(sample, 0, y, 0, capNode);
+      expect([name, v(156), v(157) > 0, v(172), v(176)]).toEqual([name, 0, true, BANDS[name][1], BANDS[name][1] + 64]);
+    }
   });
 });

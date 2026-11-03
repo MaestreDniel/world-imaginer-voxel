@@ -150,8 +150,9 @@ describe('resolveDensity (§1.6)', () => {
     // SP6a's cave terms: a param leaf becomes its value, recip(const 24) its reciprocal; a ref bound its value.
     expect(at(e, 'root.a.a.b.a.a.a.b.x.x.outside.a.a.a.b.a.b.x.a.b')).toEqual({ op: 'const', v: P.caves.cheese.offset });
     expect(at(e, 'root.a.a.b.a.a.a.b.x.x.outside.a.a.a.b.b.x.b')).toEqual({ op: 'const', v: 1 / 24 });
-    // SP6a Task 8: the cheese cap's clamp((minY − y)·recip(bandSpan)): the leaves become their values, recip its 1 / 16.
-    const capG0 = 'root.a.a.b.a.a.a.b.x.x.outside.b.a.b.b.a.x';
+    // SP6a Task 8: the cheese cap's clamp((minY − y)·recip(bandSpan)): the leaves become their values, recip its 1 / 16
+    // (Task 9: the cap's gentle sum is add(g_f, g_i), so g_f's first clamp is `.a.b.b.a.a`).
+    const capG0 = 'root.a.a.b.a.a.a.b.x.x.outside.b.a.b.b.a.a.x';
     expect(at(DEFAULT_DENSITY_TREE, `${capG0}.b`)).toEqual({ op: 'recip', x: { op: 'param', path: 'caves.limits.bandSpan' } });
     expect(at(e, `${capG0}.a.a`)).toEqual({ op: 'const', v: P.caves.cheese.minY });
     expect(at(e, `${capG0}.b`)).toEqual({ op: 'const', v: 1 / P.caves.limits.bandSpan });
@@ -230,13 +231,14 @@ function checkCompiled(seedText: string, patch: ParamsPatch, what: string, voxel
   const a = createDensityContext(c);
   const b = createDensityContext(c, legacyDefaultDensityExpr(c.params.density));
   const shape = (dc: DensityContext): number[] => [dc.compiled.nodes.length, dc.compiled.positionSlotCount, dc.compiled.columnSlotCount, dc.compiled.interpolatedSlotCount];
-  // SP3d §2.1's 51 nodes (the legacy tree); SP6a's root and cave terms: 436 nodes (143 with Task 6's, 348 with Task 7's;
-  // Task 8's caps, CSE-shared where they repeat: the `y`, the 1/16 and the constants), the legacy's 2
+  // SP3d §2.1's 51 nodes (the legacy tree); SP6a's root and cave terms: 461 nodes (143 with Task 6's, 348 with Task 7's,
+  // 436 with Task 8's caps; Task 9's island cap, CSE-shared where it repeats: g_i and h_i are the same nodes in the four
+  // slots, and once more at the noodle's voxel level, with the `y`, the 1/16 and the constants), the legacy's 2
   // position slots, four more column slots (the regional terms of cheese, spaghetti 3D and the noodle and spaghetti 2D's
   // layerAmp·Nel, each a noise2 term at the corner columns) and 10 interpolated slots (the terrain body, entrances,
   // cheese, spaghetti 3D, spaghetti 2D, pillars and the noodle's four; detailG's interpolated(ref body) shares the
   // terrain's). At clampSigma 1 the constant 1 / 1 merges with the 1 of J: one node less.
-  if (seedText === '42' && Object.keys(patch).length === 0) expect([shape(a), shape(b)]).toEqual([[436, 2, 6, 10], [51, 2, 2, 1]]);
+  if (seedText === '42' && Object.keys(patch).length === 0) expect([shape(a), shape(b)]).toEqual([[461, 2, 6, 10], [51, 2, 2, 1]]);
   const terrainSlot = a.compiled.interpolatedSlot((a.expr.root as unknown as { a: { a: { a: { x: { a: { x: InterpolatedExpr } } } } } }).a.a.a.x.a.x);
   expect(terrainSlot, what).toBeGreaterThanOrEqual(0);
   for (const [cx, cz] of COLUMNS) {

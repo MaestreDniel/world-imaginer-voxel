@@ -66,13 +66,20 @@ const bandSpan = (): JsonValue => param('caves.limits.bandSpan');
  * at the median carved voxel): the blobby families' air values are about −5 to −16, the ridged ones' −1 to −3.
  */
 const CAP_GENTLE = { entrances: 16, cheese: 16, spaghetti3d: 2.4, spaghetti2d: 2.4, noodles: 2.4 } as const;
+/** capTop = `caves.limits.capTop` (180 … 344; the default 344, above the world's top y 319, has no effect). */
+const capTop = (): JsonValue => param('caves.limits.capTop');
 /**
- * cap_f = G_f·min(1, g_f) + 128·min(1, h_f) (SP6a §1.4, D2), for the family whose depth band is `caves.<family>.minY` …
- * `.maxY`: g_f = clamp((minY − y)·(1/s), 0, 1) + clamp((y − maxY)·(1/s), 0, 1) rises from 0 to 1 over the s blocks
- * outside the band (the family narrows), h_f = clamp((minY − s − y)·(1/8), 0, 1) + clamp((y − maxY − s)·(1/8), 0, 1)
- * over the next 8 (it closes: wherever h_f ≥ 1/2 the slot is ≥ −48 + 64 > 0 over every leaf value, the floor `fl`
- * bounding the family below). Written with `recip(param …)` and `y`, not `slide` knots: a knot's y is a literal or one
- * ref and the knots must increase over the refs' static ranges, which the overlapping minY / maxY ranges break.
+ * cap_f = G_f·min(1, g_f + g_i) + 128·min(1, h_f + h_i) (SP6a §1.4, D2, D8), for the family whose depth band is
+ * `caves.<family>.minY` … `.maxY`:
+ * - the depth band: g_f = clamp((minY − y)·(1/s), 0, 1) + clamp((y − maxY)·(1/s), 0, 1) rises from 0 to 1 over the s
+ *   blocks outside the band (the family narrows), h_f = clamp((minY − s − y)·(1/8), 0, 1) + clamp((y − maxY − s)·(1/8),
+ *   0, 1) over the next 8 (it closes: wherever h_f ≥ 1/2 the slot is ≥ −48 + 64 > 0 over every leaf value, the floor
+ *   `fl` bounding the family below);
+ * - the island cap: g_i = clamp((y − capTop + 8 + s)·(1/s), 0, 1), h_i = clamp((y − capTop + 8)·(1/8), 0, 1), so with
+ *   capTop 180 (floating_islands) the families narrow over y 156 … 172 and every corner at y ≥ 176 has h_i ≥ 1/2: no
+ *   noise cave air at y ≥ 176, below ISLAND_RUN_MIN_BOTTOM (D8). At the default 344 both are 0 at every corner (y ≤ 320) while bandSpan ≤ 16.
+ * Written with `recip(param …)` and `y`, not `slide` knots: a knot's y is a literal or one ref and the knots must
+ * increase over the refs' static ranges, which the overlapping minY / maxY ranges break.
  */
 const cap = (family: keyof typeof CAP_GENTLE): JsonValue => {
   const minY = (): JsonValue => param(`caves.${family}.minY`);
@@ -83,7 +90,9 @@ const cap = (family: keyof typeof CAP_GENTLE): JsonValue => {
   const h = add(
     clamp(mul(add(add(minY(), neg(bandSpan())), neg(y())), c(0.125)), 0, 1),
     clamp(mul(add(add(y(), neg(maxY())), neg(bandSpan())), c(0.125)), 0, 1));
-  return add(mul(c(CAP_GENTLE[family]), min(c(1), g)), mul(c(128), min(c(1), h)));
+  const gi = clamp(mul(add(add(add(y(), neg(capTop())), c(8)), bandSpan()), recip(bandSpan())), 0, 1);
+  const hi = clamp(mul(add(add(y(), neg(capTop())), c(8)), c(0.125)), 0, 1);
+  return add(mul(c(CAP_GENTLE[family]), min(c(1), add(g, gi))), mul(c(128), min(c(1), add(h, hi))));
 };
 /** rough = (−0.05 − 0.05·Nrm)·(−0.4 + |Nr|). */
 const rough = (): JsonValue => mul(add(c(-0.05), mul(c(-0.05), noise('roughnessMod'))), add(c(-0.4), abs(noise('roughness'))));

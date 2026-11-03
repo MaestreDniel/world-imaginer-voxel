@@ -394,7 +394,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
   /**
    * The session's params for the request-stream mechanics: the default tree without SP6a's cave terms (`caveFreeTree`,
    * work cost 574), whose 128² density slice fits the work bound. The default tree's own 128² slices are refused since
-   * SP6a Task 7 (work cost 12,652 since Task 8 > 7,936 per vertical sample; its test below).
+   * SP6a Task 7 (work cost 13,312 since Task 9 > 7,936 per vertical sample; its test below).
    */
   const SLICED: Params = paramsWith({ density: { defs: caveFreeTree() } } as never);
   /**
@@ -686,18 +686,18 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       calls[0]!.reject(new SliceTooHeavy(calls[0]!.opts.columnCost, 2 ** 19));
       await flush();
       expect(r.notice).toBe('node too heavy to slice (cost 574, limit 15 360)');
-      expect(tooHeavyText('full', DEFAULTS, 'density', '', 128, 1_652_224, 2 ** 20)).toBe('node too heavy for a 128² slice (cost 12 652, limit 7 936)');
+      expect(tooHeavyText('full', DEFAULTS, 'density', '', 128, 1_736_704, 2 ** 20)).toBe('node too heavy for a 128² slice (cost 13 312, limit 7 936)');
     });
 
-    test('the default tree (SP6a Task 7, work cost 12,652 since Task 8): the 32² draft, then its 128² slice refused by the work bound with the notice, the draft kept', async () => {
+    test('the default tree (SP6a Task 7, work cost 13,312 since Task 9): the 32² draft, then its 128² slice refused by the work bound with the notice, the draft kept', async () => {
       const { r, calls } = harness(DEFAULTS);
       r.request(want());
-      expect(calls[0]!.opts).toEqual({ priority: 2, columnCost: 32 * 12652 + COLUMN_SAMPLE_COST, budget: DRAFT_BUDGET });
+      expect(calls[0]!.opts).toEqual({ priority: 2, columnCost: 32 * 13312 + COLUMN_SAMPLE_COST, budget: DRAFT_BUDGET });
       const d = density(32);
       calls[0]!.resolve(d);
       await flush();
       expect(calls).toHaveLength(1);
-      expect([r.shown?.result, r.pending, r.notice]).toEqual([d, null, 'node too heavy for a 128² slice (cost 12 652, limit 7 936)']);
+      expect([r.shown?.result, r.pending, r.notice]).toEqual([d, null, 'node too heavy for a 128² slice (cost 13 312, limit 7 936)']);
     });
   });
 

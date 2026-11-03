@@ -55,6 +55,8 @@ describe('the source model (SP3d spec §1.3, §1.4)', () => {
       'caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional', 'caves.noodles.minY', 'caves.noodles.maxY',
       'caves.pillars.threshold', 'caves.entrances.offset', 'caves.entrances.threshold', 'caves.entrances.minY', 'caves.entrances.maxY',
       'caves.limits.surfaceDepth', 'caves.limits.bandSpan',
+      // Task 9: the island cap's top.
+      'caves.limits.capTop',
       'caves.noises.cheese.clampSigma', 'caves.noises.layer.clampSigma', 'caves.noises.cheeseRegional.clampSigma',
       'caves.noises.pillar.clampSigma', 'caves.noises.pillarRare.clampSigma', 'caves.noises.pillarThickness.clampSigma',
       'caves.noises.roughness.clampSigma', 'caves.noises.roughnessMod.clampSigma', 'caves.noises.entrance.clampSigma',
@@ -69,6 +71,7 @@ describe('the source model (SP3d spec §1.3, §1.4)', () => {
     expect(ALLOWED_REF_TARGETS.get('caves.noodles.maxY')).toEqual({ kind: 'int', lo: -64, hi: 320 });
     // recip(param caves.limits.bandSpan) is valid: its static range 1 … 32 excludes 0.
     expect(ALLOWED_REF_TARGETS.get('caves.limits.bandSpan')).toEqual({ kind: 'int', lo: 1, hi: 32 });
+    expect(ALLOWED_REF_TARGETS.get('caves.limits.capTop')).toEqual({ kind: 'int', lo: 180, hi: 344 });
     // A band scale's whole static range lies inside noiseScaled's [1/16, 16] (SP6a §1.5), so `s: {param}` validates.
     expect(ALLOWED_REF_TARGETS.get('caves.spaghetti2d.scales.s4')).toEqual({ kind: 'number', lo: 0.0625, hi: 16 });
     expect(ALLOWED_REF_TARGETS.get('caves.noises.cheese.clampSigma')).toEqual({ kind: 'number', lo: 1, hi: 8 });

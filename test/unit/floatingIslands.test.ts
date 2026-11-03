@@ -8,6 +8,8 @@
  * - water v0 under islands over the sea (D5 on real data): the column's fluid equals the muted column's, and the
  *   heightmaps equal a top-down scan (the island top + 1 at island positions).
  * The columns are `terrain.real` bench candidates (tc ≤ 216) found by scans; the tests re-derive what they rely on.
+ * SP6a Task 9 (its spec §1.4, D8): the island cap, `caves.limits.capTop` 180 in floating_islands' overlay, leaves no
+ * noise cave air at y ≥ 176 in the island clusters (below `ISLAND_RUN_MIN_BOTTOM`).
  */
 import { describe, expect, test } from 'vitest';
 import { ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
@@ -29,6 +31,10 @@ import { fillColumnT } from '../../src/metrics/region';
 import { AIR } from '../../src/world/blocks/index';
 import type { ColumnView } from '../../src/world/store/api';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
+import { DEFAULTS } from '../../src/core/params/defaults';
+import { applyPatch } from '../../src/core/params/kit';
+import { SCHEMA } from '../../src/core/params/schema';
+import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
 import { paramsWith } from '../harness/gen';
 import { topDownHeightmaps } from '../harness/heightmaps';
 
@@ -231,5 +237,47 @@ describe('compiled == reference and probe == bulk on island columns (SP3e spec �
     expect(masked).toBeGreaterThan(0);
     expect(corners).toBe(2 * 11 * 16 * 12 * 8);
     expect(islandVoxels).toBeGreaterThan(0);
+  });
+});
+
+describe('the island cap (SP6a spec §1.4, D8)', () => {
+  test('floating_islands sets caves.limits.capTop 180; the default is 344 (above the world: no effect)', () => {
+    expect(FLOATING.caves.limits.capTop).toBe(180);
+    expect(DEFAULTS.caves.limits.capTop).toBe(344);
+    expect(resolveProfile('default').caves.limits.capTop).toBe(344);
+  });
+
+  test('no noise cave air at y ≥ 176 in 64 floating_islands cluster columns (with capTop 344 there is some)', () => {
+    // The first 64 draws of Xoshiro128(fnv1a32('floatingIslands.capTop')), uniform in [−2048, 2048)² (cx then cz), whose
+    // lattice holds islandMask ≥ 0.25 (a cluster column, SP3e spec §3.1's gate); seed 42.
+    const r = new Xoshiro128(fnv1a32('floatingIslands.capTop'));
+    const top344 = applyPatch(SCHEMA, FLOATING, { caves: { limits: { capTop: 344 } } });
+    if (!top344.ok) throw new Error('bad capTop patch');
+    const open = createDensityContext(createGenContext(seedFromInput('42'), top344.value));
+    const sample = newColumnSample();
+    let columns = 0, rock = 0, air = 0, airUncapped = 0;
+    while (columns < 64) {
+      const cx = -2048 + r.nextInt(4096), cz = -2048 + r.nextInt(4096);
+      if (!(Math.max(...buildColumnSample(ctx, cx, cz, sample).f.islandMask) >= 0.25)) continue;
+      columns++;
+      dc.column(cx, cz);
+      open.column(cx, cz);
+      for (let y = 176; y < 320; y++) {
+        for (let lz = 0; lz < 16; lz++) {
+          for (let lx = 0; lx < 16; lx++) {
+            // Noise cave air: the pre-cave density holds the voxel solid and the root does not.
+            if (!(dc.compiled.tapFn('precave', lx, y, lz) > 0)) continue;
+            rock++;
+            if (!(dc.compiled.voxelFn(lx, y, lz) > 0)) air++;
+            if (!(open.compiled.voxelFn(lx, y, lz) > 0)) airUncapped++;
+          }
+        }
+      }
+    }
+    expect(air).toBe(0);
+    // Not vacuous: the clusters hold pre-cave rock at y ≥ 176 (20,727 voxels at seed 42), and caves open some of it
+    // when the cap is lifted (172 voxels).
+    expect(rock).toBeGreaterThan(0);
+    expect(airUncapped).toBeGreaterThan(0);
   });
 });

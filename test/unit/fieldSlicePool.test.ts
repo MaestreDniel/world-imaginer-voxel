@@ -104,19 +104,19 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
     }
     pool.terminate();
   }, 120_000);
-  test('a 128² vertical density slice at the defaults: refused by REQUEST_BUDGET since SP6a Task 7 (1,652,224 per sample column since Task 8, limit 1,048,576); under a budget admitting it, 26 parts of at most k = 5 sample columns on 6 workers (10 parts of k = 14 with Task 6\'s cave terms, 6 of k = 78 before)', async () => {
+  test('a 128² vertical density slice at the defaults: refused by REQUEST_BUDGET since SP6a Task 7 (1,736,704 per sample column since Task 9, limit 1,048,576); under a budget admitting it, 32 parts of at most k = 4 sample columns on 6 workers (26 of k = 5 with Task 7\'s and 8\'s, 10 parts of k = 14 with Task 6\'s cave terms, 6 of k = 78 before)', async () => {
     const log: ToWorker[] = [];
     const pool = createWorkerPool(6, () => fakeWorker(log));
     await pool.configure('42', DEFAULTS);
     const req = vReq(MOUNTAIN, 'density', '', 128);
-    expect(costOf(req)).toBe(1_652_224);
+    expect(costOf(req)).toBe(1_736_704);
     const e = await settle(pool.fieldSlice(req, { priority: 500, columnCost: costOf(req), budget: REQUEST_BUDGET }).promise);
     expect([e instanceof SliceTooHeavy, (e as SliceTooHeavy).limit, log.filter((m) => m.type === 'fieldSlice').length]).toEqual([true, 1_048_576, 0]);
     const r = await pool.fieldSlice(req, { priority: 500, columnCost: costOf(req), budget: 2 ** 40 }).promise;
     const parts = partsOf(log);
-    expect(parts.length).toBe(26);
-    expect(Math.max(...parts.map(([a, b]) => b - a))).toBe(5);
-    expect(parts).toEqual(Array.from({ length: 26 }, (_, i) => [Math.floor((i * 128) / 26), Math.floor(((i + 1) * 128) / 26)]));
+    expect(parts.length).toBe(32);
+    expect(Math.max(...parts.map(([a, b]) => b - a))).toBe(4);
+    expect(parts).toEqual(Array.from({ length: 32 }, (_, i) => [Math.floor((i * 128) / 32), Math.floor(((i + 1) * 128) / 32)]));
     expect(bytes(r.values).equals(bytes(single(req).values))).toBe(true);
     pool.terminate();
   }, 120_000);
@@ -157,7 +157,7 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
   test('the worker\'s bound check refuses a client column cost below its own (BAD_ARGS, too heavy), and a bad request rejects with its BAD_ARGS', async () => {
     const pool = createWorkerPool(1, () => fakeWorker([]));
     await pool.configure('42', DEFAULTS);
-    await expect(pool.fieldSlice(vReq(MOUNTAIN, 'density', '', 128), { priority: 500, columnCost: 1, budget: REQUEST_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: too heavy: 128 × 1652224/);
+    await expect(pool.fieldSlice(vReq(MOUNTAIN, 'density', '', 128), { priority: 500, columnCost: 1, budget: REQUEST_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: too heavy: 128 × 1736704/);
     await expect(pool.fieldSlice(vReq(MOUNTAIN, 'node', 'root.nope'), { priority: 500, columnCost: 1, budget: DRAFT_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: path "root.nope" names no node/);
     await expect(pool.fieldSlice(hReq('blocks'), { priority: 500, columnCost: 1, budget: DRAFT_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: field blocks has no horizontal slice/);
     pool.terminate();
