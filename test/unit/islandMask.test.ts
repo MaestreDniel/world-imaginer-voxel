@@ -24,15 +24,18 @@ const points = (n: number, seed: number): Array<readonly [number, number]> => {
 };
 
 describe('SP3e islands group (spec §2.1, D9, D10)', () => {
-  test('four leaves, last in the schema, scope terrain and stage shape; the group is the last top-level section', () => {
+  test('four leaves, scope terrain and stage shape, right before the caves group (SP6a appends it after islands)', () => {
     expect(PARAM_META.filter((m) => m.path.startsWith('islands.')).map((m) => `${m.path}:${m.kind}:${m.scope}:${m.stage}`)).toEqual([
       'islands.enabled:bool:terrain:shape',
       'islands.noise:noise:terrain:shape',
       'islands.lo:number:terrain:shape',
       'islands.hi:number:terrain:shape',
     ]);
-    expect(PARAM_META.slice(-4).map((m) => m.path)).toEqual(['islands.enabled', 'islands.noise', 'islands.lo', 'islands.hi']);
-    expect(Object.keys(DEFAULTS).at(-1)).toBe('islands');
+    // The islands leaves come right before the first caves.* leaf (SP6a spec §4: the caves group is appended after islands).
+    const firstCave = PARAM_META.findIndex((m) => m.path.startsWith('caves.'));
+    expect(PARAM_META.slice(firstCave - 4, firstCave).map((m) => m.path)).toEqual(['islands.enabled', 'islands.noise', 'islands.lo', 'islands.hi']);
+    expect(Object.keys(DEFAULTS).at(-2)).toBe('islands');
+    expect(Object.keys(DEFAULTS).at(-1)).toBe('caves');
     const g = SCHEMA.byPath.get('islands');
     expect(g?.tag).toBe('group');
     if (g?.tag === 'group') expect(g.label).toBe('Islands');

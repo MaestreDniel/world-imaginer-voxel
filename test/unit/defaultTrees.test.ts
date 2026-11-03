@@ -8,7 +8,7 @@ import type { Issue } from '../../src/core/params/kit';
 import type { DensityParams, SurfaceParams } from '../../src/core/params/schema';
 import { ctxFor } from '../harness/gen';
 import { legacyDefaultDensityExpr, legacyDefaultSurfaceRules } from '../harness/legacyTrees';
-import { columnDiff, SP5C_COLUMNS, sp5cPair, sp5cTrees } from '../harness/sp5cTrees';
+import { cavesMuted, cavesMutedDiff, SP5C_COLUMNS, sp5cPair, sp5cTrees } from '../harness/sp5cTrees';
 
 const FIXTURE = new URL('../fixtures/sp3c-default-rules.json', import.meta.url);
 const fixture = (): unknown => JSON.parse(readFileSync(FIXTURE, 'utf8')) as unknown;
@@ -157,16 +157,17 @@ describe('the default trees as data (SP3d spec §2)', () => {
     expect(() => { (tree as Rec)['x'] = 1; }).toThrow(TypeError);
   });
 
-  test('DEFAULT_DENSITY_TREE is the whole expression {root, defs} with the one def body (SP6a §1.1)', () => {
+  test('DEFAULT_DENSITY_TREE is the whole expression {root, defs} with the defs body and pillars (SP6a §1.1)', () => {
     expect(Object.keys(DEFAULT_DENSITY_TREE)).toEqual(['defs', 'root']);
-    expect(Object.keys((DEFAULT_DENSITY_TREE as Rec)['defs'] as Rec)).toEqual(['body']);
+    expect(Object.keys((DEFAULT_DENSITY_TREE as Rec)['defs'] as Rec)).toEqual(['body', 'pillars']);
+    expect(nodeAt(DEFAULT_DENSITY_TREE, 'defs.pillars')).toMatchObject({ op: 'tap', name: 'pillars', x: { op: 'interpolated' } });
   });
 
   test('defs.body is the SP5c default\'s terrain body (its root.a.a.x.x), unchanged', () => {
     expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'defs.body'), nodeAt(sp5cTrees().default, 'root.a.a.x.x'))).toBeNull();
   });
 
-  test('the root: max(min(min(tap precave(add(tap terrain(interpolated(ref body)), detail)), caves slot), noodle slot), tap islands)', () => {
+  test('the root: max(min(min(tap precave(add(tap terrain(interpolated(ref body)), detailG)), caves slot), noodle slot), tap islands)', () => {
     const sp5c = sp5cTrees().default;
     const op = (path: string): unknown => (nodeAt(DEFAULT_DENSITY_TREE, path) as Rec)['op'];
     expect([op('root'), op('root.a'), op('root.a.a')]).toEqual(['max', 'min', 'min']);
@@ -174,8 +175,15 @@ describe('the default trees as data (SP3d spec §2)', () => {
     expect(Object.keys(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a') as Rec)).toEqual(['name', 'op', 'x']);
     expect(op('root.a.a.a.x')).toBe('add');
     expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a.x.a'), { op: 'tap', name: 'terrain', x: { op: 'interpolated', x: { op: 'ref', name: 'body' } } })).toBeNull();
-    expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a.x.b'), nodeAt(sp5c, 'root.a.b')), 'the detail term').toBeNull();
-    expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b'), { op: 'const', v: 1e6 }), 'the caves slot').toBeNull();
+    // detailG = rangeChoice(interpolated(ref body), −1e9, 16, detail, 0) (SP6a §1.1, Spec correction 6), the detail term unchanged.
+    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a.x.b')).toMatchObject({ op: 'rangeChoice', lo: -1e9, hi: 16, outside: { op: 'const', v: 0 } });
+    expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a.x.b.x'), { op: 'interpolated', x: { op: 'ref', name: 'body' } })).toBeNull();
+    expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a.x.b.inside'), nodeAt(sp5c, 'root.a.b')), 'the detail term').toBeNull();
+    // The caves slot max(min(E, C), keep) (SP6a §1.1; test/unit/caveTerms.test.ts checks its terms).
+    expect([op('root.a.a.b'), op('root.a.a.b.a')]).toEqual(['max', 'min']);
+    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b.a.a')).toMatchObject({ op: 'tap', name: 'entrances' });
+    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b.a.b')).toMatchObject({ op: 'tap', name: 'cheese' });
+    expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.b.b')).toMatchObject({ op: 'rangeChoice', outside: { op: 'ref', name: 'pillars' } });
     expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.b'), { op: 'const', v: 1e6 }), 'the noodle slot').toBeNull();
     expect(treeDiff(nodeAt(DEFAULT_DENSITY_TREE, 'root.b'), nodeAt(sp5c, 'root.b')), 'the islands tap').toBeNull();
   });
@@ -183,7 +191,7 @@ describe('the default trees as data (SP3d spec §2)', () => {
   test('defs.body and the detail term with their three substitutions undone equal legacyDefaultDensityExpr\'s at DEFAULTS (Object.is on every number)', () => {
     const legacy = legacyDefaultDensityExpr(DEFAULTS.density);
     const body = densityUndone(nodeAt(DEFAULT_DENSITY_TREE, 'defs.body'), DEFAULTS.density);
-    const detail = densityUndone(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a.x.b'), DEFAULTS.density);
+    const detail = densityUndone(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a.x.b.inside'), DEFAULTS.density);
     expect(body.undone + detail.undone).toBe(3);
     expect(treeDiff(body.tree, nodeAt(legacy, 'root.a.a.x.x'))).toBeNull();
     expect(treeDiff(detail.tree, nodeAt(legacy, 'root.a.b'))).toBeNull();
@@ -196,19 +204,27 @@ describe('the default trees as data (SP3d spec §2)', () => {
 
   test.each([[0, 0], [0, 8], [8, 0], [0.35, 1.05]])('… and at detailAmpLo %s, detailAmpHi %s', (lo, hi) => {
     const p = withDensity({ detailAmpLo: lo, detailAmpHi: hi });
-    expect(treeDiff(densityUndone(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a.x.b'), p).tree, nodeAt(legacyDefaultDensityExpr(p), 'root.a.b'))).toBeNull();
+    expect(treeDiff(densityUndone(nodeAt(DEFAULT_DENSITY_TREE, 'root.a.a.a.x.b.inside'), p).tree, nodeAt(legacyDefaultDensityExpr(p), 'root.a.b'))).toBeNull();
   });
 
-  test.each(SP5C_COLUMNS)('the resolved default equals the SP5c default at every voxel and every bounds decision of column (%i, %i)', (cx, cz) => {
-    const { today, sp5c } = sp5cPair(ctxFor('42'), DEFAULT_DENSITY_TREE, 'default');
-    expect(columnDiff(today, sp5c, cx, cz)).toBeNull();
+  test.each(SP5C_COLUMNS)('with the entrances and cheese taps muted to 1e6, the default is SP5c\'s at every voxel where T < 16 and its solidity everywhere, column (%i, %i)', (cx, cz) => {
+    // The cave terms are the only change but detailG (SP6a §1.1): muting the two carving families makes the caves slot
+    // max(1e6, keep) = 1e6, so the root is SP5c's wherever detailG is the detail term (interpolated(ref body) < 16); at
+    // T ≥ 16 detailG is 0, both roots are > 0 (|detail| ≤ 4.5) and the solid arrays agree.
+    const { today, sp5c } = sp5cPair(ctxFor('42'), cavesMuted(DEFAULT_DENSITY_TREE), 'default');
+    const { diff, skipped } = cavesMutedDiff(today, sp5c, cx, cz);
+    expect(diff).toBeNull();
+    expect(skipped).toBeGreaterThan(0);
   });
 
-  test('DEFAULT_DENSITY_TREE\'s node count (SP6a: the SP5c tree\'s 60 plus precave, ref, the two mins and the two slots)', () => {
+  test('DEFAULT_DENSITY_TREE\'s node count (SP6a: the SP5c tree\'s 60 plus precave, ref, the two mins and the two slots: 66; then the cave terms: 178)', () => {
     // Nodes as the README counts them (every occurrence; the legacy builder's three `y` are one shared object).
     expect(countTreeNodes(legacyDefaultDensityExpr(DEFAULTS.density) as unknown as JsonValue, 'density')).toBe(56);
     expect(countTreeNodes(sp5cTrees().default as JsonValue, 'density')).toBe(60);
-    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(66);
+    // The cave terms: detailG's rangeChoice, interpolated, ref and const 0 around the detail term (+4), the caves slot
+    // max(min(E 36, C 40), keep 6) = 84 nodes in place of its const (+83; E's Ne·recip(const 6) 3 of them) and defs.pillars
+    // (+25): 178 (README's row).
+    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(178);
   });
 
   test('DEFAULT_SURFACE_RULES holds exactly §2.2\'s 15 refs', () => {

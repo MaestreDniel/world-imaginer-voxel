@@ -26,8 +26,8 @@ import { metricTest } from '../harness/metric';
 import { analyseColumnsThreaded, s1Values, s2Values, s3Values } from '../harness/surfaceAnalysis';
 import { newSurfaceAcc, type SurfaceAcc } from '../harness/surfaceScatter';
 import {
-  analyseColumn, forEachColumnThreaded, newScatterScratch, newScattered, presetRecord, solidity, t1Values, t2Values, t3Values,
-  t5Values, transitions, type Scattered,
+  analyseColumn, forEachColumnThreaded, newScatterScratch, newScattered, preCaveTop, presetRecord, solidity, t1Values,
+  t2Values, t3Values, t5Values, transitions, type Scattered,
 } from '../harness/terrainScatter';
 import {
   binCounts, branchHoldsAtTop, columnStates, componentKm2, groundRun, islandCount, islandRuns, landComponents, nearestRank,
@@ -494,8 +494,9 @@ if (TIER === 'full') {
         const params = resolveProfile(preset);
         const dc = createDensityContext(createGenContext(seedFromInput(SEED), params));
         const est = (x: number, z: number): number => surfaceEst3(dc, x, z);
+        const pre = (x: number, z: number, top: number): number => preCaveTop(dc, x, z, top);
         await forEachColumnThreaded(REGION_WORKER_DIR, SEED, params, drawColumns(r, RECORD_COLUMNS, RECORD_RANGE),
-          (view, cx, cz) => analyseColumn(s, view, cx, cz, est, scratch));
+          (view, cx, cz) => analyseColumn(s, view, cx, cz, est, scratch, pre));
         s.seconds = timed(t0);
         out.set(preset, s);
       }

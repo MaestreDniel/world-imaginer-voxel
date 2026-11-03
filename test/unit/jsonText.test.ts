@@ -269,7 +269,8 @@ describe('parseTree', () => {
 describe('ranges', () => {
   test('nodeAt is the innermost node whose range holds the offset; pathRange falls back to the longest named prefix', () => {
     const { text, ranges } = printTree(DEFAULT_DENSITY_TREE, 'density');
-    const islands = text.indexOf('{ "op": "const", "v": -1000000 }');
+    // The islands tap's child (SP6a's `keep` prints another `{ const −1e6 }` before it, as its `inside`).
+    const islands = text.indexOf('"x": { "op": "const", "v": -1000000 }') + '"x": '.length;
     expect(nodeAt(ranges, islands)).toBe('root.b.x');
     expect(nodeAt(ranges, islands + 10)).toBe('root.b.x');
     expect(nodeAt(ranges, text.indexOf('"name": "islands"'))).toBe('root.b');

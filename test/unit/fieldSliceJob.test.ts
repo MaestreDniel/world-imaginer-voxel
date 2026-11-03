@@ -99,10 +99,12 @@ describe('the fieldSlice job (SP3d spec §5.1)', () => {
     bad(vMsg(MOUNTAIN, 'node', 'constructor', 0, 8), 'path "constructor" names no node of density.defs');
     bad(vMsg(MOUNTAIN, 'rule', 'root.rules[99]', 0, 1), 'path "root.rules[99]" names no rule or condition of surface.rules');
     for (const [from, to] of [[5, 5], [0, 33], [1.5, 3], [-1, 2], [Number.NaN, 2]]) bad(vMsg(MOUNTAIN, 'density', '', from!, to!), `samples [${from}, ${to}) are not integers with 0 ≤ from < to ≤ 32`);
-    bad(vMsg(MOUNTAIN, 'density', '', 0, 128, 128), `too heavy: 128 × 106240 work units exceed the part budget ${PART_BUDGET}`);
-    bad(vMsg(MOUNTAIN, 'blocks', '', 0, 2), 'too heavy: 2 sample columns of cost 5498413, at most 1 per part');
-    expect(h.handle(vMsg(MOUNTAIN, 'density', '', 0, 78, 128)).msg.type).toBe('fieldSliceResult');
-    bad(vMsg(MOUNTAIN, 'density', '', 0, 79, 128), `too heavy: 79 × 106240 work units exceed the part budget ${PART_BUDGET}`);
+    // A 128² vertical density sample column: 128 × 4,366 + COLUMN_SAMPLE_COST = 591,616 with SP6a's cave terms (106,240
+    // before), so a part holds at most 14 of them (78 before).
+    bad(vMsg(MOUNTAIN, 'density', '', 0, 128, 128), `too heavy: 128 × 591616 work units exceed the part budget ${PART_BUDGET}`);
+    bad(vMsg(MOUNTAIN, 'blocks', '', 0, 2), 'too heavy: 2 sample columns of cost 7658052, at most 1 per part');
+    expect(h.handle(vMsg(MOUNTAIN, 'density', '', 0, 14, 128)).msg.type).toBe('fieldSliceResult');
+    bad(vMsg(MOUNTAIN, 'density', '', 0, 15, 128), `too heavy: 15 × 591616 work units exceed the part budget ${PART_BUDGET}`);
   });
   test('before configure NOT_CONFIGURED, at another epoch STALE_EPOCH; with epoch cells a fieldSlice whose epoch the cell has left replies ABORTED', () => {
     const sab = new SharedArrayBuffer(16);

@@ -84,6 +84,10 @@ describe('rows and summaries', () => {
       '2 defs.body.a.b | b | mul [+]',
       '1 defs.body.b | b | neg [-]',
       '2 defs.body.b.x | x | mul [+]',
+      // SP6a's pillars def (the caves slot reads it twice).
+      '0 defs.pillars | defs.pillars | tap pillars [-]',
+      '1 defs.pillars.x | x | interpolated [-]',
+      '2 defs.pillars.x.x | x | mul [+]',
     ]);
     expect(rowsOf(t, 'surface.rules').map(brief)).toEqual([
       '0 root | root | sequence 3 [-]',
@@ -119,9 +123,13 @@ describe('rows and summaries', () => {
     expect(sum.get('defs.body.a.a.a.b')).toBe('neg');
     expect(sum.get('defs.body.a.a.a.b.x')).toBe('y');
     expect(sum.get('root.a.a.a.x.a.x')).toBe('interpolated');
-    expect(sum.get('root.a.a.a.x.b.b.a')).toBe('param density.detailAmpLo = 0.6');
-    expect(sum.get('root.a.a.a.x.b.b.b.b')).toBe('clamp 0 … 1');
-    expect(sum.get('root.a.a.a.x.b.b.b.b.x.b')).toBe('const 0.5');
+    expect(sum.get('root.a.a.a.x.b.inside.b.a')).toBe('param density.detailAmpLo = 0.6');
+    expect(sum.get('root.a.a.a.x.b.inside.b.b.b')).toBe('clamp 0 … 1');
+    expect(sum.get('root.a.a.a.x.b.inside.b.b.b.x.b')).toBe('const 0.5');
+    // SP6a's cave terms: detailG, a family tap, a cave param, keep's ref bound.
+    expect(sum.get('root.a.a.a.x.b')).toBe('rangeChoice -1000000000 … 16');
+    expect(sum.get('root.a.a.b.a.a')).toBe('tap entrances');
+    expect(sum.get('root.a.a.b.a.a.x.x.a.b.a.a.b')).toBe('param caves.entrances.offset = 0.37');
     const rules = new Map(r.map((x) => [x.path, x.summary]));
     const sky = 'root.rules[1].then.rules';
     expect(rules.get(`${sky}[0]`)).toBe('if not');
@@ -190,7 +198,7 @@ describe('rows and summaries', () => {
 
   test('param rows read the session value, so a slider move changes their summary and the key', () => {
     const w = session();
-    const sel: Selection = { leaf: 'density.defs', path: 'root.a.a.a.x.b.b.a' };
+    const sel: Selection = { leaf: 'density.defs', path: 'root.a.a.a.x.b.inside.b.a' };
     const exp = expandToSelection(w.state.params, NO_EXPANSION, sel);
     const before = inspectorTree(w.state.params, exp, sel);
     expect(rowsOf(before, 'density.defs').find((r) => r.path === sel.path)!.summary).toBe('param density.detailAmpLo = 0.6');
@@ -204,11 +212,11 @@ describe('rows and summaries', () => {
 describe('expansion, expand to selection and the indentation cap', () => {
   test('the initial expansion opens levels 0 and 1 (three levels shown); a toggle overrides it', () => {
     expect([0, 1, 2, 3].map((d) => isExpanded(NO_EXPANSION, 'density.defs', 'root', d))).toEqual([true, true, false, false]);
-    // Closing the root hides its subtree only: the def body (its own top-level row) stays as it was.
+    // Closing the root hides its subtree only: the defs body and pillars (their own top-level rows) stay as they were.
     const rootRows = (e: Expansion): string[] => rowsOf(inspectorTree(DEFAULTS, e, null), 'density.defs').map((r) => r.path).filter((p) => p.startsWith('root'));
     let e = toggleExpansion(NO_EXPANSION, 'density.defs', 'root', 0);
     expect(rootRows(e)).toEqual(['root']);
-    expect(rowsOf(inspectorTree(DEFAULTS, e, null), 'density.defs').filter((r) => r.path.startsWith('defs.'))).toHaveLength(6);
+    expect(rowsOf(inspectorTree(DEFAULTS, e, null), 'density.defs').filter((r) => r.path.startsWith('defs.'))).toHaveLength(9);
     expect(rowsOf(inspectorTree(DEFAULTS, e, null), 'surface.rules')).toHaveLength(10);
     e = toggleExpansion(e, 'density.defs', 'root.a.a', 2);
     expect(rootRows(e)).toEqual(['root']);
@@ -218,7 +226,7 @@ describe('expansion, expand to selection and the indentation cap', () => {
       '1 root.a | a | min [-]',
       '2 root.a.a | a | min [-]',
       '3 root.a.a.a | a | tap precave [+]',
-      '3 root.a.a.b | b | const 1000000',
+      '3 root.a.a.b | b | max [+]',
     ]);
     expect(NO_EXPANSION.size).toBe(0);
   });
@@ -312,7 +320,7 @@ describe('selection follows the longest prefix that still names a node', () => {
     expect(followNode(DEFAULTS, sel)).toEqual(DEFAULT_SELECTION);
     expect(DEFAULT_SELECTION).toEqual({ leaf: 'density.defs', path: 'root' });
     // Paths that name no node of the format fall back to the tree's root.
-    expect(followNode(DEFAULTS, { leaf: 'density.defs', path: 'root.a.a.a.x.b.b.b.b.lo' })).toEqual({ leaf: 'density.defs', path: 'root.a.a.a.x.b.b.b.b' });
+    expect(followNode(DEFAULTS, { leaf: 'density.defs', path: 'root.a.a.a.x.b.inside.b.b.b.lo' })).toEqual({ leaf: 'density.defs', path: 'root.a.a.a.x.b.inside.b.b.b' });
     expect(followNode(DEFAULTS, { leaf: 'density.defs', path: 'defs' })).toEqual(DEFAULT_SELECTION);
     expect(followNode(DEFAULTS, { leaf: 'surface.rules', path: 'rules[0]' })).toEqual({ leaf: 'surface.rules', path: 'root' });
     expect(followNode(DEFAULTS, { leaf: 'density.defs', path: 'root.constructor' })).toEqual(DEFAULT_SELECTION);
@@ -341,7 +349,8 @@ describe('caret → node and selection → highlight', () => {
     m.setCaret(ranges.byPath.get(overhang)!.start + 3);
     expect(caretTarget(m.state, w.state.params)).toEqual({ highlight: overhang, select: { leaf: 'density.defs', path: overhang } });
     // On a field of a node: that node.
-    m.setCaret(density(text, '"knots"'));
+    // The body's slide (SP6a's entrances print their yGrad slide's knots earlier, under the root).
+    m.setCaret(density(text, '"knots": [[-64'));
     expect(caretTarget(m.state, w.state.params).select).toEqual({ leaf: 'density.defs', path: 'defs.body.a.a.b.b' });
     // Outside every node (the value's own braces, the "defs" key): nothing.
     m.setCaret(0);

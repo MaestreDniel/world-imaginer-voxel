@@ -447,7 +447,8 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     expect([r.shown?.sessionEpoch, r.shown?.key, fieldSliceView(r, 7)]).toEqual([7, r.key, 'fresh']);
     expect(calls).toHaveLength(2);
     expect(calls[1]!.req).toEqual({ ...calls[0]!.req, n: 128 });
-    expect(calls[1]!.opts).toEqual({ priority: 500, columnCost: 106_240, budget: REQUEST_BUDGET });
+    // 128 × 4,366 + COLUMN_SAMPLE_COST with SP6a's cave terms (106,240 before).
+    expect(calls[1]!.opts).toEqual({ priority: 500, columnCost: 591_616, budget: REQUEST_BUDGET });
     expect(r.pending).toEqual({ sessionEpoch: 7, key: r.key, n: 128 });
     const f = density(128);
     calls[1]!.resolve(f);
@@ -466,7 +467,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
     const { r, calls } = harness();
     r.request(want(HORI, LINE));
     expect(calls[0]!.req).toEqual({ plane: 'horizontal', cx: 100, cz: -200, extent: 512, y: 63, n: 32, field: 'density', path: '' });
-    expect(calls[0]!.opts.columnCost).toBe(32 * (574 + CORNER_SAMPLE_COST));
+    expect(calls[0]!.opts.columnCost).toBe(32 * (4366 + CORNER_SAMPLE_COST));
     expect(fieldSliceSpec(HORI, null, 'node', 'root.b', 128)).toEqual({ plane: 'horizontal', cx: 100, cz: -200, extent: 512, y: 63, n: 128, field: 'node', path: 'root.b' });
   });
 
@@ -678,8 +679,8 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       r.request(want());
       calls[0]!.reject(new SliceTooHeavy(calls[0]!.opts.columnCost, 2 ** 19));
       await flush();
-      expect(r.notice).toBe('node too heavy to slice (cost 574, limit 15 360)');
-      expect(tooHeavyText('full', DEFAULTS, 'density', '', 128, 106_240, 2 ** 20)).toBe('node too heavy for a 128² slice (cost 574, limit 7 936)');
+      expect(r.notice).toBe('node too heavy to slice (cost 4 366, limit 15 360)');
+      expect(tooHeavyText('full', DEFAULTS, 'density', '', 128, 591_616, 2 ** 20)).toBe('node too heavy for a 128² slice (cost 4 366, limit 7 936)');
     });
   });
 

@@ -35,7 +35,7 @@ describe('panel tree', () => {
     expect(root.path).toBe('');
     expect(root.label).toBe('Parameters');
     expect(root.controls).toEqual([]);
-    expect(root.sections.map((s) => s.path)).toEqual(['climate', 'shape', 'rivers', 'lakes', 'biomes', 'density', 'surface', 'islands']);
+    expect(root.sections.map((s) => s.path)).toEqual(['climate', 'shape', 'rivers', 'lakes', 'biomes', 'density', 'surface', 'islands', 'caves']);
     const groups = SCHEMA.nodes.filter((n) => n.node.tag === 'group').map((n) => n.path);
     expect(sectionsOf(root).map((s) => s.path).sort()).toEqual([...groups].sort());
     expect(controlsOf(root).map((c) => c.path).sort()).toEqual(SCHEMA.leaves.map((l) => l.path).sort());
@@ -52,14 +52,25 @@ describe('panel tree', () => {
     }
   });
 
-  test('SP3e spec §2.1: the Islands section, last, holds the schema\'s first bool leaf as a checkbox control', () => {
-    const islands = panelTree().sections.at(-1)!;
+  test('SP3e spec §2.1: the Islands section, last before SP6a\'s Caves, holds the schema\'s first bool leaf as a checkbox control', () => {
+    const islands = panelTree().sections.at(-2)!;
     expect([islands.path, islands.label]).toEqual(['islands', 'Islands']);
     expect(islands.controls.map((c) => [c.path, c.kind])).toEqual([
       ['islands.enabled', 'bool'], ['islands.noise', 'noise'], ['islands.lo', 'number'], ['islands.hi', 'number'],
     ]);
     expect(islands.sections).toEqual([]);
     expect(boolShown(DEFAULTS, 'islands.enabled')).toBe(false);
+  });
+
+  test('SP6a spec §4 (D9): the Caves section, last, with its sub-sections in the spec\'s order and sizes first', () => {
+    const caves = panelTree().sections.at(-1)!;
+    expect([caves.path, caves.label, caves.controls]).toEqual(['caves', 'Caves', []]);
+    // Task 6's sub-groups (Spaghetti 3D, Spaghetti 2D and Noodles join between Cheese and Pillars, the carvers before Limits).
+    expect(caves.sections.map((s) => [s.path, s.label])).toEqual([
+      ['caves.cheese', 'Cheese'], ['caves.pillars', 'Pillars'], ['caves.entrances', 'Entrances'], ['caves.limits', 'Limits'], ['caves.noises', 'Cave noises'],
+    ]);
+    expect(caves.sections[0]!.controls.map((c) => c.path)).toEqual(['caves.cheese.offset', 'caves.cheese.regional', 'caves.cheese.layerAmp', 'caves.cheese.roofDepth']);
+    for (const c of controlsOf(caves)) expect([c.path, c.scope]).toEqual([c.path, 'terrain']);
   });
 
   test("a section's own controls come before its sub-sections (climate: the fields, then Warps)", () => {
@@ -87,6 +98,9 @@ describe('panel tree', () => {
   test('scale: log when min > 0 and max / min ≥ 20, and for every noise wavelength; linear otherwise', () => {
     const log = controlsOf(panelTree()).filter((c) => c.scale === 'log').map((c) => c.path);
     expect(log.sort()).toEqual([
+      'caves.noises.cheese', 'caves.noises.cheeseRegional', 'caves.noises.entrance', 'caves.noises.entranceA', 'caves.noises.entranceB',
+      'caves.noises.layer', 'caves.noises.pillar', 'caves.noises.pillarRare', 'caves.noises.pillarThickness', 'caves.noises.roughness',
+      'caves.noises.roughnessMod',
       'climate.C', 'climate.E', 'climate.H', 'climate.R', 'climate.T', 'climate.W', 'climate.scaleMul',
       'climate.warp.C.noise', 'climate.warp.R.noise', 'climate.warp.shift.noise',
       'density.noises.detail', 'density.noises.islands', 'density.noises.jag', 'density.noises.overhang',
@@ -213,7 +227,8 @@ describe('noise sub-block', () => {
       if (leaf.kind !== 'noise') continue;
       for (const persistence of [0.05, 0.1, 0.5, 0.97, 1]) {
         for (const octaves of [1, 7, 16]) {
-          const d: NoiseDef = { ...noiseAt(path), persistence, octaves };
+          // From no list (SP6a's entrance noise has a default list, which a toggle on keeps).
+          const d: NoiseDef = { ...noiseAt(path), persistence, octaves, amplitudes: null };
           const patch = { persistence, octaves, ...amplitudesToggle(d, true) };
           for (const a of patch.amplitudes!) expect(a === 0 || Math.abs(a) >= 1e-6).toBe(true);
           expect(applyPatch(SCHEMA, DEFAULTS, patchAt(path, patch)).ok).toBe(true);
@@ -330,8 +345,9 @@ describe('panel controls (Task 17): kinds, slider positions, typed values, issue
 
   test('on a linear stepped slider every keyboard step moves to the next value of the step grid', () => {
     const linear = [...sliders(), ...NOISE_NUMBER_FIELDS.map((f) => noiseFieldControl(control('climate.C'), f))].filter((c) => c.scale === 'linear');
-    // 34 before SP3c, + the 7 number and int leaves of the surface group, + islands.lo and islands.hi (SP3e).
-    expect(linear.length).toBe(43);
+    // 34 before SP3c, + the 7 number and int leaves of the surface group, + islands.lo and islands.hi (SP3e), + SP6a's 8
+    // caves number leaves (Task 6).
+    expect(linear.length).toBe(51);
     for (const c of linear) {
       const n = sliderPositions(c);
       expect(n).toBe(Math.round((c.max! - c.min!) / c.step!));

@@ -5,8 +5,8 @@
  * - `structuralCost(node, defs)`: 1 per node plus its children's costs; a `ref` costs its def; `interpolated` costs
  *   1 + 8 × its child (eight corners per voxel); a muted tap counts its child (mutes ignored). Value-independent.
  * - `workCost(expr, params)`: the structural cost of an evaluated expression with every `noise` / `noise2` (and SP6a's
- *   `noiseScaled`, its spec §1.5) weighted 4 × octaves × (double ? 2 : 1) of its configured `density.noises.<id>` leaf
- *   (§5.2).
+ *   `noiseScaled`, its spec §1.5) weighted 4 × octaves × (double ? 2 : 1) of its configured `density.noises.<id>` leaf,
+ *   else its `caves.noises.<id>` leaf (SP6a spec §1.5) (§5.2).
  * - `densityColumnCost(source)`: the source structure with mutes applied and refs expanded (no value is read), every
  *   noise at its static maximum weight (16 octaves, double), every node at voxel placement counted 98,304 times (a
  *   chunk column) and every node under `interpolated` 1,225 times (25 × 49 quart corners).
@@ -163,16 +163,22 @@ const STRUCTURAL: Model = {
 /**
  * The structural cost of the source subtree `node` (§1.7): 1 per node plus its children's costs, a `ref` costing its
  * def in `defs` (the tree's `defs` object), `interpolated` 1 + 8 × its child, a muted tap its child; saturating at
- * 2^31. The default tree's root costs 333 (source) and 322 (resolved).
+ * 2^31. The default tree's root costs 2,522 (source) and 2,455 (resolved) with SP6a's cave terms (333 and 322 in SP5c).
  */
 export function structuralCost(node: unknown, defs?: unknown): number {
   return treeCost(node, defs, STRUCTURAL);
 }
 
-/** 4 × octaves × (double ? 2 : 1) of the density noise leaf `id`; a noise the params do not hold weighs its maximum. */
+/**
+ * 4 × octaves × (double ? 2 : 1) of the density noise leaf `id`, looked up under `density.noises` and then under
+ * `caves.noises` (SP6a spec §1.5); a noise the params do not hold weighs its maximum.
+ */
 function noiseWeight(params: Params, id: unknown): number {
-  const noises: Rec = params.density.noises;
-  if (typeof id !== 'string' || !Object.hasOwn(noises, id)) return NOISE_MAX_WEIGHT;
+  if (typeof id !== 'string') return NOISE_MAX_WEIGHT;
+  const density: Rec = params.density.noises;
+  const caves: Rec = params.caves.noises;
+  const noises = Object.hasOwn(density, id) ? density : Object.hasOwn(caves, id) ? caves : null;
+  if (noises === null) return NOISE_MAX_WEIGHT;
   const n = noises[id];
   if (!isRec(n) || typeof n['octaves'] !== 'number') return NOISE_MAX_WEIGHT;
   return NOISE_UNITS_PER_OCTAVE * n['octaves'] * (n['double'] === true ? 2 : 1);
@@ -181,8 +187,8 @@ function noiseWeight(params: Params, id: unknown): number {
 /**
  * The work cost of the evaluated expression `expr` = {root, defs} (§5.2) under `params`: the structural cost with every
  * `noise` / `noise2` weighted by its configured leaf (a default `jag` or `overhang` costs 16, `detail` 8); saturating at
- * 2^31. The default root costs 574 at the default noises (327 structural units, 17 of them noise evaluations; 569 and
- * 322 before SP6a's root slots).
+ * 2^31. The default root costs 4,366 at the default noises (2,455 structural units, 209 of them noise evaluations; 574
+ * and 327 before SP6a's cave terms, 569 and 322 before its root slots).
  */
 export function workCost(expr: unknown, params: Params): number {
   if (!isRec(expr)) return 0;

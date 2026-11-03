@@ -9,8 +9,8 @@ import { createDensityContext } from '../../src/gen/density/context';
 import { metricTest } from '../harness/metric';
 import { genRegion } from '../harness/region';
 import {
-  analyseColumn, forEachColumnThreaded, newGrid, newScatterScratch, newScattered, putColumn, t1Values, t2Values, t3Values,
-  t5Values, waterWalls, type Scattered,
+  analyseColumn, forEachColumnThreaded, newGrid, newScatterScratch, newScattered, preCaveTop, putColumn, t1Values, t2Values,
+  t3Values, t5Values, waterWalls, type Scattered,
 } from '../harness/terrainScatter';
 
 /**
@@ -45,7 +45,10 @@ import {
  * - T4: `floorSd` the mean over regions of the sd of the floor under water; `exposedBedrock` floors at y −64 under
  *   water; `deepFloor` floors ≤ −50 under water.
  * - T5 at the 16 positions lx, lz ∈ {2, 6, 10, 14} of each column: land positions with exactly one transition at
- *   y ≥ −56; |surfaceEst3 − true top|, `median`, `p90`, `p99` (nearest rank).
+ *   y ≥ −56; |surfaceEst3 − pre-cave top|, `median`, `p90`, `p99` (nearest rank). The pre-cave top (SP6a spec §10.4)
+ *   is the top of the `precave` tap's run over the true top (`preCaveTop`): `surfaceEst3` estimates the pre-cave
+ *   terrain by design, and the surface's cave holes are C9's (`holedSurface`, `thinRoof`); `raisedTop` counts the
+ *   positions where it lies above the true top.
  *
  * Each part's value is the worse of the two profiles (seeds pooled within a profile); the per-profile values and the
  * populations are recorded beside it (`<part>.<profile>`). A part below its minimum population (§8.1: peak positions
@@ -101,9 +104,10 @@ async function scatter(): Promise<Record<Profile, Scattered>> {
     for (const seed of SEEDS) {
       const dc = createDensityContext(createGenContext(seedFromInput(seed), params));
       const est = (x: number, z: number): number => surfaceEst3(dc, x, z);
+      const pre = (x: number, z: number, top: number): number => preCaveTop(dc, x, z, top);
       const cols: Array<[number, number]> = [];
       for (let n = 0; n < COLUMNS[profile]; n++) cols.push([-R + r.nextInt(2 * R), -R + r.nextInt(2 * R)]);
-      await forEachColumnThreaded(SCATTER_WORKER_DIR, seed, params, cols, (view, cx, cz) => analyseColumn(s, view, cx, cz, est, scratch));
+      await forEachColumnThreaded(SCATTER_WORKER_DIR, seed, params, cols, (view, cx, cz) => analyseColumn(s, view, cx, cz, est, scratch, pre));
     }
     s.seconds = Math.round(performance.now() - t0) / 1000;
     out[profile] = s;

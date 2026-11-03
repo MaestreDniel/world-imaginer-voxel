@@ -3,6 +3,8 @@ import { expect } from 'vitest';
 import type { Params } from '../../src/core/params/schema';
 import { biomeFamily, biomeId, type BiomeFamily } from '../../src/gen/biomes/registry';
 import { AIR } from '../../src/world/blocks/index';
+import type { DensityContext } from '../../src/gen/density/context';
+import { probe } from '../../src/gen/density/probe';
 import type { AuxView, ColumnView } from '../../src/world/store/api';
 import { createStore } from '../../src/world/store/store';
 import { ask, buildNodeTaskWorker } from './nodeWorker';
@@ -143,6 +145,8 @@ export interface Scattered {
   t5: number[];
   t5Land: number;
   t5Multi: number;
+  /** T5 positions whose pre-cave top lies above the true top (a cave opens the surface there; SP6a spec §10.4). */
+  t5Raised: number;
   /** T3: per biome, inside pairs and their steep count; per same-family biome pair `(min << 8) | max`, the same. */
   inside: Float64Array;
   insideSteep: Float64Array;
@@ -160,7 +164,7 @@ export interface Scattered {
 
 export const newScattered = (): Scattered => ({
   hist: new Float64Array(384), land: 0, over: 0, peakLand: 0, peakOver: 0, peakColumns: 0,
-  floatPositions: 0, floatVoxels: 0, peakFloatPositions: 0, t5: [], t5Land: 0, t5Multi: 0,
+  floatPositions: 0, floatVoxels: 0, peakFloatPositions: 0, t5: [], t5Land: 0, t5Multi: 0, t5Raised: 0,
   inside: new Float64Array(256), insideSteep: new Float64Array(256),
   borderPairs: new Float64Array(65536), borderSteep: new Float64Array(65536), landPairs: 0, crossFamilyPairs: 0,
   walls: 0, water: 0, columns: 0, waterPositions: 0, seconds: 0,
@@ -171,10 +175,26 @@ export interface ScatterScratch { solid: Uint8Array; g: Grid }
 
 export const newScatterScratch = (): ScatterScratch => ({ solid: new Uint8Array(98304), g: newGrid(16, 16) });
 
+/** The true top (no caves to look through): `analyseColumn`'s default `preCaveTop`. */
+const TRUE_TOP = (_x: number, _z: number, top: number): number => top;
+
+/**
+ * The pre-cave top over a land position's true top (SP6a spec §10.4: T5 reads the pre-cave terrain, which
+ * `surfaceEst3` estimates by design): the top of the run of `precave` tap > 0 (`probe`) that continues the true top
+ * upward, so a cave that opens the surface is looked through. `dc`'s tree must have a `precave` tap.
+ */
+export function preCaveTop(dc: DensityContext, x: number, z: number, top: number): number {
+  let y = top;
+  while (y < 319 && probe(dc, x, y + 1, z, 'precave') > 0) y++;
+  return y;
+}
+
 /**
  * Adds one generated column (chunk column cx, cz) to `s`: T1's land tops, T2's overhangs and floating rocks, T5's
- * |surfaceEst − true top| at its 16 positions (`surfaceEst(x, z)` is `surfaceEst3` on the population's density
- * context), T3's in-column neighbour pairs and the water-wall diagnostic.
+ * |surfaceEst − pre-cave top| at its 16 positions (`surfaceEst(x, z)` is `surfaceEst3` on the population's density
+ * context; `preTop(x, z, top)` the pre-cave top over the true top, `preCaveTop` on that context, SP6a spec §10.4;
+ * the population stays the single-surface land positions of the generated voxels), T3's in-column neighbour pairs and
+ * the water-wall diagnostic.
  */
 export function analyseColumn(
   s: Scattered,
@@ -183,6 +203,7 @@ export function analyseColumn(
   cz: number,
   surfaceEst: (x: number, z: number) => number,
   scratch: ScatterScratch,
+  preTop: (x: number, z: number, top: number) => number = TRUE_TOP,
 ): void {
   const { solid, g } = scratch;
   const aux = view.aux()!;
@@ -215,7 +236,10 @@ export function analyseColumn(
       s.t5Land++;
       const top = ws - 1;
       if (transitions(solid, p, -56, top) !== 1) { s.t5Multi++; continue; }
-      s.t5.push(Math.abs(surfaceEst(16 * cx + lx, 16 * cz + lz) - top));
+      const x = 16 * cx + lx, z = 16 * cz + lz;
+      const pre = preTop(x, z, top);
+      if (pre !== top) s.t5Raised++;
+      s.t5.push(Math.abs(surfaceEst(x, z) - pre));
     }
   }
   putColumn(g, aux, 0, 0);
@@ -407,8 +431,9 @@ export function t3Values(s: Scattered, mode: PopulationMode, label: string): Rec
 }
 
 /**
- * T5 of one population: nearest-rank `median`, `p90`, `p99` of |surfaceEst3 − true top| (population: the
- * single-surface positions, minimum 1,000 in enforce mode; NaN when empty), then the extras.
+ * T5 of one population: nearest-rank `median`, `p90`, `p99` of |surfaceEst3 − pre-cave top| (SP6a spec §10.4; the
+ * population: the single-surface positions, minimum 1,000 in enforce mode; NaN when empty), then the extras
+ * (`raisedTop`: the positions whose pre-cave top lies above the true top).
  */
 export function t5Values(s: Scattered, mode: PopulationMode, label: string): Record<string, number> {
   const sorted = Float64Array.from(s.t5).sort();
@@ -422,6 +447,7 @@ export function t5Values(s: Scattered, mode: PopulationMode, label: string): Rec
     singleSurface: sorted.length,
     landPositions: s.t5Land,
     multiSurface: s.t5Multi,
+    raisedTop: s.t5Raised,
   };
   populations(rec, mode, ['median', 'p90', 'p99'], sorted.length);
   return rec;

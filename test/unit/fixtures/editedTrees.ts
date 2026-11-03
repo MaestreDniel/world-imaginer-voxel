@@ -12,7 +12,8 @@ const copy = (v: unknown): Tree => JSON.parse(JSON.stringify(v)) as Tree;
 
 /**
  * The default density tree (a mutable copy). Its terrain tap is `root.a.a.a.x.a` (inside the `precave` tap, SP6a §1.1),
- * its detail term `root.a.a.a.x.b`, its islands tap `root.b`.
+ * `detailG` `root.a.a.a.x.b` (the detail term is its `inside`, `root.a.a.a.x.b.inside`), the caves slot `root.a.a.b`,
+ * its islands tap `root.b`.
  */
 export const densityTree = (): Tree => copy(DEFAULT_DENSITY_TREE);
 /** The default rule tree (a mutable copy). Its deepslate gradient is the condition `rules[2].if`. */
@@ -33,10 +34,31 @@ export function terrainMuted(mute = 0): Tree {
 }
 
 /**
- * A tree that reads `col steep` at the default's weight (work cost 574 + 2): the islands const replaced by
- * add(const −1e6, col steep), so its horizontal slices take corner samples with steep (spec §4.4, §5.2).
+ * The default tree without SP6a's cave terms (its root slots kept, §1.1): detailG replaced by its detail term, the caves
+ * slot by `const 1e6`, `defs.pillars` dropped; the SP5c world's values, work cost 574.
+ */
+export function caveFreeTree(): Tree {
+  const t = densityTree();
+  t['root'].a.a.a.x.b = t['root'].a.a.a.x.b.inside;
+  t['root'].a.a.b = { op: 'const', v: 1000000 };
+  delete t['defs'].pillars;
+  return t;
+}
+
+/**
+ * A tree that reads `col steep` at the weight of the default without its cave terms (work cost 574 + 2): `caveFreeTree`
+ * with the islands const replaced by add(const −1e6, col steep), so its horizontal slices take corner samples with steep
+ * (spec §4.4, §5.2). SP3d's work bound was calibrated on that weight (P3); today's default with SP6a's cave terms weighs
+ * 4,366 (`steepDefaultTree`).
  */
 export function steepTree(): Tree {
+  const t = caveFreeTree();
+  t['root'].b.x = { op: 'add', a: { op: 'const', v: -1000000 }, b: { op: 'col', field: 'steep' } };
+  return t;
+}
+
+/** `steepTree`'s edit on today's default tree (SP6a's cave terms: work cost 4,366 + 2). */
+export function steepDefaultTree(): Tree {
   const t = densityTree();
   t['root'].b.x = { op: 'add', a: { op: 'const', v: -1000000 }, b: { op: 'col', field: 'steep' } };
   return t;
@@ -76,8 +98,8 @@ export function editedDensity(): Tree {
   t['defs'] = { ...t['defs'], lift: { op: 'mul', a: { op: 'const', v: 2 }, b: { op: 'param', path: 'density.detailAmpLo' } } };
   t['root'].b.x = { op: 'add', a: { op: 'ref', name: 'lift' }, b: { op: 'const', v: -1000000 } };
   t['root'].a.a.a.x.a.mute = 0.5;
-  const clamp = t['root'].a.a.a.x.b.b.b.b;
-  if (clamp.op !== 'clamp') throw new Error('the default density tree moved: no clamp at root.a.a.a.x.b.b.b.b');
+  const clamp = t['root'].a.a.a.x.b.inside.b.b.b;
+  if (clamp.op !== 'clamp') throw new Error('the default density tree moved: no clamp at root.a.a.a.x.b.inside.b.b.b');
   clamp.lo = { param: 'density.detailAmpLo', neg: true };
   return t;
 }

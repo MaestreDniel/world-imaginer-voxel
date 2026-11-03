@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
+import { GENERATOR_VERSION } from '../../src/core/constants';
 import { colKey, colKeyCx, colKeyCz } from '../../src/core/coords';
 import { hex64, parseHex64 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
@@ -1640,7 +1641,7 @@ describe('the bench\'s saved world in `wi10-bench` (SP5b spec §6.2; plan)', () 
     const params = loadParams(opened.world);
     expect(params.ok && params.value).toEqual(session.params);
     expect(params.ok && olderGenerator(opened.world, params.value)).toBe(false);
-    expect(opened.world).toMatchObject({ id: 'b1', seedText: '42', seed: [...session.seed], profile: 'default', generatorVersion: 5, created: 1234, backupOf: null });
+    expect(opened.world).toMatchObject({ id: 'b1', seedText: '42', seed: [...session.seed], profile: 'default', generatorVersion: GENERATOR_VERSION, created: 1234, backupOf: null });
     expect(opened.world.genKey).toBe(hex64(genKey(session.seed, stageHashes(session.params))));
     expect(opened.load).toEqual({ db: 'wi10-bench', worldId: 'b1', flushSeq: 0, genKey: opened.world.genKey, updated: 0, stateTable: todayStateTable(), rewrite: null });
     expect(opened.kv).toBe(kv);

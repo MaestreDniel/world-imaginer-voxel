@@ -13,6 +13,11 @@
  * leaves and `density.noises.islands` (NI), dead on the default base (the mask is off, no default tree reads NI), are
  * decided on a floating_islands base at an island class column found by its own stream (NI through the T column's
  * region hash), so the 21 class columns and their stream stay.
+ * SP6a (its spec §4): the `caves.*` leaves are decided first on a `cave` class column, a land column of seed 42 on the
+ * default base where every cave family of the default tree acts (entrances and cheese carve pre-cave rock, pillars keep
+ * rock a family carves) and every `caves.*` leaf changes the T column, found by its own stream
+ * (`samplePoints('sp6a.liveness.caves', …)`), so the 21 class columns and their stream stay; it joins the columns a
+ * `terrain` leaf is tried on.
  */
 import { SEA_LEVEL } from '../core/constants';
 import { fnv1a32, hash4, hashF64, hex64 } from '../core/hash';
@@ -31,6 +36,7 @@ import { buildColumnSample, latticeIndex, newColumnSample, readBiome, type Colum
 import { cellEligible, lakeCell, lakeSpace, nearestCell, newLake, sampleLakes, type CellProbe, type LakeCell } from '../gen/column/lakes';
 import { newRiver, sampleRivers } from '../gen/column/rivers';
 import { newShape, sampleShape } from '../gen/column/shape';
+import { createDensityContext, type DensityContext } from '../gen/density/context';
 import { biomeId, type SurfaceBiome } from '../gen/biomes/registry';
 import { createSurfaceContext, surfaceContextOf, type SurfaceContext } from '../gen/surface/context';
 import { surfaceProbeColumn } from '../gen/surface/probe';
@@ -85,6 +91,7 @@ const CREATE_SURFACE = createSurfaceContext;
 const PROBE_COLUMN = surfaceProbeColumn;
 const NEW_SCAN = newSurfaceScan;
 const SCAN_COLUMN = scanColumn;
+const CREATE_DENSITY = createDensityContext;
 
 /** SP3c's surface class slots (SP3c spec §3.5), in the order a third-pass column is offered to them. */
 export const SURFACE_CLASSES = ['cliffY', 'cliffSteep', 'snowline', 'patch', 'badlands'] as const;
@@ -95,7 +102,9 @@ export type LivenessClass =
   | 'threshold:lakes.p' | 'threshold:lakes.minC' | 'threshold:lakes.offsetMin' | 'threshold:lakes.offsetMax'
   | SurfaceClass
   /** SP3e spec §5.6: the floating_islands base's column, where the islands leaves are decided. */
-  | 'island';
+  | 'island'
+  /** SP6a spec §4: the default base's column where every cave family acts, where the `caves.*` leaves are decided first. */
+  | 'cave';
 
 export interface LivenessColumn { readonly cx: number; readonly cz: number; readonly cls: LivenessClass }
 
@@ -127,7 +136,7 @@ const OUTPUT_STAGES: readonly string[] = ['climate', 'shape', 'biome2d', 'terrai
  * The class columns a `terrain` leaf is tried on (SP3b spec §3.3, SP3c spec §3.5), and the islands base's island column
  * for `density.noises.islands` (SP3e spec §5.6; the default base has no island column).
  */
-const TERRAIN_CLASSES: readonly LivenessClass[] = ['land', 'coast', ...SURFACE_CLASSES, 'island'];
+const TERRAIN_CLASSES: readonly LivenessClass[] = ['land', 'coast', ...SURFACE_CLASSES, 'island', 'cave'];
 /** One column's store: ≤ 24 dense block sections (1 MiB holds 128) and ≤ 26 byte slots (1 MiB holds 256). */
 const STORE_BYTES = 1 << 20;
 const CLASS_ORDER: readonly LivenessClass[] = [
@@ -160,11 +169,20 @@ const ISLAND_CORE = 0.75;
 /** The leaves decided on the islands base (SP3e spec §5.6): the `islands` group and NI, `density.noises.islands`. */
 const isIslandLeaf = (path: string): boolean => path.startsWith('islands.') || path === 'density.noises.islands';
 
+/** SP6a spec §4: the cave class column's stream and its draw limit; the leaves decided first on it (the `caves` group). */
+const CAVE_STREAM = 'sp6a.liveness.caves';
+const CAVE_DRAWS = 4096;
+const isCaveLeaf = (path: string): boolean => path.startsWith('caves.');
+/** The cave family taps of the default tree that carve (SP6a §1.1); the pillars tap keeps rock. */
+const CARVING_TAPS = ['entrances', 'cheese'] as const;
+const PILLAR_SCALE = 0.0625;
+
 /** The class whose columns are meant to exercise a leaf (named when the leaf is dead). */
 export function intendedClass(path: string): LivenessClass {
   const c = LEAF_CLASS.get(path);
   if (c !== undefined) return c;
   if (isIslandLeaf(path)) return 'island';
+  if (isCaveLeaf(path)) return 'cave';
   if (path.startsWith('lakes.')) return 'basin';
   if (path.startsWith('rivers.')) return 'channel';
   return 'land';
@@ -804,6 +822,79 @@ export function islandLeaves(): readonly LeafInfo[] {
   return u2Leaves().filter((l) => isIslandLeaf(l.path));
 }
 
+/** The leaves of `u2Leaves()` decided first on the cave class column (SP6a spec §4): the `caves` group, in schema order. */
+export function caveLeaves(): readonly LeafInfo[] {
+  return u2Leaves().filter((l) => isCaveLeaf(l.path));
+}
+
+/** How often each cave family acts on a column (SP6a spec §4's cave class column), at the corner-lattice voxels. */
+export interface CaveFamilyCounts { readonly entrances: number; readonly cheese: number; readonly pillars: number }
+
+/**
+ * The cave families of the default tree acting on column (cx, cz) of `dc` (a DensityContext over a tree with the
+ * `precave`, `entrances`, `cheese` and `pillars` taps), counted at the 16 × 48 voxels of the corner lattice (lx, lz ∈
+ * {0, 4, 8, 12}, y = −64 + 8k, k < 48): `entrances` and `cheese`, voxels the pre-cave density holds solid (`precave`
+ * > 0) where the family's tap is ≤ 0 (it carves rock); `pillars`, such carved voxels where the pillars keep rock
+ * (P / 16 ≥ `threshold`, the `keep` term's test).
+ */
+export function caveFamilyCounts(dc: DensityContext, threshold: number, cx: number, cz: number): CaveFamilyCounts {
+  dc.column(cx, cz);
+  const c = dc.compiled;
+  let entrances = 0, cheese = 0, pillars = 0;
+  for (let k = 0; k < 48; k++) {
+    const y = -64 + 8 * k;
+    for (let lz = 0; lz < 16; lz += 4) {
+      for (let lx = 0; lx < 16; lx += 4) {
+        if (!(c.tapFn('precave', lx, y, lz) > 0)) continue;
+        const e = c.tapFn(CARVING_TAPS[0], lx, y, lz) <= 0;
+        const ch = c.tapFn(CARVING_TAPS[1], lx, y, lz) <= 0;
+        if (e) entrances++;
+        if (ch) cheese++;
+        if ((e || ch) && c.tapFn('pillars', lx, y, lz) * PILLAR_SCALE >= threshold) pillars++;
+      }
+    }
+  }
+  return { entrances, cheese, pillars };
+}
+
+/**
+ * The cave class column of `base` (SP6a spec §4; the default base): chunk columns of `samplePoints('sp6a.liveness.caves',
+ * draws)` (x, z → the chunk holding them), the first that is a land column (SP2b's `land` lattice test: no water within
+ * 64 blocks), on which every cave family acts (`caveFamilyCounts` > 0 for each) and every leaf of `leaves` changes the
+ * T column's output (SP3c's acceptance rule, as the island column); null after `draws` draws (4096 in U2).
+ */
+export function caveColumn(base: GenContext, leaves: readonly LeafInfo[] = caveLeaves(), draws = CAVE_DRAWS): LivenessColumn | null {
+  const pts = POINTS(CAVE_STREAM, draws);
+  const dc = CREATE_DENSITY(base);
+  const threshold = base.params.caves.pillars.threshold;
+  const baseHash = baseHasher(base);
+  const variants = new Map<string, readonly GenContext[]>();
+  const variantsOf = (info: LeafInfo): readonly GenContext[] => {
+    let v = variants.get(info.path);
+    if (v === undefined) { v = variantContexts(base, info); variants.set(info.path, v); }
+    return v;
+  };
+  const seen = new Set<number>();
+  const L = newLattice();
+  for (let n = 0; n < draws; n++) {
+    const cx = Math.floor(pts.x[n]! / 16);
+    const cz = Math.floor(pts.z[n]! / 16);
+    const key = (cx + 32768) * 65536 + (cz + 32768);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (!isLand(base, evalLattice(base, cx, cz, L), cx, cz)) continue;
+    const f = caveFamilyCounts(dc, threshold, cx, cz);
+    if (f.entrances === 0 || f.cheese === 0 || f.pillars === 0) continue;
+    const acts = (info: LeafInfo): boolean => {
+      const stage = stageOf(info);
+      const h = baseHash(stage, cx, cz);
+      return variantsOf(info).some((v) => stageOutputHash(v, stage, cx, cz) !== h);
+    };
+    if (leaves.every(acts)) return { cx, cz, cls: 'cave' };
+  }
+  return null;
+}
+
 /** Cells of a square spiral from (0, 0): ring r ≥ 1 has 8r cells, from (−r, −r) along j = −r, then i = r, j = r, i = −r. */
 function someSpiralCell(max: number, visit: (i: number, j: number) => boolean): boolean {
   if (visit(0, 0)) return true;
@@ -942,10 +1033,14 @@ export function islandColumn(base: GenContext, leaves: readonly LeafInfo[] = isl
  * U2 for every leaf of `u2Leaves()`: live when a perturbation changes the leaf's stage output hash on a class
  * column (its intended class first) or on its witness. value = live leaves / those leaves. The islands leaves are
  * decided on `RESOLVE('floating_islands')` at its island class column (SP3e spec §5.6); none found: "no island column".
+ * The cave class column (SP6a spec §4) joins the class columns; none found: "no cave column".
  */
 export function u2(seedText = '42'): { readonly value: number; readonly results: readonly LivenessResult[] } {
   const base = CREATE(SEED(seedText), RESOLVE('default'));
-  const columns = livenessColumns(base);
+  const caves = caveLeaves();
+  const cave = caves.length > 0 ? caveColumn(base, caves) : null;
+  if (caves.length > 0 && cave === null) throw new Error('U2: no cave column');
+  const columns = cave === null ? livenessColumns(base) : [...livenessColumns(base), cave];
   const baseHash = baseHasher(base);
   const islands = islandLeaves();
   let decideIsland = (info: LeafInfo): LivenessResult => { throw new Error(`U2: ${info.path} has no islands base`); };

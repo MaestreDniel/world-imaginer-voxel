@@ -52,7 +52,8 @@ function open(w: WorldSession, leaf: TreeLeaf = 'density.defs') {
 
 const DENSITY_TEXT = printTree(DEFAULT_DENSITY_TREE, 'density').text;
 const RULES_TEXT = printTree(DEFAULT_SURFACE_RULES, 'surfaceRules').text;
-const ISLANDS = '{ "op": "const", "v": -1000000 }';
+/** The islands tap's child as printed (its key with it: SP6a's `keep` holds another `{ const −1e6 }`, as `inside`). */
+const ISLANDS = '"x": { "op": "const", "v": -1000000 }';
 
 describe('the buffer and validation as you type', () => {
   test('opens clean on the session tree, for both leaves', () => {
@@ -70,7 +71,7 @@ describe('the buffer and validation as you type', () => {
     const { model, clock } = open(w);
     const seen: string[] = [];
     model.subscribe((s) => seen.push(s.status));
-    const broken = DENSITY_TEXT.replace(ISLANDS, '{ "op": "bogus" }');
+    const broken = DENSITY_TEXT.replace(ISLANDS, '"x": { "op": "bogus" }');
     model.edit(broken.slice(0, -1), 0);
     clock.advance(EDITOR_DEBOUNCE_MS - 1);
     model.edit(broken, 0);
@@ -92,10 +93,10 @@ describe('the buffer and validation as you type', () => {
 
   test('tier-1 issues (−0, a "__proto__" def, Infinity) at node paths; syntax errors with line and column', () => {
     const { model, clock } = open(session());
-    model.edit(DENSITY_TEXT.replace('"defs": {\n', '"defs": {\n    "__proto__": { "op": "y" },\n').replace(ISLANDS, '{ "op": "const", "v": -0 }'), 0);
+    model.edit(DENSITY_TEXT.replace('"defs": {\n', '"defs": {\n    "__proto__": { "op": "y" },\n').replace(ISLANDS, '"x": { "op": "const", "v": -0 }'), 0);
     clock.advance(EDITOR_DEBOUNCE_MS);
     expect(model.state.issues.map((i) => `${i.path} ${i.code}`)).toEqual(['defs."__proto__" BAD_KEY', 'root.b.x.v NEGATIVE_ZERO']);
-    model.edit(DENSITY_TEXT.replace(ISLANDS, '{ "op": "const", "v": 1e999 }'), 0);
+    model.edit(DENSITY_TEXT.replace(ISLANDS, '"x": { "op": "const", "v": 1e999 }'), 0);
     clock.advance(EDITOR_DEBOUNCE_MS);
     expect(model.state.issues.map((i) => `${i.path} ${i.code}`)).toEqual(['root.b.x.v NOT_FINITE']);
     model.edit('{\n  "root": { "op": "y" }\n  "defs": {}\n}', 0);
@@ -146,7 +147,7 @@ describe('the buffer and validation as you type', () => {
   test('a buffer over 512 KiB is not parsed ("too large to validate") and cannot be applied; 512 KiB is', () => {
     const w = session();
     const { model, clock } = open(w);
-    const valid = DENSITY_TEXT.replace(ISLANDS, '{ "op": "const", "v": -10 }');
+    const valid = DENSITY_TEXT.replace(ISLANDS, '"x": { "op": "const", "v": -10 }');
     const padded = valid + ' '.repeat(EDITOR_TEXT_MAX - valid.length);
     expect(padded).toHaveLength(512 * 1024);
     model.edit(padded, 0);
@@ -174,7 +175,7 @@ describe('Apply, Reset and Escape', () => {
   test('Apply sends the tree as one session step and re-prints it clean, the caret on the same node path', () => {
     const w = session();
     const { model, clock } = open(w);
-    const typed = DENSITY_TEXT.replace(ISLANDS, '{"v":-10,"op":"const"}');
+    const typed = DENSITY_TEXT.replace(ISLANDS, '"x": {"v":-10,"op":"const"}');
     const caret = typed.indexOf('"v":-10') + 4;
     model.edit(typed, caret);
     clock.advance(EDITOR_DEBOUNCE_MS);
@@ -197,12 +198,12 @@ describe('Apply, Reset and Escape', () => {
   test('Apply while the validation is pending validates first; an invalid tree is never sent', () => {
     const w = session();
     const { model, clock } = open(w);
-    model.edit(DENSITY_TEXT.replace(ISLANDS, '{ "op": "bogus" }'), 0);
+    model.edit(DENSITY_TEXT.replace(ISLANDS, '"x": { "op": "bogus" }'), 0);
     expect(model.apply()).toBe(false);
     expect(model.state.status).toBe('invalid');
     expect(clock.pending()).toBe(0);
     expect(w.state.params.density.defs).toBe(DEFAULT_DENSITY_TREE);
-    model.edit(DENSITY_TEXT.replace(ISLANDS, '{ "op": "const", "v": -10 }'), 0);
+    model.edit(DENSITY_TEXT.replace(ISLANDS, '"x": { "op": "const", "v": -10 }'), 0);
     expect(model.apply()).toBe(true);
     expect(model.state.clean).toBe(true);
   });
@@ -216,7 +217,7 @@ describe('Apply, Reset and Escape', () => {
     };
     const clock = fakeClock();
     const model = createEditorModel('density.defs', refusing, clock);
-    const typed = DENSITY_TEXT.replace(ISLANDS, '{ "op": "const", "v": -10 }');
+    const typed = DENSITY_TEXT.replace(ISLANDS, '"x": { "op": "const", "v": -10 }');
     model.edit(typed, 0);
     expect(model.apply()).toBe(false);
     expect([model.state.text, model.state.clean, model.state.status]).toEqual([typed, false, 'invalid']);
@@ -229,7 +230,7 @@ describe('Apply, Reset and Escape', () => {
   test("Reset restores the profile's tree, clean, the caret on the same node path", () => {
     const w = session();
     const { model, clock } = open(w);
-    model.edit(DENSITY_TEXT.replace(ISLANDS, '{ "op": "const", "v": -10 }'), 0);
+    model.edit(DENSITY_TEXT.replace(ISLANDS, '"x": { "op": "const", "v": -10 }'), 0);
     clock.advance(EDITOR_DEBOUNCE_MS);
     model.apply();
     const at = model.state.text.indexOf('"name": "terrain"');
@@ -278,7 +279,7 @@ describe('the dirty-buffer rule', () => {
   test('a dirty buffer is kept when its leaf changes elsewhere, with "stale"; Escape then shows the current tree', () => {
     const w = session();
     const { model, clock } = open(w);
-    const typed = DENSITY_TEXT.replace(ISLANDS, '{ "op": "const", "v": -5 }');
+    const typed = DENSITY_TEXT.replace(ISLANDS, '"x": { "op": "const", "v": -5 }');
     model.edit(typed, 0);
     clock.advance(EDITOR_DEBOUNCE_MS);
     const edited = JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE)) as { root: { b: { x: { v: number } } } };
@@ -301,7 +302,7 @@ describe('the dirty-buffer rule', () => {
     const current = printTree(w.state.params.density.defs, 'density').text;
     model.edit(current, 0);
     expect([model.state.clean, model.state.stale]).toEqual([true, false]);
-    model.edit(DENSITY_TEXT.replace(ISLANDS, '{ "op": "const", "v": -7 }'), 0);
+    model.edit(DENSITY_TEXT.replace(ISLANDS, '"x": { "op": "const", "v": -7 }'), 0);
     w.undo();
     expect(model.state.stale).toBe(true);
     clock.advance(EDITOR_DEBOUNCE_MS);
@@ -325,7 +326,7 @@ describe('the dirty-buffer rule', () => {
     expect(model.state).toBe(before);
     // The density editor's Apply does not re-print the rules editor.
     model.revert();
-    model.edit(DENSITY_TEXT.replace(ISLANDS, '{ "op": "const", "v": -10 }'), 0);
+    model.edit(DENSITY_TEXT.replace(ISLANDS, '"x": { "op": "const", "v": -10 }'), 0);
     model.apply();
     expect(rules.state.revision).toBe(0);
   });

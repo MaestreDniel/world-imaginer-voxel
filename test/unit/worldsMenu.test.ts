@@ -1,5 +1,6 @@
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { GENERATOR_VERSION } from '../../src/core/constants';
 import { colKey } from '../../src/core/coords';
 import { hex64, type Seed64 } from '../../src/core/hash';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
@@ -281,7 +282,7 @@ describe('mountWorldsMenu: the start screen and New world (SP5b spec §1.1, §1.
     expect(navigate).toHaveBeenLastCalledWith('/?world=w1');
     const [w] = worlds(kv);
     // The record as the world page opens it: the preset's resolved parameters, today's generator, genKey and table.
-    expect(w).toMatchObject({ id: 'w1', name: 'My world', seedText: '1234', seed: seedFromInput('1234'), profile: 'amplified', generatorVersion: 5, created: 1_700_000_000_000, backupOf: null });
+    expect(w).toMatchObject({ id: 'w1', name: 'My world', seedText: '1234', seed: seedFromInput('1234'), profile: 'amplified', generatorVersion: GENERATOR_VERSION, created: 1_700_000_000_000, backupOf: null });
     expect(w!.stateTable).toEqual(todayStateTable());
     expect(w!.paramsHash).toMatch(/^[0-9a-f]{16}$/);
     const p = loadParams(w!);

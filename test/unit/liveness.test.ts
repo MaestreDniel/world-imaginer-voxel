@@ -10,7 +10,7 @@ import { fnv1a32, hex64 } from '../../src/core/hash';
 import { latticeIndex } from '../../src/gen/column/columnStage';
 import { biomeName } from '../../src/gen/biomes/registry';
 import {
-  cellProbe, findWitness, intendedClass, islandColumn, islandLeaves, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
+  caveColumn, caveFamilyCounts, caveLeaves, cellProbe, findWitness, intendedClass, islandColumn, islandLeaves, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
   SURFACE_CLASSES, surfacePrefilter, surfaceSlotLeaves, u2Leaves,
   type LivenessClass,
   type LivenessColumn,
@@ -23,11 +23,16 @@ import { resolveProfile } from '../../src/core/params/profiles';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
 import { createGenContext } from '../../src/gen/context';
+import { createDensityContext } from '../../src/gen/density/context';
 import { ctxFor } from '../harness/gen';
 
 /** SP3e's island class column at seed 42 (spec §5.6) and its index among the U2.islands draws. */
 const ISLAND_PIN: LivenessColumn = { cx: 975, cz: -735, cls: 'island' };
 const ISLAND_DRAW = 33;
+/** SP6a's cave class column at seed 42 (its spec §4) and its index among the sp6a.liveness.caves draws. */
+const CAVE_PIN: LivenessColumn = { cx: 546, cz: 25857, cls: 'cave' };
+/** The leaves of SP6a Task 6 (the caves group so far): U2 covers 73 + 19 = 92 leaves. */
+const U2_LEAVES = 92;
 
 const leaf = (path: string) => {
   const info = SCHEMA.leaves.find((l) => l.path === path);
@@ -298,6 +303,7 @@ describe('class columns', () => {
     for (const p of ['surface.noises.depth', 'surface.depthMul']) expect(intendedClass(p), p).toBe('land');
     expect(intendedClass('surface.noises.bandOffset')).toBe('badlands');
     for (const p of ['density.noises.islands', 'islands.enabled', 'islands.noise', 'islands.lo', 'islands.hi']) expect(intendedClass(p), p).toBe('island');
+    for (const p of ['caves.cheese.offset', 'caves.pillars.threshold', 'caves.limits.surfaceDepth', 'caves.noises.entrance']) expect(intendedClass(p), p).toBe('cave');
   });
 });
 
@@ -465,10 +471,13 @@ describe('the islands base (SP3e spec §5.6)', () => {
     return found!;
   };
 
-  test('the islands leaves are density.noises.islands and the islands.* group, decided apart; U2 covers 73 leaves', () => {
+  test(`the islands leaves are density.noises.islands and the islands.* group, decided apart; U2 covers ${U2_LEAVES} leaves`, () => {
     expect(islandLeaves().map((l) => l.path)).toEqual(['density.noises.islands', 'islands.enabled', 'islands.noise', 'islands.lo', 'islands.hi']);
-    expect(u2Leaves().length).toBe(73);
-    expect(u2Leaves().slice(-4)).toEqual(islandLeaves().slice(1));
+    expect(u2Leaves().length).toBe(U2_LEAVES);
+    // The islands leaves come right before the first caves.* leaf (SP6a appends the caves group after islands).
+    const paths = u2Leaves().map((l) => l.path);
+    const firstCave = paths.findIndex((p) => p.startsWith('caves.'));
+    expect(paths.slice(firstCave - 4, firstCave)).toEqual(islandLeaves().slice(1).map((l) => l.path));
   });
 
   test('the island column: the first draw of U2.islands whose lattice holds 0 < m < 1 and m ≥ 0.75 and on which every islands leaf acts', () => {
@@ -501,6 +510,52 @@ describe('the islands base (SP3e spec §5.6)', () => {
 
   test('no island column where the mask is off: the default base finds none (U2 then fails with "no island column")', () => {
     expect(islandColumn(CTX, islandLeaves(), 64)).toBeNull();
+  });
+});
+
+describe('the cave class column (SP6a spec §4)', () => {
+  let found: LivenessColumn | null | undefined;
+  /** The cave class column of seed 42 on the default base (searched once per file). */
+  const cave = (): LivenessColumn => {
+    if (found === undefined) found = caveColumn(CTX);
+    expect(found, 'no cave column').not.toBeNull();
+    return found!;
+  };
+
+  test('the caves leaves are the caves.* group, in schema order, after the islands leaves', () => {
+    expect(caveLeaves().map((l) => l.path)).toEqual(SCHEMA.leaves.filter((l) => l.path.startsWith('caves.')).map((l) => l.path));
+    expect(caveLeaves().length).toBe(19);
+  });
+
+  test('the cave column: the first land column of sp6a.liveness.caves where every family acts and every caves leaf changes the T column', () => {
+    const c = cave();
+    expect(c).toEqual(CAVE_PIN);
+    const pts = samplePoints('sp6a.liveness.caves', 4096);
+    let n = 0;
+    while (Math.floor(pts.x[n]! / 16) !== c.cx || Math.floor(pts.z[n]! / 16) !== c.cz) n++;
+    expect(n).toBeLessThan(4096);
+    const f = caveFamilyCounts(createDensityContext(CTX), DEFAULTS.caves.pillars.threshold, c.cx, c.cz);
+    expect(f.entrances).toBeGreaterThan(0);
+    expect(f.cheese).toBeGreaterThan(0);
+    expect(f.pillars).toBeGreaterThan(0);
+    // A land column: no water on its lattice (SP2b's land test).
+    const s = buildColumnSample(CTX, c.cx, c.cz, newColumnSample());
+    expect(Array.from(s.f.surfaceWaterLevel).every((w) => w === -Infinity)).toBe(true);
+  });
+
+  test('every caves leaf is live on the cave column (the class it is meant for), and only through the T stage', () => {
+    const c = cave();
+    for (const l of caveLeaves()) {
+      expect(intendedClass(l.path)).toBe('cave');
+      expect(leafLiveness(CTX, l.path, [...columns(), c]), l.path).toEqual({ path: l.path, live: true, via: `cave column (${c.cx}, ${c.cz})`, cls: 'cave' });
+    }
+  });
+
+  test('a caves leaf is a terrain leaf: tried on the terrain class columns only, with no stream witness (dead on the others)', () => {
+    const terrain: readonly LivenessClass[] = ['land', 'coast', ...SURFACE_CLASSES];
+    const others = columns().filter((c) => !terrain.includes(c.cls));
+    expect(leafLiveness(CTX, 'caves.pillars.threshold', others)).toEqual({ path: 'caves.pillars.threshold', live: false, via: null, cls: 'cave' });
+    expect(caveColumn(CTX, caveLeaves(), 0)).toBeNull();
   });
 });
 

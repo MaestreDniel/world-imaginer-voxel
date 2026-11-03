@@ -104,13 +104,13 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
     }
     pool.terminate();
   }, 120_000);
-  test('a 128² vertical density slice at the defaults runs as 6 parts of at most k = 78 sample columns on 6 workers', async () => {
+  test('a 128² vertical density slice at the defaults runs as 10 parts of at most k = 14 sample columns on 6 workers (SP6a\'s cave terms: 589,568 per sample column; 6 parts of k = 78 before)', async () => {
     const log: ToWorker[] = [];
     const pool = createWorkerPool(6, () => fakeWorker(log));
     await pool.configure('42', DEFAULTS);
     const req = vReq(MOUNTAIN, 'density', '', 128);
     const r = await pool.fieldSlice(req, { priority: 500, columnCost: costOf(req), budget: REQUEST_BUDGET }).promise;
-    expect(partsOf(log)).toEqual([[0, 21], [21, 42], [42, 64], [64, 85], [85, 106], [106, 128]]);
+    expect(partsOf(log)).toEqual([[0, 12], [12, 25], [25, 38], [38, 51], [51, 64], [64, 76], [76, 89], [89, 102], [102, 115], [115, 128]]);
     expect(bytes(r.values).equals(bytes(single(req).values))).toBe(true);
     pool.terminate();
   }, 60_000);
@@ -151,7 +151,7 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
   test('the worker\'s bound check refuses a client column cost below its own (BAD_ARGS, too heavy), and a bad request rejects with its BAD_ARGS', async () => {
     const pool = createWorkerPool(1, () => fakeWorker([]));
     await pool.configure('42', DEFAULTS);
-    await expect(pool.fieldSlice(vReq(MOUNTAIN, 'density', '', 128), { priority: 500, columnCost: 1, budget: REQUEST_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: too heavy: 128 × 106240/);
+    await expect(pool.fieldSlice(vReq(MOUNTAIN, 'density', '', 128), { priority: 500, columnCost: 1, budget: REQUEST_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: too heavy: 128 × 591616/);
     await expect(pool.fieldSlice(vReq(MOUNTAIN, 'node', 'root.nope'), { priority: 500, columnCost: 1, budget: DRAFT_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: path "root.nope" names no node/);
     await expect(pool.fieldSlice(hReq('blocks'), { priority: 500, columnCost: 1, budget: DRAFT_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: field blocks has no horizontal slice/);
     pool.terminate();

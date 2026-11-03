@@ -1,7 +1,8 @@
 /**
  * DensityContext (SP3b spec §2.3): what evaluating the density of one GenContext needs, built once per context.
- * - `noises`: the GenContext's schema noises `density.noises.<id>` (seed name = leaf path) as a DensityNoiseSource,
- *   with each leaf's dims; ids are the keys under `density.noises`.
+ * - `noises`: the GenContext's schema noises `density.noises.<id>`, then `caves.noises.<id>` (SP6a spec §1.5; seed name
+ *   = leaf path) as a DensityNoiseSource, with each leaf's dims; ids are the keys under `density.noises` and
+ *   `caves.noises` (an id under both resolves to the density noise).
  * - `expr`, `compiled` and `bounds`: one frozen expression (by default `resolveDensity(params.density.defs, params)`,
  *   the `density.defs` leaf resolved for the context's params, SP3d spec §1.6, §2.1; an explicit expression is
  *   deep-frozen in place by `freezeTree`, identity kept) compiled once; its scratch is the per-column cache of the
@@ -28,8 +29,11 @@ const BOUNDS = createDensityBounds;
 const RESOLVE = resolveDensity;
 const FREEZE = freezeTree;
 
-/** The schema path prefix of the density noises; an expression's noise id is the key after it. */
-const PREFIX = 'density.noises.';
+/**
+ * The schema path prefixes of the noises an expression reads, in lookup order: the density noises, then the cave noises
+ * (SP6a spec §1.5); an expression's noise id is the key after one of them.
+ */
+const PREFIXES: readonly string[] = ['density.noises.', 'caves.noises.'];
 
 export interface DensityContext {
   readonly ctx: GenContext;
@@ -48,12 +52,18 @@ export function densityNoiseOf(n: NormalNoise, dims: 2 | 3): DensityNoise {
   return { dims, remap: n.def.remap, clampSigma: n.clamp, z2: (x, z) => n.z2(x, z), z3: (x, y, z) => n.z3(x, y, z) };
 }
 
-/** The GenContext's density noises: id → the prepared NormalNoise of schema leaf `density.noises.<id>`, with its dims. */
+/**
+ * The GenContext's density noises: id → the prepared NormalNoise of schema leaf `density.noises.<id>`, else
+ * `caves.noises.<id>` (SP6a spec §1.5), with its dims.
+ */
 export function densityNoiseSource(ctx: GenContext): DensityNoiseSource {
   const m = new Map<string, DensityNoise>();
-  for (const { path, leaf } of SCHEMA_.leaves) {
-    if (leaf.kind !== 'noise' || !path.startsWith(PREFIX)) continue;
-    m.set(path.slice(PREFIX.length), densityNoiseOf(NOISE_FOR(ctx, path), leaf.dims ?? 2));
+  for (const prefix of PREFIXES) {
+    for (const { path, leaf } of SCHEMA_.leaves) {
+      if (leaf.kind !== 'noise' || !path.startsWith(prefix)) continue;
+      const id = path.slice(prefix.length);
+      if (!m.has(id)) m.set(id, densityNoiseOf(NOISE_FOR(ctx, path), leaf.dims ?? 2));
+    }
   }
   return (id) => m.get(id);
 }

@@ -4,7 +4,10 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import { checkJson, type TreeIssueCode } from '../../src/core/params/json';
 import type { Issue } from '../../src/core/params/kit';
+import { seedFromInput } from '../../src/core/seed';
 import { SAMPLE_FIELDS } from '../../src/gen/column/columnStage';
+import { createGenContext, noiseFor } from '../../src/gen/context';
+import { densityNoiseSource } from '../../src/gen/density/context';
 import { EXPR_CHILD_KEYS, EXPR_OPS, exprHash, validateExpr, type DensitySourceCode, type ExprErrorCode, type ExprIssue } from '../../src/gen/density/expr';
 import {
   ALLOWED_REF_TARGETS, densitySourceValidations, resolveDensity, SOURCE_CHILD_KEYS, SOURCE_OPS, validateDensitySource,
@@ -30,7 +33,7 @@ const SNOW = 'surface.snowline'; // number [−1, 1]
 const CLIFF_Y = 'surface.cliffMinY'; // int [−64, 319]
 
 describe('the source model (SP3d spec §1.3, §1.4)', () => {
-  test('ALLOWED_REF_TARGETS: the number and int leaves under density. and surface., and every density/surface noise clampSigma', () => {
+  test('ALLOWED_REF_TARGETS: the number and int leaves under density., surface. and caves., and every density/surface/cave noise clampSigma', () => {
     expect(ALLOWED_REF_TARGETS).toBeInstanceOf(Map);
     expect([...ALLOWED_REF_TARGETS.keys()]).toEqual([
       'density.noises.jag.clampSigma', 'density.noises.overhang.clampSigma', 'density.noises.detail.clampSigma',
@@ -38,7 +41,16 @@ describe('the source model (SP3d spec §1.3, §1.4)', () => {
       'surface.noises.depth.clampSigma', 'surface.noises.patch.clampSigma', 'surface.noises.bandOffset.clampSigma',
       'surface.depthMul', 'surface.snowline', 'surface.lapse', 'surface.lapseBase', 'surface.cliffSteep', 'surface.cliffMinY',
       'surface.patchThreshold',
+      // SP6a spec §4 (Task 6; Tasks 7, 8, 9 and 27 grow it): the caves group's number and int leaves and cave noises.
+      'caves.cheese.offset', 'caves.cheese.regional', 'caves.cheese.layerAmp', 'caves.cheese.roofDepth',
+      'caves.pillars.threshold', 'caves.entrances.offset', 'caves.entrances.threshold', 'caves.limits.surfaceDepth',
+      'caves.noises.cheese.clampSigma', 'caves.noises.layer.clampSigma', 'caves.noises.cheeseRegional.clampSigma',
+      'caves.noises.pillar.clampSigma', 'caves.noises.pillarRare.clampSigma', 'caves.noises.pillarThickness.clampSigma',
+      'caves.noises.roughness.clampSigma', 'caves.noises.roughnessMod.clampSigma', 'caves.noises.entrance.clampSigma',
+      'caves.noises.entranceA.clampSigma', 'caves.noises.entranceB.clampSigma',
     ]);
+    expect(ALLOWED_REF_TARGETS.get('caves.cheese.offset')).toEqual({ kind: 'number', lo: -0.5, hi: 1 });
+    expect(ALLOWED_REF_TARGETS.get('caves.noises.cheese.clampSigma')).toEqual({ kind: 'number', lo: 1, hi: 8 });
     expect(ALLOWED_REF_TARGETS.get(CS)).toEqual({ kind: 'number', lo: 1, hi: 8 });
     expect(ALLOWED_REF_TARGETS.get('density.noises.islands.clampSigma')).toEqual({ kind: 'number', lo: 1, hi: 8 });
     expect(ALLOWED_REF_TARGETS.get(LO)).toEqual({ kind: 'number', lo: 0, hi: 8 });
@@ -88,7 +100,11 @@ describe('the source model (SP3d spec §1.3, §1.4)', () => {
 describe('validateDensitySource: parameter refs (SP3d spec §1.3)', () => {
   test('a param node names a target; anything else is UNKNOWN_PARAM at its path field', () => {
     for (const path of [LO, HI, CS, SNOW, CLIFF_Y, 'surface.lapse']) expect(issues(doc(P(path)))).toEqual([]);
-    for (const path of ['density.nope', 'density.noises.jag', 'density.noises.jag.octaves', 'climate.tempScale', 'constructor', 'toString', '__proto__', '', 3, undefined]) {
+    // SP6a spec §4: the caves group's number leaves and the cave noises' clampSigma.
+    for (const path of ['caves.cheese.offset', 'caves.noises.cheese.clampSigma']) expect(issues(doc(P(path)))).toEqual([]);
+    expect(issues(doc({ op: 'clamp', x: Y, lo: R('caves.cheese.offset'), hi: R('caves.noises.cheese.clampSigma') }))).toEqual([]);
+    for (const path of ['density.nope', 'density.noises.jag', 'density.noises.jag.octaves', 'climate.tempScale', 'constructor', 'toString', '__proto__', '', 3, undefined,
+      'caves.nope', 'caves.noises.cheese', 'caves.noises.cheese.octaves', 'caves.cheese']) {
       expect(issues(doc({ op: 'add', a: Y, b: P(path) }))).toEqual(['root.b.path: UNKNOWN_PARAM']);
     }
     expect(issues(doc({ op: 'param', path: LO, v: 1 }))).toEqual(['root.v: UNKNOWN_KEY']);
@@ -224,6 +240,24 @@ describe('validateDensitySource: recip, names, literals and slopes (SP3d spec §
     expect(issues(doc({ op: 'noise2', id: 'fz2a' }))).toEqual(['root.id: UNKNOWN_NOISE']);
     expect(issues(doc({ op: 'noise2', id: 'depth' }))).toEqual(['root.id: UNKNOWN_NOISE']);
     expect(issues(doc({ op: 'noise2', id: 'constructor' }))).toEqual(['root.id: UNKNOWN_NOISE']);
+  });
+
+  test('a noise id under caves.noises (SP6a spec §1.5) is a density noise at its dims: cheese is 3D, cheeseRegional 2D', () => {
+    expect(issues(doc({ op: 'add', a: { op: 'noise', id: 'cheese' }, b: { op: 'noise2', id: 'cheeseRegional' } }))).toEqual([]);
+    expect(issues(doc({ op: 'noiseScaled', id: 'entrance', s: 2 }))).toEqual([]);
+    expect(issues(doc({ op: 'noise2', id: 'cheese' }))).toEqual(['root.id: NOISE_DIMS']);
+    expect(issues(doc({ op: 'noise', id: 'cheeseRegional' }))).toEqual(['root.id: NOISE_DIMS']);
+  });
+
+  test('the noise id cheese resolves to the schema leaf caves.noises.cheese (its seed name and its def)', () => {
+    const ctx = createGenContext(seedFromInput('42'), DEFAULTS);
+    const n = densityNoiseSource(ctx)('cheese');
+    expect(n).toBeDefined();
+    const leaf = noiseFor(ctx, 'caves.noises.cheese');
+    expect([n!.dims, n!.remap, n!.clampSigma]).toEqual([3, 'none', DEFAULTS.caves.noises.cheese.clampSigma]);
+    for (const [x, y, z] of [[0, 0, 0], [17.5, -40, 903], [-3000, 250, 12]] as const) expect(n!.z3(x, y, z)).toBe(leaf.z3(x, y, z));
+    // A density noise keeps its id: jag is density.noises.jag.
+    expect(densityNoiseSource(ctx)('jag')!.z2(5, 9)).toBe(noiseFor(ctx, 'density.noises.jag').z2(5, 9));
   });
 
   test('the walk goes through recip and param, refs and mutes (mutes ignored), with the SP3b checks', () => {

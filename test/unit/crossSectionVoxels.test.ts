@@ -189,19 +189,29 @@ describe('sliceRgba: one pixel per sample, row 0 at y 319', () => {
     const cz0 = -126;
     genRegionInProcess(store, ctx, cx0, cz0, 7, 2);
     const view = regionView(store, cx0, cz0, 7, 2);
-    let water = 0;
+    let water = 0, fromSurface = 0;
     for (let i = 0; i < SLICE_POINTS; i++) {
       const [px, pz] = segmentPointAt(line, i);
       const x = Math.floor(px);
       const z = Math.floor(pz);
-      for (let y = -64; y <= 319; y++) {
-        const want = png.voxelRgb(view.block(x, y, z), view.fluid(x, y, z), view.worldSurfaceWG(x, z) - 1 - y);
+      // The depth counts from the top of the voxel's run of water (sliceRgba's rule): the harness's worldSurfaceWG − 1 − y
+      // in the sea's own run, from the cave's ceiling in a flooded cave under the sea floor (SP6a) or under an overhang.
+      let runTop = 0;
+      let wet = false;
+      for (let y = 319; y >= -64; y--) {
+        const isWater = view.fluid(x, y, z) !== 0;
+        if (isWater && !wet) runTop = y;
+        wet = isWater;
+        const want = png.voxelRgb(view.block(x, y, z), view.fluid(x, y, z), isWater ? runTop - y : 0);
         const got = pixel(rgba, i, y);
         if (got[0] !== want[0] || got[1] !== want[1] || got[2] !== want[2]) throw new Error(`sample (${i}, ${y}) at (${x}, ${z}): ${got} ≠ ${want}`);
-        if (view.fluid(x, y, z) !== 0) water++;
+        if (isWater) water++;
+        if (isWater && runTop === view.worldSurfaceWG(x, z) - 1) fromSurface++;
       }
     }
     expect(water).toBeGreaterThan(1000);
+    // Most water lies in the sea's own run, where the two depths agree.
+    expect(fromSurface).toBeGreaterThan(0.9 * water);
   });
 });
 

@@ -110,7 +110,10 @@
  * bench route, §3.7's caching line, the critical path and the SP7 header; the `spEntry('SP5c', …)` pins end at SP6a.
  * Each later SP6a commit pins its §13 item there, moving the earlier pin it rewords: the `noiseScaled` commit (Task 3)
  * pins item 10 (§2.5's `noiseScaled{id, s}`) and §1's `metrics/*.ts` entry and "Banned APIs" naming `sp6aGoldens.ts`
- * (the "amended by" list's pin moved here from the SP3e describe).
+ * (the "amended by" list's pin moved here from the SP3e describe); the cave terms commit (Task 6) pins item 16's §5.1
+ * (Terrain scope's "caves (`caves.*`)") and item 20, §6.4's U2 row with the schema's U2 leaf count (moved from the SP3e
+ * describe, which keeps SP3e's 73 as history), which Tasks 7, 8, 9 and 27 rewrite, and item 21, §6.4's T5 row read on
+ * the pre-cave top.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -432,12 +435,11 @@ describe('master spec amendments (SP3e §11, §13)', () => {
     expect(existsSync(`${ROOT_DIR}src/gen/column/islands.ts`), 'src/gen/column/islands.ts does not exist').toBe(true);
   });
 
-  test('§6.4\'s U2 row covers the schema\'s U2 leaves (73) and §3.6 sends the islands term to the SP3e spec §3', () => {
+  test('§6.4\'s U2 row states SP3e\'s islands base and leaf count (73) and §3.6 sends the islands term to the SP3e spec §3', () => {
     const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
     expect(u2, 'no U2 row in §6.4').toBeDefined();
-    const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
-    expect(n).toBe(73);
-    expect(u2).toContain(`the islands leaves are decided on a floating_islands island column; U2 covers ${n} leaves (amended by SP3e)`);
+    // SP3e's count stays as history; the schema's count is pinned in the SP6a describe (SP6a amends the row).
+    expect(u2).toContain('the islands leaves are decided on a floating_islands island column; U2 covers 73 leaves (amended by SP3e)');
     expect(text).toContain('- `islands` is `−1e6` except in the floating_islands preset (SP3e) (SP3e spec §3).');
   });
 
@@ -1962,5 +1964,27 @@ describe('master spec amendments (SP6a §13)', () => {
     const line = text.split('\n').find((l) => l.includes('(`DET_FILES` in `test/arch/rules/banned.ts`:'));
     expect(line).toContain('and the SP6a goldens, `metrics/sp6aGoldens.ts`):');
     expect(line).toContain('(amended by SP1, SP2a, SP2b, SP3a, SP3c, SP3e and SP6a)');
+  });
+
+  test('§5.1\'s Terrain scope names caves (`caves.*`) among its examples (SP6a spec §13 item 16)', () => {
+    const row = text.split('\n').find((l) => l.startsWith('| Terrain |'));
+    expect(row, 'no Terrain row in §5.1').toBeDefined();
+    expect(row!.split('|')[2]).toContain('caves (`caves.*`)');
+  });
+
+  test('§6.4\'s U2 row covers the schema\'s U2 leaves, the caves.* leaves decided on the cave class column (SP6a spec §13 item 20)', () => {
+    // Moved from the SP3e describe; Tasks 6, 7, 8, 9 and 27 rewrite n (SP6a Spec correction 12).
+    const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
+    expect(u2, 'no U2 row in §6.4').toBeDefined();
+    const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
+    expect(n).toBe(92);
+    expect(u2).toContain(`; SP6a: the caves.* leaves are decided on the cave class column or a bounded witness; U2 covers ${n} leaves (amended by SP6a)`);
+  });
+
+  test('§6.4\'s T5 row compares surfaceEst3 with the pre-cave top, its thresholds unchanged (SP6a spec §13 item 21)', () => {
+    const t5 = text.split('\n').find((l) => l.startsWith('| T5 |'));
+    expect(t5, 'no T5 row in §6.4').toBeDefined();
+    expect(t5).toContain("; SP6a: vs the pre-cave top (the top of the `precave` tap's run over the true top), the surface's cave holes being C9's (amended by SP6a) |");
+    expect(t5!.endsWith('| median ≤ 1, p90 ≤ 2, p99 ≤ 6 |')).toBe(true);
   });
 });

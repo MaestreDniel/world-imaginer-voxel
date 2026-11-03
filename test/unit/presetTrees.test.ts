@@ -38,7 +38,7 @@ import { validateParamTrees } from '../../src/gen/trees';
 import { fillColumnT } from '../../src/metrics/region';
 import { treeLints } from '../../src/ui/inspector/form';
 import { AIR } from '../../src/world/blocks/index';
-import { columnDiff, SP5C_COLUMNS, sp5cPair } from '../harness/sp5cTrees';
+import { cavesMuted, cavesMutedDiff, SP5C_COLUMNS, sp5cPair } from '../harness/sp5cTrees';
 import { createStore } from '../../src/world/store/store';
 
 type Rec = Record<string, unknown>;
@@ -182,17 +182,19 @@ describe('AMPLIFIED_DENSITY_TREE (SP3e spec §1.2, D1, D2, user point 2)', () =>
     expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.b.x')).toEqual({ op: 'const', v: -1e6 });
   });
 
-  test('86 nodes; tier 2 []; static costs: structural 498, column 15,423,937, work 734 (the default 338, 15,399,437, 574)', () => {
-    // SP6a §1.1 adds 6 nodes to every tree (precave, ref, two mins, two slots) and 5 voxel units to its costs.
-    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(66);
-    expect(countTreeNodes(AMPLIFIED_DENSITY_TREE, 'density')).toBe(86);
+  test('198 nodes; tier 2 []; static costs: structural 3,322, column 21,160,576, work 5,166 (the default 2,522, 21,038,076, 4,366)', () => {
+    // SP6a §1.1 adds 6 nodes to every tree (precave, ref, two mins, two slots) and 5 voxel units to its costs (86 nodes,
+    // structural 498, column 15,423,937, work 734 before the cave terms), then the cave terms 112 nodes; the body's
+    // replacements weigh 5 times at the corners (the terrain tap, detailG, cheese's sky, roof and ramp read `ref body`).
+    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(178);
+    expect(countTreeNodes(AMPLIFIED_DENSITY_TREE, 'density')).toBe(198);
     expect(validateParamTrees(amplified)).toEqual([]);
     const t = AMPLIFIED_DENSITY_TREE as unknown as { root: unknown; defs: unknown };
-    expect(structuralCost(t.root, t.defs)).toBe(498);
-    expect(densityColumnCost(AMPLIFIED_DENSITY_TREE)).toBe(15_423_937);
+    expect(structuralCost(t.root, t.defs)).toBe(3322);
+    expect(densityColumnCost(AMPLIFIED_DENSITY_TREE)).toBe(21_160_576);
     const work = (tree: unknown, p: Params) => workCost(resolveDensity(tree, p), p);
-    expect(work(DEFAULT_DENSITY_TREE, DEFAULTS)).toBe(574);
-    expect(work(AMPLIFIED_DENSITY_TREE, amplified)).toBe(734);
+    expect(work(DEFAULT_DENSITY_TREE, DEFAULTS)).toBe(4366);
+    expect(work(AMPLIFIED_DENSITY_TREE, amplified)).toBe(5166);
   });
 
   test('the inspector\'s cost lint does not fire (work ≤ 4 × the default) and the rules keep their fast path', () => {
@@ -329,7 +331,9 @@ describe('amplified on real columns (seed 42; SP3e spec §1.2)', () => {
     }
     expect(voxels).toBe(3 * (24 * 256 + 512));
     expect(masked).toBeGreaterThan(0);
-    expect(corners).toBe(3 * 48 * 8);
+    // Five interpolated nodes (the terrain's, detailG's sharing its slot, and SP6a's entrances, cheese and pillars).
+    expect(interp.length).toBe(5);
+    expect(corners).toBe(3 * 48 * 8 * 5);
     // The columns reach the slide (y ≥ 296): the test exercises the knots and the ceiling.
     expect(solidHigh).toBeGreaterThan(0);
   });
@@ -459,29 +463,33 @@ describe('FLOATING_DENSITY_TREE (SP3e spec §3.1, §3.3, §3.4, D3, D4, D12, D13
     expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.b.x')).toEqual({ op: 'const', v: -1e6 });
   });
 
-  test('93 nodes (BODY 21, the replacement 28); tier 2 []; the inspector\'s cost lint does not fire', () => {
+  test('205 nodes (BODY 21, the replacement 28; 93 before SP6a\'s cave terms); tier 2 []; the inspector\'s cost lint does not fire', () => {
     expect(countTreeNodes(ISLANDS_BODY as JsonValue, 'density')).toBe(21);
-    expect(countTreeNodes(FLOATING_DENSITY_TREE, 'density')).toBe(93);
+    expect(countTreeNodes(FLOATING_DENSITY_TREE, 'density')).toBe(205);
     expect(validateParamTrees(floating)).toEqual([]);
     expect(treeLints(floating)).toEqual([]);
   });
 
-  test('static costs: structural 554, column 15,588,087, work 910 (§3.4\'s computed figures 549, 15,096,567, 905, plus SP6a\'s 5 voxel nodes)', () => {
+  test('static costs: structural 2,738, column 21,226,726, work 4,702 (§3.4\'s computed figures 549, 15,096,567, 905, plus SP6a\'s 5 voxel nodes, then its cave terms)', () => {
     const t = FLOATING_DENSITY_TREE as unknown as { root: unknown; defs: unknown };
-    expect(structuralCost(t.root, t.defs)).toBe(554);
-    expect(densityColumnCost(FLOATING_DENSITY_TREE)).toBe(15_588_087);
-    expect(workCost(resolveDensity(FLOATING_DENSITY_TREE, floating), floating)).toBe(910);
+    // 554, 15,588,087 and 910 before the cave terms; the islands term adds 216 structural units, 188,650 column units
+    // and 336 work units to the default's 2,522, 21,038,076 and 4,366, as before them (554 − 338, 15,588,087 −
+    // 15,399,437, 910 − 574).
+    expect(structuralCost(t.root, t.defs)).toBe(2738);
+    expect(densityColumnCost(FLOATING_DENSITY_TREE)).toBe(21_226_726);
+    expect(workCost(resolveDensity(FLOATING_DENSITY_TREE, floating), floating)).toBe(4702);
+    expect([2738 - 2522, 21_226_726 - 21_038_076, 4702 - 4366]).toEqual([554 - 338, 15_588_087 - 15_399_437, 910 - 574]);
   });
 });
 
-describe('the preset trees keep the SP5c values (SP6a §1.1: the body as a def, the precave tap and the cave slots)', () => {
-  test.each(SP5C_COLUMNS)('amplified equals the SP5c amplified tree at every voxel and every bounds decision of column (%i, %i)', (cx, cz) => {
-    const { today, sp5c } = sp5cPair(createGenContext(seedFromInput('42'), resolveProfile('amplified')), AMPLIFIED_DENSITY_TREE, 'amplified');
-    expect(columnDiff(today, sp5c, cx, cz)).toBeNull();
+describe('the preset trees keep the SP5c values with the carving cave taps muted (SP6a §1.1: the body as a def, the precave tap, the cave terms)', () => {
+  test.each(SP5C_COLUMNS)('amplified: the SP5c amplified tree\'s values where T < 16 and its solidity everywhere, column (%i, %i)', (cx, cz) => {
+    const { today, sp5c } = sp5cPair(createGenContext(seedFromInput('42'), resolveProfile('amplified')), cavesMuted(AMPLIFIED_DENSITY_TREE), 'amplified');
+    expect(cavesMutedDiff(today, sp5c, cx, cz).diff).toBeNull();
   });
 
-  test.each(SP5C_COLUMNS)('floating_islands equals the SP5c floating_islands tree at every voxel and every bounds decision of column (%i, %i)', (cx, cz) => {
-    const { today, sp5c } = sp5cPair(createGenContext(seedFromInput('42'), resolveProfile('floating_islands')), FLOATING_DENSITY_TREE, 'floating_islands');
-    expect(columnDiff(today, sp5c, cx, cz)).toBeNull();
+  test.each(SP5C_COLUMNS)('floating_islands: the SP5c floating_islands tree\'s values where T < 16 and its solidity everywhere, column (%i, %i)', (cx, cz) => {
+    const { today, sp5c } = sp5cPair(createGenContext(seedFromInput('42'), resolveProfile('floating_islands')), cavesMuted(FLOATING_DENSITY_TREE), 'floating_islands');
+    expect(cavesMutedDiff(today, sp5c, cx, cz).diff).toBeNull();
   });
 });

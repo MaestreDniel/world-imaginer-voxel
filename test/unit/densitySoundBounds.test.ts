@@ -10,7 +10,10 @@ import {
   ivSquare, ivUnknown, ivWiden, rangeChoiceCase, valClamp,
 } from '../../src/gen/density/nodes';
 import { probe } from '../../src/gen/density/probe';
+import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
+import { resolveDensity } from '../../src/gen/density/source';
 import { ctxFor } from '../harness/gen';
+import { cavesMuted } from '../harness/sp5cTrees';
 import { testFloat, testRng } from '../harness/stats';
 
 // SP3d spec §1.9 D: interval poison in nodes.ts and NaN-testing hulls in bounds.ts.
@@ -354,9 +357,8 @@ describe('bounds: NaN and ±∞ slot and corner values never decide a cell (SP3d
 });
 
 describe('the default world is unchanged (SP3d spec §1.9 D: proven, not only claimed)', () => {
-  test('fillDensityColumn\'s mask and solid arrays over 32 seed-\'42\' columns hash as at main (9fababa)', () => {
-    // Computed with main's code (2ffec6a = 9fababa's code) in a detached worktree, by this same loop.
-    const dc = createDensityContext(ctxFor('42'));
+  /** The mask and solid arrays of `fillDensityColumn` over the 32 seed-'42' columns: their hash, masked and solid counts. */
+  const hashed = (dc: ReturnType<typeof createDensityContext>): string => {
     const solid = new Uint8Array(98304), mask = new Uint8Array(98304);
     const h = createFnv64();
     let masked = 0, solids = 0;
@@ -366,6 +368,17 @@ describe('the default world is unchanged (SP3d spec §1.9 D: proven, not only cl
       h.update(mask).update(solid);
       for (let k = 0; k < 98304; k++) { masked += mask[k]!; solids += solid[k]!; }
     }
-    expect(`${hex64(h.digest())} ${masked} ${solids}`).toBe('1e25082c8ed7a949 167808 1040924');
+    return `${hex64(h.digest())} ${masked} ${solids}`;
+  };
+
+  test('fillDensityColumn\'s mask and solid arrays over 32 seed-\'42\' columns hash as at main (9fababa), SP6a\'s carving cave taps muted', () => {
+    // Computed with main's code (2ffec6a = 9fababa's code) in a detached worktree, by this same loop. SP6a's tree with the
+    // entrances and cheese taps muted (`cavesMuted`: the caves slot is 1e6) keeps every bounds decision and solid voxel.
+    const c = ctxFor('42');
+    expect(hashed(createDensityContext(c, resolveDensity(cavesMuted(DEFAULT_DENSITY_TREE), c.params)))).toBe('1e25082c8ed7a949 167808 1040924');
+  });
+
+  test('… and with SP6a\'s cave terms (entrances, cheese, pillars; recorded at their commit): more voxels evaluated, fewer solid', () => {
+    expect(hashed(createDensityContext(ctxFor('42')))).toBe('6a825c0535036c45 411264 984610');
   });
 });

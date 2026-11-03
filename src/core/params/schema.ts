@@ -33,6 +33,18 @@ const warp = (label: string, doc: string, amplitude: number, wavelength: number,
 /** A density noise (SP3b spec §3.3): sampled at unscaled world block coordinates; remap 'none' (validateExpr; the schema refuses another). */
 const densityNoise = (label: string, doc: string, def: { readonly wavelength: number; readonly octaves: number; readonly yScale?: number; readonly persistence?: number }, dims: 2 | 3, wavelength: { readonly min: number; readonly max: number }) =>
   noise(def, { ...TERRAIN, label, doc, wavelength, dims, remapNone: true });
+/**
+ * A cave noise (SP6a spec §1.2, §4): a density noise under `caves.noises.*`, read by the cave terms of the density
+ * expression through its id (the noise lookup tries `density.noises.<id>` first, then `caves.noises.<id>`); a single
+ * stack unless `def.double` (D24), remap 'none', and `clampSigma` given here (3 for every SP6a noise, so the closure
+ * bounds of the caps hold). `def.dims` is the noise's dims; a 3D noise's vertical wavelength is λ / yScale (≥ 16 at the
+ * defaults, SP3b's rule: 2 × the 8-block corner step).
+ */
+const caveNoise = (label: string, doc: string, def: { readonly dims: 2 | 3; readonly wavelength: number; readonly octaves: number; readonly yScale?: number; readonly double?: boolean; readonly amplitudes?: readonly number[] }, clampSigma: number, range: { readonly min: number; readonly max: number }) => {
+  const { dims, ...noiseDef } = def;
+  return noise({ double: false, ...noiseDef, clampSigma }, { ...TERRAIN, label, doc, wavelength: range, dims, remapNone: true });
+};
+const CAVE_WAVELENGTH = { min: 16, max: 8192 } as const;
 const amp = (def: number, label: string, doc: string) =>
   num(def, { ...TERRAIN, label, doc, unit: 'blocks', min: 0, max: 8, step: 0.05 });
 
@@ -141,6 +153,40 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     lo: frac(0.55, 'Mask start', 'u where `islandMask` starts to rise from 0.', -1, 1),
     hi: frac(0.8, 'Mask full', 'u from which `islandMask` is 1 (lo ≥ hi: a step at lo).', -1, 1),
   }),
+  // SP6a spec §4 (D9): appended after `islands`, so randomParams and randomPatch draw every earlier group as before. The
+  // sub-groups in this order (Cheese, Spaghetti 3D, Spaghetti 2D, Noodles, Pillars, Entrances, Worms, Underground worms,
+  // Ravines, Limits, then the noises); each leaf lands with the term that reads it, sizes first.
+  caves: group('Caves', 'The cave terms of the default density expression (SP6a spec §1, §4): the noise families, their floors and limits.', {
+    cheese: group('Cheese', 'Large caverns: 16·(layerAmp·L² + clamp(Nch + offset − regional·Nra, −1, 1) + roof), carved where it is below 0.', {
+      offset: num(0.27, { ...TERRAIN, label: 'Offset', doc: 'Added to the cheese noise: lower → larger caverns (0.27: caverns are rare pockets).', min: -0.5, max: 1, step: 0.01 }),
+      regional: num(0.1, { ...TERRAIN, label: 'Regional swing', doc: 'Lowers the offset by this × the regional noise Nra (λ 1536), so some regions hold larger caverns.', min: 0, max: 0.4, step: 0.01 }),
+      layerAmp: num(4, { ...TERRAIN, label: 'Layer amplitude', doc: 'Weight of the squared layer noise L², which closes caverns between flat layers.', min: 0, max: 8, step: 0.05 }),
+      roofDepth: num(12, { ...TERRAIN, label: 'Roof depth', doc: 'Caverns close within about this depth below the terrain surface: + clamp((roofDepth − T) / 24, 0, 0.5).', unit: 'blocks', min: 0, max: 48, step: 1 }),
+    }),
+    pillars: group('Pillars', 'Rock pillars kept inside caverns: P = 16·(2·Np − 1 − rare)·(0.55 + 0.55·thickness)³.', {
+      threshold: num(0.03, { ...TERRAIN, label: 'Threshold', doc: 'Rock is kept where P / 16 is at least this (lower → more and thicker pillars).', min: 0, max: 0.5, step: 0.005 }),
+    }),
+    entrances: group('Entrances', 'Openings that reach the surface: 16·min(Ne·(1/6) + offset + yGrad, rough + clamp(max(|E1|, |E2|) − threshold, −1, 1)), not depth-ramped.', {
+      offset: num(0.37, { ...TERRAIN, label: 'Offset', doc: 'Added to the scaled entrance noise Ne·(1/6): lower → more entrances.', min: -0.5, max: 1, step: 0.01 }),
+      threshold: num(0.08, { ...TERRAIN, label: 'Threshold', doc: 'Width of the entrance tunnels: carved where max(|E1|, |E2|) is below about this.', min: 0, max: 0.5, step: 0.005 }),
+    }),
+    limits: group('Limits', 'Where the cave families may reach (SP6a spec §1.4).', {
+      surfaceDepth: num(8, { ...TERRAIN, label: 'Surface depth', doc: 'The deep families fade out above this depth: + clamp((surfaceDepth − T)·2, 0, 32) (0 at T ≥ surfaceDepth, 16 at the surface).', unit: 'blocks', min: 0, max: 32, step: 1 }),
+    }),
+    noises: group('Cave noises', 'Noises read by the cave terms (noise2 / noise ops), at unscaled world block coordinates.', {
+      cheese: caveNoise('Cheese noise', 'Nch of the cheese caverns (λxz 96, λy 144, double).', { dims: 3, wavelength: 96, octaves: 4, yScale: 96 / 144, double: true }, 3, CAVE_WAVELENGTH),
+      layer: caveNoise('Layer noise', 'L of the cheese layer term layerAmp·L² (λxz 96, λy 16).', { dims: 3, wavelength: 96, octaves: 1, yScale: 6 }, 3, CAVE_WAVELENGTH),
+      cheeseRegional: caveNoise('Cheese regional noise', 'Nra (2D): lowers the cheese offset by regional·Nra.', { dims: 2, wavelength: 1536, octaves: 2 }, 3, CAVE_WAVELENGTH),
+      pillar: caveNoise('Pillar noise', 'Np of the pillars (λxz 30, λy 400).', { dims: 3, wavelength: 30, octaves: 1, yScale: 0.075 }, 3, CAVE_WAVELENGTH),
+      pillarRare: caveNoise('Pillar rarity noise', 'rare of the pillars (λxz 60, λy 400).', { dims: 3, wavelength: 60, octaves: 1, yScale: 0.15 }, 3, CAVE_WAVELENGTH),
+      pillarThickness: caveNoise('Pillar thickness noise', 'thickness of the pillars (λxz 60, λy 400).', { dims: 3, wavelength: 60, octaves: 1, yScale: 0.15 }, 3, CAVE_WAVELENGTH),
+      roughness: caveNoise('Roughness noise', 'Nr of rough = (−0.05 − 0.05·Nrm)·(−0.4 + |Nr|).', { dims: 3, wavelength: 32, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      roughnessMod: caveNoise('Roughness modulation noise', 'Nrm of rough = (−0.05 − 0.05·Nrm)·(−0.4 + |Nr|).', { dims: 3, wavelength: 128, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      entrance: caveNoise('Entrance noise', 'Ne of the entrances (amplitudes 0.4, 0.5, 1.0).', { dims: 3, wavelength: 128, octaves: 3, amplitudes: [0.4, 0.5, 1.0] }, 3, CAVE_WAVELENGTH),
+      entranceA: caveNoise('Entrance tunnel noise A', 'E1 of the entrance tunnels max(|E1|, |E2|).', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      entranceB: caveNoise('Entrance tunnel noise B', 'E2 of the entrance tunnels max(|E1|, |E2|).', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
+    }),
+  }),
 });
 
 export const SCHEMA = buildSchema(ROOT);
@@ -154,3 +200,4 @@ export interface BiomeParams extends Value<typeof ROOT.children.biomes> {}
 export interface DensityParams extends Value<typeof ROOT.children.density> {}
 export interface SurfaceParams extends Value<typeof ROOT.children.surface> {}
 export interface IslandParams extends Value<typeof ROOT.children.islands> {}
+export interface CaveParams extends Value<typeof ROOT.children.caves> {}

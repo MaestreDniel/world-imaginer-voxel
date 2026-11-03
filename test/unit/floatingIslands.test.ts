@@ -179,7 +179,8 @@ describe('compiled == reference and probe == bulk on island columns (SP3e spec Â
   test('every voxel of y 184-272 plus 512 uniform voxels, and every corner of the cells ck 31-41, of the m = 1 and 0.25 < m < 1 sea columns', () => {
     const c = dc.compiled;
     const interp = interpolatedNodes(dc.expr).map((n) => ({ inner: n.x, slot: c.interpolatedSlot(n) }));
-    expect(interp).toHaveLength(2);
+    // The terrain's and the islands term's, plus SP6a's detailG (sharing the terrain's slot), entrances, cheese, pillars.
+    expect(interp).toHaveLength(6);
     const out = new Float64Array(98304);
     const mask = new Uint8Array(98304);
     const r = new Xoshiro128(fnv1a32('floatingIslands.compiled'));
@@ -227,7 +228,7 @@ describe('compiled == reference and probe == bulk on island columns (SP3e spec Â
     }
     expect(voxels).toBe(2 * (89 * 256 + 512));
     expect(masked).toBeGreaterThan(0);
-    expect(corners).toBe(2 * 11 * 16 * 2 * 8);
+    expect(corners).toBe(2 * 11 * 16 * 6 * 8);
     expect(islandVoxels).toBeGreaterThan(0);
   });
 });

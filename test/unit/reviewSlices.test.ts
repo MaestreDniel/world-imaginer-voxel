@@ -15,7 +15,11 @@ import {
   AIR, BEDROCK, BROWN_TERRACOTTA, DIRT, GRASS_BLOCK, LIGHT_GRAY_TERRACOTTA, ORANGE_TERRACOTTA, PACKED_ICE, RED_SAND, RED_TERRACOTTA, SAND,
   SANDSTONE, SNOW_BLOCK, STONE, TERRACOTTA, WHITE_TERRACOTTA, YELLOW_TERRACOTTA,
 } from '../../src/world/blocks/index';
+import { applyPatch } from '../../src/core/params/kit';
+import type { JsonValue } from '../../src/core/params/json';
+import { SCHEMA, type Params } from '../../src/core/params/schema';
 import { ctxFor, paramsWith } from '../harness/gen';
+import { cavesMuted } from '../harness/sp5cTrees';
 import { encodePng, VOXEL_COLORS } from '../harness/png';
 import type { RegionView } from '../harness/region';
 import {
@@ -26,7 +30,17 @@ import {
 } from '../harness/reviewSlices';
 
 const ctx = ctxFor('42');
-const params = paramsWith();
+/**
+ * `p` with its density tree's carving cave taps muted (`cavesMuted`): the terrain SP3c's and SP3e's review slices
+ * recorded, before SP6a's caves. The committed assets are those reviews' evidence, so they are checked against it.
+ */
+const noCaves = (p: Params): Params => {
+  const r = applyPatch(SCHEMA, p, { density: { defs: cavesMuted(p.density.defs) as JsonValue } });
+  if (!r.ok) throw new Error(JSON.stringify(r.issues));
+  return r.value;
+};
+const params = noCaves(paramsWith());
+const presetParams = (p: DraftPresetId): Params => noCaves(resolveProfile(p));
 const verticals = REVIEW_SITES.filter((s): s is VerticalSite => s.kind === 'vertical');
 const site = (name: string): ReviewSite => REVIEW_SITES.find((s) => s.name === name)!;
 
@@ -216,7 +230,7 @@ describe('positions and lines read from the voxels', () => {
     expect(sum.waterUnderStone).toBe(9);
   });
 
-  // The real lines (seed '42', the real T), each generated once.
+  // The real lines (seed '42', the real T without SP6a's caves: `noCaves`), each generated once.
   const views = new Map<string, RegionView>();
   beforeAll(async () => {
     for (const s of REVIEW_SITES) views.set(s.name, await generateLine('42', params, s));
@@ -503,13 +517,13 @@ function islandOverWaterOverGround(view: RegionView, x: number, z: number): numb
 describe('SP3e preset review slices on the real lines (spec §8): the committed window centres, each preset\'s params', () => {
   const lines = new Map<DraftPresetId, RegionView>();
   beforeAll(async () => {
-    for (const p of DRAFT_PRESETS) lines.set(p, await generateLine('42', resolveProfile(p), presetSite(p)));
+    for (const p of DRAFT_PRESETS) lines.set(p, await generateLine('42', presetParams(p), presetSite(p)));
   }, 120_000);
   const summaryOf = (p: DraftPresetId): LineSummary => {
     const site = presetSite(p);
     const { z, x0, n } = siteLine(site);
     const view = lines.get(p)!;
-    return lineSummary(view, z, x0, n, kindReader(createGenContext(seedFromInput('42'), resolveProfile(p)), view, z));
+    return lineSummary(view, z, x0, n, kindReader(createGenContext(seedFromInput('42'), presetParams(p)), view, z));
   };
 
   test('the lines through the committed centres: archipelago (128, −128), amplified (−640, 0), floating_islands (−768, −1408)', () => {
@@ -629,7 +643,7 @@ describe('SP3e tuning sets (spec §1.5, §8): the before set and the approved af
 test.runIf(WRITING)('write the preset review slices into REVIEW_SLICES_DIR/<preset>', async () => {
   for (const p of DRAFT_PRESETS) {
     const dir = join(process.env.REVIEW_SLICES_DIR!, p);
-    const written = await writeReviewSlices(dir, '42', resolveProfile(p), [presetSite(p)]);
+    const written = await writeReviewSlices(dir, '42', presetParams(p), [presetSite(p)]);
     expect(written.map((w) => w.site.file)).toEqual([presetSite(p).file]);
     writeFileSync(join(dir, 'slices.json'), slicesJson('42', p, written));
   }

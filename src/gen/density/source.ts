@@ -7,8 +7,8 @@
  * - tap `mute` (the tap yields the mute value instead of its child), and the ref form `{param, neg?}` in every numeric
  *   scalar field (`clamp` and `rangeChoice` bounds, each knot's y and v, `mute`, SP6a's `noiseScaled.s`, whose ref must
  *   have its whole static range inside [1/16, 16], else `SCALE_RANGE`); `const.v` stays a literal.
- * A ref names one of `ALLOWED_REF_TARGETS`: the `number` and `int` leaves under `density.` and `surface.` and the
- * `clampSigma` field of their noise leaves, each with its static range (value-independence, §1.3: every check holds over
+ * A ref names one of `ALLOWED_REF_TARGETS`: the `number` and `int` leaves under `density.`, `surface.` and (SP6a §4)
+ * `caves.`, and the `clampSigma` field of their noise leaves, each with its static range (value-independence, §1.3: every check holds over
  * the whole range, so a slider move never invalidates a stored tree).
  *
  * `validateDensitySource` is tier 2 for density (§1.7): it never throws, returns at most 50 issues (then one
@@ -131,10 +131,10 @@ export const SOURCE_CHILD_KEYS: { readonly [K in SourceOp]: readonly string[] } 
 ));
 
 /**
- * The parameters a ref may name (§1.3), by schema path, in schema order: every `number` / `int` leaf under `density.`
- * or `surface.` with its `[min, max]`, and `<noise leaf>.clampSigma` for every noise leaf under `density.noises.` and
- * `surface.noises.` with `NOISE_FIELD_RANGES.clampSigma`. Built from the schema's leaves, never from `getPath` (which
- * would read anything). Every target is hashed by the `terrain` stage.
+ * The parameters a ref may name (§1.3), by schema path, in schema order: every `number` / `int` leaf under `density.`,
+ * `surface.` or `caves.` (SP6a spec §4) with its `[min, max]`, and `<noise leaf>.clampSigma` for every noise leaf under
+ * `density.noises.`, `surface.noises.` and `caves.noises.` with `NOISE_FIELD_RANGES.clampSigma`. Built from the schema's
+ * leaves, never from `getPath` (which would read anything). Every target is hashed by the `terrain` stage.
  */
 export const ALLOWED_REF_TARGETS: ReadonlyMap<string, RefTarget> = (() => {
   const out = new Map<string, RefTarget>();
@@ -145,9 +145,9 @@ export const ALLOWED_REF_TARGETS: ReadonlyMap<string, RefTarget> = (() => {
     out.set(path, Object.freeze({ kind, lo, hi }));
   };
   for (const { path, meta } of SCHEMA_.leaves) {
-    if (!path.startsWith('density.') && !path.startsWith('surface.')) continue;
+    if (!path.startsWith('density.') && !path.startsWith('surface.') && !path.startsWith('caves.')) continue;
     if (meta.kind === 'number' || meta.kind === 'int') add(path, meta.kind, meta.min, meta.max);
-    else if (meta.kind === 'noise' && (path.startsWith('density.noises.') || path.startsWith('surface.noises.'))) {
+    else if (meta.kind === 'noise' && (path.startsWith('density.noises.') || path.startsWith('surface.noises.') || path.startsWith('caves.noises.'))) {
       add(`${path}.clampSigma`, 'number', NOISE_RANGES.clampSigma.min, NOISE_RANGES.clampSigma.max);
     }
   }
@@ -156,17 +156,21 @@ export const ALLOWED_REF_TARGETS: ReadonlyMap<string, RefTarget> = (() => {
 
 /**
  * The density noises a source tree may read, by id, with what validation needs, value-independently: the schema's
- * `density.noises.*` leaves at their dims; remap 'none' when the leaf keeps it (`remapNone`, every density noise), else
- * 'uniform' (a remap the user could switch is refused); clampSigma at its static maximum.
+ * `density.noises.*` leaves, then its `caves.noises.*` leaves (SP6a spec §1.5; an id is looked up under
+ * `density.noises.` first), at their dims; remap 'none' when the leaf keeps it (`remapNone`, every density and cave
+ * noise), else 'uniform' (a remap the user could switch is refused); clampSigma at its static maximum.
  */
 const SOURCE_NOISES: ReadonlyMap<string, DensityNoiseInfo> = (() => {
   const out = new Map<string, DensityNoiseInfo>();
-  const prefix = 'density.noises.';
-  for (const { path, leaf } of SCHEMA_.leaves) {
-    if (leaf.kind !== 'noise' || !path.startsWith(prefix)) continue;
-    out.set(path.slice(prefix.length), Object.freeze({
-      dims: leaf.dims ?? 2, remap: leaf.remapNone === true ? 'none' : 'uniform', clampSigma: NOISE_RANGES.clampSigma.max,
-    }));
+  for (const prefix of ['density.noises.', 'caves.noises.']) {
+    for (const { path, leaf } of SCHEMA_.leaves) {
+      if (leaf.kind !== 'noise' || !path.startsWith(prefix)) continue;
+      const id = path.slice(prefix.length);
+      if (out.has(id)) continue;
+      out.set(id, Object.freeze({
+        dims: leaf.dims ?? 2, remap: leaf.remapNone === true ? 'none' : 'uniform', clampSigma: NOISE_RANGES.clampSigma.max,
+      }));
+    }
   }
   return out;
 })();

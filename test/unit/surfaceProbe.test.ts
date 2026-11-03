@@ -12,6 +12,7 @@ import { AIR, BEDROCK, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { ColumnView } from '../../src/world/store/api';
 import { createStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
+import { cavesMuted } from '../harness/sp5cTrees';
 import { legacyDefaultSurfaceRules } from '../harness/legacyTrees';
 import { testFloat, testRng } from '../harness/stats';
 import { registeredKey, withRegisteredBlocks } from '../harness/surfaceFuzz';
@@ -215,6 +216,9 @@ describe('surfaceProbe (spec §3.6)', () => {
 
   test('a fast-path deepslate voxel at y −30 reports the deepslate rule (root.rules[2].then)', () => {
     const [cx, cz] = LAND;
+    // Without SP6a's caves (which split the land column's run above y −30), as the SP3c fixture was.
+    const noCaves = ctxFor('42', { density: { defs: cavesMuted(DEFAULT_DENSITY_TREE) as JsonValue } });
+    const SC = createSurfaceContext(noCaves, RULES);
     const c = surfaceProbeColumn(SC, cx, cz);
     const p = 0;
     const r0 = c.scan.runFirst[p]!;

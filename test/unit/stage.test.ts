@@ -6,7 +6,7 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import { applyPatch, bool, buildSchema, group, num } from '../../src/core/params/kit';
 import { SCHEMA } from '../../src/core/params/schema';
 import { dirtyStages, genKey, paramsHash, stageHashes } from '../../src/core/stage/hash';
-import { checkRegistry, prefixCovers, STAGES, type StageDef } from '../../src/core/stage/registry';
+import { checkRegistry, prefixCovers, SCOPE_OF_STAGE, STAGES, type StageDef } from '../../src/core/stage/registry';
 import { FIXTURE_DEFAULTS, FIXTURE_STAGES, PARAMS_FIXTURE } from '../../src/metrics/sp1Fixtures';
 
 const ALL = STAGES.map((s) => s.id);
@@ -15,7 +15,21 @@ describe('registry', () => {
   test('the SP2a schema and stage list satisfy every invariant', () => {
     expect(checkRegistry(SCHEMA, STAGES)).toEqual([]);
     expect(ALL).toEqual(['climate', 'shape', 'surfaceEst', 'biome2d', 'terrain', 'decorate', 'light', 'mesh', 'lod', 'map']);
-    expect(STAGES.map((s) => `${s.id}@${s.version}`)).toEqual(['climate@1', 'shape@2', 'surfaceEst@2', 'biome2d@2', 'terrain@3', 'decorate@1', 'light@1', 'mesh@1', 'lod@1', 'map@2']);
+    expect(STAGES.map((s) => `${s.id}@${s.version}`)).toEqual(['climate@1', 'shape@2', 'surfaceEst@2', 'biome2d@2', 'terrain@4', 'decorate@1', 'light@1', 'mesh@1', 'lod@1', 'map@2']);
+  });
+  test('SP6a (its spec §4, §12.3): terrain is version 4 and hashes the caves group; every caves.* leaf\'s badge is Terrain', () => {
+    const terrain = STAGES.find((s) => s.id === 'terrain')!;
+    expect([terrain.version, terrain.params]).toEqual([4, ['density', 'surface', 'caves']]);
+    const caves = SCHEMA.leaves.filter((l) => l.path.startsWith('caves.'));
+    expect(caves.length).toBeGreaterThan(0);
+    for (const { path, meta } of caves) {
+      const first = STAGES.find((s) => s.params.some((p) => prefixCovers(p, path)));
+      expect([path, first?.id, meta.scope, SCOPE_OF_STAGE[first!.id]]).toEqual([path, 'terrain', 'terrain', 'terrain']);
+    }
+    // A cave edit dirties the terrain stage and what reads it, never the 2D stages (no map tile is redrawn).
+    const moved = applyPatch(SCHEMA, DEFAULTS, { caves: { cheese: { offset: 0.2 } } });
+    if (!moved.ok) throw new Error('bad patch');
+    expect(dirtyStages(stageHashes(DEFAULTS), stageHashes(moved.value))).toEqual(['terrain', 'decorate', 'light', 'mesh']);
   });
   test('prefixes match on dot boundaries', () => {
     expect(prefixCovers('climate', 'climate.C')).toBe(true);

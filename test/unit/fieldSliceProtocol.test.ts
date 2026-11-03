@@ -136,7 +136,7 @@ describe('planFieldSlice: the one split and refusal math (SP3d spec §5.2, P3)',
     expect(planFieldSlice(4, PART_BUDGET + 1, 2, 2 ** 40)).toEqual({ refused: true, limit: PART_BUDGET });
     expect(accepted(planFieldSlice(4, PART_BUDGET, 2, 2 ** 40)).ranges).toEqual([[0, 1], [1, 2], [2, 3], [3, 4]]);
   });
-  test('a steep-reading tree of default weight: its horizontal 128² slice and draft are planned, never refused with limit 0', () => {
+  test('a steep-reading tree of default weight (the default without SP6a\'s cave terms, 574): its horizontal 128² slice and draft are planned, never refused with limit 0', () => {
     const steep = (n: number, c: number) => n * (c + CORNER_STEEP_COST);
     const p = paramsWith({ density: { defs: steepTree() } } as never);
     expect(workCost(evaluatedExpression(p, 'density', ''), p)).toBe(576);

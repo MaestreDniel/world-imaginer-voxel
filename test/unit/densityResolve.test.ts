@@ -12,7 +12,7 @@ import type { Issue } from '../../src/core/params/kit';
 import { SCHEMA, type Params, type ParamsPatch } from '../../src/core/params/schema';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import { cornerValueIndex } from '../../src/gen/density/compile';
-import { exprHash, ExprValidationError, type DensityExpr, type Expr } from '../../src/gen/density/expr';
+import { exprHash, ExprValidationError, type DensityExpr, type Expr, type InterpolatedExpr } from '../../src/gen/density/expr';
 import { createDensityReference, findTap } from '../../src/gen/density/reference';
 import {
   densitySourceValidations, freezeTree, resolveDensity, resolveDensityNode, type DensitySource,
@@ -145,8 +145,12 @@ describe('resolveDensity (§1.6)', () => {
     const recipPath = 'defs.body.a.a.a.a.b.b.x.b.x.x.b';
     expect(at(DEFAULT_DENSITY_TREE, recipPath)['op']).toBe('recip');
     expect(at(e, recipPath)).toEqual({ op: 'const', v: 1 / P.density.noises.jag.clampSigma });
-    expect(at(e, 'root.a.a.a.x.b.b.a')).toEqual({ op: 'const', v: P.density.detailAmpLo });
-    expect(at(e, 'root.a.a.a.x.b.b.b.a')).toEqual({ op: 'const', v: P.density.detailAmpHi - P.density.detailAmpLo });
+    expect(at(e, 'root.a.a.a.x.b.inside.b.a')).toEqual({ op: 'const', v: P.density.detailAmpLo });
+    expect(at(e, 'root.a.a.a.x.b.inside.b.b.a')).toEqual({ op: 'const', v: P.density.detailAmpHi - P.density.detailAmpLo });
+    // SP6a's cave terms: a param leaf becomes its value, recip(const 24) its reciprocal; a ref bound its value.
+    expect(at(e, 'root.a.a.b.a.b.x.x.outside.a.a.b.a.b.x.a.b')).toEqual({ op: 'const', v: P.caves.cheese.offset });
+    expect(at(e, 'root.a.a.b.a.b.x.x.outside.a.a.b.b.x.b')).toEqual({ op: 'const', v: 1 / 24 });
+    expect(at(e, 'root.a.a.b.b')['hi']).toBe(P.caves.pillars.threshold);
     expect(at(e, 'root.a.a.a.x.a')['op']).toBe('tap');
     expect(at(e, 'root.b')).toEqual({ op: 'tap', name: 'islands', x: C(-1e6) });
   });
@@ -192,46 +196,54 @@ describe('resolveDensity (§1.6)', () => {
 /**
  * The resolved default against the legacy builder's tree for `p` (value identity since SP6a §1.1, which moved the body
  * into `defs.body` and gave the root its precave tap and cave slots): the resolved `defs.body` is the legacy terrain
- * body (`root.a.x.x`) and the detail term (`root.a.a.a.x.b`) the legacy `root.a.b`, both −0-aware.
+ * body (`root.a.x.x`) and the detail term (`root.a.a.a.x.b.inside`, inside SP6a's detailG) the legacy `root.a.b`, both
+ * −0-aware.
  */
 function checkIdentity(p: Params, what: string): DensityExpr {
   const e = resolveDensity(DEFAULT_DENSITY_TREE, p);
   const legacy = legacyDefaultDensityExpr(p.density) as unknown as { root: { a: { a: { x: { x: unknown } }; b: unknown } } };
   expect(sameTree(e.defs['body'], legacy.root.a.a.x.x), what).toBeNull();
-  const detail = ((((rootOf(e)['a'] as Record<string, unknown>)['a'] as Record<string, unknown>)['a'] as Record<string, unknown>)['x'] as Record<string, unknown>)['b'];
+  const detail = (((((rootOf(e)['a'] as Record<string, unknown>)['a'] as Record<string, unknown>)['a'] as Record<string, unknown>)['x'] as Record<string, unknown>)['b'] as Record<string, unknown>)['inside'];
   expect(sameTree(detail, legacy.root.a.b), what).toBeNull();
   return e;
 }
 
-/** Compiled corner and voxel values (Object.is) of the resolved default and the legacy tree at the three columns. */
+/**
+ * Compiled values (Object.is) of the resolved default and the legacy tree at the three columns: the terrain slot's
+ * corners and the `terrain` tap at the voxels, and the `precave` tap, which is the legacy root (add(terrain, detail),
+ * its max with the islands −1e6 the identity) wherever T < 16 and T + 0 where SP6a's detailG skips the detail term.
+ */
 function checkCompiled(seedText: string, patch: ParamsPatch, what: string, voxelStride: number): void {
   const c = ctxFor(seedText, patch);
   const a = createDensityContext(c);
   const b = createDensityContext(c, legacyDefaultDensityExpr(c.params.density));
   const shape = (dc: DensityContext): number[] => [dc.compiled.nodes.length, dc.compiled.positionSlotCount, dc.compiled.columnSlotCount, dc.compiled.interpolatedSlotCount];
-  // The legacy tree's slots; the resolved default adds voxel-level nodes only (SP6a §1.1).
-  expect(shape(a).slice(1), what).toEqual(shape(b).slice(1));
-  // SP3d §2.1's 51 nodes (the legacy tree), plus SP6a's precave tap, two mins and one shared 1e6 const: 55; 2 position
-  // slots, 2 column slots, 1 interpolated slot (at clampSigma 1 the constant 1 / 1 merges with the 1 of J: one less).
-  if (seedText === '42' && Object.keys(patch).length === 0) expect([shape(a), shape(b)]).toEqual([[55, 2, 2, 1], [51, 2, 2, 1]]);
-  const eq = (dc: DensityContext, cx: number, cz: number): void => { dc.column(cx, cz); };
+  // SP3d §2.1's 51 nodes (the legacy tree); SP6a's root and cave terms: 143 nodes, the legacy's 2 position slots, one
+  // more column slot (the cheese regional noise2 at the corner columns) and 4 interpolated slots (the terrain body,
+  // entrances, cheese, pillars; detailG's interpolated(ref body) shares the terrain's). At clampSigma 1 the constant
+  // 1 / 1 merges with the 1 of J: one node less.
+  if (seedText === '42' && Object.keys(patch).length === 0) expect([shape(a), shape(b)]).toEqual([[143, 2, 3, 4], [51, 2, 2, 1]]);
+  const terrainSlot = a.compiled.interpolatedSlot((a.expr.root as unknown as { a: { a: { a: { x: { a: { x: InterpolatedExpr } } } } } }).a.a.a.x.a.x);
+  expect(terrainSlot, what).toBeGreaterThanOrEqual(0);
   for (const [cx, cz] of COLUMNS) {
-    eq(a, cx, cz);
-    eq(b, cx, cz);
+    a.column(cx, cz);
+    b.column(cx, cz);
     for (let k = 0; k <= 48; k++) {
       for (let j = 0; j <= 4; j++) {
         for (let i = 0; i <= 4; i++) {
           a.compiled.cornerFn(i, k, j);
           b.compiled.cornerFn(i, k, j);
-          const ix = cornerValueIndex(0, i, k, j);
-          if (!Object.is(a.compiled.cornerValues[ix], b.compiled.cornerValues[ix])) throw new Error(`${what}: corner (${i}, ${k}, ${j}) of (${cx}, ${cz})`);
+          const va = a.compiled.cornerValues[cornerValueIndex(terrainSlot, i, k, j)], vb = b.compiled.cornerValues[cornerValueIndex(0, i, k, j)];
+          if (!Object.is(va, vb)) throw new Error(`${what}: corner (${i}, ${k}, ${j}) of (${cx}, ${cz})`);
         }
       }
     }
     for (let v = 0; v < 98304; v += voxelStride) {
       const lx = v & 15, lz = (v >> 4) & 15, y = (v >> 8) - 64;
-      const va = a.compiled.voxelFn(lx, y, lz), vb = b.compiled.voxelFn(lx, y, lz);
-      if (!Object.is(va, vb)) throw new Error(`${what}: voxel (${lx}, ${y}, ${lz}) of (${cx}, ${cz}): ${va} vs ${vb}`);
+      const t = a.compiled.tapFn('terrain', lx, y, lz);
+      if (!Object.is(t, b.compiled.tapFn('terrain', lx, y, lz))) throw new Error(`${what}: terrain at (${lx}, ${y}, ${lz}) of (${cx}, ${cz})`);
+      const va = a.compiled.tapFn('precave', lx, y, lz), vb = t < 16 ? b.compiled.voxelFn(lx, y, lz) : t + 0;
+      if (!Object.is(va, vb)) throw new Error(`${what}: precave at (${lx}, ${y}, ${lz}) of (${cx}, ${cz}): ${va} vs ${vb}`);
     }
   }
 }
@@ -313,9 +325,9 @@ describe('resolveDensityNode (§3.4)', () => {
 
   test('the root is the final density (its own mute applies there); a node with no interpolated ancestor is not wrapped', () => {
     expect(sameTree(resolveDensityNode(muted, 'root', P), resolveDensity(muted, P))).toBeNull();
-    const detail = resolveDensityNode(muted, 'root.a.a.a.x.b', P);
-    const resolved = rootOf(resolveDensity(DEFAULT_DENSITY_TREE, P)) as unknown as { a: { a: { a: { x: { b: unknown } } } } };
-    expect(sameTree(detail.root, resolved.a.a.a.x.b)).toBeNull();
+    const detail = resolveDensityNode(muted, 'root.a.a.a.x.b.inside', P);
+    const resolved = rootOf(resolveDensity(DEFAULT_DENSITY_TREE, P)) as unknown as { a: { a: { a: { x: { b: { inside: unknown } } } } } };
+    expect(sameTree(detail.root, resolved.a.a.a.x.b.inside)).toBeNull();
     expect(detail.defs).toEqual({});
     // An interpolated node itself is not wrapped again.
     expect(rootOf(resolveDensityNode(muted, 'root.a.a.a.x.a.x', P))['op']).toBe('interpolated');

@@ -353,13 +353,19 @@ describe('ref ↔ literal on every numeric field, and neg', () => {
   });
 });
 
+/** The 3D noise ids of the noise selects: `density.noises.*`, then `caves.noises.*` (SP6a §1.5). */
+const NOISES_3D = ['overhang', 'detail', 'islands', 'cheese', 'layer', 'pillar', 'pillarRare', 'pillarThickness', 'roughness', 'roughnessMod', 'entrance', 'entranceA', 'entranceB'];
+
 describe('the fields of a node', () => {
   test('density: def name, tap name and mute, selects of noises, sample fields and defs', () => {
     expect(formFields(DEFAULTS, D('root.b'))).toEqual([{ type: 'name', key: 'name', value: 'islands' }]);
     const keys = (q: Params, path: string) => formFields(q, D(path)).map((f) => `${f.type}:${f.key}`);
     const q = withDensity(tree({ op: 'add', a: { op: 'noise', id: 'overhang' }, b: { op: 'ref', name: 'd' } }, { d: { op: 'col', field: 'E' } }));
     expect(keys(q, 'defs.d')).toEqual(['name:defName', 'select:field']);
-    expect(formFields(q, D('root.a'))).toEqual([{ type: 'select', key: 'id', value: 'overhang', options: ['overhang', 'detail', 'islands'] }]);
+    // The 3D density noises, then the 3D cave noises (SP6a §1.5): the Density tab's noise select offers them.
+    expect(formFields(q, D('root.a'))).toEqual([{ type: 'select', key: 'id', value: 'overhang', options: NOISES_3D }]);
+    const q2 = withDensity(tree({ op: 'noise2', id: 'cheeseRegional' }));
+    expect(formFields(q2, D('root'))).toEqual([{ type: 'select', key: 'id', value: 'cheeseRegional', options: ['jag', 'cheeseRegional'] }]);
     expect(formFields(q, D('root.b'))).toEqual([{ type: 'select', key: 'name', value: 'd', options: ['d'] }]);
     expect(keys(withDensity((toggleMute(DEFAULTS, D('root.b')) as { value: unknown }).value), 'root.b')).toEqual(['name:name', 'number:mute']);
     expect(keys(DEFAULTS, 'root.a')).toEqual([]);
@@ -367,7 +373,7 @@ describe('the fields of a node', () => {
   test('noiseScaled (SP6a §1.5): the 3D noise select and s, a literal or a param (never negated); a ref outside [1/16, 16] is refused at commit', () => {
     const q = withDensity(tree({ op: 'noiseScaled', id: 'detail', s: 0.75 }));
     expect(formFields(q, D('root'))).toEqual([
-      { type: 'select', key: 'id', value: 'detail', options: ['overhang', 'detail', 'islands'] },
+      { type: 'select', key: 'id', value: 'detail', options: NOISES_3D },
       { type: 'number', key: 's', value: 0.75, current: 0.75, int: false, negatable: false },
     ]);
     const root = (e: FormEdit) => (valueOf(e) as { root: Record<string, unknown> }).root;
@@ -473,16 +479,17 @@ describe('the Density tab\'s commits (§3.2, §3.3: as the parameter panel\'s va
     // Why it matters: the selected root shows the muted world, while a selected muted tap shows its unmuted subtree.
     const ctx0 = createGenContext(seedFromInput('42'), before);
     const ctx1 = createGenContext(seedFromInput('42'), w.state.params);
-    const at = (ctx: typeof ctx0, path: string) => probeField(ctx, 'node', path, 5, 70, -9, () => false);
+    // y 85: the pre-cave density is the minimum there (SP6a's caves carve (5, 25 … 70, −9), where the root is the caves slot).
+    const at = (ctx: typeof ctx0, path: string) => probeField(ctx, 'node', path, 5, 85, -9, () => false);
     expect(at(ctx1, 'root')).not.toBe(at(ctx0, 'root'));
     expect(at(ctx1, 'root.a.a.a.x.a')).toBe(at(ctx0, 'root.a.a.a.x.a'));
   });
 });
 
 describe('the two lints (§3.3)', () => {
-  const noises = (k: number): unknown => {
-    let e: unknown = { op: 'noise', id: 'overhang' };
-    for (let i = 1; i < k; i++) e = { op: 'add', a: e, b: { op: 'noise', id: 'overhang' } };
+  const noises = (k: number, id = 'overhang'): unknown => {
+    let e: unknown = { op: 'noise', id };
+    for (let i = 1; i < k; i++) e = { op: 'add', a: e, b: { op: 'noise', id } };
     return { op: 'interpolated', x: e };
   };
   test('defaults: none', () => {
@@ -492,10 +499,15 @@ describe('the two lints (§3.3)', () => {
     expect(treeLints(withRules(seq(iff({ kind: 'biome', biomes: ['plains'] }, block('stone')))))).toEqual([LINT_NO_FAST_PATH]);
     expect(treeLints(withRules(seq(block('stone'))))).toEqual([]);
   });
-  test('density cost above 4 × the default root’s work cost (574 at the defaults)', () => {
-    // interpolated(add of k overhang noises): 1 + 8 × (16k + k − 1).
+  test('density cost above 4 × the default root’s work cost (4,366 at the defaults with SP6a\'s cave terms)', () => {
+    // interpolated(add of k overhang noises): 1 + 8 × (16k + k − 1) (SP5c's default, 574: the lint fired from k = 17).
     expect(treeLints(withDensity(tree(noises(16))))).toEqual([]);
-    expect(treeLints(withDensity(tree(noises(20))))).toEqual([densityCostLint(2713 / 574)]);
     expect(densityCostLint(2713 / 574)).toBe('density cost ≈ 4.7 × the default');
+    // With the cave terms the default costs 4,366, so even 126 overhang noises (the expanded depth's limit) stay below
+    // 4 × it; the cave noise `cheese` (4 octaves, double: 32) gives interpolated(add of k cheese) 1 + 8 × (32k + k − 1).
+    expect(treeLints(withDensity(tree(noises(126))))).toEqual([]);
+    expect(treeLints(withDensity(tree(noises(65, 'cheese'))))).toEqual([]);
+    expect(treeLints(withDensity(tree(noises(80, 'cheese'))))).toEqual([densityCostLint(21113 / 4366)]);
+    expect(densityCostLint(21113 / 4366)).toBe('density cost ≈ 4.8 × the default');
   });
 });

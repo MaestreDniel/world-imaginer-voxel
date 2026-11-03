@@ -36,7 +36,11 @@ import { SECTIONS, STATUS_DECORATED } from '../../src/world/store/columnTable';
 import { copyPaddedSection, createPaddedSection } from '../../src/world/store/padded';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { fillColumnD, fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
+import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
+import type { JsonValue } from '../../src/core/params/json';
+import type { GenContext } from '../../src/gen/context';
 import { ctxFor } from '../harness/gen';
+import { cavesMuted } from '../harness/sp5cTrees';
 
 const MiB = 1 << 20;
 const NEVER = () => false;
@@ -45,6 +49,8 @@ const NEVER = () => false;
  * east seam (17 opaque voxels at x = 15 against air at the east neighbour's x = 0), so the seam check is not vacuous.
  */
 const ctx = ctxFor('42');
+/** The same world without SP6a's carving cave taps (`cavesMuted`): its deep sections stay uniform rock. */
+const ctxNoCaves = ctxFor('42', { density: { defs: cavesMuted(DEFAULT_DENSITY_TREE) as JsonValue } });
 const CX = -1239;
 const CZ = -2000;
 const MEDIUM: MeshOptions = { ao: true, smoothLight: true };
@@ -54,13 +60,13 @@ const ALL_PAIRS = 0x7FFF;
  * A shared store with T on the (2r + 7)² around (CX, CZ), D on the (2r + 5)² and L on the (2r + 3)²: the 3 × 3 of every
  * column of the (2r + 1)² is Published (r 0: the centre's 3 × 3).
  */
-function filledL(r = 0): VoxelStore {
+function filledL(r = 0, c: GenContext = ctx): VoxelStore {
   const s = createStore({ shared: true, maxBlockBytes: 64 * MiB, maxByteBytes: 64 * MiB });
   for (let dz = -r - 3; dz <= r + 3; dz++) {
-    for (let dx = -r - 3; dx <= r + 3; dx++) expect(fillColumnT(s, ctx, CX + dx, CZ + dz, NEVER)).toBe(true);
+    for (let dx = -r - 3; dx <= r + 3; dx++) expect(fillColumnT(s, c, CX + dx, CZ + dz, NEVER)).toBe(true);
   }
   for (let dz = -r - 2; dz <= r + 2; dz++) {
-    for (let dx = -r - 2; dx <= r + 2; dx++) expect(fillColumnD(s, ctx, CX + dx, CZ + dz, NEVER)).toBe(true);
+    for (let dx = -r - 2; dx <= r + 2; dx++) expect(fillColumnD(s, c, CX + dx, CZ + dz, NEVER)).toBe(true);
   }
   const light = createLightScratch();
   for (let dz = -r - 1; dz <= r + 1; dz++) {
@@ -281,12 +287,16 @@ describe('meshColumnPayload on a Published 3 × 3 (SP4a spec §5.8)', () => {
   });
 
   test('the bedrock floor (ruling P26): sy 2 is trivial opaque, sy 0, 1 and 3 are not; sy 0-3 have no rows and connectivity 0', () => {
-    expect(isTrivial(nb, 2)).toBe(2);
-    for (const sy of [0, 1, 3]) expect(isTrivial(nb, sy), `sy ${sy}`).toBe(0);
-    const withRows = new Set(rowsOf(p).map((r) => r.sy));
+    // Without SP6a's caves (which carve these sections of the fixture), as the ruling's fixture was.
+    const flat = filledL(0, ctxNoCaves);
+    const nb0 = flat.neighborhood(CX, CZ);
+    const p0 = meshColumnPayload(nb0, createMeshScratch(), MEDIUM);
+    expect(isTrivial(nb0, 2)).toBe(2);
+    for (const sy of [0, 1, 3]) expect(isTrivial(nb0, sy), `sy ${sy}`).toBe(0);
+    const withRows = new Set(rowsOf(p0).map((r) => r.sy));
     for (const sy of [0, 1, 2, 3]) {
       expect(withRows.has(sy), `sy ${sy}`).toBe(false);
-      expect(p.connectivity[sy], `sy ${sy}`).toBe(0);
+      expect(p0.connectivity[sy], `sy ${sy}`).toBe(0);
     }
   });
 

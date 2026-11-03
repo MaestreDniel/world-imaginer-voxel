@@ -98,6 +98,23 @@ describe('analyseColumn (T1-T5 per column)', () => {
     expect(seen).not.toContainEqual([16 * 3 + 2, 16 * -2 + 2]);
   });
 
+  test('T5 (SP6a spec §10.4): |surfaceEst3 − the pre-cave top|, the pre-cave top read over the true top; without it, the true top', () => {
+    const t = newScattered();
+    const asked: Array<[number, number, number]> = [];
+    // A cave opening at (lx 6, lz 14): the pre-cave top is 4 above the true top 70.
+    const preTop = (x: number, z: number, top: number): number => {
+      asked.push([x, z, top]);
+      return x === 16 * 3 + 6 && z === 16 * -2 + 14 ? top + 4 : top;
+    };
+    analyseColumn(t, testColumn(), 3, -2, () => 75, newScatterScratch(), preTop);
+    expect(asked).toHaveLength(15);
+    expect(asked).toContainEqual([16 * 3 + 6, 16 * -2 + 14, 70]);
+    // Positions in lz-then-lx order; (lx 6, lz 14) is the 13th of 15 (position 34 is not single-surface): |75 − 74|.
+    expect(t.t5).toEqual([...Array.from({ length: 12 }, () => 5), 1, 5, 5]);
+    expect(t.t5Raised).toBe(1);
+    expect(s.t5Raised).toBe(0);
+  });
+
   test('T3: land neighbour pairs inside the column, by biome', () => {
     // 240 pairs per axis; the sea position 0 drops its two pairs.
     expect(s.landPairs).toBe(478);

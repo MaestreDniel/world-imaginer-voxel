@@ -20,6 +20,7 @@ import { protoAt, REC_AUX_B } from '../../src/world/store/columnTable';
 import { PROTO_BLOCKS, PROTO_FLUID } from '../../src/world/store/section';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
+import { cavesMuted } from '../harness/sp5cTrees';
 import { topDownHeightmaps } from '../harness/heightmaps';
 
 const MiB = 1 << 20;
@@ -46,9 +47,14 @@ const flat = (y: number) => ({ coord: 'C' as const, points: [{ x: -1, y, d: 0 },
 const ctx = ctxFor('42');
 /** An extreme but valid shape (σ 40 everywhere): enclosed air far below the water line under the sea. */
 const ctx40 = ctxFor('42', { shape: { sigma: flat(40) } });
-/** §3.2: σ and jag splines at 0, both detail amplitudes at 0. */
-const REDUCED: ParamsPatch = { shape: { sigma: flat(0), jag: flat(0) }, density: { detailAmpLo: 0, detailAmpHi: 0 } };
+/**
+ * §3.2: σ and jag splines at 0, both detail amplitudes at 0; SP6a's carving cave taps muted (`cavesMuted`: the caves slot
+ * is 1e6), so the solidity is the terrain body's alone.
+ */
+const REDUCED: ParamsPatch = { shape: { sigma: flat(0), jag: flat(0) }, density: { detailAmpLo: 0, detailAmpHi: 0, defs: cavesMuted(DEFAULT_DENSITY_TREE) as JsonValue } };
 const ctxReduced = ctxFor('42', REDUCED);
+/** The default world without SP6a's carving cave taps (the terrain body and detail only). */
+const ctxNoCaves = ctxFor('42', { density: { defs: cavesMuted(DEFAULT_DENSITY_TREE) as JsonValue } });
 
 const DCS = new Map<GenContext, DensityContext>();
 const dcOf = (c: GenContext): DensityContext => {
@@ -377,7 +383,8 @@ describe('sections (§4: each channel uniform or dense)', () => {
   });
 
   test('a full deepslate section (y −48 … −33, far below the land top: Decision 6) and a full water section of the deep sea cost no slot', () => {
-    const land = generate(ctx, ...LAND).store;
+    // Without SP6a's caves (which carve that section of the land column), the section is uniform deepslate.
+    const land = generate(ctxNoCaves, ...LAND).store;
     expect(land.table.ints[protoAt(land.table.find(...LAND), 1) + PROTO_BLOCKS]).toBe(-1 - DEEPSLATE);
     const sea = generate(ctx, ...SEA).store;
     const at = protoAt(sea.table.find(...SEA), 7);
@@ -492,9 +499,10 @@ describe('terrainDensityDebug (§2.3, the DT2 hook)', () => {
       }
     }
     expect(bad.slice(0, 10)).toEqual([]);
-    // Some cells straddle 0 and most early-out (Task 5: about 4 % of the cells evaluate voxels).
+    // Some cells straddle 0 and most early-out (Task 5: about 4 % of the cells evaluate voxels; with SP6a's cave walls
+    // 21-23 % on these fixtures).
     expect(set).toBeGreaterThan(0);
-    expect(set).toBeLessThan(0.2 * 98304);
+    expect(set).toBeLessThan(0.3 * 98304);
     expect(set % 128).toBe(0);
   });
 
@@ -692,8 +700,8 @@ describe('water v0 under island runs (SP3e spec §3.5, D5)', () => {
     let wet = 0;
     for (let p = 0; p < 256; p++) {
       const first = scan.runFirst[p]!;
-      // Two runs: the slab, then the sea floor under 63 with water above its top.
-      expect(scan.runFirst[p + 1]! - first).toBe(2);
+      // The slab, then the sea floor under 63 with water above its top (SP6a's caves under the sea floor add runs below).
+      expect(scan.runFirst[p + 1]! - first).toBeGreaterThanOrEqual(2);
       expect([scan.runTop[first], scan.runBottom[first]]).toEqual([210, 200]);
       if (scan.runWaterAbove[first + 1] === 1 && scan.runWaterTop[first + 1] === 63) wet++;
     }

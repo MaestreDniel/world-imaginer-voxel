@@ -247,12 +247,15 @@ describe('the default tree on real columns (spec §4, §8)', () => {
     expect(problems.slice(0, 20)).toEqual([]);
     // Every case was met on these columns (counts at seed '42': see the fixtures' comment).
     expect(seen.grassOverDirt).toBeGreaterThan(50);
-    expect(seen.desertSandstone).toBeGreaterThan(200);
+    // 198 with SP6a's caves (an entrance opens part of the desert column's top), above 200 before.
+    expect(seen.desertSandstone).toBeGreaterThan(150);
     expect(seen.snowTops).toBeGreaterThan(300);
     expect(seen.cliffStone).toBeGreaterThan(100);
     expect(seen.cliffIce).toBeGreaterThan(50);
     expect(seen.clay).toBeGreaterThan(10);
-    expect(seen.deepslateBelowSkin).toBeGreaterThan(100_000);
+    // In the sky-open run only: SP6a's caves end that run at the first cave below the top (34,882 here, over 100,000
+    // before); the runs under a cave are counted as `noSkyStoneAbove8` and checked as runs without sky.
+    expect(seen.deepslateBelowSkin).toBeGreaterThan(20_000);
     expect(seen.noSkyStoneAbove8).toBeGreaterThan(100);
     // The badlands: red_sand tops over the bands (many colours: the table's runs and the offset), red_sandstone below.
     expect(seen.badlandsTops).toBeGreaterThan(100);

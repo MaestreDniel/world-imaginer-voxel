@@ -5,7 +5,7 @@ import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
 import { createGenContext } from '../../src/gen/context';
-import { densityNoiseSource } from '../../src/gen/density/context';
+import { createDensityContext, densityNoiseSource } from '../../src/gen/density/context';
 import { EXPR_OPS, validateExpr, type DensityExpr, type Expr } from '../../src/gen/density/expr';
 import { createDensityReference, interpolatedNodes } from '../../src/gen/density/reference';
 import { resolveDensity } from '../../src/gen/density/source';
@@ -35,6 +35,8 @@ function opsOf(e: DensityExpr): Set<string> {
 }
 
 /** Corner (i, k, j) of value index `idx` in a column's 1225 corner values: i fastest, then j, then k. */
+/** Two resolved trees are the same JSON (the DensityContext compiles the resolved default). */
+const sameResolved = (a: DensityExpr, b: DensityExpr): boolean => JSON.stringify(a) === JSON.stringify(b);
 const cornerOf = (idx: number): [number, number, number] => [idx % 5, Math.floor(idx / 25), Math.floor(idx / 5) % 5];
 
 test('2 unique SP3b keys, chained into allGoldenKeys after SP3a\'s (SP3c\'s 2, SP3e\'s 5 and SP6a\'s 1 follow)', () => {
@@ -96,27 +98,39 @@ describe('sp3b.density.ops (§9)', () => {
 describe('sp3b.density.default (§9)', () => {
   const values = densityDefaultValues();
 
-  test('1225 corners then 98,304 voxels of column (0, 0), seed 42, default profile; the key hashes them', () => {
-    expect(values.length).toBe(CORNERS + 98304);
+  /** The default tree's interpolated slots: 1 before SP6a's cave terms, 4 with them (terrain, entrances, cheese, pillars). */
+  const SLOTS = 4;
+
+  test('1225 corners per interpolated slot then 98,304 voxels of column (0, 0), seed 42, default profile; the key hashes them', () => {
+    expect(createDensityContext(CTX).compiled.interpolatedSlotCount).toBe(SLOTS);
+    expect(values.length).toBe(SLOTS * CORNERS + 98304);
     expect(computeSp3bGolden('sp3b.density.default')).toBe(hex64(hashF64(values)));
     expect(computeAnyGolden('sp3b.density.default')).toBe(computeSp3bGolden('sp3b.density.default'));
   });
 
   test('corners and sampled voxels equal the reference (Object.is); the bulk agrees where it evaluated', () => {
-    const e = resolveDensity(DEFAULT_DENSITY_TREE, CTX.params);
+    const dc = createDensityContext(CTX);
+    const e = dc.expr;
+    expect(sameResolved(e, resolveDensity(DEFAULT_DENSITY_TREE, CTX.params))).toBe(true);
     const r = createDensityReference(e, densityNoiseSource(CTX));
-    const inner = interpolatedNodes(e)[0]!.x;
+    // Each slot's corner values, against its interpolated node's child (detailG's interpolated(ref body) shares the
+    // terrain's slot).
+    const inner = new Map<number, Expr>();
+    for (const n of interpolatedNodes(e)) if (!inner.has(dc.compiled.interpolatedSlot(n))) inner.set(dc.compiled.interpolatedSlot(n), n.x);
+    expect([...inner.keys()].sort()).toEqual([0, 1, 2, 3]);
     const s = buildColumnSample(CTX, 0, 0, newColumnSample());
     const bad: string[] = [];
-    for (let idx = 0; idx < CORNERS; idx++) {
-      const [i, k, j] = cornerOf(idx);
-      if (!Object.is(values[idx], r.corner(s, inner, i, k, j))) bad.push(`corner (${i}, ${k}, ${j})`);
+    for (let slot = 0; slot < SLOTS; slot++) {
+      for (let idx = 0; idx < CORNERS; idx++) {
+        const [i, k, j] = cornerOf(idx);
+        if (!Object.is(values[slot * CORNERS + idx], r.corner(s, inner.get(slot)!, i, k, j))) bad.push(`slot ${slot} corner (${i}, ${k}, ${j})`);
+      }
     }
     const rng = testRng(909);
     for (let n = 0; n < 1500; n++) {
       const idx = rng() % 98304;
       const lx = idx & 15, lz = (idx >> 4) & 15, y = (idx >> 8) - 64;
-      if (!Object.is(values[CORNERS + idx], r.voxel(s, lx, y, lz))) bad.push(`voxel (${lx}, ${y}, ${lz})`);
+      if (!Object.is(values[SLOTS * CORNERS + idx], r.voxel(s, lx, y, lz))) bad.push(`voxel (${lx}, ${y}, ${lz})`);
     }
     const out = new Float64Array(98304);
     const mask = new Uint8Array(98304);
@@ -125,7 +139,7 @@ describe('sp3b.density.default (§9)', () => {
     for (let idx = 0; idx < 98304; idx++) {
       if (mask[idx] === 0) continue;
       masked++;
-      if (!Object.is(values[CORNERS + idx], out[idx])) bad.push(`bulk voxel ${idx}`);
+      if (!Object.is(values[SLOTS * CORNERS + idx], out[idx])) bad.push(`bulk voxel ${idx}`);
     }
     expect(masked).toBeGreaterThan(0);
     expect(bad.slice(0, 10)).toEqual([]);

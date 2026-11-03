@@ -351,7 +351,10 @@ describe('field problems and argument checks (SP3d spec §5.1)', () => {
 
   test('fieldSliceProblem', () => {
     expect(fieldSliceProblem(ctx, 'density', '', 'horizontal')).toBeNull();
-    expect(fieldSliceProblem(ctx, 'node', 'root.a.a.a.x.b.b', 'horizontal')).toBeNull();
+    expect(fieldSliceProblem(ctx, 'node', 'root.a.a.a.x.b.inside.b', 'horizontal')).toBeNull();
+    // SP6a's cave terms: a family tap and its slot child.
+    expect(fieldSliceProblem(ctx, 'node', 'root.a.a.b.a.b', 'horizontal')).toBeNull();
+    expect(fieldSliceProblem(ctx, 'node', 'defs.pillars.x.x', 'vertical')).toBeNull();
     expect(fieldSliceProblem(ctx, 'node', 'defs.x', 'vertical')).toBe('path "defs.x" names no node of density.defs');
     expect(fieldSliceProblem(ctx, 'node', 'root.b.x.v', 'vertical')).toBe('path "root.b.x.v" names no node of density.defs');
     expect(fieldSliceProblem(ctx, 'node', 'constructor', 'vertical')).toBe('path "constructor" names no node of density.defs');
@@ -384,7 +387,7 @@ describe('DensityReference memos (SP3d spec §5.1, §5.3)', () => {
 
   test('nodeReferenceOf: per (context, path), an LRU of 8 paths', () => {
     const ctx = ctxFor('42');
-    const paths = ['root', 'root.a', 'root.b', 'root.b.x', 'root.a.a.a.x.a', 'root.a.a.a.x.b', 'root.a.a.a.x.b.a', 'root.a.a.a.x.b.b', 'root.a.a.a.x.a.x'];
+    const paths = ['root', 'root.a', 'root.b', 'root.b.x', 'root.a.a.a.x.a', 'root.a.a.a.x.b', 'root.a.a.a.x.b.inside.a', 'root.a.a.a.x.b.inside.b', 'root.a.a.a.x.a.x'];
     const first = new Map(paths.slice(0, 8).map((p) => [p, nodeReferenceOf(ctx, p)]));
     for (const p of paths.slice(0, 8)) expect(nodeReferenceOf(ctx, p)).toBe(first.get(p));
     expect(nodeReferenceOf(ctx, paths[8]!)).toBe(nodeReferenceOf(ctx, paths[8]!));

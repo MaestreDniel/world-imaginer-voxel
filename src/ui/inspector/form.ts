@@ -131,13 +131,17 @@ function schemaNoises(prefix: string, dims: 2 | 3, strip: boolean): readonly str
   }
   return Object.freeze(out);
 }
+/** The density noises of dims `dims` by id: `density.noises.*`, then the `caves.noises.*` ids (SP6a §1.5) not among them. */
+function densityNoiseIds(dims: 2 | 3): readonly string[] {
+  const density = schemaNoises('density.noises.', dims, true);
+  return Object.freeze([...density, ...schemaNoises('caves.noises.', dims, true).filter((id) => !density.includes(id))]);
+}
 /**
- * `noise2` reads the 2D density noises, `noise` and `noiseScaled` (SP6a §1.5) the 3D ones (by id); `noiseThreshold` a 2D
- * surface noise (by path).
+ * `noise2` reads the 2D density noises, `noise` and `noiseScaled` (SP6a §1.5) the 3D ones (by id; the `density.noises`
+ * ids first, then the `caves.noises` ones); `noiseThreshold` a 2D surface noise (by path).
  */
 export const DENSITY_NOISE_OPTIONS: Readonly<Record<'noise' | 'noise2' | 'noiseScaled', readonly string[]>> = Object.freeze({
-  noise2: schemaNoises('density.noises.', 2, true), noise: schemaNoises('density.noises.', 3, true),
-  noiseScaled: schemaNoises('density.noises.', 3, true),
+  noise2: densityNoiseIds(2), noise: densityNoiseIds(3), noiseScaled: densityNoiseIds(3),
 });
 export const SURFACE_NOISE_OPTIONS: readonly string[] = schemaNoises('surface.noises.', 2, false);
 

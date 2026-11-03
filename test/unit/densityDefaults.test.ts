@@ -43,24 +43,31 @@ describe('the default expression (SP3b spec §3.1; SP3d spec §2.1: the resolved
   test('it validates against the schema density noises', () => {
     const e = defaultExpr();
     expect(validateExpr(e, densityNoiseSource(CTX))).toEqual([]);
-    expect(Object.keys(e.defs)).toEqual(['body']);
+    expect(Object.keys(e.defs)).toEqual(['body', 'pillars']);
     const noiseIds = ops(e).flatMap((n) => (n.op === 'noise2' || n.op === 'noise' ? [`${n.op}:${n.id}`] : []));
-    expect(noiseIds.sort()).toEqual(['noise2:jag', 'noise:detail', 'noise:overhang']);
+    // SP6a's cave terms read the caves.noises ids (pillarThickness twice: the cube is square(x)·x).
+    expect(noiseIds.sort()).toEqual([
+      'noise2:cheeseRegional', 'noise2:jag', 'noise:cheese', 'noise:detail', 'noise:entrance', 'noise:entranceA', 'noise:entranceB', 'noise:layer',
+      'noise:overhang', 'noise:pillar', 'noise:pillarRare', 'noise:pillarThickness', 'noise:pillarThickness', 'noise:roughness', 'noise:roughnessMod',
+    ]);
     const slides = ops(e).flatMap((n) => (n.op === 'slide' ? [n.knots] : []));
-    expect(slides).toEqual([[[-64, 0], [-40, 1], [240, 1], [320, 0]]]);
+    // The body's slide and the entrances' yGrad(−10 → 0.3, 30 → 0) (SP6a §1.2).
+    expect(slides.sort()).toEqual([[[-10, 0.3], [30, 0]], [[-64, 0], [-40, 1], [240, 1], [320, 0]]].sort());
   });
 
-  test('taps: terrain outside interpolated (its value is the interpolated field), islands −1e6', () => {
+  test('taps: terrain outside interpolated (its value is the interpolated field), islands −1e6; the cave family taps outside interpolated', () => {
     const e = defaultExpr();
     expect(findTap(e, 'terrain')).toMatchObject({ inside: false, node: { x: { op: 'interpolated' } } });
     expect(findTap(e, 'islands')).toMatchObject({ inside: false, node: { x: { op: 'const', v: -1e6 } } });
-    expect(interpolatedNodes(e)).toHaveLength(1);
+    for (const name of ['entrances', 'cheese', 'pillars']) expect(findTap(e, name), name).toMatchObject({ inside: false, node: { x: { op: 'interpolated' } } });
+    // The terrain's, detailG's (the same structure), entrances', cheese's and pillars' (SP6a §1.1).
+    expect(interpolatedNodes(e)).toHaveLength(5);
   });
 
-  test('placement: one interpolated slot; detail is VOXEL and reads amp from a position slot (bilinear E)', () => {
+  test('placement: four interpolated slots (detailG\'s interpolated(ref body) shares the terrain\'s); detail is VOXEL and reads amp from a position slot (bilinear E)', () => {
     const dc = createDensityContext(CTX);
     const c = dc.compiled;
-    expect(c.interpolatedSlotCount).toBe(1);
+    expect(c.interpolatedSlotCount).toBe(4);
     const detail = c.nodes.find((n) => n.op === 'noise' && (n.expr as { id: string }).id === 'detail')!;
     expect([detail.cls, detail.inside]).toEqual(['voxel', false]);
     const parent = c.nodes.find((n) => n.op === 'mul' && n.kids.includes(c.nodes.indexOf(detail)))!;
@@ -119,8 +126,10 @@ describe('DensityContext (spec §2.3)', () => {
 });
 
 /**
- * The default expression at a lattice-aligned voxel (lx, lz ∈ {0, 4, 8, 12}, y = −64 + 8k), by hand: every
- * interpolation weight is 0, so the terrain is its corner value and the bilinear E is the lattice E.
+ * The pre-cave density at a lattice-aligned voxel (lx, lz ∈ {0, 4, 8, 12}, y = −64 + 8k), by hand: every
+ * interpolation weight is 0, so the terrain is its corner value and the bilinear E is the lattice E. `final` is the
+ * terrain plus the detail term where T < 16 and T + 0 above (SP6a's detailG), max'd with the islands' −1e6: the
+ * `precave` tap's value (the root before the cave terms).
  */
 function byHand(s: ColumnSample, i: number, k: number, j: number): { terrain: number; final: number } {
   const x = 16 * s.cx + 4 * i, y = cornerY(k), z = 16 * s.cz + 4 * j, l = latticeIndex(i, j);
@@ -136,7 +145,7 @@ function byHand(s: ColumnSample, i: number, k: number, j: number): { terrain: nu
   t = t + 2 * Math.max(0, -56 + -y);
   t = t + -(2 * Math.max(0, y + -296));
   const amp = p.detailAmpLo + (p.detailAmpHi - p.detailAmpLo) * Math.min(1, Math.max(0, (s.f.E[l]! + 1) * 0.5));
-  const v = t + n('detail').z3(x, y, z) * amp;
+  const v = t + (t < 16 ? n('detail').z3(x, y, z) * amp : 0);
   return { terrain: t, final: v > -1e6 ? v : -1e6 };
 }
 
@@ -151,7 +160,12 @@ describe('probe (spec §2.3)', () => {
           if (k === 48) continue; // y 320 is above the world.
           const x = 16 * cx + 4 * i, y = cornerY(k), z = 16 * cz + 4 * j;
           const h = byHand(s, i, k, j);
-          expect(probe(dc, x, y, z), `(${x}, ${y}, ${z})`).toBe(h.final);
+          expect(probe(dc, x, y, z, 'precave'), `(${x}, ${y}, ${z})`).toBe(h.final);
+          // The root: the pre-cave density, min'd with the caves slot max(min(E, C), keep) (SP6a §1.1).
+          const P = probe(dc, x, y, z, 'pillars');
+          const keep = P * 0.0625 < DEFAULTS.caves.pillars.threshold ? -1e6 : P;
+          const caves = Math.max(Math.min(probe(dc, x, y, z, 'entrances'), probe(dc, x, y, z, 'cheese')), keep);
+          expect(probe(dc, x, y, z), `(${x}, ${y}, ${z})`).toBe(Math.max(Math.min(Math.min(h.final, caves), 1e6), -1e6));
           expect(probe(dc, x, y, z, 'terrain'), `terrain (${x}, ${y}, ${z})`).toBe(h.terrain);
           expect(probe(dc, x, y, z, 'islands')).toBe(-1e6);
           checked++;
@@ -195,8 +209,15 @@ const hull = (a: Float64Array, ls: readonly number[]): [number, number] => {
   return [lo, hi];
 };
 
+/**
+ * The share of cells whose voxels the driver evaluates on the five columns: < 0.1 before SP6a's caves; 0.230 with the
+ * cave terms (entrances, cheese, pillars: the cells straddling a cave wall, about the spec §1.6 estimate's 70-100 of
+ * some 270 underground cells per column).
+ */
+const EVALUATED_SHARE_MAX = 0.3;
+
 describe('early-outs of the default expression (spec §3.2) and the driver on it', () => {
-  test('cells above offset + jag + cs·σ + cs·ampHi are air and cells the floor term keeps positive are solid, without evaluation; driver == probe', () => {
+  test('cells above offset + jag + cs·σ + cs·ampHi are air without evaluation; cells the floor term keeps positive are solid wherever the caves slot is; driver == probe', () => {
     const dc = createDensityContext(CTX);
     const cs = DEFAULTS.density.noises.overhang.clampSigma, csD = DEFAULTS.density.noises.detail.clampSigma, ampHi = DEFAULTS.density.detailAmpHi;
     const solid = new Uint8Array(98304), values = new Float64Array(98304), mask = new Uint8Array(98304);
@@ -213,19 +234,28 @@ describe('early-outs of the default expression (spec §3.2) and the driver on it
             const sg = Math.max(Math.abs(sgLo), Math.abs(sgHi));
             const top = offHi + Math.max(0, jagHi) + cs * sg + csD * ampHi;
             const low = offLo + Math.min(0, jagLo) - (y0 + 8) - cs * sg + 2 * Math.max(0, -56 - (y0 + 8)) - 2 * Math.max(0, y0 + 8 - 296) - csD * ampHi;
-            let masked = 0, solids = 0;
+            let masked = 0, solids = 0, rock = 0;
             for (let y = y0; y < y0 + 8; y++) {
               for (let lz = 4 * cj; lz < 4 * cj + 4; lz++) {
                 for (let lx = 4 * ci; lx < 4 * ci + 4; lx++) {
                   const v = vIdx(lx, y, lz);
                   masked += mask[v]!;
                   solids += solid[v]!;
+                  if (low > 1e-3) {
+                    // The caves slot max(min(E, C), keep) at the voxel (SP6a §1.1), from the family taps.
+                    const x = 16 * cx + lx, z = 16 * cz + lz;
+                    const P = probe(dc, x, y, z, 'pillars');
+                    const keep = P * 0.0625 < DEFAULTS.caves.pillars.threshold ? -1e6 : P;
+                    if (Math.max(Math.min(probe(dc, x, y, z, 'entrances'), probe(dc, x, y, z, 'cheese')), keep) > 0) rock++;
+                  }
                 }
               }
             }
             if (masked > 0) evaluated++;
             if (y0 > top + 1e-3) { above++; expect([masked, solids], `cell (${ci}, ${ck}, ${cj}) of (${cx}, ${cz})`).toEqual([0, 0]); }
-            if (low > 1e-3) { below++; expect([masked, solids], `cell (${ci}, ${ck}, ${cj}) of (${cx}, ${cz})`).toEqual([0, 128]); }
+            // SP6a §1.6: the cave taps' intervals come from their noises' ±clampSigma, so no underground cell is decided
+            // before its corners; the pre-cave density is positive there, so only the caves slot carves it.
+            if (low > 1e-3) { below++; expect(solids, `cell (${ci}, ${ck}, ${cj}) of (${cx}, ${cz})`).toBe(rock); }
           }
         }
       }
@@ -242,10 +272,11 @@ describe('early-outs of the default expression (spec §3.2) and the driver on it
       }
     }
     // Both rules apply to most cells; few cells straddle the surface. Before the §8.4 retune: 3,269 of 3,840 cells
-    // decided by the rules, 177 evaluated; after it (larger σ, a wider open band): 3,029 and 289.
+    // decided by the rules, 177 evaluated; after it (larger σ, a wider open band): 3,029 and 289. SP6a's caves add the
+    // cells that straddle a cave wall: EVALUATED_SHARE_MAX below.
     expect(above + below).toBeGreaterThan(0.75 * COLUMNS.length * 768);
     expect(below).toBeGreaterThan(COLUMNS.length * 16 * 4);
-    expect(evaluated / (COLUMNS.length * 768)).toBeLessThan(0.1);
+    expect(evaluated / (COLUMNS.length * 768)).toBeLessThan(EVALUATED_SHARE_MAX);
   });
 });
 
@@ -324,8 +355,8 @@ describe('the density at its parameter extremes (spec §1.2, §2.4: early-outs e
     let evaluated = 0;
     for (const [cx, cz] of COLUMNS) evaluated += checkColumn(c, cx, cz, next, what);
     // The T stays far from full evaluation (≈ 9 ms per column): at these extremes a quarter of the cells at most
-    // evaluate their voxels (σ 64 with jag 128 the most).
-    expect(evaluated / (COLUMNS.length * 768)).toBeLessThan(0.4);
+    // evaluate their voxels (σ 64 with jag 128 the most: 0.42 and 0.43 with SP6a's cave walls, below 0.4 before).
+    expect(evaluated / (COLUMNS.length * 768)).toBeLessThan(0.5);
   });
 
   test('random valid density groups (the params harness) compile, and their driver equals the probe', () => {

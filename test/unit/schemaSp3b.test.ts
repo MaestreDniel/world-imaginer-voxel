@@ -70,14 +70,18 @@ describe('SP3b density group (spec §3.3)', () => {
     expect(PARAM_META.filter((m) => m.remapNone === true).map((m) => m.path)).toEqual([
       'density.noises.jag', 'density.noises.overhang', 'density.noises.detail', 'density.noises.islands', 'surface.noises.depth',
       'surface.noises.patch', 'surface.noises.bandOffset',
+      // SP6a: every cave noise is a density noise (caveTerms.test.ts).
+      ...Object.keys(DEFAULTS.caves.noises).map((id) => `caves.noises.${id}`),
     ]);
+    const cave = applyPatch(SCHEMA, DEFAULTS, { caves: { noises: { cheeseRegional: { remap: 'uniform', double: true } } } });
+    expect(cave.ok ? [] : cave.issues.map((i) => `${i.path} ${i.code}`)).toEqual(['caves.noises.cheeseRegional.remap REMAP_NOT_ALLOWED']);
     // A 2D noise outside the density group keeps 'uniform'.
     expect(applyPatch(SCHEMA, DEFAULTS, { lakes: { rimNoise: { remap: 'uniform' } } }).ok).toBe(true);
   });
 
   test('the terrain stage hashes the density group (U4 registry invariants hold)', () => {
-    // SP3c adds the surface group after it (schemaSp3c.test.ts).
-    expect(STAGES.find((s) => s.id === 'terrain')!.params).toEqual(['density', 'surface']);
+    // SP3c adds the surface group after it (schemaSp3c.test.ts), SP6a the caves group (stage.test.ts).
+    expect(STAGES.find((s) => s.id === 'terrain')!.params).toEqual(['density', 'surface', 'caves']);
     expect(checkRegistry(SCHEMA, STAGES)).toEqual([]);
     const moved = applyPatch(SCHEMA, DEFAULTS, { density: { detailAmpHi: 2 } });
     if (!moved.ok) throw new Error('bad patch');
