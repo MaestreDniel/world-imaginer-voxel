@@ -1,6 +1,7 @@
 /**
  * The voxel store (SP3a spec §3, master §2.3): a block pool and a byte pool (`pool.ts`), the 64 × 64 column torus
- * (`columnTable.ts`), section descriptors (`section.ts`), aux slots (`aux.ts`) and the epoch cells (`epochs.ts`).
+ * (`columnTable.ts`), section descriptors (`section.ts`; the cave channel, SP6a spec §3.3), aux slots (`aux.ts`) and
+ * the epoch cells (`epochs.ts`).
  * `createStore({shared})` builds it over growable `SharedArrayBuffer`s (several threads, through `handles()` and
  * `attachStore`) or over resizable `ArrayBuffer`s (one thread), with the same code.
  *
@@ -43,8 +44,8 @@ import {
 } from './pool';
 import { attachReclaimer, createReclaimBuffer, MAIN_THREAD, type Retire } from './reclaim';
 import {
-  byteAt, computeMeta, FINAL_BLOCKS, FINAL_FLUID, FINAL_LIGHT, FINAL_META, isDense, PROTO_BLOCKS, PROTO_FLUID, releaseEntry,
-  sectionBytes, sectionWords, SECTION_VOXELS, shareEntry, storeBytes, storeWords, wordAt,
+  byteAt, computeMeta, FINAL_BLOCKS, FINAL_CAVE, FINAL_FLUID, FINAL_LIGHT, FINAL_META, isDense, PROTO_BLOCKS, PROTO_CAVE,
+  PROTO_FLUID, releaseEntry, sectionBytes, sectionWords, SECTION_VOXELS, shareEntry, storeBytes, storeWords, wordAt,
 } from './section';
 
 export { SlotBusy, WriterStale } from './columnTable';
@@ -207,11 +208,12 @@ function checkLength(a: Uint16Array | Uint8Array, what: string): void {
   if (a.length !== SECTION_VOXELS) throw new RangeError(`store: ${what} has ${a.length} entries, expected ${SECTION_VOXELS}`);
 }
 
-/** The arguments of a `setProto`: a section index and two 4096-entry channels. */
-function checkProto(sy: number, blocks: Uint16Array, fluid: Uint8Array): void {
+/** The arguments of a `setProto` (and `replaceBlocks`): a section index and two or three 4096-entry channels. */
+function checkProto(sy: number, blocks: Uint16Array, fluid: Uint8Array, cave?: Uint8Array): void {
   checkSy(sy);
   checkLength(blocks, 'blocks');
   checkLength(fluid, 'fluid');
+  if (cave !== undefined) checkLength(cave, 'cave');
 }
 
 /** Voxel index in its section of (lx, y, lz), y absolute; the section is `index >> 12`. */
@@ -276,6 +278,8 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
   function view(base: number, cx: number, cz: number, final: boolean): ColumnView {
     const blocksAt = (sy: number) => (final ? finalAt(base, sy) + FINAL_BLOCKS : protoAt(base, sy) + PROTO_BLOCKS);
     const fluidAt = (sy: number) => (final ? finalAt(base, sy) + FINAL_FLUID : protoAt(base, sy) + PROTO_FLUID);
+    // The cave channel (SP6a spec §3.3): each view reads its own set's entry.
+    const caveAt = (sy: number) => (final ? finalAt(base, sy) + FINAL_CAVE : protoAt(base, sy) + PROTO_CAVE);
     return {
       cx,
       cz,
@@ -302,6 +306,14 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
       sectionLight(sy) {
         checkSy(sy);
         return final ? sectionBytes(bytePool, ints[finalAt(base, sy) + FINAL_LIGHT]!) : 0;
+      },
+      sectionCave(sy) {
+        checkSy(sy);
+        return sectionBytes(bytePool, ints[caveAt(sy)]!);
+      },
+      cave(lx, y, lz) {
+        const v = voxelOf(lx, y, lz);
+        return byteAt(bytePool, ints[caveAt(v >> 12)]!, v & 4095);
       },
       aux() {
         const slot = ints[base + REC_AUX_A]!;
@@ -353,11 +365,16 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
     };
   }
 
-  /** Proto section `sy` of the record at `base`, both channels (each releases what it replaces); `checkProto` first. */
-  function writeProto(base: number, sy: number, blocks: Uint16Array, fluid: Uint8Array): void {
+  /**
+   * Proto section `sy` of the record at `base`, its three channels (each releases what it replaces); an absent `cave`
+   * is uniform 0 (SP6a spec §3.3). `checkProto` first.
+   */
+  function writeProto(base: number, sy: number, blocks: Uint16Array, fluid: Uint8Array, cave: Uint8Array | undefined): void {
     const p = protoAt(base, sy);
     storeWords(blockPool, ints, p + PROTO_BLOCKS, blocks, retire);
     storeBytes(bytePool, ints, p + PROTO_FLUID, fluid, retire);
+    if (cave === undefined) releaseEntry(bytePool, ints, p + PROTO_CAVE, retire);
+    else storeBytes(bytePool, ints, p + PROTO_CAVE, cave, retire);
   }
 
   /** Recomputes the meta word of final section `sy` of the record at `base` from its blocks and fluid. */
@@ -372,12 +389,13 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
     return ints[at]!;
   }
 
-  /** Retires the proto entries of the record at `base` (SP4b spec §2.5) and resets them to −1. */
+  /** Retires the proto entries of the record at `base` (SP4b spec §2.5), the cave's included, and resets them to −1. */
   function releaseProto(base: number): void {
     for (let sy = 0; sy < SECTIONS; sy++) {
       const p = protoAt(base, sy);
       releaseEntry(blockPool, ints, p + PROTO_BLOCKS, retire);
       releaseEntry(bytePool, ints, p + PROTO_FLUID, retire);
+      releaseEntry(bytePool, ints, p + PROTO_CAVE, retire);
     }
   }
 
@@ -400,11 +418,11 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
     return {
       cx,
       cz,
-      setProto(sy, blocks, fluid) {
+      setProto(sy, blocks, fluid, cave) {
         check();
-        checkProto(sy, blocks, fluid);
+        checkProto(sy, blocks, fluid, cave);
         wroteBlocks = true;
-        writeProto(base, sy, blocks, fluid);
+        writeProto(base, sy, blocks, fluid, cave);
       },
       setFinal(sy, blocks, light, fluid) {
         check();
@@ -431,6 +449,8 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
         if (!wroteLight && light.some((v) => v !== 0)) wroteLight = true;
         shareEntry(blockPool, ints, p + PROTO_BLOCKS, f + FINAL_BLOCKS, retire);
         shareEntry(bytePool, ints, p + PROTO_FLUID, f + FINAL_FLUID, retire);
+        // The cave channel is shared by reference too (SP6a spec §3.3): one slot, two references.
+        shareEntry(bytePool, ints, p + PROTO_CAVE, f + FINAL_CAVE, retire);
         storeBytes(bytePool, ints, f + FINAL_LIGHT, light, retire);
         setMeta(base, sy);
       },
@@ -468,7 +488,8 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
         check();
         checkProto(sy, blocks, fluid);
         const f = finalAt(base, sy);
-        // Blocks only: the light entry is untouched, so no lightVersion bump (SP5a spec §2.2).
+        // Blocks only: the light entry is untouched, so no lightVersion bump (SP5a spec §2.2); the cave entry is kept
+        // (SP6a spec §3.3: the X-ray's and the tag's channel survive D's diff overlay).
         wroteBlocks = true;
         storeWords(blockPool, ints, f + FINAL_BLOCKS, blocks, retire);
         storeBytes(bytePool, ints, f + FINAL_FLUID, fluid, retire);
@@ -508,10 +529,10 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
     return {
       cx,
       cz,
-      setProto(sy, blocks, fluid) {
+      setProto(sy, blocks, fluid, cave) {
         check();
-        checkProto(sy, blocks, fluid);
-        writeProto(base, sy, blocks, fluid);
+        checkProto(sy, blocks, fluid, cave);
+        writeProto(base, sy, blocks, fluid, cave);
       },
       aux() {
         check();
@@ -584,6 +605,7 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
         checkProto(sy, blocks, fluid);
         const f = finalAt(base, sy);
         wroteBlocks = true;
+        // Blocks and fluid only: the cave entry is kept (SP6a spec §3.3), as the sim's edits leave the channel.
         replace(blockPool, f + FINAL_BLOCKS, blocks, sy);
         replace(bytePool, f + FINAL_FLUID, fluid, sy);
         setMeta(base, sy);
@@ -690,6 +712,7 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
         releaseEntry(blockPool, ints, f + FINAL_BLOCKS, retire);
         releaseEntry(bytePool, ints, f + FINAL_LIGHT, retire);
         releaseEntry(bytePool, ints, f + FINAL_FLUID, retire);
+        releaseEntry(bytePool, ints, f + FINAL_CAVE, retire);
       }
       releaseEntry(bytePool, ints, base + REC_AUX_A, retire);
       releaseEntry(bytePool, ints, base + REC_AUX_B, retire);

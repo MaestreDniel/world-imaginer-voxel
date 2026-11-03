@@ -1,7 +1,7 @@
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, expect, test } from 'vitest';
 import { finalAt, protoAt, RECORD_COUNT, RECORD_INTS, REC_AUX_A, REC_AUX_B, REC_CLAIMED, SECTIONS } from '../../src/world/store/columnTable';
-import { FINAL_BLOCKS, FINAL_FLUID, FINAL_LIGHT, PROTO_BLOCKS, PROTO_FLUID } from '../../src/world/store/section';
+import { FINAL_BLOCKS, FINAL_CAVE, FINAL_FLUID, FINAL_LIGHT, PROTO_BLOCKS, PROTO_CAVE, PROTO_FLUID } from '../../src/world/store/section';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import type { SlabPool } from '../../src/world/store/pool';
 import { FUZZ_LIMITS, type FuzzReply, type FuzzStats } from '../harness/fuzzWorker';
@@ -78,9 +78,11 @@ function check(s: VoxelStore, raw: { blocks: Int32Array; bytes: Int32Array }, ow
       const f = finalAt(base, sy);
       add('blocks', ints[p + PROTO_BLOCKS]!);
       add('bytes', ints[p + PROTO_FLUID]!);
+      add('bytes', ints[p + PROTO_CAVE]!);
       add('blocks', ints[f + FINAL_BLOCKS]!);
       add('bytes', ints[f + FINAL_LIGHT]!);
       add('bytes', ints[f + FINAL_FLUID]!);
+      add('bytes', ints[f + FINAL_CAVE]!);
     }
     add('bytes', ints[base + REC_AUX_A]!);
     add('bytes', ints[base + REC_AUX_B]!);

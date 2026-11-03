@@ -3,8 +3,10 @@ import { fnv1a64Bytes, hex64 } from '../../src/core/hash';
 import type { GenContext } from '../../src/gen/context';
 import { fillColumnT, genRegionInProcess, regionHash } from '../../src/metrics/region';
 import { torusSlot as torusSlotOf } from '../../src/core/coords';
-import { protoAt, REC_AUX_A, REC_AUX_B, REC_BLOCK_VERSION, REC_CLAIMED, REC_EPOCH, STATUS_PROTO } from '../../src/world/store/columnTable';
-import { PROTO_BLOCKS, PROTO_FLUID } from '../../src/world/store/section';
+import {
+  protoAt, RECORD_INTS, REC_AUX_A, REC_AUX_B, REC_BLOCK_VERSION, REC_CLAIMED, REC_EPOCH, STATUS_PROTO,
+} from '../../src/world/store/columnTable';
+import { PROTO_BLOCKS, PROTO_CAVE, PROTO_FLUID } from '../../src/world/store/section';
 import { createStore, SlotBusy, StoreFull, type VoxelStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
 
@@ -18,10 +20,11 @@ const slots = (s: VoxelStore) => [s.blockPool.freeCount(), s.blockPool.slotCount
 
 /**
  * The §6.2 byte stream built by hand from the voxel and aux reads (no section views), then hashed in one go:
- * pins the order, the little-endian u16s, the uniform expansion and the aux bytes.
+ * pins the order, the little-endian u16s, the uniform expansion, the proto cave bytes after each section's fluid
+ * (SP6a spec §3.3) and the aux bytes.
  */
 function referenceHash(s: VoxelStore, cx0: number, cz0: number, w: number, h: number): string {
-  const per = 24 * (8192 + 4096) + 2 * 4096;
+  const per = 24 * (8192 + 4096 + 4096) + 2 * 4096;
   const out = new Uint8Array(w * h * per);
   let o = 0;
   for (let cz = cz0; cz < cz0 + h; cz++) {
@@ -34,6 +37,7 @@ function referenceHash(s: VoxelStore, cx0: number, cz0: number, w: number, h: nu
           out[o++] = b >> 8;
         }
         for (let i = 0; i < 4096; i++) out[o++] = v.fluid(i & 15, -64 + 16 * sy + (i >> 8), (i >> 4) & 15);
+        for (let i = 0; i < 4096; i++) out[o++] = v.cave(i & 15, -64 + 16 * sy + (i >> 8), (i >> 4) & 15);
       }
       const a = v.aux()!;
       const i16 = (arr: Int16Array) => { for (const x of arr) { out[o++] = x & 255; out[o++] = (x >> 8) & 255; } };
@@ -96,7 +100,7 @@ describe('fillColumnT (§4, §6.1)', () => {
     expect(slots(s)).toEqual(before);
     expect(s.table.find(2, 2)).toBe(-1);
     expect(s.proto(2, 2)).toBeNull();
-    const rec = (2 + 64 * 2) * 160;
+    const rec = (2 + 64 * 2) * RECORD_INTS;
     expect(s.table.ints[rec + REC_CLAIMED]).toBe(0);
     // The record can be claimed again.
     expect(fillColumnT(s, ctx, 2, 2, NEVER)).toBe(true);
@@ -139,7 +143,7 @@ describe('fillColumnT (§4, §6.1)', () => {
     const [fx, fz] = failed!;
     // The failed column is gone and its record free; the committed columns are intact.
     expect([s.table.find(fx, fz), s.proto(fx, fz)]).toEqual([-1, null]);
-    expect(s.table.ints[torusSlotOf(fx, fz) * 160 + REC_CLAIMED]).toBe(0);
+    expect(s.table.ints[torusSlotOf(fx, fz) * RECORD_INTS + REC_CLAIMED]).toBe(0);
     // Live slots are exactly the committed columns' dense entries and aux slots: the half-written column left none.
     let blocks = 0;
     let bytes = 0;
@@ -148,6 +152,7 @@ describe('fillColumnT (§4, §6.1)', () => {
       for (let sy = 0; sy < 24; sy++) {
         if (s.table.ints[protoAt(base, sy) + PROTO_BLOCKS]! >= 0) blocks++;
         if (s.table.ints[protoAt(base, sy) + PROTO_FLUID]! >= 0) bytes++;
+        if (s.table.ints[protoAt(base, sy) + PROTO_CAVE]! >= 0) bytes++;
       }
       if (s.table.ints[base + REC_AUX_A]! >= 0) bytes++;
       if (s.table.ints[base + REC_AUX_B]! >= 0) bytes++;
@@ -216,6 +221,39 @@ describe('regionHash (§6.2)', () => {
     expect(s.proto(CX0 + 1, CZ0)!.auxB()).toBeNull();
     expect(regionHash(s, CX0, CZ0, 2, 1)).toEqual(zeroed);
     expect(hex64(zeroed)).toBe(referenceHash(s, CX0, CZ0, 2, 1));
+  });
+
+  test('the proto cave channel (SP6a spec §3.3): dense, uniform and absent cave sections hash as the reference stream; every cave byte counts', () => {
+    const s = newStore();
+    const cave = new Uint8Array(4096);
+    cave[0] = 1;
+    cave[4095] = 7;
+    for (let cx = 0; cx < 2; cx++) {
+      const w = s.claimColumn(cx, 0, 0);
+      for (let sy = 0; sy < 24; sy++) {
+        const blocks = new Uint16Array(4096).fill(sy < 10 ? 1 : 0);
+        const fluid = new Uint8Array(4096);
+        if (sy === 3 + cx) w.setProto(sy, blocks, fluid, cave);
+        else if (sy === 5) w.setProto(sy, blocks, fluid, new Uint8Array(4096).fill(2));
+        else w.setProto(sy, blocks, fluid);
+      }
+      w.aux();
+      w.commit(1);
+    }
+    const want = regionHash(s, 0, 0, 2, 1);
+    expect(hex64(want)).toBe(referenceHash(s, 0, 0, 2, 1));
+    const slot = s.proto(1, 0)!.sectionCave(4) as Uint8Array;
+    slot[100] = 3;
+    expect(regionHash(s, 0, 0, 2, 1)).not.toEqual(want);
+    expect(hex64(regionHash(s, 0, 0, 2, 1))).toBe(referenceHash(s, 0, 0, 2, 1));
+    slot[100] = 0;
+    expect(regionHash(s, 0, 0, 2, 1)).toEqual(want);
+    // A uniform cave section hashes as its expanded bytes: uniform 2 differs from uniform 0.
+    const base = s.table.find(0, 0);
+    s.table.ints[protoAt(base, 5) + PROTO_CAVE] = -1;
+    expect(regionHash(s, 0, 0, 2, 1)).not.toEqual(want);
+    s.table.ints[protoAt(base, 5) + PROTO_CAVE] = -3;
+    expect(regionHash(s, 0, 0, 2, 1)).toEqual(want);
   });
 
   test('independent of backend, generation order and slot layout', () => {

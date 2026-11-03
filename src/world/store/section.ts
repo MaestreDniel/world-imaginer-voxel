@@ -1,9 +1,15 @@
 /**
  * Section descriptors (SP3a spec §3.3, master §2.3). A descriptor entry is one int32 per channel:
- * - a slot id (≥ 0) for a dense channel: blocks in the block pool (u16 per voxel), light and fluid in the byte pool;
- * - `-1-value` for a uniform channel (no slot): `-1-stateId`, `-1-lightByte`, `-1-fluidByte`. −1 is therefore
- *   air, light 0 and "no fluid" (fluid byte 0), which is what an unwritten descriptor reads as.
- * Final descriptors are 4 ints (blocks, light, fluid, meta), proto descriptors 2 (blocks, fluid).
+ * - a slot id (≥ 0) for a dense channel: blocks in the block pool (u16 per voxel), light, fluid and cave in the byte
+ *   pool;
+ * - `-1-value` for a uniform channel (no slot): `-1-stateId`, `-1-lightByte`, `-1-fluidByte`, `-1-caveByte`. −1 is
+ *   therefore air, light 0, "no fluid" (fluid byte 0) and "no cave" (kind 0), which is what an unwritten descriptor
+ *   reads as.
+ * Final descriptors are 5 ints (blocks, light, fluid, meta, cave), proto descriptors 3 (blocks, fluid, cave).
+ *
+ * The cave channel (SP6a spec §3.3, D20): one byte per voxel, the cave kind in bits 0-3 (bits 4-7 reserved, 0),
+ * written by T with the proto set and shared into the final set by reference (as blocks and fluid are); a section with
+ * no carved voxel is uniform 0 and costs no slot. It is never persisted and leaves the meta word alone.
  *
  * Every dense entry holds one reference to its slot. Rewriting an entry releases what it held; sharing an entry
  * retains the slot; releasing an entry frees it once. The functions here act on one entry of an Int32Array (the
@@ -25,10 +31,14 @@ export const FINAL_BLOCKS = 0;
 export const FINAL_LIGHT = 1;
 export const FINAL_FLUID = 2;
 export const FINAL_META = 3;
-export const FINAL_INTS = 4;
+/** The final set's cave entry (SP6a spec §3.3): shared from the proto's. */
+export const FINAL_CAVE = 4;
+export const FINAL_INTS = 5;
 export const PROTO_BLOCKS = 0;
 export const PROTO_FLUID = 1;
-export const PROTO_INTS = 2;
+/** The proto set's cave entry (SP6a spec §3.3), written by T's `setProto`. */
+export const PROTO_CAVE = 2;
+export const PROTO_INTS = 3;
 
 export const META_NON_AIR = 0x1fff;
 export const META_OPAQUE = 1 << 13;
@@ -91,7 +101,7 @@ export function storeWords(pool: SlabPool, ints: Int32Array, at: number, src: Ui
   storeChannel(pool, ints, at, src, pool.words, retire);
 }
 
-/** Stores a light or fluid channel (4096 bytes, copied) at `ints[at]`, uniform or dense; `pool` is the byte pool. */
+/** Stores a light, fluid or cave channel (4096 bytes, copied) at `ints[at]`, uniform or dense; `pool` is the byte pool. */
 export function storeBytes(pool: SlabPool, ints: Int32Array, at: number, src: Uint8Array, retire: Retire = FREE_NOW): void {
   storeChannel(pool, ints, at, src, pool.bytes, retire);
 }
@@ -117,7 +127,7 @@ export function wordAt(pool: SlabPool, code: number, i: number): number {
   return code < 0 ? -1 - code : pool.words[code * SECTION_VOXELS + i]!;
 }
 
-/** Voxel `i`'s byte in a light or fluid entry. */
+/** Voxel `i`'s byte in a light, fluid or cave entry. */
 export function byteAt(pool: SlabPool, code: number, i: number): number {
   return code < 0 ? -1 - code : pool.bytes[code * SECTION_VOXELS + i]!;
 }
@@ -127,7 +137,7 @@ export function sectionWords(pool: SlabPool, code: number): Uint16Array | number
   return code < 0 ? -1 - code : pool.u16(code);
 }
 
-/** A light or fluid entry as a view over its slot (4096 bytes), or its uniform byte. */
+/** A light, fluid or cave entry as a view over its slot (4096 bytes), or its uniform byte. */
 export function sectionBytes(pool: SlabPool, code: number): Uint8Array | number {
   return code < 0 ? -1 - code : pool.u8(code);
 }

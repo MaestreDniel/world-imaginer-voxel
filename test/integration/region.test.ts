@@ -26,8 +26,10 @@ function accounting(r: RegionResult) {
     for (let cx = cx0; cx < cx0 + w; cx++) {
       const d = r.view.descriptors(cx, cz);
       for (let sy = 0; sy < 24; sy++) {
-        if (d[2 * sy]! >= 0) blocks++;
-        if (d[2 * sy + 1]! >= 0) bytes++;
+        // Per section: blocks, fluid, cave (SP6a spec §3.3); the fluid and cave slots are byte slots.
+        if (d[3 * sy]! >= 0) blocks++;
+        if (d[3 * sy + 1]! >= 0) bytes++;
+        if (d[3 * sy + 2]! >= 0) bytes++;
       }
       bytes += 2; // aux A and aux B
     }
@@ -139,7 +141,7 @@ describe('genRegion up to L and MESH on 4 threads (SP4a spec §9.2, rulings P31,
     expect(lit).toBeGreaterThan(0);
   }, 120_000);
 
-  test('upTo L writes a format-3 dump and a second call reads it (no worker spawned)', async () => {
+  test('upTo L writes a format-4 dump (SP6a spec §3.3: the cave channel) and a second call reads it (no worker spawned)', async () => {
     rmSync(LDIR, { recursive: true, force: true });
     const o: GenRegionOptions = { ...base, w: 3, h: 2, order: 'shuffled', threads: 4, cache: true, cacheDir: LDIR };
     const cold = await genRegion({ ...o, threads: 1, cache: false });
@@ -148,7 +150,7 @@ describe('genRegion up to L and MESH on 4 threads (SP4a spec §9.2, rulings P31,
     expect(regionWorkersSpawned() - s0).toBe(4);
     const files = readdirSync(LDIR);
     expect(files).toHaveLength(1);
-    expect(readFileSync(`${LDIR}${files[0]!}`).readUInt32LE(4)).toBe(3);
+    expect(readFileSync(`${LDIR}${files[0]!}`).readUInt32LE(4)).toBe(4);
     const s1 = regionWorkersSpawned();
     const b = await genRegion(o);
     expect(regionWorkersSpawned()).toBe(s1);

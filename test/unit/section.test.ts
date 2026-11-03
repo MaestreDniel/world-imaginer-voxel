@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import { BLOCK_SLOT_BYTES, BYTE_SLOT_BYTES, createPool, type SlabPool } from '../../src/world/store/pool';
 import {
-  byteAt, computeMeta, FINAL_BLOCKS, FINAL_FLUID, FINAL_INTS, FINAL_LIGHT, FINAL_META, isDense, META_CUTOUT,
-  META_FLUID, META_NON_AIR, META_OPAQUE, META_TRANSLUCENT, PROTO_BLOCKS, PROTO_FLUID, PROTO_INTS, releaseEntry,
+  byteAt, computeMeta, FINAL_BLOCKS, FINAL_CAVE, FINAL_FLUID, FINAL_INTS, FINAL_LIGHT, FINAL_META, isDense, META_CUTOUT,
+  META_FLUID, META_NON_AIR, META_OPAQUE, META_TRANSLUCENT, PROTO_BLOCKS, PROTO_CAVE, PROTO_FLUID, PROTO_INTS, releaseEntry,
   sectionBytes, sectionWords, SECTION_VOXELS, shareEntry, storeBytes, storeWords, uniformCode, uniformValue, wordAt,
 } from '../../src/world/store/section';
 
@@ -25,10 +25,10 @@ function snapshot(p: SlabPool): { free: number; refs: number[] } {
   return { free: p.freeCount(), refs };
 }
 
-test('descriptor encodings and layout (SP3a spec §3.3)', () => {
+test('descriptor encodings and layout (SP3a spec §3.3; the cave channel, SP6a spec §3.3)', () => {
   expect(SECTION_VOXELS).toBe(4096);
-  expect([FINAL_BLOCKS, FINAL_LIGHT, FINAL_FLUID, FINAL_META, FINAL_INTS]).toEqual([0, 1, 2, 3, 4]);
-  expect([PROTO_BLOCKS, PROTO_FLUID, PROTO_INTS]).toEqual([0, 1, 2]);
+  expect([FINAL_BLOCKS, FINAL_LIGHT, FINAL_FLUID, FINAL_META, FINAL_CAVE, FINAL_INTS]).toEqual([0, 1, 2, 3, 4, 5]);
+  expect([PROTO_BLOCKS, PROTO_FLUID, PROTO_CAVE, PROTO_INTS]).toEqual([0, 1, 2, 3]);
   // −1 is uniform 0: air, light 0, no fluid.
   expect(uniformCode(0)).toBe(-1);
   expect(uniformCode(2)).toBe(-3);

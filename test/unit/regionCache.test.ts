@@ -5,6 +5,7 @@ import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { fnv1a64, fnv1a64Bytes, hex64, type Hash64 } from '../../src/core/hash';
 import { seedFromInput } from '../../src/core/seed';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
+import { regionHash } from '../../src/metrics/region';
 import { finalAt, protoAt, REC_AUX_B } from '../../src/world/store/columnTable';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import {
@@ -17,10 +18,13 @@ import { genRegion, litRegionHash, type GenRegionOptions } from '../harness/regi
 const DIR = fileURLToPath(new URL('../.cache/regionCacheUnit/', import.meta.url));
 const SCRATCH = fileURLToPath(new URL('../.cache/regionCacheUnitSrc/', import.meta.url));
 
-/** Byte offset and size of the first dense slot (a block slot at an even descriptor, else fluid) of the dump's first column. */
+/**
+ * Byte offset and size of the first dense slot (a block slot at descriptor 3·sy, else a fluid or cave slot) of the dump's
+ * first column.
+ */
 function firstDenseSlot(b: Buffer): [number, number] {
   const d0 = 44 + 4 * 16;
-  for (let i = 0; i < 48; i++) if (b.readInt32LE(d0 + 4 * i) >= 0) return [d0 + 4 * 48, i % 2 === 0 ? 8192 : 4096];
+  for (let i = 0; i < 72; i++) if (b.readInt32LE(d0 + 4 * i) >= 0) return [d0 + 4 * 72, i % 3 === 0 ? 8192 : 4096];
   throw new Error('the first column has no dense slot');
 }
 
@@ -29,8 +33,8 @@ const header = (over: Partial<RegionCacheHeader> = {}): RegionCacheHeader => ({
 });
 
 describe('the cache key (§6.1)', () => {
-  test('REGION_CACHE_FORMAT is 3 (SP4a spec §9.2: the final light joined the dump); the dumps live in test/.cache/regions/<hex64 of the key>.bin', () => {
-    expect(REGION_CACHE_FORMAT).toBe(3);
+  test('REGION_CACHE_FORMAT is 4 (SP6a spec §3.3: the proto cave channel joined the dump); the dumps live in test/.cache/regions/<hex64 of the key>.bin', () => {
+    expect(REGION_CACHE_FORMAT).toBe(4);
     expect(REGION_CACHE_DIR).toBe(fileURLToPath(new URL('../.cache/regions/', import.meta.url)));
     const h = header();
     expect(regionCachePath(h)).toBe(join(REGION_CACHE_DIR, `${hex64(regionCacheKey(h))}.bin`));
@@ -147,9 +151,11 @@ describe('genRegion with the cache (§6.1)', () => {
     for (let cz = -1; cz < 1; cz++) {
       for (let cx = 3; cx < 5; cx++) {
         const d = b.view.descriptors(cx, cz);
+        // Per section: blocks, fluid, cave (SP6a spec §3.3); the fluid and cave slots are byte slots.
         for (let sy = 0; sy < 24; sy++) {
-          if (d[2 * sy]! >= 0) dense++;
-          if (d[2 * sy + 1]! >= 0) denseBytes++;
+          if (d[3 * sy]! >= 0) dense++;
+          if (d[3 * sy + 1]! >= 0) denseBytes++;
+          if (d[3 * sy + 2]! >= 0) denseBytes++;
         }
       }
     }
@@ -267,18 +273,18 @@ describe('genRegion with the cache (§6.1)', () => {
     expect(existsSync(at({}, k2))).toBe(true);
   });
 
-  test('a format-2 dump is ignored', async () => {
+  test('a format-3 dump is ignored', async () => {
     const first = await genRegion(base);
     const path = regionCachePath(keyOf(base), DIR);
-    // A T dump of format 3 has format 2's layout: relabel it as format 2 and sum it again, a well-formed format-2 dump.
+    // A dump relabelled as format 3 and summed again: well-formed but for its format (format 3 had no cave channel).
     const two = Buffer.from(readFileSync(path));
-    two.writeUInt32LE(2, 4);
+    two.writeUInt32LE(3, 4);
     const sum = fnv1a64Bytes(two.subarray(0, two.length - 8));
     two.writeUInt32LE(sum[0], two.length - 8);
     two.writeUInt32LE(sum[1], two.length - 4);
     const k = keyOf(base);
-    // Under its format-2 name it is never read, and once it is old the next write prunes it.
-    const name2 = `${hex64(fnv1a64(`${hex64(k.genKey)}|${hex64(k.srcKey)}|2|${k.cx0}|${k.cz0}|${k.w}|${k.h}|${k.upTo}`))}.bin`;
+    // Under its format-3 name it is never read, and once it is old the next write prunes it.
+    const name2 = `${hex64(fnv1a64(`${hex64(k.genKey)}|${hex64(k.srcKey)}|3|${k.cx0}|${k.cz0}|${k.w}|${k.h}|${k.upTo}`))}.bin`;
     expect(name2).not.toBe(path.slice(DIR.length));
     writeFileSync(join(DIR, name2), two);
     // Under this format's name it is a miss, and the dump is rewritten.
@@ -286,7 +292,7 @@ describe('genRegion with the cache (§6.1)', () => {
     const r = await genRegion(base);
     expect(r.cacheHit).toBe(false);
     expect(r.view.hash()).toBe(first.view.hash());
-    expect(readFileSync(path).readUInt32LE(4)).toBe(3);
+    expect(readFileSync(path).readUInt32LE(4)).toBe(4);
     const old = new Date(Date.now() - 2 * REGION_CACHE_PRUNE_MS);
     utimesSync(join(DIR, name2), old, old);
     await genRegion({ ...base, cx0: 4 });
@@ -325,6 +331,7 @@ describe('the dump of D and L regions (SP4a spec §9.2, format 3; ruling P31)', 
         // D shares the proto into the final set, and the rebuild shares it too.
         expect(dst.table.ints[finalAt(bd, sy)]).toBe(dst.table.ints[protoAt(bd, sy)]);
         expect(dst.table.ints[finalAt(bd, sy) + 2]).toBe(dst.table.ints[protoAt(bd, sy) + 1]);
+        expect(dst.table.ints[finalAt(bd, sy) + 4]).toBe(dst.table.ints[protoAt(bd, sy) + 2]);
       }
       const aux = (v: typeof fs) => [...new Uint8Array(v.aux()!.worldSurfaceWG.buffer, v.aux()!.worldSurfaceWG.byteOffset, 4096)];
       expect(aux(fd)).toEqual(aux(fs));
@@ -347,7 +354,7 @@ describe('the dump of D and L regions (SP4a spec §9.2, format 3; ruling P31)', 
   });
 });
 
-describe('the dump with aux B (SP3b spec §7, format 2)', () => {
+describe('the dump with aux B (SP3b spec §7, format 2; the 72 proto descriptors of format 4)', () => {
   const MiB = 1 << 20;
   const h: RegionCacheHeader = { genKey: [5, 6], srcKey: [7, 8], cx0: 0, cz0: 0, w: 3, h: 1, upTo: 'T' };
   /** Column 0 has aux A and aux B, column 1 aux A only, column 2 neither; every section uniform (no dense slot). */
@@ -374,9 +381,9 @@ describe('the dump with aux B (SP3b spec §7, format 2)', () => {
 
   test('per column: record, descriptors, dense slots, 4096 aux A bytes, then 4096 aux B bytes (zeros when absent)', () => {
     const b = Buffer.from(encodeRegionDump(source(), h));
-    const col = 4 * (16 + 48) + 4096 + 4096;
+    const col = 4 * (16 + 72) + 4096 + 4096;
     expect(b.length).toBe(44 + 3 * col + 8);
-    const auxA = (k: number) => 44 + k * col + 4 * 64;
+    const auxA = (k: number) => 44 + k * col + 4 * 88;
     const auxB = (k: number) => auxA(k) + 4096;
     expect(b.readInt16LE(auxA(0) + 6)).toBe(70);
     expect(b.readInt16LE(auxA(1) + 6)).toBe(71);
@@ -409,6 +416,85 @@ describe('the dump with aux B (SP3b spec §7, format 2)', () => {
     expect(dst.bytePool.slotCount() - dst.bytePool.freeCount()).toBe(3);
     // The dump of the rebuilt region is the dump of the source.
     expect(Buffer.from(encodeRegionDump(dst, h)).equals(Buffer.from(encodeRegionDump(src, h)))).toBe(true);
+  });
+});
+
+describe('the dump with the cave channel (SP6a spec §3.3, format 4)', () => {
+  const MiB = 1 << 20;
+  const h: RegionCacheHeader = { genKey: [5, 6], srcKey: [7, 8], cx0: 2, cz0: -1, w: 2, h: 1, upTo: 'T' };
+  /** A T region written through setProto with cave bytes (T writes no tag before SP6a's Task 11): dense, uniform and absent. */
+  const source = (): VoxelStore => {
+    const s = createStore({ shared: false, maxBlockBytes: 4 * MiB, maxByteBytes: 4 * MiB });
+    for (let cx = 2; cx < 4; cx++) {
+      const w = s.claimColumn(cx, -1, 0);
+      for (let sy = 0; sy < 24; sy++) {
+        const blocks = new Uint16Array(4096).fill(sy < 8 ? 1 : 0);
+        const fluid = new Uint8Array(4096);
+        const cave = new Uint8Array(4096);
+        if (sy === 4 + cx) for (let i = 0; i < 4096; i += 3) cave[i] = 1 + ((i + cx) % 9);
+        if (sy === 2) cave.fill(6);
+        w.setProto(sy, blocks, fluid, sy === 20 ? undefined : cave);
+      }
+      w.aux().worldSurfaceWG[0] = 9;
+      w.commit(1);
+    }
+    return s;
+  };
+
+  test('a hit of a region with a non-zero cave section reads back the same cave() values and the same hash()', () => {
+    const src = source();
+    const bytes = encodeRegionDump(src, h);
+    const cols = parseRegionDump(bytes, h)!;
+    expect(cols).not.toBeNull();
+    const dst = createStore({ shared: false, maxBlockBytes: 4 * MiB, maxByteBytes: 4 * MiB });
+    rebuildRegion(dst, cols);
+    for (let cx = 2; cx < 4; cx++) {
+      const [a, b] = [src.proto(cx, -1)!, dst.proto(cx, -1)!];
+      expect(b.sectionCave(2)).toBe(6);
+      expect(b.sectionCave(4 + cx)).toBeInstanceOf(Uint8Array);
+      for (let sy = 0; sy < 24; sy++) {
+        for (let i = 0; i < 4096; i += 7) {
+          const [lx, y, lz] = [i & 15, -64 + 16 * sy + (i >> 8), (i >> 4) & 15];
+          expect(b.cave(lx, y, lz)).toBe(a.cave(lx, y, lz));
+        }
+      }
+    }
+    expect(hex64(regionHash(dst, 2, -1, 2, 1))).toBe(hex64(regionHash(src, 2, -1, 2, 1)));
+    // One dense cave slot per column, one aux A each, nothing else in the byte pool.
+    expect(dst.bytePool.slotCount() - dst.bytePool.freeCount()).toBe(4);
+    // The rebuilt region dumps to the same bytes.
+    expect(Buffer.from(encodeRegionDump(dst, h)).equals(Buffer.from(bytes))).toBe(true);
+  });
+
+  test('the layout: 72 proto descriptors (blocks, fluid, cave per section), then each dense cave slot\'s 4096 bytes in descriptor order', () => {
+    const src = source();
+    const b = Buffer.from(encodeRegionDump(src, h));
+    const col = 4 * (16 + 72) + 4096 + 4096 + 4096;
+    expect(b.length).toBe(44 + 2 * col + 8);
+    const d0 = 44 + 4 * 16;
+    const base = src.table.find(2, -1);
+    for (let i = 0; i < 72; i++) expect(b.readInt32LE(d0 + 4 * i), `descriptor ${i}`).toBe(src.table.ints[protoAt(base, 0) + i]);
+    expect(b.readInt32LE(d0 + 4 * (3 * 2 + 2))).toBe(-7); // section 2: uniform cave 6
+    expect(b.readInt32LE(d0 + 4 * (3 * 6 + 2))).toBeGreaterThanOrEqual(0); // section 6: dense
+    expect(b.readInt32LE(d0 + 4 * (3 * 20 + 2))).toBe(-1); // section 20: absent, uniform 0
+    const slot = b.subarray(d0 + 4 * 72, d0 + 4 * 72 + 4096);
+    expect([...slot]).toEqual([...(src.proto(2, -1)!.sectionCave(6) as Uint8Array)]);
+  });
+
+  test('a D region\'s final cave is shared with its proto, like the blocks and fluid, and rebuilds shared', async () => {
+    const o: GenRegionOptions = { seed: '42', params: paramsWith(), cx0: 0, cz0: 0, w: 1, h: 1, upTo: 'D', order: 'spiral', threads: 1 };
+    const src = (await genRegion(o)).view.store;
+    const hd: RegionCacheHeader = { genKey: [5, 6], srcKey: [7, 8], cx0: 0, cz0: 0, w: 1, h: 1, upTo: 'D' };
+    const base = src.table.find(0, 0);
+    // A final cave entry that is not its proto's is refused, as the blocks and fluid are.
+    const keep = src.table.ints[finalAt(base, 3) + 4]!;
+    src.table.ints[finalAt(base, 3) + 4] = -5;
+    expect(() => encodeRegionDump(src, hd)).toThrow(/not the proto's/);
+    src.table.ints[finalAt(base, 3) + 4] = keep;
+    const dst = createStore({ shared: false, maxBlockBytes: 16 * MiB, maxByteBytes: 16 * MiB });
+    rebuildRegion(dst, parseRegionDump(encodeRegionDump(src, hd), hd)!);
+    const bd = dst.table.find(0, 0);
+    for (let sy = 0; sy < 24; sy++) expect(dst.table.ints[finalAt(bd, sy) + 4]).toBe(dst.table.ints[protoAt(bd, sy) + 2]);
   });
 });
 

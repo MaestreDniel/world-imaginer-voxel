@@ -82,7 +82,7 @@ describe('padded section layout (SP4a spec §5.1)', () => {
 
   test('createPaddedSection sizes', () => {
     const p = createPaddedSection();
-    expect([p.blocks.length, p.light.length, p.fluid.length]).toEqual([5832, 5832, 5832]);
+    expect([p.blocks.length, p.light.length, p.fluid.length, p.cave.length]).toEqual([5832, 5832, 5832, 5832]);
   });
 });
 
@@ -131,6 +131,86 @@ describe('copyPaddedSection (SP4a spec §4.3, §5.1)', () => {
     w.commit(3);
     expect(() => copyPaddedSection(lone.neighborhood(0, 0), 4, createPaddedSection())).toThrow(/no final set/);
     expect(() => copyLightRegion(lone.neighborhood(0, 0), createLightRegion())).toThrow(/no final set/);
+  });
+});
+
+/** Cave bytes per (column k, sy): uniform 0, uniform non-zero or dense (a per-voxel pattern of kinds 0 … 9). */
+function caves(k: number, sy: number): Uint8Array {
+  const a = new Uint8Array(4096);
+  if ((k + sy) % 3 === 0) return a.fill((k + sy) % 2 === 0 ? 0 : 1 + ((k + sy) % 9));
+  for (let i = 0; i < 4096; i++) a[i] = (i * 5 + k * 3 + sy) % 10;
+  return a;
+}
+
+/** The 3 × 3 around (CX, CZ) with a cave channel: each column's proto written with `caves`, shared into its final set. */
+function buildCaveStore(): VoxelStore {
+  const s = createStore({ shared: true, maxBlockBytes: 32 * MiB, maxByteBytes: 32 * MiB });
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const k = K(dx, dz);
+      const w = s.claimColumn(CX + dx, CZ + dz, 0);
+      for (let sy = 0; sy < SECTIONS; sy++) {
+        w.setProto(sy, words(k, sy), fluids(k, sy), caves(k, sy));
+        w.shareFinal(sy, lights(k, sy));
+      }
+      w.commit(3);
+    }
+  }
+  return s;
+}
+
+describe('copyPaddedSection: the cave channel (SP6a spec §3.3, D20)', () => {
+  const s = buildCaveStore();
+  const nb = s.neighborhood(CX, CZ);
+
+  test('out.cave equals per-voxel final().cave at every padded position (the six neighbours\' border included), 0 below and above the world', () => {
+    const out = createPaddedSection();
+    out.cave.fill(77); // a reused scratch: every position is written
+    for (let sy = 0; sy < SECTIONS; sy++) {
+      copyPaddedSection(nb, sy, out);
+      const ec = new Uint8Array(PAD_VOXELS);
+      for (let py = -1; py <= 16; py++) {
+        for (let pz = -1; pz <= 16; pz++) {
+          for (let px = -1; px <= 16; px++) {
+            const y = sy * 16 - 64 + py;
+            if (y < -64 || y > 319) continue;
+            const [dx, lx] = split(px);
+            const [dz, lz] = split(pz);
+            ec[padIndex(px, py, pz)] = nb.final(dx, dz)!.cave(lx, y, lz);
+          }
+        }
+      }
+      expect(out.cave, `cave at sy ${sy}`).toEqual(ec);
+    }
+    // The fixture puts non-zero kinds on the border of the centre section.
+    copyPaddedSection(nb, 10, out);
+    let border = 0;
+    for (const [x, z] of [[-1, 5], [16, 5], [5, -1], [5, 16]] as const) if (out.cave[padIndex(x, 3, z)] !== 0) border++;
+    if (out.cave[padIndex(5, -1, 5)] !== 0) border++;
+    if (out.cave[padIndex(5, 16, 5)] !== 0) border++;
+    expect(border).toBeGreaterThan(0);
+  });
+
+  test('below y −64 and above y 319 the cave bytes are 0', () => {
+    const out = createPaddedSection();
+    out.cave.fill(77);
+    copyPaddedSection(nb, 0, out);
+    for (let z = -1; z <= 16; z++) for (let x = -1; x <= 16; x++) expect(out.cave[padIndex(x, -1, z)]).toBe(0);
+    copyPaddedSection(nb, 23, out);
+    for (let z = -1; z <= 16; z++) for (let x = -1; x <= 16; x++) expect(out.cave[padIndex(x, 16, z)]).toBe(0);
+  });
+
+  test('the store\'s blocks, light and fluid copy as before beside it', () => {
+    const out = createPaddedSection();
+    copyPaddedSection(nb, 7, out);
+    for (const [x, y, z] of [[-1, -1, -1], [16, 16, 16], [0, 5, 16], [8, 8, 8]] as const) {
+      const [dx, lx] = split(x);
+      const [dz, lz] = split(z);
+      const v = nb.final(dx, dz)!;
+      const yy = 7 * 16 - 64 + y;
+      const i = padIndex(x, y, z);
+      expect([out.blocks[i], out.light[i], out.fluid[i]]).toEqual([v.block(lx, yy, lz), v.light(lx, yy, lz), v.fluid(lx, yy, lz)]);
+    }
   });
 });
 

@@ -7,21 +7,24 @@
  * Published; ruling P31), never the rings around it; upTo 'MESH' is never dumped (`genRegion` meshes the cached
  * 'L' region grown by one ring). A hit rebuilds each column through the writer API, so uniform and dense decisions
  * are made again by the same code and the versions are bumped by the same commits as a generated column's:
- * `claimColumn`, `setProto` per section with the expanded data, the aux A and aux B bytes, `commit(1)`; then, at
+ * `claimColumn`, `setProto` per section with the expanded data (the cave channel's included), the aux A and aux B
+ * bytes, `commit(1)`; then, at
  * Decorated or above, `reopenColumn(1)`, `shareFinal(sy, zeros)` per section (the D skeleton's share) and `commit(2)`;
  * then, at Published, `reopenColumn(2)`, `setLight` per section and `commit(3)`. A hit refreshes the dump's mtime, so
  * the prune grace below counts from its last use.
  *
  * Dump layout (little-endian): a 44-byte header (magic `WIRC`, format u32, genKey lo/hi u32, srcKey lo/hi u32,
  * cx0, cz0 i32, w, h u32, upTo as 4 ASCII bytes padded with 0), then per column, cz outer and cx inner: record ints
- * 0-15 (i32), the 24 proto descriptors (blocks, fluid: 48 i32), the dense slots they reference in descriptor order
- * (8192 bytes per block slot, 4096 per fluid slot); at Published only, the 24 final light descriptors (24 i32) and
+ * 0-15 (i32), the 24 proto descriptors (blocks, fluid, cave: 24 × `PROTO_INTS` = 72 i32), the dense slots they
+ * reference in descriptor order (8192 bytes per block slot, 4096 per fluid or cave slot); at Published only, the 24
+ * final light descriptors (24 i32) and
  * the dense light slots they reference (4096 bytes each); then the 4096 aux A bytes (the whole slot: the T fields and
  * D's final heightmaps), then the 4096 aux B bytes (each zeros when the column has no such slot; the record ints say
- * whether it has one); last, the FNV-1a 64 (lo, hi u32) of every byte before it. The final blocks and fluid are not
- * dumped: SP4a's D shares the proto into the final set (SP4a spec §3.1), and a dump of a column whose final entries
- * are not its proto entries throws (a D that places blocks needs a new format). Format 1 had no aux B bytes (SP3a);
- * format 2 adds them (SP3b spec §7); format 3 adds the D and L statuses and the final light (SP4a spec §9.2).
+ * whether it has one); last, the FNV-1a 64 (lo, hi u32) of every byte before it. The final blocks, fluid and cave are
+ * not dumped: SP4a's D shares the proto into the final set (SP4a spec §3.1; the cave channel is shared like the blocks
+ * and fluid, SP6a spec §3.3), and a dump of a column whose final entries are not its proto entries throws (a D that
+ * places blocks needs a new format). Format 1 had no aux B bytes (SP3a); format 2 adds them (SP3b spec §7); format 3
+ * adds the D and L statuses and the final light (SP4a spec §9.2); format 4 adds the proto cave channel (SP6a spec §3.3).
  * Anything that disagrees with the expected header, the layout or the checksum is a miss (a damaged dump is never
  * rebuilt); the caller regenerates and overwrites.
  *
@@ -40,11 +43,13 @@ import {
   finalAt, protoAt, REC_AUX_A, REC_AUX_B, REC_BLOCK_VERSION, REC_CLAIMED, REC_CX, REC_CZ, REC_LIGHT_VERSION, REC_STATUS,
   STATUS_DECORATED, STATUS_PROTO, STATUS_PUBLISHED,
 } from '../../src/world/store/columnTable';
-import { FINAL_BLOCKS, FINAL_FLUID, FINAL_LIGHT } from '../../src/world/store/section';
+import {
+  FINAL_BLOCKS, FINAL_CAVE, FINAL_FLUID, FINAL_LIGHT, PROTO_BLOCKS, PROTO_CAVE, PROTO_FLUID, PROTO_INTS,
+} from '../../src/world/store/section';
 import type { VoxelStore } from '../../src/world/store/store';
 
 /** Bumped whenever the dump layout changes. */
-export const REGION_CACHE_FORMAT = 3;
+export const REGION_CACHE_FORMAT = 4;
 /** A dump that cannot hit for the current code is deleted once it has not been modified for this long (15 min). */
 export const REGION_CACHE_PRUNE_MS = 15 * 60 * 1000;
 
@@ -83,13 +88,15 @@ export interface RegionCacheHeader {
 const MAGIC = 'WIRC';
 const HEADER_BYTES = 44;
 const RECORD_HEAD = 16;
-const DESCRIPTORS = 48;
+/** The 24 proto descriptors: blocks, fluid and cave per section (SP6a spec §3.3). */
+const DESCRIPTORS = 24 * PROTO_INTS;
 const COLUMN_HEAD_BYTES = 4 * (RECORD_HEAD + DESCRIPTORS);
 /** The 24 final light descriptors of a Published column. */
 const LIGHT_DESCRIPTORS = 24;
 const LIGHT_HEAD_BYTES = 4 * LIGHT_DESCRIPTORS;
 const BLOCK_SLOT = 8192;
 const FLUID_SLOT = 4096;
+const CAVE_SLOT = 4096;
 const AUX_BYTES = 4096;
 const LIGHT_SLOT = 4096;
 /** The trailing FNV-1a 64 of the dump. */
@@ -159,7 +166,7 @@ function writeHeader(b: Buffer, h: RegionCacheHeader): void {
 
 /**
  * The record base of (cx, cz), which must hold it at `status` (what the dump's `upTo` leaves: Proto, Decorated or
- * Published) with, at Decorated or above, its final blocks and fluid shared with its proto entries.
+ * Published) with, at Decorated or above, its final blocks, fluid and cave shared with its proto entries.
  */
 function columnBase(store: VoxelStore, cx: number, cz: number, status: number): number {
   const base = store.table.find(cx, cz);
@@ -171,8 +178,8 @@ function columnBase(store: VoxelStore, cx: number, cz: number, status: number): 
     for (let sy = 0; sy < 24; sy++) {
       const p = protoAt(base, sy);
       const f = finalAt(base, sy);
-      if (ints[f + FINAL_BLOCKS] !== ints[p] || ints[f + FINAL_FLUID] !== ints[p + 1]) {
-        throw new Error(`region cache: column (${cx}, ${cz}) section ${sy}: the final blocks or fluid are not the proto's (format ${REGION_CACHE_FORMAT} dumps a shared final set only)`);
+      if (ints[f + FINAL_BLOCKS] !== ints[p + PROTO_BLOCKS] || ints[f + FINAL_FLUID] !== ints[p + PROTO_FLUID] || ints[f + FINAL_CAVE] !== ints[p + PROTO_CAVE]) {
+        throw new Error(`region cache: column (${cx}, ${cz}) section ${sy}: the final blocks, fluid or cave are not the proto's (format ${REGION_CACHE_FORMAT} dumps a shared final set only)`);
       }
     }
   }
@@ -192,8 +199,9 @@ export function encodeRegionDump(store: VoxelStore, h: RegionCacheHeader): Uint8
       size += COLUMN_HEAD_BYTES + 2 * AUX_BYTES + (lit ? LIGHT_HEAD_BYTES : 0);
       for (let sy = 0; sy < 24; sy++) {
         const p = protoAt(base, sy);
-        if (ints[p]! >= 0) size += BLOCK_SLOT;
-        if (ints[p + 1]! >= 0) size += FLUID_SLOT;
+        if (ints[p + PROTO_BLOCKS]! >= 0) size += BLOCK_SLOT;
+        if (ints[p + PROTO_FLUID]! >= 0) size += FLUID_SLOT;
+        if (ints[p + PROTO_CAVE]! >= 0) size += CAVE_SLOT;
         if (lit && ints[finalAt(base, sy) + FINAL_LIGHT]! >= 0) size += LIGHT_SLOT;
       }
     }
@@ -209,14 +217,18 @@ export function encodeRegionDump(store: VoxelStore, h: RegionCacheHeader): Uint8
       for (let i = 0; i < DESCRIPTORS; i++, o += 4) b.writeInt32LE(ints[d0 + i]!, o);
       for (let sy = 0; sy < 24; sy++) {
         const p = protoAt(base, sy);
-        if (ints[p]! >= 0) {
-          const v = store.blockPool.u16(ints[p]!);
+        if (ints[p + PROTO_BLOCKS]! >= 0) {
+          const v = store.blockPool.u16(ints[p + PROTO_BLOCKS]!);
           b.set(new Uint8Array(v.buffer, v.byteOffset, BLOCK_SLOT), o);
           o += BLOCK_SLOT;
         }
-        if (ints[p + 1]! >= 0) {
-          b.set(store.bytePool.u8(ints[p + 1]!), o);
+        if (ints[p + PROTO_FLUID]! >= 0) {
+          b.set(store.bytePool.u8(ints[p + PROTO_FLUID]!), o);
           o += FLUID_SLOT;
+        }
+        if (ints[p + PROTO_CAVE]! >= 0) {
+          b.set(store.bytePool.u8(ints[p + PROTO_CAVE]!), o);
+          o += CAVE_SLOT;
         }
       }
       if (lit) {
@@ -259,6 +271,8 @@ interface DumpColumn {
   /** Per section: the dense slot's bytes, or null for a uniform entry. */
   readonly blocks: Array<Uint8Array | null>;
   readonly fluid: Array<Uint8Array | null>;
+  /** The cave channel (SP6a spec §3.3), as `fluid`. */
+  readonly cave: Array<Uint8Array | null>;
   /** At Published: the 24 final light descriptors, and per section the dense light slot's bytes or null; else null. */
   readonly lightDescriptors: Int32Array | null;
   readonly light: Array<Uint8Array | null> | null;
@@ -292,10 +306,12 @@ export function parseRegionDump(bytes: Uint8Array, h: RegionCacheHeader): DumpCo
       if (record[REC_CX] !== cx || record[REC_CZ] !== cz || record[REC_STATUS] !== status || record[REC_CLAIMED] !== 1) return null;
       const blocks: Array<Uint8Array | null> = [];
       const fluid: Array<Uint8Array | null> = [];
+      const cave: Array<Uint8Array | null> = [];
       for (let sy = 0; sy < 24; sy++) {
-        const bc = descriptors[2 * sy]!;
-        const fc = descriptors[2 * sy + 1]!;
-        if (bc < -0x10000 || fc < -0x100) return null;
+        const bc = descriptors[PROTO_INTS * sy + PROTO_BLOCKS]!;
+        const fc = descriptors[PROTO_INTS * sy + PROTO_FLUID]!;
+        const cc = descriptors[PROTO_INTS * sy + PROTO_CAVE]!;
+        if (bc < -0x10000 || fc < -0x100 || cc < -0x100) return null;
         if (bc >= 0) {
           if (o + BLOCK_SLOT > b.length) return null;
           blocks.push(b.subarray(o, o + BLOCK_SLOT));
@@ -306,6 +322,11 @@ export function parseRegionDump(bytes: Uint8Array, h: RegionCacheHeader): DumpCo
           fluid.push(b.subarray(o, o + FLUID_SLOT));
           o += FLUID_SLOT;
         } else fluid.push(null);
+        if (cc >= 0) {
+          if (o + CAVE_SLOT > b.length) return null;
+          cave.push(b.subarray(o, o + CAVE_SLOT));
+          o += CAVE_SLOT;
+        } else cave.push(null);
       }
       let lightDescriptors: Int32Array | null = null;
       let light: Array<Uint8Array | null> | null = null;
@@ -326,7 +347,7 @@ export function parseRegionDump(bytes: Uint8Array, h: RegionCacheHeader): DumpCo
       }
       if (o + 2 * AUX_BYTES > b.length) return null;
       out.push({
-        cx, cz, record, descriptors, blocks, fluid, lightDescriptors, light,
+        cx, cz, record, descriptors, blocks, fluid, cave, lightDescriptors, light,
         aux: b.subarray(o, o + AUX_BYTES), auxB: b.subarray(o + AUX_BYTES, o + 2 * AUX_BYTES),
       });
       o += 2 * AUX_BYTES;
@@ -350,6 +371,7 @@ export function rebuildRegion(store: VoxelStore, cols: readonly DumpColumn[]): F
   const blocks = new Uint16Array(4096);
   const blockBytes = new Uint8Array(blocks.buffer);
   const fluid = new Uint8Array(4096);
+  const cave = new Uint8Array(4096);
   const light = new Uint8Array(4096);
   const ints = store.table.ints;
   cols.forEach((c, k) => {
@@ -358,11 +380,14 @@ export function rebuildRegion(store: VoxelStore, cols: readonly DumpColumn[]): F
     for (let sy = 0; sy < 24; sy++) {
       const bs = c.blocks[sy]!;
       const fs = c.fluid[sy]!;
-      if (bs === null) blocks.fill(-1 - c.descriptors[2 * sy]!);
+      const cs = c.cave[sy]!;
+      if (bs === null) blocks.fill(-1 - c.descriptors[PROTO_INTS * sy + PROTO_BLOCKS]!);
       else blockBytes.set(bs);
-      if (fs === null) fluid.fill(-1 - c.descriptors[2 * sy + 1]!);
+      if (fs === null) fluid.fill(-1 - c.descriptors[PROTO_INTS * sy + PROTO_FLUID]!);
       else fluid.set(fs);
-      w.setProto(sy, blocks, fluid);
+      if (cs === null) cave.fill(-1 - c.descriptors[PROTO_INTS * sy + PROTO_CAVE]!);
+      else cave.set(cs);
+      w.setProto(sy, blocks, fluid, cave);
     }
     if (c.record[REC_AUX_A]! >= 0) {
       const a = w.aux().worldSurfaceWG;

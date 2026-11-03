@@ -14,7 +14,8 @@ import {
 import { EPOCH_CELL } from '../../src/world/store/epochs';
 import { DEFAULT_MAX_BLOCK_BYTES, DEFAULT_MAX_BYTE_BYTES, type SlabPool } from '../../src/world/store/pool';
 import {
-  FINAL_BLOCKS, FINAL_FLUID, FINAL_LIGHT, FINAL_META, META_CUTOUT, META_FLUID, META_OPAQUE, PROTO_BLOCKS, PROTO_FLUID,
+  FINAL_BLOCKS, FINAL_CAVE, FINAL_FLUID, FINAL_LIGHT, FINAL_META, META_CUTOUT, META_FLUID, META_OPAQUE, PROTO_BLOCKS, PROTO_CAVE,
+  PROTO_FLUID,
 } from '../../src/world/store/section';
 import {
   attachStore, createStore, DEFAULT_PASS, SlotBusy, StoreCorrupt, StoreFull, type VoxelStore,
@@ -86,8 +87,8 @@ describe.each([true, false])('shared %s', (shared) => {
       expect(ints[base + REC_AUX_A]).toBe(-1);
       expect(ints[base + REC_AUX_B]).toBe(-1);
       for (let sy = 0; sy < SECTIONS; sy++) {
-        expect(Array.from(ints.subarray(finalAt(base, sy), finalAt(base, sy) + 4))).toEqual([-1, -1, -1, 0]);
-        expect(Array.from(ints.subarray(protoAt(base, sy), protoAt(base, sy) + 2))).toEqual([-1, -1]);
+        expect(Array.from(ints.subarray(finalAt(base, sy), finalAt(base, sy) + 5))).toEqual([-1, -1, -1, 0, -1]);
+        expect(Array.from(ints.subarray(protoAt(base, sy), protoAt(base, sy) + 3))).toEqual([-1, -1, -1]);
       }
     }
     expect(s.proto(0, 0)).toBeNull();
@@ -285,6 +286,130 @@ describe.each([true, false])('shared %s', (shared) => {
     expect(f.light(1, 32, 0)).toBe(0);
     expect(f.light(2, 32, 0)).toBe(0xff);
     expect(f.block(0, 32, 0)).toBe(2);
+  });
+
+  test('the cave channel (SP6a spec §3.3, D20): setProto\'s optional cave array; a non-zero section takes one byte slot, an all-zero or absent one is uniform 0 with no slot; the proto view reads it', () => {
+    const s = newStore();
+    warm(s);
+    const w = s.claimColumn(2, 3, 0);
+    const cave = bytes(0);
+    cave[vi(1, 2, 3)] = 4;
+    cave[vi(15, 15, 15)] = 9;
+    const free = s.bytePool.freeCount();
+    w.setProto(5, words(1), bytes(0), cave); // y 16 … 31
+    expect(s.bytePool.freeCount()).toBe(free - 1);
+    cave.fill(0); // copied: the store keeps what it was given
+    w.setProto(6, words(1), bytes(0), bytes(0));
+    w.setProto(7, words(1), bytes(0));
+    w.setProto(8, words(1), bytes(0), bytes(3)); // one kind over the whole section: uniform 3, no slot
+    expect(s.bytePool.freeCount()).toBe(free - 1);
+    expect(() => w.setProto(9, words(1), bytes(0), new Uint8Array(100))).toThrow(RangeError);
+    w.commit(1);
+    const base = s.table.find(2, 3);
+    const ints = s.table.ints;
+    expect(ints[protoAt(base, 5) + PROTO_CAVE]).toBeGreaterThanOrEqual(0);
+    expect([6, 7, 8, 0].map((sy) => ints[protoAt(base, sy) + PROTO_CAVE])).toEqual([-1, -1, -4, -1]);
+    const v = s.proto(2, 3)!;
+    expect(v.cave(1, 18, 3)).toBe(4);
+    expect(v.cave(15, 31, 15)).toBe(9);
+    expect(v.cave(0, 18, 3)).toBe(0);
+    expect(v.cave(5, 70, 5)).toBe(3); // section 8: y 64 … 79
+    expect(v.cave(5, -64, 5)).toBe(0);
+    const sc = v.sectionCave(5) as Uint8Array;
+    expect(sc).toBeInstanceOf(Uint8Array);
+    expect(sc.length).toBe(4096);
+    expect([sc[vi(1, 2, 3)], sc[vi(15, 15, 15)], sc[vi(0, 0, 0)]]).toEqual([4, 9, 0]);
+    expect([v.sectionCave(6), v.sectionCave(7), v.sectionCave(8), v.sectionCave(0)]).toEqual([0, 0, 3, 0]);
+    expect(() => v.sectionCave(24)).toThrow(RangeError);
+    expect(() => v.cave(16, 0, 0)).toThrow(RangeError);
+    expect(() => v.cave(0, 320, 0)).toThrow(RangeError);
+  });
+
+  test('the cave channel: shareFinal shares the cave slot by reference (one slot, two references); the final view reads it; setFinal leaves the cave entry', () => {
+    const s = newStore();
+    const w = s.claimColumn(0, 0, 0);
+    const cave = bytes(0);
+    cave[vi(3, 4, 5)] = 6;
+    w.setProto(6, mixedBlocks(), mixedFluid(), cave);
+    w.setProto(7, words(1), bytes(0), bytes(2));
+    const base = s.table.find(0, 0);
+    const ints = s.table.ints;
+    const pc = ints[protoAt(base, 6) + PROTO_CAVE]!;
+    expect(pc).toBeGreaterThanOrEqual(0);
+    const slots = s.bytePool.slotCount() - s.bytePool.freeCount();
+    w.shareFinal(6, bytes(0));
+    w.shareFinal(7, bytes(0));
+    expect(ints[finalAt(base, 6) + FINAL_CAVE]).toBe(pc);
+    expect(s.bytePool.refcount(pc)).toBe(2);
+    expect(ints[finalAt(base, 7) + FINAL_CAVE]).toBe(-3);
+    expect(s.bytePool.slotCount() - s.bytePool.freeCount()).toBe(slots);
+    // setFinal writes blocks, light and fluid only: the shared cave entry stays.
+    w.setFinal(6, mixedBlocks(), bytes(0), mixedFluid());
+    expect(ints[finalAt(base, 6) + FINAL_CAVE]).toBe(pc);
+    w.commit(2);
+    const f = s.final(0, 0)!;
+    expect(f.cave(3, 36, 5)).toBe(6);
+    expect(f.cave(3, 37, 5)).toBe(0);
+    expect(f.sectionCave(7)).toBe(2);
+    expect((f.sectionCave(6) as Uint8Array)[vi(3, 4, 5)]).toBe(6);
+  });
+
+  test('the cave channel: replaceBlocks on an edited section keeps its cave entry (D\'s diff overlay and the sim\'s edits, SP6a spec §3.3)', () => {
+    const s = newStore();
+    const w = s.claimColumn(1, 1, 0);
+    const cave = bytes(0);
+    cave[vi(7, 0, 0)] = 2;
+    w.setProto(4, mixedBlocks(), bytes(0), cave); // y 0 … 15
+    w.commit(1);
+    const base = s.table.find(1, 1);
+    const ints = s.table.ints;
+    const pc = ints[protoAt(base, 4) + PROTO_CAVE]!;
+    const d = s.reopenColumn(1, 1, 1);
+    for (let sy = 0; sy < SECTIONS; sy++) d.shareFinal(sy, bytes(0));
+    d.replaceBlocks(4, words(0), mixedFluid()); // D's diff overlay
+    d.commit(2);
+    expect(ints[finalAt(base, 4) + FINAL_CAVE]).toBe(pc);
+    expect(s.bytePool.refcount(pc)).toBe(2);
+    s.reopenColumn(1, 1, 2).commit(3);
+    const e = s.reopenPublished(1, 1);
+    e.replaceBlocks(4, words(1), bytes(0)); // the sim's edit
+    e.publish();
+    expect(ints[finalAt(base, 4) + FINAL_CAVE]).toBe(pc);
+    e.replaceBlocks(4, mixedBlocks(), bytes(0));
+    e.rollback();
+    expect(ints[finalAt(base, 4) + FINAL_CAVE]).toBe(pc);
+    expect(s.bytePool.refcount(pc)).toBe(2);
+    expect(s.final(1, 1)!.cave(7, 0, 0)).toBe(2);
+    expect(s.final(1, 1)!.block(7, 0, 0)).toBe(1);
+  });
+
+  test('the cave channel: a rewrite and freeProto release the proto cave; a ProtoWriter writes it; each view reads its own set\'s cave; freeColumn brings the pools back', () => {
+    const s = newStore();
+    warm(s);
+    const before = snapStore(s);
+    const w = s.claimColumn(4, 4, 0);
+    const caveA = bytes(0);
+    caveA[0] = 1;
+    w.setProto(3, mixedBlocks(), mixedFluid(), caveA); // y −16 … −1
+    w.setProto(4, mixedBlocks(), bytes(0), caveA);
+    w.setProto(4, mixedBlocks(), bytes(0)); // the rewrite releases the cave slot (absent: uniform 0)
+    const base = s.table.find(4, 4);
+    const ints = s.table.ints;
+    expect(ints[protoAt(base, 4) + PROTO_CAVE]).toBe(-1);
+    w.shareFinal(3, bytes(0));
+    w.commit(2);
+    s.freeProto(4, 4);
+    expect(ints[protoAt(base, 3) + PROTO_CAVE]).toBe(-1);
+    expect(s.final(4, 4)!.cave(0, -16, 0)).toBe(1);
+    const p = s.reopenProto(4, 4);
+    const caveB = bytes(0);
+    caveB[0] = 5;
+    p.setProto(3, mixedBlocks(), mixedFluid(), caveB);
+    p.commitProto();
+    expect(s.proto(4, 4)!.cave(0, -16, 0)).toBe(5);
+    expect(s.final(4, 4)!.cave(0, -16, 0)).toBe(1);
+    s.freeColumn(4, 4);
+    expect(snapStore(s)).toEqual(before);
   });
 
   test('sharing and release: free the proto set, then the final set; every refcount and the stack come back', () => {

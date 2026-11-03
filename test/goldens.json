@@ -48,8 +48,8 @@
     "sp2a.tile.rivers.256": "d075bd749fbcc025",
     "sp2a.tile.rivers.4": "de3776fe6877fcd5",
     "sp2a.tile.rivers.64": "9dc9184c9d07926c",
-    "sp3a.region.T.default": "477428e9d1cc2264",
-    "sp3a.region.T.large_biomes": "42e4747122791159",
+    "sp3a.region.T.default": "c26cc65d64ca2264",
+    "sp3a.region.T.large_biomes": "24c85050916ad159",
     "sp3a.registry": "5e1febd88b449b63",
     "sp3b.density.default": "854d20fff433b8ea",
     "sp3b.density.ops": "adad71e21efc60cb",
@@ -57,9 +57,9 @@
     "sp3c.surface.ops": "f948fa46085f3aa7",
     "sp3e.column.point.archipelago": "576dcc24bc474a96",
     "sp3e.column.point.floating_islands": "38ad6e018c200781",
-    "sp3e.region.T.amplified": "66b7d5499d2e4c77",
-    "sp3e.region.T.archipelago": "b638b30c674388fc",
-    "sp3e.region.T.floating_islands": "39e09fa9cf9c82a2",
+    "sp3e.region.T.amplified": "dda880023c8fcc77",
+    "sp3e.region.T.archipelago": "b1db4c23630ec8fc",
+    "sp3e.region.T.floating_islands": "4474aa172f2602a2",
     "sp6a.density.ops": "631964217f1d4c07"
   }
 }

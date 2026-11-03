@@ -334,12 +334,12 @@ A pure fluid voxel is AIR plus a fluid byte. Waterlogging comes free: a state wh
 
 ### 2.3 SharedArrayBuffer store (`world/store`)
 
-**Slabs.** Two slab pools share one allocator implementation parameterised by slot size: the **block pool** (8 KiB slots, one u16 per voxel) and the **byte pool** (4 KiB slots, for light, fluid and the two aux slots). Each pool's slots live in **one growable buffer** (amended by SP3a): a `SharedArrayBuffer` created with `maxByteLength` (default 768 MiB for blocks, 512 MiB for bytes: reserved address space, not committed memory), or, with the same code, a resizable `ArrayBuffer`. A slot id is the slot's index in its pool.
+**Slabs.** Two slab pools share one allocator implementation parameterised by slot size: the **block pool** (8 KiB slots, one u16 per voxel) and the **byte pool** (4 KiB slots, for light, fluid, the cave channel and the two aux slots; the cave channel amended by SP6a). Each pool's slots live in **one growable buffer** (amended by SP3a): a `SharedArrayBuffer` created with `maxByteLength` (default 768 MiB for blocks, 512 MiB for bytes: reserved address space, not committed memory), or, with the same code, a resizable `ArrayBuffer`. A slot id is the slot's index in its pool.
 - Allocation uses an Int32 free stack per pool in a growable buffer, guarded by a CAS spinlock whose critical section is about 10 instructions; the lock word holds its owner's thread index + 1, and a thread spinning on a failed owner's lock throws `StoreCorrupt` (SP4b). Workers allocate and free slots themselves.
 - Whichever thread finds the free stack empty grows its pool by 1 MiB (128 block or 256 byte slots) inside the same lock; length-tracking views see the growth in every thread, so there is no page broadcast (amended by SP3a). A pool at its maximum throws `StoreFull`.
 - A per-slot `Int32Array` refcount (Atomics) lets proto and final section sets share unmodified slots. Every non-negative descriptor entry and every allocated aux slot holds one reference; one free per reference.
 
-**Final section descriptor**, 4 × int32 per section:
+**Final section descriptor**, 5 × int32 per section (the `cave` entry amended by SP6a):
 
 | field | encoding |
 |---|---|
@@ -347,12 +347,13 @@ A pure fluid voxel is AIR plus a fluid byte. Waterlogging comes free: a state wh
 | light | slot, or `-1-uniformByte` (all 0 in sealed rock and dark caves, all 0xF0 in open sky) |
 | fluid | slot, or `-1-uniformByte`; -1 is "no fluid" (byte 0), so a full water section of an ocean costs no slot (amended by SP3a) |
 | meta | bits 0-12 nonAir (0-4096), 13 hasOpaque, 14 hasCutout, 15 hasTranslucent (any voxel whose `PASS` is that pass), 16 hasFluid (any fluid type ≠ 0), 17-31 face-to-face connectivity (0; SP4a computes connectivity15 in the mesh job and carries it in the mesh result; SP6b decides whether the meta holds it) (amended by SP3a) |
+| cave | slot, or `-1-uniformByte`: `cave` (u8 per voxel: the cave kind in bits 0-3, bits 4-7 reserved; written by T, shared from the proto set, never persisted; SP6a); -1 is "no cave" (kind 0), so a section with no carved voxel costs no slot; it leaves the meta word alone (amended by SP6a) |
 
 Each channel is stored on its own: uniform when every value of that channel is equal (no slot), dense otherwise; rewriting a descriptor releases what it held. Unwritten descriptors are −1 (uniform air, light byte 0, no fluid). The connectivity bits and `padded.ts` are SP4a's (amended by SP3a).
 
-**Proto section descriptor**, 2 × int32: blocks and fluid. This is the pre-decoration state (terrain, aquifer, surface rules, carvers). It is immutable once T finishes.
+**Proto section descriptor**, 3 × int32: blocks, fluid and `cave` (amended by SP6a). This is the pre-decoration state (terrain, aquifer, surface rules, carvers). It is immutable once T finishes. D's share (`shareFinal`) makes the final blocks, fluid and `cave` entries reference the proto's slots; `replaceBlocks` (D's diff overlay, the sim's edits) replaces blocks and fluid only, so an edited section keeps its `cave` entry (amended by SP6a).
 
-**Column record** (160 × int32 = 640 B; the 64² torus is about 2.6 MB):
+**Column record** (208 × int32 = 832 B; the 64² torus is about 3.4 MB; amended by SP6a):
 
 | ints | fields |
 |---|---|
@@ -363,8 +364,8 @@ Each channel is stored on its own: uniform when every value of that channel is e
 | 9-10 | unsettledCount, diffFlag |
 | 11 | `claimed` (Atomics: 0 free, 1 held; claiming a held record throws `SlotBusy`, and a read of a record that holds another column returns absent; amended by SP3a) |
 | 12 | claim generation (Atomics; even free, odd held; bumped by claim and unclaim; lookups and writers validate it; SP4b) |
-| 16-111 | final descriptors |
-| 112-159 | proto descriptors |
+| 16-135 | final descriptors (24 × 5) |
+| 136-207 | proto descriptors (24 × 3) |
 
 **Aux slot A (exactly 4 KiB):**
 - proto heightmaps `WORLD_SURFACE_WG` and `OCEAN_FLOOR_WG` (Int16[256] ×2);
@@ -439,9 +440,9 @@ interface CompiledDensity { cornerFn(ctx, x:number, y:number, z:number): number;
 // for the next stage of a committed column (D at Proto, L at Decorated; clears nothing; amended by SP4a, SP4a spec §2.5, D4).
 // Each setter copies its 4096-entry arrays. (SP4b: the store also has `reopenProto`, `freeProto`, `holder`, `lightAt`,
 // `heightAt`, `enterRead`, `exitRead` and `markDead`; `VoxelStore` lives in `world/store/store.ts`.)
-interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Array): void;
+interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Array, cave?:Uint8Array): void /* cave absent: uniform 0 (SP6a) */;
   setFinal(sy:number, blocks:Uint16Array, light:Uint8Array, fluid:Uint8Array): void;
-  shareFinal(sy:number, light:Uint8Array): void /* final blocks and fluid share the proto slots */;
+  shareFinal(sy:number, light:Uint8Array): void /* final blocks, fluid and cave (SP6a) share the proto slots */;
   setLight(sy:number, light:Uint8Array): void /* light only; refused over a dense entry within one job; SP5a's relight replaces under the reclamation protocol (SP4a, SP4b) */;
   resetLight(): void /* the 24 light entries to 0, released through reclamation; L's first step (SP4b) */;
   aux(): AuxView; auxB(): AuxBView;
@@ -454,6 +455,7 @@ interface ProtoWriter { setProto(…): void; aux(): AuxView; auxB(): AuxBView; c
 interface ColumnView { block(lx:number, y:number, lz:number): number; fluid(lx:number, y:number, lz:number): number;
   light(lx:number, y:number, lz:number): number; sectionBlocks(sy:number): Uint16Array|number; sectionFluid(sy:number): Uint8Array|number;
   sectionLight(sy:number): Uint8Array|number /* the final light entry; 0 on a proto view (SP4a: padded.ts copies through it) */;
+  sectionCave(sy:number): Uint8Array|number; cave(lx:number, y:number, lz:number): number /* SP6a: the cave channel; a proto view reads the proto set */;
   aux(): AuxView | null; auxB(): AuxBView | null /* null when the column has no such slot; auxB amended by SP3b */ }
 interface NeighborhoodReader { proto(dx:number, dz:number): ColumnView | null; final(dx:number, dz:number): ColumnView | null;
   versions(): Int32Array /* 3x3 in (dz, dx) order, blockVersion then lightVersion, -1 when absent */;

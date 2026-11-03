@@ -2036,6 +2036,22 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(text).toContain('`wetMask` is 1 where `surfaceWaterLevel` is finite (a lake, a river\'s wet flag or the sea) and 0 elsewhere: the finite field the wet roof reads (§3.6) (amended by SP6a).');
   });
 
+  test('§2.3\'s section channels gain `cave` and the column record 208 ints; §2.5\'s ColumnView reads it and setProto takes it (SP6a spec §13 item 9, D20; ruling P10)', () => {
+    const lines = text.split('\n');
+    const from = lines.findIndex((l) => l.startsWith('### 2.3 '));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('### 2.4 '));
+    expect(from, 'no §2.3').toBeGreaterThanOrEqual(0);
+    const block = lines.slice(from, to).join('\n');
+    expect(block).toContain('`cave` (u8 per voxel: the cave kind in bits 0-3, bits 4-7 reserved; written by T, shared from the proto set, never persisted; SP6a)');
+    expect(block).toContain('**Final section descriptor**, 5 × int32 per section (the `cave` entry amended by SP6a):');
+    expect(block).toContain('**Proto section descriptor**, 3 × int32: blocks, fluid and `cave` (amended by SP6a).');
+    expect(block).toContain('**Column record** (208 × int32 = 832 B; the 64² torus is about 3.4 MB; amended by SP6a):');
+    expect(block).toContain('| 16-135 | final descriptors (24 × 5) |');
+    expect(block).toContain('| 136-207 | proto descriptors (24 × 3) |');
+    expect(text).toContain('interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Array, cave?:Uint8Array): void');
+    expect(text).toContain('sectionCave(sy:number): Uint8Array|number; cave(lx:number, y:number, lz:number): number /* SP6a: the cave channel; a proto view reads the proto set */');
+  });
+
   test('§6.4\'s T5 row compares surfaceEst3 with the pre-cave top, its thresholds unchanged (SP6a spec §13 item 21)', () => {
     const t5 = text.split('\n').find((l) => l.startsWith('| T5 |'));
     expect(t5, 'no T5 row in §6.4').toBeDefined();

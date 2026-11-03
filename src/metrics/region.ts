@@ -60,11 +60,12 @@ function hashWords(fnv: Fnv64T, a: Uint16Array): void {
 
 /**
  * FNV-1a 64 of the w × h window at (cx0, cz0) (SP3a spec §6.2): cz outer, cx inner; per column, for sy 0 … 23 the
- * 4096 proto block states (u16 little-endian, voxel-index order) then the 4096 proto fluid bytes (uniform sections
- * expanded, "no fluid" as 0), then the column's 4096 aux A bytes and its 4096 aux B bytes (SP3b spec §7; each zeros
- * when the column has no such slot, so an absent slot hashes like a zero-filled one). Independent of
- * generation order, thread count, backend and slot layout. Throws when a column of the window is not at
- * status ≥ Proto.
+ * 4096 proto block states (u16 little-endian, voxel-index order), the 4096 proto fluid bytes, then the 4096 proto cave
+ * bytes (SP6a spec §3.3; uniform sections expanded, "no fluid" and "no cave" as 0; T-only regions have no final set,
+ * so the proto's channel is the one hashed), then the column's 4096 aux A bytes and its 4096 aux B bytes (SP3b spec
+ * §7; each zeros when the column has no such slot, so an absent slot hashes like a zero-filled one). Independent of
+ * generation order, thread count, backend and slot layout. Throws when a column of the window is not at status ≥
+ * Proto.
  */
 export function regionHash(store: VoxelStore, cx0: number, cz0: number, w: number, h: number): Hash64 {
   checkRegion('regionHash', w, h);
@@ -80,6 +81,9 @@ export function regionHash(store: VoxelStore, cx0: number, cz0: number, w: numbe
         const f = v.sectionFluid(sy);
         if (typeof f === 'number') fnv.updateRepeatU8(f, 4096);
         else fnv.update(f);
+        const c = v.sectionCave(sy);
+        if (typeof c === 'number') fnv.updateRepeatU8(c, 4096);
+        else fnv.update(c);
       }
       const a = v.aux();
       // The aux A fields tile the 4096-byte slot from worldSurfaceWG (offset 0) on; Int16 values are native LE.

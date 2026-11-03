@@ -59,11 +59,17 @@ export type CommitStatus = 1 | 2 | 3;
 export interface ColumnWriter {
   readonly cx: number;
   readonly cz: number;
-  /** Section `sy` (0 … 23) of the proto set: 4096 block states and 4096 fluid bytes, voxel index `ly<<8|lz<<4|lx`. */
-  setProto(sy: number, blocks: Uint16Array, fluid: Uint8Array): void;
-  /** Section `sy` of the final set, and its meta word. */
+  /**
+   * Section `sy` (0 … 23) of the proto set: 4096 block states, 4096 fluid bytes and, when given, 4096 cave bytes (the
+   * cave kind per voxel, SP6a spec §3.3, D20; absent: uniform 0, no cave), voxel index `ly<<8|lz<<4|lx`.
+   */
+  setProto(sy: number, blocks: Uint16Array, fluid: Uint8Array, cave?: Uint8Array): void;
+  /** Section `sy` of the final set, and its meta word; the final cave entry is left as it is (it comes from `shareFinal`). */
   setFinal(sy: number, blocks: Uint16Array, light: Uint8Array, fluid: Uint8Array): void;
-  /** The final blocks and fluid of `sy` become its proto entries (dense slots retained); light and meta as `setFinal`. */
+  /**
+   * The final blocks, fluid and cave of `sy` become its proto entries (dense slots retained; the cave channel, SP6a spec
+   * §3.3); light and meta as `setFinal`.
+   */
   shareFinal(sy: number, light: Uint8Array): void;
   /**
    * The light channel of final section `sy` only (uniform or dense; the meta word does not depend on light). Throws
@@ -89,7 +95,8 @@ export interface ColumnWriter {
   /**
    * The final blocks and fluid of section `sy` only (SP5a spec §2.2, §2.5): each channel copy-on-write (the entry
    * moves to a new slot or a uniform code, the old one released, so a slot shared with the proto stays the proto's),
-   * and the meta word recomputed. Counts as a block write, never a light one (unlike `setFinal`). D's diff overlay.
+   * and the meta word recomputed; the cave entry is kept (SP6a spec §3.3). Counts as a block write, never a light one
+   * (unlike `setFinal`). D's diff overlay.
    */
   replaceBlocks(sy: number, blocks: Uint16Array, fluid: Uint8Array): void;
   /** Sets the record's diff flag (`REC_DIFF_FLAG`, an `Atomics.store` of 1; SP5a spec §1.2, D23). */
@@ -118,7 +125,7 @@ export interface ColumnWriter {
 export interface EditWriter {
   readonly cx: number;
   readonly cz: number;
-  /** As `ColumnWriter.replaceBlocks`, keeping the replaced codes. */
+  /** As `ColumnWriter.replaceBlocks` (the cave entry kept), keeping the replaced codes. */
   replaceBlocks(sy: number, blocks: Uint16Array, fluid: Uint8Array): void;
   /** The light channel of final section `sy`, copy-on-write over any entry (no light-once refusal), keeping the replaced code. */
   replaceLight(sy: number, light: Uint8Array): void;
@@ -159,6 +166,13 @@ export interface ColumnView {
    * through it). A proto view has no light and returns 0.
    */
   sectionLight(sy: number): Uint8Array | number;
+  /**
+   * A view over the section's cave slot (4096 bytes: the cave kind per voxel, SP6a spec §3.3, D20), or its uniform cave
+   * byte. A proto view reads the proto set's entry, a final view the final set's (shared from the proto by `shareFinal`).
+   */
+  sectionCave(sy: number): Uint8Array | number;
+  /** The cave byte at (lx, y, lz), from the view's set as `sectionCave`. */
+  cave(lx: number, y: number, lz: number): number;
   /** The column's aux A, or null when it has none. */
   aux(): AuxView | null;
   /** The column's aux B, or null when it has none (no stage of the column called the writer's `auxB()`). */
@@ -179,8 +193,8 @@ export type TerrainWriter = Pick<ColumnWriter, 'setProto' | 'aux' | 'auxB'>;
 export interface ProtoWriter {
   readonly cx: number;
   readonly cz: number;
-  /** Section `sy` (0 … 23) of the proto set, as `ColumnWriter.setProto`. */
-  setProto(sy: number, blocks: Uint16Array, fluid: Uint8Array): void;
+  /** Section `sy` (0 … 23) of the proto set, as `ColumnWriter.setProto` (the cave array included). */
+  setProto(sy: number, blocks: Uint16Array, fluid: Uint8Array, cave?: Uint8Array): void;
   /** Worker-local zeroed scratch (not the record's slot), discarded: T's aux A writes go nowhere. */
   aux(): AuxView;
   /** Aux B, likewise. */

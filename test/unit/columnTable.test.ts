@@ -17,31 +17,33 @@ function expectFree(t: ColumnTable, base: number): void {
   expect(r[base + REC_AUX_B]).toBe(-1);
   for (let sy = 0; sy < SECTIONS; sy++) {
     const f = finalAt(base, sy);
-    expect([r[f], r[f + 1], r[f + 2], r[f + 3]]).toEqual([-1, -1, -1, 0]);
+    expect([r[f], r[f + 1], r[f + 2], r[f + 3], r[f + 4]]).toEqual([-1, -1, -1, 0, -1]);
     const p = protoAt(base, sy);
-    expect([r[p], r[p + 1]]).toEqual([-1, -1]);
+    expect([r[p], r[p + 1], r[p + 2]]).toEqual([-1, -1, -1]);
   }
 }
 
-test('record layout (SP3a spec §3.2, master §2.3)', () => {
+test('record layout (SP3a spec §3.2, master §2.3; the cave entries, SP6a spec §3.3)', () => {
   expect(TORUS).toBe(64);
-  expect(RECORD_INTS).toBe(160);
+  expect(RECORD_INTS).toBe(208);
   expect(RECORD_COUNT).toBe(4096);
-  expect(COLUMN_TABLE_BYTES).toBe(64 * 64 * 160 * 4);
+  expect(COLUMN_TABLE_BYTES).toBe(64 * 64 * 208 * 4);
+  expect(COLUMN_TABLE_BYTES).toBe(3_407_872);
   expect(SECTIONS).toBe(24);
   expect([REC_CX, REC_CZ, REC_STATUS, REC_EPOCH]).toEqual([0, 1, 2, 3]);
   expect([REC_BLOCK_VERSION, REC_LIGHT_VERSION, REC_PROTO_FLAGS]).toEqual([4, 5, 6]);
   expect([REC_AUX_A, REC_AUX_B, REC_UNSETTLED, REC_DIFF_FLAG, REC_CLAIMED]).toEqual([7, 8, 9, 10, 11]);
   expect(REC_GEN).toBe(12);
-  expect([REC_FINAL, REC_PROTO]).toEqual([16, 112]);
+  expect([REC_FINAL, REC_PROTO]).toEqual([16, 136]);
   expect([STATUS_ABSENT, STATUS_PROTO, STATUS_DECORATED, STATUS_PUBLISHED]).toEqual([0, 1, 2, 3]);
-  // 24 final descriptors of 4 ints fill 16-111, 24 proto descriptors of 2 ints fill 112-159.
+  // 24 final descriptors of 5 ints (blocks, light, fluid, meta, cave) fill 16-135, 24 proto descriptors of 3 ints
+  // (blocks, fluid, cave) fill 136-207.
   expect(finalAt(0, 0)).toBe(16);
-  expect(finalAt(0, 23) + 4).toBe(112);
-  expect(protoAt(0, 0)).toBe(112);
-  expect(protoAt(0, 23) + 2).toBe(160);
-  expect(finalAt(RECORD_INTS, 1)).toBe(RECORD_INTS + 20);
-  expect(protoAt(RECORD_INTS, 1)).toBe(RECORD_INTS + 114);
+  expect(finalAt(0, 23) + 5).toBe(136);
+  expect(protoAt(0, 0)).toBe(136);
+  expect(protoAt(0, 23) + 3).toBe(208);
+  expect(finalAt(RECORD_INTS, 1)).toBe(RECORD_INTS + 21);
+  expect(protoAt(RECORD_INTS, 1)).toBe(RECORD_INTS + 139);
 });
 
 test('record = torus slot (cx & 63) + 64·(cz & 63), negative coordinates included', () => {
@@ -133,6 +135,9 @@ describe.each([true, false])('shared %s', (shared) => {
     const base = t.claim(1, 2, 0);
     t.ints[finalAt(base, 3) + 3] = 99;
     t.ints[protoAt(base, 3)] = 12;
+    // The cave entries (SP6a spec §3.3): final int 4 and proto int 2.
+    t.ints[finalAt(base, 5) + 4] = 7;
+    t.ints[protoAt(base, 5) + 2] = 8;
     t.ints[base + REC_AUX_A] = 4;
     t.bumpBlockVersion(base);
     t.unclaim(base);

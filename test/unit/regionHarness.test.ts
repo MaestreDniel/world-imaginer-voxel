@@ -89,11 +89,13 @@ describe('regionView (§6.1)', () => {
     }
   });
 
-  test('descriptors(cx, cz): a copy of the 24 proto descriptors (blocks, fluid per section)', () => {
+  test('descriptors(cx, cz): a copy of the 24 proto descriptors (blocks, fluid, cave per section; SP6a spec §3.3)', () => {
     const d = view.descriptors(-1, 4);
-    expect(d.length).toBe(48);
+    expect(d.length).toBe(72);
     const base = store.table.find(-1, 4);
-    for (let sy = 0; sy < 24; sy++) expect([d[2 * sy], d[2 * sy + 1]]).toEqual([...store.table.ints.subarray(protoAt(base, sy), protoAt(base, sy) + 2)]);
+    for (let sy = 0; sy < 24; sy++) {
+      expect([d[3 * sy], d[3 * sy + 1], d[3 * sy + 2]]).toEqual([...store.table.ints.subarray(protoAt(base, sy), protoAt(base, sy) + 3)]);
+    }
     d[0] = 12345;
     expect(view.descriptors(-1, 4)[0]).not.toBe(12345);
     expect(store.table.ints[base + REC_AUX_A]).toBeGreaterThanOrEqual(0);
@@ -178,6 +180,23 @@ describe('regionDiff (§6.1)', () => {
     expect(regionDiff(one(false), one(false, 2))).toBe('column (0, 0) section 5: blocks differ');
     expect(regionDiff(one(false), one(true))).toBe('column (0, 0) section 3: fluid differs');
   });
+
+  test('the cave channel (SP6a spec §3.3): compared after the fluid, through sectionCave', () => {
+    const one = (kind: number, at = 100) => {
+      const s = createStore({ shared: false, maxBlockBytes: 8 * MiB, maxByteBytes: 8 * MiB });
+      const w = s.claimColumn(0, 0, 0);
+      const cave = new Uint8Array(4096);
+      cave[at] = kind;
+      for (let sy = 0; sy < 24; sy++) w.setProto(sy, new Uint16Array(4096).fill(1), new Uint8Array(4096), sy === 7 ? cave : undefined);
+      w.commit(1);
+      return regionView(s, 0, 0, 1, 1);
+    };
+    expect(regionDiff(one(4), one(4))).toBeNull();
+    expect(regionDiff(one(4), one(5))).toBe('column (0, 0) section 7: cave differs');
+    expect(regionDiff(one(4), one(4, 101))).toBe('column (0, 0) section 7: cave differs');
+    // A dense section never equals a uniform one: kind 0 everywhere is uniform 0 (no slot).
+    expect(regionDiff(one(0), one(4))).toBe('column (0, 0) section 7: cave differs');
+  });
 });
 
 test('dt1WorkerDir: one worker directory per metrics tier, none shared with the default (SP3b spec §7)', () => {
@@ -237,10 +256,10 @@ describe('genRegion with 1 thread (§6.1)', () => {
 /** Descriptors with every dense slot id replaced by 'dense': slot ids depend on the generation order. */
 const layout = (d: number[]) => d.map((x) => (x >= 0 ? 'dense' : x));
 
-/** The 24 proto descriptors of a column, read from the record. */
+/** The 24 proto descriptors of a column (blocks, fluid, cave per section), read from the record. */
 function descriptorsOf(store: ReturnType<typeof createStore>, cx: number, cz: number): number[] {
   const base = store.table.find(cx, cz);
-  return [...store.table.ints.subarray(protoAt(base, 0), protoAt(base, 0) + 48)];
+  return [...store.table.ints.subarray(protoAt(base, 0), protoAt(base, 0) + 72)];
 }
 
 describe('genRegion up to D, L and MESH (SP4a spec §9.2, ruling P31)', () => {

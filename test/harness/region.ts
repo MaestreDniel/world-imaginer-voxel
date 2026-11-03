@@ -26,6 +26,7 @@ import { createMeshScratch, type ColumnMeshPayload } from '../../src/mesh/column
 import type { MeshOptions } from '../../src/mesh/greedy';
 import type { ColumnDiff } from '../../src/world/store/api';
 import { protoAt, STATUS_PUBLISHED } from '../../src/world/store/columnTable';
+import { PROTO_INTS } from '../../src/world/store/section';
 import { createStore, type AuxView, type ColumnView, type VoxelStore } from '../../src/world/store/store';
 import { fillColumnD, fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
 import { readRegionDump, regionCachePath, srcKey, writeRegionDump, type RegionCacheHeader, type RegionUpTo } from './cache';
@@ -102,7 +103,10 @@ export interface RegionView {
   biome(x: number, z: number): number;
   worldSurfaceWG(x: number, z: number): number;
   oceanFloorWG(x: number, z: number): number;
-  /** A copy of column (cx, cz)'s 24 proto descriptors: blocks then fluid per section (slot id, or −1 − value). */
+  /**
+   * A copy of column (cx, cz)'s 24 proto descriptors, 24 × `PROTO_INTS` ints: blocks, fluid then cave per section (slot
+   * id, or −1 − value; the cave entry is SP6a's, its spec §3.3).
+   */
   descriptors(cx: number, cz: number): Int32Array;
   /** hex64 of `regionHash` over the region, or over a sub-window of it (the proto data: no light). */
   hash(cx0?: number, cz0?: number, w?: number, h?: number): string;
@@ -282,7 +286,7 @@ export function regionView(store: VoxelStore, cx0: number, cz0: number, w: numbe
     descriptors(cx, cz) {
       columnAt(cx, cz);
       const d0 = protoAt(store.table.find(cx, cz), 0);
-      return store.table.ints.slice(d0, d0 + 48);
+      return store.table.ints.slice(d0, d0 + 24 * PROTO_INTS);
     },
     hash(hx = cx0, hz = cz0, hw = w, hh = h) {
       checkSize('regionView.hash', hw, hh);
@@ -313,10 +317,10 @@ const sameChannel = (a: Uint16Array | Uint8Array | number, b: Uint16Array | Uint
 
 /**
  * The first difference between two views of the same region, or null when they hold the same proto data: per
- * column, each section's blocks and fluid (uniform against uniform by value, dense against dense by bytes; a
- * uniform section never equals a dense one, so the per-channel layout must match too), the 4096 aux A bytes and the
- * 4096 aux B bytes (an absent slot compares as zeros, as in `regionHash`). Byte comparison, much faster than hashing
- * both regions.
+ * column, each section's blocks, fluid and cave (SP6a spec §3.3; uniform against uniform by value, dense against
+ * dense by bytes; a uniform section never equals a dense one, so the per-channel layout must match too), the 4096 aux
+ * A bytes and the 4096 aux B bytes (an absent slot compares as zeros, as in `regionHash`). Byte comparison, much faster
+ * than hashing both regions.
  */
 export function regionDiff(a: RegionView, b: RegionView): string | null {
   if (a.cx0 !== b.cx0 || a.cz0 !== b.cz0 || a.w !== b.w || a.h !== b.h) return 'the views cover other regions';
@@ -327,6 +331,7 @@ export function regionDiff(a: RegionView, b: RegionView): string | null {
       for (let sy = 0; sy < 24; sy++) {
         if (!sameChannel(va.sectionBlocks(sy), vb.sectionBlocks(sy))) return `column (${cx}, ${cz}) section ${sy}: blocks differ`;
         if (!sameChannel(va.sectionFluid(sy), vb.sectionFluid(sy))) return `column (${cx}, ${cz}) section ${sy}: fluid differs`;
+        if (!sameChannel(va.sectionCave(sy), vb.sectionCave(sy))) return `column (${cx}, ${cz}) section ${sy}: cave differs`;
       }
       const xa = va.aux();
       const xb = vb.aux();

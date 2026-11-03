@@ -1,5 +1,5 @@
 /**
- * The column table (SP3a spec §3.2, master §2.3): a fixed buffer of 64 × 64 records of 160 int32, one per torus
+ * The column table (SP3a spec §3.2, master §2.3): a fixed buffer of 64 × 64 records of 208 int32, one per torus
  * slot `(cx & 63) + 64·(cz & 63)`. A record holds at most one column; `claimed` (int 11) says whether it is held,
  * and cx, cz say by which column. `status`, `epoch`, `claimed`, the versions, protoFlags and the generation are read
  * and written with Atomics.
@@ -7,8 +7,9 @@
  * Record layout: 0-3 cx, cz, status, epoch; 4-5 blockVersion, lightVersion (never reset by a claim: monotone over
  * the record's life, SP4b spec §2.3); 6 protoFlags (bit 0 `PROTO_ALIVE`, bit 1 pinnedByTuning reserved for SP8b);
  * 7-8 aux A and aux B slots (−1 when not allocated); 9-10 unsettledCount, diffFlag; 11 claimed; 12 the claim
- * generation (`REC_GEN`, SP4b spec §2.2); 13-15 unassigned; 16-111 the final section descriptors (24 × 4: blocks,
- * light, fluid, meta); 112-159 the proto descriptors (24 × 2: blocks, fluid).
+ * generation (`REC_GEN`, SP4b spec §2.2); 13-15 unassigned; 16-135 the final section descriptors (24 × 5: blocks,
+ * light, fluid, meta, cave); 136-207 the proto descriptors (24 × 3: blocks, fluid, cave). The cave entries are SP6a's
+ * (its spec §3.3): the record grew from 160 ints, the table from 2.6 to 3.4 MB.
  *
  * A free record has cx = cz = `NO_COLUMN`, and a claim writes cx and cz only after it holds the record, so `find`
  * never matches a record that is free or being taken by another column. The generation is even while the record is
@@ -21,7 +22,7 @@
  */
 
 export const TORUS = 64;
-export const RECORD_INTS = 160;
+export const RECORD_INTS = 208;
 export const RECORD_COUNT = TORUS * TORUS;
 export const COLUMN_TABLE_BYTES = RECORD_COUNT * RECORD_INTS * 4;
 /** Sections per column (y −64 … 319). */
@@ -42,7 +43,7 @@ export const REC_CLAIMED = 11;
 /** The claim generation (SP4b spec §2.2): even while free, odd while held; bumped by `claim` and `unclaim`. */
 export const REC_GEN = 12;
 export const REC_FINAL = 16;
-export const REC_PROTO = 112;
+export const REC_PROTO = 136;
 
 export const STATUS_ABSENT = 0;
 export const STATUS_PROTO = 1;
@@ -55,8 +56,8 @@ export const PROTO_ALIVE = 1;
 /** cx and cz of a free record: outside every coordinate range, so a stale record never matches a lookup. */
 export const NO_COLUMN = 0x7fffffff;
 
-const FINAL_STRIDE = 4;
-const PROTO_STRIDE = 2;
+const FINAL_STRIDE = 5;
+const PROTO_STRIDE = 3;
 
 /** A claim found its record held (by another column or by the same one); free the holder first. */
 export class SlotBusy extends Error {
@@ -82,12 +83,12 @@ export function recordBase(cx: number, cz: number): number {
   return ((cx & 63) + 64 * (cz & 63)) * RECORD_INTS;
 }
 
-/** Int offset of section `sy`'s final descriptor (blocks, light, fluid, meta) in the record at `base`. */
+/** Int offset of section `sy`'s final descriptor (blocks, light, fluid, meta, cave) in the record at `base`. */
 export function finalAt(base: number, sy: number): number {
   return base + REC_FINAL + FINAL_STRIDE * sy;
 }
 
-/** Int offset of section `sy`'s proto descriptor (blocks, fluid) in the record at `base`. */
+/** Int offset of section `sy`'s proto descriptor (blocks, fluid, cave) in the record at `base`. */
 export function protoAt(base: number, sy: number): number {
   return base + REC_PROTO + PROTO_STRIDE * sy;
 }
@@ -140,9 +141,11 @@ function clearRecord(ints: Int32Array, base: number): void {
     ints[f + 1] = -1;
     ints[f + 2] = -1;
     ints[f + 3] = 0;
+    ints[f + 4] = -1;
     const p = protoAt(base, sy);
     ints[p] = -1;
     ints[p + 1] = -1;
+    ints[p + 2] = -1;
   }
 }
 

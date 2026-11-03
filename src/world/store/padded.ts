@@ -3,8 +3,8 @@
  * file `light/` and `mesh/` may value-import. Two layouts, each with its index function and its copy routine:
  *
  * - the **mesh section**: 18³ voxels, a section plus one voxel on every side, copied from the 3 × 3 columns' final
- *   sets (blocks u16, light u8, fluid u8). Below y −64 it reads `BEDROCK`, light 0 and no fluid; above y 319 air with
- *   sky 15 (0xF0) and no fluid;
+ *   sets (blocks u16, light u8, fluid u8, and the cave kind u8 of SP6a's cave channel, its spec §3.3). Below y −64 it
+ *   reads `BEDROCK`, light 0, no fluid and cave 0; above y 319 air with sky 15 (0xF0), no fluid and cave 0;
  * - the **light region**: 46 × 384 × 46 voxels (15 + 16 + 15 around the centre column, the whole height), with the
  *   final blocks and fluid and the nine columns' `LIGHT_BLOCKING`; its `light` array is the light job's output.
  *
@@ -39,10 +39,15 @@ export interface PaddedSection {
   readonly blocks: Uint16Array;
   readonly light: Uint8Array;
   readonly fluid: Uint8Array;
+  /** The final set's cave channel (SP6a spec §3.3, D20): the cave kind per voxel, 0 outside the world. */
+  readonly cave: Uint8Array;
 }
 
 export function createPaddedSection(): PaddedSection {
-  return { blocks: new Uint16Array(PAD_VOXELS), light: new Uint8Array(PAD_VOXELS), fluid: new Uint8Array(PAD_VOXELS) };
+  return {
+    blocks: new Uint16Array(PAD_VOXELS), light: new Uint8Array(PAD_VOXELS), fluid: new Uint8Array(PAD_VOXELS),
+    cave: new Uint8Array(PAD_VOXELS),
+  };
 }
 
 /** The light region's side in x and z: 15 + 16 + 15 (the maximum light reach around the centre column). */
@@ -102,7 +107,7 @@ function copyBox16(
   else copyRows16(dst, src, base, row, layer, x0, x1, y0, y1, z0, z1);
 }
 
-/** `copyBox16` for the byte channels (light, fluid). */
+/** `copyBox16` for the byte channels (light, fluid, cave). */
 function copyBox8(
   dst: Uint8Array, src: Uint8Array | number, base: number, row: number, layer: number,
   x0: number, x1: number, y0: number, y1: number, z0: number, z1: number,
@@ -158,12 +163,12 @@ const hi = (d: number, reach: number): number => (d > 0 ? reach : 16);
 
 /**
  * Copies section `sy` (0 … 23) of the centre column with its one-voxel border from the 3 × 3 final sets into `out`
- * (SP4a spec §5.1). The border's sections below y −64 read `BEDROCK`, light 0 and no fluid; above y 319, air with
- * light 0xF0 and no fluid.
+ * (SP4a spec §5.1), the cave channel included (SP6a spec §3.3). The border's sections below y −64 read `BEDROCK`,
+ * light 0, no fluid and cave 0; above y 319, air with light 0xF0, no fluid and cave 0.
  */
 export function copyPaddedSection(nb: NeighborhoodReader, sy: number, out: PaddedSection): void {
   if ((sy | 0) !== sy || sy < 0 || sy >= SECTIONS) throw new RangeError(`copyPaddedSection: section ${sy} outside 0 … ${SECTIONS - 1}`);
-  const { blocks, light, fluid } = out;
+  const { blocks, light, fluid, cave } = out;
   for (let dz = -1; dz <= 1; dz++) {
     const z0 = lo(dz, 1);
     const z1 = hi(dz, 1);
@@ -182,9 +187,11 @@ export function copyPaddedSection(nb: NeighborhoodReader, sy: number, out: Padde
         const b = below ? BEDROCK_STATE : above ? AIR_STATE : v.sectionBlocks(s);
         const l = below ? 0 : above ? ABOVE_LIGHT : v.sectionLight(s);
         const f = below || above ? 0 : v.sectionFluid(s);
+        const c = below || above ? 0 : v.sectionCave(s);
         copyBox16(blocks, b, base, PAD, PAD_LAYER, x0, x1, y0, y1, z0, z1);
         copyBox8(light, l, base, PAD, PAD_LAYER, x0, x1, y0, y1, z0, z1);
         copyBox8(fluid, f, base, PAD, PAD_LAYER, x0, x1, y0, y1, z0, z1);
+        copyBox8(cave, c, base, PAD, PAD_LAYER, x0, x1, y0, y1, z0, z1);
       }
     }
   }
