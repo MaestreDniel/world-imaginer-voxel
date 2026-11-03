@@ -43,14 +43,18 @@ describe('the source model (SP3d spec §1.3, §1.4)', () => {
       'surface.patchThreshold',
       // SP6a spec §4 (Task 6; Tasks 7, 8, 9 and 27 grow it): the caves group's number and int leaves and cave noises.
       'caves.cheese.offset', 'caves.cheese.regional', 'caves.cheese.layerAmp', 'caves.cheese.roofDepth',
+      // Task 8: each family's depth band (minY, maxY, ints), last in its group, and the limits' band span.
+      'caves.cheese.minY', 'caves.cheese.maxY',
       // Task 7: spaghetti 3D and 2D (with their band scales) and the noodles, between the cheese and the pillars.
       'caves.spaghetti3d.thickness', 'caves.spaghetti3d.thicknessVar', 'caves.spaghetti3d.regional',
       'caves.spaghetti3d.scales.s0', 'caves.spaghetti3d.scales.s1', 'caves.spaghetti3d.scales.s2', 'caves.spaghetti3d.scales.s3',
+      'caves.spaghetti3d.minY', 'caves.spaghetti3d.maxY',
       'caves.spaghetti2d.thickness', 'caves.spaghetti2d.layerAmp',
       'caves.spaghetti2d.scales.s0', 'caves.spaghetti2d.scales.s1', 'caves.spaghetti2d.scales.s2', 'caves.spaghetti2d.scales.s3',
-      'caves.spaghetti2d.scales.s4',
-      'caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional',
-      'caves.pillars.threshold', 'caves.entrances.offset', 'caves.entrances.threshold', 'caves.limits.surfaceDepth',
+      'caves.spaghetti2d.scales.s4', 'caves.spaghetti2d.minY', 'caves.spaghetti2d.maxY',
+      'caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional', 'caves.noodles.minY', 'caves.noodles.maxY',
+      'caves.pillars.threshold', 'caves.entrances.offset', 'caves.entrances.threshold', 'caves.entrances.minY', 'caves.entrances.maxY',
+      'caves.limits.surfaceDepth', 'caves.limits.bandSpan',
       'caves.noises.cheese.clampSigma', 'caves.noises.layer.clampSigma', 'caves.noises.cheeseRegional.clampSigma',
       'caves.noises.pillar.clampSigma', 'caves.noises.pillarRare.clampSigma', 'caves.noises.pillarThickness.clampSigma',
       'caves.noises.roughness.clampSigma', 'caves.noises.roughnessMod.clampSigma', 'caves.noises.entrance.clampSigma',
@@ -62,6 +66,9 @@ describe('the source model (SP3d spec §1.3, §1.4)', () => {
       'caves.noises.noodleRidgeB.clampSigma',
     ]);
     expect(ALLOWED_REF_TARGETS.get('caves.cheese.offset')).toEqual({ kind: 'number', lo: -0.5, hi: 1 });
+    expect(ALLOWED_REF_TARGETS.get('caves.noodles.maxY')).toEqual({ kind: 'int', lo: -64, hi: 320 });
+    // recip(param caves.limits.bandSpan) is valid: its static range 1 … 32 excludes 0.
+    expect(ALLOWED_REF_TARGETS.get('caves.limits.bandSpan')).toEqual({ kind: 'int', lo: 1, hi: 32 });
     // A band scale's whole static range lies inside noiseScaled's [1/16, 16] (SP6a §1.5), so `s: {param}` validates.
     expect(ALLOWED_REF_TARGETS.get('caves.spaghetti2d.scales.s4')).toEqual({ kind: 'number', lo: 0.0625, hi: 16 });
     expect(ALLOWED_REF_TARGETS.get('caves.noises.cheese.clampSigma')).toEqual({ kind: 'number', lo: 1, hi: 8 });

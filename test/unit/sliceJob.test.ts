@@ -105,7 +105,7 @@ describe('slice job: samples (SP3a spec §5.1)', () => {
     // Every column is generated once (the samples of a column are contiguous) and stays resident.
     expect(job.misses).toBe(cols.length);
     expect(job.resident()).toEqual(cols);
-  });
+  }, 120_000); // up to about 7 s alone with SP6a's caps (Task 8), 33 s under test:goldens' parallel metrics-quick
   test('the coast slice holds bedrock at row 383, air at row 0, stone, and water sources at and below y 63', () => {
     const r = runOk(createSliceJob(), COAST);
     for (let i = 0; i < SLICE_POINTS; i++) {

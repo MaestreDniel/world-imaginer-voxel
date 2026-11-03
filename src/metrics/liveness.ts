@@ -22,14 +22,17 @@
  * (one column holding every family and accepting every leaf is rarer than 1 in 4096 draws). The spaghetti scale leaves
  * (`caves.spaghetti3d.scales.*`, `caves.spaghetti2d.scales.*`) act only where their rarity band meets carved rock, so
  * they are left out of both slots' acceptance and, dead on the class columns, decided on a bounded witness search (SP6a
- * spec §1.5's witness mechanism, ruling P5).
+ * spec §1.5's witness mechanism, ruling P5). So are the depth-band leaves (`caves.<family>.minY`, `.maxY`; Task 8,
+ * rulings P3, P4, R5): dead on the class columns, each is decided on its bounded band witness (`bandWitness`) on the
+ * default base, and the maxY 320 of cheese, spaghetti 3D and the entrances, whose air the default base never holds above
+ * U2's step 272, on an amplified base (the default params with the amplified profile's overlay).
  */
 import { SEA_LEVEL, SPAGHETTI_BANDS } from '../core/constants';
 import { fnv1a32, hash4, hashF64, hex64 } from '../core/hash';
 import type { NoiseDef } from '../core/noise/types';
 import { canonicalJSON, q15 } from '../core/params/canonical';
 import { applyPatch, BOX_AXES, getPath, patchAt, type BoxTable, type LeafInfo } from '../core/params/kit';
-import { resolveProfile } from '../core/params/profiles';
+import { PROFILES, resolveProfile } from '../core/params/profiles';
 import { SCHEMA, type LakeParams, type Params } from '../core/params/schema';
 import { Xoshiro128 } from '../core/rng';
 import { seedFromInput } from '../core/seed';
@@ -64,6 +67,7 @@ const AXES = BOX_AXES;
 const GET = getPath;
 const PATCH_AT = patchAt;
 const RESOLVE = resolveProfile;
+const PROFILES_ = PROFILES;
 const SCHEMA_ = SCHEMA;
 const SEED = seedFromInput;
 const CREATE = createGenContext;
@@ -194,6 +198,34 @@ const SCALE_STREAM = 'sp6a.liveness.scales';
 const SCALE_DRAWS = 4096;
 const SCALE_CHECKS = 64;
 const isScaleLeaf = (path: string): boolean => SCALE_LEAF.test(path);
+
+/**
+ * SP6a spec §1.4, §4 (Task 8; rulings P3, P4, R5): the depth-band leaves `caves.<family>.minY` / `.maxY` act only where
+ * the family holds air within a band span of the band's end, so they are left out of both slots' acceptance and,
+ * dead on the class columns, decided on a bounded band witness search (`bandWitness`): stream columns where the family
+ * holds air in the step's window (pre-cave rock it carves at the base), the first whose T column a step of the leaf
+ * changes. The maxY leaves search `samplePoints('sp6a.liveness.mountain', …)`, the minY leaves
+ * `samplePoints('sp6a.liveness.floor', …)`, both on the default base; the maxY leaves of cheese, spaghetti 3D and the
+ * entrances (default 320, U2's one step 272) then on an amplified base (ruling P3: the default base has no air above
+ * y 272; the amplified tree reaches y 314, as SP3e's islands leaves are decided on a floating_islands base).
+ */
+const BAND_LEAF = /^caves\.(cheese|spaghetti3d|spaghetti2d|noodles|entrances)\.(minY|maxY)$/;
+type BandFamily = 'cheese' | 'spaghetti3d' | 'spaghetti2d' | 'noodles' | 'entrances';
+/** Each band family's tap (SP6a §1.1). */
+const BAND_TAP: Readonly<Record<BandFamily, string>> = { cheese: 'cheese', spaghetti3d: 'spag3d', spaghetti2d: 'spag2d', noodles: 'noodle', entrances: 'entrances' };
+const BAND_STREAM = { minY: 'sp6a.liveness.floor', maxY: 'sp6a.liveness.mountain' } as const;
+/** Stream draws, columns examined (the density built and the window scanned), T columns hashed: the scan's bounds. */
+const BAND_DRAWS = 32768;
+const BAND_EXAMINED = 2048;
+const BAND_CHECKS = 64;
+/** A corner's cap acts on the voxels of the 8-block cells that touch it: the window reaches 7 blocks past the steps. */
+const BAND_MARGIN = 7;
+/** The y range the T stage fills above the bedrock. */
+const FILL_LO = -63;
+const FILL_HI = 319;
+/** The maxY leaves decided on an amplified base when the default base has no witness (ruling P3). */
+const AMPLIFIED_BAND: ReadonlySet<string> = new Set(['caves.cheese.maxY', 'caves.spaghetti3d.maxY', 'caves.entrances.maxY']);
+const isBandLeaf = (path: string): boolean => BAND_LEAF.test(path);
 
 /** The cave class column's scan slots (SP6a spec §4): the caverns' families, then the tunnels'. */
 export type CaveSlot = 'caverns' | 'tunnels';
@@ -853,11 +885,11 @@ export function caveLeaves(): readonly LeafInfo[] {
 
 /**
  * The leaves a cave class column's slot must accept (SP6a spec §4), in schema order: the tunnels' leaves for `tunnels`,
- * every other `caves.*` leaf for `caverns`; never a spaghetti scale leaf, decided on its bounded witness search when
- * the class columns leave it dead (ruling P5).
+ * every other `caves.*` leaf for `caverns`; never a spaghetti scale leaf (ruling P5) or a depth-band leaf (`minY`,
+ * `maxY`; Task 8), each decided on its bounded witness search when the class columns leave it dead.
  */
 export function caveSlotLeaves(slot: CaveSlot): readonly LeafInfo[] {
-  return caveLeaves().filter((l) => !isScaleLeaf(l.path) && TUNNEL_LEAF.test(l.path) === (slot === 'tunnels'));
+  return caveLeaves().filter((l) => !isScaleLeaf(l.path) && !isBandLeaf(l.path) && TUNNEL_LEAF.test(l.path) === (slot === 'tunnels'));
 }
 
 /** How often each cave family acts on a column (SP6a spec §4's cave class column), at the corner-lattice voxels. */
@@ -971,6 +1003,165 @@ export function scaleWitness(base: GenContext, path: string, skip: readonly Live
   const info = leafInfo(path);
   if (!isScaleLeaf(path)) throw new Error(`${path} is not a spaghetti scale leaf`);
   return scaleWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
+}
+
+// ---------------------------------------------------------------- the depth-band leaves' witnesses (SP6a Task 8)
+
+/** A depth-band leaf's family, end and stream, or null for any other path. */
+function bandOf_(path: string): { readonly family: BandFamily; readonly end: 'minY' | 'maxY' } | null {
+  const m = BAND_LEAF.exec(path);
+  return m === null ? null : { family: m[1] as BandFamily, end: m[2] as 'minY' | 'maxY' };
+}
+
+/**
+ * The y window of a depth-band leaf's witness at `base` (ruling P3/P4): every voxel whose value a step of the leaf can
+ * change. A maxY v with steps S changes the cap at the corners above min(v, S), a minY at those below max(v, S); a
+ * corner acts on the voxels of the cells touching it, so the window reaches 7 blocks further, clipped to y −63 … 319.
+ */
+export function bandWindow(base: GenContext, path: string): readonly [number, number] {
+  const b = bandOf_(path);
+  if (b === null) throw new Error(`${path} is not a depth-band leaf`);
+  const v = GET(base.params, path) as number;
+  const steps = perturbations(leafInfo(path), v) as number[];
+  return b.end === 'maxY'
+    ? [Math.max(FILL_LO, Math.min(v, ...steps) - BAND_MARGIN), FILL_HI]
+    : [FILL_LO, Math.min(FILL_HI, Math.max(v, ...steps) + BAND_MARGIN)];
+}
+
+/**
+ * The cheap prefilter of spaghetti 2D's window (exact, at the 25 quart corners of the column): its layer term
+ * (|layerAmp·Nel + yGrad(y)| + tm)³ is open (< 0) only where |layerAmp·Nel + 8 − (y + 64)/8| < thickness +
+ * 0.35·clampSigma(Nthk), and a voxel is air only in a cell with an open corner, so the column can hold its air in
+ * [lo, hi] only if a corner's open y range, widened by a cell (8), meets the window.
+ */
+function layerMeets(base: GenContext, dc: DensityContext, cx: number, cz: number, lo: number, hi: number): boolean {
+  const p = base.params.caves.spaghetti2d;
+  const nel = dc.noises('spag2dElevation');
+  if (nel === undefined) throw new Error('no cave noise spag2dElevation');
+  const w = p.thickness + 0.35 * base.params.caves.noises.spag2dThickness.clampSigma;
+  for (let j = 0; j <= 4; j++) {
+    for (let i = 0; i <= 4; i++) {
+      const c = p.layerAmp * nel.z2(16 * cx + 4 * i, 16 * cz + 4 * j) + 8;
+      const yLo = 8 * (c - w) - 64 - 8, yHi = 8 * (c + w) - 64 + 8;
+      if (yHi >= lo && yLo <= hi) return true;
+    }
+  }
+  return false;
+}
+
+/** Positions sampled for the rock test: the corner lattice (lx, lz ∈ {0, 4, 8, 12, 15}). */
+const ROCK_LX: readonly number[] = [0, 4, 8, 12, 15];
+/** |detailG| ≤ 4.5 at the defaults; −8 the `sky` gate's margin, so the rock test is a necessary condition. */
+const ROCK_T = -8;
+
+/**
+ * A column's examination for the band witness (the density built): 0 where no corner-lattice voxel at a corner y in
+ * [lo − 8, hi + 8] has a terrain tap above −8 (no pre-cave rock can lie in the window); else, per family tap, the
+ * number of voxels of the window (every position, every y) the pre-cave density holds solid where the tap is ≤ 0.
+ */
+function examineBand(dc: DensityContext, cx: number, cz: number, lo: number, hi: number): ReadonlyMap<string, number> | null {
+  dc.column(cx, cz);
+  const c = dc.compiled;
+  let rock = false;
+  for (let k = 0; k <= 48 && !rock; k++) {
+    const y = -64 + 8 * k;
+    if (y < lo - 8 || y > hi + 8 || y > FILL_HI) continue;
+    for (const lz of ROCK_LX) for (const lx of ROCK_LX) if (c.tapFn('terrain', lx, y, lz) > ROCK_T) { rock = true; break; }
+  }
+  if (!rock) return null;
+  const taps = Object.values(BAND_TAP);
+  const air = new Map<string, number>(taps.map((t) => [t, 0]));
+  for (let y = hi; y >= lo; y--) {
+    for (let lz = 0; lz < 16; lz++) {
+      for (let lx = 0; lx < 16; lx++) {
+        if (!(c.tapFn('precave', lx, y, lz) > 0)) continue;
+        for (const t of taps) if (c.tapFn(t, lx, y, lz) <= 0) air.set(t, air.get(t)! + 1);
+      }
+    }
+  }
+  return air;
+}
+
+/** Examinations by draw, per base, stream and window (shared by the leaves of one U2 run: one window serves several). */
+const BAND_MEMO = new WeakMap<GenContext, Map<string, (ReadonlyMap<string, number> | null | undefined)[]>>();
+
+/** The figures of a band leaf's witness search: the deciding column, the draws taken, the columns examined and hashed, the y span searched. */
+export interface BandWitnessScan {
+  readonly via: string | null;
+  readonly draws: number;
+  readonly examined: number;
+  readonly checks: number;
+  readonly span: readonly [number, number];
+}
+
+function bandWitnessOf(base: GenContext, info: LeafInfo, variants: readonly GenContext[], skip: readonly LivenessColumn[], baseHash: BaseHash, label: string): BandWitnessScan {
+  const b = bandOf_(info.path)!;
+  const stage = stageOf(info);
+  const span = bandWindow(base, info.path);
+  const [lo, hi] = span;
+  const tap = BAND_TAP[b.family];
+  const stream = BAND_STREAM[b.end];
+  const pts = POINTS(stream, BAND_DRAWS);
+  let byBase = BAND_MEMO.get(base);
+  if (byBase === undefined) { byBase = new Map(); BAND_MEMO.set(base, byBase); }
+  const key = `${stream}|${lo}|${hi}`;
+  let memo = byBase.get(key);
+  if (memo === undefined) { memo = []; byBase.set(key, memo); }
+  const dc = CREATE_DENSITY(base);
+  const seen = new Set<number>(skip.map((c) => (c.cx + 32768) * 65536 + (c.cz + 32768)));
+  let examined = 0, checks = 0, n = 0;
+  for (; n < BAND_DRAWS && examined < BAND_EXAMINED && checks < BAND_CHECKS; n++) {
+    const cx = Math.floor(pts.x[n]! / 16);
+    const cz = Math.floor(pts.z[n]! / 16);
+    const key2 = (cx + 32768) * 65536 + (cz + 32768);
+    if (seen.has(key2)) continue;
+    seen.add(key2);
+    if (b.family === 'spaghetti2d' && !layerMeets(base, dc, cx, cz, lo, hi)) continue;
+    examined++;
+    let air = memo[n];
+    if (air === undefined) { air = examineBand(dc, cx, cz, lo, hi); memo[n] = air; }
+    if (air === null || air.get(tap)! === 0) continue;
+    checks++;
+    const h = baseHash(stage, cx, cz);
+    if (variants.some((v) => stageOutputHash(v, stage, cx, cz) !== h)) return { via: `${label} (${cx}, ${cz})`, draws: n + 1, examined, checks, span };
+  }
+  return { via: null, draws: n, examined, checks, span };
+}
+
+const AMPLIFIED_MEMO = new WeakMap<GenContext, { readonly ab: GenContext; readonly hash: BaseHash }>();
+/** The amplified base of `base` (ruling P3), `base`'s params with the amplified profile's overlay, and its hasher (one per base). */
+function amplifiedOf(base: GenContext): { readonly ab: GenContext; readonly hash: BaseHash } {
+  let m = AMPLIFIED_MEMO.get(base);
+  if (m === undefined) {
+    const r = APPLY(SCHEMA_, base.params, PROFILES_.amplified.overlay);
+    if (!r.ok) throw new Error(`U2: the amplified overlay is invalid: ${r.issues.map((i) => `${i.path} ${i.code}`).join(', ')}`);
+    const ab = CREATE(base.seed, r.value);
+    m = { ab, hash: baseHasher(ab) };
+    AMPLIFIED_MEMO.set(base, m);
+  }
+  return m;
+}
+
+/**
+ * A depth-band leaf's bounded witness search (SP6a Task 8; rulings P3, P4, R5) over the columns not in `skip`, on
+ * `base`: up to 32,768 draws of its stream (`sp6a.liveness.mountain` for a maxY, `sp6a.liveness.floor` for a minY;
+ * spaghetti 2D's draws first pass `layerMeets`), up to 2,048 columns examined (the density built; a column whose
+ * corner lattice shows no pre-cave rock near the window is skipped) and 64 T columns hashed: the first column where
+ * the family carves pre-cave rock inside the step's window (`bandWindow`) and a step of the leaf changes the T column
+ * is the witness (`witness column (cx, cz)`), else null.
+ */
+export function bandWitness(base: GenContext, path: string, skip: readonly LivenessColumn[] = []): BandWitnessScan {
+  const info = leafInfo(path);
+  if (!isBandLeaf(path)) throw new Error(`${path} is not a depth-band leaf`);
+  return bandWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base), 'witness column');
+}
+
+/** As `bandWitness`, on the amplified base of `base` with no columns skipped (ruling P3; `amplified witness column (cx, cz)`). */
+export function amplifiedBandWitness(base: GenContext, path: string): BandWitnessScan {
+  const info = leafInfo(path);
+  if (!AMPLIFIED_BAND.has(path)) throw new Error(`${path} is not decided on an amplified base`);
+  const { ab, hash } = amplifiedOf(base);
+  return bandWitnessOf(ab, info, variantContexts(ab, info), [], hash, 'amplified witness column');
 }
 
 /** The families each slot's column must hold (`caveFamilyCounts` > 0). */
@@ -1107,8 +1298,17 @@ function decide(base: GenContext, info: LeafInfo, columns: readonly LivenessColu
   const hit = order.find((c) => variants.some((v) => stageOutputHash(v, stage, c.cx, c.cz) !== baseHash(stage, c.cx, c.cz)));
   if (hit !== undefined) return { path: info.path, live: true, via: `${hit.cls} column (${hit.cx}, ${hit.cz})`, cls: hit.cls };
   const w = stage !== 'terrain' ? witnessOf(base, info, variants, columns, baseHash)
-    : isScaleLeaf(info.path) ? scaleWitnessOf(base, info, variants, columns, baseHash).via : null;
+    : isScaleLeaf(info.path) ? scaleWitnessOf(base, info, variants, columns, baseHash).via
+      : isBandLeaf(info.path) ? bandVia(base, info, variants, columns, baseHash) : null;
   return w !== null ? { path: info.path, live: true, via: w, cls: null } : { path: info.path, live: false, via: null, cls: intended };
+}
+
+/** A depth-band leaf's witness: on `base`, then (cheese, spaghetti 3D, entrances maxY) on its amplified base (ruling P3). */
+function bandVia(base: GenContext, info: LeafInfo, variants: readonly GenContext[], columns: readonly LivenessColumn[], baseHash: BaseHash): string | null {
+  const w = bandWitnessOf(base, info, variants, columns, baseHash, 'witness column').via;
+  if (w !== null || !AMPLIFIED_BAND.has(info.path)) return w;
+  const { ab, hash } = amplifiedOf(base);
+  return bandWitnessOf(ab, info, variantContexts(ab, info), [], hash, 'amplified witness column').via;
 }
 
 /**
@@ -1163,7 +1363,7 @@ export function islandColumn(base: GenContext, leaves: readonly LeafInfo[] = isl
  * decided on `RESOLVE('floating_islands')` at its island class column (SP3e spec §5.6); none found: "no island column".
  * The cave class columns (SP6a spec §4, one per slot) join the class columns; none found for a slot with leaves: "no
  * cave column (<slot>)". The spaghetti scale leaves dead on the class columns are decided on their bounded witness
- * search (ruling P5).
+ * search (ruling P5), the depth-band leaves on their band witness, then (three maxY leaves) on the amplified base (P3).
  */
 export function u2(seedText = '42'): { readonly value: number; readonly results: readonly LivenessResult[] } {
   const base = CREATE(SEED(seedText), RESOLVE('default'));

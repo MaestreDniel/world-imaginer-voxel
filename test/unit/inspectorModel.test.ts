@@ -129,7 +129,9 @@ describe('rows and summaries', () => {
     // SP6a's cave terms: detailG, the family taps, a cave param, keep's ref bound.
     expect(sum.get('root.a.a.a.x.b')).toBe('rangeChoice -1000000000 … 16');
     expect(sum.get('root.a.a.b.a.a.a.a')).toBe('tap entrances');
-    expect(sum.get('root.a.a.b.a.a.a.a.x.x.a.b.a.a.b')).toBe('param caves.entrances.offset = 0.37');
+    expect(sum.get('root.a.a.b.a.a.a.a.x.x.a.a.b.a.a.b')).toBe('param caves.entrances.offset = 0.37');
+    // Task 8: the entrances' cap after the floor, reading its band leaves.
+    expect(sum.get('root.a.a.b.a.a.a.a.x.x.b.a.b.b.a.x.a.a')).toBe('param caves.entrances.minY = -64');
     expect(sum.get('root.a.a.b.a.a.b')).toBe('tap spag3d');
     expect(sum.get('root.a.a.b.a.b')).toBe('tap spag2d');
     expect(sum.get('root.a.b')).toBe('tap noodle');

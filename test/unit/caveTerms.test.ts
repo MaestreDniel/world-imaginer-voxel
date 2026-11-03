@@ -2,7 +2,8 @@
  * SP6a Task 6 (spec §1.1, §1.2, §1.4, §4): the `caves` group's first leaves and noises and the cave terms of the default
  * density tree: entrances E, cheese C and pillars P with `keep`, the shared `fl`, `sky`, `ramp` and `rough`, and
  * `detailG` in place of the detail term. SP6a Task 7 (spec §1.1-§1.3): spaghetti 3D (S3) and 2D (S2) with their
- * continuous rarity blends, and the noodle with its four slots and `nb`.
+ * continuous rarity blends, and the noodle with its four slots and `nb`. SP6a Task 8 (spec §1.4, §4): each family's
+ * depth band (`minY`, `maxY`, `caves.limits.bandSpan`) and its cap, a gentle part then a steep part.
  */
 import { describe, expect, test } from 'vitest';
 import { SPAGHETTI_BANDS, type SpaghettiBands } from '../../src/core/constants';
@@ -59,8 +60,24 @@ const P = {
 } as const;
 /** max(rmS(S1), rmS(S2)) in the spaghetti 3D slot, and rmS2(S2d) in the spaghetti 2D slot (the same paths resolved). */
 const BLEND = {
-  spaghetti3d: `${P.spag3d}.x.x.outside.a.a.b.b.x.a.a.a`,
-  spaghetti2d: `${P.spag2d}.x.x.outside.a.a.b.x.a.a`,
+  spaghetti3d: `${P.spag3d}.x.x.outside.a.a.a.b.b.x.a.a.a`,
+  spaghetti2d: `${P.spag2d}.x.x.outside.a.a.a.b.x.a.a`,
+} as const;
+/** Each family's cap (SP6a §1.4): after `fl` and `ramp` inside the slot, after `fl` at voxel level for the noodle. */
+const CAP = {
+  entrances: `${P.entrances}.x.x.b`,
+  cheese: `${P.cheese}.x.x.outside.b`,
+  spag3d: `${P.spag3d}.x.x.outside.b`,
+  spag2d: `${P.spag2d}.x.x.outside.b`,
+  noodle: `${P.noodle}.x.b`,
+} as const;
+/** Each family's band leaves' group and G_f, the gentle rise of its cap (tree literals, SP6a §1.4). */
+const BANDS = {
+  entrances: ['entrances', 16],
+  cheese: ['cheese', 16],
+  spag3d: ['spaghetti3d', 2.4],
+  spag2d: ['spaghetti2d', 2.4],
+  noodle: ['noodles', 2.4],
 } as const;
 
 describe('the caves group (SP6a spec §4)', () => {
@@ -71,6 +88,8 @@ describe('the caves group (SP6a spec §4)', () => {
       ['caves.cheese.regional', 0.1, 0, 0.4],
       ['caves.cheese.layerAmp', 4, 0, 8],
       ['caves.cheese.roofDepth', 12, 0, 48],
+      ['caves.cheese.minY', -56, -64, 320],
+      ['caves.cheese.maxY', 320, -64, 320],
       ['caves.spaghetti3d.thickness', 0.0765, 0, 0.3],
       ['caves.spaghetti3d.thicknessVar', 0.0115, 0, 0.1],
       ['caves.spaghetti3d.regional', 0.05, 0, 0.2],
@@ -78,6 +97,8 @@ describe('the caves group (SP6a spec §4)', () => {
       ['caves.spaghetti3d.scales.s1', 1, 1 / 16, 16],
       ['caves.spaghetti3d.scales.s2', 1.5, 1 / 16, 16],
       ['caves.spaghetti3d.scales.s3', 2, 1 / 16, 16],
+      ['caves.spaghetti3d.minY', -56, -64, 320],
+      ['caves.spaghetti3d.maxY', 320, -64, 320],
       ['caves.spaghetti2d.thickness', 0.95, 0.5, 1.5],
       ['caves.spaghetti2d.layerAmp', 8, 0, 32],
       ['caves.spaghetti2d.scales.s0', 0.5, 1 / 16, 16],
@@ -85,14 +106,24 @@ describe('the caves group (SP6a spec §4)', () => {
       ['caves.spaghetti2d.scales.s2', 1, 1 / 16, 16],
       ['caves.spaghetti2d.scales.s3', 2, 1 / 16, 16],
       ['caves.spaghetti2d.scales.s4', 3, 1 / 16, 16],
+      ['caves.spaghetti2d.minY', -64, -64, 320],
+      // 215, not 320: the highest default from 208 to 244 (no generated output moves) whose U2 step has a witness (spec §4).
+      ['caves.spaghetti2d.maxY', 215, -64, 320],
       ['caves.noodles.thickness', 0.075, 0, 0.3],
       ['caves.noodles.ridgeMul', 1.5, 0.5, 4],
       ['caves.noodles.regional', 0.1, 0, 0.4],
+      ['caves.noodles.minY', -60, -64, 320],
+      ['caves.noodles.maxY', 64, -64, 320],
       ['caves.pillars.threshold', 0.03, 0, 0.5],
       ['caves.entrances.offset', 0.37, -0.5, 1],
       ['caves.entrances.threshold', 0.08, 0, 0.5],
+      ['caves.entrances.minY', -64, -64, 320],
+      ['caves.entrances.maxY', 320, -64, 320],
       ['caves.limits.surfaceDepth', 8, 0, 32],
+      ['caves.limits.bandSpan', 16, 1, 32],
     ]);
+    // The band ends and the band span are ints (blocks).
+    for (const l of leaves.filter((x) => /\.(minY|maxY|bandSpan)$/.test(x.path))) expect([l.path, l.leaf.kind]).toEqual([l.path, 'int']);
     for (const l of SCHEMA.leaves.filter((x) => x.path.startsWith('caves.'))) {
       expect([l.path, l.meta.scope, l.meta.stage]).toEqual([l.path, 'terrain', 'terrain']);
     }
@@ -160,7 +191,7 @@ describe('the cave terms of the default tree (SP6a spec §1.1-§1.2)', () => {
     expect(['root.a.a.b', 'root.a.a.b.a', 'root.a.a.b.a.a', 'root.a.a.b.a.a.a'].map((p) => (at(DEFAULT_DENSITY_TREE, p) as Rec)['op'])).toEqual(['max', 'min', 'min', 'min']);
     // The spaghetti slots are interpolated under the tap; the noodle is combined at voxel level from four slots.
     for (const name of ['spag3d', 'spag2d'] as const) expect(at(DEFAULT_DENSITY_TREE, `${P[name]}.x`)).toMatchObject({ op: 'interpolated' });
-    expect(at(DEFAULT_DENSITY_TREE, `${P.noodle}.x`)).toMatchObject({ op: 'max', b: { op: 'const', v: -48 } });
+    expect(at(DEFAULT_DENSITY_TREE, `${P.noodle}.x`)).toMatchObject({ op: 'add', a: { op: 'max', b: { op: 'const', v: -48 } } });
     expect(tapCounts(at(DEFAULT_DENSITY_TREE, P.noodle)).size).toBe(1);
     const noodleSlots: unknown[] = [];
     const walk = (x: unknown): void => {
@@ -257,7 +288,7 @@ describe('the cave terms of the default tree (SP6a spec §1.1-§1.2)', () => {
   });
 
   test('with caves.limits.surfaceDepth 8 the ramp is 0 at T ≥ 8, 16 at T = 0 and 32 at T ≤ −8', () => {
-    const ramp = at(expr, `${P.cheese}.x.x.outside.b`) as Expr;
+    const ramp = at(expr, `${P.cheese}.x.x.outside.a.b`) as Expr;
     expect(ramp).toMatchObject({ op: 'clamp', lo: 0, hi: 32 });
     expect(DEFAULTS.caves.limits.surfaceDepth).toBe(8);
     const s = dc.column(0, 0);
@@ -269,20 +300,20 @@ describe('the cave terms of the default tree (SP6a spec §1.1-§1.2)', () => {
   });
 });
 
-describe('the family floor F = 48 (SP6a spec §1.4)', () => {
-  /** The leaves at the ends of their static ranges that lower the families most: clampSigma 8, offsets −0.5. */
-  const WORST: ParamsPatch = {
-    caves: {
-      cheese: { offset: -0.5, regional: 0.4, layerAmp: 0, roofDepth: 0 },
-      spaghetti3d: { thickness: 0.3, thicknessVar: 0.1, regional: 0.2 },
-      spaghetti2d: { thickness: 1.5 },
-      noodles: { thickness: 0.3, regional: 0.4 },
-      entrances: { offset: -0.5, threshold: 0.5 },
-      limits: { surfaceDepth: 0 },
-      noises: Object.fromEntries(Object.keys(DEFAULTS.caves.noises).map((id) => [id, { clampSigma: 8 }])),
-    },
-  };
+/** The leaves at the ends of their static ranges that lower the families most: clampSigma 8, offsets −0.5. */
+const WORST: ParamsPatch = {
+  caves: {
+    cheese: { offset: -0.5, regional: 0.4, layerAmp: 0, roofDepth: 0 },
+    spaghetti3d: { thickness: 0.3, thicknessVar: 0.1, regional: 0.2 },
+    spaghetti2d: { thickness: 1.5 },
+    noodles: { thickness: 0.3, regional: 0.4 },
+    entrances: { offset: -0.5, threshold: 0.5 },
+    limits: { surfaceDepth: 0 },
+    noises: Object.fromEntries(Object.keys(DEFAULTS.caves.noises).map((id) => [id, { clampSigma: 8 }])),
+  },
+};
 
+describe('the family floor F = 48 (SP6a spec §1.4)', () => {
   test('each family\'s slot interval over the leaves\' static ranges is ≥ −48 (bounds.ts\' intervals; the unfloored entrances reach −62.7, spaghetti 3D −70.7)', () => {
     const params = paramsWith(WORST);
     const ctx = ctxFor('42', WORST);
@@ -587,5 +618,169 @@ describe('the noodle (SP6a spec §1.1, §1.3)', () => {
     for (const e of slots) constants.push(ref.corner(s, e, 0, 48, 0));
     expect(constants).toEqual([0, 1, 1, -1]);
     expect(noodleAt(-1, 0, 1, 1)).toBe(16 * (-0.075 + 1.5 + 4));
+  });
+});
+
+/** cap_f of SP6a §1.4 as data, written from the spec: G·min(1, g) + 128·min(1, h) over the family's band leaves. */
+function capExpr(group: string, gentle: number): unknown {
+  const p = (path: string) => ({ op: 'param', path });
+  const y = { op: 'y' };
+  const neg = (x: unknown) => ({ op: 'neg', x });
+  const add = (a: unknown, b: unknown) => ({ op: 'add', a, b });
+  const mul = (a: unknown, b: unknown) => ({ op: 'mul', a, b });
+  const clamp01 = (x: unknown) => ({ op: 'clamp', x, lo: 0, hi: 1 });
+  const minY = p(`caves.${group}.minY`), maxY = p(`caves.${group}.maxY`), s = p('caves.limits.bandSpan');
+  const g = add(clamp01(mul(add(minY, neg(y)), { op: 'recip', x: s })), clamp01(mul(add(y, neg(maxY)), { op: 'recip', x: s })));
+  const h = add(clamp01(mul(add(add(minY, neg(s)), neg(y)), { op: 'const', v: 0.125 })), clamp01(mul(add(add(y, neg(maxY)), neg(s)), { op: 'const', v: 0.125 })));
+  return add(mul({ op: 'const', v: gentle }, { op: 'min', a: { op: 'const', v: 1 }, b: g }), mul({ op: 'const', v: 128 }, { op: 'min', a: { op: 'const', v: 1 }, b: h }));
+}
+/** The cap of §1.4 in numbers: G·min(1, g) + 128·min(1, h) at y. */
+function capAt(gentle: number, minY: number, maxY: number, s: number, y: number): number {
+  const c01 = (v: number) => Math.min(1, Math.max(0, v));
+  const g = c01((minY - y) / s) + c01((y - maxY) / s);
+  const h = c01((minY - s - y) / 8) + c01((y - maxY - s) / 8);
+  return gentle * Math.min(1, g) + 128 * Math.min(1, h);
+}
+/** The steep fraction h_f of §1.4 at y. */
+function steepAt(minY: number, maxY: number, s: number, y: number): number {
+  const c01 = (v: number) => Math.min(1, Math.max(0, v));
+  return c01((minY - s - y) / 8) + c01((y - maxY - s) / 8);
+}
+type CapFamily = keyof typeof BANDS;
+const CAPPED: readonly CapFamily[] = ['entrances', 'cheese', 'spag3d', 'spag2d', 'noodle'];
+const bandPatch = (name: CapFamily, minY: number, maxY: number, extra: ParamsPatch = {}): ParamsPatch =>
+  ({ ...extra, caves: { ...extra.caves, [BANDS[name][0]]: { ...(extra.caves as Record<string, object> | undefined)?.[BANDS[name][0]], minY, maxY } } }) as ParamsPatch;
+
+describe('the depth bands and their caps (SP6a spec §1.4)', () => {
+  test('each family\'s cap is G_f·min(1, g_f) + 128·min(1, h_f) over its minY, maxY and bandSpan, after the floor (and the ramp)', () => {
+    for (const name of CAPPED) {
+      const [group, gentle] = BANDS[name];
+      expect([name, at(DEFAULT_DENSITY_TREE, CAP[name])]).toEqual([name, capExpr(group, gentle)]);
+    }
+    // Entrances: interpolated(fl(…) + cap); the deep families: interpolated(sky(fl(…) + ramp + cap)); the noodle: fl(…) + cap.
+    expect(at(DEFAULT_DENSITY_TREE, `${P.entrances}.x.x.a`)).toMatchObject({ op: 'max', b: { op: 'const', v: -48 } });
+    for (const name of ['cheese', 'spag3d', 'spag2d'] as const) {
+      expect(at(DEFAULT_DENSITY_TREE, `${P[name]}.x.x.outside.a.a`)).toMatchObject({ op: 'max', b: { op: 'const', v: -48 } });
+      expect(at(DEFAULT_DENSITY_TREE, `${P[name]}.x.x.outside.a.b`)).toMatchObject({ op: 'clamp', lo: 0, hi: 32 });
+    }
+    expect(at(DEFAULT_DENSITY_TREE, `${P.noodle}.x.a`)).toMatchObject({ op: 'max', b: { op: 'const', v: -48 } });
+  });
+
+  test('the cap evaluates to §1.4\'s formula at every y, for the defaults, a narrow span and an inverted band', () => {
+    const cases: Array<[ParamsPatch, number]> = [[{}, 16], [{ caves: { limits: { bandSpan: 1 } } }, 1], [{ caves: { limits: { bandSpan: 32 } } }, 32]];
+    for (const [patch, s] of cases) {
+      for (const name of CAPPED) {
+        const [group, gentle] = BANDS[name];
+        for (const [minY, maxY] of [[DEFAULTS.caves[group].minY, DEFAULTS.caves[group].maxY], [0, 100], [40, 20]] as const) {
+          const full = bandPatch(name, minY, maxY, patch);
+          const params = paramsWith(full);
+          const e = resolveDensity(params.density.defs, params);
+          const dc = createDensityContext(ctxFor('42', full), e);
+          const capNode = at(e, CAP[name]) as Expr;
+          const sample = dc.column(0, 0);
+          const ref = createDensityReference(dc.expr, dc.noises);
+          for (let y = -64; y < 320; y++) {
+            const got = ref.voxel(sample, 0, y, 0, capNode), want = capAt(gentle, minY, maxY, s, y);
+            if (Math.abs(got - want) > 1e-9) throw new Error(`${name} [${minY}, ${maxY}] s ${s} y ${y}: cap ${got}, §1.4 ${want}`);
+          }
+        }
+      }
+    }
+  });
+
+  test('wherever a corner\'s h ≥ 1/2 the slot is > 0 over the leaves\' static ranges (bounds.ts: ≥ −48 + 64; the noodle per voxel)', () => {
+    let decided = 0;
+    for (const s of [1, 16, 32]) {
+      for (const [minY, maxY] of [[100, 140], [-40, 0]] as const) {
+        for (const name of CAPPED) {
+          const full = bandPatch(name, minY, maxY, { ...WORST, caves: { ...WORST.caves, limits: { ...WORST.caves!.limits, bandSpan: s } } });
+          const params = paramsWith(full);
+          const dc = createDensityContext(ctxFor('42', full), resolveDensity(params.density.defs, params));
+          const c = dc.compiled;
+          const tapId = c.nodes.findIndex((n) => n.op === 'tap' && (n.expr as TapExpr).name === name);
+          // The slot's child (its corner values) for the four interpolated families; the noodle's tap (voxel level).
+          const node = name === 'noodle' ? tapId : c.nodes[c.nodes[tapId]!.kids[0]!]!.kids[0]!;
+          const iv = new Float64Array(2);
+          for (const [cx, cz] of [[0, 0], CAVE_COLUMN, TUNNEL_COLUMN] as const) {
+            dc.column(cx, cz);
+            dc.bounds.beginColumn();
+            for (let ck = 0; ck < 48; ck++) {
+              dc.bounds.cellInterval(2, ck, 1, iv, 0);
+              const y0 = -64 + 8 * ck, y1 = y0 + (name === 'noodle' ? 7 : 8);
+              if (!(Math.min(steepAt(minY, maxY, s, y0), steepAt(minY, maxY, s, y1)) >= 0.5)) continue;
+              const lo = dc.bounds.nodeIntervals[2 * node]!;
+              if (!(lo >= 16 * (1 - 1e-9))) throw new Error(`${name} s ${s} [${minY}, ${maxY}] cell ${ck} of (${cx}, ${cz}): lower bound ${lo}`);
+              decided++;
+            }
+          }
+        }
+      }
+    }
+    expect(decided).toBeGreaterThan(0);
+  });
+
+  test('with minY > maxY a family narrows across the inverted range, and is open nowhere once it is 2·bandSpan + 8 wide', () => {
+    const s = DEFAULTS.caves.limits.bandSpan;
+    for (const name of CAPPED) {
+      const [group, gentle] = BANDS[name];
+      const open = createDensityContext(ctxFor('42', bandPatch(name, -64, 320)));
+      const refOpen = createDensityReference(open.expr, open.noises);
+      // Narrow inversion (minY 40, maxY 20): every value in 20 … 40 is raised by at least G·min(1, 20 / s), the voxel of
+      // the noodle and each corner of a slot (where `sky` leaves it: 8 or more above the surface both are 32).
+      const narrow = createDensityContext(ctxFor('42', bandPatch(name, 40, 20)));
+      const refNarrow = createDensityReference(narrow.expr, narrow.noises);
+      const rise = gentle * Math.min(1, 20 / s);
+      const body = narrow.expr.defs['body']!;
+      let n = 0;
+      for (const [cx, cz] of COLUMNS) {
+        const sample = narrow.column(cx, cz);
+        if (name === 'noodle') {
+          const t = at(narrow.expr, P.noodle) as Expr, to = at(open.expr, P.noodle) as Expr;
+          for (let y = 20; y <= 40; y++) {
+            const d = refNarrow.voxel(sample, 16 * cx + 3, y, 16 * cz + 5, t) - refOpen.voxel(sample, 16 * cx + 3, y, 16 * cz + 5, to);
+            expect(d).toBeGreaterThanOrEqual(rise - 1e-9);
+            n++;
+          }
+        } else {
+          const slot = at(narrow.expr, `${P[name]}.x.x`) as Expr, slotOpen = at(open.expr, `${P[name]}.x.x`) as Expr;
+          for (let k = 11; k <= 13; k++) {
+            for (let j = 0; j <= 4; j++) for (let i = 0; i <= 4; i++) {
+              if (name !== 'entrances' && refNarrow.corner(sample, body, i, k, j) < -8) continue;
+              const d = refNarrow.corner(sample, slot, i, k, j) - refOpen.corner(sample, slotOpen, i, k, j);
+              expect(d).toBeGreaterThanOrEqual(rise - 1e-9);
+              n++;
+            }
+          }
+        }
+      }
+      expect([name, n > 0]).toEqual([name, true]);
+      // Wide inversion (minY 2·s + 8 = 40 above maxY 0): every y lies s + 4 or more inside one of the two caps (h ≥ 1/2,
+      // y ≤ minY − s − 4 = 20 or y ≥ maxY + s + 4 = 20), so the tap is > 0 at every voxel.
+      const wide = createDensityContext(ctxFor('42', bandPatch(name, 2 * s + 8, 0)));
+      for (const [cx, cz] of COLUMNS) {
+        wide.column(cx, cz);
+        for (const [lx, lz] of [[0, 0], [5, 11], [15, 15]] as const) {
+          for (let y = -64; y < 320; y++) {
+            const v = wide.compiled.tapFn(name, lx, y, lz);
+            if (!(v > 0)) throw new Error(`${name} open at (${cx}, ${cz}) ${lx} ${y} ${lz}: ${v}`);
+          }
+        }
+      }
+    }
+  });
+
+  test('nb reads the noodle\'s band leaves; its bound 40 = bandSpan\'s static maximum 32 + 8 stays a literal', () => {
+    const slots: Rec[] = [];
+    const walk = (x: unknown): void => { if (isRec(x)) { if (x['op'] === 'interpolated') slots.push(x['x'] as Rec); else Object.values(x).forEach(walk); } };
+    walk(at(DEFAULT_DENSITY_TREE, P.noodle));
+    expect(slots.length).toBe(4);
+    for (const nb of slots) {
+      expect(nb).toMatchObject({
+        op: 'rangeChoice', lo: -1e9, hi: 40,
+        x: { op: 'add', a: { op: 'y' }, b: { op: 'neg', x: { op: 'param', path: 'caves.noodles.maxY' } } },
+        inside: { op: 'rangeChoice', lo: -1e9, hi: 40, x: { op: 'add', a: { op: 'param', path: 'caves.noodles.minY' }, b: { op: 'neg', x: { op: 'y' } } } },
+      });
+    }
+    expect(SCHEMA.leaves.find((l) => l.path === 'caves.limits.bandSpan')!.leaf.max).toBe(32);
   });
 });

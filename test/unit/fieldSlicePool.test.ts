@@ -104,12 +104,12 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
     }
     pool.terminate();
   }, 120_000);
-  test('a 128² vertical density slice at the defaults: refused by REQUEST_BUDGET since SP6a Task 7 (1,483,264 per sample column, limit 1,048,576); under a budget admitting it, 26 parts of at most k = 5 sample columns on 6 workers (10 parts of k = 14 with Task 6\'s cave terms, 6 of k = 78 before)', async () => {
+  test('a 128² vertical density slice at the defaults: refused by REQUEST_BUDGET since SP6a Task 7 (1,652,224 per sample column since Task 8, limit 1,048,576); under a budget admitting it, 26 parts of at most k = 5 sample columns on 6 workers (10 parts of k = 14 with Task 6\'s cave terms, 6 of k = 78 before)', async () => {
     const log: ToWorker[] = [];
     const pool = createWorkerPool(6, () => fakeWorker(log));
     await pool.configure('42', DEFAULTS);
     const req = vReq(MOUNTAIN, 'density', '', 128);
-    expect(costOf(req)).toBe(1_483_264);
+    expect(costOf(req)).toBe(1_652_224);
     const e = await settle(pool.fieldSlice(req, { priority: 500, columnCost: costOf(req), budget: REQUEST_BUDGET }).promise);
     expect([e instanceof SliceTooHeavy, (e as SliceTooHeavy).limit, log.filter((m) => m.type === 'fieldSlice').length]).toEqual([true, 1_048_576, 0]);
     const r = await pool.fieldSlice(req, { priority: 500, columnCost: costOf(req), budget: 2 ** 40 }).promise;
@@ -157,7 +157,7 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
   test('the worker\'s bound check refuses a client column cost below its own (BAD_ARGS, too heavy), and a bad request rejects with its BAD_ARGS', async () => {
     const pool = createWorkerPool(1, () => fakeWorker([]));
     await pool.configure('42', DEFAULTS);
-    await expect(pool.fieldSlice(vReq(MOUNTAIN, 'density', '', 128), { priority: 500, columnCost: 1, budget: REQUEST_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: too heavy: 128 × 1483264/);
+    await expect(pool.fieldSlice(vReq(MOUNTAIN, 'density', '', 128), { priority: 500, columnCost: 1, budget: REQUEST_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: too heavy: 128 × 1652224/);
     await expect(pool.fieldSlice(vReq(MOUNTAIN, 'node', 'root.nope'), { priority: 500, columnCost: 1, budget: DRAFT_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: path "root.nope" names no node/);
     await expect(pool.fieldSlice(hReq('blocks'), { priority: 500, columnCost: 1, budget: DRAFT_BUDGET }).promise).rejects.toThrow(/^BAD_ARGS: field blocks has no horizontal slice/);
     pool.terminate();

@@ -450,7 +450,7 @@ describe('slice messages and the slice job (SP3a spec §5.1)', () => {
     expect(reply(slice(1, 3, -40, 9, -40, 9))).toEqual(['BAD_ARGS', 1, 3, 'A and B are the same point (-40, 9)']);
     // The window's own corners are inside.
     expect(reply(slice(1, 3, -524288, -524288, 524287, 524287))).toEqual(['sliceResult']);
-  });
+  }, 120_000); // about 8 s alone with SP6a's caps (Task 8), 38 s under test:goldens' parallel metrics-quick
   test('with epoch cells, a slice whose epoch the cell has left replies ABORTED and keeps no half-written column', () => {
     const sab = new SharedArrayBuffer(16);
     const cell = new Int32Array(sab);

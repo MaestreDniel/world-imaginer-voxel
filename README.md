@@ -113,7 +113,7 @@ Generated from `src/core/params/schema.ts` by `npm run docs:params`; a test fail
 | `density.noises.islands` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":2,"persistence":0.5,"remap":"none","wavelength":72,"yScale":2} | wavelength 16 … 8192 |  | terrain | Island noise: NI of the floating_islands islands term, sampled at the 4 × 8 × 4 corners; vertical wavelength λ / yScale. The preset's band window and cluster gate are exact for clampSigma ≤ 3; above, they cut where NI > 3. |
 | `density.detailAmpLo` | number | 0.6 | 0 … 8 | blocks | terrain | Detail amplitude at E −1: Detail amplitude in blocks where E ≤ −1. |
 | `density.detailAmpHi` | number | 1.5 | 0 … 8 | blocks | terrain | Detail amplitude at E +1: Detail amplitude in blocks where E ≥ 1; linear in (E + 1) / 2 between the two. |
-| `density.defs` | json | density tree, 616 nodes |  |  | terrain | Density expression: The density expression {root, defs} as data (SP3d spec §1-§2): its numbers may read the density and surface tunables through parameter refs, and its taps may be muted. Edit it in the Density tab. |
+| `density.defs` | json | density tree, 860 nodes |  |  | terrain | Density expression: The density expression {root, defs} as data (SP3d spec §1-§2): its numbers may read the density and surface tunables through parameter refs, and its taps may be muted. Edit it in the Density tab. |
 | `surface.noises.depth` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":2,"persistence":0.5,"remap":"none","wavelength":64,"yScale":1} | wavelength 8 … 1024 |  | terrain | Depth noise: Ns of the surface depth: max(0, ⌊3 + 2.75 · depthMul · Ns + 0.25 · hash⌋) blocks of under blocks below each top. |
 | `surface.noises.patch` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":2,"persistence":0.5,"remap":"none","wavelength":24,"yScale":1} | wavelength 4 … 512 |  | terrain | Patch noise: Every surface patch (clay, podzol, coarse dirt, mud, gravel, calcite, packed ice): a patch block where it is ≥ the patch threshold, a second one where it is ≤ −threshold. |
 | `surface.noises.bandOffset` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":1,"persistence":0.5,"remap":"none","wavelength":128,"yScale":1} | wavelength 16 … 2048 |  | terrain | Band offset noise: Shifts the badlands terracotta bands up or down by round(4 · z / clampSigma) blocks (−4 … 4), so the bands waver across the badlands. |
@@ -133,6 +133,8 @@ Generated from `src/core/params/schema.ts` by `npm run docs:params`; a test fail
 | `caves.cheese.regional` | number | 0.1 | 0 … 0.4 |  | terrain | Regional swing: Lowers the offset by this × the regional noise Nra (λ 1536), so some regions hold larger caverns. |
 | `caves.cheese.layerAmp` | number | 4 | 0 … 8 |  | terrain | Layer amplitude: Weight of the squared layer noise L², which closes caverns between flat layers. |
 | `caves.cheese.roofDepth` | number | 12 | 0 … 48 | blocks | terrain | Roof depth: Caverns close within about this depth below the terrain surface: + clamp((roofDepth − T) / 24, 0, 0.5). |
+| `caves.cheese.minY` | int | -56 | -64 … 320 | y | terrain | Lowest y: Caverns narrow below this y over the band span, then close over the next 8 blocks. |
+| `caves.cheese.maxY` | int | 320 | -64 … 320 | y | terrain | Highest y: Caverns narrow above this y over the band span, then close over the next 8 blocks. |
 | `caves.spaghetti3d.thickness` | number | 0.0765 | 0 … 0.3 |  | terrain | Thickness: Subtracted from the tunnel noise: higher → wider tunnels. |
 | `caves.spaghetti3d.thicknessVar` | number | 0.0115 | 0 … 0.1 |  | terrain | Thickness variation: Times the thickness noise thk: how much the tunnel width varies along a tunnel. |
 | `caves.spaghetti3d.regional` | number | 0.05 | 0 … 0.2 |  | terrain | Regional swing: Times the regional noise Nrb (λ 1024): tunnels are wider where Nrb is high, narrower where it is low. |
@@ -140,6 +142,8 @@ Generated from `src/core/params/schema.ts` by `npm run docs:params`; a test fail
 | `caves.spaghetti3d.scales.s1` | number | 1 | 0.0625 … 16 |  | terrain | Scale, −0.5 ≤ r < 0: The tunnel scale where the rarity noise is in −0.5 … 0. |
 | `caves.spaghetti3d.scales.s2` | number | 1.5 | 0.0625 … 16 |  | terrain | Scale, 0 ≤ r < 0.5: The tunnel scale where the rarity noise is in 0 … 0.5. |
 | `caves.spaghetti3d.scales.s3` | number | 2 | 0.0625 … 16 |  | terrain | Scale, r ≥ 0.5: The tunnel scale where the rarity noise is 0.5 or above. |
+| `caves.spaghetti3d.minY` | int | -56 | -64 … 320 | y | terrain | Lowest y: The 3D tunnels narrow below this y over the band span, then close over the next 8 blocks. |
+| `caves.spaghetti3d.maxY` | int | 320 | -64 … 320 | y | terrain | Highest y: The 3D tunnels narrow above this y over the band span, then close over the next 8 blocks. |
 | `caves.spaghetti2d.thickness` | number | 0.95 | 0.5 … 1.5 |  | terrain | Thickness: The constant of tm = −thickness − 0.35·Nthk: higher → wider and taller tunnels. |
 | `caves.spaghetti2d.layerAmp` | number | 8 | 0 … 32 |  | terrain | Layer amplitude: Times the elevation noise Nel: how far the tunnel layer rises and falls around its sloping height. |
 | `caves.spaghetti2d.scales.s0` | number | 0.5 | 0.0625 … 16 |  | terrain | Scale, r < −0.75: The tunnel scale where the rarity noise is below −0.75. |
@@ -147,13 +151,20 @@ Generated from `src/core/params/schema.ts` by `npm run docs:params`; a test fail
 | `caves.spaghetti2d.scales.s2` | number | 1 | 0.0625 … 16 |  | terrain | Scale, −0.5 ≤ r < 0.5: The tunnel scale where the rarity noise is in −0.5 … 0.5. |
 | `caves.spaghetti2d.scales.s3` | number | 2 | 0.0625 … 16 |  | terrain | Scale, 0.5 ≤ r < 0.75: The tunnel scale where the rarity noise is in 0.5 … 0.75. |
 | `caves.spaghetti2d.scales.s4` | number | 3 | 0.0625 … 16 |  | terrain | Scale, r ≥ 0.75: The tunnel scale where the rarity noise is 0.75 or above. |
+| `caves.spaghetti2d.minY` | int | -64 | -64 … 320 | y | terrain | Lowest y: The flat tunnels narrow below this y over the band span, then close over the next 8 blocks. |
+| `caves.spaghetti2d.maxY` | int | 215 | -64 … 320 | y | terrain | Highest y: The flat tunnels narrow above this y over the band span, then close over the next 8 blocks. |
 | `caves.noodles.thickness` | number | 0.075 | 0 … 0.3 |  | terrain | Thickness: Subtracted from the ridges: higher → wider noodles. |
 | `caves.noodles.ridgeMul` | number | 1.5 | 0.5 … 4 |  | terrain | Ridge multiplier: Times the ridge noises max(\|An\|, \|Bn\|): higher → thinner noodles. |
 | `caves.noodles.regional` | number | 0.1 | 0 … 0.4 |  | terrain | Regional swing: Lowers the toggle noise by this × the regional noise Nrb (λ 1024), so noodles close together where Nrb is high. |
+| `caves.noodles.minY` | int | -60 | -64 … 320 | y | terrain | Lowest y: Noodles narrow below this y over the band span, then close over the next 8 blocks. |
+| `caves.noodles.maxY` | int | 64 | -64 … 320 | y | terrain | Highest y: Noodles narrow above this y over the band span, then close over the next 8 blocks. |
 | `caves.pillars.threshold` | number | 0.03 | 0 … 0.5 |  | terrain | Threshold: Rock is kept where P / 16 is at least this (lower → more and thicker pillars). |
 | `caves.entrances.offset` | number | 0.37 | -0.5 … 1 |  | terrain | Offset: Added to the scaled entrance noise Ne·(1/6): lower → more entrances. |
 | `caves.entrances.threshold` | number | 0.08 | 0 … 0.5 |  | terrain | Threshold: Width of the entrance tunnels: carved where max(\|E1\|, \|E2\|) is below about this. |
+| `caves.entrances.minY` | int | -64 | -64 … 320 | y | terrain | Lowest y: Entrances narrow below this y over the band span, then close over the next 8 blocks. |
+| `caves.entrances.maxY` | int | 320 | -64 … 320 | y | terrain | Highest y: Entrances narrow above this y over the band span, then close over the next 8 blocks. |
 | `caves.limits.surfaceDepth` | number | 8 | 0 … 32 | blocks | terrain | Surface depth: The deep families fade out above this depth: + clamp((surfaceDepth − T)·2, 0, 32) (0 at T ≥ surfaceDepth, 16 at the surface). |
+| `caves.limits.bandSpan` | int | 16 | 1 … 32 | blocks | terrain | Band span: Outside its depth band (minY … maxY) a family narrows over this many blocks (the gentle part of its cap), then closes over the next 8. |
 | `caves.noises.cheese` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":4,"persistence":0.5,"remap":"none","wavelength":96,"yScale":0.666666666666667} | wavelength 16 … 8192 |  | terrain | Cheese noise: Nch of the cheese caverns (λxz 96, λy 144, double). |
 | `caves.noises.layer` | noise | {"amplitudes":null,"clampSigma":3,"double":false,"lacunarity":2,"octaves":1,"persistence":0.5,"remap":"none","wavelength":96,"yScale":6} | wavelength 16 … 8192 |  | terrain | Layer noise: L of the cheese layer term layerAmp·L² (λxz 96, λy 16). |
 | `caves.noises.cheeseRegional` | noise | {"amplitudes":null,"clampSigma":3,"double":false,"lacunarity":2,"octaves":2,"persistence":0.5,"remap":"none","wavelength":1536,"yScale":1} | wavelength 16 … 8192 |  | terrain | Cheese regional noise: Nra (2D): lowers the cheese offset by regional·Nra. |

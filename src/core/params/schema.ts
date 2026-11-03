@@ -50,6 +50,17 @@ const scale = (def: number, label: string, doc: string) =>
   num(def, { ...TERRAIN, label, doc, min: 0.0625, max: 16, step: 0.0625 });
 const amp = (def: number, label: string, doc: string) =>
   num(def, { ...TERRAIN, label, doc, unit: 'blocks', min: 0, max: 8, step: 0.05 });
+/**
+ * A cave family's depth band end (SP6a spec §1.4, §4): an int y in −64 … 320. Outside [minY, maxY] the family narrows
+ * over `caves.limits.bandSpan` blocks (the gentle part of its cap), then closes over the next 8 (the steep part).
+ */
+const bandY = (def: number, end: 'minY' | 'maxY', family: string) => int(def, {
+  ...TERRAIN, unit: 'y', min: -64, max: 320,
+  label: end === 'minY' ? 'Lowest y' : 'Highest y',
+  doc: end === 'minY'
+    ? `${family} narrow below this y over the band span, then close over the next 8 blocks.`
+    : `${family} narrow above this y over the band span, then close over the next 8 blocks.`,
+});
 
 /** A surface noise (SP3c spec §3.5): 2D, sampled at unscaled world block coordinates; remap 'none' (validateRules refuses another). */
 const surfaceNoise = (label: string, doc: string, def: { readonly wavelength: number; readonly octaves: number }, wavelength: { readonly min: number; readonly max: number }) =>
@@ -165,6 +176,8 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       regional: num(0.1, { ...TERRAIN, label: 'Regional swing', doc: 'Lowers the offset by this × the regional noise Nra (λ 1536), so some regions hold larger caverns.', min: 0, max: 0.4, step: 0.01 }),
       layerAmp: num(4, { ...TERRAIN, label: 'Layer amplitude', doc: 'Weight of the squared layer noise L², which closes caverns between flat layers.', min: 0, max: 8, step: 0.05 }),
       roofDepth: num(12, { ...TERRAIN, label: 'Roof depth', doc: 'Caverns close within about this depth below the terrain surface: + clamp((roofDepth − T) / 24, 0, 0.5).', unit: 'blocks', min: 0, max: 48, step: 1 }),
+      minY: bandY(-56, 'minY', 'Caverns'),
+      maxY: bandY(320, 'maxY', 'Caverns'),
     }),
     spaghetti3d: group('Spaghetti 3D', 'Winding tunnels: 16·(rough + clamp(max(rm·|S1(p/rm)|, rm·|S2(p/rm)|) − thickness − thicknessVar·thk − regional·Nrb, −1, 1)), carved where it is below 0; rm is the scale of the rarity band (SP6a spec §1.2-§1.3).', {
       thickness: num(0.0765, { ...TERRAIN, label: 'Thickness', doc: 'Subtracted from the tunnel noise: higher → wider tunnels.', min: 0, max: 0.3, step: 0.0005 }),
@@ -176,6 +189,8 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
         s2: scale(1.5, 'Scale, 0 ≤ r < 0.5', 'The tunnel scale where the rarity noise is in 0 … 0.5.'),
         s3: scale(2, 'Scale, r ≥ 0.5', 'The tunnel scale where the rarity noise is 0.5 or above.'),
       }),
+      minY: bandY(-56, 'minY', 'The 3D tunnels'),
+      maxY: bandY(320, 'maxY', 'The 3D tunnels'),
     }),
     spaghetti2d: group('Spaghetti 2D', 'Flat winding tunnels along a sloping layer: 16·clamp(max(rm·|S2d(p/rm)| + 0.083·tm, (|layerAmp·Nel + yGrad| + tm)³), −1, 1), tm = −thickness − 0.35·Nthk; rm is the scale of the rarity band (SP6a spec §1.2-§1.3).', {
       thickness: num(0.95, { ...TERRAIN, label: 'Thickness', doc: 'The constant of tm = −thickness − 0.35·Nthk: higher → wider and taller tunnels.', min: 0.5, max: 1.5, step: 0.01 }),
@@ -187,11 +202,17 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
         s3: scale(2, 'Scale, 0.5 ≤ r < 0.75', 'The tunnel scale where the rarity noise is in 0.5 … 0.75.'),
         s4: scale(3, 'Scale, r ≥ 0.75', 'The tunnel scale where the rarity noise is 0.75 or above.'),
       }),
+      minY: bandY(-64, 'minY', 'The flat tunnels'),
+      // 215, not 320 (SP6a spec §1.4, §4): the layer is never open above y 208, so any maxY from 208 to 244 changes no
+      // generated output, and 215 is the highest of those whose U2 lower step (183) has a band witness.
+      maxY: bandY(215, 'maxY', 'The flat tunnels'),
     }),
     noodles: group('Noodles', 'Thin tubes: 16·(−thickness − 0.025·Kn + ridgeMul·max(|An|, |Bn|) + 4·max(0, −Nn)), carved where it is below 0; they narrow and close where the toggle noise Nn is below 0 (SP6a spec §1.1-§1.3).', {
       thickness: num(0.075, { ...TERRAIN, label: 'Thickness', doc: 'Subtracted from the ridges: higher → wider noodles.', min: 0, max: 0.3, step: 0.0025 }),
       ridgeMul: num(1.5, { ...TERRAIN, label: 'Ridge multiplier', doc: 'Times the ridge noises max(|An|, |Bn|): higher → thinner noodles.', min: 0.5, max: 4, step: 0.05 }),
       regional: num(0.1, { ...TERRAIN, label: 'Regional swing', doc: 'Lowers the toggle noise by this × the regional noise Nrb (λ 1024), so noodles close together where Nrb is high.', min: 0, max: 0.4, step: 0.01 }),
+      minY: bandY(-60, 'minY', 'Noodles'),
+      maxY: bandY(64, 'maxY', 'Noodles'),
     }),
     pillars: group('Pillars', 'Rock pillars kept inside caverns: P = 16·(2·Np − 1 − rare)·(0.55 + 0.55·thickness)³.', {
       threshold: num(0.03, { ...TERRAIN, label: 'Threshold', doc: 'Rock is kept where P / 16 is at least this (lower → more and thicker pillars).', min: 0, max: 0.5, step: 0.005 }),
@@ -199,9 +220,12 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     entrances: group('Entrances', 'Openings that reach the surface: 16·min(Ne·(1/6) + offset + yGrad, rough + clamp(max(|E1|, |E2|) − threshold, −1, 1)), not depth-ramped.', {
       offset: num(0.37, { ...TERRAIN, label: 'Offset', doc: 'Added to the scaled entrance noise Ne·(1/6): lower → more entrances.', min: -0.5, max: 1, step: 0.01 }),
       threshold: num(0.08, { ...TERRAIN, label: 'Threshold', doc: 'Width of the entrance tunnels: carved where max(|E1|, |E2|) is below about this.', min: 0, max: 0.5, step: 0.005 }),
+      minY: bandY(-64, 'minY', 'Entrances'),
+      maxY: bandY(320, 'maxY', 'Entrances'),
     }),
     limits: group('Limits', 'Where the cave families may reach (SP6a spec §1.4).', {
       surfaceDepth: num(8, { ...TERRAIN, label: 'Surface depth', doc: 'The deep families fade out above this depth: + clamp((surfaceDepth − T)·2, 0, 32) (0 at T ≥ surfaceDepth, 16 at the surface).', unit: 'blocks', min: 0, max: 32, step: 1 }),
+      bandSpan: int(16, { ...TERRAIN, label: 'Band span', doc: 'Outside its depth band (minY … maxY) a family narrows over this many blocks (the gentle part of its cap), then closes over the next 8.', unit: 'blocks', min: 1, max: 32 }),
     }),
     noises: group('Cave noises', 'Noises read by the cave terms (noise2 / noise ops), at unscaled world block coordinates.', {
       cheese: caveNoise('Cheese noise', 'Nch of the cheese caverns (λxz 96, λy 144, double).', { dims: 3, wavelength: 96, octaves: 4, yScale: 96 / 144, double: true }, 3, CAVE_WAVELENGTH),

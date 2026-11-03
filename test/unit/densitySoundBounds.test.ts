@@ -381,7 +381,8 @@ describe('the default world is unchanged (SP3d spec §1.9 D: proven, not only cl
 
   test('… and with SP6a\'s cave terms (recorded at each commit): more voxels evaluated, fewer solid', () => {
     // Entrances, cheese and pillars (Task 6): '6a825c0535036c45 411264 984610'; with spaghetti 3D and 2D and the noodle
-    // (Task 7):
-    expect(hashed(createDensityContext(ctxFor('42')))).toBe('a511599d09a0595f 619136 982594');
+    // (Task 7): 'a511599d09a0595f 619136 982594'; with the depth bands' caps (Task 8: the noodle closed outside y −60 …
+    // 64, cheese and spaghetti 3D narrowed below −56):
+    expect(hashed(createDensityContext(ctxFor('42')))).toBe('68f1c4658652f66d 610176 983082');
   });
 });

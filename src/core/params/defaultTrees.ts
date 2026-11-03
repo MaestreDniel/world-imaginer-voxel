@@ -56,30 +56,59 @@ const fl = (v: JsonValue): JsonValue => max(v, c(-48));
 const sky = (v: JsonValue): JsonValue => rangeChoice(body(), -1e9, -8, c(32), v);
 /** ramp = clamp((surfaceDepth − T)·2, 0, 32): 0 at T ≥ surfaceDepth, 16 at the surface, 32 from 8 above it (D4). */
 const ramp = (): JsonValue => clamp(mul(add(param('caves.limits.surfaceDepth'), neg(body())), c(2)), 0, 32);
+/** The position's y (the corner's inside an `interpolated` slot, the voxel's outside). */
+const y = (): JsonValue => ({ op: 'y' });
+const recip = (x: JsonValue): JsonValue => ({ op: 'recip', x });
+/** s = `caves.limits.bandSpan`, the gentle part's span (1 … 32 blocks). */
+const bandSpan = (): JsonValue => param('caves.limits.bandSpan');
+/**
+ * The gentle rise G_f of each family's cap (SP6a §1.4; tree literals, about the family's typical air depth: its value
+ * at the median carved voxel): the blobby families' air values are about −5 to −16, the ridged ones' −1 to −3.
+ */
+const CAP_GENTLE = { entrances: 16, cheese: 16, spaghetti3d: 2.4, spaghetti2d: 2.4, noodles: 2.4 } as const;
+/**
+ * cap_f = G_f·min(1, g_f) + 128·min(1, h_f) (SP6a §1.4, D2), for the family whose depth band is `caves.<family>.minY` …
+ * `.maxY`: g_f = clamp((minY − y)·(1/s), 0, 1) + clamp((y − maxY)·(1/s), 0, 1) rises from 0 to 1 over the s blocks
+ * outside the band (the family narrows), h_f = clamp((minY − s − y)·(1/8), 0, 1) + clamp((y − maxY − s)·(1/8), 0, 1)
+ * over the next 8 (it closes: wherever h_f ≥ 1/2 the slot is ≥ −48 + 64 > 0 over every leaf value, the floor `fl`
+ * bounding the family below). Written with `recip(param …)` and `y`, not `slide` knots: a knot's y is a literal or one
+ * ref and the knots must increase over the refs' static ranges, which the overlapping minY / maxY ranges break.
+ */
+const cap = (family: keyof typeof CAP_GENTLE): JsonValue => {
+  const minY = (): JsonValue => param(`caves.${family}.minY`);
+  const maxY = (): JsonValue => param(`caves.${family}.maxY`);
+  const g = add(
+    clamp(mul(add(minY(), neg(y())), recip(bandSpan())), 0, 1),
+    clamp(mul(add(y(), neg(maxY())), recip(bandSpan())), 0, 1));
+  const h = add(
+    clamp(mul(add(add(minY(), neg(bandSpan())), neg(y())), c(0.125)), 0, 1),
+    clamp(mul(add(add(y(), neg(maxY())), neg(bandSpan())), c(0.125)), 0, 1));
+  return add(mul(c(CAP_GENTLE[family]), min(c(1), g)), mul(c(128), min(c(1), h)));
+};
 /** rough = (−0.05 − 0.05·Nrm)·(−0.4 + |Nr|). */
 const rough = (): JsonValue => mul(add(c(-0.05), mul(c(-0.05), noise('roughnessMod'))), add(c(-0.4), abs(noise('roughness'))));
 
 /**
  * E = tap entrances(interpolated(fl(16·min(Ne·(1/6) + offset + yGrad(−10 → 0.3, 30 → 0), rough + clamp(max(|E1|,
- * |E2|) − threshold, −1, 1))))): no `sky` and no `ramp` (the master's "entrances NOT depth-ramped"). Ne is a unit-sd
+ * |E2|) − threshold, −1, 1))) + cap_e)): no `sky` and no `ramp` (the master's "entrances NOT depth-ramped"). Ne is a unit-sd
  * noise, so its arm is scaled by 1/6 (written `recip(const 6)`, as the cheese roof's 1/24): the default offset 0.37
  * opens where Ne < −2.22 (SP6a spec §1.2).
  */
-const entrances = (): JsonValue => tap('entrances', interpolated(fl(mul(c(16), min(
+const entrances = (): JsonValue => tap('entrances', interpolated(add(fl(mul(c(16), min(
   add(add(mul(noise('entrance'), { op: 'recip', x: c(6) }), param('caves.entrances.offset')), { op: 'slide', x: c(1), knots: [[-10, 0.3], [30, 0]] }),
   add(rough(), clamp(add(max(abs(noise('entranceA')), abs(noise('entranceB'))), neg(param('caves.entrances.threshold'))), -1, 1)),
-)))));
+))), cap('entrances'))));
 
 /**
  * C = tap cheese(interpolated(sky(fl(16·(layerAmp·L² + clamp(Nch + offset − regional·Nra, −1, 1) + clamp((roofDepth −
- * T)·(1/24), 0, 0.5))) + ramp))): the master's cheese with its roof term; `regional` lowers the threshold where Nra is
- * high (D3).
+ * T)·(1/24), 0, 0.5))) + ramp + cap_c))): the master's cheese with its roof term; `regional` lowers the threshold where
+ * Nra is high (D3).
  */
-const cheese = (): JsonValue => tap('cheese', interpolated(sky(add(fl(mul(c(16), add(add(
+const cheese = (): JsonValue => tap('cheese', interpolated(sky(add(add(fl(mul(c(16), add(add(
   mul(param('caves.cheese.layerAmp'), square(noise('layer'))),
   clamp(add(add(noise('cheese'), param('caves.cheese.offset')), neg(mul(param('caves.cheese.regional'), noise2('cheeseRegional')))), -1, 1)),
   clamp(mul(add(param('caves.cheese.roofDepth'), neg(body())), { op: 'recip', x: c(24) }), 0, 0.5),
-))), ramp()))));
+))), ramp()), cap('cheese')))));
 
 /** 0.55 + 0.55·thk_p, the pillars' thickness factor (cubed as `mul(square(x), x)`). */
 const pillarThickness = (): JsonValue => add(c(0.55), mul(c(0.55), noise('pillarThickness')));
@@ -125,47 +154,50 @@ const S2_BANDS = SPAGHETTI_BANDS.spaghetti2d;
 
 /**
  * S3 = tap spag3d(interpolated(sky(fl(16·(rough + clamp(max(rmS(S1), rmS(S2)) − thickness − thicknessVar·thk_s −
- * regional·Nrb, −1, 1))) + ramp))): Minecraft's 3D spaghetti with continuous rarity bands (SP6a §1.2-§1.3); S1 and S2
- * share the rarity noise.
+ * regional·Nrb, −1, 1))) + ramp + cap_s3))): Minecraft's 3D spaghetti with continuous rarity bands (SP6a §1.2-§1.3);
+ * S1 and S2 share the rarity noise.
  */
-const spag3d = (): JsonValue => tap(S3_BANDS.tap, interpolated(sky(add(fl(mul(c(16), add(rough(), clamp(add(add(add(
+const spag3d = (): JsonValue => tap(S3_BANDS.tap, interpolated(sky(add(add(fl(mul(c(16), add(rough(), clamp(add(add(add(
   max(
     rarityBlend(S3_BANDS.noises[0]!, S3_BANDS),
     rarityBlend(S3_BANDS.noises[1]!, S3_BANDS),
   ),
   neg(param('caves.spaghetti3d.thickness'))),
   neg(mul(param('caves.spaghetti3d.thicknessVar'), noise('spag3dThickness')))),
-  neg(mul(param('caves.spaghetti3d.regional'), noise2('spagRegional')))), -1, 1)))), ramp()))));
+  neg(mul(param('caves.spaghetti3d.regional'), noise2('spagRegional')))), -1, 1)))), ramp()), cap('spaghetti3d')))));
 
 /** tm = −thickness − 0.35·Nthk, spaghetti 2D's thickness term (spec §1.2's `−0.95 − 0.35·Nthk`, 0.95 the leaf). */
 const spag2dTm = (): JsonValue => add(neg(param('caves.spaghetti2d.thickness')), mul(c(-0.35), noise('spag2dThickness')));
 /**
  * S2 = tap spag2d(interpolated(sky(fl(16·clamp(max(rmS2(S2d) + 0.083·tm, (|layerAmp·Nel + yGrad(−64 → 8, 320 → −40)| +
- * tm)³), −1, 1)) + ramp))): flat tunnels along a layer that slopes down by one block in eight (SP6a §1.2).
+ * tm)³), −1, 1)) + ramp + cap_s2))): flat tunnels along a layer that slopes down by one block in eight (SP6a §1.2).
  */
-const spag2d = (): JsonValue => tap(S2_BANDS.tap, interpolated(sky(add(fl(mul(c(16), clamp(max(
+const spag2d = (): JsonValue => tap(S2_BANDS.tap, interpolated(sky(add(add(fl(mul(c(16), clamp(max(
   add(rarityBlend(S2_BANDS.noises[0]!, S2_BANDS), mul(c(0.083), spag2dTm())),
   cube(() => add(abs(add(mul(param('caves.spaghetti2d.layerAmp'), noise2('spag2dElevation')), { op: 'slide', x: c(1), knots: [[-64, 8], [320, -40]] })), spag2dTm())),
-), -1, 1))), ramp()))));
+), -1, 1))), ramp()), cap('spaghetti2d')))));
 
 /**
  * nb(N, c) = rangeChoice(y − maxY_n, −1e9, 40, rangeChoice(minY_n − y, −1e9, 40, N, c), c): a noodle noise only at
  * corners within 40 blocks of the noodle band (lever 3, SP6a §1.1; 40 = bandSpan's static maximum 32 + 8), the constant
- * c (which closes the tube) outside. The band is y −60 … 64, literals until the noodles' minY / maxY leaves land.
+ * c (which closes the tube) outside; minY_n, maxY_n the leaves `caves.noodles.minY` / `.maxY` (y −60 … 64). The bound 40
+ * stays a literal (a `rangeChoice` bound is a literal or one ref): beyond bandSpan + 8 ≤ 40 blocks outside the band the
+ * steep part of the noodle's cap has closed it already.
  */
 const nb = (x: JsonValue, cst: number): JsonValue =>
-  rangeChoice(add({ op: 'y' }, c(-64)), -1e9, 40, rangeChoice(add(c(-60), neg({ op: 'y' })), -1e9, 40, x, c(cst)), c(cst));
+  rangeChoice(add(y(), neg(param('caves.noodles.maxY'))), -1e9, 40,
+    rangeChoice(add(param('caves.noodles.minY'), neg(y())), -1e9, 40, x, c(cst)), c(cst));
 /**
- * noodle = tap noodle(fl(16·(−thickness − 0.025·Kn + ridgeMul·max(|An|, |Bn|) + 4·max(0, −Nn)))), combined at voxel level
- * (outside `interpolated`) from four slots: Nn = interpolated(nb(Nt − regional·Nrb, −1)), Kn = interpolated(nb(thk_n,
- * 0)), An = interpolated(nb(Ra, 1)), Bn = interpolated(nb(Rb, 1)). The toggle `+ 4·max(0, −Nn)` narrows the tube and
- * closes it by Nn ≈ −0.019 (SP6a §1.3).
+ * noodle = tap noodle(fl(16·(−thickness − 0.025·Kn + ridgeMul·max(|An|, |Bn|) + 4·max(0, −Nn))) + cap_n), combined at
+ * voxel level (outside `interpolated`, its cap read at the voxel's y) from four slots: Nn = interpolated(nb(Nt −
+ * regional·Nrb, −1)), Kn = interpolated(nb(thk_n, 0)), An = interpolated(nb(Ra, 1)), Bn = interpolated(nb(Rb, 1)). The
+ * toggle `+ 4·max(0, −Nn)` narrows the tube and closes it by Nn ≈ −0.019 (SP6a §1.3).
  */
-const noodle = (): JsonValue => tap('noodle', fl(mul(c(16), add(add(add(
+const noodle = (): JsonValue => tap('noodle', add(fl(mul(c(16), add(add(add(
   neg(param('caves.noodles.thickness')),
   mul(c(-0.025), interpolated(nb(noise('noodleThickness'), 0)))),
   mul(param('caves.noodles.ridgeMul'), max(abs(interpolated(nb(noise('noodleRidgeA'), 1))), abs(interpolated(nb(noise('noodleRidgeB'), 1)))))),
-  mul(c(4), max(c(0), neg(interpolated(nb(add(noise('noodleToggle'), neg(mul(param('caves.noodles.regional'), noise2('spagRegional')))), -1)))))))));
+  mul(c(4), max(c(0), neg(interpolated(nb(add(noise('noodleToggle'), neg(mul(param('caves.noodles.regional'), noise2('spagRegional')))), -1)))))))), cap('noodles')));
 
 /** The caves slot (SP6a §1.1): max(min(E, C, S3, S2), keep), the mins left-nested in that order. */
 const caves = (): JsonValue => max(min(min(min(entrances(), cheese()), spag3d()), spag2d()), keep());

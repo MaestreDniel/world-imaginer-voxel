@@ -10,7 +10,7 @@ import { fnv1a32, hex64 } from '../../src/core/hash';
 import { latticeIndex } from '../../src/gen/column/columnStage';
 import { biomeName } from '../../src/gen/biomes/registry';
 import {
-  CAVE_SLOTS, caveColumn, caveFamilyCounts, caveLeaves, caveSlotLeaves, cellProbe, findWitness, intendedClass, islandColumn, islandLeaves, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
+  amplifiedBandWitness, bandWindow, bandWitness, CAVE_SLOTS, caveColumn, caveFamilyCounts, caveLeaves, caveSlotLeaves, cellProbe, findWitness, intendedClass, islandColumn, islandLeaves, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
   scaleBandCarves, scaleWitness, SURFACE_CLASSES, surfacePrefilter, surfaceSlotLeaves, u2Leaves,
   type CaveSlot,
   type LivenessClass,
@@ -23,7 +23,7 @@ import { createStore } from '../../src/world/store/store';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
-import { createGenContext } from '../../src/gen/context';
+import { createGenContext, type GenContext } from '../../src/gen/context';
 import { createDensityContext } from '../../src/gen/density/context';
 import { ctxFor } from '../harness/gen';
 
@@ -35,14 +35,40 @@ const CAVE_PINS: Readonly<Record<CaveSlot, readonly [LivenessColumn, number]>> =
   caverns: [{ cx: 546, cz: 25857, cls: 'cave' }, 7],
   tunnels: [{ cx: 4705, cz: -24478, cls: 'cave' }, 224],
 };
-/** The leaves of SP6a Tasks 6 and 7 (the caves group so far): U2 covers 73 + 19 + 30 = 122 leaves. */
-const U2_LEAVES = 122;
+/** The leaves of SP6a Tasks 6, 7 and 8 (the caves group so far): U2 covers 73 + 19 + 30 + 11 = 133 leaves. */
+const U2_LEAVES = 133;
 /** The spaghetti scale leaves (SP6a Task 7), decided on the class columns or on their bounded witness search (ruling P5). */
 const SCALE_LEAVES = [
   'caves.spaghetti3d.scales.s0', 'caves.spaghetti3d.scales.s1', 'caves.spaghetti3d.scales.s2', 'caves.spaghetti3d.scales.s3',
   'caves.spaghetti2d.scales.s0', 'caves.spaghetti2d.scales.s1', 'caves.spaghetti2d.scales.s2', 'caves.spaghetti2d.scales.s3',
   'caves.spaghetti2d.scales.s4',
 ] as const;
+
+/** The depth-band leaves (SP6a Task 8), decided on the class columns or on their bounded band witness (rulings P3, P4, R5). */
+const BAND_LEAVES = [
+  'caves.cheese.minY', 'caves.cheese.maxY', 'caves.spaghetti3d.minY', 'caves.spaghetti3d.maxY',
+  'caves.spaghetti2d.minY', 'caves.spaghetti2d.maxY', 'caves.noodles.minY', 'caves.noodles.maxY',
+  'caves.entrances.minY', 'caves.entrances.maxY',
+] as const;
+/**
+ * Each depth-band leaf's U2 verdict at seed 42 (SP6a spec §4): the minY leaves and the noodle's maxY on a class column
+ * (P4), the maxY leaves of cheese, spaghetti 3D and the entrances on the amplified base (P3: the default base's scan has
+ * none), spaghetti 2D's maxY 215 on its witness (R5).
+ */
+const BAND_PINS: Readonly<Record<(typeof BAND_LEAVES)[number], string>> = {
+  'caves.cheese.minY': 'cave column (546, 25857)',
+  'caves.cheese.maxY': 'amplified witness column (-20297, -13632)',
+  'caves.spaghetti3d.minY': 'cave column (546, 25857)',
+  'caves.spaghetti3d.maxY': 'amplified witness column (-1430, 31644)',
+  'caves.spaghetti2d.minY': 'cave column (4705, -24478)',
+  'caves.spaghetti2d.maxY': 'witness column (-8539, 19151)',
+  'caves.noodles.minY': 'cave column (4705, -24478)',
+  'caves.noodles.maxY': 'cave column (546, 25857)',
+  'caves.entrances.minY': 'badlands column (-26426, -31088)',
+  'caves.entrances.maxY': 'amplified witness column (9157, 4188)',
+};
+/** The band leaves whose default sits at a range end, so U2 has one step for them (320 → 272; −64 → −54). */
+const ONE_STEP = ['caves.cheese.maxY', 'caves.spaghetti3d.maxY', 'caves.spaghetti2d.minY', 'caves.entrances.minY', 'caves.entrances.maxY'];
 
 const leaf = (path: string) => {
   const info = SCHEMA.leaves.find((l) => l.path === path);
@@ -97,11 +123,17 @@ function surfaceShows(s: ColumnSample): Record<SurfaceClass, () => boolean> {
 }
 
 describe('perturbations', () => {
-  test('every leaf of the schema gets two distinct perturbed values (a json leaf its one pinned variant, a bool leaf its negation), each valid for the leaf', () => {
+  test('every leaf of the schema gets two distinct perturbed values (a json leaf its one pinned variant, a bool leaf its negation, a leaf at a range end one), each valid for the leaf', () => {
+    for (const p of ONE_STEP) {
+      const l = leaf(p).leaf;
+      expect([p, getPath(DEFAULTS, p) === l.min || getPath(DEFAULTS, p) === l.max]).toEqual([p, true]);
+    }
+    expect(perturbations(leaf('caves.cheese.maxY'), 320)).toEqual([272]);
+    expect(perturbations(leaf('caves.entrances.minY'), -64)).toEqual([-54]);
     for (const info of SCHEMA.leaves) {
       const value = getPath(DEFAULTS, info.path);
       const values = perturbations(info, value);
-      const n = info.leaf.kind === 'json' || info.leaf.kind === 'bool' ? 1 : 2;
+      const n = info.leaf.kind === 'json' || info.leaf.kind === 'bool' || ONE_STEP.includes(info.path) ? 1 : 2;
       expect(values, info.path).toHaveLength(n);
       expect(new Set([value, ...values].map((v) => canonicalJSON(v))).size, info.path).toBe(n + 1);
       for (const v of values) {
@@ -535,7 +567,7 @@ describe('the cave class columns (SP6a spec §4)', () => {
 
   test('the caves leaves are the caves.* group, in schema order, after the islands leaves; the slots share them but the scale leaves', () => {
     expect(caveLeaves().map((l) => l.path)).toEqual(SCHEMA.leaves.filter((l) => l.path.startsWith('caves.')).map((l) => l.path));
-    expect(caveLeaves().length).toBe(49);
+    expect(caveLeaves().length).toBe(60);
     expect(CAVE_SLOTS).toEqual(['caverns', 'tunnels']);
     const tunnels = caveSlotLeaves('tunnels').map((l) => l.path);
     expect(tunnels).toEqual([
@@ -547,10 +579,13 @@ describe('the cave class columns (SP6a spec §4)', () => {
       'caves.noises.spag2dRarity', 'caves.noises.noodleToggle', 'caves.noises.noodleThickness', 'caves.noises.noodleRidgeA',
       'caves.noises.noodleRidgeB',
     ]);
-    // Task 6's 19 leaves are the caverns' (its cave column is unchanged).
-    expect(caveSlotLeaves('caverns').length).toBe(19);
+    // Task 6's 19 leaves and caves.limits.bandSpan are the caverns' (its cave column is unchanged).
+    expect(caveSlotLeaves('caverns').length).toBe(20);
+    expect(caveSlotLeaves('caverns').map((l) => l.path)).toContain('caves.limits.bandSpan');
     const slotted = new Set([...caveSlotLeaves('caverns'), ...caveSlotLeaves('tunnels')].map((l) => l.path));
-    expect(caveLeaves().map((l) => l.path).filter((p) => !slotted.has(p))).toEqual(SCALE_LEAVES);
+    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES];
+    expect(caveLeaves().map((l) => l.path).filter((p) => !slotted.has(p))).toEqual(caveLeaves().map((l) => l.path).filter((p) => apart.includes(p)));
+    expect(apart.length).toBe(19);
   });
 
   test('each slot\'s column: the first land column of sp6a.liveness.caves where its families act and every leaf of its slot changes the T column', () => {
@@ -575,9 +610,10 @@ describe('the cave class columns (SP6a spec §4)', () => {
     expect(caveColumn(CTX, 'tunnels', [...caveSlotLeaves('caverns'), ...caveSlotLeaves('tunnels')], CAVE_PINS.tunnels[1] + 1)).toBeNull();
   });
 
-  test('every caves leaf but the scale leaves is live on a cave column (the class it is meant for), and only through the T stage', () => {
+  test('every caves leaf but the scale and band leaves is live on a cave column (the class it is meant for), and only through the T stage', () => {
     const cs = caves();
-    for (const l of caveLeaves().filter((x) => !(SCALE_LEAVES as readonly string[]).includes(x.path))) {
+    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES];
+    for (const l of caveLeaves().filter((x) => !apart.includes(x.path))) {
       expect(intendedClass(l.path)).toBe('cave');
       const r = leafLiveness(CTX, l.path, [...columns(), ...cs]);
       expect([l.path, r.live, r.cls]).toEqual([l.path, true, 'cave']);
@@ -606,6 +642,93 @@ describe('the cave class columns (SP6a spec §4)', () => {
     expect(leafLiveness(CTX, 'caves.pillars.threshold', others)).toEqual({ path: 'caves.pillars.threshold', live: false, via: null, cls: 'cave' });
     expect(caveColumn(CTX, 'caverns', caveSlotLeaves('caverns'), 0)).toBeNull();
     expect(() => scaleWitness(CTX, 'caves.noodles.regional')).toThrow('not a spaghetti scale leaf');
+  });
+});
+
+describe('the depth-band leaves (SP6a Task 8; rulings P3, P4, R5)', () => {
+  let found: LivenessColumn[] | null = null;
+  /** The class columns with the two cave columns (searched once per describe). */
+  const all = (): LivenessColumn[] => (found ??= [...columns(), ...CAVE_SLOTS.map((s) => caveColumn(CTX, s)!)]);
+  /** The family's air above y `above` on (cx, cz) of `ctx`: voxels the pre-cave density holds solid where its tap is ≤ 0. */
+  const airAbove = (ctx: GenContext, tap: string, cx: number, cz: number, above: number): number => {
+    const dc = createDensityContext(ctx);
+    dc.column(cx, cz);
+    let n = 0;
+    for (let y = above + 1; y < 320; y++) {
+      for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
+        if (dc.compiled.tapFn('precave', lx, y, lz) > 0 && dc.compiled.tapFn(tap, lx, y, lz) <= 0) n++;
+      }
+    }
+    return n;
+  };
+  const columnOf = (via: string): [number, number] => via.slice(via.indexOf('(') + 1, -1).split(', ').map(Number) as [number, number];
+
+  test('each band leaf is live: on a class column, else on its band witness (the amplified base for three maxY leaves)', () => {
+    for (const p of BAND_LEAVES) {
+      expect(intendedClass(p)).toBe('cave');
+      const r = leafLiveness(CTX, p, all());
+      expect([p, r.live, r.via]).toEqual([p, true, BAND_PINS[p]]);
+    }
+  }, 120_000); // about 8 s alone (the default base's 2,048-column maxY scan among them), 37 s under test:goldens
+
+  test('the windows: every y a step of the leaf can change, 7 blocks past the steps, clipped to y −63 … 319', () => {
+    expect(bandWindow(CTX, 'caves.cheese.maxY')).toEqual([265, 319]);
+    expect(bandWindow(CTX, 'caves.cheese.minY')).toEqual([-63, -41]);
+    expect(bandWindow(CTX, 'caves.entrances.minY')).toEqual([-63, -47]);
+    expect(bandWindow(CTX, 'caves.noodles.maxY')).toEqual([47, 319]);
+    expect(bandWindow(CTX, 'caves.spaghetti2d.maxY')).toEqual([176, 319]);
+    expect(() => bandWindow(CTX, 'caves.limits.bandSpan')).toThrow('not a depth-band leaf');
+    expect(() => bandWitness(CTX, 'caves.noodles.regional')).toThrow('not a depth-band leaf');
+    expect(() => amplifiedBandWitness(CTX, 'caves.noodles.maxY')).toThrow('not decided on an amplified base');
+  });
+
+  test('P3: the maxY 320 of cheese, spaghetti 3D and the entrances has no witness on the default base; each has one on the amplified base, holding its air above y 272', () => {
+    const amplified = createGenContext(seedFromInput('42'), resolveProfile('amplified'));
+    const draws: Record<string, number> = { 'caves.cheese.maxY': 42, 'caves.spaghetti3d.maxY': 1351, 'caves.entrances.maxY': 686 };
+    const taps: Record<string, string> = { 'caves.cheese.maxY': 'cheese', 'caves.spaghetti3d.maxY': 'spag3d', 'caves.entrances.maxY': 'entrances' };
+    for (const p of Object.keys(draws)) {
+      expect(getPath(DEFAULTS, p)).toBe(320);
+      // The default base: 2,048 columns of sp6a.liveness.mountain examined, none with the family's air in y 265 … 319.
+      expect([p, bandWitness(CTX, p, all())]).toEqual([p, { via: null, draws: 2048, examined: 2048, checks: 0, span: [265, 319] }]);
+      const w = amplifiedBandWitness(CTX, p);
+      expect([p, w.via, w.draws]).toEqual([p, BAND_PINS[p as (typeof BAND_LEAVES)[number]], draws[p]]);
+      const [cx, cz] = columnOf(w.via!);
+      expect([p, airAbove(amplified, taps[p]!, cx, cz, 272) > 0]).toEqual([p, true]);
+    }
+  });
+
+  test('R5: spaghetti 2D\'s maxY 215 is the highest default from 208 to 244 whose lower step has a witness, and moves no generated output', () => {
+    expect(DEFAULTS.caves.spaghetti2d.maxY).toBe(215);
+    // 215's steps are 183 and 247; on the witness the lower one changes the T column, the upper one does not.
+    expect(perturbations(leaf('caves.spaghetti2d.maxY'), 215)).toEqual([183, 247]);
+    const w = bandWitness(CTX, 'caves.spaghetti2d.maxY', all());
+    expect([w.via, w.draws, w.checks, w.span]).toEqual([BAND_PINS['caves.spaghetti2d.maxY'], 28559, 1, [176, 319]]);
+    const [cx, cz] = columnOf(w.via!);
+    const at = (maxY: number) => stageOutputHash(moved('caves.spaghetti2d.maxY', maxY), 'terrain', cx, cz);
+    expect([at(183) !== at(215), at(247) !== at(215)]).toEqual([true, false]);
+    // The layer is never open above y 208, so maxY 208 … 244 changes no output: here 215 gives the T column of 320.
+    expect(at(320)).toBe(at(215));
+    expect(airAbove(CTX, 'spag2d', cx, cz, 183)).toBeGreaterThan(0);
+    expect(airAbove(CTX, 'spag2d', cx, cz, 208)).toBe(0);
+    // 216 (step 184) has none: the witness's highest air is at y 184, which a cap from 184 does not reach.
+    const w216 = bandWitness(moved('caves.spaghetti2d.maxY', 216), 'caves.spaghetti2d.maxY', all());
+    expect([w216.via, w216.draws]).toEqual([null, 32768]);
+  });
+
+  test('P4: each minY leaf (and the noodle\'s maxY) also has its own band witness off the class columns, near the bottom', () => {
+    const pins: Array<[string, string, number]> = [
+      ['caves.cheese.minY', 'witness column (-26773, -930)', 2],
+      ['caves.spaghetti3d.minY', 'witness column (8300, 13717)', 18],
+      ['caves.spaghetti2d.minY', 'witness column (-17888, 14467)', 8],
+      ['caves.noodles.minY', 'witness column (-26773, -930)', 2],
+      ['caves.entrances.minY', 'witness column (10701, -27440)', 13],
+      ['caves.noodles.maxY', 'witness column (-22165, -25285)', 3],
+    ];
+    for (const [p, via, draws] of pins) {
+      const w = bandWitness(CTX, p, all());
+      expect([p, w.via, w.draws]).toEqual([p, via, draws]);
+      expect(w.checks).toBeLessThanOrEqual(64);
+    }
   });
 });
 

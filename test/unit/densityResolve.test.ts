@@ -148,12 +148,17 @@ describe('resolveDensity (§1.6)', () => {
     expect(at(e, 'root.a.a.a.x.b.inside.b.a')).toEqual({ op: 'const', v: P.density.detailAmpLo });
     expect(at(e, 'root.a.a.a.x.b.inside.b.b.a')).toEqual({ op: 'const', v: P.density.detailAmpHi - P.density.detailAmpLo });
     // SP6a's cave terms: a param leaf becomes its value, recip(const 24) its reciprocal; a ref bound its value.
-    expect(at(e, 'root.a.a.b.a.a.a.b.x.x.outside.a.a.b.a.b.x.a.b')).toEqual({ op: 'const', v: P.caves.cheese.offset });
-    expect(at(e, 'root.a.a.b.a.a.a.b.x.x.outside.a.a.b.b.x.b')).toEqual({ op: 'const', v: 1 / 24 });
+    expect(at(e, 'root.a.a.b.a.a.a.b.x.x.outside.a.a.a.b.a.b.x.a.b')).toEqual({ op: 'const', v: P.caves.cheese.offset });
+    expect(at(e, 'root.a.a.b.a.a.a.b.x.x.outside.a.a.a.b.b.x.b')).toEqual({ op: 'const', v: 1 / 24 });
+    // SP6a Task 8: the cheese cap's clamp((minY − y)·recip(bandSpan)): the leaves become their values, recip its 1 / 16.
+    const capG0 = 'root.a.a.b.a.a.a.b.x.x.outside.b.a.b.b.a.x';
+    expect(at(DEFAULT_DENSITY_TREE, `${capG0}.b`)).toEqual({ op: 'recip', x: { op: 'param', path: 'caves.limits.bandSpan' } });
+    expect(at(e, `${capG0}.a.a`)).toEqual({ op: 'const', v: P.caves.cheese.minY });
+    expect(at(e, `${capG0}.b`)).toEqual({ op: 'const', v: 1 / P.caves.limits.bandSpan });
     expect(at(e, 'root.a.a.b.b')['hi']).toBe(P.caves.pillars.threshold);
     // SP6a Task 7: spaghetti 3D's first band term, rangeChoice(r, −1e9, −0.45, (w_0·s0)·|noiseScaled(S1, s0)|, 0): the
     // scale leaf becomes its value both as the multiplier and as noiseScaled's s.
-    const band0 = 'root.a.a.b.a.a.b.x.x.outside.a.a.b.b.x.a.a.a.a.a.a.a';
+    const band0 = 'root.a.a.b.a.a.b.x.x.outside.a.a.a.b.b.x.a.a.a.a.a.a.a';
     expect(at(DEFAULT_DENSITY_TREE, `${band0}.inside.b.x`)).toEqual({ op: 'noiseScaled', id: 'spag3dA', s: { param: 'caves.spaghetti3d.scales.s0' } });
     expect(at(e, `${band0}.inside.b.x`)).toEqual({ op: 'noiseScaled', id: 'spag3dA', s: P.caves.spaghetti3d.scales.s0 });
     expect(at(e, `${band0}.inside.a.b`)).toEqual({ op: 'const', v: P.caves.spaghetti3d.scales.s0 });
@@ -225,12 +230,13 @@ function checkCompiled(seedText: string, patch: ParamsPatch, what: string, voxel
   const a = createDensityContext(c);
   const b = createDensityContext(c, legacyDefaultDensityExpr(c.params.density));
   const shape = (dc: DensityContext): number[] => [dc.compiled.nodes.length, dc.compiled.positionSlotCount, dc.compiled.columnSlotCount, dc.compiled.interpolatedSlotCount];
-  // SP3d §2.1's 51 nodes (the legacy tree); SP6a's root and cave terms: 348 nodes (143 with Task 6's), the legacy's 2
+  // SP3d §2.1's 51 nodes (the legacy tree); SP6a's root and cave terms: 436 nodes (143 with Task 6's, 348 with Task 7's;
+  // Task 8's caps, CSE-shared where they repeat: the `y`, the 1/16 and the constants), the legacy's 2
   // position slots, four more column slots (the regional terms of cheese, spaghetti 3D and the noodle and spaghetti 2D's
   // layerAmp·Nel, each a noise2 term at the corner columns) and 10 interpolated slots (the terrain body, entrances,
   // cheese, spaghetti 3D, spaghetti 2D, pillars and the noodle's four; detailG's interpolated(ref body) shares the
   // terrain's). At clampSigma 1 the constant 1 / 1 merges with the 1 of J: one node less.
-  if (seedText === '42' && Object.keys(patch).length === 0) expect([shape(a), shape(b)]).toEqual([[348, 2, 6, 10], [51, 2, 2, 1]]);
+  if (seedText === '42' && Object.keys(patch).length === 0) expect([shape(a), shape(b)]).toEqual([[436, 2, 6, 10], [51, 2, 2, 1]]);
   const terrainSlot = a.compiled.interpolatedSlot((a.expr.root as unknown as { a: { a: { a: { x: { a: { x: InterpolatedExpr } } } } } }).a.a.a.x.a.x);
   expect(terrainSlot, what).toBeGreaterThanOrEqual(0);
   for (const [cx, cz] of COLUMNS) {

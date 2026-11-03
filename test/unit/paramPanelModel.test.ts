@@ -70,14 +70,17 @@ describe('panel tree', () => {
       ['caves.cheese', 'Cheese'], ['caves.spaghetti3d', 'Spaghetti 3D'], ['caves.spaghetti2d', 'Spaghetti 2D'], ['caves.noodles', 'Noodles'],
       ['caves.pillars', 'Pillars'], ['caves.entrances', 'Entrances'], ['caves.limits', 'Limits'], ['caves.noises', 'Cave noises'],
     ]);
-    expect(caves.sections[0]!.controls.map((c) => c.path)).toEqual(['caves.cheese.offset', 'caves.cheese.regional', 'caves.cheese.layerAmp', 'caves.cheese.roofDepth']);
+    // Each family's depth band (minY, maxY; Task 8) after its sizes.
+    expect(caves.sections[0]!.controls.map((c) => c.path)).toEqual(['caves.cheese.offset', 'caves.cheese.regional', 'caves.cheese.layerAmp', 'caves.cheese.roofDepth', 'caves.cheese.minY', 'caves.cheese.maxY']);
     // The spaghetti families' sizes first, then their band scales as a sub-section.
     const s3 = caves.sections[1]!, s2 = caves.sections[2]!;
-    expect(s3.controls.map((c) => c.path)).toEqual(['caves.spaghetti3d.thickness', 'caves.spaghetti3d.thicknessVar', 'caves.spaghetti3d.regional']);
+    expect(s3.controls.map((c) => c.path)).toEqual(['caves.spaghetti3d.thickness', 'caves.spaghetti3d.thicknessVar', 'caves.spaghetti3d.regional', 'caves.spaghetti3d.minY', 'caves.spaghetti3d.maxY']);
     expect(s3.sections.map((s) => [s.path, s.label, s.controls.map((c) => c.path.split('.').at(-1))])).toEqual([['caves.spaghetti3d.scales', 'Scales', ['s0', 's1', 's2', 's3']]]);
-    expect(s2.controls.map((c) => c.path)).toEqual(['caves.spaghetti2d.thickness', 'caves.spaghetti2d.layerAmp']);
+    expect(s2.controls.map((c) => c.path)).toEqual(['caves.spaghetti2d.thickness', 'caves.spaghetti2d.layerAmp', 'caves.spaghetti2d.minY', 'caves.spaghetti2d.maxY']);
     expect(s2.sections.map((s) => [s.path, s.label, s.controls.map((c) => c.path.split('.').at(-1))])).toEqual([['caves.spaghetti2d.scales', 'Scales', ['s0', 's1', 's2', 's3', 's4']]]);
-    expect(caves.sections[3]!.controls.map((c) => c.path)).toEqual(['caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional']);
+    expect(caves.sections[3]!.controls.map((c) => c.path)).toEqual(['caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional', 'caves.noodles.minY', 'caves.noodles.maxY']);
+    expect(caves.sections[5]!.controls.map((c) => c.path)).toEqual(['caves.entrances.offset', 'caves.entrances.threshold', 'caves.entrances.minY', 'caves.entrances.maxY']);
+    expect(caves.sections[6]!.controls.map((c) => c.path)).toEqual(['caves.limits.surfaceDepth', 'caves.limits.bandSpan']);
     for (const c of controlsOf(caves)) expect([c.path, c.scope]).toEqual([c.path, 'terrain']);
   });
 
@@ -106,6 +109,8 @@ describe('panel tree', () => {
   test('scale: log when min > 0 and max / min ≥ 20, and for every noise wavelength; linear otherwise', () => {
     const log = controlsOf(panelTree()).filter((c) => c.scale === 'log').map((c) => c.path);
     expect(log.sort()).toEqual([
+      // The band span, 1 … 32 blocks (SP6a Task 8).
+      'caves.limits.bandSpan',
       'caves.noises.cheese', 'caves.noises.cheeseRegional', 'caves.noises.entrance', 'caves.noises.entranceA', 'caves.noises.entranceB',
       'caves.noises.layer', 'caves.noises.noodleRidgeA', 'caves.noises.noodleRidgeB', 'caves.noises.noodleThickness', 'caves.noises.noodleToggle',
       'caves.noises.pillar', 'caves.noises.pillarRare', 'caves.noises.pillarThickness', 'caves.noises.roughness', 'caves.noises.roughnessMod',
@@ -359,8 +364,9 @@ describe('panel controls (Task 17): kinds, slider positions, typed values, issue
   test('on a linear stepped slider every keyboard step moves to the next value of the step grid', () => {
     const linear = [...sliders(), ...NOISE_NUMBER_FIELDS.map((f) => noiseFieldControl(control('climate.C'), f))].filter((c) => c.scale === 'linear');
     // 34 before SP3c, + the 7 number and int leaves of the surface group, + islands.lo and islands.hi (SP3e), + SP6a's 8
-    // caves number leaves (Task 6), + its 8 linear spaghetti and noodle leaves (Task 7; the band scales are log).
-    expect(linear.length).toBe(59);
+    // caves number leaves (Task 6), + its 8 linear spaghetti and noodle leaves (Task 7; the band scales are log), + the 10
+    // band ends minY and maxY (Task 8; the band span 1 … 32 is log).
+    expect(linear.length).toBe(69);
     for (const c of linear) {
       const n = sliderPositions(c);
       expect(n).toBe(Math.round((c.max! - c.min!) / c.step!));

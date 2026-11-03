@@ -229,8 +229,10 @@ describe('the default trees as data (SP3d spec §2)', () => {
     // max(min(E 36, C 40), keep 6) = 84 nodes in place of its const (+83; E's Ne·recip(const 6) 3 of them) and defs.pillars
     // (+25): 178. Task 7: the caves slot max(min(min(min(E 36, C 40), S3 199), S2 159), keep 6) = 444 nodes (+360: each
     // spaghetti rarity blend is 78 (3D, four bands) or 101 (2D, five bands) nodes) and the noodle tap's 79 in place of its
-    // const (+78): 616 (README's row).
-    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(616);
+    // const (+78): 616. Task 8: each family's cap `+ G·min(1, g) + 128·min(1, h)` is 48 nodes (g 17, h 21, their mins,
+    // muls and constants 9, the add joining it 1) in each of the five families (+240), and `nb`'s maxY test reads
+    // `neg(param)` in place of a const (+1 in each of the noodle's four slots): 860 (README's row).
+    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(860);
   });
 
   test('DEFAULT_SURFACE_RULES holds exactly §2.2\'s 15 refs', () => {

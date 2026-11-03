@@ -70,8 +70,8 @@ describe('the default expression (SP3b spec §3.1; SP3d spec §2.1: the resolved
     expect(findTap(e, 'terrain')).toMatchObject({ inside: false, node: { x: { op: 'interpolated' } } });
     expect(findTap(e, 'islands')).toMatchObject({ inside: false, node: { x: { op: 'const', v: -1e6 } } });
     for (const name of ['entrances', 'cheese', 'spag3d', 'spag2d', 'pillars']) expect(findTap(e, name), name).toMatchObject({ inside: false, node: { x: { op: 'interpolated' } } });
-    // The noodle tap is combined at voxel level from its four slots (SP6a §1.1).
-    expect(findTap(e, 'noodle')).toMatchObject({ inside: false, node: { x: { op: 'max' } } });
+    // The noodle tap is combined at voxel level from its four slots, its floor plus its cap (SP6a §1.1, §1.4).
+    expect(findTap(e, 'noodle')).toMatchObject({ inside: false, node: { x: { op: 'add', a: { op: 'max' } } } });
     // The terrain's, detailG's (the same structure), entrances', cheese's, spaghetti 3D's and 2D's, pillars' and the
     // noodle's four (SP6a §1.1).
     expect(interpolatedNodes(e)).toHaveLength(11);
@@ -87,8 +87,10 @@ describe('the default expression (SP3b spec §3.1; SP3d spec §2.1: the resolved
     const parent = c.nodes.find((n) => n.op === 'mul' && n.kids.includes(c.nodes.indexOf(detail)))!;
     const amp = c.nodes[parent.kids.find((k) => k !== c.nodes.indexOf(detail))!]!;
     expect([amp.op, amp.cls, amp.posSlot >= 0]).toEqual(['add', 'column', true]);
-    // y and slide are never COLUMN (spec §2.1).
-    for (const n of c.nodes) if (n.op === 'y' || n.op === 'slide') expect(n.cls, n.op).toBe('cell');
+    // y and slide are never COLUMN (spec §2.1): CELL inside the slots, VOXEL in the noodle's cap (SP6a §1.4), read at
+    // the voxel's y.
+    for (const n of c.nodes) if (n.op === 'y' || n.op === 'slide') expect(n.cls, n.op).toBe(n.inside ? 'cell' : 'voxel');
+    expect(c.nodes.filter((n) => n.op === 'y' && !n.inside).length).toBeGreaterThan(0);
   });
 
   test('the tunables come from params.density through refs: 1 / jag clampSigma, ampLo and ampHi − ampLo', () => {
