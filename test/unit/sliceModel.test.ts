@@ -801,6 +801,59 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       expect(held()).toBe(true);
     });
 
+    test('createCaveGestureHold over a cave tree (SP6a R13, §7.4): any leaf\'s drag is held, a tree without the cave terms is not', () => {
+      const CAVE_TREE = paramsWith({} as never);
+      const CAVE_TREE_DETAIL = paramsWith({ density: { detailAmpHi: 1.4 } } as never);
+      const CAVE_TREE_SCALE = paramsWith({ climate: { scaleMul: 2 } } as never);
+      expect(CAVE_TREE_SCALE.climate.scaleMul).toBe(2);
+      const s = gestureSession(CAVE_TREE);
+      const held = createCaveGestureHold(s);
+      expect(held()).toBe(false);
+      s.inGesture = true;
+      expect(held()).toBe(false);
+      // The default tree holds the cave terms: a drag of a density tunable or of a climate leaf is held.
+      s.state.params = CAVE_TREE_DETAIL;
+      expect(held()).toBe(true);
+      s.state.params = CAVE_TREE_SCALE;
+      expect(held()).toBe(true);
+      // Back to the gesture's start: nothing moved, nothing held; the end releases.
+      s.state.params = CAVE_TREE;
+      expect(held()).toBe(false);
+      s.state.params = CAVE_TREE_DETAIL;
+      expect(held()).toBe(true);
+      s.inGesture = false;
+      expect(held()).toBe(false);
+      // Over the tree without the cave terms the same drag is not held (only a `caves.*` leaf's is).
+      const t = gestureSession();
+      const heldFree = createCaveGestureHold(t);
+      expect(heldFree()).toBe(false);
+      t.inGesture = true;
+      t.state.params = DETAIL_DRAGGED;
+      expect(heldFree()).toBe(false);
+      t.state.params = CAVE_DRAGGED;
+      expect(heldFree()).toBe(true);
+    });
+
+    test('a drag of a non-cave leaf over the cave tree requests no density slice until the gesture ends', async () => {
+      const CAVE_TREE = paramsWith({} as never);
+      const CAVE_TREE_DETAIL = paramsWith({ density: { detailAmpHi: 1.4 } } as never);
+      const s = gestureSession(CAVE_TREE);
+      const { r, calls, h } = harness(SLICED, createCaveGestureHold(s));
+      r.request(want());
+      expect(calls).toHaveLength(1);
+      s.inGesture = true;
+      s.state.params = CAVE_TREE_DETAIL;
+      h.session.state.epoch = 8;
+      h.cfg = { poolEpoch: 4, sessionEpoch: 8, params: SLICED };
+      r.request(want());
+      expect([calls.length, calls[0]!.cancelled, r.pending]).toEqual([1, true, null]);
+      // The release asks for the density slice of the draft the drag ended on.
+      s.inGesture = false;
+      r.request(want());
+      expect(calls.slice(1).map((c) => [c.req.field, c.req.n])).toEqual([['density', 32]]);
+      expect(r.pending?.sessionEpoch).toBe(8);
+    });
+
     test('a cave-leaf drag requests no density or node slice until the gesture ends; the end requests the draft it ended on', async () => {
       const s = gestureSession();
       const { r, calls, h, src } = harness(SLICED, createCaveGestureHold(s));

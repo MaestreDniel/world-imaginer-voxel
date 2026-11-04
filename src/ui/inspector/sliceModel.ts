@@ -23,8 +23,9 @@
  *   128² slice at priority 500, on the draft the pool's last resolved configure holds; a new request supersedes the
  *   previous one (its queued parts dropped, its running parts' results discarded: P1); a density or node slice refused
  *   by the work bound (`planFieldSlice`, never re-derived: P3) keeps the draft with its notice. While a gesture drags a
- *   `caves.*` leaf (`createCaveGestureHold`), density and node slices are not requested: the gesture's end asks for the
- *   draft it ended on (SP6a D13, §7.4: `slice.vertical128` misses its 300 ms over the cave tree, D25).
+ *   `caves.*` leaf, or any leaf over a tree with SP6a's cave terms (`createCaveGestureHold`), density and node slices
+ *   are not requested: the gesture's end asks for the draft it ended on (SP6a D13, §7.4: `slice.vertical128` misses its
+ *   300 ms over the cave tree, D25).
  * - **Pinned slices** (§11's cut line, built; master §5.5: up to 3 side by side): a pin is a frozen copy of the live
  *   slice's want (its plane with the line or the square and y, its field, its node) with a request stream of its own,
  *   asked again on every edit like the live slice (`createSlicePins`); `sliceImage` draws a pin as the live image.
@@ -803,21 +804,46 @@ function sameValue(a: unknown, b: unknown): boolean {
   return true;
 }
 
+/** The taps of SP6a's cave terms (§1.1): a density tree holding one of them is a cave tree. */
+const CAVE_TAPS: ReadonlySet<unknown> = new Set(['entrances', 'cheese', 'spag3d', 'spag2d', 'pillars', 'noodle']);
+const CAVE_TREES = new WeakMap<object, boolean>();
+
+/** Whether a density tree (`density.defs`: its root or a def) holds a tap of SP6a's cave terms; memoised per tree object. */
+function isCaveTree(tree: unknown): boolean {
+  if (tree === null || typeof tree !== 'object') return false;
+  let known = CAVE_TREES.get(tree);
+  if (known === undefined) {
+    const walk = (v: unknown): boolean => {
+      if (v === null || typeof v !== 'object') return false;
+      const o = v as Record<string, unknown>;
+      if (o['op'] === 'tap' && CAVE_TAPS.has(o['name'])) return true;
+      for (const k of Object.keys(o)) if (walk(o[k])) return true;
+      return false;
+    };
+    known = walk(tree);
+    CAVE_TREES.set(tree, known);
+  }
+  return known;
+}
+
 /**
- * SP6a D13's slice on release (§7.4; Task 15d, D25: `slice.vertical128` above its 300 ms gate over the cave tree): a
- * predicate, true while the session is inside a gesture whose draft differs in a `caves.*` leaf from the draft last
- * seen outside a gesture (the gesture's start). Each call observes the session, so the view calls it on every session
- * change, shown or not; a drag of any other leaf, or one back to the start's cave values, is not held.
+ * SP6a D13's slice on release (§7.4: the slice "redraws on release instead of during a drag"; Task 15d, D25:
+ * `slice.vertical128` above its 300 ms gate over the cave tree): a predicate, true while the session is inside a
+ * gesture whose draft differs from the draft last seen outside a gesture (the gesture's start) in a `caves.*` leaf, or
+ * in any leaf while the draft's density tree is a cave tree (it holds a tap of SP6a's cave terms, as the default tree
+ * does; SP6a ruling R13). Each call observes the session, so the view calls it on every session change, shown or not; a
+ * drag back to the start's values, or of a leaf other than `caves.*` over a tree without the cave terms, is not held.
  */
 export function createCaveGestureHold(session: GestureDraft): () => boolean {
-  let rest: Params['caves'] = session.state.params.caves;
+  let rest: Params = session.state.params;
   return () => {
-    const caves = session.state.params.caves;
+    const params = session.state.params;
     if (!session.inGesture) {
-      rest = caves;
+      rest = params;
       return false;
     }
-    return !sameValue(rest, caves);
+    if (!sameValue(rest.caves, params.caves)) return true;
+    return isCaveTree(params.density.defs) && !sameValue(rest, params);
   };
 }
 

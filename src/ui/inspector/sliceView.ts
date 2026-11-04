@@ -11,8 +11,8 @@
  *   for `rule`; a status line and the request stream's notice (the field's note, a refusal, `failed: …`).
  * - Requests (§4.5): `createFieldSliceRequests` on the pool's resolved configure; the page calls `update()` on every
  *   session change, driver status change, line change and selection change; while a gesture drags a `caves.*` leaf,
- *   density and node slices (live and pinned) wait for its end and then ask for the draft it ended on (SP6a D13, §7.4:
- *   `createCaveGestureHold`). The state starts at the first show
+ *   or any leaf over a tree with SP6a's cave terms, density and node slices (live and pinned) wait for its end and then
+ *   ask for the draft it ended on (SP6a D13, §7.4: `createCaveGestureHold`). The state starts at the first show
  *   (`initialSliceState`) and is reported to the page (`onState`: the map's square and the click routing); a map click on
  *   the horizontal plane sets the centre (`setCentre`). The slice hover reports its voxel (`onHover`) for the form's value.
  * - Pinned slices (§11's cut line; master §5.5): "Pin" copies the live slice's plane, field and node into a pin (up to
@@ -176,7 +176,10 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
   element.append(controls, note, status, notice, pinNotice, body, pinStrip);
   host.append(element);
 
-  /** SP6a D13: true while a gesture drags a `caves.*` leaf; called on every `update()` so it sees each gesture's start. */
+  /**
+   * SP6a D13: true while a gesture drags a `caves.*` leaf, or any leaf over a cave tree; called on every `update()` so it
+   * sees each gesture's start.
+   */
   const caveHeld = createCaveGestureHold(deps.session);
   const source = {
     pool: deps.pool,
