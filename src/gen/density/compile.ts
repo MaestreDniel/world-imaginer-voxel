@@ -27,6 +27,16 @@
  * evaluates its 8 corners as `tapFn` does (one epoch each), interpolates them, and sets the voxel registers again (a
  * fresh epoch, so the reads that follow stay exact; SP6a ruling P14).
  *
+ * Min chains (SP6a spec §1.6 lever (4)). A `min` outside `interpolated` that is not COLUMN starts a chain, which takes in
+ * every such `min` child read only by it (no other reader, no tap); the chain's operands are its other children, left to
+ * right. A `min` returns the leftmost operand at the minimum value (`vb < va ? vb : va` keeps `a` on a tie), so an
+ * operand whose value is above another operand's at every voxel of a cell is never the result there, and dropping it
+ * keeps the chain's value bit for bit (NaN aside: the bounds skip nothing over an unknown interval). The bounds decide
+ * per cell which children of each chain `min` are not needed (`minSkips`, valid where `minSkipReady`, cleared by
+ * `columnFn`); the chain's `min` then returns its other child at that cell's voxels without evaluating the skipped one.
+ * A chain's inner `min` may lose its own minimum, but only its chain reads it; the chain's root value is kept, so every
+ * reader (the root, a tap reader, another chain) sees the same value with or without the skips.
+ *
  * Scratch. One CompiledDensity owns the scratch of one column (its slot values, its corner cache and its point
  * registers); compile again for an independent one. Nothing is allocated per column, corner or voxel.
  */
@@ -66,6 +76,16 @@ export interface DensityNode {
   readonly posSlot: number;
   /** ≥ 0 on an `interpolated` node: its child's corner values, `cornerValues[cornerValueIndex(slot, i, k, j)]`; else −1. */
   readonly interpSlot: number;
+  /** ≥ 0 on a `min` of a min chain (SP6a spec §1.6 lever (4)): its entry in each cell's `minSkips`; else −1. */
+  readonly minSlot: number;
+}
+
+/** One min chain (SP6a spec §1.6 lever (4)): a `min` and the `min` children only it reads, recursively. */
+export interface MinChain {
+  /** The chain's `min` nodes in node order (children before parents); the last is the chain's root. */
+  readonly mins: readonly number[];
+  /** The chain's operands (its `min` nodes' other children), left to right. */
+  readonly operands: readonly number[];
 }
 
 /** A compiled density expression with the scratch of one column. */
@@ -87,6 +107,18 @@ export interface CompiledDensity {
   readonly cornerValues: Float64Array;
   /** 1 where corner `(k·5 + j)·5 + i` holds every interpolated slot's value for the current column. */
   readonly cornerReady: Uint8Array;
+  /** The min chains (SP6a spec §1.6 lever (4)), in the order of their roots. */
+  readonly minChains: readonly MinChain[];
+  /** The number of chain `min` nodes (each node's `minSlot` is below it). */
+  readonly minSlotCount: number;
+  /**
+   * Per cell `(ck·4 + cj)·4 + ci` and chain `min` slot, `minSkips[cell·minSlotCount + minSlot]`: bit 0 set when the
+   * `min`'s child `a` is not needed at the cell's voxels, bit 1 for `b` (never both on a chain's root). Written by the
+   * bounds (`cellMinSkips`); read by `voxelFn` (and the tap readers) only where `minSkipReady` is 1.
+   */
+  readonly minSkips: Uint8Array;
+  /** 1 where cell `(ck·4 + cj)·4 + ci` holds its `minSkips` for the current column; cleared by `columnFn`. */
+  readonly minSkipReady: Uint8Array;
   /**
    * Starts column (s.cx, s.cz): clears the corner cache and fills the column slots from `s`'s lattice. Must precede
    * positionFn, cornerFn, voxelFn and tapFn for that column.
@@ -146,6 +178,7 @@ interface Building {
   colSlot: number;
   posSlot: number;
   interpSlot: number;
+  minSlot: number;
 }
 
 /** A number's CSE key: exact (shortest round-trip form), with −0 apart from +0. */
@@ -205,7 +238,7 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
           if (e.op !== 'interpolated') cls = JOIN(cls, kc);
         }
         id = nodes.length;
-        nodes.push({ op: e.op, expr: e, inside, cls, kids, colSlot: -1, posSlot: -1, interpSlot: -1 });
+        nodes.push({ op: e.op, expr: e, inside, cls, kids, colSlot: -1, posSlot: -1, interpSlot: -1, minSlot: -1 });
         byKey.set(key, id);
       }
     }
@@ -256,12 +289,40 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
     tapIds.add(t.node);
   }
 
+  // ---- Min chains (SP6a spec §1.6 lever (4)). ----
+  /** A `min` evaluated at voxels: outside `interpolated` and not COLUMN. */
+  const chainMin = (id: number): boolean => { const n = nodes[id]!; return n.op === 'min' && !n.inside && n.cls !== 'column'; };
+  const parentOf = new Int32Array(nodes.length).fill(-1);
+  for (let id = 0; id < nodes.length; id++) for (const k of nodes[id]!.kids) parentOf[k] = id;
+  /** A chain `min` that only its parent `min` reads (one call, not the root, no tap): inside its parent's chain. */
+  const inner = (id: number): boolean =>
+    chainMin(id) && id !== root && calls[id] === 1 && !tapIds.has(id) && parentOf[id]! >= 0 && chainMin(parentOf[id]!);
+  const minChains: MinChain[] = [];
+  let minSlots = 0;
+  for (let id = 0; id < nodes.length; id++) {
+    if (!chainMin(id) || inner(id)) continue;
+    const mins: number[] = [], operands: number[] = [];
+    const visit = (m: number): void => {
+      for (const k of nodes[m]!.kids) {
+        if (inner(k)) visit(k);
+        else operands.push(k);
+      }
+      mins.push(m);
+    };
+    visit(id);
+    mins.sort((x, y) => x - y);
+    for (const m of mins) nodes[m]!.minSlot = minSlots++;
+    minChains.push(Object.freeze({ mins: Object.freeze(mins), operands: Object.freeze(operands) }));
+  }
+
   // ---- 3. Scratch. ----
   const colValues = new Float64Array(colSlots * 25);
   const posValues = new Float64Array(posSlots * 256);
   const cornerValues = new Float64Array(interpSlots * 1225);
   const cornerReady = new Uint8Array(1225);
   const cellReady = new Uint8Array(768);
+  const minSkips = new Uint8Array(768 * minSlots);
+  const minSkipReady = new Uint8Array(768);
   const memoVal = new Float64Array(nodes.length);
   const memoStamp = new Float64Array(nodes.length);
   const tmp = new Float64Array(8);
@@ -269,6 +330,8 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
   // Point registers: world (x, y, z); lat = lattice index and cc = j·5 + i of the corner column; p = lz·16 + lx; the
   // voxel's cell base index (k·5 + j)·5 + i and fractions; the memo epoch.
   let px = 0, py = 0, pz = 0, lat = 0, cc = 0, p = 0, cIdx = 0, tx = 0, ty = 0, tz = 0, epoch = 0;
+  // The voxel's cell's base in minSkips (cell·minSlots) where its skips are ready, else −1 (no skip).
+  let skipBase = -1;
   // The voxel of the last setVoxel (voxelFn, atVoxel, tapFn outside), which an inside tap's reader sets again.
   let vlx = 0, vy = 0, vlz = 0;
   let sample: ColumnSample | null = null;
@@ -306,7 +369,22 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
       case 'noiseScaled': { const nz = noise(e.id), sc = e.s; f = () => nz.z3(px / sc, py / sc, pz / sc); break; }
       case 'add': { const a = kid(0), b = kid(1); f = () => { const va = a(); return va + b(); }; break; }
       case 'mul': { const a = kid(0), b = kid(1); f = () => { const va = a(); return va * b(); }; break; }
-      case 'min': { const a = kid(0), b = kid(1); f = () => { const va = a(), vb = b(); return vb < va ? vb : va; }; break; }
+      case 'min': {
+        const a = kid(0), b = kid(1);
+        if (n.minSlot < 0) { f = () => { const va = a(), vb = b(); return vb < va ? vb : va; }; break; }
+        // A chain min (lever (4)): at a voxel whose cell has its skips, a child that cannot be the minimum is not read.
+        const slot = n.minSlot;
+        f = () => {
+          if (skipBase >= 0) {
+            const m = minSkips[skipBase + slot];
+            if (m === 1) return b();
+            if (m === 2) return a();
+          }
+          const va = a(), vb = b();
+          return vb < va ? vb : va;
+        };
+        break;
+      }
       case 'max': { const a = kid(0), b = kid(1); f = () => { const va = a(), vb = b(); return vb > va ? vb : va; }; break; }
       case 'neg': { const x = kid(0); f = () => -x(); break; }
       case 'abs': { const x = kid(0); f = () => Math.abs(x()); break; }
@@ -377,6 +455,7 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
     posSet = false;
     cornerReady.fill(0);
     cellReady.fill(0);
+    minSkipReady.fill(0);
     for (let j = 0; j <= 4; j++) {
       for (let i = 0; i <= 4; i++) {
         px = x0 + 4 * i;
@@ -440,6 +519,10 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
     tx = (lx - 4 * ci) / 4;
     ty = (y + 64 - 8 * ck) / 8;
     tz = (lz - 4 * cj) / 4;
+    if (minSlots > 0) {
+      const cell = (ck * 4 + cj) * 4 + ci;
+      skipBase = minSkipReady[cell] === 1 ? cell * minSlots : -1;
+    }
     epoch++;
   };
 
@@ -511,6 +594,10 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
     posValues,
     cornerValues,
     cornerReady,
+    minChains: Object.freeze(minChains),
+    minSlotCount: minSlots,
+    minSkips,
+    minSkipReady,
     columnFn,
     positionFn,
     hasColumn: (cx, cz) => colSet && cx === colCx && cz === colCz,

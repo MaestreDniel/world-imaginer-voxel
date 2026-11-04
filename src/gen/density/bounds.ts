@@ -21,6 +21,14 @@
  * up: the root's interval decides hi < 0 (non-solid) and lo > 0 (solid) without corner or voxel work; otherwise the
  * cell's corners are evaluated (each at most once per column) and the interval is refined with them; only a cell that
  * still straddles 0 runs `voxelFn` per voxel. Early-outs never change a voxel's solidity.
+ *
+ * Min skips (SP6a spec §1.6 lever (4)). Before a straddling cell's voxels, `cellMinSkips` reads its nodes' intervals
+ * (from the corner hulls once the corners exist) and marks, in each min chain of the compile, every operand whose low
+ * end exceeds the lowest high end of the chain's operands: it is above another operand at every voxel of the cell, so
+ * it cannot be the minimum, and `voxelFn` does not evaluate it there (a `min` of the chain whose two children are both
+ * skipped is skipped by its parent). A chain with an unknown or non-finite operand interval skips nothing. The values
+ * are kept bit for bit (compile.ts' "Min chains"); the families E, C, S3, S2 of `min(E, C, S3, S2)` and the noodle
+ * against `min(T + detailG, caves)` are the default tree's chains.
  */
 import type { ColumnSample } from '../column/columnStage';
 import type { CompiledDensity } from './compile';
@@ -92,10 +100,24 @@ export interface DensityBounds {
    * pre-cave check (SP6a spec §3.2), cheaper than the root's whole program. Updates `nodeIntervals` of those nodes only.
    */
   nodeInterval(ci: number, ck: number, cj: number, node: number, out: Float64Array, k: number): void;
+  /** Whether `fillDensityColumn` applies the min skips (SP6a spec §1.6 lever (4)); `createDensityBounds`' `minSkip`. */
+  readonly minSkip: boolean;
+  /**
+   * The min skips of cell (ci, ck, cj) (SP6a spec §1.6 lever (4)) from `nodeIntervals` as the last cellInterval or
+   * cellIntervalCorners call for that cell left them: writes the cell's `compiled.minSkips` and sets its
+   * `compiled.minSkipReady`; returns the number of operands skipped. Writes nothing when `minSkip` is false or the
+   * compile has no min chain.
+   */
+  cellMinSkips(ci: number, ck: number, cj: number): number;
+  /** Totals since creation (diagnostics): `[0]` the cells with at least one operand skipped, `[1]` the operands skipped. */
+  readonly minSkipCounts: Float64Array;
 }
 
-/** Creates the bounds of `c`; `noises` must be the source `c` was compiled with (for each noise's clampSigma). */
-export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSource): DensityBounds {
+/**
+ * Creates the bounds of `c`; `noises` must be the source `c` was compiled with (for each noise's clampSigma). `minSkip`
+ * false turns lever (4)'s min skips off (the same values, every operand evaluated).
+ */
+export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSource, minSkip = true): DensityBounds {
   const nodes = c.nodes;
   const n = nodes.length;
   const iv = new Float64Array(2 * n).fill(NaN);
@@ -164,6 +186,66 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
   const posHull = new Float64Array(c.positionSlotCount * 32);
   const colValues = c.colValues, posValues = c.posValues, cornerValues = c.cornerValues;
   const root = c.root;
+
+  // Min chains (lever (4)), flattened: per chain its operands [opFrom, opTo) in chainOps and its mins [minFrom, minTo)
+  // in chainMins (children first); per chain min its slot and, per child, the child's min slot (≥ 0: an inner min of
+  // the chain) or −1 with the child's node (an operand).
+  const chains = c.minChains, nChains = chains.length, nSlots = c.minSlotCount;
+  const opStart = new Int32Array(nChains + 1), minStart = new Int32Array(nChains + 1);
+  const chainOps: number[] = [], chainMins: number[] = [];
+  for (let q = 0; q < nChains; q++) {
+    chainOps.push(...chains[q]!.operands);
+    chainMins.push(...chains[q]!.mins);
+    opStart[q + 1] = chainOps.length;
+    minStart[q + 1] = chainMins.length;
+  }
+  const opNode = Int32Array.from(chainOps);
+  const minSlotOf = Int32Array.from(chainMins, (m) => nodes[m]!.minSlot);
+  const kidA = Int32Array.from(chainMins, (m) => nodes[m]!.kids[0]!);
+  const kidB = Int32Array.from(chainMins, (m) => nodes[m]!.kids[1]!);
+  // A child is an inner min of the same chain (its slot), else an operand (−1), even when it roots a chain of its own.
+  const innerSlot = (q: number, k: number): number => (chains[q]!.mins.includes(k) ? nodes[k]!.minSlot : -1);
+  const kidSlotA = new Int32Array(chainMins.length), kidSlotB = new Int32Array(chainMins.length);
+  for (let q = 0; q < nChains; q++) {
+    for (let m = minStart[q]!; m < minStart[q + 1]!; m++) {
+      kidSlotA[m] = innerSlot(q, kidA[m]!);
+      kidSlotB[m] = innerSlot(q, kidB[m]!);
+    }
+  }
+  const minSkips = c.minSkips, minSkipReady = c.minSkipReady;
+  const minSkipCounts = new Float64Array(2);
+  const skipOn = minSkip && nChains > 0;
+
+  const cellMinSkips = (ci: number, ck: number, cj: number): number => {
+    if (!skipOn) return 0;
+    const cell = (ck * 4 + cj) * 4 + ci;
+    const base = cell * nSlots;
+    let skipped = 0;
+    for (let q = 0; q < nChains; q++) {
+      // H: the lowest high end of the chain's operands; an operand whose low end exceeds it cannot be the minimum.
+      let h = Infinity, known = true;
+      for (let o = opStart[q]!; o < opStart[q + 1]!; o++) {
+        const id = opNode[o]!, lo = iv[2 * id]!, hi = iv[2 * id + 1]!;
+        if (!(FINITE(lo) && FINITE(hi))) { known = false; break; }
+        if (hi < h) h = hi;
+      }
+      for (let m = minStart[q]!; m < minStart[q + 1]!; m++) {
+        let st = 0;
+        if (known) {
+          const sa = kidSlotA[m]!, sb = kidSlotB[m]!;
+          // An inner min is not needed when both its children are not (3); an operand when its low end exceeds H.
+          const skipA = sa >= 0 ? minSkips[base + sa] === 3 : iv[2 * kidA[m]!]! > h;
+          const skipB = sb >= 0 ? minSkips[base + sb] === 3 : iv[2 * kidB[m]!]! > h;
+          if (skipA) { st |= 1; if (sa < 0) skipped++; }
+          if (skipB) { st |= 2; if (sb < 0) skipped++; }
+        }
+        minSkips[base + minSlotOf[m]!] = st;
+      }
+    }
+    minSkipReady[cell] = 1;
+    if (skipped > 0) { minSkipCounts[0]++; minSkipCounts[1] += skipped; }
+    return skipped;
+  };
 
   const beginColumn = (): void => {
     for (let slot = 0; slot < c.columnSlotCount; slot++) {
@@ -269,6 +351,9 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
       out[k] = iv[2 * node]!;
       out[k + 1] = iv[2 * node + 1]!;
     },
+    minSkip,
+    cellMinSkips,
+    minSkipCounts,
   };
 }
 
@@ -309,6 +394,7 @@ export function fillDensityColumn(
           b.cellIntervalCorners(ci, ck, cj, IV, 0);
           fill = IV[1]! < 0 ? 0 : IV[0]! > 0 ? 1 : -1;
         }
+        if (fill < 0) b.cellMinSkips(ci, ck, cj);
         for (let y = y0; y < y0 + 8; y++) {
           for (let lz = 4 * cj; lz < 4 * cj + 4; lz++) {
             const row = ((y + 64) * 16 + lz) * 16;
