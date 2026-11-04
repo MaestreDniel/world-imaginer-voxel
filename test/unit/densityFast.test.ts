@@ -169,3 +169,60 @@ describe('the plane cache: a trilerp\'s z-lerps kept per cell visit (SP6a R13)',
     expect(stats.tagged).toBeGreaterThan(0);
   }, 300_000);
 });
+
+describe('the y cache: a node of y alone kept per y (SP6a R13)', () => {
+  test('the default tree\'s y nodes: the caps, at corners and at voxels; none with yCache off', () => {
+    const dc = createDensityContext(ctxFor('42'));
+    const c = dc.compiled;
+    expect(c.yNodes.filter((id) => c.nodes[id]!.inside).length).toBeGreaterThan(4);
+    expect(c.yNodes.filter((id) => !c.nodes[id]!.inside).length).toBeGreaterThan(0);
+    for (const id of c.yNodes) {
+      const n = c.nodes[id]!;
+      expect(['y', 'const', 'tap', 'interpolated', 'noise', 'noiseScaled', 'noise2', 'col']).not.toContain(n.op);
+    }
+    expect(compileDensity(dc.expr, dc.noises, { yCache: false }).yNodes).toEqual([]);
+  });
+
+  test('a y node inside a min chain keeps its full value: a cell\'s skip never reaches another cell through the cache', () => {
+    // root = min(min(2, y − 3), N), N = interpolated(noise) 0.5 below x 8 and 9 from it (column (0, 0)). In cell ci 0
+    // the chain skips the constant 2 (above N's 0.5), so min(2, y − 3) read there with its skip would be y − 3 (3 at
+    // y 6); in cell ci 2 (N 9) nothing is skipped and the root is min(2, y − 3) = 2 at y 6.
+    const step: DensityNoise = { dims: 3, remap: 'none', clampSigma: 10, z2: () => 0, z3: (x) => (x < 8 ? 0.5 : 9) };
+    const ns = source({ s: step });
+    const Y: Expr = { op: 'y' };
+    const inner: Expr = { op: 'min', a: { op: 'const', v: 2 }, b: { op: 'add', a: Y, b: { op: 'const', v: -3 } } };
+    const e = { root: { op: 'min', a: inner, b: { op: 'interpolated', x: { op: 'noise', id: 's' } } }, defs: {} } as const;
+    const on = createDensityBounds(compileDensity(e, ns), ns);
+    const off = createDensityBounds(compileDensity(e, ns, { yCache: false }), ns);
+    expect(on.compiled.yNodes).toHaveLength(1);
+    expect(on.compiled.minChains).toHaveLength(1);
+    const s = buildColumnSample(ctxFor('42'), 0, 0, newColumnSample());
+    const solid = [new Uint8Array(98304), new Uint8Array(98304)];
+    const values = [new Float64Array(98304), new Float64Array(98304)];
+    const mask = [new Uint8Array(98304), new Uint8Array(98304)];
+    fillDensityColumn(on, s, solid[0]!, values[0]!, mask[0]!, NEVER);
+    fillDensityColumn(off, s, solid[1]!, values[1]!, mask[1]!, NEVER);
+    expect(on.minSkipCounts[1]).toBeGreaterThan(0);
+    let compared = 0;
+    for (let i = 0; i < 98304; i++) {
+      expect(mask[0]![i]).toBe(mask[1]![i]);
+      if (mask[0]![i] === 0) continue;
+      compared++;
+      if (!Object.is(values[0]![i], values[1]![i])) throw new Error(`voxel ${i}: ${values[0]![i]} with the y cache, ${values[1]![i]} without`);
+    }
+    // y 6 of cell ci 2 (x 8), the voxel the guard is for: the root is 2 there.
+    expect(values[0]![((6 + 64) * 16 + 0) * 16 + 8]).toBe(2);
+    expect(compared).toBeGreaterThan(0);
+  });
+
+  test('random trees: the fill with the y cache equals the fill without it', () => {
+    expect(randomTreesEqual({ yCache: false }, 1523, 40)).toBeGreaterThan(100000);
+  }, 120_000);
+
+  test('with and without the y cache, the solidity, the cells, every value and every tag of 64 columns are equal', () => {
+    const stats = checkOption({ yCache: false });
+    expect(stats.columns).toBe(64);
+    expect(stats.voxels).toBeGreaterThan(100000);
+    expect(stats.tagged).toBeGreaterThan(0);
+  }, 300_000);
+});

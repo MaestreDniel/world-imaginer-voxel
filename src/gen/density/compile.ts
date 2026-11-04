@@ -43,6 +43,14 @@
  * the same double. The kept pairs belong to one cell visit: entering another cell (`setVoxel`), a new column and a newly
  * computed corner each start a new one.
  *
+ * The y cache (SP6a ruling R13, output-keeping). A y node is a node, not `y`, a `const`, a tap or an `interpolated`,
+ * whose children are each `y`, a `const` or a y node, one at least `y` or a y node: its value is a function of the
+ * point's y alone, the corner's inside `interpolated` and the voxel's outside (the default tree's depth bands and the
+ * island cap of every family's cap, at corners, and the noodle's, at voxels). A y node read by a node that is not one
+ * (or the root) keeps its value per y (−64 … 320) for the compile's life, computed at its first read with the min
+ * skips off (its full value, which every cell may read: a skip only ever drops an operand of the cell it was decided
+ * for; inside `interpolated` there is no skip).
+ *
  * Scratch. One CompiledDensity owns the scratch of one column (its slot values, its corner cache and its point
  * registers); compile again for an independent one. Nothing is allocated per column, corner or voxel.
  */
@@ -158,6 +166,8 @@ export interface CompiledDensity {
   atVoxel(lx: number, y: number, lz: number): void;
   /** The options it was compiled with, every one given (SP6a ruling R13). */
   readonly options: Required<CompileOptions>;
+  /** The y nodes whose value the y cache keeps per y (the module header), in node order; empty with `yCache` off. */
+  readonly yNodes: readonly number[];
   /**
    * The reader of tap `name` (SP6a spec §3.2), or null when no tap of that name is reachable from the root; resolved
    * once per compile (the same function on every call). It reads the tap at the voxel registers of the last `voxelFn`
@@ -175,10 +185,12 @@ export interface CompiledDensity {
 export interface CompileOptions {
   /** The plane cache of `interpolated` nodes (the module header). */
   readonly planes?: boolean;
+  /** The y cache of y nodes (the module header). */
+  readonly yCache?: boolean;
 }
 
 /** Every option on. */
-const ALL_ON: Required<CompileOptions> = Object.freeze({ planes: true });
+const ALL_ON: Required<CompileOptions> = Object.freeze({ planes: true, yCache: true });
 
 /** Index of column slot `slot` at corner column (i, j) in `colValues`. */
 export function colValueIndex(slot: number, i: number, j: number): number { return slot * 25 + j * 5 + i; }
@@ -337,6 +349,32 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource, op
     minChains.push(Object.freeze({ mins: Object.freeze(mins), operands: Object.freeze(operands) }));
   }
 
+  // ---- The y cache (SP6a ruling R13): the y nodes, and a slot per y node a node that is not one reads. ----
+  const yNode = new Uint8Array(nodes.length);
+  for (let id = 0; id < nodes.length && opts.yCache; id++) {
+    const n = nodes[id]!;
+    if (n.kids.length === 0 || n.op === 'tap' || n.op === 'interpolated') continue;
+    let ok = true, hasY = false;
+    for (const k of n.kids) {
+      const kn = nodes[k]!;
+      if (kn.op === 'y' || yNode[k] === 1) hasY = true;
+      else if (kn.op !== 'const') ok = false;
+    }
+    if (ok && hasY) yNode[id] = 1;
+  }
+  const ySlot = new Int32Array(nodes.length).fill(-1);
+  const yNodes: number[] = [];
+  const needY = (id: number): void => {
+    if (yNode[id] === 1 && ySlot[id]! < 0) { ySlot[id] = yNodes.length; yNodes.push(id); }
+  };
+  for (let id = 0; id < nodes.length; id++) {
+    if (yNode[id] === 1) continue;
+    for (const k of nodes[id]!.kids) needY(k);
+  }
+  needY(root);
+  yNodes.sort((a, b) => a - b);
+  for (let q = 0; q < yNodes.length; q++) ySlot[yNodes[q]!] = q;
+
   // ---- 3. Scratch. ----
   const colValues = new Float64Array(colSlots * 25);
   const posValues = new Float64Array(posSlots * 256);
@@ -345,6 +383,8 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource, op
   const cellReady = new Uint8Array(768);
   const minSkips = new Uint8Array(768 * minSlots);
   const minSkipReady = new Uint8Array(768);
+  const yVal = new Float64Array(yNodes.length * 385);
+  const yReady = new Uint8Array(yNodes.length * 385);
   const memoVal = new Float64Array(nodes.length);
   const memoStamp = new Float64Array(nodes.length);
   const tmp = new Float64Array(8);
@@ -469,7 +509,22 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource, op
       case 'tap': { const x = kid(0); f = () => x(); break; }
       case 'ref': throw new Error('unreachable: refs are resolved');
     }
-    if (calls[id]! > 1 || tapIds.has(id)) {
+    if (ySlot[id]! >= 0) {
+      // The y cache: the node's value at the point's y, computed once per y with no min skip.
+      const raw = f, yb = ySlot[id]! * 385 + 64;
+      f = () => {
+        if (!(py >= -64 && py <= 320)) return raw();
+        const k = yb + py;
+        if (yReady[k] === 1) return yVal[k]!;
+        const sb = skipBase;
+        skipBase = -1;
+        const v = raw();
+        skipBase = sb;
+        yVal[k] = v;
+        yReady[k] = 1;
+        return v;
+      };
+    } else if (calls[id]! > 1 || tapIds.has(id)) {
       const raw = f;
       f = () => {
         if (memoStamp[id] === epoch) return memoVal[id]!;
@@ -669,5 +724,6 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource, op
     atVoxel: setVoxel,
     tapReader: (name) => tapReaders.get(name) ?? null,
     options: opts,
+    yNodes: Object.freeze(yNodes),
   };
 }
