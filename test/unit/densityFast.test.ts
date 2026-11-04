@@ -13,9 +13,11 @@ import { trilerp } from '../../src/gen/density/nodes';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { createGenContext } from '../../src/gen/context';
+import { caveReadersOf, tagColumn } from '../../src/gen/caves/tags';
+import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import { bitExactSets, checkBitExact } from '../harness/densityBitExact';
 import { fuzzNoiseSource, randomDensityExpr } from '../harness/densityFuzz';
-import { ctxFor } from '../harness/gen';
+import { ctxFor, paramsWith } from '../harness/gen';
 import { testRng } from '../harness/stats';
 
 const NEVER = (): boolean => false;
@@ -471,5 +473,53 @@ describe('the layer cache: the intervals that depend on neither x nor z kept per
     expect(stats.columns).toBe(64);
     expect(stats.voxelsOn).toBe(stats.voxelsOff);
     expect(stats.tagged).toBeGreaterThan(0);
+  }, 300_000);
+});
+
+describe('the cell tags: a cell\'s cave kind from its tap intervals (SP6a R13)', () => {
+  test('with and without the cell tags, every tag of 64 columns is equal (the fill unchanged)', () => {
+    const stats = checkBitExact((ctx) => {
+      const on = createDensityContext(ctx).bounds;
+      const off = createDensityContext(ctx);
+      expect(on.cellTags).toBe(true);
+      return { on, off: createDensityBounds(off.compiled, off.noises, true, true, { cellTags: false }) };
+    }, true);
+    expect(stats.columns).toBe(64);
+    expect(stats.tagged).toBeGreaterThan(64 * 1000);
+  }, 300_000);
+
+  test('the muted trees: a tap set to a constant still tags as tagVoxel does', () => {
+    // Each family muted in turn (its tap's value a constant, so its interval a point): ties between a muted family and
+    // nothing else, and cells where the muted value decides, against tagVoxel at every voxel of 8 default columns.
+    for (const name of ['entrances', 'cheese', 'spag3d', 'spag2d', 'pillars', 'noodle', 'precave']) {
+      const tree = JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE)) as { root: unknown; defs: Record<string, unknown> };
+      let muted = false;
+      const walk = (v: unknown): void => {
+        if (v === null || typeof v !== 'object') return;
+        const o = v as Record<string, unknown>;
+        if (o['op'] === 'tap' && o['name'] === name) { o['mute'] = name === 'precave' ? 3 : -0.5; muted = true; }
+        for (const x of Object.values(o)) walk(x);
+      };
+      walk(tree);
+      expect(muted, name).toBe(true);
+      const params = paramsWith({ density: { defs: tree } } as never);
+      const set = bitExactSets()[0]!;
+      const gctx = createGenContext(seedFromInput('42'), params);
+      const on = createDensityContext(gctx).bounds;
+      const offDc = createDensityContext(gctx);
+      const off = createDensityBounds(offDc.compiled, offDc.noises, true, true, { cellTags: false });
+      const s = newColumnSample();
+      const solid = new Uint8Array(98304), cells = new Uint8Array(768);
+      const tags = [new Uint8Array(98304), new Uint8Array(98304)];
+      const th = params.caves.pillars.threshold;
+      for (const [cx, cz] of set.columns.slice(0, 8)) {
+        buildColumnSample(gctx, cx, cz, s);
+        [on, off].forEach((b, k) => {
+          fillDensityColumn(b, s, solid, null, null, NEVER, cells);
+          tagColumn(b.compiled, caveReadersOf(b.compiled), th, solid, cells, tags[k]!, b);
+        });
+        for (let i = 0; i < 98304; i++) if (tags[0]![i] !== tags[1]![i]) throw new Error(`${name} muted (${cx}, ${cz}) voxel ${i}: ${tags[0]![i]} against ${tags[1]![i]}`);
+      }
+    }
   }, 300_000);
 });

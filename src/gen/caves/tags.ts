@@ -14,6 +14,15 @@
  * before them is sky wherever the pre-cave tap's interval there is ≤ 0 (its voxels 0 without evaluation); otherwise (a
  * tree whose muted taps decide cells air before their corners) the tag evaluates the cell's corners first.
  * `caveTagAt` is the rule at one voxel (SP6a spec §3.4, D22), equal to T's stored tag voxel for voxel (DT2's `tagProbe`).
+ *
+ * The cell tags (SP6a ruling R13, output-keeping). With the compile's bounds (`cellTags`), corners, and the taps
+ * `precave`, the four families, `pillars` and `noodle` all outside `interpolated`, a cell to tag that holds density air
+ * first takes its nodes' intervals from its corner hulls (`cellIntervalCorners`): they hold each tap's value at every
+ * voxel of the cell. Where they decide steps 2 and 3 alike at every voxel (the pre-cave tap ≤ 0 everywhere: 0; else
+ * > 0 everywhere, one family strictly below the other three, the pillar keep and the `caves ≤ 0` test one-sided, and the
+ * noodle above 0, or at most 0 and below the lowest family), every density-air voxel of the cell takes that kind
+ * without reading its taps; otherwise each is tagged by `tagVoxel`. The comparisons that decide are strict where the
+ * rule's are, so no voxel is a tie, and the kind is `tagVoxel`'s.
  * Follows the gen determinism rules.
  */
 import { CAVE_KIND } from '../../core/constants';
@@ -32,6 +41,12 @@ const K_ENTRANCE: number = KIND.entrance;
 const K_OTHER: number = KIND.other;
 const FIND_TAP = findTap;
 const PROBE = probe;
+const FINITE = Number.isFinite;
+
+/** The taps of the cell tags, in `cellKind`'s order. */
+const CELL_TAPS = ['precave', 'entrances', 'cheese', 'spag3d', 'spag2d', 'pillars', 'noodle'] as const;
+/** The family kinds by `CELL_TAPS` index (1 … 4: E, C, S3, S2). */
+const FAMILY_KINDS = Int32Array.of(0, K_ENTRANCE, K_CHEESE, K_SPAG3D, K_SPAG2D);
 
 /** The interval scratch of `tagColumn`'s pre-cave check. */
 const IV = new Float64Array(2);
@@ -52,6 +67,8 @@ export interface CaveReaders {
 interface Resolved {
   readonly readers: CaveReaders;
   readonly preNode: number;
+  /** The cell tags' tap nodes (`CELL_TAPS`), each outside `interpolated`; null when one is missing or inside. */
+  readonly cellNodes: Int32Array | null;
 }
 
 const RESOLVED = new WeakMap<CompiledDensity, Resolved>();
@@ -82,7 +99,9 @@ function resolve(c: CompiledDensity): Resolved {
       noodle: c.tapReader('noodle'),
     });
     const pre = tapNode(c, 'precave');
-    r = { readers, preNode: pre >= 0 ? pre : tapNode(c, 'terrain') };
+    const ids = CELL_TAPS.map((name) => tapNode(c, name));
+    const cellNodes = ids.every((id) => id >= 0 && !c.nodes[id]!.inside) ? Int32Array.from(ids) : null;
+    r = { readers, preNode: pre >= 0 ? pre : tapNode(c, 'terrain'), cellNodes };
     RESOLVED.set(c, r);
   }
   return r;
@@ -132,6 +151,58 @@ export function tagVoxel(c: CompiledDensity, r: CaveReaders, pillarThreshold: nu
 }
 
 /**
+ * The kind §3.2's rule gives every density-air voxel of a cell whose tap intervals are `iv` at nodes `nd` (`CELL_TAPS`),
+ * or −1 when they do not decide one (the header's "cell tags").
+ */
+function cellKind(iv: Float64Array, nd: Int32Array, th: number): number {
+  for (let q = 0; q < 7; q++) {
+    const o = 2 * nd[q]!;
+    if (!(FINITE(iv[o]!) && FINITE(iv[o + 1]!))) return -1;
+  }
+  const pre = 2 * nd[0]!;
+  if (iv[pre + 1]! <= 0) return 0;
+  if (!(iv[pre]! > 0)) return -1;
+  // The lowest of E, C, S3, S2: the family whose high end is below every other's low end.
+  let fam = -1;
+  for (let q = 1; q <= 4 && fam < 0; q++) {
+    const h = iv[2 * nd[q]! + 1]!;
+    let below = true;
+    for (let o = 1; o <= 4; o++) if (o !== q && !(h < iv[2 * nd[o]!]!)) { below = false; break; }
+    if (below) fam = q;
+  }
+  if (fam < 0) return -1;
+  const lLo = iv[2 * nd[fam]!]!, lHi = iv[2 * nd[fam]! + 1]!;
+  const pLo = iv[2 * nd[5]!]!, pHi = iv[2 * nd[5]! + 1]!;
+  // caves = max(lowest, keep): keep −1e6 where pillars·(1/16) < th (a product by a power of 2, monotone), else pillars.
+  let cLo: number, cHi: number;
+  if (pHi * 0.0625 < th) {
+    if (!(lLo > -1e6)) return -1;
+    cLo = lLo;
+    cHi = lHi;
+  } else if (pLo * 0.0625 >= th) {
+    if (pHi < lLo) { cLo = lLo; cHi = lHi; } else if (pLo > lHi) { cLo = pLo; cHi = pHi; } else return -1;
+  } else return -1;
+  let kind: number, bestLo: number;
+  if (cHi <= 0) { kind = FAMILY_KINDS[fam]!; bestLo = lLo; } else if (cLo > 0) { kind = K_OTHER; bestLo = Infinity; } else return -1;
+  const nLo = iv[2 * nd[6]!]!, nHi = iv[2 * nd[6]! + 1]!;
+  if (nLo > 0) return kind;
+  if (nHi <= 0 && nHi < bestLo) return K_NOODLE;
+  return -1;
+}
+
+/** Whether cell (ci, ck, cj) holds a density-air voxel above y −64. */
+function hasAir(solid: Uint8Array, ci: number, ck: number, cj: number): boolean {
+  const y0 = -64 + 8 * ck;
+  for (let y = y0 < -63 ? -63 : y0; y < y0 + 8; y++) {
+    for (let lz = 4 * cj; lz < 4 * cj + 4; lz++) {
+      const row = ((y + 64) * 16 + lz) * 16 + 4 * ci;
+      if (solid[row] === 0 || solid[row + 1] === 0 || solid[row + 2] === 0 || solid[row + 3] === 0) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * The tag pass of one column (§3.2), right after `fillDensityColumn` on `c`'s bounds left the column current: `solid`
  * (98,304 entries, `((y + 64)·16 + lz)·16 + lx`) and `cells` (768 entries, 1 where the fill evaluated the cell's corners
  * or its voxels) are the fill's; `out` (98,304 entries) is cleared, then receives `tagVoxel` at each density-air voxel
@@ -150,8 +221,10 @@ export function tagColumn(
   if (bounds !== null && bounds.compiled !== c) throw new Error('tagColumn: the bounds are not the compiled density\'s');
   out.fill(0);
   if (r.precave === null && r.terrain === null) return;
-  const preNode = resolve(c).preNode;
+  const res = resolve(c), preNode = res.preNode;
   const slots = c.interpolatedSlotCount > 0;
+  // The cell tags: with the compile's bounds, corners and the seven taps outside `interpolated`.
+  const cellNodes = slots && bounds !== null && bounds.cellTags ? res.cellNodes : null;
   for (let ck = 0; ck < 48; ck++) {
     const y0 = -64 + 8 * ck;
     for (let cj = 0; cj < 4; cj++) {
@@ -166,12 +239,19 @@ export function tagColumn(
           }
           if (slots) c.cellCorners(ci, ck, cj);
         }
+        let kind = -1;
+        if (cellNodes !== null) {
+          // A cell decided solid after its corners has nothing to tag.
+          if (!hasAir(solid, ci, ck, cj)) continue;
+          bounds!.cellIntervalCorners(ci, ck, cj, IV, 0);
+          kind = cellKind(bounds!.nodeIntervals, cellNodes, pillarThreshold);
+        }
         for (let y = y0 < -63 ? -63 : y0; y < y0 + 8; y++) {
           for (let lz = 4 * cj; lz < 4 * cj + 4; lz++) {
             const row = ((y + 64) * 16 + lz) * 16;
             for (let lx = 4 * ci; lx < 4 * ci + 4; lx++) {
               if (solid[row + lx] !== 0) continue;
-              out[row + lx] = tagVoxel(c, r, pillarThreshold, lx, y, lz);
+              out[row + lx] = kind >= 0 ? kind : tagVoxel(c, r, pillarThreshold, lx, y, lz);
             }
           }
         }

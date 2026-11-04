@@ -128,6 +128,8 @@ export interface DensityBoundsOptions {
   readonly subBlocks?: boolean;
   /** false: cellDecide runs the whole program (the header's "layer cache"). */
   readonly layerCache?: boolean;
+  /** false: `tagColumn` reads every density-air voxel's taps (caves/tags.ts' "cell tags"). */
+  readonly cellTags?: boolean;
 }
 
 /** Interval bounds of one CompiledDensity (it reads that compile's slot values and corner cache). */
@@ -180,6 +182,8 @@ export interface DensityBounds {
   readonly airWitnessCount: Float64Array;
   /** Whether cellDecide reads the per-layer intervals (the header's "layer cache"); `DensityBoundsOptions.layerCache`. */
   readonly layerCache: boolean;
+  /** Whether `tagColumn` decides a cell's tags from its tap intervals (caves/tags.ts' "cell tags"); `DensityBoundsOptions.cellTags`. */
+  readonly cellTags: boolean;
   /** Whether `fillDensityColumn` splits a straddling cell into sub-blocks (SP6a ruling R13); `DensityBoundsOptions.subBlocks`. */
   readonly subBlocks: boolean;
   /**
@@ -203,7 +207,7 @@ export interface DensityBounds {
 export function createDensityBounds(
   c: CompiledDensity, noises: DensityNoiseSource, minSkip = true, airWitness = true, options: DensityBoundsOptions = {},
 ): DensityBounds {
-  const subBlocks = options.subBlocks ?? true, layerCache = options.layerCache ?? true;
+  const subBlocks = options.subBlocks ?? true, layerCache = options.layerCache ?? true, cellTags = options.cellTags ?? true;
   const nodes = c.nodes;
   const n = nodes.length;
   const iv = new Float64Array(2 * n).fill(NaN);
@@ -604,6 +608,7 @@ export function createDensityBounds(
     },
     airWitnessCount,
     layerCache,
+    cellTags,
     subBlocks,
     boxInterval: (ci, ck, cj, x0, x1, y0, y1, z0, z1, out, k) => {
       bx0 = x0; bx1 = x1; by0 = y0; by1 = y1; bz0 = z0; bz1 = z1;
