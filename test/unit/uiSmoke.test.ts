@@ -49,6 +49,8 @@ import {
   COPY_BADGE, exportedFile, FIRST_PLACE_DOT, importedNotice, MODIFY_EDIT, OLDER_BADGE, OLDER_WORLD, PAUSED_SPEED_INDEX, SETTINGS_FOV, SMOKE_BACKUP_NOTICE, SMOKE_BACKUP_NOTICE_MS, SMOKE_COPY,
   SMOKE_PLACE, SMOKE_PLACE_SAVED, SP5B_SHOTS, ADDED_PLACE_DOT, lookDiffers, PLACES_SHOT_DOTS, PLACES_SHOT_SOUTH_PX, worldsMenuFallback,
 } from '../tools/uiSmoke';
+import { CDP_SEND_MS, CDP_WAIT_MARGIN_MS, guardedCdp, untilBoundMs } from '../tools/uiSmoke';
+import type { Cdp } from '../tools/cdp';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
 import { EMIT, REGISTRY } from '../../src/world/blocks/index';
 import { PLACEABLE } from '../../src/world/blocks/tags';
@@ -1543,5 +1545,65 @@ describe('UI smoke test: arguments', () => {
     expect(parseArgs(['--skip-build', '--profile-dir', '/tmp/p', '--shots', 'docs/x'])).toEqual({ build: false, profileDir: '/tmp/p', shots: 'docs/x' });
     expect(() => parseArgs(['--shots'])).toThrow(/--shots needs a value/);
     expect(() => parseArgs(['--what'])).toThrow(/unknown argument --what/);
+  });
+});
+
+describe('UI smoke test: CDP calls on a dead or hung renderer fail instead of hanging (SP6a ruling R16)', () => {
+  /** A page connection whose commands answer only when the test says so, with the events it can fire. */
+  const fakeCdp = (): { cdp: Cdp; answer(method: string): void; fire(event: string): void; sent: string[] } => {
+    const waiting = new Map<string, (v: Record<string, unknown>) => void>();
+    const listeners = new Map<string, Array<(p: Record<string, unknown>) => void>>();
+    const sent: string[] = [];
+    return {
+      sent,
+      cdp: {
+        send(method) {
+          sent.push(method);
+          return new Promise((resolve) => { waiting.set(method, resolve); });
+        },
+        on(method, fn) { listeners.set(method, [...(listeners.get(method) ?? []), fn]); },
+        close() {},
+      },
+      answer(method) { waiting.get(method)?.({ ok: true }); },
+      fire(event) { for (const fn of listeners.get(event) ?? []) fn({}); },
+    };
+  };
+
+  test('the bounds: every command 5 min unless it states its own; a page-side wait gets its wait plus a minute', () => {
+    expect(CDP_SEND_MS).toBe(300_000);
+    expect(CDP_WAIT_MARGIN_MS).toBe(60_000);
+    expect(untilBoundMs(30_000)).toBe(90_000);
+    expect(untilBoundMs(240_000)).toBe(300_000);
+  });
+
+  test('an answered command resolves with its answer', async () => {
+    const f = fakeCdp();
+    const g = guardedCdp(f.cdp, 1000);
+    const r = g.send('Runtime.evaluate', { expression: '1' });
+    f.answer('Runtime.evaluate');
+    await expect(r).resolves.toEqual({ ok: true });
+  });
+
+  test('a command never answered rejects after its bound, naming the method and the bound', async () => {
+    const f = fakeCdp();
+    const g = guardedCdp(f.cdp, 1000);
+    await expect(g.send('Input.insertText', { text: 'x' }, 20)).rejects.toThrow(/^Input\.insertText: no answer from the page within 0\.02 s \(a hung or dead renderer\)$/);
+    await expect(g.send('Runtime.evaluate', {})).rejects.toThrow(/within 1 s/);
+  });
+
+  test('the page\'s renderer crashing rejects every command in flight at once, and later ones too', async () => {
+    const f = fakeCdp();
+    const g = guardedCdp(f.cdp, 60_000);
+    const a = g.send('Runtime.evaluate', {});
+    const b = g.send('Input.insertText', {});
+    f.fire('Inspector.targetCrashed');
+    await expect(a).rejects.toThrow(/^Runtime\.evaluate: the page's renderer crashed \(Inspector\.targetCrashed\)$/);
+    await expect(b).rejects.toThrow(/^Input\.insertText: the page's renderer crashed/);
+    await expect(g.send('Page.navigate', {})).rejects.toThrow(/^Page\.navigate: the page's renderer crashed/);
+    // The events and close still reach the connection.
+    let heard = 0;
+    g.on('Inspector.targetCrashed', () => { heard++; });
+    f.fire('Inspector.targetCrashed');
+    expect(heard).toBe(1);
   });
 });

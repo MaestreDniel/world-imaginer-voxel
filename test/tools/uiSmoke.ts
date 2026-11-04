@@ -154,6 +154,9 @@
  * §10.10, 1400 × 900) follow: `review-rename-save.png` (menus), `review-modify-notice.png` (modify), and
  * `review-selection.png`, `review-ghost.png` and `review-rotated-paste.png` (select, a scene built in front of the
  * camera after the step's checks); only those five are committed, in `assets/sp5c/`.
+ * Every command to a page is bounded (`guardedCdp`, SP6a ruling R16): a page-side wait by its own time plus a minute,
+ * any other command by 5 minutes, and every command in flight fails at once when the page's renderer crashes
+ * (`Inspector.targetCrashed`), so a dead renderer fails its step with a message instead of hanging the smoke.
  * Options: --skip-build, --profile-dir DIR, --shots DIR. The exit code is 0 only when every check passes.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -1571,22 +1574,76 @@ function pageHelpers(): SmokePage {
 
 // ---------------------------------------------------------------- driving the page
 
+/**
+ * The longest a page command may go unanswered when it states no wait of its own (SP6a ruling R16): a renderer killed
+ * by the kernel (Chrome's 8 GiB data limit) or stuck never answers, and the smoke hung on it instead of failing.
+ */
+export const CDP_SEND_MS = 300_000;
+/** What a page-side wait (`until`, `untilAt`) may take beyond its own `ms` before its evaluation counts as unanswered. */
+export const CDP_WAIT_MARGIN_MS = 60_000;
+
+/** The bound of the evaluation behind a page-side wait of `ms`. */
+export function untilBoundMs(ms: number): number {
+  return ms + CDP_WAIT_MARGIN_MS;
+}
+
+/** A page connection whose commands can state their own bound (ms). */
+export interface GuardedCdp extends Cdp {
+  send(method: string, params?: Record<string, unknown>, ms?: number): Promise<Record<string, unknown>>;
+}
+
+/**
+ * `c` with every command bounded (SP6a ruling R16): a command unanswered after `ms` (default `defaultMs`) rejects with
+ * "<method>: no answer from the page within <s> s (a hung or dead renderer)"; once the page's renderer crashed
+ * (`Inspector.targetCrashed`, which needs `Inspector.enable`), every command in flight and every later one rejects with
+ * "<method>: the page's renderer crashed (Inspector.targetCrashed)". Events and `close` go to `c`.
+ */
+export function guardedCdp(c: Cdp, defaultMs: number): GuardedCdp {
+  let crashed = false;
+  /** The crash rejection of each command in flight. */
+  const inFlight = new Set<() => void>();
+  const crash = (method: string): Error => new Error(`${method}: the page's renderer crashed (Inspector.targetCrashed)`);
+  c.on('Inspector.targetCrashed', () => {
+    crashed = true;
+    for (const fail of [...inFlight]) fail();
+  });
+  return {
+    send(method, params = {}, ms = defaultMs) {
+      if (crashed) return Promise.reject(crash(method));
+      return new Promise((resolve, reject) => {
+        const settle = (): void => { clearTimeout(timer); inFlight.delete(onCrash); };
+        const onCrash = (): void => { settle(); reject(crash(method)); };
+        const timer = setTimeout(() => {
+          settle();
+          reject(new Error(`${method}: no answer from the page within ${ms / 1000} s (a hung or dead renderer)`));
+        }, ms);
+        inFlight.add(onCrash);
+        c.send(method, params).then((r) => { settle(); resolve(r); }, (e: unknown) => { settle(); reject(e); });
+      });
+    },
+    on(method, fn) { c.on(method, fn); },
+    close() { c.close(); },
+  };
+}
+
 /** One page under test (a target of its own): evaluation, waits and real pointer and key input. */
 class Page {
   /** Mouse button state for the moves of a drag. */
   private buttons = 0;
-  readonly cdp: Cdp;
+  /** The page's connection, every command bounded (`guardedCdp`; the connection has `Inspector.enable`, `wire`). */
+  readonly cdp: GuardedCdp;
   readonly base: string;
   /** The page's DevTools target id (`Target.closeTarget`). */
   readonly targetId: string;
   constructor(cdp: Cdp, base: string, targetId: string) {
-    this.cdp = cdp;
+    this.cdp = guardedCdp(cdp, CDP_SEND_MS);
     this.base = base;
     this.targetId = targetId;
   }
 
-  async eval<T>(expression: string): Promise<T> {
-    const r = await this.cdp.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
+  /** Evaluates `expression` (awaiting a promise), bounded by `ms` (`CDP_SEND_MS` by default). */
+  async eval<T>(expression: string, ms = CDP_SEND_MS): Promise<T> {
+    const r = await this.cdp.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, ms);
     const ex = r['exceptionDetails'] as { text?: string; exception?: { description?: string } } | undefined;
     if (ex !== undefined) throw new Error(`page: ${ex.exception?.description ?? ex.text ?? 'evaluation failed'}`);
     return (r['result'] as { value?: unknown }).value as T;
@@ -1594,7 +1651,7 @@ class Page {
 
   /** Waits until the page expression `pred` holds (checked once per animation frame). */
   until(pred: string, what: string, ms = SETTLE_MS): Promise<number> {
-    return this.eval<number>(`__wiSmoke.until(() => (${pred}), ${ms}, ${JSON.stringify(what)})`);
+    return this.eval<number>(`__wiSmoke.until(() => (${pred}), ${ms}, ${JSON.stringify(what)})`, untilBoundMs(ms));
   }
 
   /** Loads `url` as a new document (through about:blank, so that a `?map` hash never becomes a hashchange). */
@@ -1621,7 +1678,7 @@ class Page {
 
   /** As `until`, resolving with the page's `performance.now()` at the frame where `pred` held. */
   untilAt(pred: string, what: string, ms = SETTLE_MS): Promise<number> {
-    return this.eval<number>(`__wiSmoke.untilAt(() => (${pred}), ${ms}, ${JSON.stringify(what)})`);
+    return this.eval<number>(`__wiSmoke.untilAt(() => (${pred}), ${ms}, ${JSON.stringify(what)})`, untilBoundMs(ms));
   }
 
   now(): Promise<number> { return this.eval('performance.now()'); }
@@ -5082,6 +5139,8 @@ async function main(argv: readonly string[]): Promise<number> {
         void c.send('Page.handleJavaScriptDialog', { accept: true }).catch(() => undefined);
       });
       await c.send('Runtime.enable');
+      // Inspector.targetCrashed reaches the page's guarded commands (SP6a ruling R16) and the crash step.
+      await c.send('Inspector.enable');
       await c.send('Page.enable');
       await c.send('Log.enable');
       await c.send('DOM.enable');
