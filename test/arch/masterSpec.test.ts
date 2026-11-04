@@ -2005,8 +2005,8 @@ describe('master spec amendments (SP6a §13)', () => {
       expect(Math.round(n[id].wavelength / n[id].yScale), `${id} is isotropic`).toBe(n[id].wavelength);
       return `λ ${n[id].wavelength}`;
     };
-    expect([n.cheese.double, n.cheese.octaves, n.layer.octaves, n.cheeseRegional.octaves, n.spagRegional.octaves, n.spag2dElevation.octaves]).toEqual([true, 4, 1, 2, 2, 2]);
-    expect([n.entrance.octaves, n.entrance.amplitudes]).toEqual([3, [0.4, 0.5, 1.0]]);
+    expect([n.cheese.double, n.cheese.octaves, n.layer.octaves, n.cheeseRegional.octaves, n.spagRegional.octaves, n.spag2dElevation.octaves]).toEqual([true, 3, 1, 2, 2, 2]);
+    expect([n.entrance.octaves, n.entrance.amplitudes]).toEqual([2, [0.5, 1.0]]);
     const s3 = c.spaghetti3d.scales, s2 = c.spaghetti2d.scales;
     const want = [
       `ramp = clamp((${c.limits.surfaceDepth} − T)·2, 0, 32)`,
@@ -2016,7 +2016,7 @@ describe('master spec amendments (SP6a §13)', () => {
       `spag3D    = rough + clamp(rm·max(|S1|, |S2|) − ${c.spaghetti3d.thickness} − ${c.spaghetti3d.thicknessVar}·thk − ${c.spaghetti3d.regional}·Nrb, −1, 1)  S1, S2 ${lam('spag3dA')} at p/rm, rm ${s3.s0}, ${s3.s1}, ${s3.s2}, ${s3.s3} by rarity ${lam('spag3dRarity')}; thk ${lam('spag3dThickness')}; Nrb 2D ${lam('spagRegional')}, 2 oct`,
       `spag2D    = clamp(max(rm·|S| + 0.083·tm, (|${c.spaghetti2d.layerAmp}·Nel + yGrad(−64→8, 320→−40)| + tm)³), −1, 1), tm = −${c.spaghetti2d.thickness} − 0.35·thk   S ${lam('spag2d')} at p/rm, rm ${s2.s0}, ${s2.s1}, ${s2.s2}, ${s2.s3}, ${s2.s4} by rarity ${lam('spag2dRarity')}; Nel 2D ${lam('spag2dElevation')}, 2 oct; thk ${lam('spag2dThickness')}`,
       `noodle    = −${c.noodles.thickness} − 0.025·thk + ${c.noodles.ridgeMul}·max(|Ra|, |Rb|) + 4·max(0, −(Nt − ${c.noodles.regional}·Nrb))      Nt ${lam('noodleToggle')}, thk ${lam('noodleThickness')}, Ra/Rb ${lam('noodleRidgeA')}; each noise its own interpolated slot, combined per voxel`,
-      `entr      = min(Ne·(1/6) + ${c.entrances.offset} + yGrad(−10→0.3, 30→0), rough + clamp(max(|E1|,|E2|) − ${c.entrances.threshold}, −1, 1))   Ne ${lam('entrance')}, amps [0.4,0.5,1.0]; E1, E2 ${lam('entranceA')}`,
+      `entr      = min(Ne·(1/6) + ${c.entrances.offset} + yGrad(−10→0.3, 30→0), rough + clamp(max(|E1|,|E2|) − ${c.entrances.threshold}, −1, 1))   Ne ${lam('entrance')}, amps [0.5,1.0]; E1, E2 ${lam('entranceA')}`,
       `P         = tap('pillars', interpolated( 16·pillars ))      keep = rangeChoice(P·(1/16), −1e9, ${c.pillars.threshold}, −1e6, P)`,
       'caves     = max( min(E, C, S3, S2), keep )',
       'cap_f     = G_f·min(1, g_f + g_w + g_i) + 128·min(1, h_f + h_i)                        G_f 0.4 (entrances), 5.8 (cheese), 0.5 (spaghetti 3D), 0.3 (spaghetti 2D), 0.4 (noodle)',

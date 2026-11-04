@@ -230,7 +230,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       capTop: int(344, { ...TERRAIN, label: 'Cap top', doc: 'The island cap: caves narrow over the band span below capTop − 8 and are closed from capTop − 4 up (344, above the world\'s top, has no effect while the band span is at most 16; 180 in floating_islands, so no cave air lies at y ≥ 176).', unit: 'y', min: 180, max: 344 }),
     }),
     noises: group('Cave noises', 'Noises read by the cave terms (noise2 / noise ops), at unscaled world block coordinates.', {
-      cheese: caveNoise('Cheese noise', 'Nch of the cheese caverns (λxz 96, λy 144, double).', { dims: 3, wavelength: 96, octaves: 4, yScale: 96 / 144, double: true }, 3, CAVE_WAVELENGTH),
+      cheese: caveNoise('Cheese noise', 'Nch of the cheese caverns (λxz 96, λy 144, double).', { dims: 3, wavelength: 96, octaves: 3, yScale: 96 / 144, double: true }, 3, CAVE_WAVELENGTH),
       layer: caveNoise('Layer noise', 'L of the cheese layer term layerAmp·L² (λxz 96, λy 16).', { dims: 3, wavelength: 96, octaves: 1, yScale: 6 }, 3, CAVE_WAVELENGTH),
       cheeseRegional: caveNoise('Cheese regional noise', 'Nra (2D): lowers the cheese offset by regional·Nra.', { dims: 2, wavelength: 1536, octaves: 2 }, 3, CAVE_WAVELENGTH),
       pillar: caveNoise('Pillar noise', 'Np of the pillars (λxz 30, λy 400).', { dims: 3, wavelength: 30, octaves: 1, yScale: 0.075 }, 3, CAVE_WAVELENGTH),
@@ -238,7 +238,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       pillarThickness: caveNoise('Pillar thickness noise', 'thickness of the pillars (λxz 60, λy 400).', { dims: 3, wavelength: 60, octaves: 1, yScale: 0.15 }, 3, CAVE_WAVELENGTH),
       roughness: caveNoise('Roughness noise', 'Nr of rough = (−0.05 − 0.05·Nrm)·(−0.4 + |Nr|).', { dims: 3, wavelength: 32, octaves: 1 }, 3, CAVE_WAVELENGTH),
       roughnessMod: caveNoise('Roughness modulation noise', 'Nrm of rough = (−0.05 − 0.05·Nrm)·(−0.4 + |Nr|).', { dims: 3, wavelength: 128, octaves: 1 }, 3, CAVE_WAVELENGTH),
-      entrance: caveNoise('Entrance noise', 'Ne of the entrances (amplitudes 0.4, 0.5, 1.0).', { dims: 3, wavelength: 128, octaves: 3, amplitudes: [0.4, 0.5, 1.0] }, 3, CAVE_WAVELENGTH),
+      entrance: caveNoise('Entrance noise', 'Ne of the entrances (amplitudes 0.5, 1.0 at λ 64 and 32).', { dims: 3, wavelength: 64, octaves: 2, amplitudes: [0.5, 1.0] }, 3, CAVE_WAVELENGTH),
       entranceA: caveNoise('Entrance tunnel noise A', 'E1 of the entrance tunnels max(|E1|, |E2|).', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
       entranceB: caveNoise('Entrance tunnel noise B', 'E2 of the entrance tunnels max(|E1|, |E2|).', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
       spag3dA: caveNoise('Spaghetti 3D noise A', 'S1 of the 3D tunnels max(rm·|S1(p/rm)|, rm·|S2(p/rm)|).', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),

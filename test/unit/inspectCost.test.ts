@@ -91,9 +91,9 @@ describe('structural and work costs (SP3d spec §1.7, §5.2)', () => {
     expect(structuralCost(sp5c.root, sp5c.defs)).toBe(333);
   });
 
-  test('the default work cost is 17,547 at DEFAULTS: 11,428 units, 865 of them noises (the body\'s jag and overhang at 16 corner reads)', () => {
+  test('the default work cost is 17,451 at DEFAULTS: 11,428 units, 865 of them noises (the body\'s jag and overhang at 16 corner reads)', () => {
     const resolved = resolveDensity(DEFAULT_DENSITY_TREE, DEFAULTS);
-    expect(workCost(resolved, DEFAULTS)).toBe(17547);
+    expect(workCost(resolved, DEFAULTS)).toBe(17451);
     // SP5c's 574: 327 units, 17 of them noises (8 jag, 8 overhang corners, 1 detail).
     expect(327 - 17 + 8 * 16 + 8 * 16 + 8).toBe(574);
     // SP6a: `ref body` is read at the corners by the terrain tap, detailG, cheese's sky, roof and ramp and each spaghetti
@@ -113,11 +113,15 @@ describe('structural and work costs (SP3d spec §1.7, §5.2)', () => {
     // its 2,555 resolved units, 112 of them the body's jag and overhang reads, which weigh 16 each.
     const task9Units = 56 * 16 + 56 * 16;
     expect(11428 - (753 + 2 * 56) + task6Units + task7Units + task9Units).toBe(17547);
+    // D25's lever 5 (Task 15b): cheese 4 → 3 octaves (double: 32 → 24) and entrance 3 → 2 (12 → 8), each at its 8 corner
+    // reads.
+    const lever5Units = 8 * (32 - 24) + 8 * (12 - 8);
+    expect(17547 - lever5Units).toBe(17451);
     // The legacy-built tree (SP5c's values without the root's slots) stays at 569.
     expect(workCost(legacyDefaultDensityExpr(DEFAULTS.density), DEFAULTS)).toBe(569);
     // The configured leaf: 3 octaves of a single-stack jag weigh 12 each.
     const p = paramsWith({ density: { noises: { jag: { octaves: 3, double: false } } } });
-    expect(workCost(resolveDensity(DEFAULT_DENSITY_TREE, p), p)).toBe(17547 - 128 * 16 + 128 * 12);
+    expect(workCost(resolveDensity(DEFAULT_DENSITY_TREE, p), p)).toBe(17451 - 128 * 16 + 128 * 12);
   });
 
   test('a ref costs its def; interpolated 1 + 8 × child; a muted tap counts its child; mutes ignored', () => {
@@ -135,8 +139,8 @@ describe('structural and work costs (SP3d spec §1.7, §5.2)', () => {
 
   test('a caves.noises noise (SP6a spec §1.5) weighs 4 · octaves · (double ? 2 : 1) of its configured leaf, as a density noise', () => {
     const n = DEFAULTS.caves.noises;
-    expect(workCost({ root: { op: 'noise', id: 'cheese' }, defs: {} }, DEFAULTS)).toBe(4 * 4 * 2);
-    expect(workCost({ root: { op: 'noise', id: 'entrance' }, defs: {} }, DEFAULTS)).toBe(4 * 3);
+    expect(workCost({ root: { op: 'noise', id: 'cheese' }, defs: {} }, DEFAULTS)).toBe(4 * 3 * 2);
+    expect(workCost({ root: { op: 'noise', id: 'entrance' }, defs: {} }, DEFAULTS)).toBe(4 * 2);
     expect(workCost({ root: { op: 'noise2', id: 'cheeseRegional' }, defs: {} }, DEFAULTS)).toBe(4 * 2);
     expect(workCost({ root: { op: 'noiseScaled', id: 'layer', s: 2 }, defs: {} }, DEFAULTS)).toBe(4);
     for (const id of Object.keys(n) as (keyof typeof n)[]) {

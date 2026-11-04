@@ -218,8 +218,8 @@ export interface MemoWork {
  *   voxel placement plus each def reachable from them at corner placement, every one counted once (a `ref` there costs
  *   nothing beyond its def's single count; a ref to a missing def costs 1, as in `workCost`).
  * A sample column whose samples read K distinct corners costs at most n × voxel + K × corner (`sliceCostOf`), never
- * more than `workCost`'s n × (voxel + 8 × the children's expanded cost). The default root: 179 per sample and 1,116
- * per corner at the default noises (`workCost` 17,547 = 179 + 8 × 2,171: the CSE of its defs at a corner).
+ * more than `workCost`'s n × (voxel + 8 × the children's expanded cost). The default root: 179 per sample and 1,104
+ * per corner at the default noises (`workCost` 17,451 = 179 + 8 × 2,159: the CSE of its defs at a corner).
  */
 export function memoWorkCost(expr: unknown, params: Params): MemoWork {
   if (!isRec(expr)) return { voxel: 0, corner: 0 };

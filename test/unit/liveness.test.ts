@@ -68,7 +68,7 @@ const BAND_PINS: Readonly<Record<(typeof BAND_LEAVES)[number], string>> = {
   'caves.noodles.minY': 'land column (-15542, -30245)',
   'caves.noodles.maxY': 'cave column (546, 25857)',
   'caves.entrances.minY': 'badlands column (-26426, -31088)',
-  'caves.entrances.maxY': 'amplified witness column (9157, 4188)',
+  'caves.entrances.maxY': 'amplified witness column (17330, 32119)',
 };
 /**
  * The leaves whose default sits at a range end, so U2 has one step for them: the band leaves (320 → 272; −64 → −54)
@@ -708,7 +708,7 @@ describe('the depth-band leaves (SP6a Task 8; rulings P3, P4, R5)', () => {
 
   test('P3: the maxY 320 of cheese, spaghetti 3D and the entrances has no witness on the default base; each has one on the amplified base, holding its air above y 272', () => {
     const amplified = createGenContext(seedFromInput('42'), resolveProfile('amplified'));
-    const draws: Record<string, number> = { 'caves.cheese.maxY': 42, 'caves.spaghetti3d.maxY': 1351, 'caves.entrances.maxY': 686 };
+    const draws: Record<string, number> = { 'caves.cheese.maxY': 42, 'caves.spaghetti3d.maxY': 1351, 'caves.entrances.maxY': 677 };
     const taps: Record<string, string> = { 'caves.cheese.maxY': 'cheese', 'caves.spaghetti3d.maxY': 'spag3d', 'caves.entrances.maxY': 'entrances' };
     for (const p of Object.keys(draws)) {
       expect(getPath(DEFAULTS, p)).toBe(320);

@@ -159,7 +159,7 @@ describe('the caves group (SP6a spec §4)', () => {
       return [id, dims, d.wavelength, Math.round(d.wavelength / d.yScale), d.octaves, d.double, d.amplitudes];
     };
     expect(Object.keys(n).map((id) => row(id as keyof typeof n))).toEqual([
-      ['cheese', 3, 96, 144, 4, true, null],
+      ['cheese', 3, 96, 144, 3, true, null],
       ['layer', 3, 96, 16, 1, false, null],
       ['cheeseRegional', 2, 1536, 1536, 2, false, null],
       ['pillar', 3, 30, 400, 1, false, null],
@@ -167,7 +167,7 @@ describe('the caves group (SP6a spec §4)', () => {
       ['pillarThickness', 3, 60, 400, 1, false, null],
       ['roughness', 3, 32, 32, 1, false, null],
       ['roughnessMod', 3, 128, 128, 1, false, null],
-      ['entrance', 3, 128, 128, 3, false, [0.4, 0.5, 1.0]],
+      ['entrance', 3, 64, 64, 2, false, [0.5, 1.0]],
       ['entranceA', 3, 64, 64, 1, false, null],
       ['entranceB', 3, 64, 64, 1, false, null],
       ['spag3dA', 3, 64, 64, 1, false, null],

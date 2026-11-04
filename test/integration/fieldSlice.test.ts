@@ -126,11 +126,11 @@ const configure = (epoch: number, params: Params, epochs: SharedArrayBuffer | nu
 
 describe('a configure stops an in-flight fieldSlice part within 50 ms (SP3d spec §4.5, §10)', () => {
   // A part as large as the work bound allows: the default tree's 128² vertical part of k = 30 sample columns under the
-  // corner memo's bound (SP6a §7.4, Task 13: 8,232,480 units of 274,416 each, 98 % of PART_BUDGET; 3 of 2,278,784
-  // without it, at Tasks 9-12; 78 of 106,240 before SP6a), and partWorst's one 32-sample column (330 leaves: 8,376,324
-  // units, 99.9 %; one sample ≈ 2 ms).
+  // corner memo's bound (SP6a §7.4, Task 13: 8,161,920 units of 272,064 each since D25's lever 5, 97.3 % of PART_BUDGET
+  // (8,232,480 of 274,416, 98 %, before it); 3 of 2,278,784 without the memo, at Tasks 9-12; 78 of 106,240 before SP6a),
+  // and partWorst's one 32-sample column (330 leaves: 8,376,324 units, 99.9 %; one sample ≈ 2 ms).
   const CASES: Array<[string, Params, FieldSliceSpec, number, number]> = [
-    ['the default tree, a 128² vertical part of 30 sample columns', DEFAULTS, vReq(MOUNTAIN, 'density', '', 128), 30, 0.98],
+    ['the default tree, a 128² vertical part of 30 sample columns', DEFAULTS, vReq(MOUNTAIN, 'density', '', 128), 30, 0.97],
     ['partWorst\'s tree at the part bound, one 32-sample column', partWorstParams(), vReq(MOUNTAIN, 'density', '', 32), 1, 0.99],
   ];
 

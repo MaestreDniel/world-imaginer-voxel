@@ -705,8 +705,8 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       await flush();
       // ⌈(32 × 30 + 196 × 68) / 32⌉ = 447 per sample under the corner memo (the 196 corners of 49 layers shared by its rows).
       expect(r.notice).toBe('node too heavy to slice (cost 447, limit 15 360)');
-      // The default's 128² vertical column: ⌈(128 × 179 + 196 × 1,116) / 128⌉ = 1,888 (17,547 without the memo).
-      expect(tooHeavyText('full', DEFAULTS, 'density', '', 'vertical', 128, sliceCostOf(DEFAULTS, 'density', '', 'vertical', 128), 2 ** 20)).toBe('node too heavy for a 128² slice (cost 1 888, limit 7 936)');
+      // The default's 128² vertical column: ⌈(128 × 179 + 196 × 1,104) / 128⌉ = 1,870 (17,451 without the memo).
+      expect(tooHeavyText('full', DEFAULTS, 'density', '', 'vertical', 128, sliceCostOf(DEFAULTS, 'density', '', 'vertical', 128), 2 ** 20)).toBe('node too heavy for a 128² slice (cost 1 870, limit 7 936)');
       // A tree without interpolated: its work cost per sample, as before the memo.
       expect(tooHeavyText('draft', P8, 'density', '', 'vertical', 32, sliceCostOf(P8, 'density', '', 'vertical', 32), 2 ** 19)).toBe('node too heavy to slice (cost 8 255, limit 15 360)');
     });
@@ -727,10 +727,10 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
           await flush();
           expect([r.shown?.result, r.pending, r.notice]).toEqual([f, null, null]);
         } else {
-          // The full slice is refused before any job: the draft stays with the notice (⌈(128 × 2,227 + 1,024 × 1,116 −
-          // 128 × 2,048) / 128⌉ = 9,107 per sample against 6,144).
+          // The full slice is refused before any job: the draft stays with the notice (⌈(128 × 2,227 + 1,024 × 1,104 −
+          // 128 × 2,048) / 128⌉ = 9,011 per sample against 6,144).
           expect(calls).toHaveLength(1);
-          expect([r.shown?.result, r.pending, r.notice]).toEqual([d, null, 'node too heavy for a 128² slice (cost 9 107, limit 6 144)']);
+          expect([r.shown?.result, r.pending, r.notice]).toEqual([d, null, 'node too heavy for a 128² slice (cost 9 011, limit 6 144)']);
         }
       }
     });

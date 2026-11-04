@@ -61,7 +61,7 @@ export function steepTree(): Tree {
   return t;
 }
 
-/** `steepTree`'s edit on today's default tree (SP6a's cave terms with the wet roof: work cost 17,547 + 2). */
+/** `steepTree`'s edit on today's default tree (SP6a's cave terms with the wet roof: work cost 17,451 + 2 since D25's lever 5). */
 export function steepDefaultTree(): Tree {
   const t = densityTree();
   t['root'].b.x = { op: 'add', a: { op: 'const', v: -1000000 }, b: { op: 'col', field: 'steep' } };
