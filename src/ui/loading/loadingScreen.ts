@@ -3,6 +3,11 @@
  * random start, one thin progress bar with a phase line, and the failure panel (cause, "Copy details", links to the map
  * and to a lower RD). The page computes the fraction (§8.3's stage weights) and the phase; this screen only shows them.
  *
+ * The page calls `progress` every frame of the load; the bar moves by whole percents, without a CSS transition, and
+ * the bar and the phase line are written only when they change (SP6a ruling R14): any repaint wakes the integrated
+ * GPU, and on the reference machine (i7-12700H, Iris Xe) an awake GPU caps the cores' clock for the whole fill (the
+ * workers at about 2.4 GHz instead of 4.1, the 4-worker fill about 2 s longer).
+ *
  * The watchdog fires `onWatchdog` after 30 s without a `progress` call that raised the fraction. Time while the tab is
  * hidden does not count: rAF stops in a background tab, so the uploads pause while the workers go on, and a wall clock
  * would fail a load that is fine (Review Focus 2). A `visibilitychange` restarts the window, and so does every check
@@ -105,6 +110,10 @@ export function mountLoadingScreen(root: HTMLElement, o: LoadingScreenOptions): 
     }, TIP_MS)
     : null;
 
+  // What the bar and the phase line show, written only when it changes (SP6a ruling R14).
+  let barWidth = '0%';
+  let phaseText = '';
+
   // The watchdog: visible time since the last raise of the fraction.
   let best = 0;
   let windowStart = o.now();
@@ -145,9 +154,16 @@ export function mountLoadingScreen(root: HTMLElement, o: LoadingScreenOptions): 
       if (f > best) {
         best = f;
         restart();
-        fill.style.width = `${Math.round(f * 1000) / 10}%`;
+        const w = `${Math.round(f * 100)}%`;
+        if (w !== barWidth) {
+          barWidth = w;
+          fill.style.width = w;
+        }
       }
-      phase.textContent = phaseName;
+      if (phaseName !== phaseText) {
+        phaseText = phaseName;
+        phase.textContent = phaseName;
+      }
     },
     warn(text) {
       warning.textContent = text;

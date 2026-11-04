@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { mountLoadingScreen, type LoadingScreen } from '../../src/ui/loading/loadingScreen';
 import { parseManifest, pickPanorama, type PanoramaEntry } from '../../src/ui/loading/panoramas';
@@ -143,6 +144,29 @@ describe('the loading screen (SP4a spec §8.3, D22)', () => {
     expect(dom.el('loading-phase').textContent).toBe('Meshing');
     s.progress(2, 'Preparing the view');
     expect(dom.el('loading-bar-fill').style.width).toBe('100%');
+  });
+
+  test('progress writes the page only when the bar\'s whole percent or the phase changes, and the bar has no transition (SP6a ruling R14)', () => {
+    // Any repaint during the load wakes the Iris Xe, which caps the workers' clock (about 4.1 → 2.4 GHz on the
+    // reference machine) for the whole fill: the bar moves by whole percents, without an animated width.
+    const s = mount();
+    const fill = dom.el('loading-bar-fill');
+    const phase = dom.el('loading-phase');
+    s.progress(0.401, 'Generating');
+    expect(fill.style.width).toBe('40%');
+    expect(phase.textContent).toBe('Generating');
+    fill.style.width = 'kept';
+    phase.textContent = 'kept';
+    s.progress(0.404, 'Generating');
+    expect(fill.style.width).toBe('kept');
+    expect(phase.textContent).toBe('kept');
+    s.progress(0.406, 'Lighting');
+    expect(fill.style.width).toBe('41%');
+    expect(phase.textContent).toBe('Lighting');
+    const css = readFileSync(new URL('../../src/ui/styles.css', import.meta.url), 'utf8');
+    const rule = /\.loading-bar-fill\s*\{([^}]*)\}/.exec(css);
+    expect(rule).not.toBeNull();
+    expect(rule![1]).not.toMatch(/transition|animation/);
   });
 
   test('tips rotate every 7 s, starting at a random one', () => {
