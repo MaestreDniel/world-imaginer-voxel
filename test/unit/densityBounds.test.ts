@@ -4,7 +4,7 @@ import { createDensityBounds, fillDensityColumn, type DensityBounds } from '../.
 import { compileDensity, posValueIndex } from '../../src/gen/density/compile';
 import type { DensityExpr, DensityNoise, DensityNoiseSource, Expr } from '../../src/gen/density/expr';
 import { cornerY, ivWiden } from '../../src/gen/density/nodes';
-import { densityNoiseSource } from '../../src/gen/density/context';
+import { createDensityContext, densityNoiseSource } from '../../src/gen/density/context';
 import { createDensityReference } from '../../src/gen/density/reference';
 import { fuzzNoiseSource, randomDensityExpr, terrainStandInExpr } from '../harness/densityFuzz';
 import { ctxFor } from '../harness/gen';
@@ -340,5 +340,73 @@ describe('bounds: noiseScaled (SP6a §1.5, D18)', () => {
         expect(hi - lo).toBeGreaterThan(0.5);
       }
     }
+  });
+});
+
+describe('fillDensityColumn: re-entrant and exception-safe (SP6a ruling R14)', () => {
+  const ctx = ctxFor();
+  const outer = createDensityContext(ctx);
+  const inner = createDensityContext(ctx);
+  const sOut = buildColumnSample(ctx, 0, 0, newColumnSample());
+  const sIn = buildColumnSample(ctx, 3, -2, newColumnSample());
+  interface Fill { solid: Uint8Array; values: Float64Array; mask: Uint8Array }
+  const run = (b: DensityBounds, s: ColumnSample): Fill => {
+    const f = { solid: new Uint8Array(98304), values: new Float64Array(98304).fill(NaN), mask: new Uint8Array(98304) };
+    expect(fillDensityColumn(b, s, f.solid, f.values, f.mask, () => false)).toBe(true);
+    return f;
+  };
+  /** `b` with its compile's voxelFn replaced (the bounds' closures keep reading the real compile). */
+  const withVoxelFn = (b: DensityBounds, voxelFn: (lx: number, y: number, lz: number) => number): DensityBounds =>
+    ({ ...b, compiled: { ...b.compiled, voxelFn } });
+  const same = (got: Fill, want: Fill, what: string): void => {
+    for (let i = 0; i < 98304; i++) {
+      if (got.solid[i] !== want.solid[i] || got.mask[i] !== want.mask[i] || !Object.is(got.values[i], want.values[i])) {
+        throw new Error(`${what}: voxel ${i} differs`);
+      }
+    }
+  };
+  const wantOut = run(outer.bounds, sOut);
+  const wantIn = run(inner.bounds, sIn);
+
+  test('the default tree splits the outer column into sub-blocks (the recursion the state serves)', () => {
+    const before = outer.bounds.boxCounts[0]!;
+    run(outer.bounds, sOut);
+    expect(outer.bounds.boxCounts[0]! - before).toBeGreaterThan(10);
+  });
+
+  test('a fill run from inside another fill\'s voxelFn leaves the outer fill\'s output as a plain fill\'s', () => {
+    const c = outer.compiled;
+    let nested = 0;
+    const b = withVoxelFn(outer.bounds, (lx, y, lz) => {
+      if (nested < 3) {
+        nested++;
+        same(run(inner.bounds, sIn), wantIn, 'the inner fill');
+      }
+      return c.voxelFn(lx, y, lz);
+    });
+    same(run(b, sOut), wantOut, 'the outer fill');
+    expect(nested).toBe(3);
+  });
+
+  test('a voxelFn that throws leaves the outer fill and the next fills correct', () => {
+    const c = outer.compiled;
+    const throwing = withVoxelFn(inner.bounds, () => { throw new Error('boom'); });
+    let thrown = 0;
+    const b = withVoxelFn(outer.bounds, (lx, y, lz) => {
+      if (thrown < 2) {
+        try {
+          run(throwing, sIn);
+        } catch (e) {
+          expect((e as Error).message).toBe('boom');
+          thrown++;
+        }
+      }
+      return c.voxelFn(lx, y, lz);
+    });
+    same(run(b, sOut), wantOut, 'the outer fill around a throwing inner fill');
+    expect(thrown).toBe(2);
+    expect(() => run(throwing, sIn)).toThrow('boom');
+    same(run(inner.bounds, sIn), wantIn, 'the next inner fill');
+    same(run(outer.bounds, sOut), wantOut, 'the next outer fill');
   });
 });

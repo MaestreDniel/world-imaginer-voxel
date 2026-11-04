@@ -201,8 +201,11 @@ export interface DensityBounds {
 /**
  * Creates the bounds of `c`; `noises` must be the source `c` was compiled with (for each noise's clampSigma). `minSkip`
  * false turns lever (4)'s min skips off (the same values, every operand evaluated); `airWitness` false turns the air
- * witness off (`cellDecide` is then cellInterval); `subBlocks` false the sub-blocks (a straddling cell's voxels are then
-
+ * witness off (`cellDecide` is then cellInterval); `options` (`DensityBoundsOptions`, every switch on by default)
+ * turns off the output-keeping speedups of ruling R13 one by one, each giving the same solidity, values and tags:
+ * `subBlocks` false the sub-blocks (a straddling cell's voxels are then all evaluated), `layerCache` false the layer
+ * cache (`cellDecide` then runs the whole program for every cell), `cellTags` false the cell tags (`tagColumn` then
+ * reads the taps at every density-air voxel).
  */
 export function createDensityBounds(
   c: CompiledDensity, noises: DensityNoiseSource, minSkip = true, airWitness = true, options: DensityBoundsOptions = {},
@@ -623,7 +626,9 @@ export function createDensityBounds(
 
 const IV = new Float64Array(2);
 
-// The fill's current cell, for the sub-block recursion (set by fillDensityColumn; one fill at a time per thread).
+// The fill's current cell, for the sub-block recursion. fillDensityColumn saves the values it finds on entry and puts
+// them back in a `finally` (SP6a ruling R14), so a fill called from inside another fill's voxelFn (another bounds, or a
+// probe) leaves the outer fill's cell as it was, and a voxelFn that throws leaves no stale reference behind.
 let F_B: DensityBounds | null = null;
 let F_C: CompiledDensity | null = null;
 const NO_SOLID = new Uint8Array(0);
@@ -631,15 +636,6 @@ let F_SOLID: Uint8Array = NO_SOLID;
 let F_VALUES: Float64Array | null = null;
 let F_MASK: Uint8Array | null = null;
 let F_CI = 0, F_CK = 0, F_CJ = 0;
-
-/** Drops the fill's references (its arrays are the caller's). */
-function endFill(): void {
-  F_B = null;
-  F_C = null;
-  F_SOLID = NO_SOLID;
-  F_VALUES = null;
-  F_MASK = null;
-}
 
 /** The voxels of box x0 … x1, y0 … y1, z0 … z1 of the fill's cell: `fill` 0 or 1 written, −1 evaluated by voxelFn. */
 function boxVoxels(x0: number, x1: number, y0: number, y1: number, z0: number, z1: number, fill: number): void {
@@ -711,13 +707,33 @@ export function fillDensityColumn(
   if (cells !== null) cells.fill(0);
   const corners = c.interpolatedSlotCount > 0;
   const boxes = corners && b.subBlocks;
+  const sB = F_B, sC = F_C, sSolid = F_SOLID, sValues = F_VALUES, sMask = F_MASK, sCi = F_CI, sCk = F_CK, sCj = F_CJ;
   F_B = b;
   F_C = c;
   F_SOLID = solid;
   F_VALUES = values;
   F_MASK = mask;
+  try {
+    return fillLayers(b, c, solid, values, mask, stop, cells, corners, boxes);
+  } finally {
+    F_B = sB;
+    F_C = sC;
+    F_SOLID = sSolid;
+    F_VALUES = sValues;
+    F_MASK = sMask;
+    F_CI = sCi;
+    F_CK = sCk;
+    F_CJ = sCj;
+  }
+}
+
+/** fillDensityColumn's 48 layers, the fill's state set (F_B … F_MASK); false when `stop()` fired. */
+function fillLayers(
+  b: DensityBounds, c: CompiledDensity, solid: Uint8Array, values: Float64Array | null, mask: Uint8Array | null,
+  stop: () => boolean, cells: Uint8Array | null, corners: boolean, boxes: boolean,
+): boolean {
   for (let ck = 0; ck < 48; ck++) {
-    if ((ck & 7) === 0 && stop()) { endFill(); return false; }
+    if ((ck & 7) === 0 && stop()) return false;
     const y0 = CORNER_Y(ck);
     for (let cj = 0; cj < 4; cj++) {
       for (let ci = 0; ci < 4; ci++) {
@@ -752,6 +768,5 @@ export function fillDensityColumn(
       }
     }
   }
-  endFill();
   return true;
 }
