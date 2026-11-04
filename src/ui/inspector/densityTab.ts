@@ -51,7 +51,7 @@ export interface DensityTabDeps {
   readonly session: WorldSession;
   /** Runs a session call caused by the input event `e`, so the preview latency counts from `e.timeStamp`. */
   edit(e: Event, fn: () => void): void;
-  /** The JSON editor's debounce clock (default: the window's timers). */
+  /** The JSON editor's debounce and mirror-paint clock (default: the window's timers). */
   readonly clock?: EditorClock;
 }
 
@@ -124,7 +124,8 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
   const listeners = new Set<(sel: Selection) => void>();
   /** The ends of the target sliders' open drags, run by dispose (SP4c spec §1.2). */
   const drags = new Set<() => void>();
-  const editors = new Map<TreeLeaf, EditorModel>(TREE_LEAVES.map((leaf) => [leaf, createEditorModel(leaf, session, deps.clock ?? windowClock)]));
+  const clock = deps.clock ?? windowClock;
+  const editors = new Map<TreeLeaf, EditorModel>(TREE_LEAVES.map((leaf) => [leaf, createEditorModel(leaf, session, clock)]));
 
   // ---------------------------------------------------------------- DOM
   const element = el('div', 'it');
@@ -596,6 +597,7 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
   };
   const view = createJsonEditor({
     edit: deps.edit,
+    clock,
     onState: () => refreshHighlight(false),
     onCaret: (s) => caretAt(s, s.caret, null),
     onIssue: (s, path) => {

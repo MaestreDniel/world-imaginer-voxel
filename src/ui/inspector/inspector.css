@@ -55,13 +55,16 @@
 .it-lints { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; padding: 4px 6px; border: 1px solid #6b5424; border-radius: 3px; color: #f0b34a; }
 .it-lints::before { content: 'Warnings'; font-size: 11px; text-transform: uppercase; }
 
-/* JSON editor (§3.5): a textarea over a mirror <pre> with the same font, line height and padding. */
+/* JSON editor (§3.5): a textarea over a mirror <pre> with the same font, line height and padding. The textarea is a
+   layout boundary (contain: strict; CSS sizes it, the whole cell): without it every edit of its text laid out the
+   mirror's whole text again, and a multi-line insertText (two edits per line in one task) took the ?map renderer past
+   Chrome's 8 GiB data limit on the cave tree's 128 KB text (SP6a ruling R16). */
 .je { display: grid; grid-template-rows: minmax(0, 1fr) auto auto auto; height: 100%; min-height: 0; }
 .je-box { position: relative; min-height: 0; overflow: hidden; background: #15171b; }
 .je-mirror, .je-text { box-sizing: border-box; margin: 0; padding: 4px 6px; font: 12px/16px ui-monospace, monospace; tab-size: 2; white-space: pre; border: 0; }
 .je-mirror { position: absolute; inset: 0; overflow: hidden; color: transparent; pointer-events: none; }
 .je-mark { color: transparent; background: #2b3a52; border-radius: 2px; }
-.je-text { position: relative; display: block; width: 100%; height: 100%; resize: none; overflow: auto; color: #ddd; background: transparent; caret-color: #fff; outline: none; }
+.je-text { position: relative; display: block; width: 100%; height: 100%; contain: strict; resize: none; overflow: auto; color: #ddd; background: transparent; caret-color: #fff; outline: none; }
 .je-text.je-dirty { color: #f2e6c9; }
 .je-bar { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-top: 1px solid #2c3038; }
 .je-bar button { font: inherit; padding: 1px 8px; }

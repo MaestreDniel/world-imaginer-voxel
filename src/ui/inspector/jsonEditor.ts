@@ -10,12 +10,19 @@
  * binds a model (one per tree leaf; the tab binds the selected root's) to the DOM. Text only through `textContent`. In a
  * saved world whose modification mode is off (SP5b spec D10, `setEditable`) the text is read-only and Apply (with its
  * Ctrl+Enter) and Reset are disabled.
+ *
+ * The mirror's whole text is laid out once per task at most (SP6a ruling R16): a multi-line text inserted at once (CDP's
+ * `Input.insertText`, the smoke's 'density json' step) makes two edits, each with an input event, per line in one task,
+ * and on the cave tree's 128 KB text a mirror laid out per edit took the ?map renderer past Chrome's 8 GiB data limit.
+ * So the textarea is a layout boundary (`contain: strict`, inspector.css), and the mirror is painted on the injected
+ * clock's 0 ms timer, once however many updates the task made. The model still takes every edit at once; only the
+ * mirror, which shows nothing but the highlight's background, follows on the next task.
  */
 import { el } from '../common/dom';
 import { setModeTip } from '../common/modeTip';
 import {
   anchorOfScroll, createScrollKeeper, EDITOR_LINE_PX, editorKeyAction, highlightParts, issueLines, lineIndexAt,
-  type EditorModel, type EditorState, type EditorStatus, type ScrollRequest, type ScrollView,
+  type EditorClock, type EditorModel, type EditorState, type EditorStatus, type ScrollRequest, type ScrollView,
 } from './editorModel';
 import type { TextRange } from './jsonText';
 
@@ -28,6 +35,8 @@ export interface JsonEditorDeps {
   onCaret(state: EditorState): void;
   /** An issue line was clicked: the issue's node path inside the leaf. */
   onIssue(state: EditorState, path: string): void;
+  /** The mirror's paint timer (0 ms: after the current task). */
+  readonly clock: EditorClock;
 }
 
 export interface JsonEditorView {
@@ -70,6 +79,8 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
   let revision = -1;
   let range: TextRange | null = null;
   let mirrorKey = '';
+  /** The mirror's pending paint (the clock's timer id), or null. */
+  let paintTimer: number | null = null;
   let issuesKey = '';
   /** A caret event happened; reported once the buffer's ranges are known. */
   let caretMoved = false;
@@ -135,7 +146,11 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
     mirror.style.bottom = `${String(bottom)}px`;
   };
 
-  const paintMirror = (s: EditorState): void => {
+  /** Paints the bound model's buffer and the highlight into the mirror now, and aligns its scroll with the text's. */
+  const paintNow = (): void => {
+    paintTimer = null;
+    if (model === null) return;
+    const s = model.state;
     syncGutters();
     const key = `${String(s.revision)}|${s.text.length}|${range === null ? '' : `${String(range.start)}-${String(range.end)}`}|${s.text}`;
     if (key === mirrorKey) return;
@@ -145,6 +160,12 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
     mark.textContent = m;
     // The trailing newline keeps the mirror's last line as tall as the textarea's.
     after.textContent = `${b}\n`;
+    mirror.scrollTop = text.scrollTop;
+    mirror.scrollLeft = text.scrollLeft;
+  };
+  /** The mirror is painted after the current task (one paint, however many updates the task makes). */
+  const paintMirror = (): void => {
+    if (paintTimer === null) paintTimer = deps.clock.setTimeout(paintNow, 0);
   };
 
   const viewOf = (): ScrollView => ({ height: text.clientHeight, top: text.scrollTop, left: text.scrollLeft });
@@ -194,7 +215,7 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
       if (focused) text.setSelectionRange(s.caret, s.caret);
       scrollTo({ kind: 'anchor', anchor: s.scrollAnchor });
     }
-    paintMirror(s);
+    paintMirror();
     status.textContent = STATUS_TEXT[s.status];
     status.dataset['status'] = s.status;
     apply.disabled = !editable || s.clean;
@@ -253,7 +274,7 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
     },
     highlight(r, scroll) {
       range = r;
-      if (model !== null) paintMirror(model.state);
+      paintMirror();
       if (scroll && r !== null && model !== null) scrollToLine(lineIndexAt(model.state.text, r.start));
     },
     saveScroll() {
@@ -273,6 +294,8 @@ export function createJsonEditor(deps: JsonEditorDeps): JsonEditorView {
       setModeTip(reset, on, RESET_TIP);
     },
     dispose() {
+      if (paintTimer !== null) deps.clock.clearTimeout(paintTimer);
+      paintTimer = null;
       resizeObserver?.disconnect();
       unsubscribe?.();
       unsubscribe = null;

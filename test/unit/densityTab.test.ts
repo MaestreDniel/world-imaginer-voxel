@@ -6,6 +6,7 @@
  * highlight split and its keys (Ctrl/Cmd+Enter applies, Escape reverts); and the target slider of a ref field (the
  * parameter panel's row of the target, written on its leaf, a noise's clampSigma as a partial noise).
  */
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { getPath } from '../../src/core/params/kit';
 import { DEFAULTS } from '../../src/core/params/defaults';
@@ -23,7 +24,8 @@ import {
   DEFAULT_SUB_TAB, DENSITY_STACK_PX, DENSITY_SUB_TAB_LABELS, DENSITY_SUB_TABS, DENSITY_WIDE_PX, densityLayout, shownPanes,
 } from '../../src/ui/inspector/model';
 import { refTargetControl, refTargetWrite, sliderToValue } from '../../src/ui/paramPanel/model';
-import { installDom, shownTitle, type FakeElement } from './fixtures/domShim';
+import { brokenIslandsJson } from '../tools/uiSmoke';
+import { FakeElement, installDom, shownTitle } from './fixtures/domShim';
 
 describe('layout mode by drawer width (§3.1)', () => {
   test('the four columns from 1,200 px, the Slice/JSON sub-tabs below, stacked below 900 px', () => {
@@ -309,5 +311,87 @@ describe('the reminder on the Density tab\'s disabled controls (SP5c spec §7.3,
     // Each titled control still shown has its own title back.
     const live = new Set(all(host));
     for (const [i, c] of titled.entries()) if (live.has(c)) expect(c.title).toBe(own[i]);
+  });
+});
+
+describe('the JSON editor under a burst of input events (SP6a ruling R16)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  test('the text is a layout boundary (`contain: strict`), so an edit of it never lays out the mirror\'s whole text again', () => {
+    const css = readFileSync(new URL('../../src/ui/inspector/inspector.css', import.meta.url), 'utf8');
+    const rule = /^\.je-text \{([^}]*)\}/m.exec(css);
+    expect(rule).not.toBeNull();
+    expect(rule![1]).toMatch(/(^|;)\s*contain: strict;/);
+    // Size containment keeps the text's box as CSS sizes it: the whole editor cell, not its content.
+    expect(rule![1]).toMatch(/(^|;)\s*width: 100%;/);
+    expect(rule![1]).toMatch(/(^|;)\s*height: 100%;/);
+  });
+
+  /** Every descendant of `e`. */
+  const all = (e: FakeElement): FakeElement[] => e.children.flatMap((c) => [c, ...all(c)]);
+
+  test('a whole default tree typed as one insertText (two input events per line, one task) paints the mirror once, after the task', () => {
+    const dom = installDom();
+    vi.stubGlobal('ResizeObserver', class { observe(): void {} disconnect(): void {} });
+    // A manual clock: the editor's 150 ms debounce and the mirror's paint run only when the test runs them.
+    let next = 1;
+    const timers = new Map<number, { fn: () => void; ms: number }>();
+    const run = (upTo: number): void => {
+      for (const [id, t] of [...timers]) if (t.ms <= upTo) { timers.delete(id); t.fn(); }
+    };
+    const clock = { setTimeout: (fn: () => void, ms: number): number => { timers.set(next, { fn, ms }); return next++; }, clearTimeout: (id: number): void => { timers.delete(id); } };
+    const session = new WorldSession(() => [1, 2], { validateParams: validateParamTrees });
+    const host = dom.document.createElement('div');
+    createDensityTab(host as unknown as HTMLElement, { session, edit: (_e, fn) => fn(), clock });
+    run(0);
+    const of = (cls: string): FakeElement[] => all(host).filter((e) => e.className.split(' ').includes(cls));
+    const text = of('je-text')[0]!;
+    const status = of('je-status')[0]!;
+    const mirror = of('je-mirror')[0]!;
+    // Counts the writes of the mirror's three parts (the text before the highlight, the highlight, the text after).
+    let writes = 0;
+    const setText = Object.getOwnPropertyDescriptor(FakeElement.prototype, 'textContent')!.set!;
+    for (const part of mirror.children) {
+      Object.defineProperty(part, 'textContent', {
+        get: () => part.childNodes.map((c) => c.textContent).join(''),
+        set: (v: string) => { writes++; setText.call(part, v); },
+      });
+    }
+    const printed = text.value;
+    expect(printed.length).toBeGreaterThan(100_000);
+    const broken = brokenIslandsJson(printed);
+    const lines = broken.split('\n');
+    // CDP's Input.insertText over the selected text (the smoke's 'density json' step): Chrome inserts it line by line,
+    // with an input event after each line's text and after each line break, all in one task.
+    text.focus();
+    text.select();
+    let events = 0;
+    let typed = '';
+    const type = (s: string): void => {
+      typed += s;
+      text.value = typed;
+      text.selectionStart = text.selectionEnd = typed.length;
+      text.dispatchEvent(new Event('input'));
+      events++;
+    };
+    lines.forEach((line, i) => {
+      type(line);
+      if (i < lines.length - 1) type('\n');
+    });
+    expect(events).toBe(2 * lines.length - 1);
+    expect(text.value).toBe(broken);
+    // During the task: the model holds every edit (the buffer is dirty and pending), the mirror is not repainted.
+    expect(status.dataset['status']).toBe('pending');
+    expect(writes).toBe(0);
+    // After the task: one paint of the final text.
+    run(0);
+    expect(writes).toBeLessThanOrEqual(3);
+    expect(mirror.textContent).toBe(`${broken}\n`);
+    // The debounce validates it once: the issue, and at most one more paint.
+    run(Infinity);
+    expect(status.dataset['status']).toBe('invalid');
+    expect(of('je-issue').map((e) => e.textContent)).toEqual(['root.b.x: UNKNOWN_OP — unknown op "bogus"']);
+    expect(writes).toBeLessThanOrEqual(6);
+    expect(mirror.textContent).toBe(`${broken}\n`);
   });
 });
