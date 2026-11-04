@@ -22,7 +22,9 @@
  * - **Requests** (`createFieldSliceRequests`, §4.5): per (session epoch, request key), a 32² draft at priority 2 then the
  *   128² slice at priority 500, on the draft the pool's last resolved configure holds; a new request supersedes the
  *   previous one (its queued parts dropped, its running parts' results discarded: P1); a density or node slice refused
- *   by the work bound (`planFieldSlice`, never re-derived: P3) keeps the draft with its notice.
+ *   by the work bound (`planFieldSlice`, never re-derived: P3) keeps the draft with its notice. While a gesture drags a
+ *   `caves.*` leaf (`createCaveGestureHold`), density and node slices are not requested: the gesture's end asks for the
+ *   draft it ended on (SP6a D13, §7.4: `slice.vertical128` misses its 300 ms over the cave tree, D25).
  * - **Pinned slices** (§11's cut line, built; master §5.5: up to 3 side by side): a pin is a frozen copy of the live
  *   slice's want (its plane with the line or the square and y, its field, its node) with a request stream of its own,
  *   asked again on every edit like the live slice (`createSlicePins`); `sliceImage` draws a pin as the live image.
@@ -589,6 +591,11 @@ export interface FieldSliceSource {
   visible(): boolean;
   /** The shown result, the request in flight, the key or the notice changed. */
   changed(): void;
+  /**
+   * True while density and node slices wait for a gesture's end (SP6a D13, §7.4: a drag over a `caves.*` leaf,
+   * `createCaveGestureHold`); absent, never held.
+   */
+  held?(): boolean;
 }
 
 /** A slice as it is shown: the session epoch and key it ran for, its plane and geometry (the hover's pixel → voxel) and its samples. */
@@ -749,6 +756,15 @@ export function createFieldSliceRequests(src: FieldSliceSource): FieldSliceReque
         if (moved) src.changed();
         return;
       }
+      // SP6a D13 (§7.4, D25): a density or node slice over the cave tree misses its 300 ms, so while a cave leaf is
+      // dragged it is not asked per configure; a request of an older epoch still in flight is dropped, the last image
+      // shows stale, and the gesture's end (a session change, so the view asks again) requests the draft it ended on.
+      if ((f.field === 'density' || f.field === 'node') && src.held?.() === true) {
+        const had = run !== null;
+        supersede();
+        if (moved || had) src.changed();
+        return;
+      }
       supersede();
       notice = null;
       const r: Run = { sessionEpoch: cfg.sessionEpoch, key: k, n: SLICE_DRAFT_N, handle: null };
@@ -766,6 +782,42 @@ export function createFieldSliceRequests(src: FieldSliceSource): FieldSliceReque
       done = null;
       notice = null;
     },
+  };
+}
+
+/** What `createCaveGestureHold` reads of a WorldSession: whether a gesture is open, and the draft. */
+export interface GestureDraft {
+  readonly inGesture: boolean;
+  readonly state: { readonly params: Params };
+}
+
+/** Structural equality of two params values (plain objects, arrays and primitives, as the schema builds them). */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null || Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a), kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) {
+    if (!Object.hasOwn(b, k) || !sameValue((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k])) return false;
+  }
+  return true;
+}
+
+/**
+ * SP6a D13's slice on release (§7.4; Task 15d, D25: `slice.vertical128` above its 300 ms gate over the cave tree): a
+ * predicate, true while the session is inside a gesture whose draft differs in a `caves.*` leaf from the draft last
+ * seen outside a gesture (the gesture's start). Each call observes the session, so the view calls it on every session
+ * change, shown or not; a drag of any other leaf, or one back to the start's cave values, is not held.
+ */
+export function createCaveGestureHold(session: GestureDraft): () => boolean {
+  let rest: Params['caves'] = session.state.params.caves;
+  return () => {
+    const caves = session.state.params.caves;
+    if (!session.inGesture) {
+      rest = caves;
+      return false;
+    }
+    return !sameValue(rest, caves);
   };
 }
 

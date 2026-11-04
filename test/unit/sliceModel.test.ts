@@ -29,7 +29,7 @@ import {
   sliceStats, type SliceState,
   createFieldSliceRequests, fieldSliceSpec, fieldSliceView, sliceRequestKey, tooHeavyText, BLOCKS_HORIZONTAL_NOTE, RULE_HORIZONTAL_NOTE,
   SLICE_DRAFT_N, SLICE_DRAFT_PRIORITY, SLICE_FULL_N, SLICE_FULL_PRIORITY, type ConfiguredDraft, type SliceWant,
-  contourPath, createSlicePins, pinWant, PIN_DUPLICATE_TEXT, PIN_FULL_TEXT, PIN_MAX, sliceImage,
+  contourPath, createSlicePins, pinWant, PIN_DUPLICATE_TEXT, PIN_FULL_TEXT, PIN_MAX, sliceImage, createCaveGestureHold,
 } from '../../src/ui/inspector/sliceModel';
 import { planFieldSlice, type FieldSliceSpec } from '../../src/workers/protocol';
 import { partWorstParams } from '../harness/sliceTrees';
@@ -402,7 +402,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
    * A fake pool of deferred promises: `cancel()` only records the cancellation (the real pool rejects JobCancelled at
    * once; here the stream's token must discard a result that still lands, as a running part's does, P1).
    */
-  const harness = (params: Params = SLICED) => {
+  const harness = (params: Params = SLICED, held?: () => boolean) => {
     const calls: Call[] = [];
     const pool = {
       size: 3,
@@ -423,10 +423,12 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       visible: true,
       changes: 0,
     };
-    const r = createFieldSliceRequests({
+    const src = {
       pool: h.pool, session: h.session, configured: () => h.cfg, visible: () => h.visible, changed: () => { h.changes++; },
-    });
-    return { ...h, r, h };
+      ...(held === undefined ? {} : { held }),
+    };
+    const r = createFieldSliceRequests(src);
+    return { ...h, r, h, src };
   };
   const density = (n: number, v = n): FieldSliceResult => ({ n, field: 'density', values: new Float64Array(n * n).fill(v), fluid: null });
   const VERT: SliceState = { plane: 'vertical', field: 'density', y: 63, extent: 2048, cx: 0, cz: 0 };
@@ -756,6 +758,131 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       const v = harness(p);
       v.r.request(want(VERT));
       expect(v.calls.map((c) => [c.req.n, c.opts.columnCost])).toEqual([[32, 32 + 196 * 1934 + COLUMN_SAMPLE_COST]]);
+    });
+  });
+
+  describe('the slice on release over the cave tree (SP6a D13, §7.4, D25: Task 15d, `slice.vertical128` above 300 ms)', () => {
+    /** A WorldSession's gesture state and draft, as `createCaveGestureHold` reads them. */
+    const gestureSession = (params: Params = SLICED) => ({ inGesture: false, state: { params } });
+    const CAVE_DRAGGED = paramsWith({ density: { defs: caveFreeTree() }, caves: { cheese: { offset: 0.2 } } } as never);
+    const CAVE_DRAGGED_MORE = paramsWith({ density: { defs: caveFreeTree() }, caves: { cheese: { offset: 0.15 } } } as never);
+    const DETAIL_DRAGGED = paramsWith({ density: { defs: caveFreeTree(), detailAmpHi: 1.4 } } as never);
+
+    test('createCaveGestureHold: held only inside a gesture whose draft differs from the gesture\'s start in a `caves.*` leaf', () => {
+      const s = gestureSession();
+      const held = createCaveGestureHold(s);
+      expect(held()).toBe(false);
+      s.inGesture = true;
+      expect(held()).toBe(false);
+      s.state.params = DETAIL_DRAGGED;
+      expect(held()).toBe(false);
+      s.state.params = CAVE_DRAGGED;
+      expect(held()).toBe(true);
+      s.state.params = CAVE_DRAGGED_MORE;
+      expect(held()).toBe(true);
+      // Back to the start's cave value inside the same gesture: nothing of the caves moved, nothing held.
+      s.state.params = DETAIL_DRAGGED;
+      expect(held()).toBe(false);
+      s.state.params = CAVE_DRAGGED;
+      expect(held()).toBe(true);
+      // The gesture's end releases, and the draft it ended on is the next gesture's start.
+      s.inGesture = false;
+      expect(held()).toBe(false);
+      s.inGesture = true;
+      expect(held()).toBe(false);
+      s.state.params = CAVE_DRAGGED_MORE;
+      expect(held()).toBe(true);
+      // A gesture first observed after its first edit still compares against the draft last seen outside a gesture.
+      s.inGesture = false;
+      s.state.params = SLICED;
+      expect(held()).toBe(false);
+      s.inGesture = true;
+      s.state.params = CAVE_DRAGGED;
+      expect(held()).toBe(true);
+    });
+
+    test('a cave-leaf drag requests no density or node slice until the gesture ends; the end requests the draft it ended on', async () => {
+      const s = gestureSession();
+      const { r, calls, h, src } = harness(SLICED, createCaveGestureHold(s));
+      const pins = createSlicePins(src);
+      r.request(want());
+      calls[0]!.resolve(density(32));
+      await flush();
+      calls[1]!.resolve(density(128));
+      await flush();
+      expect(pins.add(want({ ...VERT, field: 'selected' }, LINE, TAP_ISLANDS))).toBeNull();
+      expect(calls.map((c) => [c.req.field, c.req.n])).toEqual([['density', 32], ['density', 128], ['node', 32]]);
+      calls[2]!.resolve(density(32));
+      await flush();
+      calls[3]!.resolve(density(128));
+      await flush();
+      expect(calls).toHaveLength(4);
+      // The pointer goes down on a cave slider: the gesture begins, nothing has moved yet.
+      s.inGesture = true;
+      r.request(want());
+      pins.update();
+      expect(calls).toHaveLength(4);
+      // Three drag steps, each a session epoch the pool resolves: no density or node slice is asked for, live or pinned,
+      // and the slices shown are stale.
+      for (const [epoch, params] of [[8, CAVE_DRAGGED], [9, CAVE_DRAGGED_MORE], [10, CAVE_DRAGGED]] as const) {
+        s.state.params = params;
+        h.session.state.epoch = epoch;
+        h.cfg = { poolEpoch: 4, sessionEpoch: epoch, params };
+        r.request(want());
+        r.request(want({ ...VERT, field: 'selected' }, LINE, TAP_TERRAIN));
+        r.request(want());
+        pins.update();
+        expect(calls, `epoch ${epoch}`).toHaveLength(4);
+        expect([r.pending, fieldSliceView(r, epoch), fieldSliceView(pins.pins[0]!.requests, epoch)]).toEqual([null, 'stale', 'stale']);
+      }
+      // The release: the gesture's end asks for the draft it ended on, a 32² draft then the 128² slice, live and pinned.
+      s.inGesture = false;
+      r.request(want());
+      pins.update();
+      expect(calls.slice(4).map((c) => [c.req.field, c.req.n, c.opts.columnCost])).toEqual([
+        ['density', 32, sliceCostOf(CAVE_DRAGGED, 'density', '', 'vertical', 32)],
+        ['node', 32, sliceCostOf(CAVE_DRAGGED, 'node', 'root.b', 'vertical', 32)],
+      ]);
+      expect(r.pending).toEqual({ sessionEpoch: 10, key: sliceRequestKey(VERT, LINE, 'density', ''), n: 32 });
+      calls[4]!.resolve(density(32, 10));
+      await flush();
+      expect(calls[6]!.req).toMatchObject({ field: 'density', n: 128 });
+      calls[6]!.resolve(density(128, 10));
+      await flush();
+      expect([r.shown?.sessionEpoch, r.shown?.result.n, fieldSliceView(r, 10)]).toEqual([10, 128, 'fresh']);
+    });
+
+    test('a cave drag that catches a slice in flight drops it; blocks slices and drags of other leaves request per configure as before', async () => {
+      const s = gestureSession();
+      const { r, calls, h } = harness(SLICED, createCaveGestureHold(s));
+      r.request(want());
+      expect(calls).toHaveLength(1);
+      s.inGesture = true;
+      s.state.params = CAVE_DRAGGED;
+      h.session.state.epoch = 8;
+      h.cfg = { poolEpoch: 4, sessionEpoch: 8, params: CAVE_DRAGGED };
+      r.request(want());
+      expect([calls.length, calls[0]!.cancelled, r.pending]).toEqual([1, true, null]);
+      // A landing result of the dropped request is discarded.
+      calls[0]!.resolve(density(32));
+      await flush();
+      expect([r.shown, calls.length]).toEqual([null, 1]);
+      // The blocks field is not held (D13's fallback names the density and node slices).
+      r.request(want({ ...VERT, field: 'blocks' }));
+      expect(calls.slice(1).map((c) => [c.req.field, c.req.n])).toEqual([['blocks', 32]]);
+      // The release asks for the density slice of the draft the drag ended on.
+      s.inGesture = false;
+      r.request(want());
+      expect(calls.slice(2).map((c) => [c.req.field, c.req.n])).toEqual([['density', 32]]);
+      expect(r.pending?.sessionEpoch).toBe(8);
+      // A drag of a leaf outside `caves.*` keeps requesting on every configure.
+      const detailDragged = paramsWith({ density: { defs: caveFreeTree(), detailAmpHi: 1.4 }, caves: { cheese: { offset: 0.2 } } } as never);
+      s.inGesture = true;
+      s.state.params = detailDragged;
+      h.session.state.epoch = 9;
+      h.cfg = { poolEpoch: 4, sessionEpoch: 9, params: detailDragged };
+      r.request(want());
+      expect([calls.length, calls[2]!.cancelled, calls[3]!.req.n, r.pending?.sessionEpoch]).toEqual([4, true, 32, 9]);
     });
   });
 

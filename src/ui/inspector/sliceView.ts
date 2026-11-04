@@ -10,7 +10,9 @@
  * - Beside it the histogram and its statistics for `density`/`node`, the Voxels legend for `blocks`, the share of 1s
  *   for `rule`; a status line and the request stream's notice (the field's note, a refusal, `failed: …`).
  * - Requests (§4.5): `createFieldSliceRequests` on the pool's resolved configure; the page calls `update()` on every
- *   session change, driver status change, line change and selection change. The state starts at the first show
+ *   session change, driver status change, line change and selection change; while a gesture drags a `caves.*` leaf,
+ *   density and node slices (live and pinned) wait for its end and then ask for the draft it ended on (SP6a D13, §7.4:
+ *   `createCaveGestureHold`). The state starts at the first show
  *   (`initialSliceState`) and is reported to the page (`onState`: the map's square and the click routing); a map click on
  *   the horizontal plane sets the centre (`setCentre`). The slice hover reports its voxel (`onHover`) for the form's value.
  * - Pinned slices (§11's cut line; master §5.5): "Pin" copies the live slice's plane, field and node into a pin (up to
@@ -21,13 +23,14 @@
  */
 import { SEA_LEVEL, SLICE_EXTENTS } from '../../core/constants';
 import type { WorkerPool } from '../../engine/workerPool';
+import type { Params } from '../../core/params/schema';
 import type { Segment } from '../../metrics/crossSection';
 import { el } from '../common/dom';
 import type { SlicePlane } from '../map/clickAction';
 import type { HoverVoxel } from './hoverModel';
 import type { Selection } from './model';
 import {
-  blocksLegend, contourPath, createFieldSliceRequests, createSlicePins, fieldOptionLabel, fieldOptions, fieldSliceView, histogram,
+  blocksLegend, contourPath, createCaveGestureHold, createFieldSliceRequests, createSlicePins, fieldOptionLabel, fieldOptions, fieldSliceView, histogram,
   histogramLabels, initialSliceState, levelLine, parseScale, parseSliceY, PIN_FULL_TEXT, PIN_MAX, pointerPixel, ruleShare,
   ruleShareText, sliceAxisLabels, sliceBoxSide, sliceEmptyText, sliceHoverText, sliceImage, slicePointer, sliceStatusText,
   withCentre, withExtent, type ConfiguredDraft, type FieldChoice, type SlicePin, type SlicePointer, type SliceShown,
@@ -38,8 +41,11 @@ import {
 export const DENSITY_NOTE = 'Tree edits show in the slices, the Voxels mode and the hover values; the 2D map is upstream of the terrain';
 
 export interface SliceViewDeps {
-  /** The session's current epoch: a slice of an older one is stale. */
-  readonly session: { readonly state: { readonly epoch: number } };
+  /**
+   * The session's current epoch (a slice of an older one is stale), its draft and whether a gesture is open (a drag of
+   * a `caves.*` leaf holds the density and node slices until its end, SP6a D13).
+   */
+  readonly session: { readonly state: { readonly epoch: number; readonly params: Params }; readonly inGesture: boolean };
   readonly pool: Pick<WorkerPool, 'fieldSlice' | 'size' | 'epoch'>;
   /** The pool's last resolved configure and its draft's params (null before one). */
   configured(): ConfiguredDraft | null;
@@ -170,12 +176,15 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
   element.append(controls, note, status, notice, pinNotice, body, pinStrip);
   host.append(element);
 
+  /** SP6a D13: true while a gesture drags a `caves.*` leaf; called on every `update()` so it sees each gesture's start. */
+  const caveHeld = createCaveGestureHold(deps.session);
   const source = {
     pool: deps.pool,
     session: deps.session,
     configured: () => deps.configured(),
     visible: () => shown && state !== null,
     changed: () => render(),
+    held: caveHeld,
   };
   const requests = createFieldSliceRequests(source);
   const pins = createSlicePins(source);
@@ -500,6 +509,7 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
   }
 
   function update(): void {
+    caveHeld();
     if (state === null) return;
     if (shown) {
       requests.request({ state, line: deps.line(), selection: deps.selection() });
