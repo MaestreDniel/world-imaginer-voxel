@@ -2113,6 +2113,9 @@ async function runDensity(t: Smoke): Promise<void> {
   t.check(st0 !== null && st0.constant === null && st0.p1 < -10 && st0.p99 > 0, `the histogram: ${s0.stats.replace(/\n/g, ' · ')}`, s0.stats);
   const hovered = await hoverSlice(p, 0.4, 0.5);
   t.check(hovered !== null && hoverAgrees(hovered.readout, hovered.hover), `the slice hover and the form's value at the hover agree (probe == slice): ${hovered?.readout ?? '-'} | ${hovered?.hover ?? '-'}`, hovered);
+  // The start's rows are read with the terrain tap's ancestors open: the mute opens them, and they stay open after the
+  // Undo the 'density json' step compares against this list.
+  await showTerrainRow(p);
   const rows0 = await p.eval<string[]>(`[...document.querySelectorAll('.it-row')].map((r) => r.title + ' ' + r.textContent)`);
   t.check(rows0.length > 0, `${rows0.length} tree rows`);
 

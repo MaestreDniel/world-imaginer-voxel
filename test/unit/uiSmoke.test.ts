@@ -480,6 +480,21 @@ describe('UI smoke test: the Density tab steps\' pure parts (SP3d spec §6)', ()
     expect(() => viewportForDrawer({ viewport: 1400, drawer: 0 }, 800)).toThrow(RangeError);
   });
 
+  test('the density steps open the rows above the terrain tap before the start\'s row list is read (SP6a §1.1, Task 4\'s showTerrainRow)', () => {
+    // The rows the mute opens stay open after the Undo, so the "tree rows show the default" check compares with a list
+    // read with them already open (the smoke's 'density json' failure before push A).
+    const src = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+    const start = src.indexOf('async function runDensity(');
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf('\n}\n', start));
+    const opened = body.indexOf('await showTerrainRow(p);');
+    const rows0 = body.indexOf('const rows0 = ');
+    const compared = body.indexOf('sameJson(rows, rows0)');
+    expect([opened, rows0, compared].every((i) => i > -1)).toBe(true);
+    expect(opened).toBeLessThan(rows0);
+    expect(rows0).toBeLessThan(compared);
+  });
+
   test('times are reported as their median and every run', () => {
     expect(timesText([300.4, 100.2, 200.7])).toBe('p50 201 ms (100, 201, 300)');
     expect(timesText([5])).toBe('p50 5 ms (5)');
