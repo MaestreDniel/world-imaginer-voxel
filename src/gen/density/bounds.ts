@@ -29,6 +29,16 @@
  * skipped is skipped by its parent). A chain with an unknown or non-finite operand interval skips nothing. The values
  * are kept bit for bit (compile.ts' "Min chains"); the families E, C, S3, S2 of `min(E, C, S3, S2)` and the noodle
  * against `min(T + detailG, caves)` are the default tree's chains.
+ *
+ * The air witness (SP6a ruling R13, output-keeping). From the root, down through every `min` (to its first child) and
+ * every `max` whose other child is a negative constant (or a tap of one), to the first node of another kind: that node
+ * W bounds the root from above at every voxel (a `min` is at most its first child, NaN aside, and such a `max` is
+ * below 0 wherever its child is). `cellDecide` runs the instructions of the nodes up to W first (a node's sub-tree has
+ * smaller indices; the inside and outside programs are each run in node order, so the split computes every interval
+ * as one run does) and, when W's high end is already below 0, decides the cell air without the rest: in the default
+ * tree W is the `precave` tap (T + detailG, 26 of about 390 instructions), which decides every sky cell. Otherwise it
+ * runs the rest and gives cellInterval's root interval. Where cellInterval decides air, so does the witness, and the
+ * other way round unless an operand's interval is UNKNOWN (non-finite), where the witness still decides air soundly.
  */
 import type { ColumnSample } from '../column/columnStage';
 import type { CompiledDensity } from './compile';
@@ -111,13 +121,24 @@ export interface DensityBounds {
   cellMinSkips(ci: number, ck: number, cj: number): number;
   /** Totals since creation (diagnostics): `[0]` the cells with at least one operand skipped, `[1]` the operands skipped. */
   readonly minSkipCounts: Float64Array;
+  /** The air witness's node (SP6a ruling R13), or −1 when the root has none or `createDensityBounds`' `airWitness` is false. */
+  readonly airWitness: number;
+  /**
+   * As cellInterval, except that when the air witness's high end is below 0 after the instructions up to it, the rest is
+   * not run and `out` receives [−∞, that high end] (an interval of the root, wider than cellInterval's); `nodeIntervals`
+   * then hold the witness's sub-program only. Otherwise `out` and `nodeIntervals` are cellInterval's.
+   */
+  cellDecide(ci: number, ck: number, cj: number, out: Float64Array, k: number): void;
+  /** Totals since creation (diagnostics): `[0]` the cells cellDecide decided by the air witness alone. */
+  readonly airWitnessCount: Float64Array;
 }
 
 /**
  * Creates the bounds of `c`; `noises` must be the source `c` was compiled with (for each noise's clampSigma). `minSkip`
- * false turns lever (4)'s min skips off (the same values, every operand evaluated).
+ * false turns lever (4)'s min skips off (the same values, every operand evaluated); `airWitness` false turns the air
+ * witness off (`cellDecide` is then cellInterval).
  */
-export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSource, minSkip = true): DensityBounds {
+export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSource, minSkip = true, airWitness = true): DensityBounds {
   const nodes = c.nodes;
   const n = nodes.length;
   const iv = new Float64Array(2 * n).fill(NaN);
@@ -212,6 +233,28 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
       kidSlotB[m] = innerSlot(q, kidB[m]!);
     }
   }
+  // The air witness (R13): through `min` (first child) and `max` beside a negative constant, to another node.
+  const negConst = (id: number): boolean => {
+    const nd = nodes[id]!;
+    if (nd.op === 'tap') return negConst(nd.kids[0]!);
+    return nd.op === 'const' && (nd.expr as { v: number }).v < 0;
+  };
+  let witness = -1;
+  if (airWitness) {
+    let w = c.root;
+    for (;;) {
+      const nd = nodes[w]!;
+      if (nd.op === 'min') w = nd.kids[0]!;
+      else if (nd.op === 'max' && negConst(nd.kids[1]!)) w = nd.kids[0]!;
+      else if (nd.op === 'max' && negConst(nd.kids[0]!)) w = nd.kids[1]!;
+      else break;
+    }
+    // Only a witness below the root with an interval of its own (an instruction) saves anything.
+    if (w !== c.root && nodes[w]!.op !== 'const' && nodes[w]!.cls !== 'column') witness = w;
+  }
+  const wIn = witness >= 0 ? endIn[witness]! : 0, wOut = witness >= 0 ? endOut[witness]! : cellCount;
+  const airWitnessCount = new Float64Array(1);
+
   const minSkips = c.minSkips, minSkipReady = c.minSkipReady;
   const minSkipCounts = new Float64Array(2);
   const skipOn = minSkip && nChains > 0;
@@ -354,6 +397,25 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
     minSkip,
     cellMinSkips,
     minSkipCounts,
+    airWitness: witness,
+    cellDecide: (ci, ck, cj, out, k) => {
+      if (witness >= 0) {
+        run(0, wIn, ci, ck, cj, false);
+        run(cellCount, wOut, ci, ck, cj, false);
+        const hi = iv[2 * witness + 1]!;
+        if (hi < 0) {
+          airWitnessCount[0]++;
+          out[k] = -Infinity;
+          out[k + 1] = hi;
+          return;
+        }
+        run(wIn, cellCount, ci, ck, cj, false);
+        run(wOut, count, ci, ck, cj, false);
+      } else run(0, count, ci, ck, cj, false);
+      out[k] = iv[2 * root]!;
+      out[k + 1] = iv[2 * root + 1]!;
+    },
+    airWitnessCount,
   };
 }
 
@@ -386,7 +448,7 @@ export function fillDensityColumn(
     const y0 = CORNER_Y(ck);
     for (let cj = 0; cj < 4; cj++) {
       for (let ci = 0; ci < 4; ci++) {
-        b.cellInterval(ci, ck, cj, IV, 0);
+        b.cellDecide(ci, ck, cj, IV, 0);
         let fill = IV[1]! < 0 ? 0 : IV[0]! > 0 ? 1 : -1;
         if (fill < 0 && cells !== null) cells[(ck * 4 + cj) * 4 + ci] = 1;
         if (fill < 0 && corners) {
