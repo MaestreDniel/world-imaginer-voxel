@@ -37,6 +37,12 @@
  * A chain's inner `min` may lose its own minimum, but only its chain reads it; the chain's root value is kept, so every
  * reader (the root, a tap reader, another chain) sees the same value with or without the skips.
  *
+ * The plane cache (SP6a ruling R13, output-keeping). `trilerp` lerps along x, then z, then y, so its lower and upper
+ * z-lerps depend only on the voxel's (lx, lz) in its cell: an `interpolated` node keeps them per voxel column of the
+ * cell it is read in (16 pairs per slot) and does only the y-lerp per voxel, the same operations in the same order, so
+ * the same double. The kept pairs belong to one cell visit: entering another cell (`setVoxel`), a new column and a newly
+ * computed corner each start a new one.
+ *
  * Scratch. One CompiledDensity owns the scratch of one column (its slot values, its corner cache and its point
  * registers); compile again for an independent one. Nothing is allocated per column, corner or voxel.
  */
@@ -150,6 +156,8 @@ export interface CompiledDensity {
    * needs them. Integers, unchecked.
    */
   atVoxel(lx: number, y: number, lz: number): void;
+  /** The options it was compiled with, every one given (SP6a ruling R13). */
+  readonly options: Required<CompileOptions>;
   /**
    * The reader of tap `name` (SP6a spec §3.2), or null when no tap of that name is reachable from the root; resolved
    * once per compile (the same function on every call). It reads the tap at the voxel registers of the last `voxelFn`
@@ -159,6 +167,18 @@ export interface CompiledDensity {
    */
   tapReader(name: string): (() => number) | null;
 }
+
+/**
+ * Switches of the output-keeping speedups (SP6a ruling R13), each on by default; off, the closures compute the same
+ * values the plain way (the bit-exactness tests compare both).
+ */
+export interface CompileOptions {
+  /** The plane cache of `interpolated` nodes (the module header). */
+  readonly planes?: boolean;
+}
+
+/** Every option on. */
+const ALL_ON: Required<CompileOptions> = Object.freeze({ planes: true });
 
 /** Index of column slot `slot` at corner column (i, j) in `colValues`. */
 export function colValueIndex(slot: number, i: number, j: number): number { return slot * 25 + j * 5 + i; }
@@ -201,9 +221,11 @@ function scalarKey(e: Expr): string {
 }
 
 /**
- * Validates `expr` against `noises` (throws ExprValidationError listing every issue) and compiles it (SP3b spec §2.1).
+ * Validates `expr` against `noises` (throws ExprValidationError listing every issue) and compiles it (SP3b spec §2.1);
+ * `options` switches the output-keeping speedups (all on by default).
  */
-export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): CompiledDensity {
+export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource, options: CompileOptions = ALL_ON): CompiledDensity {
+  const opts: Required<CompileOptions> = Object.freeze({ ...ALL_ON, ...options });
   const issues = VALIDATE(expr, noises);
   if (issues.length > 0) throw new INVALID(issues);
   const defs = expr.defs;
@@ -327,9 +349,17 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
   const memoStamp = new Float64Array(nodes.length);
   const tmp = new Float64Array(8);
   const tmpReader = new Float64Array(8);
+  // The plane cache: per interpolated slot and voxel column (lz & 3)·4 + (lx & 3) of the current cell, the trilerp's
+  // lower and upper z-lerps, valid where the entry's stamp is the current cell visit.
+  const planeL = new Float64Array(interpSlots * 16);
+  const planeU = new Float64Array(interpSlots * 16);
+  const planeStamp = new Float64Array(interpSlots * 16);
   // Point registers: world (x, y, z); lat = lattice index and cc = j·5 + i of the corner column; p = lz·16 + lx; the
   // voxel's cell base index (k·5 + j)·5 + i and fractions; the memo epoch.
   let px = 0, py = 0, pz = 0, lat = 0, cc = 0, p = 0, cIdx = 0, tx = 0, ty = 0, tz = 0, epoch = 0;
+  // The plane cache's registers: the voxel's column in its cell, (lz & 3)·4 + (lx & 3); the current cell visit and the
+  // cell it is in.
+  let q16 = 0, cellVisit = 1, visitCIdx = -1;
   // The voxel's cell's base in minSkips (cell·minSlots) where its skips are ready, else −1 (no skip).
   let skipBase = -1;
   // The voxel of the last setVoxel (voxelFn, atVoxel, tapFn outside), which an inside tap's reader sets again.
@@ -403,10 +433,31 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
       }
       case 'interpolated': {
         const base = n.interpSlot * 1225;
+        if (!opts.planes) {
+          f = () => {
+            const b = base + cIdx;
+            return TRILERP(cornerValues[b]!, cornerValues[b + 1]!, cornerValues[b + 5]!, cornerValues[b + 6]!,
+              cornerValues[b + 25]!, cornerValues[b + 26]!, cornerValues[b + 30]!, cornerValues[b + 31]!, tx, ty, tz);
+          };
+          break;
+        }
+        // trilerp (nodes.ts: lerp(a, b, t) = a + t·(b − a)) in two steps: the x- and z-lerps of the lower and upper
+        // layers, kept per cell visit, then the y-lerp.
+        const pb = n.interpSlot * 16;
         f = () => {
-          const b = base + cIdx;
-          return TRILERP(cornerValues[b]!, cornerValues[b + 1]!, cornerValues[b + 5]!, cornerValues[b + 6]!,
-            cornerValues[b + 25]!, cornerValues[b + 26]!, cornerValues[b + 30]!, cornerValues[b + 31]!, tx, ty, tz);
+          const e = pb + q16;
+          if (planeStamp[e] !== cellVisit) {
+            const b = base + cIdx;
+            const c000 = cornerValues[b]!, c100 = cornerValues[b + 1]!, c001 = cornerValues[b + 5]!, c101 = cornerValues[b + 6]!;
+            const c010 = cornerValues[b + 25]!, c110 = cornerValues[b + 26]!, c011 = cornerValues[b + 30]!, c111 = cornerValues[b + 31]!;
+            const e00 = c000 + tx * (c100 - c000), e01 = c001 + tx * (c101 - c001);
+            const e10 = c010 + tx * (c110 - c010), e11 = c011 + tx * (c111 - c011);
+            planeL[e] = e00 + tz * (e01 - e00);
+            planeU[e] = e10 + tz * (e11 - e10);
+            planeStamp[e] = cellVisit;
+          }
+          const l = planeL[e]!;
+          return l + ty * (planeU[e]! - l);
         };
         break;
       }
@@ -456,6 +507,7 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
     cornerReady.fill(0);
     cellReady.fill(0);
     minSkipReady.fill(0);
+    visitCIdx = -1;
     for (let j = 0; j <= 4; j++) {
       for (let i = 0; i <= 4; i++) {
         px = x0 + 4 * i;
@@ -495,6 +547,8 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
     epoch++;
     for (let o = 0; o < nCorner; o++) { const out = cornerOut[o]!; cornerValues[out.at + idx] = out.f(); }
     cornerReady[idx] = 1;
+    // New corner values: no plane kept before them is read again.
+    cellVisit++;
   };
 
   const cellCorners = (ci: number, ck: number, cj: number): void => {
@@ -519,6 +573,11 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
     tx = (lx - 4 * ci) / 4;
     ty = (y + 64 - 8 * ck) / 8;
     tz = (lz - 4 * cj) / 4;
+    q16 = (lz & 3) * 4 + (lx & 3);
+    if (cIdx !== visitCIdx) {
+      visitCIdx = cIdx;
+      cellVisit++;
+    }
     if (minSlots > 0) {
       const cell = (ck * 4 + cj) * 4 + ci;
       skipBase = minSkipReady[cell] === 1 ? cell * minSlots : -1;
@@ -609,5 +668,6 @@ export function compileDensity(expr: DensityExpr, noises: DensityNoiseSource): C
     interpolatedSlot: (e) => interpBySource.get(e) ?? -1,
     atVoxel: setVoxel,
     tapReader: (name) => tapReaders.get(name) ?? null,
+    options: opts,
   };
 }
