@@ -337,6 +337,24 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
   test('the Density drag ends at biome-size position 7, after a hold at 6', () => {
     expect(SIZE_7).toBe(BIOME_SIZE_SCALE[6]);
   });
+
+  test('the Density drag over the default (cave) tree draws nothing while held, then a draft after the release (SP6a §7.4, D13, R13)', () => {
+    // createCaveGestureHold holds every drag over a tree with SP6a's cave terms, as the default tree is: the step checks
+    // the hold (no draw between the press and the release) and the draft the release asks for, not drafts per configure.
+    const src = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+    const start = src.indexOf('async function runDensity(');
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf('\n}\n', start));
+    const step = body.slice(body.indexOf("t.step('density drag:"), body.indexOf("t.step('density times:"));
+    expect(step.length).toBeGreaterThan(0);
+    expect(step).not.toMatch(/during\.some\(/);
+    expect(step).toMatch(/during\.length === 0/);
+    const released = step.indexOf("await p.mouse('mouseReleased'");
+    const after = step.indexOf('d.n === 32 && d.t > ${releasedAt}');
+    expect([released, after].every((i) => i > -1)).toBe(true);
+    expect(released).toBeLessThan(after);
+    expect(readFileSync(new URL('../../src/ui/inspector/sliceView.ts', import.meta.url), 'utf8')).toMatch(/createCaveGestureHold\(/);
+  });
 });
 
 /** A vertical slice on the mountain line at n, with `values` in sample order, as the page shows it. */

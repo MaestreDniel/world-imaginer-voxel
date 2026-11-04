@@ -47,7 +47,8 @@
  *   - density horizontal: the horizontal plane; a map click moves its centre (the square's centre cross follows on the
  *     map, a fresh draft arrives: the default tree's 128² horizontal slice at 2048 is refused by the work bound, SP6a
  *     §7.4, so the 32² draft stays with the notice); a cut line drawn while Density is shown keeps it shown;
- *   - density drag: the biome-size slider dragged 5 → 6, held, → 7: at least one 32² draft is drawn during the drag;
+ *   - density drag: the biome-size slider dragged 5 → 6, held, → 7: over the default (cave) tree nothing is drawn during
+ *     the drag (SP6a §7.4, D13: the slice redraws on release), and the release draws the 32² draft it ended on;
  *   - density times: the browser wall times of the vertical 128² slice (a control change, and three tree edits, to the
  *     fresh 128²) and of the horizontal plane at extent 8192 (the same, to the fresh 32² draft and its refusal notice),
  *     and the URL length;
@@ -1228,6 +1229,8 @@ export function pixelDiffShare(a: Uint8Array, b: Uint8Array, tol: number): numbe
 
 /** BIOME_SIZE_SCALE[6]: biome-size position 7, where the Density step's drag ends (a unit test keeps them equal). */
 export const SIZE_7 = 1.74110112659225;
+/** How long the Density step's drag holds at 6, a draft's time several times over (SP6a §7.4: the drag is held). */
+const DRAG_HOLD_MS = 2000;
 
 /** The slice status line of a fresh n² slice with nothing in flight (`sliceStatusText`: `n²`, else `stale` / `slicing …`). */
 export function freshSlice(status: string, n: number): boolean {
@@ -2268,6 +2271,8 @@ async function runDensity(t: Smoke): Promise<void> {
   t.step('density drag: the biome-size slider dragged 5 → 6, held, then → 7, with Density shown');
   t.check(await p.eval<string>(`document.querySelector('.map-size').value`) === '5', 'the slider starts at 5');
   const sl = await p.center('.map-size');
+  // The draft of the step before settles first, so a draw between the press and the release is the drag's.
+  await p.until(Page.draftRefused(), 'the horizontal draft settled before the drag');
   before = await p.hash();
   await p.eval('__wiSmoke.recordDraws()');
   let x = sl.box.x + 8 + (4 / 9) * (sl.box.width - 16);
@@ -2282,18 +2287,19 @@ async function runDensity(t: Smoke): Promise<void> {
     }
   };
   await moveTo('6');
-  const at6 = await p.now();
-  let draftAt: number | null = null;
-  try {
-    draftAt = await p.untilAt(`__wiSmoke.draws().some((d) => d.n === 32 && d.t > ${at6})`, 'a draft drawn while the slider is held at 6', 15000);
-  } catch { draftAt = null; }
+  // Held at 6 long enough for a draft to arrive if one were asked for (the horizontal draft takes well under a second).
+  await sleep(DRAG_HOLD_MS);
   await moveTo('7');
   const releasedAt = await p.now();
   await p.mouse('mouseReleased', x, sl.y);
   const s6 = await p.changed(before, 'the slider drag');
   const during = (await p.eval<Array<{ t: number; n: number }>>('__wiSmoke.draws()')).filter((d) => d.t > pressedAt && d.t < releasedAt);
   t.check(sameJson(patchOf(s6), { climate: { scaleMul: SIZE_7 } }), `the patch gains climate.scaleMul ${SIZE_7}`, s6.patch);
-  t.check(during.some((d) => d.n === 32), `drafts drawn during the drag: ${during.filter((d) => d.n === 32).length} of 32², ${during.filter((d) => d.n === 128).length} of 128²${draftAt === null ? '' : `; the first draft ${Math.round(draftAt - at6)} ms after the slider reached 6`}`, during);
+  // SP6a §7.4 (D13, ruling R13): a drag over a tree with the cave terms, as the default tree is, is held: nothing is
+  // drawn until the release, which asks for the draft the drag ended on (`createCaveGestureHold`).
+  t.check(during.length === 0, `the drag over the cave tree is held: ${during.filter((d) => d.n === 32).length} of 32², ${during.filter((d) => d.n === 128).length} of 128² drawn during it (held ${DRAG_HOLD_MS} ms at 6)`, during);
+  const draftAt = await p.untilAt(`__wiSmoke.draws().some((d) => d.n === 32 && d.t > ${releasedAt})`, 'a draft drawn after the release', 15000);
+  t.check(true, `the release asks for the draft it ended on: drawn ${Math.round(draftAt - releasedAt)} ms after the release`);
   await p.until(Page.draftRefused(), 'a fresh horizontal draft after the drag');
 
   t.step('density times: the URL length and the browser wall times of the 128² slices');
