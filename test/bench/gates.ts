@@ -8,9 +8,14 @@ export const COLUMN_P95_MAX_MS = 1.2;
  * The real T stage's `terrain.real` p50 in ms per column, its ColumnSample included (SP3b §10 at 4 ms); SP3e §7 gates
  * `terrain.islands` (floating_islands cluster columns) at the same bound. SP6a §10.5 (D24, the master's P1) raises it to
  * 10 ms with the caves in T (the cave families, their caps and the tag) and adds `TERRAIN_P99_MAX_MS`, 20 ms, on both rows.
+ * SP6a ruling R14 (the user's, 2026-11-04) sets each gate still missed after D25's last lever (15g) to the worst 15g run
+ * × 1.15, rounded up to 0.5 ms: `terrain.real` p50 10 → 13 ms (its p99 met, 20 ms kept), and `terrain.islands` its own
+ * gates, `ISLANDS_P50_MAX_MS` 10 → 14.5 ms and `ISLANDS_P99_MAX_MS` 20 → 26.5 ms.
  */
-export const TERRAIN_P50_MAX_MS = 10;
+export const TERRAIN_P50_MAX_MS = 13;
 export const TERRAIN_P99_MAX_MS = 20;
+export const ISLANDS_P50_MAX_MS = 14.5;
+export const ISLANDS_P99_MAX_MS = 26.5;
 /**
  * SP3d (its spec §9, master §7): the vertical 128² density slice on one thread (`slice.vertical128`), one slice part at
  * PART_BUDGET of the heaviest noise tree (`slice.partWorst`, which pins the work unit of spec §5.2) and one slider commit
@@ -256,9 +261,9 @@ export interface AbsoluteLatencies {
   readonly sliceV128P50: number;
   readonly slicePartP50: number;
   readonly sessionCommitP50: number;
-  /** SP3e §7: `terrain.islands` p50 (floating_islands cluster columns), gated at TERRAIN_P50_MAX_MS. */
+  /** SP3e §7: `terrain.islands` p50 (floating_islands cluster columns), gated at ISLANDS_P50_MAX_MS (SP6a R14). */
   readonly islandsP50: number;
-  /** SP6a §10.5 (D24): `terrain.islands` p99, gated at TERRAIN_P99_MAX_MS. */
+  /** SP6a §10.5 (D24): `terrain.islands` p99, gated at ISLANDS_P99_MAX_MS (SP6a R14). */
   readonly islandsP99: number;
   /** SP4a §9.3: `light.column` and `mesh.section` p50 and p99 (p99 bounds p95 from above). */
   readonly lightP50: number;
@@ -288,8 +293,8 @@ export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
   if (l.terrainP99 > TERRAIN_P99_MAX_MS) out.push(`terrain.real p99 ${l.terrainP99.toFixed(3)} ms > ${TERRAIN_P99_MAX_MS} ms`);
   if (l.sliceV128P50 > SLICE_V128_P50_MAX_MS) out.push(`slice.vertical128 p50 ${l.sliceV128P50.toFixed(3)} ms > ${SLICE_V128_P50_MAX_MS} ms`);
   if (l.slicePartP50 > SLICE_PART_P50_MAX_MS) out.push(`slice.partWorst p50 ${l.slicePartP50.toFixed(3)} ms > ${SLICE_PART_P50_MAX_MS} ms`);
-  if (l.islandsP50 > TERRAIN_P50_MAX_MS) out.push(`terrain.islands p50 ${l.islandsP50.toFixed(3)} ms > ${TERRAIN_P50_MAX_MS} ms`);
-  if (l.islandsP99 > TERRAIN_P99_MAX_MS) out.push(`terrain.islands p99 ${l.islandsP99.toFixed(3)} ms > ${TERRAIN_P99_MAX_MS} ms`);
+  if (l.islandsP50 > ISLANDS_P50_MAX_MS) out.push(`terrain.islands p50 ${l.islandsP50.toFixed(3)} ms > ${ISLANDS_P50_MAX_MS} ms`);
+  if (l.islandsP99 > ISLANDS_P99_MAX_MS) out.push(`terrain.islands p99 ${l.islandsP99.toFixed(3)} ms > ${ISLANDS_P99_MAX_MS} ms`);
   if (l.sessionCommitP50 > SESSION_COMMIT_P50_MAX_MS) out.push(`session.commitMaxTree p50 ${l.sessionCommitP50.toFixed(3)} ms > ${SESSION_COMMIT_P50_MAX_MS} ms`);
   if (l.lightP50 > LIGHT_P50_MAX_MS) out.push(`light.column p50 ${l.lightP50.toFixed(3)} ms > ${LIGHT_P50_MAX_MS} ms`);
   if (l.lightP99 > LIGHT_P99_MAX_MS) out.push(`light.column p99 ${l.lightP99.toFixed(3)} ms > ${LIGHT_P99_MAX_MS} ms`);
