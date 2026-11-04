@@ -10,7 +10,10 @@ import { compileDensity, cornerValueIndex, type CompileOptions } from '../../src
 import { createDensityContext } from '../../src/gen/density/context';
 import type { DensityNoise, DensityNoiseSource, Expr } from '../../src/gen/density/expr';
 import { trilerp } from '../../src/gen/density/nodes';
-import { checkBitExact } from '../harness/densityBitExact';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { seedFromInput } from '../../src/core/seed';
+import { createGenContext } from '../../src/gen/context';
+import { bitExactSets, checkBitExact } from '../harness/densityBitExact';
 import { fuzzNoiseSource, randomDensityExpr } from '../harness/densityFuzz';
 import { ctxFor } from '../harness/gen';
 import { testRng } from '../harness/stats';
@@ -225,4 +228,49 @@ describe('the y cache: a node of y alone kept per y (SP6a R13)', () => {
     expect(stats.voxels).toBeGreaterThan(100000);
     expect(stats.tagged).toBeGreaterThan(0);
   }, 300_000);
+});
+
+describe('the air witnesses through a max of two terms (SP6a R13)', () => {
+  test('floating_islands\' witnesses are the precave and islands taps; the default tree\'s the precave tap alone', () => {
+    const names = (params: Parameters<typeof createGenContext>[1]): string[] => {
+      const dc = createDensityContext(createGenContext(seedFromInput('42'), params));
+      return dc.bounds.airWitnesses.map((id) => `${dc.compiled.nodes[id]!.op} ${(dc.compiled.nodes[id]!.expr as { name?: string }).name}`);
+    };
+    expect(names(resolveProfile('floating_islands'))).toEqual(['tap precave', 'tap islands']);
+    expect(names(resolveProfile('amplified'))).toEqual(['tap precave']);
+    expect(names(ctxFor('42').params)).toEqual(['tap precave']);
+  });
+
+  test('a max of two terms is decided air only where both are below 0', () => {
+    const noises = fuzzNoiseSource();
+    const Y: Expr = { op: 'y' };
+    // root = max(64 − y, y − 256): air from y 64 to 256, solid elsewhere; the witnesses are both terms.
+    const a: Expr = { op: 'add', a: { op: 'const', v: 64 }, b: { op: 'neg', x: Y } };
+    const b: Expr = { op: 'add', a: Y, b: { op: 'const', v: -256 } };
+    const bounds = createDensityBounds(compileDensity({ root: { op: 'max', a, b }, defs: {} }, noises), noises);
+    expect(bounds.airWitnesses).toHaveLength(2);
+    const s = buildColumnSample(ctxFor('42'), 0, 0, newColumnSample());
+    const solid = new Uint8Array(98304);
+    fillDensityColumn(bounds, s, solid, null, null, NEVER);
+    for (let y = -64; y < 320; y++) expect(solid[(y + 64) * 256]).toBe(y < 64 || y > 256 ? 1 : 0);
+    // Only the cells wholly inside 65 … 255 are decided by the witnesses: 23 layers of 16.
+    expect(bounds.airWitnessCount[0]).toBe(16 * 23);
+  });
+
+  test('the 64 columns\' islands columns: cells decided by both witnesses, the same fill as without them', () => {
+    const set = bitExactSets().find((x) => x.name === 'floating_islands')!;
+    const ctx = createGenContext(seedFromInput('42'), set.params);
+    const on = createDensityContext(ctx).bounds;
+    const offDc = createDensityContext(ctx);
+    const off = createDensityBounds(offDc.compiled, offDc.noises, true, false);
+    const s = newColumnSample();
+    const solid = [new Uint8Array(98304), new Uint8Array(98304)], cells = [new Uint8Array(768), new Uint8Array(768)];
+    for (const [cx, cz] of set.columns) {
+      buildColumnSample(ctx, cx, cz, s);
+      fillDensityColumn(on, s, solid[0]!, null, null, NEVER, cells[0]!);
+      fillDensityColumn(off, s, solid[1]!, null, null, NEVER, cells[1]!);
+      for (let i = 0; i < 98304; i++) if (solid[0]![i] !== solid[1]![i]) throw new Error(`(${cx}, ${cz}) voxel ${i}: solid differs`);
+    }
+    expect(on.airWitnessCount[0]).toBeGreaterThan(8 * 100);
+  }, 120_000);
 });

@@ -30,15 +30,15 @@
  * are kept bit for bit (compile.ts' "Min chains"); the families E, C, S3, S2 of `min(E, C, S3, S2)` and the noodle
  * against `min(T + detailG, caves)` are the default tree's chains.
  *
- * The air witness (SP6a ruling R13, output-keeping). From the root, down through every `min` (to its first child) and
- * every `max` whose other child is a negative constant (or a tap of one), to the first node of another kind: that node
- * W bounds the root from above at every voxel (a `min` is at most its first child, NaN aside, and such a `max` is
- * below 0 wherever its child is). `cellDecide` runs the instructions of the nodes up to W first (a node's sub-tree has
- * smaller indices; the inside and outside programs are each run in node order, so the split computes every interval
- * as one run does) and, when W's high end is already below 0, decides the cell air without the rest: in the default
- * tree W is the `precave` tap (T + detailG, 26 of about 390 instructions), which decides every sky cell. Otherwise it
- * runs the rest and gives cellInterval's root interval. Where cellInterval decides air, so does the witness, and the
- * other way round unless an operand's interval is UNKNOWN (non-finite), where the witness still decides air soundly.
+ * The air witnesses (SP6a ruling R13, output-keeping). From the root, down through every `min` (to its first child)
+ * and every `max` (to the child beside a negative constant, or a tap of one; to both children otherwise), to the first
+ * nodes of another kind: wherever each of these nodes W is below 0, so is the root (a `min` is at most its first child
+ * and a `max` of values below 0 is below 0, NaN aside: a NaN voxel is air). `cellDecide` first runs the witnesses'
+ * program (the instructions of their sub-trees, in program order) and, when every W's high end is below 0, decides the
+ * cell air without the rest: in the default tree the one witness is the `precave` tap (T + detailG, 26 of about 390
+ * instructions), which decides every sky cell; in floating_islands' tree the `precave` and `islands` taps. Otherwise it
+ * runs the whole program and gives cellInterval's root interval. Where cellInterval decides air, so do the witnesses,
+ * and the other way round unless an operand's interval is UNKNOWN (non-finite), where they still decide air soundly.
  */
 import type { ColumnSample } from '../column/columnStage';
 import type { CompiledDensity } from './compile';
@@ -87,6 +87,18 @@ const I_INTERP = 13;
 const I_RANGE = 14;
 const I_PASS = 15;
 
+/** One interval program: per instruction its code, its node, its operands and parameters (module-private). */
+interface Program {
+  readonly code: Int32Array;
+  readonly out0: Int32Array;
+  readonly A: Int32Array;
+  readonly B: Int32Array;
+  readonly K3: Int32Array;
+  readonly P0: Float64Array;
+  readonly P1: Float64Array;
+  readonly knots: ReadonlyArray<readonly SlideKnot[] | null>;
+}
+
 /** Interval bounds of one CompiledDensity (it reads that compile's slot values and corner cache). */
 export interface DensityBounds {
   readonly compiled: CompiledDensity;
@@ -121,12 +133,14 @@ export interface DensityBounds {
   cellMinSkips(ci: number, ck: number, cj: number): number;
   /** Totals since creation (diagnostics): `[0]` the cells with at least one operand skipped, `[1]` the operands skipped. */
   readonly minSkipCounts: Float64Array;
-  /** The air witness's node (SP6a ruling R13), or −1 when the root has none or `createDensityBounds`' `airWitness` is false. */
+  /** The first air witness (SP6a ruling R13), or −1 when the root has none or `createDensityBounds`' `airWitness` is false. */
   readonly airWitness: number;
+  /** Every air witness, in the order the root's walk meets them (empty when `airWitness` is −1). */
+  readonly airWitnesses: readonly number[];
   /**
-   * As cellInterval, except that when the air witness's high end is below 0 after the instructions up to it, the rest is
-   * not run and `out` receives [−∞, that high end] (an interval of the root, wider than cellInterval's); `nodeIntervals`
-   * then hold the witness's sub-program only. Otherwise `out` and `nodeIntervals` are cellInterval's.
+   * As cellInterval, except that when every air witness's high end is below 0 after their program, the rest is not run
+   * and `out` receives [−∞, the highest of those high ends] (an interval of the root, wider than cellInterval's);
+   * `nodeIntervals` then hold the witnesses' sub-trees only. Otherwise `out` and `nodeIntervals` are cellInterval's.
    */
   cellDecide(ci: number, ck: number, cj: number, out: Float64Array, k: number): void;
   /** Totals since creation (diagnostics): `[0]` the cells cellDecide decided by the air witness alone. */
@@ -202,6 +216,17 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
   }
   const code = Int32Array.from(codes), out0 = Int32Array.from(dst), A = Int32Array.from(ka), B = Int32Array.from(kb);
   const K3 = Int32Array.from(kc), P0 = Float64Array.from(pa), P1 = Float64Array.from(pb);
+  const MAIN: Program = { code, out0, A, B, K3, P0, P1, knots };
+  /** The sub-program of the instructions whose node is in `keep`, in program order. */
+  const subProgram = (keep: Uint8Array): Program => {
+    const at: number[] = [];
+    for (let q = 0; q < count; q++) if (keep[out0[q]!] === 1) at.push(q);
+    return {
+      code: Int32Array.from(at, (q) => code[q]!), out0: Int32Array.from(at, (q) => out0[q]!),
+      A: Int32Array.from(at, (q) => A[q]!), B: Int32Array.from(at, (q) => B[q]!), K3: Int32Array.from(at, (q) => K3[q]!),
+      P0: Float64Array.from(at, (q) => P0[q]!), P1: Float64Array.from(at, (q) => P1[q]!), knots: at.map((q) => knots[q]!),
+    };
+  };
 
   const colHull = new Float64Array(c.columnSlotCount * 32);
   const posHull = new Float64Array(c.positionSlotCount * 32);
@@ -233,26 +258,48 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
       kidSlotB[m] = innerSlot(q, kidB[m]!);
     }
   }
-  // The air witness (R13): through `min` (first child) and `max` beside a negative constant, to another node.
+  // The air witnesses (R13): through `min` (first child) and `max` (beside a negative constant; else both children).
   const negConst = (id: number): boolean => {
     const nd = nodes[id]!;
     if (nd.op === 'tap') return negConst(nd.kids[0]!);
     return nd.op === 'const' && (nd.expr as { v: number }).v < 0;
   };
-  let witness = -1;
-  if (airWitness) {
-    let w = c.root;
-    for (;;) {
-      const nd = nodes[w]!;
-      if (nd.op === 'min') w = nd.kids[0]!;
-      else if (nd.op === 'max' && negConst(nd.kids[1]!)) w = nd.kids[0]!;
-      else if (nd.op === 'max' && negConst(nd.kids[0]!)) w = nd.kids[1]!;
-      else break;
+  const found: number[] = [];
+  /** Collects the witnesses under `id`; false when one of them could never be below 0 by an interval of its own. */
+  const collect = (id: number): boolean => {
+    const nd = nodes[id]!;
+    if (nd.op === 'min') return collect(nd.kids[0]!);
+    if (nd.op === 'max') {
+      if (negConst(nd.kids[1]!)) return collect(nd.kids[0]!);
+      if (negConst(nd.kids[0]!)) return collect(nd.kids[1]!);
+      return collect(nd.kids[0]!) && collect(nd.kids[1]!);
     }
-    // Only a witness below the root with an interval of its own (an instruction) saves anything.
-    if (w !== c.root && nodes[w]!.op !== 'const' && nodes[w]!.cls !== 'column') witness = w;
+    // A node with an interval of its own (an instruction): not a const, not a slot-less COLUMN node.
+    if (nd.op === 'const' || (nd.cls === 'column' && nd.colSlot < 0 && nd.posSlot < 0)) return false;
+    if (!found.includes(id)) found.push(id);
+    return true;
+  };
+  const witnesses = airWitness && collect(c.root) && !found.includes(c.root) ? Int32Array.from(found) : new Int32Array(0);
+  const nW = witnesses.length;
+  // Their program: every node of their sub-trees.
+  const inWitness = new Uint8Array(n);
+  {
+    const stack = [...witnesses];
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      if (inWitness[id] === 1) continue;
+      inWitness[id] = 1;
+      for (const k of nodes[id]!.kids) stack.push(k);
+    }
   }
-  const wIn = witness >= 0 ? endIn[witness]! : 0, wOut = witness >= 0 ? endOut[witness]! : cellCount;
+  const WITNESS = subProgram(inWitness);
+  const wCount = WITNESS.code.length;
+  /** Runs the witnesses' program over cell (ci, ck, cj); true when each witness's high end is below 0. */
+  const witnessAir = (ci: number, ck: number, cj: number): boolean => {
+    run(WITNESS, 0, wCount, ci, ck, cj, false);
+    for (let w = 0; w < nW; w++) if (!(iv[2 * witnesses[w]! + 1]! < 0)) return false;
+    return true;
+  };
   const airWitnessCount = new Float64Array(1);
 
   const minSkips = c.minSkips, minSkipReady = c.minSkipReady;
@@ -328,8 +375,9 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
     }
   };
 
-  /** Runs instructions [from, to) for cell (ci, ck, cj); `corners`: interpolated from the corner hull. */
-  const run = (from: number, to: number, ci: number, ck: number, cj: number, corners: boolean): void => {
+  /** Runs instructions [from, to) of program `P` for cell (ci, ck, cj); `corners`: interpolated from the corner hull. */
+  const run = (P: Program, from: number, to: number, ci: number, ck: number, cj: number, corners: boolean): void => {
+    const code = P.code, out0 = P.out0, A = P.A, B = P.B, K3 = P.K3, P0 = P.P0, P1 = P.P1, knots = P.knots;
     const y0 = CORNER_Y(ck);
     const cc4 = cj * 4 + ci;
     for (let q = from; q < to; q++) {
@@ -379,39 +427,36 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
     nodeIntervals: iv,
     beginColumn,
     cellInterval: (ci, ck, cj, out, k) => {
-      run(0, count, ci, ck, cj, false);
+      run(MAIN, 0, count, ci, ck, cj, false);
       out[k] = iv[2 * root]!;
       out[k + 1] = iv[2 * root + 1]!;
     },
     cellIntervalCorners: (ci, ck, cj, out, k) => {
-      run(cellCount, count, ci, ck, cj, true);
+      run(MAIN, cellCount, count, ci, ck, cj, true);
       out[k] = iv[2 * root]!;
       out[k + 1] = iv[2 * root + 1]!;
     },
     nodeInterval: (ci, ck, cj, node, out, k) => {
-      run(0, endIn[node]!, ci, ck, cj, false);
-      run(cellCount, endOut[node]!, ci, ck, cj, false);
+      run(MAIN, 0, endIn[node]!, ci, ck, cj, false);
+      run(MAIN, cellCount, endOut[node]!, ci, ck, cj, false);
       out[k] = iv[2 * node]!;
       out[k + 1] = iv[2 * node + 1]!;
     },
     minSkip,
     cellMinSkips,
     minSkipCounts,
-    airWitness: witness,
+    airWitness: nW > 0 ? witnesses[0]! : -1,
+    airWitnesses: Object.freeze([...witnesses]),
     cellDecide: (ci, ck, cj, out, k) => {
-      if (witness >= 0) {
-        run(0, wIn, ci, ck, cj, false);
-        run(cellCount, wOut, ci, ck, cj, false);
-        const hi = iv[2 * witness + 1]!;
-        if (hi < 0) {
-          airWitnessCount[0]++;
-          out[k] = -Infinity;
-          out[k + 1] = hi;
-          return;
-        }
-        run(wIn, cellCount, ci, ck, cj, false);
-        run(wOut, count, ci, ck, cj, false);
-      } else run(0, count, ci, ck, cj, false);
+      if (nW > 0 && witnessAir(ci, ck, cj)) {
+        airWitnessCount[0]++;
+        let hi = -Infinity;
+        for (let w = 0; w < nW; w++) { const h = iv[2 * witnesses[w]! + 1]!; if (h > hi) hi = h; }
+        out[k] = -Infinity;
+        out[k + 1] = hi;
+        return;
+      }
+      run(MAIN, 0, count, ci, ck, cj, false);
       out[k] = iv[2 * root]!;
       out[k + 1] = iv[2 * root + 1]!;
     },
