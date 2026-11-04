@@ -41,6 +41,15 @@
  * runs the whole program and gives cellInterval's root interval. Where cellInterval decides air, so do the witnesses,
  * and the other way round unless an operand's interval is UNKNOWN (non-finite), where they still decide air soundly.
  *
+ * The layer cache (SP6a ruling R13, output-keeping). Without corners, a node's interval depends on the cell through
+ * its column and position slot hulls (x and z) and through `y` and `slide` (the layer), and on nothing else (a noise is
+ * ±clampSigma, an `interpolated` its child's interval): one of a node's leaves or neither. The instructions of the
+ * nodes that depend on neither x nor z are run once per layer when the bounds are created, and the intervals of those
+ * among them that the others read (or the root) are kept per layer; `cellDecide` copies them in and runs only the
+ * instructions that depend on x or z, in program order. The same operations on the same intervals give the same
+ * intervals, so its root interval is cellInterval's, bit for bit, and so are the min chains' operands' intervals
+ * (also kept), which `cellMinSkips` reads after it in a tree without corners.
+ *
  * The sub-blocks (SP6a ruling R13, output-keeping). A cell that still straddles 0 after its corners is halved, along y
  * first, then x, then z (4 × 8 × 4 → 4 × 4 × 4 → 4 × 2 × 4 → 2 × 2 × 4), and each half asks `boxInterval` for the
  * root's interval over its voxels: an `interpolated` node there is the hull of its trilinear interpolation at the box's
@@ -117,6 +126,8 @@ interface Program {
 export interface DensityBoundsOptions {
   /** false: a straddling cell's voxels are all evaluated (the header's "sub-blocks"). */
   readonly subBlocks?: boolean;
+  /** false: cellDecide runs the whole program (the header's "layer cache"). */
+  readonly layerCache?: boolean;
 }
 
 /** Interval bounds of one CompiledDensity (it reads that compile's slot values and corner cache). */
@@ -160,11 +171,15 @@ export interface DensityBounds {
   /**
    * As cellInterval, except that when every air witness's high end is below 0 after their program, the rest is not run
    * and `out` receives [−∞, the highest of those high ends] (an interval of the root, wider than cellInterval's);
-   * `nodeIntervals` then hold the witnesses' sub-trees only. Otherwise `out` and `nodeIntervals` are cellInterval's.
+   * `nodeIntervals` then hold the witnesses' sub-trees only. Otherwise `out` is cellInterval's, and so are the
+   * `nodeIntervals` of the nodes that depend on x or z, of those they read and of the min chains' operands (with
+   * `layerCache` false, of every node).
    */
   cellDecide(ci: number, ck: number, cj: number, out: Float64Array, k: number): void;
   /** Totals since creation (diagnostics): `[0]` the cells cellDecide decided by the air witness alone. */
   readonly airWitnessCount: Float64Array;
+  /** Whether cellDecide reads the per-layer intervals (the header's "layer cache"); `DensityBoundsOptions.layerCache`. */
+  readonly layerCache: boolean;
   /** Whether `fillDensityColumn` splits a straddling cell into sub-blocks (SP6a ruling R13); `DensityBoundsOptions.subBlocks`. */
   readonly subBlocks: boolean;
   /**
@@ -182,13 +197,13 @@ export interface DensityBounds {
 /**
  * Creates the bounds of `c`; `noises` must be the source `c` was compiled with (for each noise's clampSigma). `minSkip`
  * false turns lever (4)'s min skips off (the same values, every operand evaluated); `airWitness` false turns the air
- * witness off (`cellDecide` is then cellInterval); `options` turns off the later output-keeping speedups (each on by
- * default, `DensityBoundsOptions`).
+ * witness off (`cellDecide` is then cellInterval); `subBlocks` false the sub-blocks (a straddling cell's voxels are then
+
  */
 export function createDensityBounds(
   c: CompiledDensity, noises: DensityNoiseSource, minSkip = true, airWitness = true, options: DensityBoundsOptions = {},
 ): DensityBounds {
-  const subBlocks = options.subBlocks ?? true;
+  const subBlocks = options.subBlocks ?? true, layerCache = options.layerCache ?? true;
   const nodes = c.nodes;
   const n = nodes.length;
   const iv = new Float64Array(2 * n).fill(NaN);
@@ -349,6 +364,28 @@ export function createDensityBounds(
   const boxCount = BOX.code.length;
   const boxCounts = new Float64Array(2);
   let bx0 = 0, bx1 = 3, by0 = 0, by1 = 7, bz0 = 0, bz1 = 3;
+  // The layer cache (R13): per node, whether its interval (no corners) depends on x or z (a slot hull it reaches).
+  const depXZ = new Uint8Array(n);
+  for (let id = 0; id < n; id++) {
+    const nd = nodes[id]!;
+    if (nd.op === 'const') continue;
+    if (nd.cls === 'column') { if (nd.colSlot >= 0 || nd.posSlot >= 0) depXZ[id] = 1; continue; }
+    for (const k of nd.kids) depXZ[id] |= depXZ[k]!;
+  }
+  const notXZ = new Uint8Array(n);
+  for (let id = 0; id < n; id++) notXZ[id] = depXZ[id] === 1 ? 0 : 1;
+  const XZ = subProgram(depXZ), LAYER = subProgram(notXZ);
+  // Kept per layer: the nodes without x or z that an instruction of XZ reads, the root and the min chains' operands
+  // (cellMinSkips reads them after cellDecide in a tree without corners) when they are such nodes.
+  const keptSet = new Set<number>();
+  const keep = (k: number): void => { if (notXZ[k] === 1 && nodes[k]!.op !== 'const') keptSet.add(k); };
+  for (let q = 0; q < XZ.code.length; q++) for (const k of nodes[XZ.out0[q]!]!.kids) keep(k);
+  keep(root);
+  for (let o = 0; o < opNode.length; o++) keep(opNode[o]!);
+  const kept = Int32Array.from([...keptSet].sort((a, b) => a - b));
+  const nKept = kept.length;
+  const layerIv = new Float64Array(48 * nKept * 2);
+  let layersReady = false;
 
   const minSkips = c.minSkips, minSkipReady = c.minSkipReady;
   const minSkipCounts = new Float64Array(2);
@@ -505,6 +542,19 @@ export function createDensityBounds(
     }
   };
 
+  /** The kept intervals of each layer: LAYER's instructions (no slot hull) at each ck, x and z unread. */
+  const fillLayers = (): void => {
+    for (let ck = 0; ck < 48; ck++) {
+      run(LAYER, 0, LAYER.code.length, 0, ck, 0, false, false);
+      const at = ck * nKept * 2;
+      for (let f = 0; f < nKept; f++) {
+        layerIv[at + 2 * f] = iv[2 * kept[f]!]!;
+        layerIv[at + 2 * f + 1] = iv[2 * kept[f]! + 1]!;
+      }
+    }
+    layersReady = true;
+  };
+
   return {
     compiled: c,
     nodeIntervals: iv,
@@ -539,11 +589,21 @@ export function createDensityBounds(
         out[k + 1] = hi;
         return;
       }
-      run(MAIN, 0, count, ci, ck, cj, false, false);
+      if (layerCache) {
+        if (!layersReady) fillLayers();
+        const at = ck * nKept * 2;
+        for (let f = 0; f < nKept; f++) {
+          const o = 2 * kept[f]!;
+          iv[o] = layerIv[at + 2 * f]!;
+          iv[o + 1] = layerIv[at + 2 * f + 1]!;
+        }
+        run(XZ, 0, XZ.code.length, ci, ck, cj, false, false);
+      } else run(MAIN, 0, count, ci, ck, cj, false, false);
       out[k] = iv[2 * root]!;
       out[k + 1] = iv[2 * root + 1]!;
     },
     airWitnessCount,
+    layerCache,
     subBlocks,
     boxInterval: (ci, ck, cj, x0, x1, y0, y1, z0, z1, out, k) => {
       bx0 = x0; bx1 = x1; by0 = y0; by1 = y1; bz0 = z0; bz1 = z1;

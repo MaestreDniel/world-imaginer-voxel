@@ -4,7 +4,7 @@
  * `test/harness/densityBitExact.ts`) and, where it applies to any tree, over random trees.
  */
 import { describe, expect, test } from 'vitest';
-import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
+import { buildColumnSample, newColumnSample, type ColumnSample } from '../../src/gen/column/columnStage';
 import { createDensityBounds, fillDensityColumn } from '../../src/gen/density/bounds';
 import { compileDensity, cornerValueIndex, type CompileOptions } from '../../src/gen/density/compile';
 import { createDensityContext } from '../../src/gen/density/context';
@@ -394,6 +394,82 @@ describe('the sub-blocks: a straddling cell halved into boxes decided by their t
     expect(stats.voxelsOn + decided).toBe(stats.voxelsOff);
     expect(stats.voxelsOn).toBeLessThan(0.4 * stats.voxelsOff);
     expect(stats.voxels).toBe(stats.voxelsOn);
+    expect(stats.tagged).toBeGreaterThan(0);
+  }, 300_000);
+});
+
+describe('the layer cache: the intervals that depend on neither x nor z kept per layer (SP6a R13)', () => {
+  test('random trees and the default tree: cellDecide\'s root interval is cellInterval\'s at every cell, bit for bit', () => {
+    const noises = fuzzNoiseSource();
+    const ctx = ctxFor('42');
+    const samples = [[-4, 9], [0, 0], [7, -3], [-1, -1]].map(([cx, cz]) => buildColumnSample(ctx, cx!, cz!, newColumnSample()));
+    const next = testRng(1523);
+    const a = new Float64Array(2), b = new Float64Array(2);
+    const check = (on: ReturnType<typeof createDensityBounds>, ref: ReturnType<typeof createDensityBounds>, s: ColumnSample, what: string): void => {
+      for (const x of [on, ref]) {
+        x.compiled.columnFn(s);
+        x.compiled.positionFn(s);
+        x.beginColumn();
+      }
+      for (let cell = 0; cell < 768; cell++) {
+        const ci = cell & 3, cj = (cell >> 2) & 3, ck = cell >> 4;
+        on.cellDecide(ci, ck, cj, a, 0);
+        ref.cellInterval(ci, ck, cj, b, 0);
+        if (!Object.is(a[0], b[0]) || !Object.is(a[1], b[1])) throw new Error(`${what} cell ${cell}: [${a[0]}, ${a[1]}] against [${b[0]}, ${b[1]}]`);
+      }
+    };
+    for (let n = 0; n < 120; n++) {
+      const e = randomDensityExpr(next);
+      const on = createDensityBounds(compileDensity(e, noises), noises, true, false);
+      expect(on.layerCache).toBe(true);
+      check(on, createDensityBounds(compileDensity(e, noises), noises, true, false, { layerCache: false }), samples[n % 4]!, `tree ${n}\n${JSON.stringify(e)}`);
+    }
+    for (const set of bitExactSets()) {
+      const gctx = createGenContext(seedFromInput('42'), set.params);
+      const dc = createDensityContext(gctx);
+      const on = createDensityBounds(dc.compiled, dc.noises, true, false);
+      const ref = createDensityBounds(compileDensity(dc.expr, dc.noises), dc.noises, true, false, { layerCache: false });
+      const s = newColumnSample();
+      for (const [cx, cz] of set.columns.slice(0, 8)) check(on, ref, buildColumnSample(gctx, cx, cz, s), `${set.name} (${cx}, ${cz})`);
+    }
+  }, 120_000);
+
+  test('random trees: the fill with the layer cache equals the fill without it (the min skips read its intervals without corners)', () => {
+    // Seed 1513's tree 72 is min(y, min(−clamp(noiseScaled), noise)): no corners, so cellMinSkips reads the chain's
+    // operands right after cellDecide; the layer cache keeps them.
+    const noises = fuzzNoiseSource();
+    const ctx = ctxFor('42');
+    const samples = [[-4, 9], [0, 0], [7, -3], [-1, -1]].map(([cx, cz]) => buildColumnSample(ctx, cx!, cz!, newColumnSample()));
+    const next = testRng(1513);
+    const solid = [new Uint8Array(98304), new Uint8Array(98304)];
+    const values = [new Float64Array(98304), new Float64Array(98304)];
+    const mask = [new Uint8Array(98304), new Uint8Array(98304)];
+    let skipped = 0;
+    for (let n = 0; n < 120; n++) {
+      const e = randomDensityExpr(next);
+      const on = createDensityBounds(compileDensity(e, noises), noises, true, false);
+      const off = createDensityBounds(compileDensity(e, noises), noises, true, false, { layerCache: false });
+      const s = samples[n % 4]!;
+      fillDensityColumn(on, s, solid[0]!, values[0]!, mask[0]!, NEVER);
+      fillDensityColumn(off, s, solid[1]!, values[1]!, mask[1]!, NEVER);
+      for (let i = 0; i < 98304; i++) {
+        if (solid[0]![i] !== solid[1]![i] || mask[0]![i] !== mask[1]![i]) throw new Error(`tree ${n} voxel ${i}: solid or mask differs\n${JSON.stringify(e)}`);
+        if (mask[0]![i] === 1 && !Object.is(values[0]![i], values[1]![i])) throw new Error(`tree ${n} voxel ${i}: ${values[0]![i]} on, ${values[1]![i]} off`);
+      }
+      expect([...on.minSkipCounts]).toEqual([...off.minSkipCounts]);
+      skipped += on.minSkipCounts[1]!;
+    }
+    expect(skipped).toBeGreaterThan(0);
+  }, 120_000);
+
+  test('with and without the layer cache, the solidity, the cells, every value and every tag of 64 columns are equal', () => {
+    const stats = checkBitExact((ctx) => {
+      const on = createDensityContext(ctx).bounds;
+      const off = createDensityContext(ctx);
+      return { on, off: createDensityBounds(off.compiled, off.noises, true, true, { layerCache: false }) };
+    }, true);
+    expect(stats.columns).toBe(64);
+    expect(stats.voxelsOn).toBe(stats.voxelsOff);
     expect(stats.tagged).toBeGreaterThan(0);
   }, 300_000);
 });
