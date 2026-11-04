@@ -1875,7 +1875,7 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(sp6a).toContain('**Deliverable:** explorable caves with visible surface entrances and ravines, seen through the X-ray.');
     // Moved from the SP3e describe: SP3e's note, verbatim from the SP6 entry.
     expect(sp6a).toContain(`- Received from SP3e (its spec §12): exclude cave-detached runs above y ${ISLAND_RUN_MIN_BOTTOM - 1} from the floating_islands island branch, water v0's island rule and the surface scan's sky-open run under islands when caves reach y ≥ ${ISLAND_RUN_MIN_BOTTOM}.`);
-    expect(sp6a).toContain('**Exit:** as the SP6a spec §16 (C1-C9; re-asserted with caves: L2, S1 `grassSky0`, DT1, DT2 probe == bulk and the tag; P1 T ≤ 10 ms p50, ≤ 20 ms p99; the DAG-closure overhead measured; L13 and L14; the user\'s check)');
+    expect(sp6a).toContain('**Exit:** as the SP6a spec §16 (C1-C9; re-asserted with caves: L2, S1 `grassSky0`, DT1, DT2 probe == bulk and the tag; P1 T ≤ 13 ms p50, ≤ 20 ms p99 (`terrain.islands` ≤ 14.5 ms p50, ≤ 26.5 ms p99; set to the measurement after D25\'s levers, the SP6a spec\'s Threshold log); the DAG-closure overhead measured; L13 and L14; the user\'s check)');
     // The Cut line: the SP6a spec §15's three items, in its order.
     const cut = sp6a.split('\n').find((l) => l.startsWith('- **Cut line:**'));
     expect(cut, 'the SP6a entry has no `- **Cut line:**` line').toBeDefined();
