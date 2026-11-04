@@ -112,7 +112,8 @@ describe('bounds: the root interval per cell (SP3b spec §1.2, §2.4)', () => {
 describe('fillDensityColumn: the early-out driver (SP3b spec §2.4, §4)', () => {
   test('solid below y 100: early-outs above and below, voxels only in the straddling layer, values where mask is set', () => {
     const e = only(interp(add(C(100), neg(Y))));
-    const b = createDensityBounds(compileDensity(e, source({})), source({}));
+    // Without the sub-blocks (SP6a ruling R13; densityFast.test.ts has the layer with them): the whole layer.
+    const b = createDensityBounds(compileDensity(e, source({})), source({}), true, true, { subBlocks: false });
     const solid = new Uint8Array(98304).fill(7);
     const values = new Float64Array(98304).fill(NaN);
     const mask = new Uint8Array(98304).fill(7);
@@ -217,9 +218,12 @@ describe('bounds and early-outs: fuzz (SP3b spec §1.2, §10)', () => {
     expect(tiny).toBeGreaterThan(30);
   });
 
-  /** Runs the driver and checks every voxel against a full evaluation on an independent compile; returns early-out cells. */
-  function driverEqualsFull(e: DensityExpr, s: ColumnSample, what: string): { air: number; solid: number; voxel: number } {
-    const b = createDensityBounds(compileDensity(e, noises), noises);
+  /**
+   * Runs the driver and checks every voxel against a full evaluation on an independent compile; returns early-out cells
+   * (a cell whose voxels are mixed, or any evaluated, is `voxel`). `subBlocks` as DensityBoundsOptions'.
+   */
+  function driverEqualsFull(e: DensityExpr, s: ColumnSample, what: string, subBlocks = true): { air: number; solid: number; voxel: number } {
+    const b = createDensityBounds(compileDensity(e, noises), noises, true, true, { subBlocks });
     const full = compileDensity(e, noises);
     full.columnFn(s);
     full.positionFn(s);
@@ -242,11 +246,11 @@ describe('bounds and early-outs: fuzz (SP3b spec §1.2, §10)', () => {
               }
             }
           }
-          // A cell is evaluated whole or not at all.
-          expect(masked === 0 || masked === 128).toBe(true);
-          if (masked === 128) cells.voxel++;
+          // Without the sub-blocks a cell is evaluated whole or not at all; with them, a straddling cell's undecided boxes.
+          if (!subBlocks) expect(masked === 0 || masked === 128).toBe(true);
+          if (masked > 0 || (solids > 0 && solids < 128)) cells.voxel++;
           else if (solids === 128) cells.solid++;
-          else { expect(solids).toBe(0); cells.air++; }
+          else cells.air++;
         }
       }
     }
@@ -264,6 +268,7 @@ describe('bounds and early-outs: fuzz (SP3b spec §1.2, §10)', () => {
       if (!hasInterp && n - withInterp >= 40) continue;
       if (hasInterp) withInterp++;
       const cells = driverEqualsFull(e, samples[n % 4]!, `tree ${n}`);
+      driverEqualsFull(e, samples[n % 4]!, `tree ${n} without the sub-blocks`, false);
       total.air += cells.air;
       total.solid += cells.solid;
       total.voxel += cells.voxel;

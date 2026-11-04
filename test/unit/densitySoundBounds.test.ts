@@ -357,14 +357,18 @@ describe('bounds: NaN and ±∞ slot and corner values never decide a cell (SP3d
 });
 
 describe('the default world is unchanged (SP3d spec §1.9 D: proven, not only claimed)', () => {
-  /** The mask and solid arrays of `fillDensityColumn` over the 32 seed-'42' columns: their hash, masked and solid counts. */
-  const hashed = (dc: ReturnType<typeof createDensityContext>): string => {
+  /**
+   * The mask and solid arrays of `fillDensityColumn` over the 32 seed-'42' columns: their hash, masked and solid counts.
+   * Without the sub-blocks (SP6a ruling R13), whose fill evaluates fewer voxels of a straddling cell, unless `subBlocks`.
+   */
+  const hashed = (dc: ReturnType<typeof createDensityContext>, subBlocks = false): string => {
+    const bounds = createDensityBounds(dc.compiled, dc.noises, true, true, { subBlocks });
     const solid = new Uint8Array(98304), mask = new Uint8Array(98304);
     const h = createFnv64();
     let masked = 0, solids = 0;
     for (let i = 0; i < 32; i++) {
       const cx = ((i * 7919) % 513) - 256, cz = ((i * 104729) % 513) - 256;
-      expect(fillDensityColumn(dc.bounds, dc.columns.get(cx, cz), solid, null, mask, () => false)).toBe(true);
+      expect(fillDensityColumn(bounds, dc.columns.get(cx, cz), solid, null, mask, () => false)).toBe(true);
       h.update(mask).update(solid);
       for (let k = 0; k < 98304; k++) { masked += mask[k]!; solids += solid[k]!; }
     }
@@ -388,5 +392,17 @@ describe('the default world is unchanged (SP3d spec §1.9 D: proven, not only cl
     // 0.3, 0.4, so the caps narrow the families less): 'a89dd9967f37f513 590080 985254'; with D25's lever 5 (Task 15b:
     // cheese 3 octaves, entrance 2):
     expect(hashed(createDensityContext(ctxFor('42')))).toBe('eb36083e7b0f2a7a 588160 984869');
+  });
+
+  test('… and with the sub-blocks (SP6a ruling R13): the same solid voxels, fewer evaluated', () => {
+    const c = ctxFor('42');
+    for (const [dc, solids] of [
+      [createDensityContext(c, resolveDensity(cavesMuted(DEFAULT_DENSITY_TREE), c.params)), 1040924],
+      [createDensityContext(ctxFor('42')), 984869],
+    ] as const) {
+      const [, masked, solid] = hashed(dc, true).split(' ').map(Number);
+      expect(solid).toBe(solids);
+      expect(masked).toBeLessThan(0.6 * Number(hashed(dc).split(' ')[1]));
+    }
   });
 });

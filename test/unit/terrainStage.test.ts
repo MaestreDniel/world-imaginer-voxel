@@ -504,7 +504,7 @@ describe('order and abort (§4, SP3c §1)', () => {
 });
 
 describe('terrainDensityDebug (§2.3, the DT2 hook)', () => {
-  test.each(FIXTURES)('%s: mask 1 exactly at the bulk-evaluated voxels, whose values are the probe\'s (Object.is); whole cells; the rest untouched', (_name, [cx, cz]) => {
+  test.each(FIXTURES)('%s: mask 1 exactly at the bulk-evaluated voxels, whose values are the probe\'s (Object.is); whole sub-blocks; the rest untouched', (_name, [cx, cz]) => {
     const out = new Float64Array(98304).fill(12345);
     const mask = new Uint8Array(98304).fill(7);
     terrainDensityDebug(ctx, cx, cz, out, mask);
@@ -518,8 +518,9 @@ describe('terrainDensityDebug (§2.3, the DT2 hook)', () => {
           const i = vi(lx, y, lz);
           const at = `(${lx}, ${y}, ${lz})`;
           if (mask[i] !== 0 && mask[i] !== 1) bad.push(`${at}: mask ${mask[i]}`);
-          // A cell is evaluated whole or not at all: each voxel's mask equals its cell's first voxel's.
-          if (mask[i] !== mask[vi(lx & ~3, y - ((y + 64) & 7), lz & ~3)]) bad.push(`${at}: mask differs inside its cell`);
+          // A straddling cell's sub-block (SP6a ruling R13: 2 × 2 × 4 voxels, x and y pairs across the cell's z) is
+          // evaluated whole or not at all: each voxel's mask equals its sub-block's first voxel's.
+          if (mask[i] !== mask[vi(lx & ~1, y - ((y + 64) & 1), lz & ~3)]) bad.push(`${at}: mask differs inside its sub-block`);
           if (mask[i] === 1) {
             set++;
             const v = probe(dc, 16 * cx + lx, y, 16 * cz + lz);
@@ -536,7 +537,7 @@ describe('terrainDensityDebug (§2.3, the DT2 hook)', () => {
     // 21-23 % on these fixtures with entrances, cheese and pillars, 30.3 % at most with spaghetti and the noodle).
     expect(set).toBeGreaterThan(0);
     expect(set).toBeLessThan(0.4 * 98304);
-    expect(set % 128).toBe(0);
+    expect(set % 16).toBe(0);
   });
 
   test('it leaves the T stage unchanged: a column generated after it equals the expected column', () => {

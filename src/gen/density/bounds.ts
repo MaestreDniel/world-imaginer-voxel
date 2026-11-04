@@ -20,7 +20,8 @@
  * Driver. `fillDensityColumn` writes one column's solidity (density > 0) for all 98,304 voxels, cell by cell, bottom
  * up: the root's interval decides hi < 0 (non-solid) and lo > 0 (solid) without corner or voxel work; otherwise the
  * cell's corners are evaluated (each at most once per column) and the interval is refined with them; only a cell that
- * still straddles 0 runs `voxelFn` per voxel. Early-outs never change a voxel's solidity.
+ * still straddles 0 runs `voxelFn`, per voxel of the boxes its sub-blocks leave undecided (below). Early-outs never
+ * change a voxel's solidity.
  *
  * Min skips (SP6a spec §1.6 lever (4)). Before a straddling cell's voxels, `cellMinSkips` reads its nodes' intervals
  * (from the corner hulls once the corners exist) and marks, in each min chain of the compile, every operand whose low
@@ -39,6 +40,19 @@
  * instructions), which decides every sky cell; in floating_islands' tree the `precave` and `islands` taps. Otherwise it
  * runs the whole program and gives cellInterval's root interval. Where cellInterval decides air, so do the witnesses,
  * and the other way round unless an operand's interval is UNKNOWN (non-finite), where they still decide air soundly.
+ *
+ * The sub-blocks (SP6a ruling R13, output-keeping). A cell that still straddles 0 after its corners is halved, along y
+ * first, then x, then z (4 × 8 × 4 → 4 × 4 × 4 → 4 × 2 × 4 → 2 × 2 × 4), and each half asks `boxInterval` for the
+ * root's interval over its voxels: an `interpolated` node there is the hull of its trilinear interpolation at the box's
+ * 8 vertex voxels, widened. A trilinear function is linear along each axis, so its extremes over a box are at the box's
+ * vertices; the voxel values `voxelFn` computes differ from the exact interpolation by a few ulps of the largest corner
+ * magnitude M, as do the vertex values here, so widening the vertex hull by 1e-12·M (then as every hull, 1e-9
+ * relative) holds every voxel value of the box. The other nodes of the voxel program take that interval through the
+ * same rules; a node that no `interpolated` node reaches keeps the cell's interval (it holds its values over every box
+ * of the cell). A box whose root interval is below 0 is air, above 0 solid; one of 16 voxels or fewer that still
+ * straddles is evaluated voxel by voxel. The solidity and each evaluated value are those of the whole cell's evaluation
+ * (voxelFn is a function of the voxel alone), so the stored blocks and the cave tag are kept bit for bit; only fewer
+ * voxels are evaluated (`mask`).
  */
 import type { ColumnSample } from '../column/columnStage';
 import type { CompiledDensity } from './compile';
@@ -99,6 +113,12 @@ interface Program {
   readonly knots: ReadonlyArray<readonly SlideKnot[] | null>;
 }
 
+/** The output-keeping speedups of SP6a ruling R13 that `createDensityBounds` can turn off (each on when absent). */
+export interface DensityBoundsOptions {
+  /** false: a straddling cell's voxels are all evaluated (the header's "sub-blocks"). */
+  readonly subBlocks?: boolean;
+}
+
 /** Interval bounds of one CompiledDensity (it reads that compile's slot values and corner cache). */
 export interface DensityBounds {
   readonly compiled: CompiledDensity;
@@ -145,14 +165,30 @@ export interface DensityBounds {
   cellDecide(ci: number, ck: number, cj: number, out: Float64Array, k: number): void;
   /** Totals since creation (diagnostics): `[0]` the cells cellDecide decided by the air witness alone. */
   readonly airWitnessCount: Float64Array;
+  /** Whether `fillDensityColumn` splits a straddling cell into sub-blocks (SP6a ruling R13); `DensityBoundsOptions.subBlocks`. */
+  readonly subBlocks: boolean;
+  /**
+   * The root's interval over the box of voxels x0 … x1, y0 … y1, z0 … z1 (offsets in cell (ci, ck, cj): x and z 0 … 3,
+   * y 0 … 7, inclusive) into `out[k]`, `out[k + 1]`: every `interpolated` node the hull of its trilinear interpolation
+   * at the box's 8 vertex voxels, widened, and the nodes it reaches re-run over it (the header's "sub-blocks"). Needs
+   * `compiled.cellCorners(ci, ck, cj)` and a cellIntervalCorners call for the same cell first (the other nodes keep its
+   * intervals); updates `nodeIntervals` of the nodes it re-runs.
+   */
+  boxInterval(ci: number, ck: number, cj: number, x0: number, x1: number, y0: number, y1: number, z0: number, z1: number, out: Float64Array, k: number): void;
+  /** Totals since creation (diagnostics): `[0]` the boxes boxInterval ran, `[1]` the voxels decided by a box's interval. */
+  readonly boxCounts: Float64Array;
 }
 
 /**
  * Creates the bounds of `c`; `noises` must be the source `c` was compiled with (for each noise's clampSigma). `minSkip`
  * false turns lever (4)'s min skips off (the same values, every operand evaluated); `airWitness` false turns the air
- * witness off (`cellDecide` is then cellInterval).
+ * witness off (`cellDecide` is then cellInterval); `options` turns off the later output-keeping speedups (each on by
+ * default, `DensityBoundsOptions`).
  */
-export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSource, minSkip = true, airWitness = true): DensityBounds {
+export function createDensityBounds(
+  c: CompiledDensity, noises: DensityNoiseSource, minSkip = true, airWitness = true, options: DensityBoundsOptions = {},
+): DensityBounds {
+  const subBlocks = options.subBlocks ?? true;
   const nodes = c.nodes;
   const n = nodes.length;
   const iv = new Float64Array(2 * n).fill(NaN);
@@ -296,11 +332,23 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
   const wCount = WITNESS.code.length;
   /** Runs the witnesses' program over cell (ci, ck, cj); true when each witness's high end is below 0. */
   const witnessAir = (ci: number, ck: number, cj: number): boolean => {
-    run(WITNESS, 0, wCount, ci, ck, cj, false);
+    run(WITNESS, 0, wCount, ci, ck, cj, false, false);
     for (let w = 0; w < nW; w++) if (!(iv[2 * witnesses[w]! + 1]! < 0)) return false;
     return true;
   };
   const airWitnessCount = new Float64Array(1);
+  // The box program (R13 sub-blocks): the voxel program's instructions whose node an `interpolated` node reaches.
+  const reached = new Uint8Array(n);
+  for (let id = 0; id < n; id++) {
+    const nd = nodes[id]!;
+    if (nd.inside) continue;
+    if (nd.op === 'interpolated') { reached[id] = 1; continue; }
+    for (const k of nd.kids) if (reached[k] === 1) { reached[id] = 1; break; }
+  }
+  const BOX = subProgram(reached);
+  const boxCount = BOX.code.length;
+  const boxCounts = new Float64Array(2);
+  let bx0 = 0, bx1 = 3, by0 = 0, by1 = 7, bz0 = 0, bz1 = 3;
 
   const minSkips = c.minSkips, minSkipReady = c.minSkipReady;
   const minSkipCounts = new Float64Array(2);
@@ -375,10 +423,44 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
     }
   };
 
-  /** Runs instructions [from, to) of program `P` for cell (ci, ck, cj); `corners`: interpolated from the corner hull. */
-  const run = (P: Program, from: number, to: number, ci: number, ck: number, cj: number, corners: boolean): void => {
+  /** The hull of the trilinear interpolation of the 8 corner values at `base` over the box's 8 vertex voxels, widened. */
+  const boxHull = (base: number, out: Float64Array, o: number): void => {
+    const c000 = cornerValues[base]!, c100 = cornerValues[base + 1]!, c001 = cornerValues[base + 5]!, c101 = cornerValues[base + 6]!;
+    const c010 = cornerValues[base + 25]!, c110 = cornerValues[base + 26]!, c011 = cornerValues[base + 30]!, c111 = cornerValues[base + 31]!;
+    const m = Math.max(
+      Math.abs(c000), Math.abs(c100), Math.abs(c001), Math.abs(c101), Math.abs(c010), Math.abs(c110), Math.abs(c011), Math.abs(c111),
+    );
+    // NaN or ±∞ among the corners (m is then NaN or ∞): UNKNOWN, as the corner hull.
+    if (!FINITE(m)) { IV_UNKNOWN(out, o); return; }
+    let lo = Infinity, hi = -Infinity, nan = false;
+    for (let xi = 0; xi < 2; xi++) {
+      const tx = (xi === 0 ? bx0 : bx1) / 4;
+      const e00 = c000 + tx * (c100 - c000), e01 = c001 + tx * (c101 - c001);
+      const e10 = c010 + tx * (c110 - c010), e11 = c011 + tx * (c111 - c011);
+      for (let zi = 0; zi < 2; zi++) {
+        const tz = (zi === 0 ? bz0 : bz1) / 4;
+        const l = e00 + tz * (e01 - e00), u = e10 + tz * (e11 - e10);
+        const v0 = l + (by0 / 8) * (u - l), v1 = l + (by1 / 8) * (u - l);
+        if (IS_NAN(v0) || IS_NAN(v1)) nan = true;
+        if (v0 < lo) lo = v0;
+        if (v0 > hi) hi = v0;
+        if (v1 < lo) lo = v1;
+        if (v1 > hi) hi = v1;
+      }
+    }
+    if (nan) { IV_UNKNOWN(out, o); return; }
+    const w = 1e-12 * m;
+    IV_WIDEN(lo - w, hi + w, out, o);
+  };
+
+  /**
+   * Runs instructions [from, to) of program `P` for cell (ci, ck, cj); `corners`: interpolated from the corner hull;
+   * `box` (with `corners`): over the box bx0 … bx1, by0 … by1, bz0 … bz1 (interpolated from its vertex hull, y over its
+   * layers).
+   */
+  const run = (P: Program, from: number, to: number, ci: number, ck: number, cj: number, corners: boolean, box: boolean): void => {
     const code = P.code, out0 = P.out0, A = P.A, B = P.B, K3 = P.K3, P0 = P.P0, P1 = P.P1, knots = P.knots;
-    const y0 = CORNER_Y(ck);
+    const y0 = box ? CORNER_Y(ck) + by0 : CORNER_Y(ck);
     const cc4 = cj * 4 + ci;
     for (let q = from; q < to; q++) {
       const o = 2 * out0[q]!;
@@ -386,7 +468,7 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
       switch (code[q]) {
         case I_COL_HULL: { const h = (A[q]! * 16 + cc4) * 2; iv[o] = colHull[h]!; iv[o + 1] = colHull[h + 1]!; break; }
         case I_POS_HULL: { const h = (A[q]! * 16 + cc4) * 2; iv[o] = posHull[h]!; iv[o + 1] = posHull[h + 1]!; break; }
-        case I_Y: IV_SET(y0, y0 + P0[q]!, iv, o); break;
+        case I_Y: IV_SET(y0, y0 + (box ? by1 - by0 : P0[q]!), iv, o); break;
         case I_NOISE: IV_SET(-P0[q]!, P0[q]!, iv, o); break;
         case I_ADD: { const b = 2 * B[q]!; IV_ADD(iv[a]!, iv[a + 1]!, iv[b]!, iv[b + 1]!, iv, o); break; }
         case I_MUL: { const b = 2 * B[q]!; IV_MUL(iv[a]!, iv[a + 1]!, iv[b]!, iv[b + 1]!, iv, o); break; }
@@ -396,10 +478,11 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
         case I_ABS: IV_ABS(iv[a]!, iv[a + 1]!, iv, o); break;
         case I_SQUARE: IV_SQUARE(iv[a]!, iv[a + 1]!, iv, o); break;
         case I_CLAMP: IV_CLAMP(iv[a]!, iv[a + 1]!, P0[q]!, P1[q]!, iv, o); break;
-        case I_SLIDE: IV_SLIDE(iv[a]!, iv[a + 1]!, knots[q]!, y0, y0 + P0[q]!, iv, o); break;
+        case I_SLIDE: IV_SLIDE(iv[a]!, iv[a + 1]!, knots[q]!, y0, y0 + (box ? by1 - by0 : P0[q]!), iv, o); break;
         case I_INTERP: {
           if (!corners) { IV_WIDEN(iv[a]!, iv[a + 1]!, iv, o); break; }
           const base = B[q]! * 1225 + (ck * 5 + cj) * 5 + ci;
+          if (box) { boxHull(base, iv, o); break; }
           let lo = cornerValues[base]!, hi = lo, nan = IS_NAN(lo);
           for (let q = 0; q < 7; q++) {
             const v = cornerValues[base + CORNER_OFFSETS[q]!]!;
@@ -427,18 +510,18 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
     nodeIntervals: iv,
     beginColumn,
     cellInterval: (ci, ck, cj, out, k) => {
-      run(MAIN, 0, count, ci, ck, cj, false);
+      run(MAIN, 0, count, ci, ck, cj, false, false);
       out[k] = iv[2 * root]!;
       out[k + 1] = iv[2 * root + 1]!;
     },
     cellIntervalCorners: (ci, ck, cj, out, k) => {
-      run(MAIN, cellCount, count, ci, ck, cj, true);
+      run(MAIN, cellCount, count, ci, ck, cj, true, false);
       out[k] = iv[2 * root]!;
       out[k + 1] = iv[2 * root + 1]!;
     },
     nodeInterval: (ci, ck, cj, node, out, k) => {
-      run(MAIN, 0, endIn[node]!, ci, ck, cj, false);
-      run(MAIN, cellCount, endOut[node]!, ci, ck, cj, false);
+      run(MAIN, 0, endIn[node]!, ci, ck, cj, false, false);
+      run(MAIN, cellCount, endOut[node]!, ci, ck, cj, false, false);
       out[k] = iv[2 * node]!;
       out[k + 1] = iv[2 * node + 1]!;
     },
@@ -456,23 +539,97 @@ export function createDensityBounds(c: CompiledDensity, noises: DensityNoiseSour
         out[k + 1] = hi;
         return;
       }
-      run(MAIN, 0, count, ci, ck, cj, false);
+      run(MAIN, 0, count, ci, ck, cj, false, false);
       out[k] = iv[2 * root]!;
       out[k + 1] = iv[2 * root + 1]!;
     },
     airWitnessCount,
+    subBlocks,
+    boxInterval: (ci, ck, cj, x0, x1, y0, y1, z0, z1, out, k) => {
+      bx0 = x0; bx1 = x1; by0 = y0; by1 = y1; bz0 = z0; bz1 = z1;
+      run(BOX, 0, boxCount, ci, ck, cj, true, true);
+      boxCounts[0]++;
+      out[k] = iv[2 * root]!;
+      out[k + 1] = iv[2 * root + 1]!;
+    },
+    boxCounts,
   };
 }
 
 const IV = new Float64Array(2);
+
+// The fill's current cell, for the sub-block recursion (set by fillDensityColumn; one fill at a time per thread).
+let F_B: DensityBounds | null = null;
+let F_C: CompiledDensity | null = null;
+const NO_SOLID = new Uint8Array(0);
+let F_SOLID: Uint8Array = NO_SOLID;
+let F_VALUES: Float64Array | null = null;
+let F_MASK: Uint8Array | null = null;
+let F_CI = 0, F_CK = 0, F_CJ = 0;
+
+/** Drops the fill's references (its arrays are the caller's). */
+function endFill(): void {
+  F_B = null;
+  F_C = null;
+  F_SOLID = NO_SOLID;
+  F_VALUES = null;
+  F_MASK = null;
+}
+
+/** The voxels of box x0 … x1, y0 … y1, z0 … z1 of the fill's cell: `fill` 0 or 1 written, −1 evaluated by voxelFn. */
+function boxVoxels(x0: number, x1: number, y0: number, y1: number, z0: number, z1: number, fill: number): void {
+  const c = F_C!, solid = F_SOLID, values = F_VALUES, mask = F_MASK;
+  const yb = CORNER_Y(F_CK), xb = 4 * F_CI, zb = 4 * F_CJ;
+  for (let y = yb + y0; y <= yb + y1; y++) {
+    for (let lz = zb + z0; lz <= zb + z1; lz++) {
+      const row = ((y + 64) * 16 + lz) * 16;
+      for (let lx = xb + x0; lx <= xb + x1; lx++) {
+        if (fill >= 0) { solid[row + lx] = fill; continue; }
+        const v = c.voxelFn(lx, y, lz);
+        solid[row + lx] = v > 0 ? 1 : 0;
+        if (values !== null) values[row + lx] = v;
+        if (mask !== null) mask[row + lx] = 1;
+      }
+    }
+  }
+}
+
+/** Halves the box (y first, then x, then z; it straddles 0 as far as known) and decides each half (the sub-blocks). */
+function splitBox(x0: number, x1: number, y0: number, y1: number, z0: number, z1: number): void {
+  const nx = x1 - x0 + 1, ny = y1 - y0 + 1, nz = z1 - z0 + 1;
+  if (ny >= nx && ny >= nz) {
+    const m = y0 + (ny >> 1);
+    decideBox(x0, x1, y0, m - 1, z0, z1);
+    decideBox(x0, x1, m, y1, z0, z1);
+  } else if (nx >= nz) {
+    const m = x0 + (nx >> 1);
+    decideBox(x0, m - 1, y0, y1, z0, z1);
+    decideBox(m, x1, y0, y1, z0, z1);
+  } else {
+    const m = z0 + (nz >> 1);
+    decideBox(x0, x1, y0, y1, z0, m - 1);
+    decideBox(x0, x1, y0, y1, m, z1);
+  }
+}
+
+/** Box x0 … x1, y0 … y1, z0 … z1: decided by its interval, else evaluated (16 voxels or fewer) or halved again. */
+function decideBox(x0: number, x1: number, y0: number, y1: number, z0: number, z1: number): void {
+  const b = F_B!;
+  b.boxInterval(F_CI, F_CK, F_CJ, x0, x1, y0, y1, z0, z1, IV, 0);
+  const fill = IV[1]! < 0 ? 0 : IV[0]! > 0 ? 1 : -1;
+  const size = (x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1);
+  if (fill >= 0) b.boxCounts[1] += size;
+  if (fill >= 0 || size <= 16) boxVoxels(x0, x1, y0, y1, z0, z1, fill);
+  else splitBox(x0, x1, y0, y1, z0, z1);
+}
 
 /**
  * Fills column (s.cx, s.cz)'s solidity with early-outs (SP3b spec §2.4, §4): runs `columnFn` and `positionFn` of
  * `b.compiled` on `s`, then the 48 cell layers bottom up, polling `stop()` before every 8 layers (6 polls); on true it
  * returns false at once (the outputs are then partial). `solid[((y + 64)·16 + lz)·16 + lx]` (98,304 entries, the T
  * stage's section order) becomes 1 where the density is > 0, else 0. A non-null `mask` is cleared, then set to 1 at
- * each voxel `voxelFn` evaluated; a non-null `values` receives those voxels' values (its other entries are left as they
- * were). A non-null `cells` (768 entries, cell `(ck·4 + cj)·4 + ci`) is cleared, then set to 1 at each cell the root's
+ * each voxel `voxelFn` evaluated (with `b.subBlocks`, only the voxels of a straddling cell's undecided boxes); a non-null
+ * `values` receives those voxels' values (its other entries are left as they were). A non-null `cells` (768 entries, cell `(ck·4 + cj)·4 + ci`) is cleared, then set to 1 at each cell the root's
  * interval did not decide before its corners: its corners were evaluated (a tree with `interpolated`) or, without
  * slots, its voxels were (SP6a spec §3.2: a cell left 0 was decided solid or air by its interval alone). Nothing is
  * allocated.
@@ -488,8 +645,14 @@ export function fillDensityColumn(
   if (mask !== null) mask.fill(0);
   if (cells !== null) cells.fill(0);
   const corners = c.interpolatedSlotCount > 0;
+  const boxes = corners && b.subBlocks;
+  F_B = b;
+  F_C = c;
+  F_SOLID = solid;
+  F_VALUES = values;
+  F_MASK = mask;
   for (let ck = 0; ck < 48; ck++) {
-    if ((ck & 7) === 0 && stop()) return false;
+    if ((ck & 7) === 0 && stop()) { endFill(); return false; }
     const y0 = CORNER_Y(ck);
     for (let cj = 0; cj < 4; cj++) {
       for (let ci = 0; ci < 4; ci++) {
@@ -502,6 +665,13 @@ export function fillDensityColumn(
           fill = IV[1]! < 0 ? 0 : IV[0]! > 0 ? 1 : -1;
         }
         if (fill < 0) b.cellMinSkips(ci, ck, cj);
+        if (fill < 0 && boxes) {
+          F_CI = ci;
+          F_CK = ck;
+          F_CJ = cj;
+          splitBox(0, 3, 0, 7, 0, 3);
+          continue;
+        }
         for (let y = y0; y < y0 + 8; y++) {
           for (let lz = 4 * cj; lz < 4 * cj + 4; lz++) {
             const row = ((y + 64) * 16 + lz) * 16;
@@ -517,5 +687,6 @@ export function fillDensityColumn(
       }
     }
   }
+  endFill();
   return true;
 }
