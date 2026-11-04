@@ -774,6 +774,41 @@ The rows of the other gated runs at this commit: `surface.column` p50 0.84 / 0.7
 
 The baselines after D25 (Task 14 Step 5, dispatch 14s5; rulings R14 and R15): `npm run bench:record` at 26520a3, with the gates as R14 set them, on the reference machine (i7-12700H, Node v24.21.0), 1-minute load 0.59 before, turbo enabled (`intel_pstate/no_turbo` 0), on mains; the rows through `slice.vertical128` measured at turbo (calibration 0.637 ns), those from `slice.horizontal128` on off turbo (0.69-0.79 ns); killRatio 0.807. Its rows: `terrain.real` p50 9.81 / p99 17.52 ms, `terrain.islands` 12.27 / 21.84 ms, `density.corner` 2.23 µs, `slice.vertical128` 109.65 ms, `slice.horizontal128` 1,117.8 ms, `slice.partWorst` 81.10 ms, `surface.column` 0.70 ms, `light.column` 2.57 ms, `mesh.section` p50 0.30 / p99 0.66 ms, `session.commitMaxTree` 3.65 ms. Then `npm run bench` once against the new baselines (load 0.76 before; at turbo through `map.tile.b16.relief`, off turbo from `worker.configure` on): every gate holds (`terrain.real` p50 10.56 / p99 17.72 ms against 13 / 20; `terrain.islands` 12.07 / 21.44 ms against 14.5 / 26.5; `slice.vertical128` 132.65 ms against 300; `mesh.section` p99 0.64 ms; `session.commitMaxTree` 3.53 ms) and the +30 % p50 ratio holds on every row without `BENCH_EXEMPT`; killRatio 0.837. The rows that rise by design are re-baselined by this record against SP5c's (85d3b2f, 2026-11-02; ratio to the calibration): `terrain.real` × 4.26, `terrain.islands` × 3.33, `density.corner` × 11.89, `slice.horizontal128` × 1.84 (`slice.vertical128` × 0.81, the stage's compile since d07e907). Two rows that the T misses had hidden fail the ratio gate against SP5c's baselines and are re-baselined here, not exempted (R15 d): `stageHashes.genKey` 230.7 µs → 459.8 µs (ratio 361,985 → 721,932, × 1.99; 460.7 µs in the follow-up) and `worker.configure` 1.09 ms → 3.50 ms (ratio 1,714,126 → 5,491,809, × 3.20; 3.95 ms off turbo in the follow-up, ratio 5,219,709). The cause is the cave tree's size: the default density tree has 1,087 nodes against SP5c's 60 (`countTreeNodes`; amplified 80 → 1,107, floating_islands 87 → 1,114), its canonical JSON 29,618 characters against 1,471, and the `caves` group adds 4,260 more, so the text `stageHashes` canonicalises and hashes over every stage's parameter slice grows from 17,630 to 50,047 characters (× 2.84; today's defaults with SP5c's tree and no `caves` group against today's); `genKey` is that plus one FNV over a short string, so it rises less than the text (fixed costs). A configure walks the tree several times: the schema check of the posted params, the tree checks, `createGenContext` (which resolves and compiles the density tree) and `stageHashes`, so it rises more than the hash alone.
 
+### Push A (Task 16)
+
+Recorded on 2026-11-04 at 6e8527a (this commit's parent, the last commit that changes code; push A's head is this commit), on the reference machine (i7-12700H, Node v24.21.0, Bun 1.4.4, headless Chrome through SwiftShader for the smoke). §12.3's record: `git checkout c64b4a9 -- test/goldens.json`, then `npm run test:goldens`. Its first stage wrote all 60 observation files; 4 tests timed out on this laptop (T1 and S1 at 600 s, `floatingIslands` at 30 s, `floatingRules` at 120 s; ruling R10, and T1 and S1 pass in the quick run below). The merge passed (1/1). Then `git diff --exit-code HEAD -- test/goldens.json` was empty: the last generator commit had already recorded the file. `GENERATOR_VERSION` is 6 (`src/core/constants.ts:2`) and the terrain stage's version is 4 (`src/core/stage/registry.ts:20`).
+
+The golden diff against the base, `git diff c64b4a9 -- test/goldens.json`, key by key (59 keys → 60):
+
+| key | c64b4a9 | push A |
+|---|---|---|
+| `generatorVersion` | 5 | 6 |
+| `sp1.params` | `0ef3ba26bfc92a94` | `3a8e213e97fd51d6` |
+| `sp3a.region.T.default` | `454c4d8287c4b075` | `d6b82017a311b71c` |
+| `sp3a.region.T.large_biomes` | `67936d16e11d5725` | `b4efc8f80215afc9` |
+| `sp3b.density.default` | `020212de61dc83da` | `d3219e909dc7e47d` |
+| `sp3c.surface.ops` | `df53f0d1115b0d39` | `63ce1a4012e60684` |
+| `sp3e.region.T.amplified` | `4154a9618fba00c5` | `98c0688b9bd6d91f` |
+| `sp3e.region.T.archipelago` | `acf38af4e7775370` | `96acbc8e675cf384` |
+| `sp3e.region.T.floating_islands` | `e8e632117b08d820` | `05ca039b97a877bb` |
+| `sp6a.density.ops` (new) | — | `631964217f1d4c07` |
+
+These are exactly §12.3's allowed keys for push A. Lever 5's output change (3b44852, 15b) was re-recorded within them. No other key moved: every `sp2a.*` key (`sp2a.spawn` included), `sp3e.column.point.*`, `sp3b.density.ops`, `sp3a.registry` and `sp3c.registry` equal the base.
+
+- **Bun:** `npx --yes bun@1 test/tools/goldensJsc.ts`: `60/60 match on Bun 1.4.4 (JavaScriptCore)` (10 s).
+- **`?selftest=1` in Chrome** (the smoke): `✓ all 60 goldens match (10.2 s)` and `IndexedDB contract: 10/10 passed`. Firefox's run is the user's, at Task 51.
+- **The smoke** (`node test/tools/uiSmoke.ts`): 464/464 checks pass at 6e8527a, with all 41 steps run. Two smoke checks failed before push A, and each was fixed in a commit of its own:
+  - cdb0252: "density json: the tree rows show the default". The row list at the step's start was read before Task 4's `showTerrainRow` opened the terrain tap's ancestors, and those rows stay open after the Undo.
+  - 6e8527a: "density drag: drafts drawn during the drag". Since 1a5c9f2 (D13, ruling R13), a drag over the cave tree is held until the release. The step now checks that nothing is drawn during the drag and that the release draws its draft (715 ms after the release).
+
+  The modify-on regeneration that had not settled within 30 s settles in 233 ms (with the fill at 4.9 s after 15g).
+- **`npm run test:metrics`** (quick): 18 files and 58 tests passed, 6 skipped (524 s). The values:
+  - DT1: mismatches 0, invariance mismatches 0, golden mismatches 0, over 10 regions.
+  - DT2: `tagProbe` 0, and `probeBulk` and `compiledReference` 0.
+  - U2: 1 (every leaf live; gated at min 1).
+  - U4: `migrationFailures` 0 and `readmeStale` 0.
+- **CI:** push A's head SHA, the CI run, its wall time and each job's time against §11 (the heavier T, no `caves` shard yet) are recorded by the next docs commit (Task 17; rulings P12, P23, P40).
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
