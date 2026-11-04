@@ -26,7 +26,9 @@ import { noiseSumTree, PART_WORST_LEAVES, partWorstParams } from '../harness/sli
  * (cold caches: the case right after an edit). It measures the unit (ns per work unit of reference evaluation, the
  * ColumnSamples already cached) on the default tree and on partWorst's tree, the time of a part at PART_BUDGET (the
  * default's 128² vertical part of k = 30 sample columns, its 128² horizontal part at extent 512 of k = 8 rows, and
- * partWorst's one 32-sample column), and the three acquisition costs (a ColumnSample per chunk column along the mountain
+ * partWorst's one 32-sample column; each timed on the `node` field at `root`, the density field's expression by the
+ * reference, since SP6a ruling R14 sends the vertical `density` field to the T stage's compile), and the three
+ * acquisition costs (a ColumnSample per chunk column along the mountain
  * line; a corner sample without and with steep at extent 8192, where no two samples share a corner) in units of the
  * default tree's unit. It prints `MEASUREMENT:` lines and fails — the spec's STOP — when a part at PART_BUDGET takes more
  * than 250 ms p50 or an acquisition cost differs from its constant by more than 2 ×.
@@ -52,6 +54,8 @@ describe('slice.partWorst\'s tree (SP3d spec §9)', () => {
     expect(memoWorkCost(evaluatedExpression(p, 'density', ''), p)).toEqual({ voxel: 1, corner: 42_569 });
     expect(sliceCostOf(p, 'density', '', 'vertical', 32)).toBe(worstColumnCost(PART_WORST_LEAVES));
     expect(sliceCostOf(p, 'density', '', 'vertical', 32)).toBe(8_376_324);
+    // The bench row and the calibration time it on the node root (SP6a R14), which the bound costs the same.
+    expect(sliceCostOf(p, 'node', 'root', 'vertical', 32)).toBe(8_376_324);
     expect(sliceCostOf(p, 'density', '', 'vertical', 32)).toBeLessThanOrEqual(PART_BUDGET);
     const more = partWorstParams(PART_WORST_LEAVES + 1);
     expect(validateParamTrees(more)).toEqual([]);
@@ -88,10 +92,18 @@ const PARTS: readonly Part[] = [
   { name: `partWorst (${PART_WORST_LEAVES} leaves) vertical 32² part [0, 1)`, params: partWorstParams(), geometry: vertical(32), to: 1 },
 ];
 
+/**
+ * The field the parts are timed on: `node` at `root`, the density field's expression by the reference evaluator with its
+ * corner memo, under the same work bound (pinned equal where each cost is read). Since SP6a ruling R14 the vertical
+ * `density` field runs the T stage's compile, which would time the compile instead of the unit.
+ */
+const FIELD = 'node' as const;
+const PATH = 'root';
+
 /** Times evaluateFieldSlice of [0, to): cold (fresh context) and, for vertical planes, warm (the same part again). */
 function timePart(part: Part): { cold: number; warm: number } {
   const ctx = fresh(part.params);
-  const req = { geometry: part.geometry, field: 'density' as const, path: '', from: 0, to: part.to };
+  const req = { geometry: part.geometry, field: FIELD, path: PATH, from: 0, to: part.to };
   let t = now();
   evaluateFieldSlice(ctx, req, NEVER);
   const cold = now() - t;
@@ -123,12 +135,14 @@ describe('a slide fan-out at the knot cap stays within the part budget (SP3d fin
     const p = slideFanParams(2000, 64);
     expect(validateParamTrees(p)).toEqual([]);
     const geometry = vertical(128);
+    // Timed on the node root, by the reference (FIELD): the cost the density field's slice is planned with.
+    expect(sliceCostOf(p, FIELD, PATH, 'vertical', 128)).toBe(sliceCostOf(p, 'density', '', 'vertical', 128));
     const plan = planFieldSlice(128, sliceCostOf(p, 'density', '', 'vertical', 128), 6, REQUEST_BUDGET);
     if (plan.refused) throw new Error(`refused, limit ${plan.limit}`);
     const widest = plan.ranges.reduce((a, r) => (r[1] - r[0] > a[1] - a[0] ? r : a));
     const ctx = fresh(p);
     const t = now();
-    evaluateFieldSlice(ctx, { geometry, field: 'density', path: '', from: widest[0], to: widest[1] }, NEVER);
+    evaluateFieldSlice(ctx, { geometry, field: FIELD, path: PATH, from: widest[0], to: widest[1] }, NEVER);
     const ms = now() - t;
     console.log(`MEASUREMENT: slide fan-out (2,000 refs, 64 knots): part [${widest[0]}, ${widest[1]}) of ${plan.ranges.length}, ${ms.toFixed(1)} ms`);
     expect(ms).toBeLessThanOrEqual(PART_P50_MAX_MS);
@@ -143,7 +157,9 @@ describe.runIf(CALIBRATE)('calibration of the work unit and the acquisition cost
     for (const part of PARTS) {
       const runs = Array.from({ length: RUNS }, () => timePart(part));
       const g = part.geometry;
-      const columnCost = sliceCostOf(part.params, 'density', '', g.plane, g.n, g.plane === 'horizontal' ? g.extent : undefined);
+      const extent = g.plane === 'horizontal' ? g.extent : undefined;
+      const columnCost = sliceCostOf(part.params, FIELD, PATH, g.plane, g.n, extent);
+      expect(columnCost, `${part.name}: the node root costs what the density field costs`).toBe(sliceCostOf(part.params, 'density', '', g.plane, g.n, extent));
       const cold = p50(runs.map((r) => r.cold));
       partP50[part.name] = cold;
       lines.push(`${part.name}: ${part.to} × ${columnCost} = ${part.to * columnCost} units (${((100 * part.to * columnCost) / PART_BUDGET).toFixed(1)} % of PART_BUDGET), cold p50 ${cold.toFixed(1)} ms (min ${Math.min(...runs.map((r) => r.cold)).toFixed(1)}, max ${Math.max(...runs.map((r) => r.cold)).toFixed(1)})`);

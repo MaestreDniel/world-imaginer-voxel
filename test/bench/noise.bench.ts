@@ -262,10 +262,13 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b and SP5c k
   // slice.partWorst: one part at PART_BUDGET — one 32-sample vertical column of the interpolated add of
   // PART_WORST_LEAVES 16-octave double `noise detail` leaves (Task 19's calibration tree; 330 leaves under SP6a §7.4's
   // memo-aware bound, 253 before) — below the request check (planFieldSlice refuses the whole slice; the handler's part
-  // bound accepts this part).
+  // bound accepts this part). Since SP6a ruling R14 the vertical `density` field runs the T stage's compile (such a part
+  // takes about 2 ms), so the part is measured on the `node` field at `root`: the same expression, by the reference with
+  // its corner memo, under the same work bound (pinned equal), which keeps the row on the work unit of SP3d §5.2.
   const worst = partWorstParams();
-  const wSpec: FieldSliceSpec = { ...vSpec, n: 32 };
-  const wCost = sliceCostOf(worst, 'density', '', 'vertical', 32);
+  const wSpec: FieldSliceSpec = { ...vSpec, n: 32, field: 'node', path: 'root' };
+  const wCost = sliceCostOf(worst, wSpec.field, wSpec.path, 'vertical', 32);
+  expect(wCost, 'slice.partWorst: the node root costs what the density field costs').toBe(sliceCostOf(worst, 'density', '', 'vertical', 32));
   expect(wCost, 'slice.partWorst: one sample column within PART_BUDGET').toBeLessThanOrEqual(PART_BUDGET);
   expect(planFieldSlice(32, wCost, 1, REQUEST_BUDGET).refused, 'slice.partWorst: the whole slice is refused').toBe(true);
   const wRun = await measure('slice.partWorst', 1, () => { sink += slice(worst, wSpec, [[0, 1]]); }, 9);
