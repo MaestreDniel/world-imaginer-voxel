@@ -18,7 +18,11 @@
  *
  * Fields (§4.1): `density` (the resolved tree's root) and `node` (§3.4's evaluated expression of a density node,
  * `resolveDensityNode`) by the reference evaluator, on both planes, with one corner memo per part (SP6a spec §7.4: each
- * interpolated node's child and each def evaluated once per corner of a column the part reads; bit-identical); `blocks` (the T stage's state and fluid, read from
+ * interpolated node's child and each def evaluated once per corner of a column the part reads; bit-identical), except
+ * `density` on a vertical plane, which the T stage's own compile (`surfaceContextOf(ctx).density`, the same resolved
+ * tree on the same full ColumnSamples) evaluates: its closures equal the reference bit for bit, NaN and −0 included
+ * (DT2's compiledReference, the compile fuzz, `fieldSlice.test.ts` over the bench's plane and random trees; SP6a
+ * ruling R14), and its corner cache keeps each corner of the current chunk column once; `blocks` (the T stage's state and fluid, read from
  * an injected T-column source, since gen cannot reach the worker's store) and `rule` (1 when the voxel's rule path
  * passes through the selected rule, or the selected condition holds there; 0 otherwise; `SLICE_RULE_NA` on voxels the
  * rules never evaluate) on vertical planes only. A part covers the sample columns [from, to) and holds each sample
@@ -408,6 +412,26 @@ export function evaluateFieldSlice(ctx: GenContext, req: FieldSliceRequest, stop
     else xs[k] = horizontalCoord(g.cx, g.extent, k, n);
   }
   const sc = SURFACE_CONTEXT(ctx);
+
+  if (field === 'density' && g.plane === 'vertical') {
+    // The stage's own compile (SP6a ruling R14): bit-identical to the reference (the module header), with the column's
+    // corners kept by the compile, which makes each sample column's chunk column current (columnFn and positionFn run
+    // once per chunk column the part crosses).
+    const dc = sc.density;
+    const c = dc.compiled;
+    const values = new Float64Array(size);
+    for (let col = from; col < to; col++) {
+      const [x, , z] = sliceSampleVoxel(g, col, 0);
+      dc.column(x >> 4, z >> 4);
+      const lx = x & 15, lz = z & 15;
+      const base = (col - from) * n;
+      for (let k = 0; k < n; k++) {
+        if (stop()) return null;
+        values[base + k] = c.voxelFn(lx, ys[k]!, lz);
+      }
+    }
+    return { field, values, fluid: null };
+  }
 
   if (field === 'density' || field === 'node') {
     const { ref, sampling } = field === 'density' ? densityEntry(ctx) : nodeEntry(ctx, path);

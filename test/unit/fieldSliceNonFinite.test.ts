@@ -3,8 +3,8 @@ import { evaluateFieldSlice, probeField, sliceSampleVoxel, type SliceGeometry } 
 import { segmentPointAt } from '../../src/metrics/crossSection';
 import { ctxFor } from '../harness/gen';
 
-// A valid tree never evaluates to NaN or ±∞ (SP3d spec §1.9), so the reference is wrapped to return them: the slice and
-// the probe must hand such values on unchanged (§3.6 shows NaN, +∞ and −∞; §5.3's reply guard accepts any number).
+// A valid tree never evaluates to NaN or ±∞ (SP3d spec §1.9), so the reference (and the compile, below) is wrapped to
+// return them: the slice and the probe must hand such values on unchanged (§3.6 shows NaN, +∞ and −∞; §5.3's reply guard accepts any number).
 vi.mock('../../src/gen/density/reference', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../src/gen/density/reference')>();
   const odd = (x: number, y: number, z: number): number | null => {
@@ -16,6 +16,28 @@ vi.mock('../../src/gen/density/reference', async (importOriginal) => {
     createDensityReference: (...args: Parameters<typeof real.createDensityReference>) => {
       const ref = real.createDensityReference(...args);
       return { ...ref, voxel: (s, x, y, z, e) => odd(x, y, z) ?? ref.voxel(s, x, y, z, e) } satisfies typeof ref;
+    },
+  };
+});
+
+// The vertical density slice evaluates with the stage's compile since SP6a ruling R14 (bit-identical to the reference):
+// its voxelFn is wrapped the same way, at the voxel's world position (the column of its last columnFn).
+vi.mock('../../src/gen/density/compile', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/gen/density/compile')>();
+  const odd = (x: number, y: number, z: number): number | null => {
+    const k = (Math.imul(x ^ Math.imul(z, 0x27d4eb2f), 0x9e3779b1) ^ Math.imul(y, 0x85ebca77)) >>> 30;
+    return k === 0 ? Number.NaN : k === 1 ? Number.POSITIVE_INFINITY : k === 2 ? Number.NEGATIVE_INFINITY : null;
+  };
+  return {
+    ...real,
+    compileDensity: (...args: Parameters<typeof real.compileDensity>) => {
+      const c = real.compileDensity(...args);
+      let cx = 0, cz = 0;
+      return {
+        ...c,
+        columnFn: (s) => { cx = s.cx; cz = s.cz; c.columnFn(s); },
+        voxelFn: (lx, y, lz) => odd(16 * cx + lx, y, 16 * cz + lz) ?? c.voxelFn(lx, y, lz),
+      } satisfies typeof c;
     },
   };
 });

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { DENSITY_COLUMN_COST_MAX, SLICE_RULE_NA } from '../../src/core/constants';
 import type { GenContext } from '../../src/gen/context';
-import { createDensityReference } from '../../src/gen/density/reference';
+import { createCornerMemo, createDensityReference } from '../../src/gen/density/reference';
 import { probe } from '../../src/gen/density/probe';
 import { resolveDensity } from '../../src/gen/density/source';
 import { densityColumnCost } from '../../src/gen/inspect/cost';
@@ -19,6 +19,16 @@ import { fillColumnT } from '../../src/metrics/region';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { createStore } from '../../src/world/store/store';
 import { ctxFor, paramsWith } from '../harness/gen';
+import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
+import { DEFAULTS } from '../../src/core/params/defaults';
+import { applyPatch } from '../../src/core/params/kit';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { SCHEMA } from '../../src/core/params/schema';
+import { seedFromInput } from '../../src/core/seed';
+import { createGenContext } from '../../src/gen/context';
+import { randomDensityExpr, SCHEMA_DENSITY_NOISES } from '../harness/densityFuzz';
+import { testRng } from '../harness/stats';
+import { mutateTree } from '../harness/treeMutator';
 import { densityTree, heavyDetailPatch, terrainMuted } from './fixtures/editedTrees';
 
 type Tree = Record<string, any>;
@@ -405,5 +415,53 @@ describe('DensityReference memos (SP3d spec §5.1, §5.3)', () => {
     const s = surfaceContextOf(ctx).density.columns.get(0, 0);
     expect(nodeReferenceOf(ctx, 'root.b').voxel(s, 3, 200, 4)).toBe(-10);
     expect(nodeReferenceOf(ctx, 'root.b.x').voxel(s, 3, 200, 4)).toBe(-10);
+  });
+});
+
+describe('evaluateFieldSlice: the vertical density slice on the stage\'s compile (SP6a ruling R14)', () => {
+  /** Every sample of the whole slice by the reference with one corner memo (the evaluator before R14), bit for bit. */
+  function sameAsReference(ctx: GenContext, g: SliceGeometry, what: string): number {
+    const r = run(ctx, g, 'density');
+    const ref = densityReferenceOf(ctx);
+    const columns = surfaceContextOf(ctx).density.columns;
+    const memo = createCornerMemo();
+    let solid = 0;
+    for (const { i, x, y, z } of samples(g)) {
+      const want = ref.voxel(columns.get(x >> 4, z >> 4), x, y, z, undefined, memo);
+      if (!Object.is(r.values[i], want)) throw new Error(`${what} (${x}, ${y}, ${z}): slice ${r.values[i]} reference ${want}`);
+      if (want > 0) solid++;
+    }
+    return solid;
+  }
+
+  test('the slice makes the stage\'s compile current on the chunk columns it crosses', () => {
+    const ctx = ctxFor('42');
+    const g = vertical(MOUNTAIN);
+    const [x, , z] = sliceSampleVoxel(g, 31, 0);
+    run(ctx, g, 'density', '', 30, 32);
+    expect(surfaceContextOf(ctx).density.compiled.hasPositions(x >> 4, z >> 4)).toBe(true);
+  });
+
+  test.each([['default', DEFAULTS], ['amplified', resolveProfile('amplified')], ['floating_islands', resolveProfile('floating_islands')]] as const)(
+    'the bench\'s plane (the mountain line at n 128), %s: every value equals the reference\'s, bit for bit', (name, params) => {
+      const solid = sameAsReference(createGenContext(seedFromInput('42'), params), vertical(MOUNTAIN, 128), name);
+      expect(solid).toBeGreaterThan(1000);
+    });
+
+  test('random trees (the default tree mutated, and fuzz trees over the schema noises): every value equals the reference\'s', () => {
+    const next = testRng(1415);
+    let trees = 0, mutated = 0;
+    for (let i = 0; i < 200 && trees < 16; i++) {
+      const fuzz = i % 2 === 0;
+      const tree = fuzz ? randomDensityExpr(next, { noises: SCHEMA_DENSITY_NOISES, negativeZero: false }) : mutateTree(next, DEFAULT_DENSITY_TREE, 'density', { cls: 'preserving', count: 2 }).value;
+      const p = applyPatch(SCHEMA, DEFAULTS, { density: { defs: tree as never } });
+      if (!p.ok || validateParamTrees(p.value).length > 0) continue;
+      const g = vertical(trees % 2 === 0 ? MOUNTAIN : COAST, 32);
+      sameAsReference(createGenContext(seedFromInput('42'), p.value), g, `tree ${i} ${JSON.stringify(tree).slice(0, 200)}`);
+      trees++;
+      if (!fuzz) mutated++;
+    }
+    expect(trees).toBe(16);
+    expect(mutated).toBeGreaterThan(3);
   });
 });
