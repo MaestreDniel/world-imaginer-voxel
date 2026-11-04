@@ -128,17 +128,21 @@ describe('a configure stops an in-flight fieldSlice part within 50 ms (SP3d spec
   // A part as large as the work bound allows: the default tree's 128² vertical part of k = 30 sample columns under the
   // corner memo's bound (SP6a §7.4, Task 13: 8,161,920 units of 272,064 each since D25's lever 5, 97.3 % of PART_BUDGET
   // (8,232,480 of 274,416, 98 %, before it); 3 of 2,278,784 without the memo, at Tasks 9-12; 78 of 106,240 before SP6a),
-  // and partWorst's one 32-sample column (330 leaves: 8,376,324 units, 99.9 %; one sample ≈ 2 ms).
+  // and partWorst's one 32-sample column (330 leaves: 8,376,324 units, 99.9 %; one sample ≈ 2 ms). Since SP6a ruling R14
+  // the vertical `density` field runs the T stage's compile (such a part takes about 26 ms and 2 ms), so the stop is
+  // measured on the `node` field at `root`: the same expression, by the reference with its memo, under the same bound.
   const CASES: Array<[string, Params, FieldSliceSpec, number, number]> = [
-    ['the default tree, a 128² vertical part of 30 sample columns', DEFAULTS, vReq(MOUNTAIN, 'density', '', 128), 30, 0.97],
-    ['partWorst\'s tree at the part bound, one 32-sample column', partWorstParams(), vReq(MOUNTAIN, 'density', '', 32), 1, 0.99],
+    ['the default tree, a 128² vertical part of 30 sample columns', DEFAULTS, vReq(MOUNTAIN, 'node', 'root', 128), 30, 0.97],
+    ['partWorst\'s tree at the part bound, one 32-sample column', partWorstParams(), vReq(MOUNTAIN, 'node', 'root', 32), 1, 0.99],
   ];
 
   test.each(CASES)('%s: ABORTED within 50 ms of Atomics.store; the next epoch\'s part equals the in-process evaluation', { retry: 2, timeout: 120_000 }, async (_name, params, req, to, fill) => {
-    expect(sliceCostOf(params, 'density', '', 'vertical', req.n) * to).toBeLessThanOrEqual(PART_BUDGET);
+    // The node `root` costs what the density field costs (the same expression).
+    expect(sliceCostOf(params, req.field, req.path, 'vertical', req.n)).toBe(sliceCostOf(params, 'density', '', 'vertical', req.n));
+    expect(sliceCostOf(params, req.field, req.path, 'vertical', req.n) * to).toBeLessThanOrEqual(PART_BUDGET);
     // The largest part the bound admits: one sample column more exceeds it.
-    expect(sliceCostOf(params, 'density', '', 'vertical', req.n) * (to + 1)).toBeGreaterThan(PART_BUDGET);
-    expect(sliceCostOf(params, 'density', '', 'vertical', req.n) * to).toBeGreaterThan(PART_BUDGET * fill);
+    expect(sliceCostOf(params, req.field, req.path, 'vertical', req.n) * (to + 1)).toBeGreaterThan(PART_BUDGET);
+    expect(sliceCostOf(params, req.field, req.path, 'vertical', req.n) * to).toBeGreaterThan(PART_BUDGET * fill);
     const cell = new Int32Array(new SharedArrayBuffer(16));
     const w = start(stamped);
     Atomics.store(cell, 0, 1);
@@ -158,7 +162,7 @@ describe('a configure stops an in-flight fieldSlice part within 50 ms (SP3d spec
 
     expect((await ask(w, configure(2, params, cell.buffer)))['type']).toBe('ready');
     const next = await ask(w, part(2, 2));
-    expect(next).toMatchObject({ type: 'fieldSliceResult', jobId: 2, epoch: 2, n: req.n, field: 'density', from: 0, to });
+    expect(next).toMatchObject({ type: 'fieldSliceResult', jobId: 2, epoch: 2, n: req.n, field: req.field, from: 0, to });
     expect(Buffer.from(next['values'] as ArrayBuffer).equals(bytes(inProcess(params, req, 0, to).values))).toBe(true);
   });
 
