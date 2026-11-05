@@ -4,9 +4,14 @@
  * - Density phase: the column's ColumnSample, then `fillDensityColumn` (columnFn, positionFn, then the 48 cell layers
  *   bottom up with bounds and early-outs) into a column-wide solidity scratch; `stop()` is polled before every 8 cell
  *   layers (6 polls). No section is written in this phase: water needs the whole column's `top`.
- * - The cave tag (SP6a spec §3.1-§3.2): `tagColumn` right after the fill, from its solidity and its per-cell record of
- *   the cells whose corners (or voxels) it evaluated, through the compiled tap readers, into a column-wide tag scratch
- *   (the noise kinds and 9; 0 for rock, sky and surface air).
+ * - The carve (SP6a spec §2.4, §3.1): each position's density top from the fill's solidity (`densityTopColumn`), a
+ *   `stop()` poll (the 7th), then `carveColumn` over the carver window's paths (`carverCacheOf(ctx)`): the voxels it
+ *   carves become air in the solidity scratch and take their carver kind in the tag scratch (§3.2 step 4).
+ * - The cave tag (SP6a spec §3.1-§3.2): `tagColumn` right after the carve, from the fill's per-cell record of the cells
+ *   whose corners (or voxels) it evaluated, through the compiled tap readers, into the tag scratch at the density air
+ *   the carve did not tag (the noise kinds and 9; 0 for rock, sky and surface air).
+ * - Water v0, the biomes and the surface pass see the carved solidity, so the scan skins the carved column: a ravine
+ *   floor open to the sky is the sky run (the biome's top), a cave floor a lower run (stone or deepslate, never grass).
  * - Water v0: `top` is the y of the highest solid voxel per position (−64 when there is none above bedrock); air with
  *   `top − 12 < y ≤ surfaceWaterLevel` (nearest quart corner, as SP3a) becomes a water source, recorded in a
  *   column-wide water scratch. Air under an overhang near the water line fills; deeper enclosed air stays dry
@@ -14,7 +19,7 @@
  *   With `islands.enabled` (SP3e spec §3.5) the fill's base skips island runs (bottom voxel ≥ ISLAND_RUN_MIN_BOTTOM,
  *   181), so the sea under a floating island fills as if the island were not there; `top` is unchanged.
  * - The per-block surface biome (`readBiome`), computed once into a 256-entry buffer for the surface pass and aux A.
- * - Surface pass (SP3c §3, `surfacePass`): after a `stop()` poll (the 7th), the whole-column scan and the compiled
+ * - Surface pass (SP3c §3, `surfacePass`): after a `stop()` poll (the 8th), the whole-column scan and the compiled
  *   rules (fast path included) give every solid voxel at y −63 … 319 its final state in a column-wide state scratch.
  * - Fill: y = −64 bedrock; a solid voxel its surface state; anything else air (with its water).
  * - Sections 0 … 23 go to `setProto` in order with their cave tags (each channel uniform or dense), `stop()` before each
@@ -26,13 +31,15 @@
  * The stage uses the SurfaceContext of its GenContext (`surfaceContextOf`, memoised), which holds the DensityContext.
  * Follows the gen determinism rules.
  * `terrainDensityDebug` is a test hook (SP3b §2.3, DT2): the same density phase, recording the bulk-evaluated values.
- * `terrainSurfaceDebug` is another (SP3c §5.2, DT2's `surfaceReference`): the same phases up to the surface pass, which
- * scans into the caller's scan context.
+ * `terrainSurfaceDebug` is another (SP3c §5.2, DT2's `surfaceReference`): the same phases up to the surface pass (the
+ * carve included), which scans into the caller's scan context.
  */
 import { ISLAND_RUN_MIN_BOTTOM, MIN_Y } from '../../core/constants';
 import { WATER_SOURCE } from '../../world/blocks/fluid';
 import { AIR, BEDROCK } from '../../world/blocks/index';
 import type { TerrainWriter } from '../../world/store/api';
+import { carveColumn, densityTopColumn } from '../caves/carve';
+import { carverCacheOf } from '../caves/carverCache';
 import { caveReadersOf, tagColumn } from '../caves/tags';
 import { buildColumnSample, latticeIndex, newColumnSample, readLevel, type ColumnSample } from '../column/columnStage';
 import type { GenContext } from '../context';
@@ -56,6 +63,9 @@ const SURFACE_PASS = surfacePass;
 const SURFACE_BIOMES = fillSurfaceBiomes;
 const READERS = caveReadersOf;
 const TAG_COLUMN = tagColumn;
+const CARVE = carveColumn;
+const DENSITY_TOPS = densityTopColumn;
+const CARVER_CACHE = carverCacheOf;
 
 /** Highest y of the world (MIN_Y + 384 − 1); water tops are clamped to [Y0 − 1, TOP_Y], which changes no comparison. */
 const TOP_Y = Y0 + 383;
@@ -67,6 +77,8 @@ const SAMPLE = NEW_SAMPLE();
 const SOLID = new Uint8Array(98304);
 /** The cave tag per voxel (same index; SP6a spec §3.2): `tagColumn`'s output. */
 const TAG = new Uint8Array(98304);
+/** Per column index `lz·16 + lx`: the density top after the fill, before the carve (`densityTopColumn`, SP6a §2.4). */
+const DENSITY_TOP = new Int16Array(256);
 /** Per cell `(ck·4 + cj)·4 + ci`: 1 where the fill evaluated the cell's corners or voxels (`fillDensityColumn`'s cells). */
 const CELLS = new Uint8Array(768);
 /** Water v0 per voxel (same index): 1 where the stage writes a water source. */
@@ -147,6 +159,16 @@ export function columnWaterV0(
 }
 
 /**
+ * The carve of column (cx, cz) after its fill (SP6a spec §2.4): `TAG` cleared, then `carveColumn` through `ctx`'s path
+ * cache on `SOLID`, with the density tops in `DENSITY_TOP`, writing the carver kinds into `TAG`.
+ */
+function carve(ctx: GenContext, s: ColumnSample, cx: number, cz: number): void {
+  const cache = CARVER_CACHE(ctx);
+  TAG.fill(0);
+  CARVE(cache, cache.params, s, cx, cz, SOLID, DENSITY_TOP, TAG);
+}
+
+/**
  * Writes column (cx, cz)'s proto sections, aux A and aux B through `w`; false (nothing more written) as soon as
  * `stop()` returns true. Never commits: the caller does (`fillColumnT`, `metrics/region.ts`).
  */
@@ -155,9 +177,13 @@ export function terrainStage(ctx: GenContext, cx: number, cz: number, w: Terrain
   const s = BUILD(ctx, cx, cz, SAMPLE);
   const bounds = sc.density.bounds;
   if (!FILL(bounds, s, SOLID, null, null, stop, CELLS)) return false;
+  const islands = ctx.params.islands.enabled;
+  DENSITY_TOPS(SOLID, islands, DENSITY_TOP);
+  if (stop()) return false;
+  carve(ctx, s, cx, cz);
   const c = bounds.compiled;
-  TAG_COLUMN(c, READERS(c), ctx.params.caves.pillars.threshold, SOLID, CELLS, TAG, bounds);
-  columnWaterV0(s, SOLID, TOP, WATER_TOP, WATER_V, ctx.params.islands.enabled);
+  TAG_COLUMN(c, READERS(c), ctx.params.caves.pillars.threshold, SOLID, CELLS, TAG, bounds, true);
+  columnWaterV0(s, SOLID, TOP, WATER_TOP, WATER_V, islands);
   SURFACE_BIOMES(s, ctx, BIOMES);
   if (stop()) return false;
   SURFACE_PASS(sc, s, SOLID, WATER_V, BIOMES, STATE);
@@ -215,7 +241,7 @@ export function terrainDensityDebug(ctx: GenContext, cx: number, cz: number, out
 
 /**
  * Test hook (SP3c spec §5.2, DT2 `surfaceReference`): runs column (cx, cz) exactly as `terrainStage` does up to and
- * including the surface pass (its ColumnSample, the density fill, water v0, the biome buffer, then `surfacePass` on
+ * including the surface pass (its ColumnSample, the density fill, the carve, water v0, the biome buffer, then `surfacePass` on
  * `surfaceContextOf(ctx)`, never stopped), with `scan` as the pass's scan context, and writes no store. Afterwards
  * `scan` holds the stage's scan of the column, on which the stage's compiled tree and the reference evaluator can be
  * compared voxel by voxel. Returns the pass's evaluated-voxel count.
@@ -224,6 +250,8 @@ export function terrainSurfaceDebug(ctx: GenContext, cx: number, cz: number, sca
   const sc = SURFACE_CONTEXT(ctx);
   const s = BUILD(ctx, cx, cz, SAMPLE);
   FILL(sc.density.bounds, s, SOLID, null, null, NEVER);
+  DENSITY_TOPS(SOLID, ctx.params.islands.enabled, DENSITY_TOP);
+  carve(ctx, s, cx, cz);
   columnWaterV0(s, SOLID, TOP, WATER_TOP, WATER_V, ctx.params.islands.enabled);
   SURFACE_BIOMES(s, ctx, BIOMES);
   return SURFACE_PASS(sc, s, SOLID, WATER_V, BIOMES, STATE, scan);

@@ -65,10 +65,11 @@ describe('panel tree', () => {
   test('SP6a spec §4 (D9): the Caves section, last, with its sub-sections in the spec\'s order and sizes first', () => {
     const caves = panelTree().sections.at(-1)!;
     expect([caves.path, caves.label, caves.controls]).toEqual(['caves', 'Caves', []]);
-    // Tasks 6 and 7's sub-groups (the carvers join before Limits).
+    // Tasks 6 and 7's sub-groups, the carvers' (Task 27) before Limits.
     expect(caves.sections.map((s) => [s.path, s.label])).toEqual([
       ['caves.cheese', 'Cheese'], ['caves.spaghetti3d', 'Spaghetti 3D'], ['caves.spaghetti2d', 'Spaghetti 2D'], ['caves.noodles', 'Noodles'],
-      ['caves.pillars', 'Pillars'], ['caves.entrances', 'Entrances'], ['caves.limits', 'Limits'], ['caves.noises', 'Cave noises'],
+      ['caves.pillars', 'Pillars'], ['caves.entrances', 'Entrances'], ['caves.worms', 'Worms'], ['caves.undergroundWorms', 'Underground worms'],
+      ['caves.ravines', 'Ravines'], ['caves.limits', 'Limits'], ['caves.noises', 'Cave noises'],
     ]);
     // Each family's depth band (minY, maxY; Task 8) after its sizes.
     expect(caves.sections[0]!.controls.map((c) => c.path)).toEqual(['caves.cheese.offset', 'caves.cheese.regional', 'caves.cheese.layerAmp', 'caves.cheese.roofDepth', 'caves.cheese.minY', 'caves.cheese.maxY']);
@@ -80,7 +81,16 @@ describe('panel tree', () => {
     expect(s2.sections.map((s) => [s.path, s.label, s.controls.map((c) => c.path.split('.').at(-1))])).toEqual([['caves.spaghetti2d.scales', 'Scales', ['s0', 's1', 's2', 's3', 's4']]]);
     expect(caves.sections[3]!.controls.map((c) => c.path)).toEqual(['caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional', 'caves.noodles.minY', 'caves.noodles.maxY']);
     expect(caves.sections[5]!.controls.map((c) => c.path)).toEqual(['caves.entrances.offset', 'caves.entrances.threshold', 'caves.entrances.minY', 'caves.entrances.maxY']);
-    expect(caves.sections[6]!.controls.map((c) => c.path)).toEqual(['caves.limits.surfaceDepth', 'caves.limits.waterDepth', 'caves.limits.bandSpan', 'caves.limits.capTop']);
+    // The worms' sizes first, then their chances, rooms and starts, the drift constants as a sub-section (Task 27).
+    const worms = caves.sections[6]!;
+    expect(worms.controls.map((c) => c.path.split('.').at(-1))).toEqual([
+      'chance', 'length', 'lengthVar', 'radiusMin', 'radiusMax', 'vRatioMin', 'vRatioMax', 'floorMin', 'floorMax', 'branchChance',
+      'roomChance', 'roomYScaleMin', 'roomYScaleMax', 'startYMin', 'startYMax',
+    ]);
+    expect(worms.sections.map((s) => [s.path, s.label, s.controls.length])).toEqual([['caves.worms.shape', 'Shape', 7]]);
+    expect(caves.sections[7]!.controls.map((c) => c.path.split('.').at(-1))).toEqual(['chance', 'startYMin', 'startYMax', 'maxY']);
+    expect(caves.sections[8]!.controls.length).toBe(10);
+    expect(caves.sections[9]!.controls.map((c) => c.path)).toEqual(['caves.limits.surfaceDepth', 'caves.limits.waterDepth', 'caves.limits.bandSpan', 'caves.limits.capTop']);
     for (const c of controlsOf(caves)) expect([c.path, c.scope]).toEqual([c.path, 'terrain']);
   });
 
@@ -119,6 +129,8 @@ describe('panel tree', () => {
       // The spaghetti band scales, 1/16 … 16 (SP6a Task 7).
       'caves.spaghetti2d.scales.s0', 'caves.spaghetti2d.scales.s1', 'caves.spaghetti2d.scales.s2', 'caves.spaghetti2d.scales.s3', 'caves.spaghetti2d.scales.s4',
       'caves.spaghetti3d.scales.s0', 'caves.spaghetti3d.scales.s1', 'caves.spaghetti3d.scales.s2', 'caves.spaghetti3d.scales.s3',
+      // The worms' radius and height factors, 0.1 … 2 and 0.1 … 3 (SP6a Task 27).
+      'caves.worms.radiusMax', 'caves.worms.radiusMin', 'caves.worms.vRatioMax', 'caves.worms.vRatioMin',
       'climate.C', 'climate.E', 'climate.H', 'climate.R', 'climate.T', 'climate.W', 'climate.scaleMul',
       'climate.warp.C.noise', 'climate.warp.R.noise', 'climate.warp.shift.noise',
       'density.noises.detail', 'density.noises.islands', 'density.noises.jag', 'density.noises.overhang',
@@ -365,8 +377,9 @@ describe('panel controls (Task 17): kinds, slider positions, typed values, issue
     const linear = [...sliders(), ...NOISE_NUMBER_FIELDS.map((f) => noiseFieldControl(control('climate.C'), f))].filter((c) => c.scale === 'linear');
     // 34 before SP3c, + the 7 number and int leaves of the surface group, + islands.lo and islands.hi (SP3e), + SP6a's 8
     // caves number leaves (Task 6), + its 8 linear spaghetti and noodle leaves (Task 7; the band scales are log), + the 10
-    // band ends minY and maxY (Task 8; the band span 1 … 32 is log), + capTop and waterDepth (Task 9).
-    expect(linear.length).toBe(71);
+    // band ends minY and maxY (Task 8; the band span 1 … 32 is log), + capTop and waterDepth (Task 9), + 32 of the 36
+    // carver leaves (Task 27; the worms' radius and height factors are log).
+    expect(linear.length).toBe(103);
     for (const c of linear) {
       const n = sliderPositions(c);
       expect(n).toBe(Math.round((c.max! - c.min!) / c.step!));

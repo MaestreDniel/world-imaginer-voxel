@@ -29,7 +29,7 @@ import { surfaceEst3 } from '../../src/gen/column/surfaceEstimate';
 import { createGenContext, type GenContext } from '../../src/gen/context';
 import { cornerValueIndex } from '../../src/gen/density/compile';
 import { createDensityContext } from '../../src/gen/density/context';
-import { probe } from '../../src/gen/density/probe';
+import { probe, solidAt } from '../../src/gen/density/probe';
 import { createDensityReference, interpolatedNodes } from '../../src/gen/density/reference';
 import { resolveDensity } from '../../src/gen/density/source';
 import { densityColumnCost, structuralCost, workCost } from '../../src/gen/inspect/cost';
@@ -313,7 +313,8 @@ describe('amplified on real columns (seed 42; SP3e spec §1.2)', () => {
         const value = probe(dc, x, y, z);
         const block = view.block(lx, y, lz);
         voxels++;
-        expect(value > 0, `(${x}, ${y}, ${z}) probe ${value}, block ${block}`).toBe(block !== AIR);
+        // The stored solidity is solidAt's: density > 0 and not carved (SP6a spec §3.4).
+        expect(solidAt(dc, x, y, z), `(${x}, ${y}, ${z}) probe ${value}, block ${block}`).toBe(block !== AIR);
         if (y >= 296 && block !== AIR) solidHigh++;
         if (mask[i] === 1) {
           masked++;

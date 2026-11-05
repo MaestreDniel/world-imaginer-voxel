@@ -44,16 +44,16 @@ function windowViews(p: Sp3ePreset, store: VoxelStore): ColumnView[] {
   return out;
 }
 
-test('5 unique SP3e keys, in the spec\'s order, chained into allGoldenKeys before SP6a\'s: 60 goldens', () => {
+test('5 unique SP3e keys, in the spec\'s order, chained into allGoldenKeys before SP6a\'s: 61 goldens', () => {
   const keys = sp3eGoldenKeys();
   expect(keys).toEqual([
     'sp3e.region.T.amplified', 'sp3e.region.T.archipelago', 'sp3e.region.T.floating_islands',
     'sp3e.column.point.archipelago', 'sp3e.column.point.floating_islands',
   ]);
-  expect(allGoldenKeys().slice(-6, -1)).toEqual(keys);
-  expect(allGoldenKeys().slice(-8, -6)).toEqual(['sp3c.registry', 'sp3c.surface.ops']);
-  expect(allGoldenKeys()).toHaveLength(60);
-  expect(new Set(allGoldenKeys()).size).toBe(60);
+  expect(allGoldenKeys().slice(-7, -2)).toEqual(keys);
+  expect(allGoldenKeys().slice(-9, -7)).toEqual(['sp3c.registry', 'sp3c.surface.ops']);
+  expect(allGoldenKeys()).toHaveLength(61);
+  expect(new Set(allGoldenKeys()).size).toBe(61);
 });
 
 test('unknown SP3e keys throw, directly and through computeAnyGolden', () => {

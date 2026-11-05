@@ -1,7 +1,7 @@
 /**
  * SP6a golden digests (SP6a spec §12.3, D28), chained last into `allGoldenKeys`/`computeAnyGolden` (`sp2aGoldens.ts`),
  * so the unit tests, `?selftest=1` and `test/tools/goldensJsc.ts` all check them. Push A adds `sp6a.density.ops`; push B
- * appends `sp6a.carver.paths` and `sp6a.region.T.caves`.
+ * appends `sp6a.carver.paths` (Task 27) and `sp6a.region.T.caves` (Task 39).
  * - `sp6a.density.ops`: the `noiseScaled` op (D18, spec §1.5) at fixed points, world seed '42', default profile. The
  *   fixture is a density source tree that uses `noiseScaled` inside and outside `interpolated`, with literal scales and a
  *   `{param}` scale (`density.noises.detail.clampSigma`, static range [1, 8]: before the cave parameters only the
@@ -10,12 +10,19 @@
  *   each in `cornerValueIndex` order: i fastest, then j, then k), then the voxel values (compiled, no early-outs) at 32
  *   points drawn from `Xoshiro128(fnv1a32('sp6a.density.ops'))` as lx, lz (`nextU32() & 15`) and y
  *   (−64 + `nextU32() % 384`). Every value is hashed as its IEEE double bits (`hashF64`, so −0 ≠ +0).
+ * - `sp6a.carver.paths` (push B, Task 27): the carvers' paths (spec §2.1-§2.3, D21, D35), world seed '42', the default
+ *   profile's carver leaves (`carverParamsOf`). Per kind, in the order worm, ravine, underground worm, the first 64
+ *   source chunks whose roll passes, scanning a square spiral of chunks from (0, 0) (ring r ≥ 1: from (−r, −r) along
+ *   sz = −r, then sx = r, sz = r, sx = −r, as `liveness.ts`' lake-cell spiral); per path, in that order: sx, sz, its
+ *   ellipsoid count, its box (6 values), its ellipsoids (6 values each: x, y, z, rh, rv, floor) and, for a ravine, its
+ *   384 f² values. Every value is hashed as its IEEE double bits in one array (`hashF64`).
  * Follows the core determinism rules (in `DET_FILES`, arch-tested). Every value is hex64.
  */
 import { fnv1a32, hashF64, hex64 } from '../core/hash';
 import { resolveProfile } from '../core/params/profiles';
 import { Xoshiro128 } from '../core/rng';
 import { seedFromInput } from '../core/seed';
+import { carverParamsOf, carverPath, type CarverKind, type CarverPath } from '../gen/caves/carvers';
 import type { SampleField } from '../gen/column/columnStage';
 import { createGenContext } from '../gen/context';
 import type { GenContext as GenContextT } from '../gen/context';
@@ -37,6 +44,8 @@ const CORNER_INDEX = cornerValueIndex;
 const CREATE_DC = createDensityContext;
 const PROBE = probe;
 const RESOLVE_DENSITY = resolveDensity;
+const CARVER_PATH = carverPath;
+const CARVER_PARAMS_OF = carverParamsOf;
 
 const CORNERS = 1225;
 /** The column the ops fixture is evaluated over. */
@@ -100,11 +109,56 @@ export function densityScaledValues(): Float64Array {
   return values;
 }
 
+/** The kinds of `sp6a.carver.paths`, in its order. */
+const CARVER_KINDS: readonly CarverKind[] = ['worm', 'ravine', 'undergroundWorm'];
+/** Paths per kind in `sp6a.carver.paths`. */
+const CARVER_SOURCES = 64;
+
+/** Chunks of a square spiral from (0, 0) (ring r ≥ 1: from (−r, −r) along sz = −r, then sx = r, sz = r, sx = −r) until `visit` says stop. */
+function spiral(visit: (sx: number, sz: number) => boolean): void {
+  if (visit(0, 0)) return;
+  for (let r = 1; ; r++) {
+    for (let i = -r; i <= r; i++) if (visit(i, -r)) return;
+    for (let j = 1 - r; j <= r; j++) if (visit(r, j)) return;
+    for (let i = r - 1; i >= -r; i--) if (visit(i, r)) return;
+    for (let j = r - 1; j > -r; j--) if (visit(-r, j)) return;
+  }
+}
+
+/** The 64 fixed sources' paths of `kind` (seed '42', the default profile's carver leaves): the first 64 whose roll passes, in spiral order. */
+export function carverGoldenPaths(kind: CarverKind): CarverPath[] {
+  const ctx = ctx42();
+  const p = CARVER_PARAMS_OF(ctx.params);
+  const out: CarverPath[] = [];
+  spiral((sx, sz) => {
+    const path = CARVER_PATH(ctx.seed, kind, sx, sz, p);
+    if (path !== null) out.push(path);
+    return out.length === CARVER_SOURCES;
+  });
+  return out;
+}
+
+/** `sp6a.carver.paths`' values: per kind (worm, ravine, underground worm), per path, sx, sz, count, box, ellipsoids and f². */
+export function carverPathsValues(): Float64Array {
+  const parts: number[] = [];
+  for (const kind of CARVER_KINDS) {
+    for (const path of carverGoldenPaths(kind)) {
+      parts.push(path.sx, path.sz, path.count);
+      for (let k = 0; k < 6; k++) parts.push(path.box[k]!);
+      for (let k = 0; k < 6 * path.count; k++) parts.push(path.ell[k]!);
+      const ws = path.widthSq;
+      if (ws !== null) for (let k = 0; k < ws.length; k++) parts.push(ws[k]!);
+    }
+  }
+  return Float64Array.from(parts);
+}
+
 export function sp6aGoldenKeys(): string[] {
-  return ['sp6a.density.ops'];
+  return ['sp6a.density.ops', 'sp6a.carver.paths'];
 }
 
 export function computeSp6aGolden(key: string): string {
   if (key === 'sp6a.density.ops') return HEX64(HASH_F64(densityScaledValues()));
+  if (key === 'sp6a.carver.paths') return HEX64(HASH_F64(carverPathsValues()));
   throw new Error(`unknown golden ${key}`);
 }

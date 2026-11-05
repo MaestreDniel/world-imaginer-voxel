@@ -42,6 +42,7 @@ import { detCos, detSin } from '../../core/detMath';
 import { HEIGHT } from '../../core/constants';
 import { deriveSeed, hash2 } from '../../core/hash';
 import { Xoshiro128 } from '../../core/rng';
+import type { Params } from '../../core/params/schema';
 import type { GenContext } from '../context';
 
 const DERIVE = deriveSeed;
@@ -322,4 +323,33 @@ export function carverPath(seed: GenContext['seed'], kind: CarverKind, sx: numbe
   const chance = kind === 'ravine' ? p.ravines.chance : kind === 'undergroundWorm' ? p.undergroundWorms.chance : p.worms.chance;
   if (!(rng.nextFloat() < chance)) return null;
   return kind === 'ravine' ? ravinePath(rng, sx, sz, p) : wormPath(rng, kind, sx, sz, p);
+}
+
+/**
+ * The carver leaves of `p` as the carvers read them (spec §4): `caves.worms.*` with `caves.worms.shape.*`,
+ * `caves.undergroundWorms.*`, `caves.ravines.*` and the `caves.limits.*` leaves of the carve's shrinks (§2.4). A fresh
+ * object of plain numbers, so its fields read no `Params` getter in the carve's loops.
+ */
+export function carverParamsOf(p: Params): CarverParams {
+  const c = p.caves;
+  const w = c.worms, sh = w.shape, u = c.undergroundWorms, r = c.ravines, l = c.limits;
+  return {
+    worms: {
+      chance: w.chance, length: w.length, lengthVar: w.lengthVar, radiusMin: w.radiusMin, radiusMax: w.radiusMax,
+      vRatioMin: w.vRatioMin, vRatioMax: w.vRatioMax, floorMin: w.floorMin, floorMax: w.floorMax,
+      branchChance: w.branchChance, roomChance: w.roomChance, roomYScaleMin: w.roomYScaleMin, roomYScaleMax: w.roomYScaleMax,
+      startYMin: w.startYMin, startYMax: w.startYMax,
+      shape: {
+        pitchKeep: sh.pitchKeep, yawStep: sh.yawStep, pitchStep: sh.pitchStep, yawDriftKeep: sh.yawDriftKeep,
+        yawDriftMul: sh.yawDriftMul, pitchDriftKeep: sh.pitchDriftKeep, pitchDriftMul: sh.pitchDriftMul,
+      },
+    },
+    undergroundWorms: { chance: u.chance, startYMin: u.startYMin, startYMax: u.startYMax, maxY: u.maxY },
+    ravines: {
+      chance: r.chance, lengthMin: r.lengthMin, lengthMax: r.lengthMax, thicknessMax: r.thicknessMax, plateau: r.plateau,
+      yScale: r.yScale, widthSmoothness: r.widthSmoothness, vRotation: r.vRotation, startYMin: r.startYMin,
+      startYMax: r.startYMax,
+    },
+    limits: { waterDepth: l.waterDepth, bandSpan: l.bandSpan, capTop: l.capTop },
+  };
 }

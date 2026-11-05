@@ -54,6 +54,16 @@ describe('the source model (SP3d spec §1.3, §1.4)', () => {
       'caves.spaghetti2d.scales.s4', 'caves.spaghetti2d.minY', 'caves.spaghetti2d.maxY',
       'caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional', 'caves.noodles.minY', 'caves.noodles.maxY',
       'caves.pillars.threshold', 'caves.entrances.offset', 'caves.entrances.threshold', 'caves.entrances.minY', 'caves.entrances.maxY',
+      // Task 27: the carver leaves, between the entrances and the limits.
+      'caves.worms.chance', 'caves.worms.length', 'caves.worms.lengthVar', 'caves.worms.radiusMin', 'caves.worms.radiusMax',
+      'caves.worms.vRatioMin', 'caves.worms.vRatioMax', 'caves.worms.floorMin', 'caves.worms.floorMax',
+      'caves.worms.branchChance', 'caves.worms.roomChance', 'caves.worms.roomYScaleMin', 'caves.worms.roomYScaleMax',
+      'caves.worms.startYMin', 'caves.worms.startYMax',
+      'caves.worms.shape.pitchKeep', 'caves.worms.shape.yawStep', 'caves.worms.shape.pitchStep', 'caves.worms.shape.yawDriftKeep',
+      'caves.worms.shape.yawDriftMul', 'caves.worms.shape.pitchDriftKeep', 'caves.worms.shape.pitchDriftMul',
+      'caves.undergroundWorms.chance', 'caves.undergroundWorms.startYMin', 'caves.undergroundWorms.startYMax', 'caves.undergroundWorms.maxY',
+      'caves.ravines.chance', 'caves.ravines.lengthMin', 'caves.ravines.lengthMax', 'caves.ravines.thicknessMax', 'caves.ravines.plateau',
+      'caves.ravines.yScale', 'caves.ravines.widthSmoothness', 'caves.ravines.vRotation', 'caves.ravines.startYMin', 'caves.ravines.startYMax',
       'caves.limits.surfaceDepth',
       // Task 9: the wet roof's depth.
       'caves.limits.waterDepth', 'caves.limits.bandSpan',

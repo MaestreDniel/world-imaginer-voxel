@@ -24,7 +24,7 @@ import { createGenContext, type GenContext } from '../../src/gen/context';
 import { cornerValueIndex } from '../../src/gen/density/compile';
 import { createDensityContext } from '../../src/gen/density/context';
 import type { Expr } from '../../src/gen/density/expr';
-import { probe } from '../../src/gen/density/probe';
+import { probe, solidAt } from '../../src/gen/density/probe';
 import { createDensityReference, interpolatedNodes } from '../../src/gen/density/reference';
 import { terrainDensityDebug } from '../../src/gen/pipeline/terrainStage';
 import { fillColumnT } from '../../src/metrics/region';
@@ -207,7 +207,9 @@ describe('compiled == reference and probe == bulk on island columns (SP3e spec ย
         const value = probe(dc, x, y, z);
         const block = view.block(lx, y, lz);
         voxels++;
-        expect(value > 0, `(${x}, ${y}, ${z}) probe ${value}, block ${block}`).toBe(block !== AIR);
+        // The stored solidity is solidAt's: density > 0 and not carved (SP6a spec ยง3.4; the 512 uniform voxels reach the
+        // carvers under the sea bed).
+        expect(solidAt(dc, x, y, z), `(${x}, ${y}, ${z}) probe ${value}, block ${block}`).toBe(block !== AIR);
         if (y >= 193 && y <= 263 && block !== AIR) islandVoxels++;
         if (mask[i] === 1) {
           masked++;

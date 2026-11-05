@@ -1,14 +1,17 @@
 /**
  * The cave tag (SP6a spec §3.2, D17, D20): the cave kind T writes per voxel into the store's `cave` channel, a pure
  * function of the voxel (`CAVE_KIND`, `core/constants.ts`). Steps 1-3 here (the noise kinds and 9); step 4, the carver
- * kinds, comes with the carvers.
+ * kinds, is the carve's (`carveColumn` tags the voxels it carves before the tag pass, which skips them; `caveTagAt`
+ * reads it through `carvedAt`).
  * 1. a solid final block is 0; y −64 is always bedrock, so 0;
  * 2. pre-cave solidity is `precave > 0` (T + detailG), else `terrain > 0` without a `precave` tap; with neither tap it is
  *    unknown and density air is 0 (only carver kinds are tagged); air that is not pre-cave solid (sky, surface air) is 0;
  * 3. density air: keep = −1e6 where pillars·(1/16) < `caves.pillars.threshold`, else pillars (−∞ without a `pillars`
  *    tap), caves = max(min(the present E, C, S3, S2), keep); the candidates are those families when caves ≤ 0 and the
  *    noodle when noodle ≤ 0, the lowest value wins, ties in the order E, C, S3, S2, noodle (so pillar rock a noodle opens
- *    is a noodle); density air no candidate explains is 9.
+ *    is a noodle); density air no candidate explains is 9;
+ * 4. a voxel the density left solid and a carver carved: the kind of the first source in the window's order whose
+ *    ellipsoid carved it (worm, ravine or underground worm).
  * The values come through the compiled tap readers (`CompiledDensity.tapReader`) at the voxel registers `atVoxel` sets:
  * a cell the fill evaluated voxel by voxel or decided air after its corners has its corners, and a cell decided air
  * before them is sky wherever the pre-cave tap's interval there is ≤ 0 (its voxels 0 without evaluation); otherwise (a
@@ -31,6 +34,7 @@ import type { CompiledDensity } from '../density/compile';
 import type { DensityContext } from '../density/context';
 import { probe } from '../density/probe';
 import { findTap } from '../density/reference';
+import { carvedAt } from './carve';
 
 const KIND = CAVE_KIND;
 const K_CHEESE: number = KIND.cheese;
@@ -41,6 +45,7 @@ const K_ENTRANCE: number = KIND.entrance;
 const K_OTHER: number = KIND.other;
 const FIND_TAP = findTap;
 const PROBE = probe;
+const CARVED_AT = carvedAt;
 const FINITE = Number.isFinite;
 
 /** The taps of the cell tags, in `cellKind`'s order. */
@@ -190,13 +195,13 @@ function cellKind(iv: Float64Array, nd: Int32Array, th: number): number {
   return -1;
 }
 
-/** Whether cell (ci, ck, cj) holds a density-air voxel above y −64. */
-function hasAir(solid: Uint8Array, ci: number, ck: number, cj: number): boolean {
+/** Whether cell (ci, ck, cj) holds a density-air voxel above y −64: air in `solid` that the carve did not tag in `out`. */
+function hasAir(solid: Uint8Array, out: Uint8Array, ci: number, ck: number, cj: number): boolean {
   const y0 = -64 + 8 * ck;
   for (let y = y0 < -63 ? -63 : y0; y < y0 + 8; y++) {
     for (let lz = 4 * cj; lz < 4 * cj + 4; lz++) {
       const row = ((y + 64) * 16 + lz) * 16 + 4 * ci;
-      if (solid[row] === 0 || solid[row + 1] === 0 || solid[row + 2] === 0 || solid[row + 3] === 0) return true;
+      for (let v = row; v < row + 4; v++) if (solid[v] === 0 && out[v] === 0) return true;
     }
   }
   return false;
@@ -208,18 +213,21 @@ function hasAir(solid: Uint8Array, ci: number, ck: number, cj: number): boolean 
  * or its voxels) are the fill's; `out` (98,304 entries) is cleared, then receives `tagVoxel` at each density-air voxel
  * above y −64 that may be pre-cave solid. A cell the fill decided solid is skipped; a cell decided air before its corners
  * is skipped where the pre-cave tap's interval over it (`bounds.nodeInterval`, the compile's own bounds) is ≤ 0, and
- * otherwise has its corners evaluated first (always so without `bounds`: exact, only slower). Throws a RangeError on
- * other sizes, an Error when `bounds` is not `c`'s.
+ * otherwise has its corners evaluated first (always so without `bounds`: exact, only slower). With `carved` (the T
+ * stage, after `carveColumn`), `solid` is the carved solidity and `out` already holds the carve's tags (§3.2 step 4: a
+ * carver kind exactly at the voxels it carved, 0 elsewhere) and is not cleared: a voxel is density air where it is air
+ * and untagged, and a carved voxel keeps its carver kind. Throws a RangeError on other sizes, an Error when `bounds` is
+ * not `c`'s.
  */
 export function tagColumn(
   c: CompiledDensity, r: CaveReaders, pillarThreshold: number, solid: Uint8Array, cells: Uint8Array, out: Uint8Array,
-  bounds: DensityBounds | null = null,
+  bounds: DensityBounds | null = null, carved = false,
 ): void {
   if (solid.length !== 98304 || out.length !== 98304 || cells.length !== 768) {
     throw new RangeError('tagColumn: solid and out need 98,304 entries, cells 768');
   }
   if (bounds !== null && bounds.compiled !== c) throw new Error('tagColumn: the bounds are not the compiled density\'s');
-  out.fill(0);
+  if (!carved) out.fill(0);
   if (r.precave === null && r.terrain === null) return;
   const res = resolve(c), preNode = res.preNode;
   const slots = c.interpolatedSlotCount > 0;
@@ -231,8 +239,9 @@ export function tagColumn(
       for (let ci = 0; ci < 4; ci++) {
         const cell = (ck * 4 + cj) * 4 + ci;
         if (cells[cell] === 0) {
-          // Decided before its corners: uniformly solid (tag 0), or air.
-          if (solid[((y0 + 64) * 16 + 4 * cj) * 16 + 4 * ci] !== 0) continue;
+          // Decided before its corners: uniformly solid (tag 0, or the carve's), or air.
+          const first = ((y0 + 64) * 16 + 4 * cj) * 16 + 4 * ci;
+          if (solid[first] !== 0 || out[first] !== 0) continue;
           if (bounds !== null && preNode >= 0) {
             bounds.nodeInterval(ci, ck, cj, preNode, IV, 0);
             if (IV[1]! <= 0) continue;
@@ -242,7 +251,7 @@ export function tagColumn(
         let kind = -1;
         if (cellNodes !== null) {
           // A cell decided solid after its corners has nothing to tag.
-          if (!hasAir(solid, ci, ck, cj)) continue;
+          if (!hasAir(solid, out, ci, ck, cj)) continue;
           bounds!.cellIntervalCorners(ci, ck, cj, IV, 0);
           kind = cellKind(bounds!.nodeIntervals, cellNodes, pillarThreshold);
         }
@@ -250,7 +259,7 @@ export function tagColumn(
           for (let lz = 4 * cj; lz < 4 * cj + 4; lz++) {
             const row = ((y + 64) * 16 + lz) * 16;
             for (let lx = 4 * ci; lx < 4 * ci + 4; lx++) {
-              if (solid[row + lx] !== 0) continue;
+              if (solid[row + lx] !== 0 || out[row + lx] !== 0) continue;
               out[row + lx] = kind >= 0 ? kind : tagVoxel(c, r, pillarThreshold, lx, y, lz);
             }
           }
@@ -261,14 +270,15 @@ export function tagColumn(
 }
 
 /**
- * The cave tag of world voxel (x, y, z) (SP6a spec §3.2 steps 1-3, §3.4, D22): 0 at y −64 and where the final density is
- * > 0 (`probe` on `dc`, which makes the column current and readies the voxel's cell corners), else `tagVoxel` with `dc`'s
- * `caves.pillars.threshold`. Equals the T stage's stored tag at every voxel. Integers only, y in −64 … 319, (x, z) in the
- * world window, as `probe` (a RangeError otherwise).
+ * The cave tag of world voxel (x, y, z) (SP6a spec §3.2, §3.4, D22): 0 at y −64; where the final density is > 0 (`probe`
+ * on `dc`, which makes the column current and readies the voxel's cell corners) the carver kind that carved it (step 4,
+ * `carvedAt`; 0 where none did); else `tagVoxel` with `dc`'s `caves.pillars.threshold`. Equals the T stage's stored tag
+ * at every voxel. Integers only, y in −64 … 319, (x, z) in the world window, as `probe` (a RangeError otherwise).
  */
 export function caveTagAt(dc: DensityContext, x: number, y: number, z: number): number {
   const v = PROBE(dc, x, y, z);
-  if (y === -64 || v > 0) return 0;
+  if (y === -64) return 0;
+  if (v > 0) return CARVED_AT(dc, x, y, z);
   const c = dc.compiled;
   return tagVoxel(c, resolve(c).readers, dc.ctx.params.caves.pillars.threshold, x & 15, y, z & 15);
 }

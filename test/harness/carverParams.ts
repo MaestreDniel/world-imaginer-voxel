@@ -1,16 +1,23 @@
 /**
- * The carver parameters as `CarverParams` literals (SP6a spec §2.2, §4), for the carver tests until the carver leaves
- * land in the schema (Task 27, which pins `CARVER_DEFAULTS` equal to `carverParamsOf(DEFAULTS)`):
+ * The carver parameters as `CarverParams` literals (SP6a spec §2.2, §4), mirrors of the schema's carver leaves (Task 27
+ * pins `CARVER_DEFAULTS` equal to `carverParamsOf(DEFAULTS)` and `CARVER_MAXIMA` to `carverParamsOf` of every carver
+ * leaf at its schema maximum, `carverPaths.test.ts`):
  * - `CARVER_DEFAULTS`: spec §4's defaults, with `caves.worms.shape` at §2.2's drift constants;
  * - `CARVER_MAXIMA`: every carver leaf at its static maximum, the end of its range (spec §4; where §4 gives none, the
  *   plan's ranges: `branchChance`, `roomChance` 0 … 1, `roomYScaleMin`/`Max` 0.1 … 0.9, `startYMin`/`Max` −64 … 320,
  *   `ravines.plateau` 0 … 8, `ravines.vRotation` 0 … 0.5, `worms.shape.pitchKeep`, `.yawDriftKeep` and
  *   `.pitchDriftKeep` 0 … 1 and the other four shape leaves 0 … 8 (ruling P17)); `reachOverflow`'s static-maxima case
  *   (Task 25 in `carverPaths.test.ts`, Task 30's C7) runs every path at these;
+ * - `CARVERS_OFF`: a params patch with the three carver chances at 0, so no source passes its roll and T carves
+ *   nothing (the world of the density caves alone);
  * - `carverReachOf` and `carverWindowROf`: spec §2.1's L_max, r_max and window R for given leaves, which
  *   `test/unit/constants.test.ts` applies to `CARVER_MAXIMA` to recompute `CARVER_WINDOW_R`.
  */
+import type { ParamsPatch } from '../../src/core/params/schema';
 import type { CarverParams, WormShape } from '../../src/gen/caves/carvers';
+
+/** The three carver chances at 0: T carves nothing. */
+export const CARVERS_OFF: ParamsPatch = { caves: { worms: { chance: 0 }, undergroundWorms: { chance: 0 }, ravines: { chance: 0 } } };
 
 /** Minecraft's drift (spec §2.2): pitch ·= 0.7; yaw += 0.1·yd; pitch += 0.1·pd; yd = 0.75·yd + …·4; pd = 0.9·pd + …·2. */
 const SHAPE_DEFAULTS: WormShape = {

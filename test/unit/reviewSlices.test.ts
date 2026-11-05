@@ -18,6 +18,7 @@ import {
 import { applyPatch } from '../../src/core/params/kit';
 import type { JsonValue } from '../../src/core/params/json';
 import { SCHEMA, type Params } from '../../src/core/params/schema';
+import { CARVERS_OFF } from '../harness/carverParams';
 import { ctxFor, paramsWith } from '../harness/gen';
 import { cavesMuted } from '../harness/sp5cTrees';
 import { encodePng, VOXEL_COLORS } from '../harness/png';
@@ -31,11 +32,12 @@ import {
 
 const ctx = ctxFor('42');
 /**
- * `p` with its density tree's carving cave taps muted (`cavesMuted`): the terrain SP3c's and SP3e's review slices
- * recorded, before SP6a's caves. The committed assets are those reviews' evidence, so they are checked against it.
+ * `p` with its density tree's carving cave taps muted (`cavesMuted`) and its carvers off (`CARVERS_OFF`, Task 27): the
+ * terrain SP3c's and SP3e's review slices recorded, before SP6a's caves. The committed assets are those reviews'
+ * evidence, so they are checked against it.
  */
 const noCaves = (p: Params): Params => {
-  const r = applyPatch(SCHEMA, p, { density: { defs: cavesMuted(p.density.defs) as JsonValue } });
+  const r = applyPatch(SCHEMA, p, { ...CARVERS_OFF, density: { defs: cavesMuted(p.density.defs) as JsonValue } });
   if (!r.ok) throw new Error(JSON.stringify(r.issues));
   return r.value;
 };

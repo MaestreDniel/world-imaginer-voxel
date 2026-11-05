@@ -163,6 +163,42 @@ Generated from `src/core/params/schema.ts` by `npm run docs:params`; a test fail
 | `caves.entrances.threshold` | number | 0.08 | 0 … 0.5 |  | terrain | Threshold: Width of the entrance tunnels: carved where max(\|E1\|, \|E2\|) is below about this. |
 | `caves.entrances.minY` | int | -64 | -64 … 320 | y | terrain | Lowest y: Entrances narrow below this y over the band span, then close over the next 8 blocks. |
 | `caves.entrances.maxY` | int | 320 | -64 … 320 | y | terrain | Highest y: Entrances narrow above this y over the band span, then close over the next 8 blocks. |
+| `caves.worms.chance` | number | 0.15 | 0 … 1 |  | terrain | Chance: Probability that a chunk starts a worm. |
+| `caves.worms.length` | int | 112 | 32 … 160 | blocks | terrain | Length: Steps of a worm (each moves 1 block), before the length variation. |
+| `caves.worms.lengthVar` | int | 28 | 0 … 64 | blocks | terrain | Length variation: A worm is length − ⌊lengthVar·u⌋ steps long (at least 1). |
+| `caves.worms.radiusMin` | number | 0.7 | 0.1 … 2 |  | terrain | Lowest radius factor: The horizontal radius factor is drawn in radiusMin … radiusMax. |
+| `caves.worms.radiusMax` | number | 1.4 | 0.1 … 2 |  | terrain | Highest radius factor: The horizontal radius factor is drawn in radiusMin … radiusMax. |
+| `caves.worms.vRatioMin` | number | 0.8 | 0.1 … 3 |  | terrain | Lowest height factor: The vertical radius factor is drawn in vRatioMin … vRatioMax. |
+| `caves.worms.vRatioMax` | number | 1.3 | 0.1 … 3 |  | terrain | Highest height factor: The vertical radius factor is drawn in vRatioMin … vRatioMax. |
+| `caves.worms.floorMin` | number | -1 | -1 … 1 |  | terrain | Lowest floor: A worm carves only above its floor, drawn in floorMin … floorMax (in vertical radii from its centre; −1: no floor). |
+| `caves.worms.floorMax` | number | -0.4 | -1 … 1 |  | terrain | Highest floor: A worm carves only above its floor, drawn in floorMin … floorMax (in vertical radii from its centre; −1: no floor). |
+| `caves.worms.branchChance` | number | 0.25 | 0 … 1 |  | terrain | Branch chance: Probability that a thick worm splits into two branches at its midpoint. |
+| `caves.worms.roomChance` | number | 0.25 | 0 … 1 |  | terrain | Room chance: Probability that a worm starts in a room, a wide flat ellipsoid. |
+| `caves.worms.roomYScaleMin` | number | 0.1 | 0.1 … 0.9 |  | terrain | Lowest room height: A room's height over its width is drawn in roomYScaleMin … roomYScaleMax. |
+| `caves.worms.roomYScaleMax` | number | 0.9 | 0.1 … 0.9 |  | terrain | Highest room height: A room's height over its width is drawn in roomYScaleMin … roomYScaleMax. |
+| `caves.worms.startYMin` | int | -56 | -64 … 320 | y | terrain | Lowest start: A worm starts at a y drawn in startYMin … startYMax. |
+| `caves.worms.startYMax` | int | 180 | -64 … 320 | y | terrain | Highest start: A worm starts at a y drawn in startYMin … startYMax. |
+| `caves.worms.shape.pitchKeep` | number | 0.7 | 0 … 1 |  | terrain | Pitch keep: The pitch is multiplied by this at every step: lower → flatter tunnels. |
+| `caves.worms.shape.yawStep` | number | 0.1 | 0 … 8 |  | terrain | Yaw step: Times the yaw drift, added to the yaw at every step. |
+| `caves.worms.shape.pitchStep` | number | 0.1 | 0 … 8 |  | terrain | Pitch step: Times the pitch drift, added to the pitch at every step. |
+| `caves.worms.shape.yawDriftKeep` | number | 0.75 | 0 … 1 |  | terrain | Yaw drift keep: The part of the yaw drift kept at every step. |
+| `caves.worms.shape.yawDriftMul` | number | 4 | 0 … 8 |  | terrain | Yaw drift gain: The yaw drift's random kick at every step: higher → more winding. |
+| `caves.worms.shape.pitchDriftKeep` | number | 0.9 | 0 … 1 |  | terrain | Pitch drift keep: The part of the pitch drift kept at every step. |
+| `caves.worms.shape.pitchDriftMul` | number | 2 | 0 … 8 |  | terrain | Pitch drift gain: The pitch drift's random kick at every step: higher → steeper slopes. |
+| `caves.undergroundWorms.chance` | number | 0.07 | 0 … 1 |  | terrain | Chance: Probability that a chunk starts an underground worm. |
+| `caves.undergroundWorms.startYMin` | int | -56 | -64 … 320 | y | terrain | Lowest start: An underground worm starts at a y drawn in startYMin … startYMax. |
+| `caves.undergroundWorms.startYMax` | int | 24 | -64 … 320 | y | terrain | Highest start: An underground worm starts at a y drawn in startYMin … startYMax. |
+| `caves.undergroundWorms.maxY` | int | 40 | -32 … 120 | y | terrain | Highest y: Underground worms narrow over the 16 blocks below this y and carve nothing from it up. |
+| `caves.ravines.chance` | number | 0.015 | 0 … 0.2 |  | terrain | Chance: Probability that a chunk starts a ravine. |
+| `caves.ravines.lengthMin` | int | 84 | 32 … 160 | blocks | terrain | Shortest: A ravine is lengthMin … max(lengthMin, lengthMax) steps long. |
+| `caves.ravines.lengthMax` | int | 112 | 32 … 160 | blocks | terrain | Longest: A ravine is lengthMin … max(lengthMin, lengthMax) steps long. |
+| `caves.ravines.thicknessMax` | number | 6 | 0 … 8 |  | terrain | Thickness: A ravine's thickness is drawn from a trapezoid on 0 … thicknessMax. |
+| `caves.ravines.plateau` | number | 2 | 0 … 8 |  | terrain | Plateau: The width of the trapezoid's flat top (at most thicknessMax). |
+| `caves.ravines.yScale` | number | 3 | 0.5 … 6 |  | terrain | Height factor: A step's vertical radius over its horizontal one. |
+| `caves.ravines.widthSmoothness` | int | 3 | 1 … 16 | blocks | terrain | Width smoothness: The walls' roughness is redrawn every this many rows: higher → smoother walls. |
+| `caves.ravines.vRotation` | number | 0.125 | 0 … 0.5 |  | terrain | Vertical rotation: The start pitch is drawn in ±vRotation. |
+| `caves.ravines.startYMin` | int | 10 | -64 … 320 | y | terrain | Lowest start: A ravine starts at a y drawn in startYMin … startYMax. |
+| `caves.ravines.startYMax` | int | 72 | -64 … 320 | y | terrain | Highest start: A ravine starts at a y drawn in startYMin … startYMax. |
 | `caves.limits.surfaceDepth` | number | 8 | 0 … 32 | blocks | terrain | Surface depth: The deep families fade out above this depth: + clamp((surfaceDepth − T)·2, 0, 32) (0 at T ≥ surfaceDepth, 16 at the surface). |
 | `caves.limits.waterDepth` | int | 16 | 8 … 48 | blocks | terrain | Water depth: The wet roof: under lakes, rivers and seas (where water v0 fills the column) caves are closed within waterDepth + 4 blocks of the bed, narrow over the band span below waterDepth + 8 and are fully open from waterDepth + 8 + band span blocks down. |
 | `caves.limits.bandSpan` | int | 16 | 1 … 32 | blocks | terrain | Band span: Outside its depth band (minY … maxY) a family narrows over this many blocks (the gentle part of its cap), then closes over the next 8. |

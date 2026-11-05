@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
+import { CAVE_KIND, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import type { JsonValue } from '../../src/core/params/json';
 import type { ParamsPatch } from '../../src/core/params/schema';
@@ -7,20 +7,23 @@ import {
   buildColumnSample, latticeIndex, newColumnSample, readBiome, readField, readLevel, type ColumnSample,
 } from '../../src/gen/column/columnStage';
 import type { GenContext } from '../../src/gen/context';
+import { carveColumn, carvedAt, densityTopColumn } from '../../src/gen/caves/carve';
+import { carverCacheOf } from '../../src/gen/caves/carverCache';
 import { caveReadersOf, tagColumn } from '../../src/gen/caves/tags';
 import { fillDensityColumn } from '../../src/gen/density/bounds';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
-import { probe } from '../../src/gen/density/probe';
+import { probe, solidAt } from '../../src/gen/density/probe';
 import { columnWaterV0, terrainDensityDebug, terrainStage, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf, type SurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbe, surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { newSurfaceScan, runAt, type SurfaceScan } from '../../src/gen/surface/scan';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
-import { AIR, BEDROCK, COLLIDE, DEEPSLATE, REGISTRY, STONE } from '../../src/world/blocks/index';
+import { AIR, BEDROCK, COLLIDE, DEEPSLATE, GRASS_BLOCK, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { AuxBView, AuxView, ColumnView, ColumnWriter } from '../../src/world/store/api';
 import { protoAt, REC_AUX_B } from '../../src/world/store/columnTable';
 import { PROTO_BLOCKS, PROTO_FLUID } from '../../src/world/store/section';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
+import { CARVERS_OFF } from '../harness/carverParams';
 import { ctxFor } from '../harness/gen';
 import { cavesMuted } from '../harness/sp5cTrees';
 import { topDownHeightmaps } from '../harness/heightmaps';
@@ -51,12 +54,12 @@ const ctx = ctxFor('42');
 const ctx40 = ctxFor('42', { shape: { sigma: flat(40) } });
 /**
  * §3.2: σ and jag splines at 0, both detail amplitudes at 0; SP6a's carving cave taps muted (`cavesMuted`: the caves slot
- * is 1e6), so the solidity is the terrain body's alone.
+ * is 1e6) and its carvers off (`CARVERS_OFF`: no source passes its roll), so the solidity is the terrain body's alone.
  */
-const REDUCED: ParamsPatch = { shape: { sigma: flat(0), jag: flat(0) }, density: { detailAmpLo: 0, detailAmpHi: 0, defs: cavesMuted(DEFAULT_DENSITY_TREE) as JsonValue } };
+const REDUCED: ParamsPatch = { ...CARVERS_OFF, shape: { sigma: flat(0), jag: flat(0) }, density: { detailAmpLo: 0, detailAmpHi: 0, defs: cavesMuted(DEFAULT_DENSITY_TREE) as JsonValue } };
 const ctxReduced = ctxFor('42', REDUCED);
-/** The default world without SP6a's carving cave taps (the terrain body and detail only). */
-const ctxNoCaves = ctxFor('42', { density: { defs: cavesMuted(DEFAULT_DENSITY_TREE) as JsonValue } });
+/** The default world without SP6a's carving cave taps and carvers (the terrain body and detail only). */
+const ctxNoCaves = ctxFor('42', { ...CARVERS_OFF, density: { defs: cavesMuted(DEFAULT_DENSITY_TREE) as JsonValue } });
 
 const DCS = new Map<GenContext, DensityContext>();
 const dcOf = (c: GenContext): DensityContext => {
@@ -85,8 +88,8 @@ interface Expected {
 }
 
 /**
- * SP3b §4 and SP3c §1 independently of the stage: solidity from the density probe (no early-outs), `top` and the
- * water v0 rule; each solid voxel's state from `surfaceProbe` on a SurfaceContext built apart (the reference
+ * SP3b §4 and SP3c §1 independently of the stage: solidity from the density probe (no early-outs) after the carvers
+ * (`solidAt`: density > 0 and not `carvedAt`, SP6a spec §3.4), `top` and the water v0 rule; each solid voxel's state from `surfaceProbe` on a SurfaceContext built apart (the reference
  * evaluator, never the fast path; it rebuilds the column with its own early-outs, so a solidity disagreement shows as
  * air).
  */
@@ -104,7 +107,7 @@ function expectedOf(c: GenContext, cx: number, cz: number): Expected {
       const z = 16 * cz + lz;
       blocks[vi(lx, -64, lz)] = BEDROCK;
       for (let y = -63; y <= 319; y++) {
-        const solid = probe(dc, x, y, z) > 0;
+        const solid = solidAt(dc, x, y, z);
         blocks[vi(lx, y, lz)] = solid ? surfaceProbe(sc, x, y, z).state : AIR;
         if (solid) top[lz * 16 + lx] = y;
       }
@@ -398,13 +401,17 @@ describe('the cave channel (SP6a spec §3.1-§3.2, D20)', () => {
   /** The caverns' cave class column of seed 42 (pinned in test/unit/liveness.test.ts). */
   const CAVERNS = [546, 25857] as const;
 
-  test('a column\'s proto cave sections equal tagColumn\'s output after the density fill, section by section', () => {
+  test('a column\'s proto cave sections equal the carve\'s tags and then tagColumn\'s after the density fill, section by section', () => {
     for (const col of [CAVERNS, LAND, COAST]) {
       const { view } = generate(ctx, col[0], col[1]);
       const dc = createDensityContext(ctx);
-      const solid = new Uint8Array(98304), cells = new Uint8Array(768), tags = new Uint8Array(98304);
-      expect(fillDensityColumn(dc.bounds, dc.columns.get(col[0], col[1]), solid, null, null, NEVER, cells)).toBe(true);
-      tagColumn(dc.compiled, caveReadersOf(dc.compiled), ctx.params.caves.pillars.threshold, solid, cells, tags, dc.bounds);
+      const solid = new Uint8Array(98304), cells = new Uint8Array(768), tags = new Uint8Array(98304), tops = new Int16Array(256);
+      const s = dc.columns.get(col[0], col[1]);
+      expect(fillDensityColumn(dc.bounds, s, solid, null, null, NEVER, cells)).toBe(true);
+      densityTopColumn(solid, false, tops);
+      const cache = carverCacheOf(ctx);
+      carveColumn(cache, cache.params, s, col[0], col[1], solid, tops, tags);
+      tagColumn(dc.compiled, caveReadersOf(dc.compiled), ctx.params.caves.pillars.threshold, solid, cells, tags, dc.bounds, true);
       let dense = 0;
       for (let sy = 0; sy < 24; sy++) {
         const want = tags.subarray(4096 * sy, 4096 * (sy + 1));
@@ -415,8 +422,73 @@ describe('the cave channel (SP6a spec §3.1-§3.2, D20)', () => {
           dense++;
         }
       }
-      if (col === CAVERNS) expect(dense).toBeGreaterThan(0);
+      if (col === CAVERNS) {
+        expect(dense).toBeGreaterThan(0);
+        // The caverns' column holds a worm (§3.2 step 4): its carved voxels keep the worm's kind.
+        expect(tags.includes(CAVE_KIND.worm)).toBe(true);
+      }
     }
+  });
+
+  test('a column holding a worm: every voxel the carvers open is air and tagged with its carver kind, the worm\'s 6 among them; nothing else is carved', () => {
+    const { view } = generate(ctx, ...CAVERNS);
+    const dc = dcOf(ctx);
+    let worm = 0;
+    const bad: string[] = [];
+    for (let p = 0; p < 256; p++) {
+      const lx = p & 15, lz = p >> 4, x = 16 * CAVERNS[0] + lx, z = 16 * CAVERNS[1] + lz;
+      for (let y = -63; y <= 319; y++) {
+        const tag = view.cave(lx, y, lz);
+        const densitySolid = probe(dc, x, y, z) > 0;
+        const carver = tag === CAVE_KIND.worm || tag === CAVE_KIND.ravine || tag === CAVE_KIND.undergroundWorm;
+        // Carved ⇔ density-solid and air in T; then its tag is a carver kind, the one carvedAt names.
+        const carved = densitySolid && view.block(lx, y, lz) === AIR;
+        if (carved !== carver) bad.push(`(${lx}, ${y}, ${lz}): carved ${carved}, tag ${tag}`);
+        if (carved && carvedAt(dc, x, y, z) !== tag) bad.push(`(${lx}, ${y}, ${lz}): carvedAt ${carvedAt(dc, x, y, z)} ≠ tag ${tag}`);
+        if (tag === CAVE_KIND.worm) worm++;
+      }
+    }
+    expect(bad.slice(0, 10)).toEqual([]);
+    expect(worm).toBeGreaterThan(0);
+  });
+
+  test('a ravine floor open to the sky is the scan\'s sky run and gets the biome\'s top (grass); a cave floor under a ceiling gets stone or deepslate, never grass (D6)', () => {
+    // RAVINE: a column a ravine crosses with its floor open to the sky (seed 42, found by a scan of the ravine paths).
+    const RAVINE = [4, -10] as const;
+    let skyFloors = 0;
+    {
+      const { view } = generate(ctx, ...RAVINE);
+      const scan = newSurfaceScan();
+      terrainSurfaceDebug(ctx, ...RAVINE, scan);
+      for (let p = 0; p < 256; p++) {
+        const lx = p & 15, lz = p >> 4;
+        let top = -64;
+        for (let y = 319; y > -64; y--) if (view.block(lx, y, lz) !== AIR) { top = y; break; }
+        if (view.cave(lx, top + 1, lz) !== CAVE_KIND.ravine) continue;
+        skyFloors++;
+        expect(scan.runTop[scan.skyRun[p]!], `(${lx}, ${top}, ${lz})`).toBe(top);
+        expect(REGISTRY.stateKey(view.block(lx, top, lz)), `(${lx}, ${top}, ${lz})`).toBe('grass_block');
+      }
+    }
+    expect(skyFloors).toBeGreaterThan(0);
+    let caveFloors = 0;
+    for (const col of [CAVERNS, RAVINE]) {
+      const { view } = generate(ctx, col[0], col[1]);
+      for (let p = 0; p < 256; p++) {
+        const lx = p & 15, lz = p >> 4;
+        let top = -64;
+        for (let y = 319; y > -64; y--) if (view.block(lx, y, lz) !== AIR) { top = y; break; }
+        for (let y = -63; y < top; y++) {
+          const k = view.cave(lx, y + 1, lz);
+          if (view.block(lx, y, lz) === AIR || !(k === CAVE_KIND.worm || k === CAVE_KIND.ravine || k === CAVE_KIND.undergroundWorm)) continue;
+          caveFloors++;
+          const b = view.block(lx, y, lz);
+          expect(b === STONE || b === DEEPSLATE, `(${col[0]}, ${col[1]}) (${lx}, ${y}, ${lz}): ${REGISTRY.stateKey(b)}`).toBe(true);
+          expect(b).not.toBe(GRASS_BLOCK);
+        }
+      }
+    }
+    expect(caveFloors).toBeGreaterThan(0);
   });
 
   test('a column with no cave is uniform 0 in every section', () => {
@@ -457,27 +529,27 @@ function spyWriter(): { w: ColumnWriter; sections: number[]; aux: number; auxB: 
 }
 
 describe('order and abort (§4, SP3c §1)', () => {
-  test('6 density polls, 1 before the surface pass, then sections 0 … 23 in order with a poll before each, then aux A and aux B; never commits', () => {
+  test('7 density polls: 6 in the fill, 1 before the carve; 1 before the surface pass; then sections 0 … 23 in order with a poll before each, then aux A and aux B; never commits', () => {
     const spy = spyWriter();
     const at: number[] = [];
     expect(terrainStage(ctx, 3, -2, spy.w, () => { at.push(spy.sections.length); return false; })).toBe(true);
     expect(spy.sections).toEqual(Array.from({ length: 24 }, (_, i) => i));
-    // No section is written during the density phase or the surface pass: the first 8 polls see none.
-    expect(at).toEqual([0, 0, 0, 0, 0, 0, 0, ...Array.from({ length: 24 }, (_, i) => i)]);
+    // No section is written during the density phase, the carve or the surface pass: the first 9 polls see none.
+    expect(at).toEqual([0, 0, 0, 0, 0, 0, 0, 0, ...Array.from({ length: 24 }, (_, i) => i)]);
     expect([spy.aux, spy.auxB, spy.commits]).toEqual([1, 1, 0]);
   });
 
-  test.each([0, 1, 5, 6, 7, 8, 14, 30])('stop true at poll %i: returns false at once, no aux, no commit', (k) => {
+  test.each([0, 1, 5, 6, 7, 8, 9, 14, 31])('stop true at poll %i: returns false at once, no aux, no commit', (k) => {
     const spy = spyWriter();
     let polls = 0;
     expect(terrainStage(ctx, 3, -2, spy.w, () => ++polls > k)).toBe(false);
-    expect(spy.sections).toEqual(Array.from({ length: Math.max(0, k - 7) }, (_, i) => i));
+    expect(spy.sections).toEqual(Array.from({ length: Math.max(0, k - 8) }, (_, i) => i));
     expect(polls).toBe(k + 1);
     expect([spy.aux, spy.auxB, spy.commits]).toEqual([0, 0, 0]);
   });
 
   test('a stop in the density phase or at the surface pass leaves no trace: the next column is generated as if alone', () => {
-    for (const k of [3, 6]) {
+    for (const k of [3, 6, 7]) {
       let polls = 0;
       expect(terrainStage(ctx, ...OVERHANG, spyWriter().w, () => ++polls > k)).toBe(false);
       expect(mismatches(generate(ctx, ...COAST).view, expectedFor(ctx, COAST))).toBe(0);
@@ -525,7 +597,9 @@ describe('terrainDensityDebug (§2.3, the DT2 hook)', () => {
             set++;
             const v = probe(dc, 16 * cx + lx, y, 16 * cz + lz);
             if (!Object.is(out[i], v)) bad.push(`${at}: bulk ${out[i]} ≠ probe ${v}`);
-            if (y > -64 && (v > 0) !== (e.blocks[i] !== AIR)) bad.push(`${at}: block ${e.blocks[i]} vs value ${v}`);
+            // The block is air where the density is ≤ 0 or a carver carved (SP6a §3.4).
+            const carved = v > 0 && carvedAt(dc, 16 * cx + lx, y, 16 * cz + lz) !== 0;
+            if (y > -64 && (v > 0 && !carved) !== (e.blocks[i] !== AIR)) bad.push(`${at}: block ${e.blocks[i]} vs value ${v}${carved ? ' (carved)' : ''}`);
           } else if (out[i] !== 12345) {
             bad.push(`${at}: out written at an early-out voxel`);
           }

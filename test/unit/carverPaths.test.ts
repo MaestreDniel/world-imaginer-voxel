@@ -4,7 +4,8 @@
  * freezes from Task 27), its purity, the step counts, the end taper (`C7.endTaper`'s rule, the start room excluded),
  * the branches (ruling P27), the start room, the box, the ravines' width factors and radii, the underground worms'
  * start range, the uniformity of the starts, and `reachOverflow`'s unit form (§10.1: every path's box inside the
- * chunks within `CARVER_WINDOW_R` of its source chunk, at the defaults and at the static maxima). `unit (heavy)`.
+ * chunks within `CARVER_WINDOW_R` of its source chunk, at the defaults and at the static maxima). Task 27: the harness's
+ * `CARVER_DEFAULTS` and `CARVER_MAXIMA` mirror the schema's carver leaves (`carverParamsOf`). `unit (heavy)`.
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
@@ -12,7 +13,10 @@ import { CARVER_WINDOW_R } from '../../src/core/constants';
 import { detCos, detSin } from '../../src/core/detMath';
 import { deriveSeed, hash2, type Seed64 } from '../../src/core/hash';
 import { Xoshiro128 } from '../../src/core/rng';
-import { carverPath, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
+import { DEFAULTS } from '../../src/core/params/defaults';
+import { applyPatch, patchAt } from '../../src/core/params/kit';
+import { SCHEMA, type Params } from '../../src/core/params/schema';
+import { carverParamsOf, carverPath, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
 import { CARVER_DEFAULTS, CARVER_MAXIMA } from '../harness/carverParams';
 import { chiSquareP } from '../harness/stats';
 
@@ -246,6 +250,60 @@ function median(values: number[]): number {
   const m = s.length >> 1;
   return s.length % 2 === 1 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
 }
+
+describe('the carver leaves (SP6a spec §4; Task 27, ruling P17)', () => {
+  /** The schema's carver leaves: caves.worms.* (with caves.worms.shape.*), caves.undergroundWorms.*, caves.ravines.*. */
+  const carverLeaves = () => SCHEMA.leaves.filter((l) => /^caves\.(worms|undergroundWorms|ravines)\./.test(l.path));
+
+  test('carverParamsOf(DEFAULTS) equals the harness defaults (CARVER_DEFAULTS)', () => {
+    expect(carverParamsOf(DEFAULTS)).toEqual(CARVER_DEFAULTS);
+  });
+
+  test('every carver leaf at its schema maximum (the limits leaves too) gives the harness maxima (CARVER_MAXIMA), so Task 25\'s reach holds for the leaves', () => {
+    const leaves = carverLeaves();
+    expect(leaves.length).toBe(36);
+    let p: Params = DEFAULTS;
+    for (const l of [...leaves, ...SCHEMA.leaves.filter((x) => ['caves.limits.waterDepth', 'caves.limits.bandSpan', 'caves.limits.capTop'].includes(x.path))]) {
+      expect(Number.isFinite(l.leaf.max), l.path).toBe(true);
+      const r = applyPatch(SCHEMA, p, patchAt(l.path, l.leaf.max));
+      if (!r.ok) throw new Error(`${l.path}: ${JSON.stringify(r.issues)}`);
+      p = r.value;
+    }
+    expect(carverParamsOf(p)).toEqual(CARVER_MAXIMA);
+  });
+
+  test('the ranges §4 gives and the plan\'s where it gives none (P17: the three shape keeps 0 … 1, the other shape leaves 0 … 8)', () => {
+    const range = (path: string) => {
+      const l = SCHEMA.leaves.find((x) => x.path === path)!;
+      return [l.leaf.kind, l.leaf.min, l.leaf.max];
+    };
+    expect(range('caves.worms.chance')).toEqual(['number', 0, 1]);
+    expect(range('caves.worms.length')).toEqual(['int', 32, 160]);
+    expect(range('caves.worms.lengthVar')).toEqual(['int', 0, 64]);
+    expect(range('caves.worms.radiusMin')).toEqual(['number', 0.1, 2]);
+    expect(range('caves.worms.vRatioMax')).toEqual(['number', 0.1, 3]);
+    expect(range('caves.worms.floorMin')).toEqual(['number', -1, 1]);
+    expect(range('caves.worms.branchChance')).toEqual(['number', 0, 1]);
+    expect(range('caves.worms.roomChance')).toEqual(['number', 0, 1]);
+    expect(range('caves.worms.roomYScaleMin')).toEqual(['number', 0.1, 0.9]);
+    expect(range('caves.worms.startYMax')).toEqual(['int', -64, 320]);
+    for (const k of ['pitchKeep', 'yawDriftKeep', 'pitchDriftKeep']) expect(range(`caves.worms.shape.${k}`)).toEqual(['number', 0, 1]);
+    for (const k of ['yawStep', 'pitchStep', 'yawDriftMul', 'pitchDriftMul']) expect(range(`caves.worms.shape.${k}`)).toEqual(['number', 0, 8]);
+    expect(range('caves.undergroundWorms.chance')).toEqual(['number', 0, 1]);
+    expect(range('caves.undergroundWorms.startYMin')).toEqual(['int', -64, 320]);
+    expect(range('caves.undergroundWorms.maxY')).toEqual(['int', -32, 120]);
+    expect(range('caves.ravines.chance')).toEqual(['number', 0, 0.2]);
+    expect(range('caves.ravines.lengthMin')).toEqual(['int', 32, 160]);
+    expect(range('caves.ravines.thicknessMax')).toEqual(['number', 0, 8]);
+    expect(range('caves.ravines.plateau')).toEqual(['number', 0, 8]);
+    expect(range('caves.ravines.yScale')).toEqual(['number', 0.5, 6]);
+    expect(range('caves.ravines.widthSmoothness')).toEqual(['int', 1, 16]);
+    expect(range('caves.ravines.vRotation')).toEqual(['number', 0, 0.5]);
+    expect(range('caves.ravines.startYMax')).toEqual(['int', -64, 320]);
+    // Every carver leaf is a Terrain leaf (the terrain stage reads caves.*).
+    for (const l of carverLeaves()) expect([l.path, l.meta.stage]).toEqual([l.path, 'terrain']);
+  });
+});
 
 describe('carverPath: sources and worm paths (SP6a §2.1-§2.2)', () => {
   test('the draw order: every path equals the oracle\'s, bit for bit, and a failed roll is null', () => {

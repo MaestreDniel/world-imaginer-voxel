@@ -4,7 +4,7 @@ import type { GenContext } from '../../src/gen/context';
 import { cornerValueIndex } from '../../src/gen/density/compile';
 import { caveTagAt } from '../../src/gen/caves/tags';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
-import { probe } from '../../src/gen/density/probe';
+import { probe, solidAt } from '../../src/gen/density/probe';
 import { createDensityReference, findTap, interpolatedNodes, type DensityReference } from '../../src/gen/density/reference';
 import { terrainDensityDebug, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf, type SurfaceContext } from '../../src/gen/surface/context';
@@ -283,9 +283,10 @@ export function dt2Column(ctx: GenContext, cx: number, cz: number, r: Xoshiro128
     const value = probe(dc, x, y, z);
     const block = view.block(lx, y, lz);
     acc.voxels++;
-    if ((value > 0) !== (block !== AIR)) {
+    // The stored solidity is the point probe's after the carvers (SP6a spec §3.4): density > 0 and not carved.
+    if (solidAt(dc, x, y, z) !== (block !== AIR)) {
       acc.probeBulk++;
-      acc.problems.push(`${at}: (${x}, ${y}, ${z}) probe ${value}, block ${block}`);
+      acc.problems.push(`${at}: (${x}, ${y}, ${z}) probe ${value}, solidAt ${solidAt(dc, x, y, z)}, block ${block}`);
     }
     const surfaceState = surfaceProbe(sc, x, y, z).state;
     if (surfaceState !== block) {

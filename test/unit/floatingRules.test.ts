@@ -18,7 +18,7 @@
  *   and the ground's top under the islands equals the default world's (Z3's `shadowDiff` ≈ 0).
  */
 import { describe, expect, test } from 'vitest';
-import { ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
+import { CAVE_KIND, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
 import { DEFAULTS } from '../../src/core/params/defaults';
@@ -28,6 +28,8 @@ import { resolveProfile } from '../../src/core/params/profiles';
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
 import { biomeId, type SurfaceBiome } from '../../src/gen/biomes/registry';
+import { wetAt } from '../../src/gen/caves/carve';
+import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
 import { createGenContext, type GenContext } from '../../src/gen/context';
 import { createSurfaceContext, type SurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbeColumn } from '../../src/gen/surface/probe';
@@ -365,16 +367,21 @@ describe('islands.enabled on trees that do not match it (amplified\'s window, se
   const seed = seedFromInput('42');
   const withFlag = (params: Params, enabled: boolean): GenContext => createGenContext(seed, { ...params, islands: { ...params.islands, enabled } });
   /** The stage's blocks and fluid of chunk column (cx, cz), indexed `at(p, y)`. */
-  const generate = (c: GenContext, cx: number, cz: number): { blocks: Uint16Array; fluid: Uint8Array } => {
+  const generate = (c: GenContext, cx: number, cz: number): { blocks: Uint16Array; fluid: Uint8Array; cave: Uint8Array } => {
     expect(fillColumnT(store, c, cx, cz, () => false)).toBe(true);
     const view = store.proto(cx, cz)!;
-    const blocks = new Uint16Array(98304), fluid = new Uint8Array(98304);
+    const blocks = new Uint16Array(98304), fluid = new Uint8Array(98304), cave = new Uint8Array(98304);
     for (let p = 0; p < 256; p++) {
-      for (let y = -64; y <= 319; y++) { blocks[at(p, y)] = view.block(p & 15, y, p >> 4); fluid[at(p, y)] = view.fluid(p & 15, y, p >> 4); }
+      for (let y = -64; y <= 319; y++) {
+        blocks[at(p, y)] = view.block(p & 15, y, p >> 4);
+        fluid[at(p, y)] = view.fluid(p & 15, y, p >> 4);
+        cave[at(p, y)] = view.cave(p & 15, y, p >> 4);
+      }
     }
     store.freeColumn(cx, cz);
-    return { blocks, fluid };
+    return { blocks, fluid, cave };
   };
+  const CARVED: readonly number[] = [CAVE_KIND.worm, CAVE_KIND.ravine, CAVE_KIND.undergroundWorm];
   /** The run of position p holding voxel y, or −1. */
   const runOf = (scan: SurfaceScan, p: number, y: number): number => {
     for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) if (scan.runBottom[r]! <= y && y <= scan.runTop[r]!) return r;
@@ -411,32 +418,44 @@ describe('islands.enabled on trees that do not match it (amplified\'s window, se
     // Unticking the flag removes the islands (the mask is 0, so the term's gate gives −1e6) and their water rule, not
     // the preset's rules: 47 of the 64 columns keep the islands palette on their peaks (mostly stone → dirt or grass).
     // SP6a's caves hollow the peaks, so more runs are topped above y 180 (D31, accepted until SP12); the island cap closes
-    // them from y 176 up: 48 columns, 32,940 voxels with D25's lever 5 (Task 15b; 31,717 with the caps' gentle rises from
+    // them from y 176 up: 49 columns, 35,260 voxels with the carvers (Task 27; 48 and 32,940 before them, with D25's
+    // lever 5, Task 15b; 31,717 with the caps' gentle rises from
     // D25, Task 14; 31,584 before them,
     // 49 and 37,136 with the depth bands' caps, 37,417 with spaghetti and the noodle, 37,106 with entrances, cheese and
     // pillars; 23,585 before SP6a).
-    expect({ solidity, fluid, outside, changed, columns }).toEqual({ solidity: 0, fluid: 0, outside: 0, changed: 32940, columns: 48 });
+    expect({ solidity, fluid, outside, changed, columns }).toEqual({ solidity: 0, fluid: 0, outside: 0, changed: 35260, columns: 49 });
   }, 120_000);
 
   // SP6a's caves detach more runs above y 180 under peaks (default 5,953 voxels, 1,373 positions, 34 columns; amplified
   // 9,705, 2,073, 41 and 1,613 snow → stone before them; with entrances, cheese and pillars default 7,536, 1,948, 37 and
   // amplified 15,860, 4,903, 45, 4,224; before D25's lever 5, default 7,538, 1,949, 37 and amplified 15,994, 4,970, 45,
-  // 4,291).
-  test.each([['default', 7577, 1955, 37, 0], ['amplified', 17529, 5056, 45, 4252]] as const)('%s with the flag on: the same solidity and water; states change only where a run lies above y 180, stage == reference == compiled.state there', (id, wantVoxels, wantPositions, wantColumns, wantSnowToStone) => {
+  // 4,291; before the carvers, Task 27, default 7,577, 1,955, 37 and amplified 17,529, 5,056, 45, 4,252). With the
+  // carvers 15 of amplified's carved voxels differ (wet positions under a run above y 180, where the flag's island rule
+  // moves the density top that the carvers' wet shrink reads, §2.4); the default window has none.
+  test.each([['default', 7654, 1962, 37, 0, 0], ['amplified', 17544, 5056, 45, 4252, 15]] as const)('%s with the flag on: the same solidity and water (but carved voxels at wet positions under a run above y 180, SP6a §2.4); states change only where a run lies above y 180, stage == reference == compiled.state there', (id, wantVoxels, wantPositions, wantColumns, wantSnowToStone, wantCarved) => {
     const params = resolveProfile(id);
     const on = withFlag(params, true), off = withFlag(params, false);
     const probeSc = createSurfaceContext(on);
-    let solidity = 0, fluid = 0, voxels = 0, positions = 0, columns = 0, noIslandRun = 0, checked = 0, snowToStone = 0;
+    let solidity = 0, fluid = 0, voxels = 0, positions = 0, columns = 0, noIslandRun = 0, checked = 0, snowToStone = 0, carvedSolidity = 0;
     const SNOW = REGISTRY.parseStateKey('snow_block');
     for (const [cx, cz] of WINDOW) {
       const a = generate(on, cx, cz), b = generate(off, cx, cz);
+      const sample = buildColumnSample(on, cx, cz, newColumnSample());
       let here = 0;
       let c: ReturnType<typeof surfaceProbeColumn> | null = null;
       for (let p = 0; p < 256; p++) {
         let at_p = 0;
         for (let y = -63; y <= 319; y++) {
           const i = at(p, y);
-          if ((a.blocks[i] === AIR) !== (b.blocks[i] === AIR)) solidity++;
+          if ((a.blocks[i] === AIR) !== (b.blocks[i] === AIR)) {
+            // SP6a §2.4: the carvers' wet shrink reads the density top, which the flag's island rule takes under a run lying
+            // above y 180; so a carved voxel at a wet position under such a run may differ, and nothing else.
+            const wet = wetAt(sample, 16 * cx + (p & 15), 16 * cz + (p >> 4)) > 0;
+            let high = false;
+            for (let yy = ISLAND_RUN_MIN_BOTTOM; yy <= 319 && !high; yy++) high = b.blocks[at(p, yy)] !== AIR;
+            if ((CARVED.includes(a.cave[i]!) || CARVED.includes(b.cave[i]!)) && wet && high) carvedSolidity++;
+            else solidity++;
+          }
           if (a.fluid[i] !== b.fluid[i]) fluid++;
           if (a.blocks[i] !== b.blocks[i]) {
             at_p++;
@@ -465,6 +484,6 @@ describe('islands.enabled on trees that do not match it (amplified\'s window, se
     expect({ solidity, fluid, noIslandRun }).toEqual({ solidity: 0, fluid: 0, noIslandRun: 0 });
     expect(checked).toBeGreaterThan(positions * 100);
     // A detached peak above y 180 is no longer the sky-open run: its top loses the sky-open palette (snow → stone).
-    expect({ id, voxels, positions, columns, snowToStone }).toEqual({ id, voxels: wantVoxels, positions: wantPositions, columns: wantColumns, snowToStone: wantSnowToStone });
+    expect({ id, voxels, positions, columns, snowToStone, carvedSolidity }).toEqual({ id, voxels: wantVoxels, positions: wantPositions, columns: wantColumns, snowToStone: wantSnowToStone, carvedSolidity: wantCarved });
   }, 120_000);
 });

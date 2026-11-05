@@ -99,7 +99,9 @@ const BANDS = {
 
 describe('the caves group (SP6a spec §4)', () => {
   test('the leaves of this task, sizes first, every one Terrain-scoped on the terrain stage, with spec §4\'s defaults and ranges', () => {
-    const leaves = SCHEMA.leaves.filter((l) => l.path.startsWith('caves.') && !l.path.startsWith('caves.noises.'));
+    // The carver leaves (Task 27, between the entrances and the limits) are pinned in test/unit/carverPaths.test.ts.
+    const carver = /^caves\.(worms|undergroundWorms|ravines)\./;
+    const leaves = SCHEMA.leaves.filter((l) => l.path.startsWith('caves.') && !l.path.startsWith('caves.noises.') && !carver.test(l.path));
     expect(leaves.map((l) => [l.path, l.leaf.def, l.leaf.min, l.leaf.max])).toEqual([
       ['caves.cheese.offset', 0.27, -0.5, 1],
       ['caves.cheese.regional', 0.1, 0, 0.4],

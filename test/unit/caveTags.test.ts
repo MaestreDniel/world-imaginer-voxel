@@ -2,8 +2,9 @@
  * The cave tag's noise kinds (SP6a spec §3.2, D17, D20; Task 11): `tagColumn` after the T stage's density fill, against
  * the rule applied voxel by voxel through `voxelFn` and `tapFn` (no early-outs, no readers), on the default tree and on
  * trees without some taps, without `interpolated`, or with a family muted so that cells are decided air before their
- * corners where the pre-cave density is positive; and the point probes `caveTagAt` and `solidAt` (SP6a spec §3.4, D22;
- * Task 12) against the stored tag and solidity. `unit (heavy)`.
+ * corners where the pre-cave density is positive; step 4, the carver kinds the carve writes before the tag pass (Task
+ * 27), on the T stage's tags and through `carvedAt`; and the point probes `caveTagAt` and `solidAt` (SP6a spec §3.4,
+ * D22; Tasks 12, 27) against the stored tag and solidity, carved voxels included. `unit (heavy)`.
  */
 import { describe, expect, test } from 'vitest';
 import { CAVE_KIND } from '../../src/core/constants';
@@ -13,6 +14,8 @@ import { fillDensityColumn } from '../../src/gen/density/bounds';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import type { DensityExpr, Expr } from '../../src/gen/density/expr';
 import type { GenContext } from '../../src/gen/context';
+import { carveColumn, carvedAt, densityTopColumn } from '../../src/gen/caves/carve';
+import { carverCacheOf } from '../../src/gen/caves/carverCache';
 import { caveReadersOf, caveTagAt, tagColumn, tagVoxel } from '../../src/gen/caves/tags';
 import { probe, solidAt } from '../../src/gen/density/probe';
 import { terrainStage } from '../../src/gen/pipeline/terrainStage';
@@ -32,23 +35,41 @@ const FAMILIES: ReadonlyArray<readonly [tap: string, kind: number]> = [
   ['entrances', CAVE_KIND.entrance], ['cheese', CAVE_KIND.cheese], ['spag3d', CAVE_KIND.spaghetti3d], ['spag2d', CAVE_KIND.spaghetti2d],
 ];
 
-/** The T stage's density fill of (cx, cz) on `dc` and `tagColumn` after it (with the bounds, else without). */
-function tagsOf(dc: DensityContext, cx: number, cz: number, threshold: number, withBounds = true): { solid: Uint8Array; cells: Uint8Array; tags: Uint8Array } {
+/** The carver kinds (§3.2 step 4). */
+const CARVER_KINDS: readonly number[] = [CAVE_KIND.worm, CAVE_KIND.ravine, CAVE_KIND.undergroundWorm];
+
+/**
+ * The T stage's density fill of (cx, cz) on `dc` and `tagColumn` after it (with the bounds, else without); with `carve`,
+ * the T stage's carve between them (the density tops, `carveColumn` through `carverCacheOf(dc.ctx)` writing the carver
+ * kinds, then `tagColumn` on the carved solidity), and `fill` the density fill's solidity before the carve.
+ */
+function tagsOf(dc: DensityContext, cx: number, cz: number, threshold: number, withBounds = true, carve = false): { solid: Uint8Array; cells: Uint8Array; tags: Uint8Array; fill: Uint8Array } {
   const solid = new Uint8Array(98304), cells = new Uint8Array(768), tags = new Uint8Array(98304).fill(13);
-  expect(fillDensityColumn(dc.bounds, dc.columns.get(cx, cz), solid, null, null, NEVER, cells)).toBe(true);
+  const s = dc.columns.get(cx, cz);
+  expect(fillDensityColumn(dc.bounds, s, solid, null, null, NEVER, cells)).toBe(true);
+  const fill = solid.slice();
   const c = dc.compiled;
-  tagColumn(c, caveReadersOf(c), threshold, solid, cells, tags, withBounds ? dc.bounds : null);
-  return { solid, cells, tags };
+  if (carve) {
+    const tops = new Int16Array(256);
+    densityTopColumn(solid, dc.ctx.params.islands.enabled, tops);
+    const cache = carverCacheOf(dc.ctx);
+    tags.fill(0);
+    carveColumn(cache, cache.params, s, cx, cz, solid, tops, tags);
+  }
+  tagColumn(c, caveReadersOf(c), threshold, solid, cells, tags, withBounds ? dc.bounds : null, carve);
+  return { solid, cells, tags, fill };
 }
 
 /**
- * §3.2's rule at voxel (lx, y, lz) of `dc`'s current column, from `voxelFn` and `tapFn` alone: 0 at y −64 and in solid
- * voxels; pre-cave solidity from `precave`, else `terrain`, else unknown (0); then the lowest candidate, ties in the
- * order E, C, S3, S2, noodle; 9 when none explains the air.
+ * §3.2's rule at voxel (lx, y, lz) of `dc`'s current column, from `voxelFn` and `tapFn` alone: 0 at y −64 and in
+ * density-solid voxels, or with `col` (the current column's (cx, cz)) step 4 there, `carvedAt`'s carver kind; pre-cave
+ * solidity from `precave`, else `terrain`, else unknown (0); then the lowest candidate, ties in the order E, C, S3, S2,
+ * noodle; 9 when none explains the air.
  */
-function ruleAt(dc: DensityContext, threshold: number, lx: number, y: number, lz: number): number {
+function ruleAt(dc: DensityContext, threshold: number, lx: number, y: number, lz: number, col: readonly [number, number] | null = null): number {
   const c = dc.compiled;
-  if (y === -64 || c.voxelFn(lx, y, lz) > 0) return 0;
+  if (y === -64) return 0;
+  if (c.voxelFn(lx, y, lz) > 0) return col === null ? 0 : carvedAt(dc, 16 * col[0] + lx, y, 16 * col[1] + lz);
   const at = (name: string): number | null => (c.tapReader(name) === null ? null : c.tapFn(name, lx, y, lz));
   const pre = at('precave') ?? at('terrain');
   if (pre === null || !(pre > 0)) return 0;
@@ -85,7 +106,7 @@ function storedEqualsRule(c: GenContext, cx: number, cz: number): Map<number, nu
     for (let lz = 0; lz < 16; lz++) {
       for (let lx = 0; lx < 16; lx++) {
         const got = view.cave(lx, y, lz);
-        const want = ruleAt(dc, threshold, lx, y, lz);
+        const want = ruleAt(dc, threshold, lx, y, lz, [cx, cz]);
         if (got !== want) throw new Error(`(${cx}, ${cz}) voxel (${lx}, ${y}, ${lz}): stored ${got} ≠ rule ${want}`);
         kinds.set(got, (kinds.get(got) ?? 0) + 1);
       }
@@ -122,15 +143,15 @@ const minS = (a: unknown, b: unknown): Record<string, unknown> => ({ op: 'min', 
 const TERRAIN40 = addS(num(40), { op: 'neg', x: y });
 
 describe('the tag on the default tree (SP6a spec §3.2, §10.7)', () => {
-  test('64 columns around a cave class column: the tagged set is pre-cave solid ∧ density air voxel for voxel; no tag at y −64; no 9; no cell decided air before its corners holds pre-cave rock; without the bounds the same tags', () => {
+  test('64 columns around a cave class column, carved: the tagged set is pre-cave solid ∧ air voxel for voxel, the carved voxels (step 4) carver kinds; no tag at y −64; no 9; no cell decided air before its corners holds pre-cave rock; without the bounds the same tags', () => {
     const dc = createDensityContext(ctx);
     const brute = createDensityContext(ctx);
     const kinds = new Map<number, number>();
-    let tagged = 0, earlyAir = 0;
+    let tagged = 0, earlyAir = 0, carved = 0;
     for (let n = 0; n < 64; n++) {
       const cx = CAVERNS[0] - 3 + (n & 7), cz = CAVERNS[1] - 3 + (n >> 3);
-      const { solid, cells, tags } = tagsOf(dc, cx, cz, THRESHOLD);
-      if (n === 0) expect(tagsOf(createDensityContext(ctx), cx, cz, THRESHOLD, false).tags).toEqual(tags);
+      const { solid, cells, tags, fill } = tagsOf(dc, cx, cz, THRESHOLD, true, true);
+      if (n === 0) expect(tagsOf(createDensityContext(ctx), cx, cz, THRESHOLD, false, true).tags).toEqual(tags);
       brute.column(cx, cz);
       for (let v = 0; v < 98304; v++) {
         const k = tags[v]!;
@@ -141,6 +162,9 @@ describe('the tag on the default tree (SP6a spec §3.2, §10.7)', () => {
         const lx = v & 15, lz = (v >> 4) & 15, yy = (v >> 8) - 64;
         const pre = brute.compiled.tapFn('precave', lx, yy, lz);
         if ((k !== 0) !== (pre > 0)) throw new Error(`(${cx}, ${cz}) voxel (${lx}, ${yy}, ${lz}): tag ${k}, precave ${pre}`);
+        // Step 4: a voxel the fill left solid and the carve opened has a carver kind, and only such a voxel.
+        if ((fill[v] !== 0) !== CARVER_KINDS.includes(k)) throw new Error(`(${cx}, ${cz}) voxel (${lx}, ${yy}, ${lz}): fill ${fill[v]}, tag ${k}`);
+        if (fill[v] !== 0) { carved++; continue; }
         const cell = (((yy + 64) >> 3) * 4 + (lz >> 2)) * 4 + (lx >> 2);
         if (cells[cell] === 0) {
           earlyAir++;
@@ -149,9 +173,11 @@ describe('the tag on the default tree (SP6a spec §3.2, §10.7)', () => {
       }
     }
     expect(kinds.get(CAVE_KIND.other) ?? 0, 'the default tree yields no 9').toBe(0);
-    for (const k of kinds.keys()) expect([0, CAVE_KIND.cheese, CAVE_KIND.spaghetti3d, CAVE_KIND.spaghetti2d, CAVE_KIND.noodle, CAVE_KIND.entrance]).toContain(k);
+    for (const k of kinds.keys()) expect([0, CAVE_KIND.cheese, CAVE_KIND.spaghetti3d, CAVE_KIND.spaghetti2d, CAVE_KIND.noodle, CAVE_KIND.entrance, ...CARVER_KINDS]).toContain(k);
     expect(kinds.get(CAVE_KIND.cheese) ?? 0).toBeGreaterThan(0);
+    expect(kinds.get(CAVE_KIND.worm) ?? 0).toBeGreaterThan(0);
     expect(tagged).toBeGreaterThan(0);
+    expect(carved).toBeGreaterThan(0);
     expect(earlyAir).toBeGreaterThan(0);
   });
 
@@ -243,7 +269,7 @@ describe('the tag on other trees (SP6a spec §3.2: trees without the family taps
     expect(counts[1]).toBeGreaterThan(0);
   });
 
-  test('no terrain and no precave tap: density air is 0 (pre-cave solidity unknown; only carver kinds would be tagged)', () => {
+  test('no terrain and no precave tap: density air is 0 (pre-cave solidity unknown); only the carver kinds are tagged, exactly where the carve opened rock', () => {
     const tree = { root: minS(TERRAIN40, tapS('cheese', addS(mulS(noise('cheese'), num(20)), num(6)))), defs: {} };
     const c = ctxFor('42', { density: { defs: tree as unknown as JsonValue } });
     const { solid, tags } = tagsOf(createDensityContext(c), 0, 0, THRESHOLD);
@@ -251,6 +277,20 @@ describe('the tag on other trees (SP6a spec §3.2: trees without the family taps
     for (let v = 256; v < 98304; v++) if (solid[v] === 0 && v < 256 * (40 + 64)) air++;
     expect(air).toBeGreaterThan(0);
     expect(tags.every((k) => k === 0)).toBe(true);
+    // The carve on a tree of the same shape whose rock is whole below y 40 (cheese·2 + 6 > 0: |cheese| ≤ 3).
+    const rock = { root: minS(TERRAIN40, tapS('cheese', addS(mulS(noise('cheese'), num(2)), num(6)))), defs: {} };
+    const cr = ctxFor('42', { density: { defs: rock as unknown as JsonValue } });
+    let opened = 0;
+    for (let cx = 0; cx < 4; cx++) {
+      const carved = tagsOf(createDensityContext(cr), cx, 0, THRESHOLD, true, true);
+      for (let v = 256; v < 98304; v++) {
+        const k = carved.tags[v]!;
+        const wasRock = carved.fill[v] !== 0 && carved.solid[v] === 0;
+        if (wasRock !== (k !== 0)) throw new Error(`(${cx}, 0) voxel ${v}: fill ${carved.fill[v]}, carved ${carved.solid[v]}, tag ${k}`);
+        if (k !== 0) { expect(CARVER_KINDS).toContain(k); opened++; }
+      }
+    }
+    expect(opened).toBeGreaterThan(0);
   });
 });
 
@@ -326,13 +366,14 @@ function cellClasses(dc: DensityContext, cx: number, cz: number): Uint8Array {
 
 /**
  * caveTagAt and solidAt at every voxel of (cx, cz) generated by T on `c` equal the stored tag and solidity (solidAt above
- * y −64); the tagged voxels per cell class.
+ * y −64); the tagged voxels per cell class (the noise kinds; the carver kinds, of voxels the fill left solid, apart in
+ * index 4).
  */
 function probesEqualStored(c: GenContext, cx: number, cz: number): number[] {
   const view = generate(c, cx, cz);
   const dc = createDensityContext(c);
   const classes = cellClasses(createDensityContext(c), cx, cz);
-  const tagged = [0, 0, 0, 0];
+  const tagged = [0, 0, 0, 0, 0];
   for (let y = -64; y < 320; y++) {
     for (let lz = 0; lz < 16; lz++) {
       for (let lx = 0; lx < 16; lx++) {
@@ -343,7 +384,8 @@ function probesEqualStored(c: GenContext, cx: number, cz: number): number[] {
         const solid = view.block(lx, y, lz) !== AIR;
         // y −64 is bedrock in T whatever the density (DT2 never draws it).
         if (y > -64 && solidAt(dc, x, y, z) !== solid) throw new Error(`(${x}, ${y}, ${z}): solidAt ≠ stored solidity ${solid}`);
-        if (want !== 0) tagged[classes[(((y + 64) >> 3) * 4 + (lz >> 2)) * 4 + (lx >> 2)]!]!++;
+        if (CARVER_KINDS.includes(want)) tagged[4]!++;
+        else if (want !== 0) tagged[classes[(((y + 64) >> 3) * 4 + (lz >> 2)) * 4 + (lx >> 2)]!]!++;
       }
     }
   }
@@ -351,15 +393,17 @@ function probesEqualStored(c: GenContext, cx: number, cz: number): number[] {
 }
 
 describe('caveTagAt and solidAt (SP6a spec §3.4, D22; Task 12)', () => {
-  test('8 columns around the cave class column: caveTagAt equals the stored tag and solidAt the stored solidity on every voxel, tagged voxels in cave interiors (cells decided air after their corners) and in straddling cells', () => {
-    const tagged = [0, 0, 0, 0];
+  test('8 columns around the cave class column: caveTagAt equals the stored tag and solidAt the stored solidity on every voxel, tagged voxels in cave interiors (cells decided air after their corners) and in straddling cells, carved voxels included', () => {
+    const tagged = [0, 0, 0, 0, 0];
     for (let n = 0; n < 8; n++) {
       const t = probesEqualStored(ctx, CAVERNS[0] - 1 + (n & 3), CAVERNS[1] + (n >> 2));
-      for (let k = 0; k < 4; k++) tagged[k]! += t[k]!;
+      for (let k = 0; k < 5; k++) tagged[k]! += t[k]!;
     }
     expect(tagged[AIR_AFTER_CORNERS], 'tagged voxels in cells decided air after their corners').toBeGreaterThan(0);
     expect(tagged[STRADDLING], 'tagged voxels in straddling cells').toBeGreaterThan(0);
+    // A noise kind never lies in a cell the fill decided solid; a carved voxel may (§3.2 step 4).
     expect(tagged[SOLID_AFTER_CORNERS]).toBe(0);
+    expect(tagged[4], 'carved voxels (carver kinds)').toBeGreaterThan(0);
   });
 
   test('the cheese and pillars taps muted to −1e6: caveTagAt equals the stored tag on every voxel of the cave class column, cells decided air before their corners included', () => {
@@ -368,14 +412,23 @@ describe('caveTagAt and solidAt (SP6a spec §3.4, D22; Task 12)', () => {
     expect(tagged[EARLY], 'tagged voxels in cells decided air before their corners').toBeGreaterThan(0);
   });
 
-  test('y −64 is 0; solidAt is probe > 0; both refuse what probe refuses (RangeError)', () => {
+  test('y −64 is 0; solidAt is probe > 0 and not carvedAt, false at a carved voxel; both refuse what probe refuses (RangeError)', () => {
     const dc = createDensityContext(ctx);
     const [cx, cz] = CAVERNS;
     for (let lx = 0; lx < 16; lx++) expect(caveTagAt(dc, 16 * cx + lx, -64, 16 * cz)).toBe(0);
     for (const y of [-64, -40, 0, 30, 63, 100, 319]) {
       const x = 16 * cx + 5, z = 16 * cz + 9;
-      expect(solidAt(dc, x, y, z)).toBe(probe(dc, x, y, z) > 0);
+      expect(solidAt(dc, x, y, z)).toBe(probe(dc, x, y, z) > 0 && carvedAt(dc, x, y, z) === 0);
     }
+    // A carved voxel of the column: density > 0, carvedAt a carver kind, solidAt false, caveTagAt that kind.
+    const { fill, solid } = tagsOf(createDensityContext(ctx), cx, cz, THRESHOLD, true, true);
+    const v = fill.findIndex((f, i) => f !== 0 && solid[i] === 0);
+    expect(v).toBeGreaterThan(0);
+    const [x, y, z] = [16 * cx + (v & 15), (v >> 8) - 64, 16 * cz + ((v >> 4) & 15)];
+    expect(probe(dc, x, y, z)).toBeGreaterThan(0);
+    expect(CARVER_KINDS).toContain(carvedAt(dc, x, y, z));
+    expect(solidAt(dc, x, y, z)).toBe(false);
+    expect(caveTagAt(dc, x, y, z)).toBe(carvedAt(dc, x, y, z));
     for (const [x, y, z] of [[0.5, 0, 0], [0, 0.5, 0], [0, 0, 0.5], [0, -65, 0], [0, 320, 0], [524288, 0, 0], [0, 0, -524289], [NaN, 0, 0]] as const) {
       expect(() => caveTagAt(dc, x, y, z), `caveTagAt (${x}, ${y}, ${z})`).toThrow(RangeError);
       expect(() => solidAt(dc, x, y, z), `solidAt (${x}, ${y}, ${z})`).toThrow(RangeError);

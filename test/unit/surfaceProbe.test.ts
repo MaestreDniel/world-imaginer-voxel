@@ -8,6 +8,7 @@ import { createSurfaceContext, surfaceContextOf, surfaceNoiseSource, type Surfac
 import { surfaceProbe, surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { RuleValidationError } from '../../src/gen/surface/rules';
 import { surfaceScanSettings } from '../../src/gen/surface/scan';
+import { CAVE_KIND } from '../../src/core/constants';
 import { AIR, BEDROCK, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { ColumnView } from '../../src/world/store/api';
 import { createStore } from '../../src/world/store/store';
@@ -116,7 +117,41 @@ describe('SurfaceContext (spec §3.6)', () => {
   });
 });
 
-describe('the probe\'s column rebuild (spec §3.6): the T stage\'s fill, water v0 and biome buffer', () => {
+describe('the probe\'s column rebuild (spec §3.6): the T stage\'s fill, the carve (SP6a §3.4), water v0 and biome buffer', () => {
+  test('8 columns with carvers: the rebuilt solidity and water equal the T stage\'s at every voxel, its states the stored blocks at every solid voxel within 16 blocks below a run\'s top (the carved floors\' skins among them)', () => {
+    // Columns a worm, a ravine or an underground worm crosses at seed 42: the caverns' cave class column and its east
+    // neighbour, a ravine open to the sky at (4, −10) and the columns along it, and (0, 0) and (3, 0).
+    const cols: ReadonlyArray<readonly [number, number]> = [[546, 25857], [547, 25857], [4, -10], [5, -10], [5, -9], [6, -9], [0, 0], [3, 0]];
+    const sc = surfaceContextOf(CTX);
+    let carved = 0, skins = 0;
+    for (const col of cols) {
+      const view = generate(CTX, col[0], col[1]);
+      const c = surfaceProbeColumn(sc, col[0], col[1]);
+      const bad: string[] = [];
+      for (let p = 0; p < 256; p++) {
+        const lx = p & 15, lz = p >> 4;
+        let runTop = -65;
+        for (let y = 319; y >= -63; y--) {
+          const i = ((y + 64) << 8) | p;
+          const block = view.block(lx, y, lz);
+          const k = view.cave(lx, y, lz);
+          if (k === CAVE_KIND.worm || k === CAVE_KIND.ravine || k === CAVE_KIND.undergroundWorm) carved++;
+          if ((c.solid[i] !== 0) !== (block !== AIR)) bad.push(`(${lx}, ${y}, ${lz}): rebuilt ${c.solid[i]}, block ${block}`);
+          if ((c.water[i] !== 0) !== (view.fluid(lx, y, lz) !== 0)) bad.push(`(${lx}, ${y}, ${lz}): rebuilt water ${c.water[i]}`);
+          if (block === AIR) { runTop = -65; continue; }
+          if (runTop === -65) runTop = y;
+          if (runTop - y >= 16) continue;
+          skins++;
+          const got = surfaceProbe(sc, 16 * col[0] + lx, y, 16 * col[1] + lz).state;
+          if (got !== block) bad.push(`(${lx}, ${y}, ${lz}): probe ${REGISTRY.stateKey(got)} ≠ block ${REGISTRY.stateKey(block)}`);
+        }
+      }
+      expect([col, bad.slice(0, 10)]).toEqual([col, []]);
+    }
+    expect(carved).toBeGreaterThan(0);
+    expect(skins).toBeGreaterThan(0);
+  });
+
   test.each(FIXTURES)('%s: solidity and water equal the T stage\'s blocks and fluid at every voxel; the biome buffer is aux A\'s surfaceBiome', (_name, col) => {
     const view = viewOf(col);
     const c = surfaceProbeColumn(SC, col[0], col[1]);
@@ -246,7 +281,9 @@ describe('surfaceProbe (spec §3.6)', () => {
       const top = c.scan.runTop[c.scan.runFirst[p]!]!;
       const x = 16 * cx + (p & 15), z = 16 * cz + (p >> 4);
       expect(surfaceProbe(SC, x, top, z)).toEqual({ state: REGISTRY.parseStateKey('red_sand'), path: chain(`${BADLANDS}.rules[0].then`) });
-      for (let d = 1; d <= c.scan.surfaceDepth[p]!; d++) {
+      // Down the sky-open run only: a carver may open a cave within the band (SP6a), and below it lies another run.
+      const bottom = c.scan.runBottom[c.scan.runFirst[p]!]!;
+      for (let d = 1; d <= c.scan.surfaceDepth[p]! && top - d >= bottom; d++) {
         const got = surfaceProbe(SC, x, top - d, z);
         expect(got.path).toEqual(chain(`${BADLANDS}.rules[1]`));
         expect(REGISTRY.stateKey(got.state)).toMatch(/terracotta$/);

@@ -10,7 +10,7 @@ import { fnv1a32, hex64 } from '../../src/core/hash';
 import { latticeIndex } from '../../src/gen/column/columnStage';
 import { biomeName } from '../../src/gen/biomes/registry';
 import {
-  amplifiedBandWitness, bandWindow, bandWitness, capTopWitness, CAVE_SLOTS, caveColumn, caveFamilyCounts, caveLeaves, caveSlotLeaves, cellProbe, findWitness, intendedClass, islandColumn, islandLeaves, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
+  amplifiedBandWitness, bandWindow, bandWitness, capTopWitness, carverWitness, CAVE_SLOTS, caveColumn, caveFamilyCounts, caveLeaves, caveSlotLeaves, cellProbe, findWitness, intendedClass, islandColumn, islandLeaves, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
   scaleBandCarves, scaleWitness, SURFACE_CLASSES, surfacePrefilter, surfaceSlotLeaves, u2Leaves,
   type CaveSlot,
   type LivenessClass,
@@ -36,10 +36,12 @@ const CAVE_PINS: Readonly<Record<CaveSlot, readonly [LivenessColumn, number]>> =
   tunnels: [{ cx: 4705, cz: -24478, cls: 'cave' }, 224],
 };
 /**
- * The leaves of SP6a Tasks 6, 7, 8 and 9 (the caves group so far): U2 covers 73 + 19 + 30 + 11 + 1 + 1 = 135 leaves
- * (Task 9: the island cap's capTop, then the wet roof's waterDepth).
+ * The leaves of SP6a Tasks 6, 7, 8, 9 and 27 (the caves group): U2 covers 73 + 19 + 30 + 11 + 1 + 1 + 36 = 171 leaves
+ * (Task 9: the island cap's capTop, then the wet roof's waterDepth; Task 27: the 36 carver leaves).
  */
-const U2_LEAVES = 135;
+const U2_LEAVES = 171;
+/** The carver leaves (SP6a Task 27), decided on the class columns or on their bounded carver witness (ruling P18). */
+const CARVER_LEAVES = SCHEMA.leaves.filter((l) => /^caves\.(worms|undergroundWorms|ravines)\./.test(l.path)).map((l) => l.path);
 /** The spaghetti scale leaves (SP6a Task 7), decided on the class columns or on their bounded witness search (ruling P5). */
 const SCALE_LEAVES = [
   'caves.spaghetti3d.scales.s0', 'caves.spaghetti3d.scales.s1', 'caves.spaghetti3d.scales.s2', 'caves.spaghetti3d.scales.s3',
@@ -71,10 +73,31 @@ const BAND_PINS: Readonly<Record<(typeof BAND_LEAVES)[number], string>> = {
   'caves.entrances.maxY': 'amplified witness column (17330, 32119)',
 };
 /**
- * The leaves whose default sits at a range end, so U2 has one step for them: the band leaves (320 → 272; −64 → −54)
- * and the island cap's top (344 → 292; Task 9).
+ * The leaves whose default sits at a range end, so U2 has one step for them: the band leaves (320 → 272; −64 → −54),
+ * the island cap's top (344 → 292; Task 9) and three carver leaves (Task 27: the worms' floorMin −1 → −0.85, the rooms'
+ * yScale 0.1 → 0.115 and 0.9 → 0.765).
  */
-const ONE_STEP = ['caves.cheese.maxY', 'caves.spaghetti3d.maxY', 'caves.spaghetti2d.minY', 'caves.entrances.minY', 'caves.entrances.maxY', 'caves.limits.capTop'];
+const ONE_STEP = [
+  'caves.cheese.maxY', 'caves.spaghetti3d.maxY', 'caves.spaghetti2d.minY', 'caves.entrances.minY', 'caves.entrances.maxY',
+  'caves.worms.floorMin', 'caves.worms.roomYScaleMin', 'caves.worms.roomYScaleMax', 'caves.limits.capTop',
+];
+/**
+ * Each carver leaf's U2 verdict at seed 42 (Task 27, ruling P18): most worm leaves on the caverns' cave column, the
+ * underground worms' start range on the tunnels', the rest on their carver witness (the spiral's first source whose
+ * path a step changes; for `undergroundWorms.maxY` the first reaching its shrink's band).
+ */
+const CARVER_PINS: Readonly<Record<string, string>> = {
+  'caves.worms.branchChance': 'carver witness column (-3, -5)',
+  'caves.worms.roomYScaleMin': 'carver witness column (5, 5)',
+  'caves.worms.roomYScaleMax': 'carver witness column (-3, -5)',
+  'caves.undergroundWorms.chance': 'carver witness column (3, -6)',
+  'caves.undergroundWorms.startYMin': 'cave column (4705, -24478)',
+  'caves.undergroundWorms.startYMax': 'cave column (4705, -24478)',
+  'caves.undergroundWorms.maxY': 'carver witness column (-2, -2)',
+  'caves.ravines.chance': 'carver witness column (0, -3)',
+};
+/** The ravine leaves other than the chance: decided on the first ravine's column of the spiral that a step changes. */
+const RAVINE_WITNESS = 'carver witness column (5, 1)';
 
 /** The island cap's top (SP6a Task 9), decided on a floating_islands base at its own witness. */
 const CAP_TOP = 'caves.limits.capTop';
@@ -580,7 +603,7 @@ describe('the cave class columns (SP6a spec §4)', () => {
 
   test('the caves leaves are the caves.* group, in schema order, after the islands leaves; the slots share them but the scale leaves', () => {
     expect(caveLeaves().map((l) => l.path)).toEqual(SCHEMA.leaves.filter((l) => l.path.startsWith('caves.')).map((l) => l.path));
-    expect(caveLeaves().length).toBe(62);
+    expect(caveLeaves().length).toBe(98);
     expect(CAVE_SLOTS).toEqual(['caverns', 'tunnels']);
     const tunnels = caveSlotLeaves('tunnels').map((l) => l.path);
     expect(tunnels).toEqual([
@@ -596,9 +619,10 @@ describe('the cave class columns (SP6a spec §4)', () => {
     expect(caveSlotLeaves('caverns').length).toBe(20);
     expect(caveSlotLeaves('caverns').map((l) => l.path)).toContain('caves.limits.bandSpan');
     const slotted = new Set([...caveSlotLeaves('caverns'), ...caveSlotLeaves('tunnels')].map((l) => l.path));
-    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES, CAP_TOP, WATER_DEPTH];
+    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES, ...CARVER_LEAVES, CAP_TOP, WATER_DEPTH];
     expect(caveLeaves().map((l) => l.path).filter((p) => !slotted.has(p))).toEqual(caveLeaves().map((l) => l.path).filter((p) => apart.includes(p)));
-    expect(apart.length).toBe(21);
+    expect(CARVER_LEAVES.length).toBe(36);
+    expect(apart.length).toBe(57);
   });
 
   test('each slot\'s column: the first land column of sp6a.liveness.caves where its families act and every leaf of its slot changes the T column', () => {
@@ -623,9 +647,9 @@ describe('the cave class columns (SP6a spec §4)', () => {
     expect(caveColumn(CTX, 'tunnels', [...caveSlotLeaves('caverns'), ...caveSlotLeaves('tunnels')], CAVE_PINS.tunnels[1] + 1)).toBeNull();
   });
 
-  test('every caves leaf but the scale and band leaves, capTop and waterDepth is live on a cave column (the class it is meant for), and only through the T stage', () => {
+  test('every caves leaf but the scale, band and carver leaves, capTop and waterDepth is live on a cave column (the class it is meant for), and only through the T stage', () => {
     const cs = caves();
-    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES, CAP_TOP, WATER_DEPTH];
+    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES, ...CARVER_LEAVES, CAP_TOP, WATER_DEPTH];
     for (const l of caveLeaves().filter((x) => !apart.includes(x.path))) {
       expect(intendedClass(l.path)).toBe('cave');
       const r = leafLiveness(CTX, l.path, [...columns(), ...cs]);
@@ -659,6 +683,30 @@ describe('the cave class columns (SP6a spec §4)', () => {
       expect(findWitness(CTX, p, all)).toBe(w.via);
     }
   });
+
+  test('every carver leaf is live: on a class column, else on its bounded carver witness (ruling P18), whose column a path of its kinds crosses', () => {
+    const all = [...columns(), ...caves()];
+    const via: Record<string, string> = {};
+    for (const p of CARVER_LEAVES) {
+      expect(intendedClass(p)).toBe('cave');
+      const r = leafLiveness(CTX, p, all);
+      expect([p, r.live]).toEqual([p, true]);
+      via[p] = r.via!;
+      const pin = CARVER_PINS[p] ?? (p.startsWith('caves.ravines.') ? RAVINE_WITNESS : 'cave column (546, 25857)');
+      expect([p, r.via]).toEqual([p, pin]);
+      if (r.cls === null) {
+        // Decided on its witness: the scan's figures stay within its bounds, and the column changes its T output.
+        const w = carverWitness(CTX, p, all);
+        expect([p, w.via]).toEqual([p, r.via]);
+        expect(w.checks, p).toBeLessThanOrEqual(64);
+        expect(w.via, p).toMatch(/^carver witness column \(-?\d+, -?\d+\)$/);
+      } else {
+        expect(all.map((c) => `${c.cls} column (${c.cx}, ${c.cz})`)).toContain(r.via);
+      }
+    }
+    expect(Object.keys(via).length).toBe(36);
+    expect(() => carverWitness(CTX, 'caves.noodles.regional')).toThrow('not a carver leaf');
+  }, 300_000);
 
   test('a caves leaf is a terrain leaf: tried on the terrain class columns only, with no stream witness (dead on the others)', () => {
     const terrain: readonly LivenessClass[] = ['land', 'coast', ...SURFACE_CLASSES];

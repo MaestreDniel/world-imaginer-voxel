@@ -29,7 +29,13 @@
  * `caves.limits.capTop` (Task 9; its default 344 lies above the world, so it is dead on the default base) is decided on
  * a floating_islands base (capTop 180, U2's one effective step 207) at its own witness (`capTopWitness`), not on the
  * island class column, which the island noise picks. The wet roof's `caves.limits.waterDepth` (Task 9) acts under water
- * only: it is left out of the slots' acceptance and meant for the coast class column (`LEAF_CLASS`).
+ * only: it is left out of the slots' acceptance and meant for the coast class column (`LEAF_CLASS`). The carver leaves
+ * (`caves.worms.*` with `caves.worms.shape.*`, `caves.undergroundWorms.*`, `caves.ravines.*`; Task 27, ruling P18) act
+ * only where a carver's path passes, so they are left out of the slots' acceptance too: each is tried on the class
+ * columns (the cave columns among them), then, dead there, decided on a bounded carver witness search
+ * (`carverWitness`): the source chunks of the kinds that read the leaf, in a square spiral from (0, 0), whose path a
+ * step of the leaf changes (or makes pass or fail its roll), each giving the column of its middle ellipsoid (a column
+ * its path box meets); up to 64 such columns hashed, the first whose T column a step changes.
  */
 import { SEA_LEVEL, SPAGHETTI_BANDS } from '../core/constants';
 import { fnv1a32, hash4, hashF64, hex64 } from '../core/hash';
@@ -41,6 +47,7 @@ import { SCHEMA, type LakeParams, type Params } from '../core/params/schema';
 import { Xoshiro128 } from '../core/rng';
 import { seedFromInput } from '../core/seed';
 import type { NestedSpline } from '../core/spline/types';
+import { carverParamsOf, carverPath, type CarverKind, type CarverPath } from '../gen/caves/carvers';
 import { createGenContext, noiseFor, type GenContext } from '../gen/context';
 import { newClimate, sampleClimate } from '../gen/column/climate';
 import { newPointRecord, samplePoint, waterLevel } from '../gen/column/columnPoint';
@@ -106,6 +113,8 @@ const PROBE_COLUMN = surfaceProbeColumn;
 const NEW_SCAN = newSurfaceScan;
 const SCAN_COLUMN = scanColumn;
 const CREATE_DENSITY = createDensityContext;
+const CARVER_PARAMS_OF = carverParamsOf;
+const CARVER_PATH = carverPath;
 
 /** SP3c's surface class slots (SP3c spec §3.5), in the order a third-pass column is offered to them. */
 export const SURFACE_CLASSES = ['cliffY', 'cliffSteep', 'snowline', 'patch', 'badlands'] as const;
@@ -254,6 +263,26 @@ const CAP_OFFSET = 150;
 const CAP_TOP_MIN = 200;
 const CAP_AIR_LO = 176;
 const CAP_AIR_HI = 200;
+
+/**
+ * SP6a spec §2, §4 (Task 27, ruling P18): the carver leaves, left out of the slots' acceptance and, dead on the class
+ * columns, decided on a bounded carver witness search (`carverWitness`): up to `CARVER_SOURCES` source chunks of a
+ * square spiral from (0, 0), per chunk the kinds that read the leaf (`carverKindsOf`), a source whose path differs
+ * between the base and a step of the leaf (in its roll, its ellipsoids or its f²) giving the column of the middle
+ * ellipsoid of the first such path (the base's, else the step's); `caves.undergroundWorms.maxY`, which no path reads
+ * (it is the carve's shrink σ_u, §2.4), takes instead a passing source whose path reaches within 16 blocks below the
+ * lowest of its value and steps, giving the column of the path's highest ellipsoid. Up to `CARVER_CHECKS` distinct
+ * columns hashed, the first whose T column a step changes.
+ */
+const CARVER_LEAF = /^caves\.(worms|undergroundWorms|ravines)\./;
+/** The carver leaf the carve's shrink reads and no path does (σ_u: the underground worms narrow over 16 blocks below it). */
+const UNDER_MAX_Y = 'caves.undergroundWorms.maxY';
+const UNDER_SPAN = 16;
+const CARVER_SOURCES = 16384;
+const CARVER_CHECKS = 64;
+const isCarverLeaf = (path: string): boolean => CARVER_LEAF.test(path);
+/** The worm leaves that only worms read (underground worms have their own); the other worm leaves are both kinds'. */
+const WORM_ONLY: ReadonlySet<string> = new Set(['caves.worms.chance', 'caves.worms.startYMin', 'caves.worms.startYMax']);
 
 /** The cave class column's scan slots (SP6a spec §4): the caverns' families, then the tunnels'. */
 export type CaveSlot = 'caverns' | 'tunnels';
@@ -914,13 +943,13 @@ export function caveLeaves(): readonly LeafInfo[] {
 /**
  * The leaves a cave class column's slot must accept (SP6a spec §4), in schema order: the tunnels' leaves for `tunnels`,
  * every other `caves.*` leaf for `caverns`; never a spaghetti scale leaf (ruling P5), a depth-band leaf (`minY`,
- * `maxY`; Task 8) or `caves.limits.capTop` (Task 9), each decided on its bounded witness search when the class columns
- * leave it dead, and never `caves.limits.waterDepth` (Task 9), the wet roof's depth, decided on the coast class column
- * (it acts under water only, and the cave columns are land columns).
+ * `maxY`; Task 8), a carver leaf (Task 27, ruling P18) or `caves.limits.capTop` (Task 9), each decided on its bounded
+ * witness search when the class columns leave it dead, and never `caves.limits.waterDepth` (Task 9), the wet roof's
+ * depth, decided on the coast class column (it acts under water only, and the cave columns are land columns).
  */
 export function caveSlotLeaves(slot: CaveSlot): readonly LeafInfo[] {
-  return caveLeaves().filter((l) => !isScaleLeaf(l.path) && !isBandLeaf(l.path) && l.path !== CAP_TOP_PATH && l.path !== WATER_DEPTH_PATH
-    && TUNNEL_LEAF.test(l.path) === (slot === 'tunnels'));
+  return caveLeaves().filter((l) => !isScaleLeaf(l.path) && !isBandLeaf(l.path) && !isCarverLeaf(l.path) && l.path !== CAP_TOP_PATH
+    && l.path !== WATER_DEPTH_PATH && TUNNEL_LEAF.test(l.path) === (slot === 'tunnels'));
 }
 
 /** How often each cave family acts on a column (SP6a spec §4's cave class column), at the corner-lattice voxels. */
@@ -1034,6 +1063,86 @@ export function scaleWitness(base: GenContext, path: string, skip: readonly Live
   const info = leafInfo(path);
   if (!isScaleLeaf(path)) throw new Error(`${path} is not a spaghetti scale leaf`);
   return scaleWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
+}
+
+// ---------------------------------------------------------------- the carver leaves' witnesses (SP6a Task 27)
+
+/** The carver kinds whose paths read a carver leaf (spec §2.2-§2.3: the ravines walk with `caves.worms.shape`). */
+function carverKindsOf(path: string): readonly CarverKind[] {
+  if (path.startsWith('caves.worms.shape.')) return ['worm', 'ravine', 'undergroundWorm'];
+  if (path.startsWith('caves.worms.')) return WORM_ONLY.has(path) ? ['worm'] : ['worm', 'undergroundWorm'];
+  if (path.startsWith('caves.undergroundWorms.')) return ['undergroundWorm'];
+  if (path.startsWith('caves.ravines.')) return ['ravine'];
+  throw new Error(`${path} is not a carver leaf`);
+}
+
+/** Whether two paths of one source are equal: both null, or the same ellipsoids and f². */
+function samePath(a: CarverPath | null, b: CarverPath | null): boolean {
+  if (a === null || b === null) return a === b;
+  if (a.count !== b.count) return false;
+  for (let k = 0; k < a.ell.length; k++) if (!Object.is(a.ell[k], b.ell[k])) return false;
+  const wa = a.widthSq, wb = b.widthSq;
+  if (wa === null || wb === null) return wa === wb;
+  for (let k = 0; k < wa.length; k++) if (!Object.is(wa[k], wb[k])) return false;
+  return true;
+}
+
+/** The figures of a carver leaf's bounded witness search (ruling P18): source chunks taken and columns hashed. */
+export interface CarverWitnessScan { readonly via: string | null; readonly draws: number; readonly checks: number }
+
+function carverWitnessOf(base: GenContext, info: LeafInfo, variants: readonly GenContext[], skip: readonly LivenessColumn[], baseHash: BaseHash): CarverWitnessScan {
+  const stage = stageOf(info);
+  const kinds = carverKindsOf(info.path);
+  const ps = [base, ...variants].map((c) => CARVER_PARAMS_OF(c.params));
+  const shrinkOnly = info.path === UNDER_MAX_Y;
+  const reach = Math.min(...ps.map((p) => p.undergroundWorms.maxY)) - UNDER_SPAN;
+  const seen = new Set<number>(skip.map((c) => (c.cx + 32768) * 65536 + (c.cz + 32768)));
+  let checks = 0, draws = 0;
+  let via: string | null = null;
+  someSpiralCell(CARVER_SOURCES, (sx, sz) => {
+    draws++;
+    for (const kind of kinds) {
+      const paths = ps.map((p) => CARVER_PATH(base.seed, kind, sx, sz, p));
+      let path: CarverPath;
+      let o: number;
+      if (shrinkOnly) {
+        // The path is the base's under every step: one that reaches the shrink's band, at its highest ellipsoid.
+        const q = paths[0]!;
+        if (q === null || !(q.box[4]! > reach)) continue;
+        path = q;
+        o = 0;
+        for (let e = 1; e < q.count; e++) if (q.ell[6 * e + 1]! > q.ell[o + 1]!) o = 6 * e;
+      } else {
+        if (paths.every((q) => samePath(q, paths[0]!))) continue;
+        path = paths.find((q) => q !== null)!;
+        o = 6 * Math.floor(path.count / 2);
+      }
+      const cx = Math.floor(path.ell[o]! / 16);
+      const cz = Math.floor(path.ell[o + 2]! / 16);
+      const key = (cx + 32768) * 65536 + (cz + 32768);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      checks++;
+      const h = baseHash(stage, cx, cz);
+      if (variants.some((v) => stageOutputHash(v, stage, cx, cz) !== h)) {
+        via = `carver witness column (${cx}, ${cz})`;
+        return true;
+      }
+      if (checks >= CARVER_CHECKS) return true;
+    }
+    return false;
+  });
+  return { via, draws, checks };
+}
+
+/**
+ * A carver leaf's bounded witness search (ruling P18) over the columns not in `skip`: the deciding column
+ * (`carver witness column (cx, cz)`) or null, with the source chunks taken and the columns hashed.
+ */
+export function carverWitness(base: GenContext, path: string, skip: readonly LivenessColumn[] = []): CarverWitnessScan {
+  const info = leafInfo(path);
+  if (!isCarverLeaf(path)) throw new Error(`${path} is not a carver leaf`);
+  return carverWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
 }
 
 // ---------------------------------------------------------------- the depth-band leaves' witnesses (SP6a Task 8)
@@ -1413,7 +1522,8 @@ function decide(base: GenContext, info: LeafInfo, columns: readonly LivenessColu
   const w = stage !== 'terrain' ? witnessOf(base, info, variants, columns, baseHash)
     : isScaleLeaf(info.path) ? scaleWitnessOf(base, info, variants, columns, baseHash).via
       : isBandLeaf(info.path) ? bandVia(base, info, variants, columns, baseHash)
-        : info.path === CAP_TOP_PATH ? capTopWitness(base).via : null;
+        : isCarverLeaf(info.path) ? carverWitnessOf(base, info, variants, columns, baseHash).via
+          : info.path === CAP_TOP_PATH ? capTopWitness(base).via : null;
   return w !== null ? { path: info.path, live: true, via: w, cls: null } : { path: info.path, live: false, via: null, cls: intended };
 }
 
@@ -1428,8 +1538,9 @@ function bandVia(base: GenContext, info: LeafInfo, variants: readonly GenContext
 /**
  * One leaf's U2 verdict over `columns` (the class columns of `base`): its stage output hash on the class columns (the
  * intended class first; a `terrain` leaf only on the land, coast, surface, island and cave ones), then, except for a
- * `terrain` leaf, the witness search; a spaghetti scale leaf, a depth-band leaf and `caves.limits.capTop` (`terrain`
- * leaves) have their own (ruling P5; Task 8's `bandWitness`; Task 9's `capTopWitness`).
+ * `terrain` leaf, the witness search; a spaghetti scale leaf, a depth-band leaf, a carver leaf and `caves.limits.capTop`
+ * (`terrain` leaves) have their own (ruling P5; Task 8's `bandWitness`; Task 27's `carverWitness`; Task 9's
+ * `capTopWitness`).
  */
 export function leafLiveness(base: GenContext, path: string, columns: readonly LivenessColumn[]): LivenessResult {
   return decide(base, leafInfo(path), columns, baseHasher(base));
@@ -1479,7 +1590,8 @@ export function islandColumn(base: GenContext, leaves: readonly LeafInfo[] = isl
  * The cave class columns (SP6a spec §4, one per slot) join the class columns; none found for a slot with leaves: "no
  * cave column (<slot>)". The spaghetti scale leaves dead on the class columns are decided on their bounded witness
  * search (ruling P5), the depth-band leaves on their band witness, then (three maxY leaves) on the amplified base (P3),
- * and `caves.limits.capTop` on its floating_islands witness (`capTopWitness`, Task 9).
+ * the carver leaves on their carver witness (`carverWitness`, Task 27, ruling P18) and `caves.limits.capTop` on its
+ * floating_islands witness (`capTopWitness`, Task 9).
  */
 export function u2(seedText = '42'): { readonly value: number; readonly results: readonly LivenessResult[] } {
   const base = CREATE(SEED(seedText), RESOLVE('default'));

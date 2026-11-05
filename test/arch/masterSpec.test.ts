@@ -120,12 +120,15 @@
  * item 7's D19 sentence as ruling R8 words it. The tag commit (Task 11) pins item 11's debug-channel sentence (§3.6: T
  * writes the winning kind into the `cave` channel) and item 8's `gen/caves/*` token, §1 naming each SP6a module in its
  * entry, which exists (`SP6A_MODULES`, its first row added with `tags.ts`; Tasks 17, 18, 21, 24, 26 and 43 append theirs).
+ * The carve commit (Task 27) pins item 12, §3.8's carvers as built (the window R = 11, the paths with the rooms and the
+ * underground worm's shrink, the carving rules), whose values state the schema defaults of the carver leaves, and moves
+ * item 20's U2 count to the carver leaves.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { SUB_PROJECTS, type SubProjectId } from '../../src/core/ids';
-import { ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
+import { CARVER_CACHE_PATHS, CARVER_WINDOW_R, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import * as presetTrees from '../../src/core/params/presetTrees';
 import { resolveProfile } from '../../src/core/params/profiles';
@@ -1985,10 +1988,10 @@ describe('master spec amendments (SP6a §13)', () => {
     const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
     expect(u2, 'no U2 row in §6.4').toBeDefined();
     const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
-    expect(n).toBe(135);
+    expect(n).toBe(171);
     // Task 8: the two scan slots (Task 7) and the amplified base of three maxY leaves (ruling P3); Task 9: capTop's
-    // floating_islands base and waterDepth's coast class column.
-    expect(u2).toContain(`; SP6a: the caves.* leaves are decided on the cave class columns (two scan slots) or a bounded witness, the maxY leaves of cheese, spaghetti 3D and the entrances on an amplified base, the island cap's \`caves.limits.capTop\` on a floating_islands base, the wet roof's \`caves.limits.waterDepth\` on the coast class column; U2 covers ${n} leaves (amended by SP6a)`);
+    // floating_islands base and waterDepth's coast class column; Task 27: the carver leaves' bounded witness (ruling P18).
+    expect(u2).toContain(`; SP6a: the caves.* leaves are decided on the cave class columns (two scan slots) or a bounded witness, the maxY leaves of cheese, spaghetti 3D and the entrances on an amplified base, the island cap's \`caves.limits.capTop\` on a floating_islands base, the wet roof's \`caves.limits.waterDepth\` on the coast class column, the carver leaves (\`caves.worms.*\`, \`caves.undergroundWorms.*\`, \`caves.ravines.*\`) on a bounded carver witness where the class columns leave them dead; U2 covers ${n} leaves (amended by SP6a)`);
   });
 
   test('§3.6 holds the default expression as built, with the schema defaults of DEFAULTS.caves; §2.4 names wetMask (SP6a spec §13 items 7 and 11)', () => {
@@ -2053,6 +2056,41 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(block).toContain('| 136-207 | proto descriptors (24 × 3) |');
     expect(text).toContain('interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Array, cave?:Uint8Array): void');
     expect(text).toContain('sectionCave(sy:number): Uint8Array|number; cave(lx:number, y:number, lz:number): number /* SP6a: the cave channel; a proto view reads the proto set */');
+  });
+
+  test('§3.8\'s carvers as built: the window R = 11, the paths with the rooms and the underground worm\'s shrink below y 40, the carving rules (SP6a spec §13 item 12)', () => {
+    const lines = text.split('\n');
+    const from = lines.findIndex((l) => l.startsWith('### 3.8 '));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('### 3.9 '));
+    expect(from, 'no §3.8').toBeGreaterThanOrEqual(0);
+    const block = lines.slice(from, to).join('\n');
+    expect(block).toContain('within R = 11 chunks (23 × 23), R derived from the leaves\' maxima (SP6a)');
+    // The window is the constant the carve uses.
+    expect(CARVER_WINDOW_R).toBe(11);
+    // §2.2-§2.3's paths as built: the room and the underground worm's shrink below y 40.
+    expect(block).toContain('- a room (SP6a): with chance 0.25 a worm starts with an ellipsoid of horizontal radius (1 + 6·u)·hMul and vertical radius that times yScale ∈ [0.1, 0.9] (Minecraft\'s room);');
+    expect(block).toContain('shrinking to nothing over the 16 blocks below y 40 (`caves.undergroundWorms.maxY`), so none reaches above y 40 (SP6a)');
+    expect(block).toContain('Only `CARVABLE` blocks; carvers shrink to nothing under water and below `caves.limits.capTop` (from y 172 in floating_islands) (SP6a); structure piece boxes (SP9) shrink them the same way; each carved voxel asks `aquifer.fluidAt` (SP7; until then it is air); carving runs before the surface pass, which skins the carved column (SP6a).');
+    expect(block).toContain('carving runs before the surface pass, which skins the carved column (SP6a)');
+    // The values as built are the schema's defaults (the carver leaves, Task 27): a retune amends the master.
+    const w = DEFAULTS.caves.worms, u = DEFAULTS.caves.undergroundWorms, r = DEFAULTS.caves.ravines, sh = w.shape;
+    const sgn = (v: number): string => (v < 0 ? `−${-v}` : `${v}`);
+    expect(block).toContain(`cave carver (worm): p = ${w.chance}, plus an underground-only carver (underground worm) with p = ${u.chance}, starting at y ${sgn(u.startYMin)} … ${u.startYMax} and shrinking to nothing over the 16 blocks below y ${u.maxY}`);
+    expect(block).toContain(`canyon carver (ravine): p = ${r.chance}.`);
+    expect(block).toContain(`y uniform in [${sgn(w.startYMin)}, ${w.startYMax}]`);
+    expect(block).toContain(`n = max(1, ${w.length} − ⌊${w.lengthVar}·u⌋) steps`);
+    expect(block).toContain(`hMul ∈ [${w.radiusMin}, ${w.radiusMax}]`);
+    expect(block).toContain(`vMul ∈ [${w.vRatioMin}, ${w.vRatioMax}]`);
+    expect(block).toContain(`floor_level in [${sgn(w.floorMin)}, ${sgn(w.floorMax)}]`);
+    expect(block).toContain(`with chance ${w.roomChance} a worm starts with an ellipsoid`);
+    expect(block).toContain(`yScale ∈ [${w.roomYScaleMin}, ${w.roomYScaleMax}]`);
+    expect(block).toContain(`a branch at the midpoint with ${100 * w.branchChance}% chance`);
+    expect(block).toContain(`pitch ·= ${sh.pitchKeep}; yaw += ${sh.yawStep}·yd; pitch += ${sh.pitchStep}·pd; yd = ${sh.yawDriftKeep}·yd + (u − u)·u·${sh.yawDriftMul}; pd = ${sh.pitchDriftKeep}·pd + (u − u)·u·${sh.pitchDriftMul}`);
+    expect(block).toContain(`start y ${r.startYMin}-${r.startYMax}, yScale ${r.yScale}, vertical rotation ±${r.vRotation}, trapezoid thickness 0-${r.thicknessMax} with plateau ${r.plateau}`);
+    expect(block).toContain(`redrawn every ${r.widthSmoothness} blocks (width smoothness ${r.widthSmoothness})`);
+    expect(block).toContain(`length ${r.lengthMin}-${r.lengthMax} (SP6a)`);
+    expect(block).toContain(`a worker LRU of ${CARVER_CACHE_PATHS} entries (\`CARVER_CACHE_PATHS\``);
+    expect(block).not.toContain('within 8 columns');
   });
 
   /** [§1 entry head, the token its entry holds, the file on disk]; each later task that creates a module appends its row. */

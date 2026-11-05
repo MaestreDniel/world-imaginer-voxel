@@ -61,6 +61,17 @@ const bandY = (def: number, end: 'minY' | 'maxY', family: string) => int(def, {
     ? `${family} narrow below this y over the band span, then close over the next 8 blocks.`
     : `${family} narrow above this y over the band span, then close over the next 8 blocks.`,
 });
+/** A carver's chance per source chunk (SP6a spec §2.1, §4): 0 … `max`. */
+const chance = (def: number, label: string, doc: string, max: number) =>
+  num(def, { ...TERRAIN, label, doc, min: 0, max, step: 0.005 });
+/** A carver number (SP6a spec §2.2-§2.3, §4). */
+const carverNum = (def: number, label: string, doc: string, min: number, max: number) =>
+  num(def, { ...TERRAIN, label, doc, min, max, step: 0.05 });
+/** A carver's start height (SP6a spec §2.2-§2.3): an int y in −64 … 320. */
+const carverY = (def: number, label: string, doc: string) => int(def, { ...TERRAIN, label, doc, unit: 'y', min: -64, max: 320 });
+/** A drift constant of the carvers' walk (`caves.worms.shape`, SP6a spec §2.2): 0 … `max` (the keeps 0 … 1, ruling P17). */
+const shapeNum = (def: number, label: string, doc: string, max: number) =>
+  num(def, { ...TERRAIN, label, doc, min: 0, max, step: 0.05 });
 
 /** A surface noise (SP3c spec §3.5): 2D, sampled at unscaled world block coordinates; remap 'none' (validateRules refuses another). */
 const surfaceNoise = (label: string, doc: string, def: { readonly wavelength: number; readonly octaves: number }, wavelength: { readonly min: number; readonly max: number }) =>
@@ -222,6 +233,53 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       threshold: num(0.08, { ...TERRAIN, label: 'Threshold', doc: 'Width of the entrance tunnels: carved where max(|E1|, |E2|) is below about this.', min: 0, max: 0.5, step: 0.005 }),
       minY: bandY(-64, 'minY', 'Entrances'),
       maxY: bandY(320, 'maxY', 'Entrances'),
+    }),
+    // SP6a spec §2, §4 (Task 27): the carvers' leaves, read by `carverParamsOf` and the carve step in T. Where §4 gives
+    // no range, the plan's: branchChance, roomChance 0 … 1, roomYScaleMin/Max 0.1 … 0.9, startYMin/Max −64 … 320,
+    // ravines.plateau 0 … 8, ravines.vRotation 0 … 0.5, worms.shape.* 0 … 8 but the three keeps 0 … 1 (ruling P17).
+    worms: group('Worms', 'Minecraft\'s cave carver: tunnels walked from a source per chunk, each step an ellipsoid (SP6a spec §2.1-§2.2).', {
+      chance: chance(0.15, 'Chance', 'Probability that a chunk starts a worm.', 1),
+      length: int(112, { ...TERRAIN, label: 'Length', doc: 'Steps of a worm (each moves 1 block), before the length variation.', unit: 'blocks', min: 32, max: 160 }),
+      lengthVar: int(28, { ...TERRAIN, label: 'Length variation', doc: 'A worm is length − ⌊lengthVar·u⌋ steps long (at least 1).', unit: 'blocks', min: 0, max: 64 }),
+      radiusMin: carverNum(0.7, 'Lowest radius factor', 'The horizontal radius factor is drawn in radiusMin … radiusMax.', 0.1, 2),
+      radiusMax: carverNum(1.4, 'Highest radius factor', 'The horizontal radius factor is drawn in radiusMin … radiusMax.', 0.1, 2),
+      vRatioMin: carverNum(0.8, 'Lowest height factor', 'The vertical radius factor is drawn in vRatioMin … vRatioMax.', 0.1, 3),
+      vRatioMax: carverNum(1.3, 'Highest height factor', 'The vertical radius factor is drawn in vRatioMin … vRatioMax.', 0.1, 3),
+      floorMin: carverNum(-1, 'Lowest floor', 'A worm carves only above its floor, drawn in floorMin … floorMax (in vertical radii from its centre; −1: no floor).', -1, 1),
+      floorMax: carverNum(-0.4, 'Highest floor', 'A worm carves only above its floor, drawn in floorMin … floorMax (in vertical radii from its centre; −1: no floor).', -1, 1),
+      branchChance: chance(0.25, 'Branch chance', 'Probability that a thick worm splits into two branches at its midpoint.', 1),
+      roomChance: chance(0.25, 'Room chance', 'Probability that a worm starts in a room, a wide flat ellipsoid.', 1),
+      roomYScaleMin: carverNum(0.1, 'Lowest room height', 'A room\'s height over its width is drawn in roomYScaleMin … roomYScaleMax.', 0.1, 0.9),
+      roomYScaleMax: carverNum(0.9, 'Highest room height', 'A room\'s height over its width is drawn in roomYScaleMin … roomYScaleMax.', 0.1, 0.9),
+      startYMin: carverY(-56, 'Lowest start', 'A worm starts at a y drawn in startYMin … startYMax.'),
+      startYMax: carverY(180, 'Highest start', 'A worm starts at a y drawn in startYMin … startYMax.'),
+      shape: group('Shape', 'Minecraft\'s drift constants of every carver\'s walk (SP6a spec §2.2): pitch ·= pitchKeep; yaw += yawStep·yd; pitch += pitchStep·pd; yd = yawDriftKeep·yd + (u − u)·u·yawDriftMul; pd = pitchDriftKeep·pd + (u − u)·u·pitchDriftMul.', {
+        pitchKeep: shapeNum(0.7, 'Pitch keep', 'The pitch is multiplied by this at every step: lower → flatter tunnels.', 1),
+        yawStep: shapeNum(0.1, 'Yaw step', 'Times the yaw drift, added to the yaw at every step.', 8),
+        pitchStep: shapeNum(0.1, 'Pitch step', 'Times the pitch drift, added to the pitch at every step.', 8),
+        yawDriftKeep: shapeNum(0.75, 'Yaw drift keep', 'The part of the yaw drift kept at every step.', 1),
+        yawDriftMul: shapeNum(4, 'Yaw drift gain', 'The yaw drift\'s random kick at every step: higher → more winding.', 8),
+        pitchDriftKeep: shapeNum(0.9, 'Pitch drift keep', 'The part of the pitch drift kept at every step.', 1),
+        pitchDriftMul: shapeNum(2, 'Pitch drift gain', 'The pitch drift\'s random kick at every step: higher → steeper slopes.', 8),
+      }),
+    }),
+    undergroundWorms: group('Underground worms', 'Worms that start deep and shrink to nothing below maxY (SP6a spec §2.2, §2.4); their other leaves are the Worms\'.', {
+      chance: chance(0.07, 'Chance', 'Probability that a chunk starts an underground worm.', 1),
+      startYMin: carverY(-56, 'Lowest start', 'An underground worm starts at a y drawn in startYMin … startYMax.'),
+      startYMax: carverY(24, 'Highest start', 'An underground worm starts at a y drawn in startYMin … startYMax.'),
+      maxY: int(40, { ...TERRAIN, label: 'Highest y', doc: 'Underground worms narrow over the 16 blocks below this y and carve nothing from it up.', unit: 'y', min: -32, max: 120 }),
+    }),
+    ravines: group('Ravines', 'Minecraft\'s canyon carver: tall narrow paths with rough walls (SP6a spec §2.3).', {
+      chance: chance(0.015, 'Chance', 'Probability that a chunk starts a ravine.', 0.2),
+      lengthMin: int(84, { ...TERRAIN, label: 'Shortest', doc: 'A ravine is lengthMin … max(lengthMin, lengthMax) steps long.', unit: 'blocks', min: 32, max: 160 }),
+      lengthMax: int(112, { ...TERRAIN, label: 'Longest', doc: 'A ravine is lengthMin … max(lengthMin, lengthMax) steps long.', unit: 'blocks', min: 32, max: 160 }),
+      thicknessMax: carverNum(6, 'Thickness', 'A ravine\'s thickness is drawn from a trapezoid on 0 … thicknessMax.', 0, 8),
+      plateau: carverNum(2, 'Plateau', 'The width of the trapezoid\'s flat top (at most thicknessMax).', 0, 8),
+      yScale: carverNum(3, 'Height factor', 'A step\'s vertical radius over its horizontal one.', 0.5, 6),
+      widthSmoothness: int(3, { ...TERRAIN, label: 'Width smoothness', doc: 'The walls\' roughness is redrawn every this many rows: higher → smoother walls.', unit: 'blocks', min: 1, max: 16 }),
+      vRotation: num(0.125, { ...TERRAIN, label: 'Vertical rotation', doc: 'The start pitch is drawn in ±vRotation.', min: 0, max: 0.5, step: 0.005 }),
+      startYMin: carverY(10, 'Lowest start', 'A ravine starts at a y drawn in startYMin … startYMax.'),
+      startYMax: carverY(72, 'Highest start', 'A ravine starts at a y drawn in startYMin … startYMax.'),
     }),
     limits: group('Limits', 'Where the cave families may reach (SP6a spec §1.4).', {
       surfaceDepth: num(8, { ...TERRAIN, label: 'Surface depth', doc: 'The deep families fade out above this depth: + clamp((surfaceDepth − T)·2, 0, 32) (0 at T ≥ surfaceDepth, 16 at the surface).', unit: 'blocks', min: 0, max: 32, step: 1 }),

@@ -340,11 +340,15 @@ describe('ref ↔ literal on every numeric field, and neg', () => {
       expect([key, at(back)]).toEqual([key, 0 - (int ? DEFAULTS.surface.cliffMinY : DEFAULTS.surface.snowline)]);
     }
     // SP6a Task 8: the caves group's int leaves, each family's minY and maxY and the band span, follow (Task 9: the wet
-    // roof's waterDepth and capTop).
+    // roof's waterDepth and capTop; Task 27: the carvers' int leaves, between the entrances and the limits).
     expect(refOptions(DEFAULTS, true).map((o) => o.path)).toEqual([
       'surface.lapseBase', 'surface.cliffMinY',
       'caves.cheese.minY', 'caves.cheese.maxY', 'caves.spaghetti3d.minY', 'caves.spaghetti3d.maxY', 'caves.spaghetti2d.minY',
       'caves.spaghetti2d.maxY', 'caves.noodles.minY', 'caves.noodles.maxY', 'caves.entrances.minY', 'caves.entrances.maxY',
+      'caves.worms.length', 'caves.worms.lengthVar', 'caves.worms.startYMin', 'caves.worms.startYMax',
+      'caves.undergroundWorms.startYMin', 'caves.undergroundWorms.startYMax', 'caves.undergroundWorms.maxY',
+      'caves.ravines.lengthMin', 'caves.ravines.lengthMax', 'caves.ravines.widthSmoothness', 'caves.ravines.startYMin',
+      'caves.ravines.startYMax',
       'caves.limits.waterDepth', 'caves.limits.bandSpan', 'caves.limits.capTop',
     ]);
     expect(refOptions(DEFAULTS, false).map((o) => o.path)).toEqual([...ALLOWED_REF_TARGETS.keys()]);

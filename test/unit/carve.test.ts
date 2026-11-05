@@ -9,16 +9,22 @@
  *   floating island over the sea (SP6a spec §2.4: the sea bed's, water v0's base rule);
  * - the window's order: a voxel two sources carve is tagged with the first;
  * - wet′ in `carve.ts` equals the default tree's wet′ subtree through the reference, bit for bit, at 10,000 positions;
- * - `carvedKind` equals `carveColumn`'s tags on every density-solid voxel of 8 columns (ruling P19), column by column.
+ * - `carvedKind` equals `carveColumn`'s tags on every density-solid voxel of 8 columns (ruling P19), column by column;
+ * - `carverCacheOf` (Task 27): one cache per GenContext over `carverParamsOf(ctx.params)` with capacity 1,024, a new one
+ *   for a new context (a `configure`); `carvedAt` equals the T stage's carve on every density-solid voxel of 8 columns,
+ *   an island-over-sea column of floating_islands among them.
  */
 import { describe, expect, test } from 'vitest';
-import { CARVER_WINDOW_R, CAVE_KIND, HEIGHT, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
+import { CARVER_CACHE_PATHS, CARVER_WINDOW_R, CAVE_KIND, HEIGHT, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
-import { carveColumn, carvedKind, carveShrink, carveTest, densityTopOf, wetAt } from '../../src/gen/caves/carve';
-import { createCarverCache, type CarverCache } from '../../src/gen/caves/carverCache';
-import { carverPath, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
+import { carveColumn, carvedAt, carvedKind, carveShrink, carveTest, densityTopColumn, densityTopOf, wetAt } from '../../src/gen/caves/carve';
+import { carverCacheOf, createCarverCache, type CarverCache } from '../../src/gen/caves/carverCache';
+import { carverParamsOf, carverPath, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
+import { probe } from '../../src/gen/density/probe';
+import { terrainStage } from '../../src/gen/pipeline/terrainStage';
+import { createStore } from '../../src/world/store/store';
 import { newColumnSample, type ColumnSample } from '../../src/gen/column/columnStage';
 import { createGenContext } from '../../src/gen/context';
 import { fillDensityColumn } from '../../src/gen/density/bounds';
@@ -92,7 +98,7 @@ function firstDiff(a: Uint8Array, b: Uint8Array): number {
 /** A cache that serves the given paths by source and nothing else. */
 function fakeCache(paths: readonly CarverPath[]): CarverCache {
   const m = new Map(paths.map((q) => [`${q.kind} ${q.sx} ${q.sz}`, q] as const));
-  return { path: (kind, sx, sz) => m.get(`${kind} ${sx} ${sz}`) ?? null, size: m.size };
+  return { path: (kind, sx, sz) => m.get(`${kind} ${sx} ${sz}`) ?? null, size: m.size, params: CARVER_DEFAULTS, capacity: Math.max(1, m.size) };
 }
 
 /** A vertical stack of spheres of radius r at (x, z), one per y from y0 to y1, floor −1 (none); a ravine's f² all 1. */
@@ -492,5 +498,88 @@ describe('carvedKind (SP6a spec §3.4; rulings P19, P22)', () => {
     expect(unheldCalls, 'densityTopAt called for a voxel no ellipsoid holds').toBe(0);
     expect(wetCalls).toBeLessThan(wetVoxels);
     expect([...kinds].every((k) => k === CAVE_KIND.worm || k === CAVE_KIND.ravine || k === CAVE_KIND.undergroundWorm)).toBe(true);
+  });
+});
+
+describe('carverCacheOf and carvedAt (SP6a spec §2.5, §3.4; Task 27)', () => {
+  test('carverCacheOf: one cache per GenContext, over carverParamsOf(ctx.params) with capacity 1,024; a new context (a configure) gets a new, empty one', () => {
+    const a = ctxFor('42');
+    const cache = carverCacheOf(a);
+    expect(carverCacheOf(a)).toBe(cache);
+    expect(cache.params).toEqual(carverParamsOf(a.params));
+    expect(cache.params).toEqual(CARVER_DEFAULTS);
+    expect([cache.capacity, CARVER_CACHE_PATHS]).toEqual([1024, 1024]);
+    cache.path('worm', 0, 0);
+    for (let sx = -3; sx <= 3; sx++) cache.path('worm', sx, 5);
+    expect(cache.size).toBeGreaterThan(0);
+    // A configure builds a new GenContext (src/workers/taskHandler.ts): its cache is another, empty object.
+    const b = ctxFor('42');
+    const fresh = carverCacheOf(b);
+    expect(fresh).not.toBe(cache);
+    expect(fresh.size).toBe(0);
+    // Other carver leaves, another cache over them.
+    const c = ctxFor('42', { caves: { worms: { chance: 0.3 } } });
+    expect(carverCacheOf(c).params.worms.chance).toBe(0.3);
+  });
+
+  test('densityTopColumn is densityTopOf at every position, with and without the island rule; it checks its sizes', () => {
+    const c = filled(dc, 0, 0);
+    for (const islands of [false, true]) {
+      const out = new Int16Array(256);
+      densityTopColumn(c.solid, islands, out);
+      expect(Array.from(out)).toEqual(Array.from(topsOf(c.solid, islands)));
+    }
+    expect(() => densityTopColumn(new Uint8Array(4096), false, new Int16Array(256))).toThrow(RangeError);
+    expect(() => densityTopColumn(c.solid, false, new Int16Array(255))).toThrow(RangeError);
+  });
+
+  test('carvedAt equals the T stage\'s carve on every density-solid voxel of 8 columns, an island-over-sea column of floating_islands included', () => {
+    const floating = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
+    const cols: ReadonlyArray<readonly [typeof ctx, number, number]> = [
+      [ctx, 546, 25857], [ctx, 4, -10], [ctx, 5, -9], [ctx, 0, 0], [ctx, 3, 0], [ctx, -20, 0], [ctx, -18, 1],
+      // Beside test/unit/floatingIslands.test.ts' SEA_CORE: an island over the sea at all 256 positions (wet′ 1; the density
+      // top is the sea bed's), with carvers under the bed.
+      [floating, 19357, -22223],
+    ];
+    const kinds = new Set<number>();
+    let carved = 0;
+    for (const [c, cx, cz] of cols) {
+      const store = createStore({ shared: false, maxBlockBytes: 4 << 20, maxByteBytes: 4 << 20 });
+      const w = store.claimColumn(cx, cz, 0);
+      expect(terrainStage(c, cx, cz, w, NEVER)).toBe(true);
+      w.commit(1);
+      const view = store.proto(cx, cz)!;
+      const d = createDensityContext(c);
+      const bad: string[] = [];
+      let here = 0;
+      // Column by column (P22): every voxel of this column before the next.
+      for (let y = -63; y <= 319; y++) {
+        for (let lz = 0; lz < 16; lz++) {
+          for (let lx = 0; lx < 16; lx++) {
+            const x = 16 * cx + lx, z = 16 * cz + lz;
+            if (!(probe(d, x, y, z) > 0)) continue;
+            const stored = view.cave(lx, y, lz);
+            const got = carvedAt(d, x, y, z);
+            if (got !== stored) bad.push(`(${x}, ${y}, ${z}): carvedAt ${got} ≠ stored ${stored}`);
+            if (got !== 0) { here++; kinds.add(got); }
+          }
+        }
+      }
+      expect([cx, cz, bad.slice(0, 5)]).toEqual([cx, cz, []]);
+      if (c === floating) {
+        expect(here, 'the island-over-sea column carves').toBeGreaterThan(0);
+        // Every position holds an island above y 180 over the sea.
+        for (let p = 0; p < 256; p++) {
+          expect(view.fluid(p & 15, 60, p >> 4)).not.toBe(0);
+          let island = false;
+          for (let y = 181; y < 320 && !island; y++) island = view.block(p & 15, y, p >> 4) !== 0;
+          expect(island).toBe(true);
+        }
+      }
+      carved += here;
+    }
+    expect(carved).toBeGreaterThan(0);
+    expect([...kinds].sort()).toEqual([CAVE_KIND.worm, CAVE_KIND.ravine, CAVE_KIND.undergroundWorm].filter((k) => kinds.has(k)).sort());
+    expect(kinds.has(CAVE_KIND.worm) && kinds.has(CAVE_KIND.ravine)).toBe(true);
   });
 });

@@ -1,8 +1,10 @@
 /**
- * The SP6a goldens (SP6a spec §12.3, D28): `sp6a.density.ops`, chained last into `allGoldenKeys` (push B appends
- * `sp6a.carver.paths` and `sp6a.region.T.caves`). Its fixture is a density source tree that uses `noiseScaled` (D18,
- * §1.5) inside and outside `interpolated`, with literal scales and a `{param}` scale; the values are the compiled
- * corners and voxels of column (0, 0), equal to the reference, and the key matches `test/goldens.json`.
+ * The SP6a goldens (SP6a spec §12.3, D28): `sp6a.density.ops` and `sp6a.carver.paths` (push B, Task 27), chained last
+ * into `allGoldenKeys` (Task 39 appends `sp6a.region.T.caves`). `sp6a.density.ops`' fixture is a density source tree
+ * that uses `noiseScaled` (D18, §1.5) inside and outside `interpolated`, with literal scales and a `{param}` scale; the
+ * values are the compiled corners and voxels of column (0, 0), equal to the reference. `sp6a.carver.paths` digests the
+ * paths of 64 fixed sources per kind at seed 42 and the defaults (the first 64 per kind whose roll passes, in a spiral
+ * from (0, 0)). Both keys match `test/goldens.json`.
  */
 import { describe, expect, test } from 'vitest';
 import { hashF64, hex64 } from '../../src/core/hash';
@@ -16,8 +18,11 @@ import { createDensityReference, interpolatedNodes } from '../../src/gen/density
 import { validateDensitySource } from '../../src/gen/density/source';
 import { allGoldenKeys, computeAnyGolden } from '../../src/metrics/sp2aGoldens';
 import {
-  computeSp6aGolden, densityScaledExpr, densityScaledPoints, densityScaledSource, densityScaledValues, sp6aGoldenKeys,
+  carverGoldenPaths, carverPathsValues, computeSp6aGolden, densityScaledExpr, densityScaledPoints, densityScaledSource,
+  densityScaledValues, sp6aGoldenKeys,
 } from '../../src/metrics/sp6aGoldens';
+import { DEFAULTS } from '../../src/core/params/defaults';
+import { carverParamsOf, carverPath } from '../../src/gen/caves/carvers';
 import { expectGolden } from '../harness/goldens';
 
 const CTX = createGenContext(seedFromInput('42'), resolveProfile('default'));
@@ -34,13 +39,13 @@ function nodesOf(root: Expr): Array<{ readonly node: Expr; readonly inside: bool
   return out;
 }
 
-test('1 SP6a key, chained last into allGoldenKeys after SP3e\'s: 60 goldens', () => {
-  expect(sp6aGoldenKeys()).toEqual(['sp6a.density.ops']);
-  expect(allGoldenKeys().slice(-1)).toEqual(['sp6a.density.ops']);
-  expect(allGoldenKeys().slice(-2, -1)).toEqual(['sp3e.column.point.floating_islands']);
-  expect(allGoldenKeys()).toHaveLength(60);
-  expect(new Set(allGoldenKeys()).size).toBe(60);
-  for (const bad of ['sp6a.density', 'sp6a.density.ops.x', 'sp6a.carver.paths', 'sp6a.region.T.caves', 'sp6a.nope']) {
+test('2 SP6a keys, chained last into allGoldenKeys after SP3e\'s: 61 goldens', () => {
+  expect(sp6aGoldenKeys()).toEqual(['sp6a.density.ops', 'sp6a.carver.paths']);
+  expect(allGoldenKeys().slice(-2)).toEqual(['sp6a.density.ops', 'sp6a.carver.paths']);
+  expect(allGoldenKeys().slice(-3, -2)).toEqual(['sp3e.column.point.floating_islands']);
+  expect(allGoldenKeys()).toHaveLength(61);
+  expect(new Set(allGoldenKeys()).size).toBe(61);
+  for (const bad of ['sp6a.density', 'sp6a.density.ops.x', 'sp6a.carver', 'sp6a.carver.paths.x', 'sp6a.region.T.caves', 'sp6a.nope']) {
     expect(() => computeSp6aGolden(bad)).toThrow(/unknown golden/);
     expect(() => computeAnyGolden(bad)).toThrow(/unknown golden/);
   }
@@ -87,6 +92,55 @@ describe('sp6a.density.ops (§12.3)', () => {
     expect(bad).toEqual([]);
     expect(computeSp6aGolden('sp6a.density.ops')).toBe(hex64(hashF64(values)));
     expect(computeAnyGolden('sp6a.density.ops')).toBe(computeSp6aGolden('sp6a.density.ops'));
+  });
+});
+
+describe('sp6a.carver.paths (§12.3; spec §2.1-§2.3)', () => {
+  /** The chunks of a square spiral from (0, 0), as the golden's comment states. */
+  function* spiral(): Generator<[number, number]> {
+    yield [0, 0];
+    for (let r = 1; ; r++) {
+      for (let i = -r; i <= r; i++) yield [i, -r];
+      for (let j = 1 - r; j <= r; j++) yield [r, j];
+      for (let i = r - 1; i >= -r; i--) yield [i, r];
+      for (let j = r - 1; j > -r; j--) yield [-r, j];
+    }
+  }
+
+  test('64 fixed sources per kind: the first 64 whose roll passes in a spiral from (0, 0), seed 42, the default carver leaves', () => {
+    const p = carverParamsOf(DEFAULTS);
+    for (const kind of ['worm', 'ravine', 'undergroundWorm'] as const) {
+      const want: Array<[number, number]> = [];
+      for (const [sx, sz] of spiral()) {
+        if (carverPath(CTX.seed, kind, sx, sz, p) !== null) want.push([sx, sz]);
+        if (want.length === 64) break;
+      }
+      const got = carverGoldenPaths(kind);
+      expect(got.map((q) => [q.sx, q.sz])).toEqual(want);
+      for (const q of got) expect(q.kind).toBe(kind);
+      // The paths are carverPath's, bit for bit.
+      for (const q of got) expect(q).toEqual(carverPath(CTX.seed, kind, q.sx, q.sz, p));
+    }
+  });
+
+  test('the values: per kind, per path, sx, sz, count, box, ellipsoids and (ravines) f²; the key hashes them', () => {
+    const v = carverPathsValues();
+    let n = 0;
+    for (const kind of ['worm', 'ravine', 'undergroundWorm'] as const) {
+      for (const q of carverGoldenPaths(kind)) {
+        expect([v[n], v[n + 1], v[n + 2]]).toEqual([q.sx, q.sz, q.count]);
+        expect(Array.from(v.subarray(n + 3, n + 9))).toEqual(Array.from(q.box));
+        expect(Array.from(v.subarray(n + 9, n + 9 + 6 * q.count))).toEqual(Array.from(q.ell));
+        n += 9 + 6 * q.count;
+        if (q.widthSq !== null) {
+          expect(Array.from(v.subarray(n, n + 384))).toEqual(Array.from(q.widthSq));
+          n += 384;
+        }
+      }
+    }
+    expect(v.length).toBe(n);
+    expect(computeSp6aGolden('sp6a.carver.paths')).toBe(hex64(hashF64(v)));
+    expect(computeAnyGolden('sp6a.carver.paths')).toBe(computeSp6aGolden('sp6a.carver.paths'));
   });
 });
 

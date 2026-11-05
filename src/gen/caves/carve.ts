@@ -26,13 +26,18 @@
  * Per cache, the window's paths that meet the current column are kept as one list of (path, ellipsoid, voxel range)
  * entries in the window's order, rebuilt when the column changes (ruling P22): `carvedKind` probes voxel by voxel and
  * reuses it while its calls stay in one column. The list is a pure function of the cache's paths, so it changes no
- * output. Follows the gen determinism rules.
+ * output.
+ * The point probe (spec §3.4, D22): `carvedAt(dc, x, y, z)` is `carvedKind` through `carverCacheOf(dc.ctx)` with the
+ * column sample of `dc` and the density top read by a downward scan of the density probe (`voxelFn`) with
+ * `densityTopOf`'s island rule, only when the answer needs it; `densityTopColumn` is T's and the surface probe's per
+ * position density top over a filled solidity. Follows the gen determinism rules.
  */
 import { CARVER_WINDOW_R, CAVE_KIND, HEIGHT, ISLAND_RUN_MIN_BOTTOM, MIN_Y } from '../../core/constants';
 import { CARVABLE, STONE } from '../../world/blocks/index';
 import { readField, type ColumnSample } from '../column/columnStage';
+import type { DensityContext } from '../density/context';
 import { valClamp } from '../density/nodes';
-import type { CarverCache } from './carverCache';
+import { carverCacheOf, type CarverCache } from './carverCache';
 import type { CarverKind, CarverParams, CarverPath } from './carvers';
 
 const R = CARVER_WINDOW_R;
@@ -48,6 +53,7 @@ const K_RAVINE: number = KIND.ravine;
 const K_UNDER: number = KIND.undergroundWorm;
 const CARVABLE_ = CARVABLE;
 const STONE_ = STONE;
+const CACHE_OF = carverCacheOf;
 /** The window's kinds, in its order. */
 const KINDS: readonly CarverKind[] = ['worm', 'ravine', 'undergroundWorm'];
 /** No density top: the position holds no solid voxel above the bedrock (or, with islands, no ground run). */
@@ -150,6 +156,27 @@ export function densityTopOf(isSolid: (y: number) => boolean, islands: boolean):
   if (y === Y0) return NO_TOP;
   while (y < TOP_Y && isSolid(y + 1)) y++;
   return y;
+}
+
+/** `densityTopColumn`'s solidity (none between calls) and position, read by `TOP_READ`. */
+const NO_SOLID = new Uint8Array(0);
+let TOP_SOLID: Uint8Array = NO_SOLID;
+let TOP_P = 0;
+const TOP_READ = (y: number): boolean => TOP_SOLID[((y - Y0) << 8) | TOP_P] !== 0;
+
+/**
+ * Every position's density top (`densityTopOf`, spec §2.4) of a column from its solidity after the density fill
+ * `solid` (98,304 entries, 1 solid, in `fillDensityColumn`'s index `256·(y + 64) + p`, p = lz·16 + lx), with the island
+ * rule when `islands` (`islands.enabled`), into `out[p]` (256 entries). Throws a RangeError on other sizes.
+ */
+export function densityTopColumn(solid: Uint8Array, islands: boolean, out: Int16Array): void {
+  if (solid.length !== 98304 || out.length !== 256) throw new RangeError('densityTopColumn: solid needs 98,304 entries, out 256');
+  TOP_SOLID = solid;
+  for (let p = 0; p < 256; p++) {
+    TOP_P = p;
+    out[p] = densityTopOf(TOP_READ, islands);
+  }
+  TOP_SOLID = NO_SOLID;
 }
 
 /** The window's paths that meet one column, as (path, ellipsoid, voxel range) entries in the window's order. */
@@ -291,4 +318,24 @@ export function carvedKind(
     if (hit === 1) return tagOf(path.kind);
   }
   return 0;
+}
+
+/**
+ * The carver kind that carves world voxel (x, y, z) (spec §3.4, D22): `carvedKind` through `carverCacheOf(dc.ctx)` and
+ * its carver leaves, with `dc`'s column sample (`dc.column`, which makes the column current) and, only when the answer
+ * needs it, the position's density top by a downward scan of the density probe (`voxelFn > 0` from y 319, with
+ * `densityTopOf`'s island rule under `islands.enabled`). 0 when no carver carves it (and at y −64). Like `carvedKind`,
+ * the result means anything only for a voxel the density fill leaves solid (ruling P19): there it equals the T stage's
+ * carve (`carveColumn`'s tag). x, z integers in the world window, y an integer in −64 … 319 (the caller's to check, as
+ * `probe` does).
+ */
+export function carvedAt(dc: DensityContext, x: number, y: number, z: number): number {
+  if (y <= Y0 || y > TOP_Y) return 0;
+  const cx = x >> 4, cz = z >> 4;
+  const s = dc.column(cx, cz);
+  const cache = CACHE_OF(dc.ctx);
+  const c = dc.compiled;
+  const lx = x - 16 * cx, lz = z - 16 * cz;
+  const islands = dc.ctx.params.islands.enabled;
+  return carvedKind(cache, cache.params, s, x, y, z, () => densityTopOf((yy) => c.voxelFn(lx, yy, lz) > 0, islands));
 }

@@ -43,6 +43,7 @@ import { fillColumnD, fillColumnL, meshColumnJob } from '../../src/workers/world
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import type { JsonValue } from '../../src/core/params/json';
 import type { GenContext } from '../../src/gen/context';
+import { CARVERS_OFF } from '../harness/carverParams';
 import { ctxFor } from '../harness/gen';
 import { cavesMuted } from '../harness/sp5cTrees';
 
@@ -53,8 +54,11 @@ const NEVER = () => false;
  * east seam (17 opaque voxels at x = 15 against air at the east neighbour's x = 0), so the seam check is not vacuous.
  */
 const ctx = ctxFor('42');
-/** The same world without SP6a's carving cave taps (`cavesMuted`): its deep sections stay uniform rock. */
-const ctxNoCaves = ctxFor('42', { density: { defs: cavesMuted(DEFAULT_DENSITY_TREE) as JsonValue } });
+/**
+ * The same world without SP6a's carving cave taps (`cavesMuted`) and carvers (`CARVERS_OFF`): its deep sections stay
+ * uniform rock.
+ */
+const ctxNoCaves = ctxFor('42', { ...CARVERS_OFF, density: { defs: cavesMuted(DEFAULT_DENSITY_TREE) as JsonValue } });
 const CX = -1239;
 const CZ = -2000;
 const MEDIUM: MeshOptions = { ao: true, smoothLight: true };
