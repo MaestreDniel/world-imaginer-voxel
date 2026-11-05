@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { CARVER_WINDOW_R, CAVE_FILM_KIND, CAVE_KIND, GENERATOR_VERSION } from '../../src/core/constants';
+import { CARVER_CACHE_PATHS, CARVER_WINDOW_R, CAVE_FILM_KIND, CAVE_KIND, GENERATOR_VERSION } from '../../src/core/constants';
 import { CARVER_MAXIMA, carverReachOf, carverWindowROf } from '../harness/carverParams';
 
 test('GENERATOR_VERSION is a non-negative integer', () => {
@@ -33,4 +33,8 @@ test('CARVER_WINDOW_R is 11, recomputed from the carver leaves\' static maxima (
   expect(CARVER_WINDOW_R).toBe(carverWindowROf(CARVER_MAXIMA));
   expect(16 * CARVER_WINDOW_R).toBeLessThan(reach);
   expect(16 * (CARVER_WINDOW_R + 1)).toBeGreaterThan(reach);
+});
+
+test('CARVER_CACHE_PATHS is 1024: the carver path cache\'s capacity per worker (SP6a spec §2.5)', () => {
+  expect(CARVER_CACHE_PATHS).toBe(1024);
 });

@@ -2059,6 +2059,8 @@ describe('master spec amendments (SP6a §13)', () => {
   const SP6A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+caves\/carvers\.ts /, 'carve.ts tags.ts (SP6a)', 'src/gen/caves/tags.ts'],
     [/^\s+caves\/carvers\.ts /, 'carvers.ts', 'src/gen/caves/carvers.ts'],
+    [/^\s+caves\/carvers\.ts /, 'carverCache.ts', 'src/gen/caves/carverCache.ts'],
+    [/^\s+caves\/carvers\.ts /, 'carve.ts', 'src/gen/caves/carve.ts'],
     [/^\s+mesh\/greedy\.ts /, 'xray.ts (SP6a)', 'src/mesh/xray.ts'],
     [/^\s+materials\/index\.ts /, '(SP6a: the X-ray material, glsl/xray.glsl.ts)', 'src/render/materials/glsl/xray.glsl.ts'],
     [/^\s+ui\/world\/\* /, 'xrayStrip.ts (SP6a)', 'src/ui/world/xrayStrip.ts'],

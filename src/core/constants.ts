@@ -189,6 +189,13 @@ export const CAVE_FILM_KIND = 15;
  * `reachOverflow`. Here rather than in `gen/caves/`, which exports functions and types only (gen exports no numeric data).
  */
 export const CARVER_WINDOW_R = 11;
+/**
+ * The carver path cache's capacity per worker (SP6a spec §2.5): an LRU of 1,024 `CarverPath`s keyed by (kind, sx, sz),
+ * at most about 8.2 MB (all ravines), about 5.5 MB typically; a column needs about 124 paths and its neighbours share
+ * most of them. A miss recomputes the same path, so the capacity never changes output (`DT1.carverCache`). Here rather
+ * than in `gen/caves/carverCache.ts`, which exports functions and types only (gen exports no numeric data).
+ */
+export const CARVER_CACHE_PATHS = 1024;
 
 /** The `rule` slice field's value on a voxel the rules never evaluate (air, water, the bedrock at y −64): n/a (§4.1). */
 export const SLICE_RULE_NA = 255;
