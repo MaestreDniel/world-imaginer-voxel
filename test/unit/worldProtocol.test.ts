@@ -13,7 +13,7 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import { createLightScratch } from '../../src/light/initial';
 import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { ROW_INTS } from '../../src/mesh/column';
-import { cellOf, parseFromWorker, parseToWorker, type FromWorker } from '../../src/workers/protocol';
+import { cellOf, parseFromWorker, parseToWorker, payloadOfMeshResult, type FromWorker, type MeshColumnResultMsg } from '../../src/workers/protocol';
 import { createTaskHandler, drainAfterReply, LIMBO_RETRY_MS, type TaskHandler } from '../../src/workers/taskHandler';
 import { fillColumnD, fillColumnL, fillProtoOnly } from '../../src/workers/worldJobs';
 import { STATUS_DECORATED, STATUS_PROTO, STATUS_PUBLISHED } from '../../src/world/store/columnTable';
@@ -43,7 +43,7 @@ const reason = (m: unknown): string | null => {
 const columnDone = (job: string, versions: ArrayBuffer | null) => ({ type: 'columnDone', jobId: 3, epoch: 0, job, cx: 2, cz: -1, ms: 1.5, versions });
 
 /** A meshColumnResult carrying `fakePayload`'s buffers (each its own, as the worker transfers them). */
-function meshResult(rows = [{ sy: 4, pass: 0 as const, quads: 3 }, { sy: 5, pass: 2 as const, quads: 1 }]) {
+function meshResult(rows: Array<{ sy: number; pass: 0 | 1 | 2 | 3; quads: number }> = [{ sy: 4, pass: 0, quads: 3 }, { sy: 5, pass: 2, quads: 1 }]) {
   const p = fakePayload(2, -1, rows);
   return {
     type: 'meshColumnResult', jobId: 4, epoch: 0, cx: 2, cz: -1, ms: 3,
@@ -135,6 +135,20 @@ describe('parseFromWorker: the world replies', () => {
   test('meshColumnResult: a valid payload passes, an empty one too', () => {
     expect(valid(meshResult())).toBe(true);
     expect(valid(meshResult([]))).toBe(true);
+  });
+  test('meshColumnResult: rows of the X-ray pass (3) pass the guard and rebuild equal; a pass 4 is refused (SP6a spec §5.1)', () => {
+    const rows = [
+      { sy: 4, pass: 0 as const, quads: 3 }, { sy: 4, pass: 3 as const, quads: 2 }, { sy: 5, pass: 2 as const, quads: 1 },
+      { sy: 5, pass: 3 as const, quads: 1 },
+    ];
+    const m = meshResult(rows);
+    expect(valid(m)).toBe(true);
+    const back = payloadOfMeshResult(parseFromWorker(m) as MeshColumnResultMsg);
+    expect(back).toEqual(fakePayload(2, -1, rows));
+    expect([...back.rows].filter((_, k) => k % ROW_INTS === 1)).toEqual([0, 3, 2, 3]);
+    const bad = meshResult(rows);
+    new Int32Array(bad['rows'] as ArrayBuffer)[ROW_INTS + 1] = 4;
+    expect(reason(bad)).toMatch(/^meshColumnResult: row 1: pass 4/);
   });
   test('meshColumnResult: rows of 20 bytes are refused', () => {
     expect(reason({ ...meshResult(), rows: new ArrayBuffer(20) })).toMatch(/^meshColumnResult: rows/);

@@ -269,25 +269,25 @@ describe('compileScene: every pass\'s program at load, built or not (SP4b spec Â
   const object = (kind: SectionRendererKind): string => (kind === 'batch' ? 'BatchedMesh' : 'Mesh');
 
   for (const kind of ['batch', 'mesh'] as const) {
-    test(`${kind}: on an empty world the walk sees the opaque, cutout and water materials on the ${object(kind)}, and the sky; the stand-ins are gone after it`, async () => {
+    test(`${kind}: on an empty world the walk sees the opaque, cutout, water and X-ray materials on the ${object(kind)}, and the sky; the stand-ins are gone after it`, async () => {
       const { sections, scene, camera } = world(kind);
       const r = walker();
       await compileScene(r, scene, camera, sections);
-      expect([...r.seen].sort()).toEqual([`${object(kind)} terrainCutout`, `${object(kind)} terrainOpaque`, `${object(kind)} waterFast`, 'Mesh sky'].sort());
+      expect([...r.seen].sort()).toEqual([`${object(kind)} terrainCutout`, `${object(kind)} terrainOpaque`, `${object(kind)} waterFast`, `${object(kind)} xray`, 'Mesh sky'].sort());
       expect(sections.root.children).toEqual([]);
       expect(sections.root.visible, 'the reveals stay held').toBe(false);
       expect(sections.gpuBytes()).toBe(0);
       sections.dispose();
     });
 
-    test(`${kind}: with an opaque region built, each pass material is seen on the ${object(kind)} exactly once (stand-ins for the cutout and water passes only)`, async () => {
+    test(`${kind}: with an opaque region built, each pass material is seen on the ${object(kind)} exactly once (stand-ins for the cutout, water and X-ray passes only)`, async () => {
       const { sections, scene, camera } = world(kind);
       sections.stage(fakePayload(0, 0, [{ sy: 4, pass: 0, quads: 2 }]), 1);
       pumpAll(sections);
       const built = [...sections.root.children];
       const r = walker();
       await compileScene(r, scene, camera, sections);
-      expect([...r.seen].sort()).toEqual([`${object(kind)} terrainCutout`, `${object(kind)} terrainOpaque`, `${object(kind)} waterFast`, 'Mesh sky'].sort());
+      expect([...r.seen].sort()).toEqual([`${object(kind)} terrainCutout`, `${object(kind)} terrainOpaque`, `${object(kind)} waterFast`, `${object(kind)} xray`, 'Mesh sky'].sort());
       expect(sections.root.children).toEqual(built);
       expect(built.every((o) => o.visible)).toBe(true);
       sections.dispose();

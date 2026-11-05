@@ -3,7 +3,7 @@ import { payloadProblem, ROW_INTS, type ColumnMeshPayload } from '../../../src/m
 /** One row of a fake payload: section sy, pass, and its quad count (4 vertices and 6 indices per quad). */
 export interface FakeRow {
   readonly sy: number;
-  readonly pass: 0 | 1 | 2;
+  readonly pass: 0 | 1 | 2 | 3;
   readonly quads: number;
 }
 
@@ -22,7 +22,7 @@ export function fakeSphere(r: number, row: FakeRow): [number, number, number, nu
  * at a row-dependent spot of the section, every vertex's `data` word is its row number, versions and connectivity are
  * zeros (SP4a spec §5.8).
  */
-export function fakePayload(cx: number, cz: number, rows: Array<{ sy: number; pass: 0 | 1 | 2; quads: number }>): ColumnMeshPayload {
+export function fakePayload(cx: number, cz: number, rows: Array<{ sy: number; pass: 0 | 1 | 2 | 3; quads: number }>): ColumnMeshPayload {
   const vertexCount = rows.reduce((n, r) => n + 4 * r.quads, 0);
   const position = new Uint8Array(4 * vertexCount);
   const data = new Uint32Array(vertexCount);

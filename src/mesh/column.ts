@@ -3,8 +3,9 @@
  * buffers with one row per non-empty (section, pass). The renderer wraps subarrays per row; each row is master §2.5's
  * `SectionMesh`. This module holds the type, its structural check and the assembly, `meshColumnPayload`: per section
  * the trivial-section rule (§5.1), else the padded copy, `meshSolid`, `meshBoxes` (SP5a spec §1.3), `fluidDepths` and
- * `meshFluid` (ruling P24) and `connectivity15` (§5.7). The job's two levers (SP4b spec §3.13, D27): the nine views are
- * fetched once per column, and a section `fluidDepths` finds dry skips `meshFluid`.
+ * `meshFluid` (ruling P24), SP6a's `meshXray` (the X-ray's pass 3, its spec §5.1) and `connectivity15` (§5.7). The job's
+ * two levers (SP4b spec §3.13, D27): the nine views are fetched once per column, and a section `fluidDepths` finds dry
+ * skips `meshFluid`.
  */
 import { AIR, BEDROCK, FULL_FACES, PASS } from '../world/blocks/index';
 import { hasFluid } from '../world/blocks/fluid';
@@ -16,6 +17,7 @@ import { createMeshBuilder, type MeshBuilder, type MeshPass, type MeshView } fro
 import { connectivity15 } from './connectivity';
 import { fluidDepths, meshFluid } from './fluid';
 import { meshSolid, type MeshOptions } from './greedy';
+import { meshXray } from './xray';
 
 const AIR_STATE = AIR;
 const BEDROCK_STATE = BEDROCK;
@@ -28,15 +30,17 @@ const COPY_PADDED = copyPaddedSection;
 const MESH_SOLID = meshSolid;
 const MESH_BOXES = meshBoxes;
 const MESH_FLUID = meshFluid;
+const MESH_XRAY = meshXray;
 const FLUID_DEPTHS = fluidDepths;
 const CONNECTIVITY = connectivity15;
 const NEW_PADDED = createPaddedSection;
 const NEW_BUILDER = createMeshBuilder;
 
-/** The three passes of a row (SP4a spec §5.2). */
+/** The passes of a row (SP4a spec §5.2), and the X-ray's cave walls and surface film (SP6a spec §5.1, D23). */
 export const MESH_PASS_OPAQUE = 0;
 export const MESH_PASS_CUTOUT = 1;
 export const MESH_PASS_TRANSLUCENT = 2;
+export const MESH_PASS_XRAY = 3;
 
 /** Int32s per row of `ColumnMeshPayload.rows`: sy, pass, vertexStart, vertexCount, indexStart, indexCount. */
 export const ROW_INTS = 6;
@@ -80,7 +84,7 @@ export function payloadProblem(p: ColumnMeshPayload): string | null {
     const indexStart = p.rows[o + 4]!;
     const indexCount = p.rows[o + 5]!;
     if (sy < 0 || sy >= SECTIONS) return `row ${r}: sy ${sy} is outside 0…${SECTIONS - 1}`;
-    if (pass < MESH_PASS_OPAQUE || pass > MESH_PASS_TRANSLUCENT) return `row ${r}: pass ${pass} is outside 0…2`;
+    if (pass < MESH_PASS_OPAQUE || pass > MESH_PASS_XRAY) return `row ${r}: pass ${pass} is outside 0…${MESH_PASS_XRAY}`;
     if (vertexStart < 0 || vertexCount < 0 || vertexStart + vertexCount > vertices) {
       return `row ${r}: vertex range ${vertexStart}+${vertexCount} is past the ${vertices} vertices (data ${p.data.length}, position ${p.position.length} / 4)`;
     }
@@ -97,8 +101,10 @@ export function payloadProblem(p: ColumnMeshPayload): string | null {
 /** `connectivity15` of an all-air section (every pair) and of an all-opaque one (none) (SP4a spec §5.7). */
 const ALL_PAIRS = 0x7FFF;
 const NO_PAIRS = 0;
-/** At most one row per section and pass. */
-const MAX_ROWS = 3 * SECTIONS;
+/** The passes a section's rows come in, in row order (the X-ray's last, SP6a spec §5.1). */
+const PASSES: readonly MeshPass[] = [0, 1, 2, 3];
+/** At most one row per section and pass: `appendRow` writes `rows` and `spheres` without growing them. */
+const MAX_ROWS = PASSES.length * SECTIONS;
 /** Vertices the column buffers hold before their first growth (a column's median is ≈ 1,500 quads, 6,000 vertices). */
 const INITIAL_VERTICES = 8192;
 
@@ -262,8 +268,6 @@ function appendRow(c: ColumnBuffers, sy: number, pass: MeshPass, v: MeshView): v
   c.rowCount = r + 1;
 }
 
-const PASSES: readonly MeshPass[] = [0, 1, 2];
-
 /**
  * A reader over `nb` whose `final(dx, dz)` returns the nine views fetched once (SP4b spec §3.13, D27; plan): the store's
  * `final` builds a view per call, which `isTrivial`, `copyPaddedSection` and `fluidDepths` would otherwise pay up to 15
@@ -294,9 +298,9 @@ function finalsOnce(nb: NeighborhoodReader): NeighborhoodReader {
  * The mesh payload of the centre column of `nb` (SP4a spec §5.8), whose 3 × 3 holds final sets (the job checks they are
  * Published). `versions` is read first, before any copy. Per section: a trivial one (`isTrivial`) gets connectivity
  * 0x7FFF or 0 and no rows; any other is copied into the padded view and meshed (`meshSolid`, `meshBoxes`, then
- * `fluidDepths` and, when the section holds fluid, `meshFluid`), with `connectivity15` and one row per non-empty pass,
- * in (sy, pass) order. The column has one position, one data and one index buffer, indices relative to each row's
- * `vertexStart`. Every array of the payload is a fresh, exact, unshared copy (ruling P27): `s` is reused by the next
+ * `fluidDepths` and, when the section holds fluid, `meshFluid`, then SP6a's `meshXray` into pass 3), with
+ * `connectivity15` and one row per non-empty pass, in (sy, pass) order. The column has one position, one data and one
+ * index buffer, indices relative to each row's `vertexStart`. Every array of the payload is a fresh, exact, unshared copy (ruling P27): `s` is reused by the next
  * call, and the job transfers each buffer. The nine views are fetched once, after `versions` (SP4b spec §3.13, D27):
  * `nb.final` runs at most 9 times. A dry section's `meshFluid` would add nothing, so skipping it leaves the payload
  * byte-identical.
@@ -320,6 +324,7 @@ export function meshColumnPayload(nb: NeighborhoodReader, s: MeshScratch, o: Mes
     MESH_SOLID(s.padded, o, s.builder);
     MESH_BOXES(s.padded, o, s.builder);
     if (FLUID_DEPTHS(once, sy, s.depth)) MESH_FLUID(s.padded, s.depth, s.builder);
+    MESH_XRAY(s.padded, s.builder);
     connectivity[sy] = CONNECTIVITY(s.padded);
     for (const pass of PASSES) {
       const v = s.builder.view(pass);

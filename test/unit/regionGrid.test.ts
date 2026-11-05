@@ -1,18 +1,18 @@
 import { readFileSync } from 'node:fs';
-import { Box3, Group, Sphere, type BatchedMesh, type Mesh, type Object3D } from 'three';
-import { describe, expect, test } from 'vitest';
-import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
+import { Box3, Group, Sphere, type BatchedMesh, type Material, type Mesh, type Object3D } from 'three';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { createMaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
 import {
-  createStreamingRenderer, EMPTIED_PER_PUMP, RELEASE_SHARE, rowBounds, rowsOfPass, type PayloadRow, type RegionBackend,
-  type StagedColumn,
+  createStreamingRenderer, EMPTIED_PER_PUMP, RELEASE_SHARE, RESERVATION, rowBounds, rowsOfPass, type PayloadRow,
+  type RegionBackend, type StagedColumn,
 } from '../../src/render/regionGrid';
 import {
   createRevealProbe, createSectionRenderer, createSectionRendererCounts, type SectionRenderer,
 } from '../../src/render/sectionRenderer';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { fakePayload } from './fixtures/payloads';
-import { fakeGate, pumpAll } from './sectionRendererContract';
+import { fakeGate, pumpAll, regionObjects, visibleIndices } from './sectionRendererContract';
 
 const ALBEDO = createFlatColorArray();
 
@@ -341,4 +341,114 @@ describe('regionGrid: the pump\'s order (SP4c spec §5.4, D10)', () => {
     expect(r.counts(createSectionRendererCounts())).toMatchObject({ columnsRemoving: 0, rows: 14, regions: 1 });
     expect(disposed.size).toBe(15);
   });
+});
+
+describe('regionGrid: the X-ray pass in the staging, the swap and the stand-ins (SP6a spec §5.1, §5.2, §5.4)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test('the pass-3 reservation is 16,384 vertices and 24,576 indices, the other passes\' unchanged', () => {
+    expect(RESERVATION[MESH_PASS_XRAY]).toEqual([16_384, 24_576]);
+    expect([RESERVATION[MESH_PASS_OPAQUE], RESERVATION[MESH_PASS_CUTOUT], RESERVATION[MESH_PASS_TRANSLUCENT]])
+      .toEqual([[131_072, 196_608], [8192, 12_288], [16_384, 24_576]]);
+  });
+
+  test('over the recording backend, a replacement with rows in passes 0-3 swaps them all in one swap call, in the pump that uploads its last row', () => {
+    const { backend, log, visible } = recordingBackend();
+    const r = createStreamingRenderer('batch', new Group(), backend);
+    const four = (sy: number) => [0, 1, 2, 3].map((pass) => ({ sy, pass: pass as 0 | 1 | 2 | 3, quads: 1 }));
+    r.stage(fakePayload(1, 1, four(4)), 1);
+    pumpAll(r);
+    log.length = 0;
+    r.stage(fakePayload(1, 1, four(5)), 2);
+    r.pump(fakeGate(3), 1, 1, 0);
+    expect(log).toEqual(['upload 2:0', 'upload 2:1', 'upload 2:2']);
+    expect([...visible].sort()).toEqual(['1:0', '1:1', '1:2', '1:3']);
+    r.pump(fakeGate(3), 1, 1, 0);
+    expect(log.slice(3)).toEqual(['upload 2:3', 'swap 1→2']);
+    expect([...visible].sort()).toEqual(['2:0', '2:1', '2:2', '2:3']);
+  });
+
+  /** The indices three would draw per pass under `root` (`visibleIndices` per region object). */
+  const byPass = (root: Object3D): number[] => {
+    const out = [0, 0, 0, 0];
+    for (const m of regionObjects(root)) out[m.userData['pass'] as number]! += visibleIndices(m);
+    return out;
+  };
+
+  for (const kind of ['batch', 'mesh'] as const) {
+    test(`${kind}: a revealed column staged again with rows in passes 0-3: until its last row uploads prev's four passes show and the new ones are hidden; the pump that uploads the last swaps all four passes in one call; a replacement with no pass-3 row hides prev's pass-3 rows in that swap; setXray(true) and setXrayBand(−40, −9) between the two pumps change uniforms only (no stage, unstage or remove; the staged count unchanged) (Review Focus 1)`, () => {
+      const materials = createMaterialSystem({ variant: kind, ao: true, smoothLight: true }, ALBEDO);
+      const r = createSectionRenderer(kind, materials);
+      const counts = () => r.counts(createSectionRendererCounts());
+      const OLD = [{ sy: 4, pass: 0 as const, quads: 2 }, { sy: 4, pass: 1 as const, quads: 1 }, { sy: 4, pass: 2 as const, quads: 1 }, { sy: 4, pass: 3 as const, quads: 3 }];
+      const NEXT = [{ sy: 5, pass: 0 as const, quads: 1 }, { sy: 5, pass: 1 as const, quads: 2 }, { sy: 5, pass: 2 as const, quads: 2 }, { sy: 5, pass: 3 as const, quads: 1 }];
+      r.stage(fakePayload(1, 1, OLD), 1);
+      pumpAll(r, 1, 1);
+      expect(byPass(r.root)).toEqual([12, 6, 6, 18]);
+      // Every pass's object exists now; the replacement needs no structural operation.
+      r.stage(fakePayload(1, 1, NEXT), 2);
+      r.pump(fakeGate(3), 1, 1, 0);
+      expect(counts()).toMatchObject({ columnsStaged: 1, columnsComplete: 0, columnsRevealed: 1, rows: 4 + 3 });
+      expect(byPass(r.root), 'prev\'s four passes show, the new rows are hidden').toEqual([12, 6, 6, 18]);
+      expect(r.isRevealed(1, 1)).toBe(true);
+
+      const stage = vi.spyOn(r, 'stage');
+      const unstage = vi.spyOn(r, 'unstage');
+      const remove = vi.spyOn(r, 'remove');
+      const staged = counts().columnsStaged;
+      const xrayOn = (materials.xray.uniforms['xrayOn'] as { value: number });
+      materials.setXray(true, -64, 319, 336);
+      materials.setXray(true, -40, -9, 336);
+      expect(xrayOn.value).toBe(1);
+      expect([materials.xray.uniforms['xrayYMin']!.value, materials.xray.uniforms['xrayYMax']!.value]).toEqual([-40, -9]);
+      expect([stage, unstage, remove].map((f) => f.mock.calls.length)).toEqual([0, 0, 0]);
+      expect(counts().columnsStaged).toBe(staged);
+      expect(byPass(r.root)).toEqual([12, 6, 6, 18]);
+
+      r.pump(fakeGate(3), 1, 1, 0);
+      expect(byPass(r.root), 'the swap: all four passes of the new payload, none of prev').toEqual([6, 12, 12, 6]);
+      expect(counts()).toMatchObject({ columnsStaged: 1, columnsComplete: 1, columnsRevealed: 1, columnsRemoving: 1 });
+      expect([stage, unstage, remove].map((f) => f.mock.calls.length)).toEqual([0, 0, 0]);
+      materials.setXray(false, -64, 319, 336);
+      vi.restoreAllMocks();
+      pumpAll(r, 1, 1);
+      expect(counts()).toMatchObject({ columnsRemoving: 0, rows: 4 });
+
+      // A replacement with no pass-3 row: its swap hides the shown pass-3 rows with the rest.
+      r.stage(fakePayload(1, 1, [{ sy: 6, pass: 0, quads: 1 }]), 3);
+      r.pump(fakeGate(1), 1, 1, 0);
+      expect(byPass(r.root)).toEqual([6, 0, 0, 0]);
+      pumpAll(r, 1, 1);
+      expect(counts()).toMatchObject({ columnsRemoving: 0, rows: 1 });
+      expect(byPass(r.root)).toEqual([6, 0, 0, 0]);
+      r.dispose();
+    });
+
+    test(`${kind}: addStandIns adds a pass-3 stand-in over the X-ray material when no region object of pass 3 exists, so the material compiles behind the loading screen; none once one exists`, () => {
+      const materials = createMaterialSystem({ variant: kind, ao: true, smoothLight: true }, ALBEDO);
+      const r = createSectionRenderer(kind, materials);
+      const name = (m: Mesh): string => (m.material as Material).name;
+      // Passes 0-2 built: the X-ray's stand-in is the only one.
+      r.stage(fakePayload(0, 0, [{ sy: 4, pass: 0, quads: 1 }, { sy: 4, pass: 1, quads: 1 }, { sy: 4, pass: 2, quads: 1 }]), 1);
+      pumpAll(r);
+      const built = regionObjects(r.root);
+      let drop = r.addStandIns();
+      const added = regionObjects(r.root).filter((m) => !built.includes(m));
+      expect(added.map(name)).toEqual(['xray']);
+      expect(added[0]!.material).toBe(materials.xray);
+      expect(added[0]!.visible).toBe(false);
+      drop();
+      expect(regionObjects(r.root)).toEqual(built);
+      // A pass-3 row built: no stand-in at all.
+      r.stage(fakePayload(1, 0, [{ sy: 4, pass: 3, quads: 1 }]), 1);
+      pumpAll(r);
+      const all = regionObjects(r.root);
+      drop = r.addStandIns();
+      expect(regionObjects(r.root)).toEqual(all);
+      drop();
+      r.dispose();
+    });
+  }
 });

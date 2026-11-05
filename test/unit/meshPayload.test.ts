@@ -3,6 +3,7 @@ import {
   MESH_PASS_CUTOUT,
   MESH_PASS_OPAQUE,
   MESH_PASS_TRANSLUCENT,
+  MESH_PASS_XRAY,
   payloadProblem,
   ROW_INTS,
   type ColumnMeshPayload,
@@ -29,13 +30,19 @@ function valid(): Mutable<ColumnMeshPayload> {
   };
 }
 
-test('the pass ids and the row width (SP4a spec §5.8)', () => {
-  expect([MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT]).toEqual([0, 1, 2]);
+test('the pass ids and the row width (SP4a spec §5.8; the X-ray\'s pass 3, SP6a spec §5.1)', () => {
+  expect([MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY]).toEqual([0, 1, 2, 3]);
   expect(ROW_INTS).toBe(6);
 });
 
 test('null on a valid two-row payload', () => {
   expect(payloadProblem(valid())).toBeNull();
+});
+
+test('null on a payload whose second row is the X-ray pass (3) (SP6a spec §5.1)', () => {
+  const p = valid();
+  p.rows[ROW_INTS + 1] = MESH_PASS_XRAY;
+  expect(payloadProblem(p)).toBeNull();
 });
 
 test('null on an empty payload', () => {
@@ -59,8 +66,8 @@ const BROKEN: Array<[string, (p: Mutable<ColumnMeshPayload>) => void, RegExp]> =
   ['an index ≥ its row\'s vertexCount', (p) => { p.index[13] = 4; }, /index 4/],
   ['sy outside 0-23 (24)', (p) => { p.rows[ROW_INTS] = 24; }, /sy 24/],
   ['sy outside 0-23 (−1)', (p) => { p.rows[0] = -1; }, /sy -1/],
-  ['pass outside 0-2 (3)', (p) => { p.rows[1] = 3; }, /pass 3/],
-  ['pass outside 0-2 (−1)', (p) => { p.rows[ROW_INTS + 1] = -1; }, /pass -1/],
+  ['pass outside 0-3 (4)', (p) => { p.rows[1] = 4; }, /pass 4/],
+  ['pass outside 0-3 (−1)', (p) => { p.rows[ROW_INTS + 1] = -1; }, /pass -1/],
   ['versions.length ≠ 18', (p) => { p.versions = new Int32Array(17); }, /versions/],
   ['connectivity.length ≠ 24', (p) => { p.connectivity = new Uint16Array(25); }, /connectivity/],
 ];

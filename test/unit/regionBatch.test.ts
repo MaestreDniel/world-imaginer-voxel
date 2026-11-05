@@ -2,12 +2,13 @@ import {
   BatchedMesh, Matrix4, Quaternion, Vector3, type Box3, type BufferAttribute, type BufferGeometry, type Object3D, type Sphere,
 } from 'three';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
+import { MESH_PASS_XRAY, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { createMaterialSystem, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
 import {
   createSectionRenderer, createSectionRendererCounts, regionOf, selectSectionRenderer, type SectionRenderer,
   type SectionRendererCounts,
 } from '../../src/render/sectionRenderer';
+import { GHOST_ORDER, XRAY_ORDER } from '../../src/render/selection';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { fakePayload, fakeSphere, type FakeRow } from './fixtures/payloads';
 import { fakeGate, indexSum, opaque, pumpAll, rowsOf, sectionRendererContract, visibleIndices, water } from './sectionRendererContract';
@@ -58,7 +59,7 @@ function rowsIn(ps: readonly ColumnMeshPayload[], pass: number): Array<{ p: Colu
 }
 
 /** `n` rows of `quads` quads in `pass` (1,024 quads: 4,096 vertices and 6,144 indices). */
-const big = (n: number, quads = 1024, pass: 0 | 1 | 2 = 0): FakeRow[] => Array.from({ length: n }, (_, k) => ({ sy: k % 24, pass, quads }));
+const big = (n: number, quads = 1024, pass: 0 | 1 | 2 | 3 = 0): FakeRow[] => Array.from({ length: n }, (_, k) => ({ sy: k % 24, pass, quads }));
 
 /** The geometries a test hands to `addGeometry`, without the empty one a new batch is initialised with. */
 function spyAdded(): BufferGeometry[] {
@@ -392,6 +393,56 @@ describe('RegionBatch (SP4b spec §4.2, D14)', () => {
     expect(box).not.toHaveBeenCalled();
     expect(bs.map((b) => b.boundingSphere)).toEqual(spheres);
     for (const b of bs) expect(b.position.toArray()).toEqual([-512, -64 + 512, -1024]);
+    r.dispose();
+  });
+
+  test('the X-ray pass (SP6a spec §5.1, §5.2): a pass-3 batch per region with X-ray rows, over `materials.xray`, of 16,384 vertices and a Uint16 index of 24,576; `sortObjects` off on it and on on the others; its `renderOrder` `XRAY_ORDER`, above every water region\'s and below `GHOST_ORDER`', () => {
+    const materials = system('batch');
+    const r = make(materials);
+    r.stage(fakePayload(0, 0, [opaque(4), { sy: 4, pass: 3, quads: 2 }, water(5), { sy: 5, pass: 3, quads: 1 }]), 1);
+    r.stage(fakePayload(9, 0, [opaque(2)]), 1);
+    pumpAll(r);
+    expect(batches(r.root).map((b) => `${b.userData['rx'] as number}:${b.userData['pass'] as number}`).sort()).toEqual(['0:0', '0:2', '0:3', '1:0']);
+    const x = batchOf(r, MESH_PASS_XRAY)!;
+    expect(x.material).toBe(materials.xray);
+    expect(x.maxInstanceCount).toBe(1536);
+    expect(x.geometry.getAttribute('position').count).toBe(16_384);
+    expect(x.geometry.getIndex()!.array).toBeInstanceOf(Uint16Array);
+    expect(x.geometry.getIndex()!.array.length).toBe(24_576);
+    expect(bytesOf(x)).toBe(180_224);
+    expect(x.perObjectFrustumCulled).toBe(true);
+    expect(x.sortObjects).toBe(false);
+    expect(x.renderOrder).toBe(XRAY_ORDER);
+    for (const b of batches(r.root)) {
+      if (b === x) continue;
+      expect(b.sortObjects).toBe(true);
+      expect(b.renderOrder).toBe(0);
+    }
+    expect(XRAY_ORDER).toBeGreaterThan(batchOf(r, 2)!.renderOrder);
+    expect(XRAY_ORDER).toBeLessThan(GHOST_ORDER);
+    // Both pass-3 rows are instances of the pass-3 batch, shown with the column.
+    expect(rowsIn([fakePayload(0, 0, [opaque(4), { sy: 4, pass: 3, quads: 2 }, water(5), { sy: 5, pass: 3, quads: 1 }])], MESH_PASS_XRAY)).toHaveLength(2);
+    expect(visibleIndices(x)).toBe(18);
+    expect(counts(r)).toMatchObject({ rows: 5, columnsRevealed: 2 });
+    r.sortTranslucent(0, 0, 0);
+    expect(x.renderOrder).toBe(XRAY_ORDER);
+    r.dispose();
+  });
+
+  test('a column whose pass-3 rows exceed the pass-3 reservation makes columnNeed ask for \'grow\' (or \'optimize\') before its first row, so the pump takes it as its structural operation', () => {
+    const r = make();
+    // The region's pass-3 batch exists (one small row), then a column with 5 × 4,096 = 20,480 X-ray vertices.
+    r.stage(fakePayload(1, 1, [{ sy: 4, pass: 3, quads: 1 }]), 1);
+    pumpAll(r);
+    expect(batchOf(r, MESH_PASS_XRAY)!.geometry.getAttribute('position').count).toBe(16_384);
+    r.stage(fakePayload(0, 0, big(5, 1024, 3)), 1);
+    const gate = fakeGate(32);
+    r.pump(gate, 0, 0, 0);
+    expect(gate.granted).toBe(1);
+    expect(['grow', 'optimize']).toContain(counts(r).lastStructural);
+    expect(batchOf(r, MESH_PASS_XRAY)!.geometry.getAttribute('position').count).toBe(24_576);
+    pumpAll(r);
+    expect(r.isRevealed(0, 0)).toBe(true);
     r.dispose();
   });
 

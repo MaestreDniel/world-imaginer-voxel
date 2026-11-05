@@ -17,6 +17,7 @@ import {
   MESH_PASS_CUTOUT,
   MESH_PASS_OPAQUE,
   MESH_PASS_TRANSLUCENT,
+  MESH_PASS_XRAY,
   meshColumnPayload,
   payloadProblem,
   ROW_INTS,
@@ -26,10 +27,13 @@ import {
 import { connectivity15 } from '../../src/mesh/connectivity';
 import { fluidDepths, meshFluid } from '../../src/mesh/fluid';
 import { meshSolid, type MeshOptions } from '../../src/mesh/greedy';
-import { unpackFluid, unpackSolid } from '../../src/mesh/packing';
+import { unpackFluid, unpackSolid, unpackXray } from '../../src/mesh/packing';
+import { meshXray } from '../../src/mesh/xray';
 import { REVIEW_HOUSE, REVIEW_POOL, REVIEW_SITE } from '../../src/ui/world/bench';
 import { FLUID_WATER, fluidType } from '../../src/world/blocks/fluid';
-import { AIR, FULL_FACES, PASS, STONE, TORCH } from '../../src/world/blocks/index';
+import { CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
+import { WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { AIR, FULL_FACES, GLASS, PASS, STONE, TORCH } from '../../src/world/blocks/index';
 import { FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import type { NeighborhoodReader } from '../../src/world/store/api';
 import { SECTIONS, STATUS_DECORATED } from '../../src/world/store/columnTable';
@@ -99,7 +103,10 @@ const arraysOf = (p: ColumnMeshPayload) => ({
 const snapshot = (p: ColumnMeshPayload): Uint8Array[] =>
   Object.values(arraysOf(p)).map((a) => new Uint8Array(a.buffer, a.byteOffset, a.byteLength).slice());
 
-/** Per section, the hand-run mesh: the builder's three passes and connectivity15 (ruling P24's `fluidDepths`). */
+/**
+ * Per section, the hand-run mesh: the builder's four passes (the X-ray's pass 3, SP6a spec §5.1) and connectivity15
+ * (ruling P24's `fluidDepths`).
+ */
 function handMesh(nb: NeighborhoodReader, sy: number, o: MeshOptions) {
   const padded = createPaddedSection();
   const builder = createMeshBuilder();
@@ -108,6 +115,7 @@ function handMesh(nb: NeighborhoodReader, sy: number, o: MeshOptions) {
   meshSolid(padded, o, builder);
   fluidDepths(nb, sy, depth);
   meshFluid(padded, depth, builder);
+  meshXray(padded, builder);
   return { builder, connectivity: connectivity15(padded) };
 }
 
@@ -121,7 +129,8 @@ function f32Up(r: number): number {
 /**
  * SP4a's `meshColumnPayload`, kept as the reference of the mesh-job levers (SP4b spec §3.13, D27): every call reads the
  * raw reader (`isTrivial`, `copyPaddedSection` and `fluidDepths` each fetch their views), and every non-trivial section
- * runs `meshFluid`, dry or not. Same assembly: rows in (sy, pass) order, back to back, spheres on the vertices' AABB.
+ * runs `meshFluid`, dry or not, then SP6a's `meshXray` (pass 3, its spec §5.1). Same assembly: rows in (sy, pass) order,
+ * back to back, spheres on the vertices' AABB.
  */
 function sp4aPayload(nb: NeighborhoodReader, o: MeshOptions): ColumnMeshPayload {
   const versions = nb.versions();
@@ -145,8 +154,9 @@ function sp4aPayload(nb: NeighborhoodReader, o: MeshOptions): ColumnMeshPayload 
     meshSolid(padded, o, builder);
     fluidDepths(nb, sy, depth);
     meshFluid(padded, depth, builder);
+    meshXray(padded, builder);
     connectivity[sy] = connectivity15(padded);
-    for (const pass of [0, 1, 2] as const) {
+    for (const pass of [0, 1, 2, 3] as const) {
       const v = builder.view(pass);
       if (v.indices === 0) continue;
       let x0 = 255, y0 = 255, z0 = 255, x1 = 0, y1 = 0, z1 = 0;
@@ -327,7 +337,7 @@ describe('meshColumnPayload on a Published 3 × 3 (SP4a spec §5.8)', () => {
     for (let sy = 0; sy < SECTIONS; sy++) {
       const hand = handMesh(nb, sy, MEDIUM);
       expect(p.connectivity[sy], `sy ${sy}`).toBe(hand.connectivity);
-      for (const pass of [0, 1, 2] as const) {
+      for (const pass of [0, 1, 2, 3] as const) {
         const v = hand.builder.view(pass);
         const row = rows.find((r) => r.sy === sy && r.pass === pass);
         if (v.indices === 0) {
@@ -359,11 +369,27 @@ describe('meshColumnPayload on a Published 3 × 3 (SP4a spec §5.8)', () => {
     expect(passes.has(2)).toBe(true);
   });
 
+  test('the payload has X-ray rows (pass 3, SP6a spec §5.1): the column\'s cave walls and its surface film, each word `PACK_LAYOUT.xray`', () => {
+    const xray = rowsOf(p).filter((r) => r.pass === MESH_PASS_XRAY);
+    expect(xray.length).toBeGreaterThan(0);
+    const kinds = new Set<number>();
+    for (const row of xray) {
+      expect(row.vertexCount % 4).toBe(0);
+      for (let v = row.vertexStart; v < row.vertexStart + row.vertexCount; v++) kinds.add(unpackXray(p.data[v]!).kind);
+    }
+    // The film (kind 15) on the surface, and the cave walls under it, each with its tag's kind.
+    expect(kinds.has(CAVE_FILM_KIND)).toBe(true);
+    expect([...kinds].some((k) => k !== CAVE_FILM_KIND && k !== 0)).toBe(true);
+    expect(kinds.has(0)).toBe(false);
+    expect(payloadProblem(p)).toBeNull();
+  });
+
   test('seam: the faces on the column\'s x = 16 plane are exactly the east faces of x = 15 against air of the east neighbour', () => {
     const centre = nb.final(0, 0)!;
     const east = nb.final(1, 0)!;
     const meshed = { solid: [] as string[], water: [] as string[] };
-    for (const row of rowsOf(p)) {
+    // SP4a's passes; the X-ray's walls and film (pass 3, SP6a) have their own references (meshXray.test.ts, R1.xray).
+    for (const row of rowsOf(p).filter((r) => r.pass !== MESH_PASS_XRAY)) {
       const y0 = 16 * row.sy - 64;
       for (let i = row.indexStart; i < row.indexStart + row.indexCount; i += 6) {
         // A quad's four distinct vertices: the first triangle and the other vertex of the second.
@@ -405,7 +431,8 @@ describe('meshColumnPayload on a Published 3 × 3 (SP4a spec §5.8)', () => {
 
   test('no face on the x = 0 plane faces west into a non-air voxel of the west neighbour', () => {
     const west = nb.final(-1, 0)!;
-    for (const row of rowsOf(p)) {
+    // SP4a's passes (a cave wall on that plane faces its hollow voxel's way; the X-ray's are checked apart).
+    for (const row of rowsOf(p).filter((r) => r.pass !== MESH_PASS_XRAY)) {
       const y0 = 16 * row.sy - 64;
       for (let i = row.indexStart; i < row.indexStart + row.indexCount; i += 6) {
         const vs = [...new Set([...p.index.subarray(i, i + 6)].map((k) => row.vertexStart + k))];
@@ -649,5 +676,54 @@ describe('meshColumnPayload meshes box states (SP5a spec §1.3)', () => {
     }
     expect(faces.sort()).toEqual([FACE_NORTH, FACE_EAST, FACE_SOUTH, FACE_WEST, FACE_UP].sort());
     expect([...lo, ...hi]).toEqual([LX * 8 + 3, LY * 8, LZ * 8 + 3, LX * 8 + 5, LY * 8 + 5, LZ * 8 + 5]);
+  });
+});
+
+describe('meshColumnPayload keeps a row per section and pass, the X-ray\'s included (SP6a spec §5.1)', () => {
+  test('a column with rows in all four passes of all 24 sections keeps all 96 rows, in (sy, pass) order, each sphere bounding its vertices', () => {
+    // A canned 3 × 3, air everywhere but the centre column, whose every section holds a stone voxel (opaque), a glass
+    // voxel (cutout), a water source (translucent) and a cave-tagged air voxel beside the stone (an X-ray wall).
+    const s = createStore({ shared: false, maxBlockBytes: 16 * MiB, maxByteBytes: 16 * MiB });
+    const at = (lx: number, ly: number, lz: number): number => (ly << 8) | (lz << 4) | lx;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const w = s.claimColumn(dx, dz, 0);
+        for (let sy = 0; sy < SECTIONS; sy++) {
+          const blocks = new Uint16Array(4096).fill(AIR);
+          const fluid = new Uint8Array(4096);
+          const cave = new Uint8Array(4096);
+          if (dx === 0 && dz === 0) {
+            blocks[at(4, 8, 4)] = STONE;
+            cave[at(5, 8, 4)] = CAVE_KIND.cheese;
+            blocks[at(10, 8, 10)] = GLASS;
+            fluid[at(12, 3, 12)] = WATER_SOURCE;
+          }
+          w.setProto(sy, blocks, fluid, cave);
+          w.shareFinal(sy, new Uint8Array(4096));
+        }
+        w.commit(3);
+      }
+    }
+    const p = meshColumnPayload(s.neighborhood(0, 0), createMeshScratch(), MEDIUM);
+    expect(payloadProblem(p)).toBeNull();
+    const rows = rowsOf(p);
+    const expected: Array<[number, number]> = [];
+    for (let sy = 0; sy < SECTIONS; sy++) {
+      for (const pass of [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY]) expected.push([sy, pass]);
+    }
+    expect(rows).toHaveLength(4 * SECTIONS);
+    expect(rows.map((r) => [r.sy, r.pass])).toEqual(expected);
+    for (const row of rows.filter((r) => r.pass === MESH_PASS_XRAY)) {
+      // One wall: the hollow voxel's west face against the stone, kind cheese.
+      expect([row.vertexCount, row.indexCount]).toEqual([4, 6]);
+      expect(unpackXray(p.data[row.vertexStart]!)).toMatchObject({ face: FACE_WEST, kind: CAVE_KIND.cheese });
+    }
+    for (const row of rows) {
+      const [x, y, z, r] = [...p.spheres.subarray(4 * row.r, 4 * row.r + 4)] as [number, number, number, number];
+      for (let v = row.vertexStart; v < row.vertexStart + row.vertexCount; v++) {
+        const d = Math.hypot(p.position[4 * v]! / 8 - x, p.position[4 * v + 1]! / 8 - y, p.position[4 * v + 2]! / 8 - z);
+        expect(d).toBeLessThanOrEqual(r);
+      }
+    }
   });
 });

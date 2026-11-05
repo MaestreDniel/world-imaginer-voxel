@@ -6,7 +6,8 @@ import { hex64 } from '../../src/core/hash';
 import { seedFromInput } from '../../src/core/seed';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
 import { fillColumnT, genRegionInProcess, regionHash } from '../../src/metrics/region';
-import { createMeshScratch, meshColumnPayload, payloadProblem } from '../../src/mesh/column';
+import { CAVE_FILM_KIND } from '../../src/core/constants';
+import { createMeshScratch, MESH_PASS_XRAY, meshColumnPayload, payloadProblem, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { AIR, DEEPSLATE, DIRT, STONE, TORCH } from '../../src/world/blocks/index';
 import { NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { FACE_DOWN, FACE_EAST, FACE_UP } from '../../src/world/blocks/kinds';
@@ -17,7 +18,7 @@ import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { fillColumnD } from '../../src/workers/worldJobs';
 import { regionCachePath, srcKey, type RegionCacheHeader } from '../harness/cache';
 import { ctxFor, paramsWith } from '../harness/gen';
-import { bruteFaces, meshFaceCounts } from '../harness/refs';
+import { bruteFaces, bruteXrayFaces, meshFaceCounts } from '../harness/refs';
 import { dt1WorkerDir, genRegion, litRegionHash, regionColumns, regionDiff, regionView, type GenRegionOptions } from '../harness/region';
 
 const MiB = 1 << 20;
@@ -440,13 +441,15 @@ describe('the face references (SP4a spec §9.2, ruling P32)', () => {
   /**
    * A canned 3 × 3 of Published columns around (1, 1): a stone floor at y < 0, a deterministic scatter of stone, dirt and
    * deepslate over y 0 … 40 (crossing the sections 4 … 6 and every column seam), still water in some of its air, a
-   * stone pillar to y 319 and a lone voxel at y −64.
+   * stone pillar to y 319 and a lone voxel at y −64. With `caves` (SP6a spec §3.3), a cave tag (kinds 1-9) on part of
+   * the voxels of y 0 … 40, air, water and rock alike (rock is never hollow), written through the proto set and shared.
    */
-  function cannedStore(): VoxelStore {
+  function cannedStore(caves = false): VoxelStore {
     const s = createStore({ shared: false, maxBlockBytes: 32 * MiB, maxByteBytes: 32 * MiB });
     const blocks = new Uint16Array(4096);
     const fluid = new Uint8Array(4096);
     const light = new Uint8Array(4096);
+    const cave = new Uint8Array(4096);
     const hash = (x: number, y: number, z: number): number => {
       let h = Math.imul(x, 73856093) ^ Math.imul(y, 19349663) ^ Math.imul(z, 83492791);
       h = Math.imul(h ^ (h >>> 13), 0x5bd1e995);
@@ -477,8 +480,14 @@ describe('the face references (SP4a spec §9.2, ruling P32)', () => {
             blocks[i] = b;
             fluid[i] = f;
             light[i] = y > 20 ? 0xf0 : (8 + (y & 1)) << 4 | 3;
+            cave[i] = y >= 0 && y <= 40 && hash(z, x, y) % 3 !== 0 ? 1 + (hash(y, z, x) % 9) : 0;
           }
-          w.setFinal(sy, blocks, light, fluid);
+          if (caves) {
+            w.setProto(sy, blocks, fluid, cave);
+            w.shareFinal(sy, light);
+          } else {
+            w.setFinal(sy, blocks, light, fluid);
+          }
         }
         w.commit(3);
       }
@@ -525,6 +534,81 @@ describe('the face references (SP4a spec §9.2, ruling P32)', () => {
     const both = meshFaceCounts({ ...twice, rows: appendRow(p.rows, p.rows[0]!, p.rows[1]!, p.data.length) });
     expect(both.opaque.length + both.water.length).toBeGreaterThan(once.opaque.length + once.water.length);
     expect(() => bruteFaces(regionView(s, 0, 0, 3, 3), 0, 1)).toThrow(RangeError);
+  });
+
+  describe('the X-ray faces (SP6a spec §5.1, §10.4: R1.xray)', () => {
+  /** `p` without its X-ray rows (pass 3): the same buffers, the other rows and their spheres. */
+  const withoutXray = (p: ColumnMeshPayload): ColumnMeshPayload => {
+    const keep: number[] = [];
+    for (let r = 0; r < p.rows.length / ROW_INTS; r++) if (p.rows[r * ROW_INTS + 1] !== MESH_PASS_XRAY) keep.push(r);
+    return {
+      ...p,
+      rows: Int32Array.from(keep.flatMap((r) => [...p.rows.subarray(r * ROW_INTS, (r + 1) * ROW_INTS)])),
+      spheres: Float32Array.from(keep.flatMap((r) => [...p.spheres.subarray(4 * r, 4 * r + 4)])),
+    };
+  };
+
+  test('meshFaceCounts files the X-ray rows apart: R1\'s and R2\'s counts equal those of the payload without its pass-3 rows, and its X-ray list (decoded with `PACK_LAYOUT.xray.face`) equals bruteXrayFaces on a canned 3 × 3 with caves and film', () => {
+    const s = cannedStore(true);
+    const view = regionView(s, 0, 0, 3, 3);
+    const brute = bruteXrayFaces(view, 1, 1);
+    const kindOf = (k: number): number => k & 15;
+    // Cave walls of several kinds, and the film over the sky-lit tops.
+    expect(brute.length).toBeGreaterThan(500);
+    expect(brute.some((k) => kindOf(k) === CAVE_FILM_KIND)).toBe(true);
+    expect(new Set([...brute].map(kindOf).filter((k) => k !== CAVE_FILM_KIND)).size).toBe(9);
+    for (let i = 1; i < brute.length; i++) expect(brute[i]!).toBeGreaterThan(brute[i - 1]!);
+    for (const o of [{ ao: true, smoothLight: true }, { ao: false, smoothLight: false }]) {
+      const p = meshColumnPayload(s.neighborhood(1, 1), createMeshScratch(), o);
+      expect(payloadProblem(p)).toBeNull();
+      const rows = p.rows.length / ROW_INTS;
+      const xrayRows = [...Array(rows).keys()].filter((r) => p.rows[r * ROW_INTS + 1] === MESH_PASS_XRAY).length;
+      expect(xrayRows).toBeGreaterThan(0);
+      const m = meshFaceCounts(p);
+      const plain = meshFaceCounts(withoutXray(p));
+      expect(plain.xray).toHaveLength(0);
+      expect(plain.quadsXray).toBe(0);
+      expect({ opaque: [...m.opaque], water: [...m.water], quadsOpaque: m.quadsOpaque, quadsWater: m.quadsWater })
+        .toEqual({ opaque: [...plain.opaque], water: [...plain.water], quadsOpaque: plain.quadsOpaque, quadsWater: plain.quadsWater });
+      expect(Buffer.from(m.xray.buffer).equals(Buffer.from(brute.buffer))).toBe(true);
+      // The greedy merge covers several unit faces per X-ray quad.
+      expect(m.quadsXray).toBeGreaterThan(0);
+      expect(m.quadsXray).toBeLessThan(m.xray.length);
+    }
+    // The opaque and water categories still equal bruteFaces with the cave channel written.
+    const p = meshColumnPayload(s.neighborhood(1, 1), createMeshScratch(), { ao: true, smoothLight: true });
+    const m = meshFaceCounts(p);
+    const plainBrute = bruteFaces(view, 1, 1);
+    expect(Buffer.from(m.opaque.buffer).equals(Buffer.from(plainBrute.opaque.buffer))).toBe(true);
+    expect(Buffer.from(m.water.buffer).equals(Buffer.from(plainBrute.water.buffer))).toBe(true);
+  });
+
+  test('without a cave tag the X-ray faces are the film alone: the up faces of opaque and water voxels under sky-15 air (the pillar\'s top at y 319 included)', () => {
+    const s = cannedStore();
+    const view = regionView(s, 0, 0, 3, 3);
+    const brute = bruteXrayFaces(view, 1, 1);
+    expect(brute.length).toBeGreaterThan(0);
+    expect(brute.every((k) => (k & 15) === CAVE_FILM_KIND && (k >> 4) % 6 === FACE_UP)).toBe(true);
+    const key = (lx: number, y: number, lz: number, f: number, kind: number) => (((y + 64) * 256 + lz * 16 + lx) * 6 + f) * 16 + kind;
+    expect(brute.includes(key(7, 319, 8, FACE_UP, CAVE_FILM_KIND))).toBe(true);
+    const m = meshFaceCounts(meshColumnPayload(s.neighborhood(1, 1), createMeshScratch(), { ao: false, smoothLight: false }));
+    expect(Buffer.from(m.xray.buffer).equals(Buffer.from(brute.buffer))).toBe(true);
+  });
+
+  test('an X-ray quad decoded with the solid layout would name another face: the X-ray word keeps its face in bits 0-2', () => {
+    const s = cannedStore(true);
+    const p = meshColumnPayload(s.neighborhood(1, 1), createMeshScratch(), { ao: false, smoothLight: false });
+    const m = meshFaceCounts(p);
+    // Every X-ray key's face is the word's bits 0-2, and some differ from the solid layout's bits 10-12.
+    let differ = 0;
+    for (let r = 0; r < p.rows.length / ROW_INTS; r++) {
+      if (p.rows[r * ROW_INTS + 1] !== MESH_PASS_XRAY) continue;
+      const v0 = p.rows[r * ROW_INTS + 2]!;
+      for (let v = v0; v < v0 + p.rows[r * ROW_INTS + 3]!; v += 4) if ((p.data[v]! & 7) !== ((p.data[v]! >>> 10) & 7)) differ++;
+    }
+    expect(differ).toBeGreaterThan(0);
+    expect(m.xray.length).toBeGreaterThan(0);
+  });
   });
 });
 

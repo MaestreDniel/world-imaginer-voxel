@@ -7,7 +7,7 @@ import { createGenContext } from '../../src/gen/context';
 import { sp3eWindow, type Sp3ePreset } from '../../src/metrics/sp3eGoldens';
 import type { MeshOptions } from '../../src/mesh/greedy';
 import { metricTest } from '../harness/metric';
-import { bruteFaces, meshFaceCounts } from '../harness/refs';
+import { bruteFaces, bruteXrayFaces, meshFaceCounts } from '../harness/refs';
 import { genRegion, type RegionView } from '../harness/region';
 import { nearestRank } from '../harness/zMetrics';
 
@@ -25,7 +25,10 @@ import { nearestRank } from '../harness/zMetrics';
  * page renders) and with `{ao: false, smoothLight: false}` (a cache hit, meshed in process).
  * - R1 (gated): per interior column, category (opaque, water) and meshing, `meshFaceCounts`' unit-face keys merge-walked
  *   against `bruteFaces`' (ruling P32): `hiddenEmitted` counts mesh keys missing from brute plus every repeat after the
- *   first, `visibleMissing` brute keys missing from the mesh; both summed over both meshings.
+ *   first, `visibleMissing` brute keys missing from the mesh; both summed over both meshings. `xray` (SP6a spec §10.4):
+ *   the X-ray rows' face keys (`meshFaceCounts`' `xray`, pass 3) against `bruteXrayFaces` (hollow voxels' walls and the
+ *   surface film, with their kinds), missing + extra (repeats counted) summed over both meshings; `xrayFaces` records
+ *   the brute count.
  * - R2 (gated): opaque quads per visible opaque face (brute's keys), pooled over the interior columns: `quadsPerFaceAo`
  *   on the Medium meshing, `quadsPerFaceNoAo` on the other.
  * - R4 (recorded, activeFrom SP8b): quads per interior column (opaque and water, the Medium meshing), `medianQuads` and
@@ -117,6 +120,8 @@ async function measure(): Promise<Measurement> {
   const hidden = { ao: 0, noAo: 0 };
   const missing = { ao: 0, noAo: 0 };
   const quadsOpaque = { ao: 0, noAo: 0 };
+  let xrayDiff = 0;
+  let xrayFaces = 0;
   let visibleOpaque = 0;
   let visibleWater = 0;
   let quadsWater = 0;
@@ -139,6 +144,8 @@ async function measure(): Promise<Measurement> {
       for (let cx = s.cx0 + 1; cx < s.cx0 + s.size - 1; cx++) {
         columns++;
         const brute = bruteFaces(views[0]![1], cx, cz);
+        const bruteXray = bruteXrayFaces(views[0]![1], cx, cz);
+        xrayFaces += bruteXray.length;
         visibleOpaque += brute.opaque.length;
         visibleWater += brute.water.length;
         for (const [variant, view] of views) {
@@ -152,6 +159,11 @@ async function measure(): Promise<Measurement> {
             if (d.hidden + d.missing > 0) {
               problems.push(`${s.label}, ${variant}, (${cx}, ${cz}) ${cat}: ${d.hidden} hidden emitted, ${d.missing} visible missing`);
             }
+          }
+          const dx = faceDiff(m.xray, bruteXray);
+          xrayDiff += dx.hidden + dx.missing;
+          if (dx.hidden + dx.missing > 0) {
+            problems.push(`${s.label}, ${variant}, (${cx}, ${cz}) xray: ${dx.hidden} extra, ${dx.missing} missing`);
           }
           quadsOpaque[variant] += m.quadsOpaque;
           if (variant === 'ao') {
@@ -171,7 +183,7 @@ async function measure(): Promise<Measurement> {
     R1: {
       hiddenEmitted: hidden.ao + hidden.noAo, visibleMissing: missing.ao + missing.noAo,
       hiddenEmittedAo: hidden.ao, hiddenEmittedNoAo: hidden.noAo, visibleMissingAo: missing.ao, visibleMissingNoAo: missing.noAo,
-      visibleOpaqueFaces: visibleOpaque, visibleWaterFaces: visibleWater, ...common,
+      visibleOpaqueFaces: visibleOpaque, visibleWaterFaces: visibleWater, xray: xrayDiff, xrayFaces, ...common,
     },
     R2: {
       quadsPerFaceAo: ratio(quadsOpaque.ao, visibleOpaque), quadsPerFaceNoAo: ratio(quadsOpaque.noAo, visibleOpaque),
@@ -189,7 +201,7 @@ async function measure(): Promise<Measurement> {
 let measured: Promise<Measurement> | null = null;
 const measurement = (): Promise<Measurement> => (measured ??= measure());
 
-metricTest('R1', ['hiddenEmitted', 'visibleMissing'], async () => {
+metricTest('R1', ['hiddenEmitted', 'visibleMissing', 'xray'], async () => {
   const m = await measurement();
   expect.soft(m.problems.slice(0, 20), `R1 face mismatches (tier ${TIER}), first 20 of ${m.problems.length}`).toEqual([]);
   return m.R1;

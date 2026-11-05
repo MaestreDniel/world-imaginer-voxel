@@ -1,6 +1,6 @@
 import { Quaternion, Sphere, Vector3, type BufferAttribute, type Mesh, type Object3D } from 'three';
 import { describe, expect, test } from 'vitest';
-import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
+import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { createMaterialSystem, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
 import { RESERVATION } from '../../src/render/regionGrid';
 import { createFreeList, firstFit, giveRange, takeFirstFit } from '../../src/render/regionMesh';
@@ -8,6 +8,7 @@ import {
   createRevealProbe, createSectionRenderer, createSectionRendererCounts, regionOf, selectSectionRenderer,
   type RevealProbe, type SectionRenderer, type SectionRendererCounts,
 } from '../../src/render/sectionRenderer';
+import { GHOST_ORDER, XRAY_ORDER } from '../../src/render/selection';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { fakePayload, type FakeRow } from './fixtures/payloads';
 import {
@@ -311,6 +312,50 @@ describe('RegionMesh (SP4a spec §6.2, D2; SP4b spec §4.3)', () => {
     expect(waterOrder(far)).toEqual([3904, 3905, 3906]);
     expect(opaqueOrders(far).every((o) => o === 0)).toBe(true);
     far.dispose();
+  });
+
+  test('the X-ray pass (SP6a spec §5.1, §5.2): a pass-3 arena per region with X-ray rows, over `materials.xray`, of 16,384 vertices and 24,576 indices, at `renderOrder` `XRAY_ORDER`; sortTranslucent orders the water regions and never touches it', () => {
+    const materials = system('mesh');
+    // Three regions along x, each with opaque, water and X-ray rows.
+    const ps = [0, 1, 2].map((k) => fakePayload(8 * k + 3, 3, [
+      { sy: 4, pass: 0, quads: 1 }, { sy: 4, pass: 3, quads: 2 }, { sy: 5, pass: 2, quads: 1 }, { sy: 6, pass: 3, quads: 1 },
+    ]));
+    const r = built(ps, materials);
+    const xray = meshes(r.root).filter((m) => passOf(m) === MESH_PASS_XRAY);
+    expect(xray.map((m) => m.userData['rx'] as number).sort()).toEqual([0, 1, 2]);
+    for (const m of xray) {
+      expect(m.material).toBe(materials.xray);
+      expect(m.geometry.getAttribute('position').count).toBe(RESERVATION[MESH_PASS_XRAY]![0]);
+      expect(m.geometry.getAttribute('position').count).toBe(16_384);
+      expect(m.geometry.getIndex()!.count).toBe(24_576);
+      expect(m.renderOrder).toBe(XRAY_ORDER);
+      expect(visibleIndices(m)).toBe(18);
+    }
+    const water = () => meshes(r.root).filter((m) => passOf(m) === MESH_PASS_TRANSLUCENT);
+    for (const [x, order] of [[-200, [2, 1, 0]], [600, [0, 1, 2]]] as const) {
+      r.sortTranslucent(x, 100, 64);
+      expect(water().sort((a, b) => a.renderOrder - b.renderOrder).map((m) => m.userData['rx'] as number)).toEqual(order);
+      for (const m of xray) expect(m.renderOrder).toBe(XRAY_ORDER);
+      expect(Math.max(...water().map((m) => m.renderOrder))).toBeLessThan(XRAY_ORDER);
+    }
+    expect(XRAY_ORDER).toBeLessThan(GHOST_ORDER);
+    for (const m of meshes(r.root)) if (passOf(m) === MESH_PASS_OPAQUE) expect(m.renderOrder).toBe(0);
+    r.dispose();
+  });
+
+  test('a column whose pass-3 rows exceed the pass-3 arena makes columnNeed ask for its growth (or a compaction) before its first row', () => {
+    const r = createSectionRenderer('mesh', system('mesh'));
+    r.stage(fakePayload(1, 1, [{ sy: 4, pass: 3, quads: 1 }]), 1);
+    pumpAll(r);
+    r.stage(fakePayload(0, 0, Array.from({ length: 5 }, (_, k) => ({ sy: k, pass: 3 as const, quads: 1024 }))), 1);
+    const gate = fakeGate(32);
+    r.pump(gate, 0, 0, 0);
+    expect(gate.granted).toBe(1);
+    expect(['grow', 'compact']).toContain(counts(r).lastStructural);
+    pumpAll(r);
+    expect(r.isRevealed(0, 0)).toBe(true);
+    expect(arenaOf(r, MESH_PASS_XRAY)!.geometry.getAttribute('position').count).toBe(24_576);
+    r.dispose();
   });
 
   test('counts(out).structuralMs is finite and ≥ 0', () => {

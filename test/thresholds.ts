@@ -81,7 +81,11 @@ export const THRESHOLDS: ThresholdTable = {
   S3: { snowAboveLine: { min: 0.9, activeFrom: 'SP3c' }, snowNoSky: { max: 0, activeFrom: 'SP3c' } },
   // SP4a spec §9.1 (D26): the mesher's rows (`render.metric.ts`). R2 is retuned to SP3b's density terrain (0.85 / 0.55,
   // the user's decision of 2026-10-22; the master's 0.6 / 0.35 came from 09's flat terrain); R4 and R5 are recorded.
-  R1: { hiddenEmitted: { max: 0, activeFrom: 'SP4a' }, visibleMissing: { max: 0, activeFrom: 'SP4a' } },
+  R1: {
+    hiddenEmitted: { max: 0, activeFrom: 'SP4a' }, visibleMissing: { max: 0, activeFrom: 'SP4a' },
+    // SP6a spec §10.4: the X-ray faces missing + extra against a brute force over hollow voxels and the film.
+    xray: { max: 0, activeFrom: 'SP6a' },
+  },
   R2: { quadsPerFaceAo: { max: 0.85, activeFrom: 'SP4a' }, quadsPerFaceNoAo: { max: 0.55, activeFrom: 'SP4a' } },
   R4: { medianQuads: { max: 2000, activeFrom: 'SP8b' }, p95Quads: { max: 4000, activeFrom: 'SP8b' } },
   R5: { waterQuadsPerFace: { max: 0.1, activeFrom: 'SP7' } },

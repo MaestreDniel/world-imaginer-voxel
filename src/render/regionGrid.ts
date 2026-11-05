@@ -1,6 +1,6 @@
 import { Box3, Vector3, type Group, type Mesh, type Sphere } from 'three';
 import { STAGE_BONUS, streamScore } from '../core/streamScore';
-import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, ROW_INTS, type ColumnMeshPayload } from '../mesh/column';
+import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, ROW_INTS, type ColumnMeshPayload } from '../mesh/column';
 import type {
   RevealProbe, SectionRenderer, SectionRendererCounts, SectionRendererKind, StructuralKind, UploadGate,
 } from './sectionRenderer';
@@ -33,12 +33,15 @@ export const SECTION_UNITS = 16 * UNITS;
 
 /**
  * Per pass: the vertex and index reservation of a region's object, RegionBatch's batch and RegionMesh's arena alike
- * (SP4b spec §4.2, §4.3; Medium; the opaque one ≈ 1.8 MB on RegionBatch, 2.4 MB on RegionMesh).
+ * (SP4b spec §4.2, §4.3; Medium; the opaque one ≈ 1.8 MB on RegionBatch, 2.4 MB on RegionMesh). The X-ray's (SP6a spec
+ * §5.1) is an estimate, the translucent pass's size, until D25's second checkpoint measures every pass's use with the
+ * carvers and the X-ray pass and the reservations are resized right after push B.
  */
 export const RESERVATION: Readonly<Record<number, readonly [vertices: number, indices: number]>> = {
   [MESH_PASS_OPAQUE]: [131_072, 196_608],
   [MESH_PASS_CUTOUT]: [8192, 12_288],
   [MESH_PASS_TRANSLUCENT]: [16_384, 24_576],
+  [MESH_PASS_XRAY]: [16_384, 24_576],
 };
 /** Every growth of a region's object is × 1.5 (SP4b spec §4.2, §4.3). */
 export const GROWTH = 1.5;
@@ -197,6 +200,8 @@ export interface RegionBackend<R> {
 }
 
 const DEG = Math.PI / 180;
+/** The passes `addStandIns` covers: every pass a region object may draw, the X-ray's included (SP6a spec §5.2). */
+const STAND_IN_PASSES = [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY] as const;
 /** Structural operations one row may take in one pump before the backend is judged stuck (a bug, never a budget). */
 const MAX_OPS_PER_ROW = 8;
 /** Regions left with no column disposed per pump, outside the row cap and the structural slot (SP4c spec §5.4, D10). */
@@ -550,7 +555,7 @@ export function createStreamingRenderer<R>(
     },
     addStandIns() {
       const made: Array<{ readonly object: Mesh; dispose(): void }> = [];
-      for (const pass of [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT]) {
+      for (const pass of STAND_IN_PASSES) {
         if (b.hasPass(pass)) continue;
         const s = b.standIn(pass);
         root.add(s.object);

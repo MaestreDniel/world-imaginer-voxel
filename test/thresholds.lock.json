@@ -1,5 +1,5 @@
 {
-  "sha256": "a2244249c7935022e1bbe36bece7a906d41ad6d29a698c507de103335078c23f",
+  "sha256": "7a4a124f73693a43030adbc52cd98f405f14fc9a692ccc33a778fc5244487ceb",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -546,6 +546,10 @@
         },
         "visibleMissing": {
           "activeFrom": "SP4a",
+          "max": 0
+        },
+        "xray": {
+          "activeFrom": "SP6a",
           "max": 0
         }
       },

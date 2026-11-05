@@ -1077,10 +1077,11 @@ In AO, smooth light and connectivity15, "opaque" means PASS opaque with `FULL_FA
 5. Translucent (blending with depthWrite on; `customSort` back to front by section centre; double-sided water top).
 6. Clouds.
 7. Selection box, and with the selection tool (SP5c) its volume box and the ghost, drawn after the translucent pass.
+8. The X-ray pass (SP6a): cave walls and the surface film, additive, drawn alone while the X-ray is on (in the transparent list after every translucent region and before the ghost; the terrain and water passes collapse, the sky dome and clouds are hidden).
 
 On Ultra, passes 2-4 (after the LOD depth clear) render into a `WebGLRenderTarget` with a `DepthTexture` for Fabulous water.
 
-**Draw calls:** about 16-20 regions × 3 plus LOD 4, sky 2, clouds 1 and selection 1 (up to 7 while the selection tool shows a box and a ghost, SP5c), roughly 60 at Medium (target ≤ 100). 09 had about 2.3k at RD16. High adds RD16 regions and the shadow depth pass; its draw calls are recorded, not gated.
+**Draw calls:** about 16-20 regions × 3 (+1 per region with X-ray rows (SP6a)) plus LOD 4, sky 2, clouds 1 and selection 1 (up to 7 while the selection tool shows a box and a ghost, SP5c), roughly 60 at Medium (target ≤ 100). 09 had about 2.3k at RD16. High adds RD16 regions and the shadow depth pass; its draw calls are recorded, not gated.
 
 ### 4.6 Materials (`render/materials`, the only GLSL boundary)
 

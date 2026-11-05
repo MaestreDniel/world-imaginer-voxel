@@ -1,11 +1,12 @@
 import { Box3, BufferAttribute, BufferGeometry, DynamicDrawUsage, Group, Mesh, Sphere } from 'three';
-import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, ROW_INTS } from '../mesh/column';
+import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, ROW_INTS } from '../mesh/column';
 import type { MaterialSystem } from './materials/index';
 import {
   createStreamingRenderer, GROWTH, regionOrigin, RESERVATION, rowBounds, rowIsEmpty, SECTION_UNITS, UNITS,
   type RegionBackend, type StagedColumn,
 } from './regionGrid';
 import type { SectionRenderer, StructuralKind } from './sectionRenderer';
+import { XRAY_ORDER } from './selection';
 
 /**
  * RegionMesh (SP4a spec §6.2, D2; SP4b spec §4.3, D15): the section renderer where `WEBGL_multi_draw` is missing
@@ -26,6 +27,9 @@ import type { SectionRenderer, StructuralKind } from './sectionRenderer';
  * would hold it, else growth × 1.5 into a new geometry (three cannot resize an attribute), the old one disposed in
  * the same call. No path re-merges a region. A shown column's replacement (SP4c spec §5.3) takes spans of its own beside
  * the shown ones, its indices zero until the swap, which zeroes the old spans' indices and writes the new in one call.
+ *
+ * SP6a (spec §5.1, §5.2): a fourth arena per region, the X-ray's pass 3 over `materials.xray`, at `renderOrder`
+ * `XRAY_ORDER`; it is not translucent, so `sortTranslucent` never orders it (its additive blend needs no order).
  */
 
 /** A region's half extent in blocks: 8 columns across, 24 sections (384 blocks) high. */
@@ -34,7 +38,7 @@ const REGION_HALF_Y = 192;
 /** An arena whose free space reaches this share of its capacity is compacted instead of grown. */
 const COMPACT_AT = 0.4;
 
-const PASSES = [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT] as const;
+const PASSES = [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY] as const;
 
 /**
  * A first-fit free list (SP4b spec §4.3): the free ranges `[starts[k], starts[k] + sizes[k])`, sorted by start, never
@@ -193,6 +197,7 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
     [MESH_PASS_OPAQUE]: materials.terrainOpaque,
     [MESH_PASS_CUTOUT]: materials.terrainCutout,
     [MESH_PASS_TRANSLUCENT]: materials.water,
+    [MESH_PASS_XRAY]: materials.xray,
   };
   const root = new Group();
   root.name = 'regionMesh';
@@ -306,6 +311,7 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
     mesh.userData['rx'] = g.rx;
     mesh.userData['rz'] = g.rz;
     mesh.userData['pass'] = pass;
+    if (pass === MESH_PASS_XRAY) mesh.renderOrder = XRAY_ORDER;
     mesh.scale.setScalar(1 / UNITS);
     const a: Arena = {
       mesh, origin: regionOrigin(g.rx, g.rz),
@@ -400,7 +406,7 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
   };
 
   const backend: RegionBackend<MeshRegion> = {
-    newRegion: () => ({ passes: [null, null, null] }),
+    newRegion: () => ({ passes: [null, null, null, null] }),
     columnNeed(c) {
       for (const pass of PASSES) {
         let any = false;
@@ -590,7 +596,8 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
         a.d2 = dx * dx + dy * dy + dz * dz;
       }
       translucent.sort(fartherFirst);
-      // three draws the transparent list by ascending renderOrder before depth: the farthest region gets 0.
+      // three draws the transparent list by ascending renderOrder before depth: the farthest region gets 0. Only the
+      // water's arenas are listed: the X-ray's keep `XRAY_ORDER`, above every one of them (SP6a spec §5.2).
       for (let k = 0; k < translucent.length; k++) translucent[k]!.mesh.renderOrder = k;
     },
     gpuBytes() {

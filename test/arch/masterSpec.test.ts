@@ -2082,6 +2082,20 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(text).not.toContain('In the harness, a debug channel records the winning cave term per carved voxel.');
   });
 
+  test('§4.5\'s pass list gains the X-ray pass and its draw calls +1 per region with X-ray rows (SP6a spec §13 item 13)', () => {
+    const at = text.indexOf('### 4.5 Render structure');
+    const s45 = text.slice(at, text.indexOf('### 4.6 ', at));
+    const order = s45.slice(s45.indexOf('**Pass order:**'), s45.indexOf('**Draw calls:**'));
+    const xray = order.split('\n').find((l) => /^\d+\. /.test(l) && l.includes('X-ray'));
+    expect(xray, 'no X-ray item in §4.5\'s pass order').toBeDefined();
+    // The spec's wording, capitalised as the list's items are.
+    expect(xray!.startsWith('8. The X-ray pass (SP6a): cave walls and the surface film, additive, drawn alone while the X-ray is on')).toBe(true);
+    // SP5c's item 7 stays as pinned above.
+    expect(order.split('\n')).toContain('7. Selection box, and with the selection tool (SP5c) its volume box and the ghost, drawn after the translucent pass.');
+    const calls = s45.split('\n').find((l) => l.startsWith('**Draw calls:**'));
+    expect(calls).toContain('+1 per region with X-ray rows (SP6a)');
+  });
+
   test('§6.4\'s T5 row compares surfaceEst3 with the pre-cave top, its thresholds unchanged (SP6a spec §13 item 21)', () => {
     const t5 = text.split('\n').find((l) => l.startsWith('| T5 |'));
     expect(t5, 'no T5 row in §6.4').toBeDefined();

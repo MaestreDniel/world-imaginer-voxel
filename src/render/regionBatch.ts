@@ -1,11 +1,12 @@
 import { BatchedMesh, Box3, BufferAttribute, BufferGeometry, Group, Matrix4, Sphere, Vector3 } from 'three';
-import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, ROW_INTS, type ColumnMeshPayload } from '../mesh/column';
+import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, ROW_INTS, type ColumnMeshPayload } from '../mesh/column';
 import type { MaterialSystem } from './materials/index';
 import {
   createStreamingRenderer, GROWTH, RESERVATION, rowBounds, rowIsEmpty, SECTION_UNITS, UNITS, type RegionBackend,
   type StagedColumn, type StagingRegion,
 } from './regionGrid';
 import type { SectionRenderer, StructuralKind } from './sectionRenderer';
+import { XRAY_ORDER } from './selection';
 
 /**
  * RegionBatch (SP4a spec §6.2, D13; SP4b spec §4.2, D14): per region and pass a `BatchedMesh` created at the region's
@@ -22,6 +23,10 @@ import type { SectionRenderer, StructuralKind } from './sectionRenderer';
  * like a removal's (`optimize` keeps geometry and instance ids, so it may run mid-swap). A row that does not fit waits for the frame's structural operation: `optimize()` when the
  * batch's deleted space is ≥ 40 % of its reservation, else `setGeometrySize` × 1.5; a full instance table
  * `setInstanceCount` × 1.5.
+ *
+ * SP6a (spec §5.1, §5.2): a fourth batch per region, the X-ray's pass 3 over `materials.xray`, at `renderOrder`
+ * `XRAY_ORDER` with `sortObjects` off (additive, no depth test: its order does not matter), staged, uploaded, revealed
+ * and swapped with the column's other passes.
  */
 
 /** Instances a batch starts with: a mountain region holds up to 64 columns × 24 opaque rows. */
@@ -34,7 +39,7 @@ const OPTIMIZE_AT = 0.4;
 const REGION_XZ = 128;
 const REGION_Y = 384;
 
-const PASSES = [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT] as const;
+const PASSES = [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY] as const;
 
 interface BatchPass {
   readonly mesh: BatchedMesh;
@@ -120,6 +125,7 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
     [MESH_PASS_OPAQUE]: materials.terrainOpaque,
     [MESH_PASS_CUTOUT]: materials.terrainCutout,
     [MESH_PASS_TRANSLUCENT]: materials.water,
+    [MESH_PASS_XRAY]: materials.xray,
   };
   const root = new Group();
   root.name = 'regionBatch';
@@ -128,9 +134,9 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
   const origin = [0, 0, 0];
   const matrix = new Matrix4();
   // The rows a column's remaining rows add per pass (columnNeed), and the pass the last need was found in.
-  const needRows = new Int32Array(3);
-  const needVertices = new Float64Array(3);
-  const needIndices = new Float64Array(3);
+  const needRows = new Int32Array(PASSES.length);
+  const needVertices = new Float64Array(PASSES.length);
+  const needIndices = new Float64Array(PASSES.length);
   let needPass = 0;
 
   const place = (bp: BatchPass): void => {
@@ -167,7 +173,7 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
   };
 
   const backend: RegionBackend<BatchRegion> = {
-    newRegion: () => ({ passes: [null, null, null] }),
+    newRegion: () => ({ passes: [null, null, null, null] }),
     columnNeed(c) {
       needRows.fill(0);
       needVertices.fill(0);
@@ -217,7 +223,9 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
           mesh.userData['rz'] = region.rz;
           mesh.userData['pass'] = pass;
           mesh.perObjectFrustumCulled = true;
-          mesh.sortObjects = true;
+          // The X-ray's additive, depth-test-free blend needs no order (SP6a spec §5.2); every other batch sorts.
+          mesh.sortObjects = pass !== MESH_PASS_XRAY;
+          if (pass === MESH_PASS_XRAY) mesh.renderOrder = XRAY_ORDER;
           mesh.boundingSphere = new Sphere(new Vector3(REGION_XZ / 2, REGION_Y / 2, REGION_XZ / 2), Math.hypot(REGION_XZ / 2, REGION_Y / 2, REGION_XZ / 2));
           mesh.boundingBox = new Box3(new Vector3(0, 0, 0), new Vector3(REGION_XZ, REGION_Y, REGION_XZ));
           bp = { mesh, rx: region.rx, rz: region.rz, liveVertices: 0, liveIndices: 0, unculled: false };

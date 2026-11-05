@@ -562,7 +562,8 @@ const meshColumnCheck: ReplyCheck = (m) => {
     unitsProblem('rows', m['rows'], ROW_BYTES));
   if (shape !== null) return shape;
   const r = m as unknown as MeshColumnResultMsg;
-  // One Uint8 × 4 position and one Uint32 data word per vertex; one sphere per row.
+  // One Uint8 × 4 position and one Uint32 data word per vertex; one sphere per row; each row's pass 0 … 3, the X-ray's
+  // pass 3 included (SP6a spec §5.1; `payloadProblem`).
   return all(r.position.byteLength === r.data.byteLength ? null : `position (${r.position.byteLength} bytes) and data (${r.data.byteLength} bytes) hold different vertex counts`,
     exactProblem('spheres', r.spheres, SPHERE_BYTES * (r.rows.byteLength / ROW_BYTES)))
     ?? payloadProblem(payloadOfMeshResult(r));
@@ -610,7 +611,8 @@ export function parseFromWorker(m: unknown): FromWorker | BadReply | null {
 
 /**
  * The column payload of a `meshColumnResult` (SP4a spec §5.8): whole-buffer typed views over its seven transferred
- * buffers (ruling P27). The byte lengths must already be whole items (the reply guard checks them first).
+ * buffers (ruling P27), its rows of every pass (the X-ray's pass 3 included, SP6a spec §5.1) as they came. The byte
+ * lengths must already be whole items (the reply guard checks them first).
  */
 export function payloadOfMeshResult(m: MeshColumnResultMsg): ColumnMeshPayload {
   return {
