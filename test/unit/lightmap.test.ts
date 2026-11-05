@@ -1,7 +1,7 @@
 import { ClampToEdgeWrapping, LinearFilter, NoColorSpace } from 'three';
 import { describe, expect, test } from 'vitest';
 import { dayFactor, duskFactor } from '../../src/daynight/dayNight';
-import { createLightmap, lightCurve, lightmapRgba } from '../../src/render/lightmap';
+import { createLightmap, LIGHT_FLOOR, lightCurve, lightmapRgba } from '../../src/render/lightmap';
 
 const TIMES = Array.from({ length: 96 }, (_, i) => i / 96);
 const BRIGHTNESS = [0, 0.3, 1] as const;
@@ -27,11 +27,26 @@ describe('the lightmap (SP4a spec §6.7, master §4.8)', () => {
     expect(lightCurve(7.5)).toBeCloseTo(0.5 / 2.5, 12);
   });
 
-  test('(sky 0, block 0) has luminance ≤ 0.02·255 at every t and brightness', () => {
+  /** The texel value after the light floor F and before the brightness lift (SP6a spec §6.1, D14). */
+  const floored = (c: number): number => LIGHT_FLOOR + (1 - LIGHT_FLOOR) * c;
+
+  test('the light floor F = 0.02: the (sky 0, block 0) texel is byte 5 at β 0, 10 at β 0.3, 20 at β 1 at every t (SP6a spec §6.1)', () => {
+    expect(LIGHT_FLOOR).toBe(0.02);
+    const bytes: Array<[beta: number, byte: number]> = [[0, 5], [0.3, 10], [1, 20]];
     for (const t of TIMES) {
-      for (const beta of BRIGHTNESS) {
-        expect(luminance(texel(at(t, beta), 0, 0)), `t ${t}, β ${beta}`).toBeLessThanOrEqual(0.02 * 255);
-      }
+      for (const [beta, byte] of bytes) expect(texel(at(t, beta), 0, 0), `t ${t}, β ${beta}`).toEqual([byte, byte, byte, 255]);
+    }
+  });
+
+  test('(sky 0, block 0) is > 0 and ≤ 0.3 × the midnight sky-15 texel\'s luminance at every β, so night stays night (SP6a spec §6.1, D14)', () => {
+    // Midnight: the day factor and the dusk bump are 0.
+    expect(dayFactor(0.75)).toBe(0);
+    expect(duskFactor(0.75)).toBe(0);
+    for (const beta of BRIGHTNESS) {
+      const midnight = at(0.75, beta);
+      const floor = luminance(texel(midnight, 0, 0));
+      expect(floor, `β ${beta}`).toBeGreaterThan(0);
+      expect(floor, `β ${beta}`).toBeLessThanOrEqual(0.3 * luminance(texel(midnight, 0, 15)));
     }
   });
 
@@ -48,23 +63,32 @@ describe('the lightmap (SP4a spec §6.7, master §4.8)', () => {
     }
   });
 
-  test('the texel values: (15, 15) white at noon with β 0, block 15 warm, alpha 255 everywhere', () => {
+  test('the texel values: (15, 15) white at noon at every β, block 15 warm, alpha 255 everywhere (with the floor, SP6a spec §6.1)', () => {
+    for (const beta of BRIGHTNESS) expect(texel(at(0.25, beta), 15, 15), `β ${beta}`).toEqual([255, 255, 255, 255]);
     const noon = at(0.25, 0);
-    expect(texel(noon, 15, 15)).toEqual([255, 255, 255, 255]);
     expect(texel(noon, 0, 15)).toEqual([255, 255, 255, 255]);
-    expect(texel(noon, 15, 0)).toEqual([255, Math.round(255 * 0.85), Math.round(255 * 0.65), 255]);
+    expect(texel(noon, 15, 0)).toEqual([255, Math.round(255 * floored(0.85)), Math.round(255 * floored(0.65)), 255]);
     const midnight = at(0.75, 0);
     expect(texel(midnight, 0, 15)).toEqual([
-      Math.round(255 * 0.15 * 0.45),
-      Math.round(255 * 0.15 * 0.55),
-      Math.round(255 * 0.15 * 0.85),
+      Math.round(255 * floored(0.15 * 0.45)),
+      Math.round(255 * floored(0.15 * 0.55)),
+      Math.round(255 * floored(0.15 * 0.85)),
       255,
     ]);
     for (const m of [noon, midnight, at(0.5, 1)]) for (let i = 3; i < 1024; i += 4) expect(m[i]).toBe(255);
   });
 
-  test('brightness lifts the mid levels and keeps 0 at 0: c′ = mix(c, 1 − (1 − c)⁴, β)', () => {
-    const c = lightCurve(8);
+  test('every level stays distinct along both axes: luminance strictly increasing at β 0 (SP6a spec §6.1)', () => {
+    // The block axis at sky 0 (the same at every t) and the sky axis at block 0 at noon.
+    const noon = at(0.25, 0);
+    for (let l = 1; l < 16; l++) {
+      expect(luminance(texel(noon, l, 0)), `block ${l}`).toBeGreaterThan(luminance(texel(noon, l - 1, 0)));
+      expect(luminance(texel(noon, 0, l)), `sky ${l}`).toBeGreaterThan(luminance(texel(noon, 0, l - 1)));
+    }
+  });
+
+  test('brightness lifts the floored levels: c′ = mix(c, 1 − (1 − c)⁴, β) after the floor', () => {
+    const c = floored(lightCurve(8));
     const lifted = 1 - (1 - c) ** 4;
     const row = (beta: number) => texel(at(0.25, beta), 0, 8)[0]!;
     expect(row(0)).toBe(Math.round(255 * c));

@@ -1141,6 +1141,7 @@ This replaces the ±15-block slab relight rejected in §9. L3 includes shaft cas
 - curve `f/(3(1−f)+1)`;
 - the sky axis scaled by the day factor, with a blue night tint and a moon floor;
 - warm block light, max-combined;
+- a light floor F = 0.02 lifting every texel before the brightness (SP6a);
 - a brightness setting.
 
 **Shadows:**
@@ -1460,7 +1461,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
   - old meshes are kept on Apply (SP4c);
   - the throttle reacts to a simulated frame p95.
 - **Fluid rules:** diamond of radius 7; fall; infinite source; drain; reactions; the settle distance cap.
-- **Lightmap:** (0,0) ≤ 0.02 luminance; block light independent of time; phases match the sign of sun elevation.
+- **Lightmap:** (0,0) = the light floor: > 0 and ≤ 0.3 × the midnight sky-15 texel's luminance at every β, with night vision off (SP6a); block light independent of time; phases match the sign of sun elevation.
 - **Rendering setup:** colour-space assertion; glass meshed in the cutout pass; the fog shader uses `length(viewPos)`; water (a fluid byte on air) has effective opacity 1 and no collision, is meshed in the translucent pass, and sky light 3 blocks under open still water is 12 (amended by SP4a).
 - **Mesher AO:** the per-vertex 3-sample table [1, .8, .6, .45] and the diagonal flip (quad split chosen by AO sums) on canned 3×3×3 neighbourhoods.
 - **FPS limiter:** ≥ 59.5 fps at cap 60 on simulated 60 Hz timestamps.

@@ -2109,4 +2109,14 @@ describe('master spec amendments (SP6a §13)', () => {
     const s59 = text.slice(at59, text.indexOf('## 6. ', at59));
     expect(s59).toContain('while placing a paste, the wheel, ↑, ↓ (turn, raise, lower it; SP5c); X (X-ray; SP6a); PageUp / PageDown / Home (the X-ray band; SP6a); L (night vision; SP6a);');
   });
+
+  test('§4.8\'s Lightmap gains the light floor; §6.3\'s Lightmap line states it against the midnight sky-15 texel (SP6a spec §13 item 14, §6.1)', () => {
+    const at48 = text.indexOf('### 4.8 Lighting');
+    const s48 = text.slice(at48, text.indexOf('### 4.9 ', at48));
+    expect(s48).toContain('a light floor F = 0.02 lifting every texel before the brightness (SP6a)');
+    const at63 = text.indexOf('### 6.3 ');
+    const s63 = text.slice(at63, text.indexOf('### 6.4 ', at63));
+    expect(s63).toContain('(0,0) = the light floor: > 0 and ≤ 0.3 × the midnight sky-15 texel\'s luminance at every β, with night vision off (SP6a)');
+    expect(text).not.toContain('(0,0) ≤ 0.02 luminance');
+  });
 });

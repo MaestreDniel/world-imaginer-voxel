@@ -16,6 +16,12 @@ const DUSK_TINT = [1, 0.8, 0.65] as const;
 const BLOCK_TINT = [1, 0.85, 0.65] as const;
 /** The sky term's floor at night: curve(s)·mix(0.15, 1, day). */
 const NIGHT_SKY = 0.15;
+/**
+ * The light floor F (SP6a spec §6.1, D14): every texel c becomes F + (1 − F)·c, neutral grey, after the max of the sky
+ * and block terms and before the brightness, so an unlit cave reads dim grey, not black. It is the user's to judge by
+ * eye; a separate constant from the moon floor `NIGHT_SKY`.
+ */
+export const LIGHT_FLOOR = 0.02;
 
 const mix = (a: number, b: number, f: number): number => a + (b - a) * f;
 
@@ -35,19 +41,21 @@ const CURVE = Float64Array.from({ length: SIZE }, (_, l) => lightCurve(l));
 /**
  * Fills `out` (1024 bytes) with the lightmap at day factor `day`, dusk bump `dusk` and brightness β. Each texel is the
  * per-channel max of the sky term curve(s)·mix(0.15, 1, day)·tint, tint = mix(mix(night, white, day), warm, dusk), and
- * the block term curve(b)·[1, 0.85, 0.65]; then c′ = mix(c, 1 − (1 − c)⁴, β), stored as round(255c′), alpha 255.
- * The block term does not depend on the time, and (0, 0) stays 0 for every β.
+ * the block term curve(b)·[1, 0.85, 0.65]; then the light floor c ← F + (1 − F)·c (F = `LIGHT_FLOOR`, SP6a spec §6.1)
+ * and c′ = mix(c, 1 − (1 − c)⁴, β), stored as round(255c′), alpha 255. The block term does not depend on the time;
+ * (0, 0) is the floor (bytes 5, 10, 20 at β 0, 0.3, 1), every level stays distinct and (15, 15) stays 1.
  */
 export function lightmapRgba(day: number, dusk: number, brightness: number, out: Uint8Array): void {
   const skyScale = mix(NIGHT_SKY, 1, day);
   const tint = TINT;
   const curve = CURVE;
+  const floor = LIGHT_FLOOR;
   for (let c = 0; c < 3; c++) tint[c] = mix(mix(NIGHT_TINT[c]!, 1, day), DUSK_TINT[c]!, dusk) * skyScale;
   for (let sky = 0; sky < SIZE; sky++) {
     for (let block = 0; block < SIZE; block++) {
       const o = (sky * SIZE + block) * 4;
       for (let c = 0; c < 3; c++) {
-        const v = Math.max(curve[sky]! * tint[c]!, curve[block]! * BLOCK_TINT[c]!);
+        const v = floor + (1 - floor) * Math.max(curve[sky]! * tint[c]!, curve[block]! * BLOCK_TINT[c]!);
         const lifted = 1 - (1 - v) ** 4;
         out[o + c] = Math.round(255 * mix(v, lifted, brightness));
       }
