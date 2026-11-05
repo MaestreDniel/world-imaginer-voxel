@@ -1,6 +1,20 @@
 import { readFileSync } from 'node:fs';
 import { PerspectiveCamera } from 'three';
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
+import { Color } from 'three';
+import {
+  createCoordinator, createCoordinatorCounts, type CoordinatorJobs, type StreamSink, type StreamStore,
+} from '../../src/engine/coordinator';
+import { appliedDraftOf, regenFrom } from '../../src/engine/invalidation';
+import type { Stage } from '../../src/engine/rings';
+import { createThrottle } from '../../src/engine/throttle';
+import type { ColumnMeshPayload } from '../../src/mesh/column';
+import { createMaterialSystem } from '../../src/render/materials/index';
+import { createXrayControl } from '../../src/render/renderer';
+import { createFlatColorArray } from '../../src/render/textureArray';
+import { createEpochs } from '../../src/ui/world/applyControl';
+import { createPageXray, XRAY_NOTICE_MS, xrayNotice } from '../../src/ui/world/worldPage';
+import { createXrayStrip, XRAY_ALL } from '../../src/ui/world/xrayStrip';
 import { evaluateWorldCapabilities, type CapabilityReport } from '../../src/engine/capabilityRules';
 import type { StreamEvent } from '../../src/engine/coordinator';
 import { defaultRenderDistance, lowerRd } from '../../src/engine/renderDistance';
@@ -6374,5 +6388,332 @@ describe('the selection tool in the page III: Ctrl+V, the ghost, turn, raise and
     expect(s).toMatch(/ghostBuild: \(\) => world\.ghostBuild\(\),/);
     expect(s).toMatch(/setReplaced: \(x0, y0, z0, cells, count\) => world\.setReplaced\(x0, y0, z0, cells, count\),/);
     expect(s).toMatch(/hideReplaced: \(\) => world\.hideReplaced\(\),/);
+  });
+});
+
+/**
+ * A store model, jobs that settle when the test says so (each frame's work), and a sink that shows a staged payload at
+ * the next pump (its upload), for the X-ray's Review Focus 1 (SP6a spec §8): T commits a record at Proto, D at
+ * Decorated, L at Published, MESH stages a payload; each job resolves with the generation it was issued under; the
+ * queued jobs a cancel names leave with `JobCancelled`. The sink keeps, per column, the seq and epoch staged and not yet
+ * uploaded and the ones shown; `unstage` drops a payload not yet uploaded (true) or answers that it is shown (false).
+ */
+function xrayWorld() {
+  const slotOf = (cx: number, cz: number): number => (cx & 63) + 64 * (cz & 63);
+  const records = new Map<number, { cx: number; cz: number; status: number; block: number; light: number }>();
+  const held = (cx: number, cz: number) => {
+    const r = records.get(slotOf(cx, cz));
+    return r !== undefined && r.cx === cx && r.cz === cz ? r : undefined;
+  };
+  const store: StreamStore = {
+    versionsInto(cx, cz, out) {
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const k = 2 * (3 * (dz + 1) + (dx + 1));
+          const r = held(cx + dx, cz + dz);
+          out[k] = r?.block ?? -1;
+          out[k + 1] = r?.light ?? -1;
+        }
+      }
+    },
+    holder(cx, cz) {
+      const r = records.get(slotOf(cx, cz));
+      return r === undefined ? 'free' : r.cx === cx && r.cz === cz ? 'self' : 'other';
+    },
+    freeColumn(cx, cz) {
+      if (held(cx, cz) !== undefined) records.delete(slotOf(cx, cz));
+    },
+    freeProto() {},
+  };
+  const w = {
+    generation: 0,
+    epoch: 1,
+    /** The sink's operations (stage, unstage, remove), counted. */
+    ops: 0,
+    queue: [] as Array<{ stage: Stage; cx: number; cz: number; run(): void; cancel(): void }>,
+    pending: new Map<number, { seq: number; epoch: number }>(),
+    shown: new Map<number, { seq: number; epoch: number }>(),
+    /** The last seq staged per column. */
+    lastSeq: new Map<number, number>(),
+  };
+  const jobs: CoordinatorJobs = {
+    run(stage, cx, cz) {
+      const generation = w.generation;
+      return new Promise((resolve, reject) => {
+        w.queue.push({
+          stage, cx, cz,
+          run() {
+            const versions = new Int32Array(18);
+            store.versionsInto(cx, cz, versions);
+            if (stage === 'T') records.set(slotOf(cx, cz), { cx, cz, status: 1, block: 1, light: 0 });
+            else if (stage === 'D') { const r = held(cx, cz)!; r.status = 2; r.block++; }
+            else if (stage === 'L') { const r = held(cx, cz)!; r.status = 3; r.light++; }
+            const payload = stage === 'MESH' ? ({ cx, cz, versions } as unknown as ColumnMeshPayload) : null;
+            resolve({ versions: stage === 'L' || stage === 'MESH' ? versions : null, payload, generation });
+          },
+          cancel: () => reject(new JobCancelled()),
+        });
+      });
+    },
+    cancel(pred) {
+      const keep = w.queue.filter((j) => !pred(j.stage, j.cx, j.cz));
+      for (const j of w.queue) if (!keep.includes(j)) j.cancel();
+      w.queue.splice(0, w.queue.length, ...keep);
+    },
+    liveWorkers: () => 4,
+    generation: () => w.generation,
+  };
+  const sink: StreamSink = {
+    stage(p, seq) {
+      w.ops++;
+      const k = colKey(p.cx, p.cz);
+      w.pending.set(k, { seq, epoch: w.epoch });
+      w.lastSeq.set(k, seq);
+    },
+    unstage(cx, cz) {
+      w.ops++;
+      return w.pending.delete(colKey(cx, cz));
+    },
+    remove(cx, cz) {
+      w.ops++;
+      w.pending.delete(colKey(cx, cz));
+      w.shown.delete(colKey(cx, cz));
+    },
+  };
+  /** Runs every queued job (those they lead to wait for the next update). */
+  const settle = (): void => {
+    const due = w.queue.splice(0, w.queue.length);
+    for (const j of due) j.run();
+  };
+  /** The uploads: every staged payload is shown, swapped in whole. */
+  const pump = (): void => {
+    for (const [k, v] of w.pending) w.shown.set(k, v);
+    w.pending.clear();
+  };
+  return { w, store, jobs, sink, settle, pump };
+}
+
+describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HUD line and the notice (SP6a spec §5.3, §7.1, §7.2; D10, D11)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => { dom = installDom(); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+  const SRC = (): string => readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+
+  /** The page's X-ray over a recording renderer, the real strip and the notices shown, the camera at y `camera.y`. */
+  const page = (y = 80.5) => {
+    const calls: string[] = [];
+    const shown: Array<[string, number | undefined]> = [];
+    const camera = { y };
+    const strip = createXrayStrip(dom.body as unknown as HTMLElement);
+    const xray = createPageXray({
+      renderer: {
+        setXray: (on) => { calls.push(`setXray ${on}`); },
+        setXrayBand: (a, b) => { calls.push(`band ${a} ${b}`); },
+      },
+      strip,
+      notices: { show: (text, o) => { shown.push([text, o?.timeoutMs]); } },
+      cameraY: () => camera.y,
+      keyName: pageKeyName,
+    });
+    const box = dom.body.querySelector('#world-xray-strip')!;
+    return { xray, calls, shown, camera, box, line: () => box.children[0]!.textContent, strip };
+  };
+
+  test('X toggles `setXray`, the strip and the HUD line; off at the start, at every depth', () => {
+    const p = page();
+    expect([p.xray.on, p.xray.band, p.xray.hud(), p.box.hidden]).toEqual([false, XRAY_ALL, null, true]);
+    p.xray.action('xray');
+    expect(p.calls).toEqual(['setXray true']);
+    expect([p.xray.on, p.box.hidden, p.line()]).toEqual([true, false, 'X-ray · y −64 … 319 · by cave type']);
+    expect(p.xray.hud()).toBe(XRAY_ALL);
+    p.xray.action('xray');
+    expect(p.calls).toEqual(['setXray true', 'setXray false']);
+    expect([p.xray.on, p.box.hidden, p.xray.hud()]).toEqual([false, true, null]);
+    // The page wires the strip beside the build HUD, the HUD's line from `hud()`, and the four keys to `action`.
+    const s = SRC();
+    expect(s).toMatch(/const xrayStrip = createXrayStrip\(host\);/);
+    expect(s).toMatch(/teardown\.push\(\(\) => xrayStrip\.dispose\(\)\);/);
+    expect(s).toMatch(/xray: pageXray\.hud\(\),/);
+    expect(s).toMatch(/case 'xray': case 'xrayDown': case 'xrayUp': case 'xrayAll': pageXray\.action\(a\); break;/);
+    expect(s).toMatch(/renderer: world,\n\s+strip: xrayStrip,/);
+    expect(s).toMatch(/cameraY: \(\) => fly\.y,/);
+  });
+
+  test('the first X in a page shows the notice once (6 s), its key names from the key map; another page shows it again', () => {
+    expect(xrayNotice(pageKeyName)).toBe('X-ray: Page Down and Page Up move the depth band, Home shows every depth');
+    expect(XRAY_NOTICE_MS).toBe(6000);
+    const p = page();
+    for (let i = 0; i < 5; i++) p.xray.action('xray');
+    p.xray.action('xrayDown');
+    p.xray.action('xrayAll');
+    expect(p.shown).toEqual([[xrayNotice(pageKeyName), 6000]]);
+    // PageDown before any X shows nothing; the next page's first X shows it.
+    p.strip.dispose();
+    const q = page();
+    q.xray.action('xrayDown');
+    expect(q.shown).toEqual([]);
+    q.xray.action('xray');
+    expect(q.shown).toEqual([[xrayNotice(pageKeyName), 6000]]);
+  });
+
+  test('PageDown with the X-ray off still moves the band (shown at the next X); PageUp moves it 8 up; Home gives every depth', () => {
+    const p = page(80.5);
+    p.xray.action('xrayDown');
+    expect(p.calls).toEqual(['band 64 95']);
+    expect([p.xray.on, p.box.hidden, p.xray.hud(), [p.xray.band.yMin, p.xray.band.yMax]]).toEqual([false, true, null, [64, 95]]);
+    p.xray.action('xray');
+    expect(p.calls).toEqual(['band 64 95', 'setXray true']);
+    expect([p.box.hidden, p.line()]).toEqual([false, 'X-ray · y 64 … 95 · by cave type']);
+    expect(p.xray.hud()).toBe(p.xray.band);
+    // The camera moved: a band that is not all moves by 8 from where it is.
+    p.camera.y = -200;
+    p.xray.action('xrayUp');
+    expect(p.calls.at(-1)).toBe('band 72 103');
+    expect(p.line()).toBe('X-ray · y 72 … 103 · by cave type');
+    p.xray.action('xrayAll');
+    expect(p.calls.at(-1)).toBe('band -64 319');
+    expect([p.xray.band, p.line()]).toEqual([XRAY_ALL, 'X-ray · y −64 … 319 · by cave type']);
+    // From all again, the first press centres on the camera, clamped inside the world.
+    p.xray.action('xrayUp');
+    expect(p.calls.at(-1)).toBe('band -64 -33');
+  });
+
+  test('keys act only while the world owns the controls: with the map owning, X and PageDown are neither acted on nor prevented (SP6a spec §7.1)', () => {
+    const p = page();
+    const target = Object.assign(new EventTarget(), { requestPointerLock: () => Promise.resolve() });
+    const doc = Object.assign(new EventTarget(), { pointerLockElement: null as unknown });
+    let owner: 'world' | 'map' = 'map';
+    const input = attachInput(target as unknown as HTMLElement, {
+      // As the page's `onAction` routes the four (pinned above).
+      onAction: (a) => { if (a === 'xray' || a === 'xrayDown' || a === 'xrayUp' || a === 'xrayAll') p.xray.action(a); },
+      onLook() {},
+      onButton() {},
+      wheelCtrlAsSlot: () => false,
+      placing: () => false,
+      isTextFocus: () => false,
+      active: () => owner === 'world',
+      doc: doc as unknown as Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>,
+      win: new EventTarget() as unknown as Pick<Window, 'addEventListener' | 'removeEventListener'>,
+    });
+    const press = (code: string, key: string): Event => {
+      const e = Object.assign(new Event('keydown', { cancelable: true }), { code, key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, repeat: false });
+      doc.dispatchEvent(e);
+      doc.dispatchEvent(Object.assign(new Event('keyup'), { code, key }));
+      return e;
+    };
+    for (const [code, key] of [['KeyX', 'x'], ['PageDown', 'PageDown'], ['PageUp', 'PageUp'], ['Home', 'Home']] as const) {
+      expect(press(code, key).defaultPrevented, code).toBe(false);
+    }
+    expect([p.calls, p.xray.on, p.xray.band]).toEqual([[], false, XRAY_ALL]);
+    owner = 'world';
+    expect(press('KeyX', 'x').defaultPrevented).toBe(true);
+    expect(press('PageDown', 'PageDown').defaultPrevented).toBe(true);
+    expect(p.calls).toEqual(['setXray true', 'band 64 95']);
+    input.dispose();
+    // The page's `active` is the map overlay's owner (SP4c spec §2.3).
+    expect(SRC()).toMatch(/active: \(\) => mapRef === null \|\| mapRef\.owner === 'world',/);
+  });
+
+  test('Review Focus 1: X on, an Apply of `caves.cheese.offset` 0.27 → 0.20 settling over 30 fake frames with PageDown at frame 5 and X twice at frames 10 and 11: the strip reads the moved band, `xrayOn` is 1 at the end, every column\'s shown seq is the Apply\'s, the stale count reaches 0', async () => {
+    const flush = (): Promise<void> => new Promise((r) => { setImmediate(r); });
+    // The renderer's X-ray over a real material system, the sky dome and a clear colour (no GL context in Node).
+    const materials = createMaterialSystem({ variant: 'batch', ao: true, smoothLight: true }, createFlatColorArray());
+    const sky = { visible: true };
+    const clearColor = new Color(0x87ceeb);
+    let clearAlpha = 1;
+    const clear = {
+      getClearColor: (t: Color) => t.copy(clearColor),
+      getClearAlpha: () => clearAlpha,
+      setClearColor: (c: Color, a = 1) => { clearColor.copy(c); clearAlpha = a; },
+    };
+    const control = createXrayControl(materials, sky, clear as never);
+    const fly = { y: 80.5 };
+    const shownNotices: string[] = [];
+    const strip = createXrayStrip(dom.body as unknown as HTMLElement);
+    const xray = createPageXray({
+      renderer: control, strip, notices: { show: (text) => { shownNotices.push(text); } }, cameraY: () => fly.y, keyName: pageKeyName,
+    });
+
+    // A world at RD 4 filled at the first draft (epoch 1) and shown.
+    const world = xrayWorld();
+    const { w } = world;
+    const c = createCoordinator({
+      jobs: world.jobs, store: world.store, sink: world.sink, throttle: createThrottle({ max: 3 }), rd: 4, rdMax: 16,
+      retainAllProtos: true, strict: true, generation: 0, epoch: 1, onEvent: (e) => { throw new Error(`unexpected event ${e.kind}`); },
+    });
+    const cam = { x: 8.5, z: 8.5, yawDeg: 37.5 };
+    const counts = createCoordinatorCounts();
+    const work = async (updates: number): Promise<void> => {
+      for (let u = 0; u < updates; u++) {
+        c.update(cam);
+        await flush();
+        world.settle();
+        await flush();
+      }
+    };
+    for (let i = 0; i < 400 && !(c.firstFill() && w.queue.length === 0 && c.counts(counts).MESH.done === counts.MESH.needed); i++) await work(1);
+    world.pump();
+    expect(c.firstFill()).toBe(true);
+    expect([counts.stale, w.shown.size]).toEqual([0, counts.MESH.needed]);
+
+    // X on, before the Apply.
+    xray.action('xray');
+    // The Apply: the draft with `caves.cheese.offset` 0.20 regenerates from T (`regenFrom`), at epoch 2 under the pool's
+    // next generation, as the apply control does it.
+    const session = openMapSession(DEFAULT_MAP_STATE, () => [1, 2]);
+    const s0 = session.state;
+    expect((s0.params as unknown as { caves: { cheese: { offset: number } } }).caves.cheese.offset).toBe(0.27);
+    const next = structuredClone(s0.params) as unknown as { caves: { cheese: { offset: number } } };
+    next.caves.cheese.offset = 0.2;
+    const draft = (params: unknown) => {
+      const h = stageHashes(params);
+      const hex: Record<string, string> = {};
+      for (const [k, v] of Object.entries(h)) hex[k] = hex64(v!);
+      return appliedDraftOf('seed', { stageHashes: hex, genKey: hex64(genKey(s0.seed, h)) });
+    };
+    const epochs = createEpochs();
+    const a = draft(s0.params);
+    const b = draft(next);
+    expect(epochs.of(a.genKey)).toBe(1);
+    const from = regenFrom(a, b);
+    expect(from).toBe('T');
+    w.generation = 1;
+    c.apply({ epoch: epochs.of(b.genKey), generation: 1, from: from! });
+    w.epoch = c.counts(counts).epoch;
+    expect(w.epoch).toBe(2);
+
+    const staleAt: number[] = [];
+    // Each frame does 12 updates' work (the jobs of each settle before the next): the regeneration is under way from
+    // frame 4 and done before frame 30 (stale 64, 33 and 26 at frames 5, 10 and 11 when written).
+    for (let frame = 0; frame < 30; frame++) {
+      const ops = w.ops;
+      if (frame === 5) xray.action('xrayDown');
+      if (frame === 10 || frame === 11) xray.action('xray');
+      // The X-ray's keys write uniforms and the strip only: nothing staged, dropped or removed.
+      expect(w.ops, `frame ${frame}`).toBe(ops);
+      staleAt.push(c.counts(counts).stale);
+      await work(12);
+      world.pump();
+    }
+    c.update(cam);
+    c.counts(counts);
+
+    // The keys acted while the world regenerated.
+    for (const f of [5, 10, 11]) expect(staleAt[f], `stale at frame ${f}`).toBeGreaterThan(0);
+    // The strip reads the moved band (PageDown from all at y 80.5: [64, 95]), shown; one notice, at the first X.
+    expect([xray.on, xray.band.all, xray.band.yMin, xray.band.yMax]).toEqual([true, false, 64, 95]);
+    const box = dom.body.querySelector('#world-xray-strip')!;
+    expect([box.hidden, box.children[0]!.textContent]).toEqual([false, 'X-ray · y 64 … 95 · by cave type']);
+    expect(shownNotices).toEqual([xrayNotice(pageKeyName)]);
+    // `xrayOn` 1 with the band, the sky hidden and the X-ray's clear colour.
+    const u = materials.xray.uniforms;
+    expect([u['xrayOn']!.value, u['xrayYMin']!.value, u['xrayYMax']!.value]).toEqual([1, 64, 95]);
+    expect(sky.visible).toBe(false);
+    expect(clearColor.getHex()).toBe(new Color().setHex(0x0b0e14, 'srgb').getHex());
+    // Every column shows the Apply's payload, whole: its last staged seq, at epoch 2; nothing waits.
+    expect(w.pending.size).toBe(0);
+    expect(w.shown.size).toBe(counts.MESH.needed);
+    for (const [k, v] of w.shown) expect(v, `column ${k}`).toEqual({ seq: w.lastSeq.get(k), epoch: 2 });
+    expect([counts.stale, counts.epoch, counts.MESH.done]).toEqual([0, 2, counts.MESH.needed]);
   });
 });

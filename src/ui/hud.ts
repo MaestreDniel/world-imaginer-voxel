@@ -4,6 +4,7 @@ import type { FlyState } from '../player/fly';
 import { bindingLabel, DEFAULT_KEYMAP, type Action } from '../player/keymap';
 import type { SectionRendererKind } from '../render/sectionRenderer';
 import type { FrameStats, FrameSummary } from './frameStats';
+import { stripText, type XrayBand } from './world/xrayStrip';
 
 const REFRESH_MS = 250;
 
@@ -85,6 +86,11 @@ export interface HudData {
    * column's new mesh is shown, `editLatency.visibleP95()`) and their count; null before the first, and no line.
    */
   readonly edit: { readonly p95: number; readonly count: number } | null;
+  /**
+   * The X-ray's band while it is on, null off (SP6a spec §7.2): the line "X-ray · y a … b · by cave type", the strip's,
+   * shows while it is on, as "stale" does while the world regenerates.
+   */
+  readonly xray: XrayBand | null;
 }
 
 /** The clock as HH:MM from t (t 0 is 06:00, the opening t is 08:00). */
@@ -124,6 +130,8 @@ function hudLines(d: HudData, hints: string): string[] {
   ];
   // While the world regenerates after an Apply (SP4c spec §4.5, D26).
   if (d.stale > 0) lines.push(`stale ${d.stale} / ${d.needed}`);
+  // While the X-ray is on (SP6a spec §7.2).
+  if (d.xray !== null) lines.push(stripText(d.xray));
   const walking = d.mode === 'walk';
   lines.push(
     `genCap ${d.genCap} · dropped ${d.dropped} · failed ${d.failed}`,
@@ -145,7 +153,8 @@ function hudLines(d: HudData, hints: string): string[] {
 /**
  * The world HUD (SP4a spec §6.9, D30; SP4b spec §7.3): the fps line plus the counts (SP4b: the streaming counts), one
  * line each, refreshed every 250 ms from `read`; SP4c adds "stale n / needed" while the world regenerates (§4.5); SP5a
- * starts the position line with the mode and adds "edit p95 n ms (k)" once there is an edit (SP5a spec §4.6). The page
+ * starts the position line with the mode and adds "edit p95 n ms (k)" once there is an edit (SP5a spec §4.6); SP6a
+ * adds the X-ray's line "X-ray · y a … b · by cave type" after it while the X-ray is on (SP6a spec §7.2). The page
  * toggles it on F3 (`toggle`); while hidden it does not read. SP10 grows F3 into the full overlay.
  */
 export function mountWorldHud(host: HTMLElement, read: () => HudData): { toggle(): void; dispose(): void } {

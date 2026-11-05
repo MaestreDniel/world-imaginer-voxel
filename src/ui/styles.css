@@ -62,6 +62,11 @@ body { background: #0f1629; color: var(--text); font: 13px/1.4 system-ui, sans-s
 .world-select-label { position: absolute; left: 50%; bottom: 84px; z-index: 2; transform: translateX(-50%); padding: .1rem .5rem; border-radius: 4px; background: rgb(0 0 0 / .45); color: #f4f7ff; white-space: nowrap; pointer-events: none; }
 .world-host:has(> .world-select-label:not([hidden])) > .world-notices { bottom: 7.25rem; }
 .world-crosshair[hidden], .world-slot-name[hidden], .world-select-label[hidden] { display: none; }
+/* The X-ray's strip (SP6a spec §7.2): its line and legend at the top centre while the X-ray is on (styling deferred). */
+.world-xray-strip { position: absolute; left: 50%; top: .5rem; z-index: 2; transform: translateX(-50%); padding: .2rem .6rem; border-radius: 4px; background: rgb(0 0 0 / .45); color: #f4f7ff; font: 12px/1.45 ui-monospace, monospace; text-align: center; pointer-events: none; }
+.world-xray-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: .15rem .6rem; }
+.world-xray-swatch { display: inline-block; width: .7rem; height: .7rem; margin-right: .25rem; border-radius: 2px; vertical-align: middle; }
+.world-xray-strip[hidden] { display: none; }
 /* The creative palette (SP5a spec §4.4, D10): an overlay over the paused world as the help's (inset 0, z-index 3), so
    no click reaches the canvas; transparent, a click on it closes the palette. Its panel is the help's dark card,
    ending 84 px above the bottom, clear of the hotbar and the slot name, so the active slot and its name show each

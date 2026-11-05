@@ -820,6 +820,7 @@ function hudData(o: { x: number; y: number; z: number; rd: number; revealed: num
     sectionRenderer: o.kind,
     renderer: 'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)',
     edit: null,
+    xray: null,
   };
 }
 

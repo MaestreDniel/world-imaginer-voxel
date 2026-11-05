@@ -42,7 +42,7 @@
  */
 import v8 from 'node:v8';
 import { runInNewContext } from 'node:vm';
-import { PerspectiveCamera } from 'three';
+import { Color, PerspectiveCamera } from 'three';
 import { afterAll, describe, expect, test, vi } from 'vitest';
 import { colKey } from '../../src/core/coords';
 import { hex64 } from '../../src/core/hash';
@@ -68,7 +68,7 @@ import { firstOrigin } from '../../src/render/floatingOrigin';
 import { createFpsLimiter } from '../../src/render/fpsLimiter';
 import { createGhost, type Ghost } from '../../src/render/ghost';
 import { createMaterialSystem } from '../../src/render/materials/index';
-import { gpuEstimateOf, type GpuEstimate, type WorldRenderer } from '../../src/render/renderer';
+import { createXrayControl, gpuEstimateOf, XRAY_CLEAR, type GpuEstimate, type WorldRenderer } from '../../src/render/renderer';
 import { createSectionRenderer, createSectionRendererCounts } from '../../src/render/sectionRenderer';
 import { REFUSED_RED, SELECTION_YELLOW, createSelection, createVolumeBox, type Selection } from '../../src/render/selection';
 import { createSky } from '../../src/render/sky';
@@ -89,9 +89,10 @@ import { createModifyMode, createModifySwitch } from '../../src/ui/world/modifyM
 import { createPlaces, PLACE_COLOURS } from '../../src/ui/world/places';
 import { AUTOSAVE_MS } from '../../src/ui/world/autosave';
 import {
-  aimReach, createAim, createClickQueue, createPageAutosave, createSelectActions, newWorldRecord, pageKeyName, toolClicks, type Aim, type GhostHost,
-  type SelectActions,
+  aimReach, createAim, createClickQueue, createPageAutosave, createPageXray, createSelectActions, newWorldRecord, pageKeyName, toolClicks, type Aim,
+  type GhostHost, type PageXray, type SelectActions,
 } from '../../src/ui/world/worldPage';
+import { createXrayStrip } from '../../src/ui/world/xrayStrip';
 import { createClipboardStore, type ClipboardStore } from '../../src/ui/world/clipboardStore';
 import { createSelectTool, type SelectTool } from '../../src/ui/world/selectTool';
 import { GLASS, STONE } from '../../src/world/blocks/index';
@@ -434,6 +435,10 @@ interface AtRest {
   readonly session: WorldSession;
   /** Routes the apply control's `beforeApply` through `gate` (a saved world's modification mode), or back to always true (null). */
   setBeforeApply(gate: ((from: WorldStage | null) => boolean) | null): void;
+  /** The page's X-ray (SP6a spec §5.3) over the renderer's control on the batch materials, off until its tests. */
+  readonly xray: PageXray;
+  /** The X-ray's uniforms, the sky dome's visibility, the clear colour and the strip's element. */
+  xrayState(): { on: number; yMin: number; yMax: number; sky: boolean; clear: number; strip: ReturnType<ReturnType<typeof installDom>['el']> };
 }
 
 /**
@@ -457,6 +462,20 @@ async function buildAtRest(): Promise<AtRest> {
   const origin = firstOrigin({ x: fly.x, z: fly.z });
   sections.setOrigin(origin.x, origin.y, origin.z);
   const camera = new PerspectiveCamera(70, 16 / 9, 0.1, 336);
+  // The X-ray's control (SP6a spec §5.3) over the material system, a sky dome and a clear colour, as the renderer's:
+  // the frame syncs its radius after the frame uniforms (`renderer.ts`); off until the X-ray test turns it on.
+  const sky = { visible: true };
+  const clearColor = new Color(0x87ceeb);
+  let clearAlpha = 1;
+  const clear = {
+    getClearColor: (t: Color): Color => t.copy(clearColor),
+    getClearAlpha: (): number => clearAlpha,
+    setClearColor: (c: Color, a: number): void => {
+      clearColor.copy(c);
+      clearAlpha = a;
+    },
+  };
+  const xrayControl = createXrayControl(materials, sky, clear as never);
   const world: FrameStepDeps['world'] = {
     origin,
     camera,
@@ -464,6 +483,7 @@ async function buildAtRest(): Promise<AtRest> {
     frame(state) {
       sections.sortTranslucent(camera.position.x, camera.position.y, camera.position.z);
       materials.setFrameUniforms(state);
+      xrayControl.syncRadius();
     },
   };
 
@@ -483,7 +503,8 @@ async function buildAtRest(): Promise<AtRest> {
   // A 144 Hz display under a cap of 144: the limiter's median runs on every tick and every tick renders. Enough
   // timestamps for the warm-ups and each frame-step test's attempts.
   // SP5a's two tests warm up again and measure on their own (`sp5a`); so do SP5c's tool tests (the box, the ghost).
-  const times = boxedTimes(1000 / 144, FRAME_WARM_UP + SHOWN_WARM_UP + 4 * FRAME_WARM_UP + 3 * ATTEMPTS * ATTEMPTS * N);
+  // SP6a's X-ray test warms up and measures on its own too.
+  const times = boxedTimes(1000 / 144, FRAME_WARM_UP + SHOWN_WARM_UP + 5 * FRAME_WARM_UP + 4 * ATTEMPTS * ATTEMPTS * N);
   let ticks = 0;
   // The budget's clock is the tick's timestamp: Node's `performance.now()` allocates on each call (88 B measured),
   // the browser's does not concern this code.
@@ -677,6 +698,12 @@ async function buildAtRest(): Promise<AtRest> {
   });
   const buildHud = mountBuildHud(app as unknown as HTMLElement, { hotbar, hud: true, locked: () => true });
   let sp5aOn = false;
+  // SP6a's X-ray as the page wires it (spec §5.3, §7.2): its keys through the page's X-ray over the control and the
+  // strip beside the build HUD; nothing of it runs per frame but the control's radius sync above.
+  const xrayStrip = createXrayStrip(app as unknown as HTMLElement);
+  const pageXray = createPageXray({
+    renderer: xrayControl, strip: xrayStrip, notices: { show() {} }, cameraY: () => fly.y, keyName: pageKeyName,
+  });
 
   const step = createFrameStep({
     fly,
@@ -719,6 +746,15 @@ async function buildAtRest(): Promise<AtRest> {
   for (let i = 0; i < FRAME_WARM_UP; i++) tick();
   return {
     fly, coordinator, counts, tick, state, t0, sections, overlay, applied,
+    xray: pageXray,
+    xrayState: () => ({
+      on: materials.xray.uniforms['xrayOn']!.value as number,
+      yMin: materials.xray.uniforms['xrayYMin']!.value as number,
+      yMax: materials.xray.uniforms['xrayYMax']!.value as number,
+      sky: sky.visible,
+      clear: clearColor.getHex(),
+      strip: app.querySelector('#world-xray-strip')!,
+    }),
     stats: () => ({ ticks, rendered, lightmapBuilds }),
     policy: () => ({ poolEpoch: pool.epoch, generation: applyControl.generation, size: pool.size }),
     hooks: {
@@ -1167,6 +1203,55 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
       mode.dispose();
       f.session.setWritable(true);
     }
+  }, TIMEOUT_MS);
+
+  test(`${N} frame steps at rest with the X-ray on at a fixed band grow the heap by less than the boxing budget of 256 B per tick (SP6a §5.3)`, async () => {
+    const f = await atRest();
+    // X, then PageDown from every depth: the 32 blocks centred on the camera's y, written once; then nothing changes.
+    f.xray.action('xray');
+    f.xray.action('xrayDown');
+    const c = Math.floor(f.fly.y);
+    try {
+      for (let i = 0; i < FRAME_WARM_UP; i++) f.tick();
+      const x = f.xrayState();
+      expect([x.on, x.yMin, x.yMax, x.sky, x.clear]).toEqual([1, c - 16, c + 15, false, new Color().setHex(XRAY_CLEAR, 'srgb').getHex()]);
+      const text = x.strip.children[0]!.childNodes[0];
+      expect([x.strip.hidden, x.strip.textContent.startsWith(`X-ray · y ${c - 16} … ${c + 15} · by cave type`)]).toEqual([false, true]);
+      const before = f.stats();
+      const g = allocationOver(f.tick, 0, FRAME_STEP_ALLOC_MAX);
+      expectAtRest(g, FRAME_STEP_ALLOC_MAX);
+      expectSp4cAtRest(f);
+      expect(f.stats().rendered - before.rendered).toBe(g.calls);
+      // The uniforms, the sky and the clear colour as they were; the strip's text never written in the frame.
+      const y = f.xrayState();
+      expect([y.on, y.yMin, y.yMax, y.sky, y.clear]).toEqual([x.on, x.yMin, x.yMax, x.sky, x.clear]);
+      expect(y.strip.children[0]!.childNodes[0]).toBe(text);
+    } finally {
+      f.xray.action('xrayAll');
+      f.xray.action('xray');
+      f.tick();
+    }
+    const off = f.xrayState();
+    expect([off.on, off.yMin, off.yMax, off.sky, off.strip.hidden]).toEqual([0, -64, 319, true, true]);
+  }, TIMEOUT_MS);
+
+  test(`${N} toggles of X at a fixed band grow the heap by less than 256 KB (SP6a spec §5.3: a toggle writes uniforms and the clear colour only)`, async () => {
+    const f = await atRest();
+    expect(f.xray.on).toBe(false);
+    // The first X (the page's one notice) is behind the measurement, and the band is PageDown's from every depth.
+    f.xray.action('xray');
+    f.xray.action('xray');
+    f.xray.action('xrayDown');
+    const band = f.xray.band;
+    const text = f.xrayState().strip.children[0]!.childNodes[0];
+    const g = allocationOver(() => f.xray.action('xray'), WARM_UP, ZERO_ALLOC_MAX);
+    expectAtRest(g);
+    if (f.xray.on) f.xray.action('xray');
+    const x = f.xrayState();
+    expect([f.xray.on, f.xray.band, x.on, x.sky, x.strip.hidden]).toEqual([false, band, 0, true, true]);
+    expect([x.yMin, x.yMax]).toEqual([band.yMin, band.yMax]);
+    expect(x.strip.children[0]!.childNodes[0]).toBe(text);
+    f.xray.action('xrayAll');
   }, TIMEOUT_MS);
 
   test(`${N} frame-clock ticks (a cap of 144 on a 144 Hz display, the slow-frame notice past its 300 frames) grow the heap by less than 256 KB`, () => {

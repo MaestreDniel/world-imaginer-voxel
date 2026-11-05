@@ -221,6 +221,7 @@ import { coversWorld, createApplyControl, createEpochs, updateAuxPolicy } from '
 import { LEAVE_WAIT_MS, createAutosave, createStateParts, type Autosave, type AutosaveDeps } from './autosave';
 import { createEditLatency } from './editLatency';
 import { mountBuildHud } from './buildHud';
+import { bandStep, createXrayStrip, XRAY_ALL, type XrayBand } from './xrayStrip';
 import { createActionPost, createBlockHistory, type BlockHistory, type BlockStep } from './blockHistory';
 import { turnedCell, type Clipboard } from './clipboard';
 import { createClipboardStore, type ClipboardStore } from './clipboardStore';
@@ -2056,6 +2057,76 @@ export function pageKeyName(a: Action): string {
   const e = DEFAULT_KEYMAP.find((k) => k.action === a);
   const b = e?.bindings[0];
   return b === undefined ? '' : bindingLabel(b);
+}
+
+/** How long the first X's notice shows, ms (SP6a spec §7.2). */
+export const XRAY_NOTICE_MS = 6_000;
+
+/** The first X's notice (SP6a spec §7.2), its key names from the key map's labels (`pageKeyName`). */
+export const xrayNotice = (keyName: (a: Action) => string): string =>
+  `X-ray: ${keyName('xrayDown')} and ${keyName('xrayUp')} move the depth band, ${keyName('xrayAll')} shows every depth`;
+
+/** The X-ray's keys (SP6a spec §7.1). */
+export type XrayAction = Extract<Action, 'xray' | 'xrayDown' | 'xrayUp' | 'xrayAll'>;
+
+/** The page's X-ray (SP6a spec §5.3, §7.1, §7.2; D10, D11): on or off and its depth band. */
+export interface PageXray {
+  readonly on: boolean;
+  readonly band: XrayBand;
+  /**
+   * X toggles it (the renderer's `setXray`, the strip shown or hidden; the first X in a page shows the notice once);
+   * PageDown and PageUp move the band (`bandStep` from the camera's y), Home sets every depth (`setBand`).
+   */
+  action(a: XrayAction): void;
+  /** Sets the band: the renderer's band uniforms and the strip's text (the Caves tab's sliders, Home). */
+  setBand(b: XrayBand): void;
+  /** The band while the X-ray is on, null off: the F3 HUD's line (SP6a spec §7.2). */
+  hud(): XrayBand | null;
+}
+
+/**
+ * The page's X-ray over the renderer (`setXray`, `setXrayBand`: uniforms, the sky dome and the clear colour only), the
+ * strip and the notices, with the camera's y for a first band step. Off at every depth at a page's start. A band key
+ * acts with the X-ray off too: the band shows at the next X. A toggle allocates nothing (spec §5.3): the strip writes
+ * only what changed; a band step returns a new band and the strip's new text (a user action, not a frame).
+ */
+export function createPageXray(o: {
+  readonly renderer: Pick<WorldRenderer, 'setXray' | 'setXrayBand'>;
+  readonly strip: { set(on: boolean, b: XrayBand): void };
+  readonly notices: Pick<WorldNotices, 'show'>;
+  cameraY(): number;
+  keyName(a: Action): string;
+}): PageXray {
+  let on = false;
+  let band = XRAY_ALL;
+  let noticed = false;
+  const setBand = (b: XrayBand): void => {
+    band = b;
+    o.renderer.setXrayBand(b.yMin, b.yMax);
+    o.strip.set(on, b);
+  };
+  return {
+    get on() { return on; },
+    get band() { return band; },
+    action(a) {
+      switch (a) {
+        case 'xray':
+          on = !on;
+          o.renderer.setXray(on);
+          o.strip.set(on, band);
+          if (on && !noticed) {
+            noticed = true;
+            o.notices.show(xrayNotice(o.keyName), { timeoutMs: XRAY_NOTICE_MS });
+          }
+          break;
+        case 'xrayDown': setBand(bandStep(band, -1, o.cameraY())); break;
+        case 'xrayUp': setBand(bandStep(band, 1, o.cameraY())); break;
+        case 'xrayAll': setBand(XRAY_ALL); break;
+      }
+    },
+    setBand,
+    hud: () => (on ? band : null),
+  };
 }
 
 /** The aim's reach (SP5c spec §1.2, D2): `SELECT_REACH` with the selection tool on, else `REACH_WALK` / `REACH_FLY`. */
@@ -4884,6 +4955,17 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // The frame loop's parts: the limiter, the stats, the HUD, the help and the input.
     const limiter: FpsLimiter = createFpsLimiter(settings.fpsCap);
     const frames = createFrameStats();
+    // The X-ray (SP6a spec §5.3, §7.2): its strip beside the build HUD and its state, which X, PageDown, PageUp and Home
+    // change through `onAction`; the HUD shows its line while it is on.
+    const xrayStrip = createXrayStrip(host);
+    teardown.push(() => xrayStrip.dispose());
+    const pageXray = createPageXray({
+      renderer: world,
+      strip: xrayStrip,
+      notices,
+      cameraY: () => fly.y,
+      keyName: pageKeyName,
+    });
     // The HUD reads every count from its owner (SP4b spec §7.3), on its own timer outside the frame (§3.10).
     const gpu: GpuEstimate = { sectionsBytes: 0, skyBytes: 0, textureBytes: 0, lightmapBytes: 0, drawingBufferBytes: 0 };
     const huds = hud
@@ -4920,6 +5002,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           renderer: caps.renderer,
           // G2's live reading once there is an edit (SP5a spec §4.6): click to the frame the new mesh is shown.
           edit: editLatency.count > 0 ? { p95: editLatency.visibleP95(), count: editLatency.count } : null,
+          // The X-ray's line while it is on (SP6a spec §7.2).
+          xray: pageXray.hud(),
         };
       })
       : null;
@@ -5130,6 +5214,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         case 'turn': case 'turnBack': case 'raise': case 'lower':
           selectToolAction(a, selectActions);
           break;
+        // The X-ray's keys (SP6a spec §7.1, D10, D11): X toggles it, PageDown and PageUp move its band, Home shows every
+        // depth; the band moves with the X-ray off too.
+        case 'xray': case 'xrayDown': case 'xrayUp': case 'xrayAll': pageXray.action(a); break;
         default: break; // movement and sprint are held; Esc (releasePointer) is the browser's
       }
     };

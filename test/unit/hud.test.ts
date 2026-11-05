@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { OPENING_T } from '../../src/daynight/dayNight';
 import { formatClock, mountWorldHud, timeSpeedLabel, type HudData } from '../../src/ui/hud';
+import { bandSet, XRAY_ALL } from '../../src/ui/world/xrayStrip';
 import { installDom } from './fixtures/domShim';
 
 const DATA: HudData = {
@@ -34,6 +35,7 @@ const DATA: HudData = {
   sectionRenderer: 'batch',
   renderer: 'ANGLE (Intel, Mesa Intel(R) Xe Graphics (TGL GT2), OpenGL 4.6)',
   edit: null,
+  xray: null,
 };
 
 describe('formatClock and timeSpeedLabel (SP4a spec §6.5, §6.9)', () => {
@@ -118,6 +120,27 @@ describe('mountWorldHud (SP4a spec §6.9, D30)', () => {
     vi.advanceTimersByTime(250);
     expect(dom.body.textContent).not.toContain('stale');
     expect(dom.body.children[0]!.children.map((r) => r.textContent)).toHaveLength(lines.length - 1);
+  });
+
+  test('X-ray off: no line; on: the strip\'s line, `X-ray · y −64 … 319 · by cave type` at every depth, then the band\'s, after the stale line; off again, the line goes (SP6a spec §7.2)', () => {
+    let xray: HudData['xray'] = null;
+    mount(() => ({ ...DATA, stale: 12, needed: 349, xray }));
+    const rows = (): string[] => dom.body.children[0]!.children.map((r) => r.textContent);
+    expect(dom.body.textContent).not.toContain('X-ray');
+    const before = rows().length;
+    xray = XRAY_ALL;
+    vi.advanceTimersByTime(250);
+    expect(rows()).toHaveLength(before + 1);
+    const at = rows().indexOf('X-ray · y \u221264 … 319 · by cave type');
+    expect(at).toBeGreaterThan(0);
+    expect(rows()[at - 1]).toBe('stale 12 / 349');
+    xray = bandSet(-40, -9);
+    vi.advanceTimersByTime(250);
+    expect(rows()).toContain('X-ray · y \u221240 … \u22129 · by cave type');
+    xray = null;
+    vi.advanceTimersByTime(250);
+    expect(dom.body.textContent).not.toContain('X-ray');
+    expect(rows()).toHaveLength(before);
   });
 
   test('position and column; mesh, paused and an unreported renderer string', () => {

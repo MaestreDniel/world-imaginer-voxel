@@ -2060,6 +2060,7 @@ describe('master spec amendments (SP6a §13)', () => {
     [/^\s+caves\/carvers\.ts /, 'carve.ts tags.ts (SP6a)', 'src/gen/caves/tags.ts'],
     [/^\s+mesh\/greedy\.ts /, 'xray.ts (SP6a)', 'src/mesh/xray.ts'],
     [/^\s+materials\/index\.ts /, '(SP6a: the X-ray material, glsl/xray.glsl.ts)', 'src/render/materials/glsl/xray.glsl.ts'],
+    [/^\s+ui\/world\/\* /, 'xrayStrip.ts (SP6a)', 'src/ui/world/xrayStrip.ts'],
   ];
 
   test('§1 names each SP6a module in its entry, which exists; the line under gen/ names carve.ts and tags.ts (SP6a spec §13 item 8)', () => {
