@@ -145,11 +145,11 @@ world-imaginer-voxel/          (repository root)
     textures/painters/*.ts palette.ts layers.ts resourcePack.ts flatColors.ts   pure RGBA byte painters + manifest parsing;
                                 flatColors.ts (SP4a): the flat block colours of SP4a's 1 × 1 texture array and the Voxels palette
     light/initial.ts relight.ts (SP5a) queue.ts    L2
-    mesh/greedy.ts cross.ts fluid.ts shapes.ts packing.ts connectivity.ts lodTile.ts column.ts builder.ts faces.ts boxes.ts (SP5a, provisional until SP8a)   L2 (packing exports PACK_LAYOUT; render/materials turns it into #defines;
+    mesh/greedy.ts cross.ts fluid.ts shapes.ts packing.ts connectivity.ts lodTile.ts column.ts builder.ts faces.ts boxes.ts (SP5a, provisional until SP8a) xray.ts (SP6a)   L2 (packing exports PACK_LAYOUT; render/materials turns it into #defines;
                                 shapes.ts meshes non-cube states, deriving fence/pane/stair connections from neighbours; SP4a: column.ts, one column's
                                 sections → the column payload; builder.ts, the growable per-pass buffers; faces.ts, the face geometry, per-vertex light
                                 and greedy merge shared by greedy.ts and fluid.ts; SP5a: boxes.ts, the faces of the torch, wall-torch and ladder
-                                boxes until SP8a's SHAPE_BOXES)
+                                boxes until SP8a's SHAPE_BOXES; SP6a: xray.ts, the X-ray pass 3 of cave walls and the surface film, PACK_LAYOUT's xray word)
     audio/synth/*.ts                                L2 pure DSP → Float32Array (no WebAudio; node-testable, runs in workers)
     audio/soundPack.ts                              pure manifest parsing (wi10-sounds)
     audio/model/ambienceModel.ts emitterCluster.ts footstepCadence.ts musicScheduler.ts   pure decision logic used by sound/

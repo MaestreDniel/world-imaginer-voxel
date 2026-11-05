@@ -5,7 +5,8 @@
  * digs a voxel T leaves solid, opened through `openPersistWorld` (the page's open on the real stack). The world opens
  * with today's tree and the older-generator flag; the edits read back; the placed stone keeps the T stage's tag in the
  * final set (`replaceBlocks` keeps the section's cave entry) and the dug voxel's tag is 0 (it was rock: not cave).
- * Task 17 adds the X-ray's half: `meshXray` over that section, walls toward the stone and none toward the dug voxel.
+ * The X-ray's half (Task 17, SP6a spec §5.1): `meshXray` over the final sets' padded sections shows a wall toward the
+ * placed stone from each hollow neighbour, kind its tag, and no face owned by the dug voxel (air, tag 0: not hollow).
  */
 import { expect, test } from 'vitest';
 import { CAVE_KIND } from '../../src/core/constants';
@@ -15,13 +16,19 @@ import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import type { JsonObject } from '../../src/core/params/migrate';
 import { terrainStage } from '../../src/gen/pipeline/terrainStage';
+import { createMeshBuilder } from '../../src/mesh/builder';
+import { unpackXray } from '../../src/mesh/packing';
+import { meshXray } from '../../src/mesh/xray';
 import { encodeColumnDiff } from '../../src/persist/diffCodec';
 import { createMemoryKV } from '../../src/persist/memory';
 import { createSaves, loadParams, newState } from '../../src/persist/saves';
 import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
 import { newWorldRecord, OLDER_GENERATOR_NOTICE } from '../../src/ui/world/worldPage';
-import { AIR, STONE } from '../../src/world/blocks/index';
+import { AIR, FULL_FACES, PASS, STONE } from '../../src/world/blocks/index';
+import { ALL_FACES, PASS_OPAQUE } from '../../src/world/blocks/kinds';
+import type { NeighborhoodReader } from '../../src/world/store/api';
+import { copyPaddedSection, createPaddedSection, padIndex } from '../../src/world/store/padded';
 import { createStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
 import { openPersistWorld } from '../harness/persistWorld';
@@ -32,6 +39,41 @@ const MiB = 1 << 20;
 const OLD = 'f00df00df00df00d';
 
 interface Voxel { readonly x: number; readonly y: number; readonly z: number }
+
+/** Per face (north, east, south, west, up, down): the normal axis, its sign and the unit normal (master face order). */
+const AXIS = [2, 0, 2, 0, 1, 1] as const;
+const SIGN = [-1, 1, 1, -1, 1, -1] as const;
+const NORMAL: ReadonlyArray<readonly [number, number, number]> = [[0, 0, -1], [1, 0, 0], [0, 0, 1], [-1, 0, 0], [0, 1, 0], [0, -1, 0]];
+const OPPOSITE = [2, 3, 0, 1, 5, 4] as const;
+
+/**
+ * The X-ray faces of section `sy` of column (cx, cz), each unit face keyed `x,y,z,face,kind` by the world voxel that
+ * owns it, and the section's padded copy (`meshXray` over `copyPaddedSection`, as the mesh job runs it).
+ */
+function xrayFaces(nb: NeighborhoodReader, cx: number, cz: number, sy: number): { faces: Set<string>; tagAt: (v: Voxel) => number; blockAt: (v: Voxel) => number } {
+  const padded = createPaddedSection();
+  copyPaddedSection(nb, sy, padded);
+  const b = createMeshBuilder();
+  meshXray(padded, b);
+  const view = b.view(3);
+  const faces = new Set<string>();
+  for (let q = 0; q < view.vertices / 4; q++) {
+    const { face: f, kind } = unpackXray(view.data[4 * q]!);
+    const corners = [0, 1, 2, 3].map((k) => [0, 1, 2].map((a) => view.position[4 * (4 * q + k) + a]! / 8));
+    const lo = [0, 1, 2].map((a) => Math.min(...corners.map((c) => c[a]!)));
+    const hi = [0, 1, 2].map((a) => Math.max(...corners.map((c) => c[a]!)));
+    const a = AXIS[f]!;
+    lo[a] = SIGN[f]! > 0 ? corners[0]![a]! - 1 : corners[0]![a]!;
+    hi[a] = lo[a]! + 1;
+    for (let y = lo[1]!; y < hi[1]!; y++) {
+      for (let z = lo[2]!; z < hi[2]!; z++) {
+        for (let x = lo[0]!; x < hi[0]!; x++) faces.add(`${16 * cx + x},${16 * sy - 64 + y},${16 * cz + z},${f},${kind}`);
+      }
+    }
+  }
+  const local = (v: Voxel): number => padIndex(v.x - 16 * cx, v.y + 64 - 16 * sy, v.z - 16 * cz);
+  return { faces, tagAt: (v) => padded.cave[local(v)]! & 15, blockAt: (v) => padded.blocks[local(v)]! };
+}
 
 /**
  * The first column of seed 42 (default) from (0, 0) outward whose T output holds a cheese-tagged voxel: that voxel and
@@ -65,7 +107,7 @@ function findVoxels(): { cx: number; cz: number; cheese: Voxel; rock: Voxel } {
   throw new Error('no cheese voxel within 5 columns of (0, 0)');
 }
 
-test('a GV5 world with edits in what are now caves opens with the caves: today\'s tree, the older-generator flag, the edits read back, the stone keeps its cheese tag and the dug voxel has none (Review Focus 2)', async () => {
+test('a GV5 world with edits in what are now caves opens with the caves: today\'s tree, the older-generator flag, the edits read back, the stone keeps its cheese tag and the dug voxel has none; the X-ray walls the stone and not the dug voxel (Review Focus 2)', async () => {
   const { cx, cz, cheese, rock } = findVoxels();
   const kv = createMemoryKV();
   const id = 'gv5';
@@ -104,6 +146,32 @@ test('a GV5 world with edits in what are now caves opens with the caves: today\'
       expect(fin.cave(cheese.x & 15, cheese.y, cheese.z & 15)).toBe(CAVE_KIND.cheese);
       expect(fin.cave(rock.x & 15, rock.y, rock.z & 15)).toBe(0);
       expect(fin.block(cheese.x & 15, cheese.y, cheese.z & 15)).toBe(STONE);
+
+      // The X-ray (spec §5.1): each hollow neighbour of the placed stone shows a wall toward it, kind its tag; the stone
+      // is an opaque full cube, so it is not hollow and owns no face.
+      const opaqueFull = (s: number): boolean => PASS[s] === PASS_OPAQUE && FULL_FACES[s] === ALL_FACES;
+      const sectionOf = (v: Voxel): number => (v.y + 64) >> 4;
+      const nb = p.store.neighborhood(cx, cz);
+      let walls = 0;
+      for (let f = 0; f < 6; f++) {
+        const [dx, dy, dz] = NORMAL[f]!;
+        const n = { x: cheese.x + dx, y: cheese.y + dy, z: cheese.z + dz };
+        const ncx = n.x >> 4;
+        const ncz = n.z >> 4;
+        const x = xrayFaces(ncx === cx && ncz === cz ? nb : p.store.neighborhood(ncx, ncz), ncx, ncz, sectionOf(n));
+        const tag = x.tagAt(n);
+        if (tag === 0 || opaqueFull(x.blockAt(n))) continue;
+        expect(x.faces, `the hollow neighbour ${n.x},${n.y},${n.z} (kind ${tag}) shows no wall toward the placed stone`).toContain(`${n.x},${n.y},${n.z},${OPPOSITE[f]},${tag}`);
+        walls++;
+      }
+      expect(walls, 'the placed stone has no hollow neighbour (the case is vacuous)').toBeGreaterThan(0);
+      const own = xrayFaces(nb, cx, cz, sectionOf(cheese));
+      expect([...own.faces].filter((k) => k.startsWith(`${cheese.x},${cheese.y},${cheese.z},`))).toEqual([]);
+      // The dug voxel: air with tag 0 (it was rock), so not hollow: it owns no X-ray face.
+      const dug = xrayFaces(nb, cx, cz, sectionOf(rock));
+      expect(dug.tagAt(rock)).toBe(0);
+      expect(dug.blockAt(rock)).toBe(AIR);
+      expect([...dug.faces].filter((k) => k.startsWith(`${rock.x},${rock.y},${rock.z},`))).toEqual([]);
     } finally {
       p.store.exitRead();
     }

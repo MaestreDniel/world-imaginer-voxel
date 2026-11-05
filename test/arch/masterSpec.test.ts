@@ -2058,6 +2058,7 @@ describe('master spec amendments (SP6a §13)', () => {
   /** [§1 entry head, the token its entry holds, the file on disk]; each later task that creates a module appends its row. */
   const SP6A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+caves\/carvers\.ts /, 'carve.ts tags.ts (SP6a)', 'src/gen/caves/tags.ts'],
+    [/^\s+mesh\/greedy\.ts /, 'xray.ts (SP6a)', 'src/mesh/xray.ts'],
   ];
 
   test('§1 names each SP6a module in its entry, which exists; the line under gen/ names carve.ts and tags.ts (SP6a spec §13 item 8)', () => {

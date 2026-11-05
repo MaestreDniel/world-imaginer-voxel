@@ -1,13 +1,14 @@
 /**
- * The mesher's output (SP4a spec §5.5, §5.8): per mesh pass (0 opaque, 1 cutout, 2 translucent) one growable
- * `position` (Uint8 × 4 per vertex: x, y, z in 1/8-block units, then 0), `data` (one `PACK_LAYOUT` word per vertex)
- * and `index` (Uint32, six per quad, relative to the pass's first vertex) array. A builder lives in the mesh job's
+ * The mesher's output (SP4a spec §5.5, §5.8): per mesh pass (0 opaque, 1 cutout, 2 translucent, 3 the X-ray's cave
+ * walls and surface film, SP6a spec §5.1, D23) one growable `position` (Uint8 × 4 per vertex: x, y, z in 1/8-block
+ * units, then 0), `data` (one `PACK_LAYOUT` word per vertex) and `index` (Uint32, six per quad, relative to the pass's
+ * first vertex) array. A builder lives in the mesh job's
  * worker-local scratch and is `reset` per section; `quad` allocates nothing except when a pass outgrows its arrays,
  * which then double.
  */
 
-/** A mesh pass: 0 opaque, 1 cutout, 2 translucent (`MESH_PASS_*` in `mesh/column.ts`). */
-export type MeshPass = 0 | 1 | 2;
+/** A mesh pass: 0 opaque, 1 cutout, 2 translucent (`MESH_PASS_*` in `mesh/column.ts`), 3 the X-ray (`mesh/xray.ts`). */
+export type MeshPass = 0 | 1 | 2 | 3;
 
 /** One pass's vertices and indices so far: views of exactly `4·vertices`, `vertices` and `indices` entries. */
 export interface MeshView {
@@ -67,7 +68,9 @@ function grow(p: PassBuffers): void {
 }
 
 export function createMeshBuilder(): MeshBuilder {
-  const passes: readonly PassBuffers[] = [createPass(INITIAL_QUADS), createPass(INITIAL_QUADS), createPass(INITIAL_QUADS)];
+  const passes: readonly PassBuffers[] = [
+    createPass(INITIAL_QUADS), createPass(INITIAL_QUADS), createPass(INITIAL_QUADS), createPass(INITIAL_QUADS),
+  ];
   return {
     reset(): void {
       for (const p of passes) {

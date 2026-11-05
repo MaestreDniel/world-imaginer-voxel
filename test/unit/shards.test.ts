@@ -2,7 +2,7 @@
  * The CI shard tables (SP4b spec §1.1, D1): `shardArgs` selects a named shard's files or excludes every named file for
  * the catch-all, and `coverageProblems` holds every rule a table's `check` enforces, on synthetic file lists (no
  * `vitest list`). The unit table is the spec's ten heavy files, plus the five slowest of `rest` in CI run 41132868697
- * (final review GOV-8), SP6a's slow cave files (Task 8's `caveContinuity`, Task 11's `caveTags`), and `rest`; the metrics-quick table keeps its shards; the
+ * (final review GOV-8), SP6a's slow cave files (Task 8's `caveContinuity`, Task 11's `caveTags`, Task 17's `meshXray`), and `rest`; the metrics-quick table keeps its shards; the
  * metrics-fast table (SP4b spec §9's lever, taken after SP4c's merge run) is `terrain` and `surface` alone plus `rest`.
  */
 import { existsSync, readdirSync } from 'node:fs';
@@ -17,14 +17,14 @@ const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 
 const HEAVY = ['sliceJob', 'floatingRules', 'workerPool', 'treeMutator', 'reviewSlices', 'columnStage', 'tile', 'fieldSlice',
   'splineFixtures', 'surfaceProbe', 'relight', 'zeroAlloc', 'terrainStage', 'terrainHeap', 'modifyMode', 'caveContinuity',
-  'caveTags'].map((n) => `test/unit/${n}.test.ts`);
+  'caveTags', 'meshXray'].map((n) => `test/unit/${n}.test.ts`);
 
 describe('shardArgs (SP4b spec §1.1)', () => {
-  test('the unit table: heavy is its seventeen files, rest excludes each of them', () => {
+  test('the unit table: heavy is its eighteen files, rest excludes each of them', () => {
     expect(Object.keys(SHARDS)).toEqual(['heavy', 'rest']);
     expect(shardArgs(SHARDS, 'heavy')).toEqual(HEAVY);
     const rest = shardArgs(SHARDS, 'rest');
-    expect(rest).toHaveLength(34);
+    expect(rest).toHaveLength(36);
     expect(rest).toEqual(HEAVY.flatMap((f) => ['--exclude', f]));
     for (const f of HEAVY) expect(existsSync(`${ROOT}${f}`), `${f} does not exist`).toBe(true);
   });

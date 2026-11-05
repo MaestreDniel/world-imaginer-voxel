@@ -807,7 +807,23 @@ These are exactly §12.3's allowed keys for push A. Lever 5's output change (3b4
   - DT2: `tagProbe` 0, and `probeBulk` and `compiledReference` 0.
   - U2: 1 (every leaf live; gated at min 1).
   - U4: `migrationFailures` 0 and `readmeStale` 0.
-- **CI:** push A's head SHA, the CI run, its wall time and each job's time against §11 (the heavier T, no `caves` shard yet) are recorded by the next docs commit (Task 17; rulings P12, P23, P40).
+- **CI** (recorded by Task 17's commit; rulings P12, P23, P40): push A's head is 54dd34aa9c5b4ee171f2f36f6d68cb117c33d6d8, pushed to `sp6a/cave-shapes`; CI run 41927787407 succeeded, wall **7 min 19 s** (22:43:46 → 22:51:05Z), above §11's budget of 3 min 30 s (SP5c's exit run: 2 min 56 s), so the CI levers run at push B (Task 39), whose run is the first with the `caves` shards. This run has the heavier T and no `caves` shard yet, and its region caches started cold (they are keyed on `src/**`, §11). Each job's time, against §11's estimate where it gives one:
+
+  | job | push A | SP5c exit | §11's estimate |
+  |---|---|---|---|
+  | `metrics-quick (terrain)` (the long pole) | 7:02 | 2:38 | ≈ 170-200 s |
+  | `metrics-quick (surface)` | 5:22 | 2:27 | ≈ 170-200 s |
+  | `metrics-quick (rest)` | 4:36 | | +5-20 s |
+  | `check` | 3:48 | 2:08 | +5-10 s |
+  | `metrics-fast (surface)` | 3:15 | | +5-20 s |
+  | `metrics-fast (rest)` | 2:52 | 2:21 | +5-20 s |
+  | `unit (rest)` | 2:51 | 2:32 | +15-30 s (unit) |
+  | `metrics-fast (terrain)` | 2:33 | | +5-20 s |
+  | `metrics-quick (persist)` | 2:27 | | +5-20 s |
+  | `unit (heavy)` | 2:08 | 1:32 | +15-30 s (unit) |
+  | `metrics-quick (render)` | 2:02 | | +5-20 s |
+  | `metrics-quick (clipboard)` | 1:57 | | +5-20 s |
+  | `metrics-quick (edit)` | 1:47 | | +5-20 s |
 
 ## Threshold log
 

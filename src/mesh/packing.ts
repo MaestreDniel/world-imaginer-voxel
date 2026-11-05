@@ -7,7 +7,10 @@
  *   `flags` 26-29 (emissive, waving, randomRotate, upper), `frame` 30 (glass's thin frame, discarded inside by the
  *   cutout shader; SP5a spec §1.3, provisional until SP8a), spare 31;
  * - fluid: `layer` 0-9, `face` 10-12, `sky` 13-16, `block` 17-20, `depth` 21-24, `tint` 25-27, `cornerDrop` 28-31
- *   (ninths of a block below the voxel's top).
+ *   (ninths of a block below the voxel's top);
+ * - xray (SP6a spec §5.1, D23; the X-ray pass, `mesh/xray.ts`): the position as the solid word's, then `face` 0-2,
+ *   `kind` 3-6 (the cave kind, `CAVE_KIND`, or 15 for the surface film, `CAVE_FILM_KIND`), `biome` 7-10 (reserved for
+ *   SP6b's cave biome, written 0), bits 11-31 spare.
  */
 
 /** One field: its lowest bit and its width. */
@@ -25,6 +28,12 @@ export interface SolidFields {
   tint: number;
   flags: number;
   frame: number;
+}
+
+export interface XrayFields {
+  face: number;
+  kind: number;
+  biome: number;
 }
 
 export interface FluidFields {
@@ -60,8 +69,14 @@ const FLUID: Readonly<Record<keyof FluidFields, PackField>> = Object.freeze({
   cornerDrop: field(28, 4),
 });
 
-/** Offset and width of every field of both variants (SP4a spec §5.5), deep-frozen. */
-export const PACK_LAYOUT = Object.freeze({ solid: SOLID, fluid: FLUID });
+const XRAY: Readonly<Record<keyof XrayFields, PackField>> = Object.freeze({
+  face: field(0, 3),
+  kind: field(3, 4),
+  biome: field(7, 4),
+});
+
+/** Offset and width of every field of each variant (SP4a spec §5.5; SP6a spec §5.1's `xray`), deep-frozen. */
+export const PACK_LAYOUT = Object.freeze({ solid: SOLID, fluid: FLUID, xray: XRAY });
 
 /** `[name, offset, mask]` per field, for the pack and unpack loops. */
 type Entry<K> = readonly [K, number, number];
@@ -70,6 +85,7 @@ const entries = <K extends string>(layout: Readonly<Record<K, PackField>>): read
 
 const SOLID_ENTRIES = entries(SOLID);
 const FLUID_ENTRIES = entries(FLUID);
+const XRAY_ENTRIES = entries(XRAY);
 
 function pack<K extends string>(variant: string, list: readonly Entry<K>[], f: Readonly<Record<K, number>>): number {
   let word = 0;
@@ -98,10 +114,19 @@ export function packFluid(f: FluidFields): number {
   return pack('fluid', FLUID_ENTRIES, f);
 }
 
+/** The u32 data word of an X-ray vertex (SP6a spec §5.1); a RangeError names a field outside `[0, 2^bits)` or not an integer. */
+export function packXray(f: XrayFields): number {
+  return pack('xray', XRAY_ENTRIES, f);
+}
+
 export function unpackSolid(word: number): SolidFields {
   return unpack(SOLID_ENTRIES, word);
 }
 
 export function unpackFluid(word: number): FluidFields {
   return unpack(FLUID_ENTRIES, word);
+}
+
+export function unpackXray(word: number): XrayFields {
+  return unpack(XRAY_ENTRIES, word);
 }
