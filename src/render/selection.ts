@@ -39,6 +39,12 @@ export const DIM_OPACITY = 0.35;
 export const AFTER_WATER_ORDER = 1 << 20;
 /** The ghost's `renderOrder` (depth-tested, after the water; SP5c spec §6.2). */
 export const GHOST_ORDER = AFTER_WATER_ORDER;
+/**
+ * The X-ray pass's `renderOrder` (SP6a spec §5.2; set on the pass-3 objects of both section renderers): after every
+ * water region, whose orders RegionMesh renumbers 0 … N − 1 every frame with N ≪ 2^20, and before the ghost, whose
+ * `GHOST_ORDER` is `AFTER_WATER_ORDER`, so nothing lies strictly between them.
+ */
+export const XRAY_ORDER = AFTER_WATER_ORDER - 1;
 /** The volume box's through-terrain lines, after the ghost; the replaced-cell overlay shares it (SP5c spec §6.3). */
 export const VOLUME_DIM_ORDER = AFTER_WATER_ORDER + 1;
 

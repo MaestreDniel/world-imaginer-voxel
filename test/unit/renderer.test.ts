@@ -1,5 +1,5 @@
 import {
-  BoxGeometry, Group, LinearMipmapLinearFilter, Mesh, MeshBasicMaterial, NearestFilter, PerspectiveCamera, Scene,
+  BoxGeometry, Color, Group, LinearMipmapLinearFilter, Mesh, MeshBasicMaterial, NearestFilter, PerspectiveCamera, Scene,
   ShaderMaterial, Vector3, type BatchedMesh, type InstancedMesh, type LineSegments, type Material, type Object3D, type RenderItem,
 } from 'three';
 import { WebGLRenderList } from 'three/src/renderers/webgl/WebGLRenderLists.js';
@@ -8,10 +8,13 @@ import { MESH_PASS_TRANSLUCENT } from '../../src/mesh/column';
 import type { Ghost } from '../../src/render/ghost';
 import { createMaterialSystem } from '../../src/render/materials/index';
 import {
-  NEAR_FLY, NEAR_WALK, applyNear, applyRenderDistance, compileScene, compileWorldScene, createGpuTimer, createWorldScene,
-  gpuEstimateOf, opaquePassSort, toolDrawCallsOf, withRegionsUnculled, withSectionsShown, type GpuEstimate,
+  NEAR_FLY, NEAR_WALK, XRAY_CLEAR, applyNear, applyRenderDistance, compileScene, compileWorldScene, createGpuTimer,
+  createWorldScene, createXrayControl, gpuEstimateOf, opaquePassSort, toolDrawCallsOf, withRegionsUnculled,
+  withSectionsShown, type GpuEstimate,
 } from '../../src/render/renderer';
-import { GHOST_CYAN, GHOST_ORDER, SELECTION_YELLOW, VOLUME_DIM_ORDER, createSelection } from '../../src/render/selection';
+import {
+  AFTER_WATER_ORDER, GHOST_CYAN, GHOST_ORDER, SELECTION_YELLOW, VOLUME_DIM_ORDER, XRAY_ORDER, createSelection,
+} from '../../src/render/selection';
 import { SKY_RENDER_ORDER } from '../../src/render/sky';
 import { createSectionRenderer, type SectionRendererKind } from '../../src/render/sectionRenderer';
 import { createSky } from '../../src/render/sky';
@@ -748,5 +751,81 @@ describe('gpuEstimateOf (SP4b spec §8.4)', () => {
     const out: GpuEstimate = { sectionsBytes: 0, skyBytes: 0, textureBytes: 0, lightmapBytes: 0, drawingBufferBytes: 0 };
     expect(gpuEstimateOf(parts(true, LinearMipmapLinearFilter), out).textureBytes).toBe((16 + 4 + 1) * 3 * 4);
     expect(gpuEstimateOf(parts(true, NearestFilter), out).textureBytes).toBe(16 * 3 * 4);
+  });
+});
+
+describe('the X-ray toggle and band (SP6a spec §5.3)', () => {
+  /** The clear colour's surface of a `WebGLRenderer`, recording each write. */
+  const fakeClear = (hex: number, alpha: number) => {
+    const s = { color: new Color().setHex(hex), alpha, writes: 0 };
+    return {
+      s,
+      getClearColor: (target: Color) => target.copy(s.color),
+      getClearAlpha: () => s.alpha,
+      setClearColor: (c: Color, a = 1) => {
+        s.color.copy(c);
+        s.alpha = a;
+        s.writes++;
+      },
+    };
+  };
+  const setup = () => {
+    const materials = createMaterialSystem({ variant: 'mesh', ao: true, smoothLight: true }, createFlatColorArray());
+    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64 });
+    const sky = createSky(materials);
+    const clear = fakeClear(0x123456, 0.5);
+    const x = createXrayControl(materials, sky, clear as never);
+    const u = materials.xray.uniforms;
+    const values = () => [u['xrayOn']!.value, u['xrayYMin']!.value, u['xrayYMax']!.value, u['xrayRadius']!.value];
+    return { materials, sky, clear, x, values };
+  };
+
+  test('setXray(true) hides the sky dome and sets the clear colour #0b0e14; setXray(false) restores both', () => {
+    const { sky, clear, x, values } = setup();
+    expect(XRAY_CLEAR).toBe(0x0b0e14);
+    expect(sky.visible).toBe(true);
+    x.setXray(true);
+    expect(sky.visible).toBe(false);
+    expect(clear.s.color.getHex()).toBe(0x0b0e14);
+    // The radius is the fog end, (12 − 1)·16 = 176; the band every depth.
+    expect(values()).toEqual([1, -64, 319, 176]);
+    // A second X while on keeps the colour it restores.
+    x.setXray(true);
+    x.setXray(false);
+    expect(sky.visible).toBe(true);
+    expect(clear.s.color.getHex()).toBe(0x123456);
+    expect(clear.s.alpha).toBe(0.5);
+    expect(values()).toEqual([0, -64, 319, 176]);
+  });
+
+  test('setXrayBand writes the two band uniforms only: xrayOn, the radius, the sky dome and the clear colour unchanged', () => {
+    const { sky, clear, x, values } = setup();
+    x.setXray(true);
+    const writes = clear.s.writes;
+    x.setXrayBand(-40, -9);
+    expect(values()).toEqual([1, -40, -9, 176]);
+    expect(sky.visible).toBe(false);
+    expect(clear.s.writes).toBe(writes);
+    x.setXray(false);
+    x.setXrayBand(100, 131);
+    expect(values()).toEqual([0, 100, 131, 176]);
+    expect(sky.visible).toBe(true);
+    // The band stays across a toggle.
+    x.setXray(true);
+    expect(values()).toEqual([1, 100, 131, 176]);
+  });
+
+  test('the radius follows the fog end (no radius forced): `syncRadius` after a render distance change', () => {
+    const { materials, x, values } = setup();
+    x.setXray(true);
+    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 16.5, fogBand: 64 });
+    x.syncRadius();
+    expect(values()).toEqual([1, -64, 319, 248]);
+  });
+
+  test('XRAY_ORDER sorts after every water region and before the ghost, with nothing between them', () => {
+    expect(XRAY_ORDER).toBe(AFTER_WATER_ORDER - 1);
+    expect(XRAY_ORDER).toBeGreaterThan(1 << 19);
+    expect(GHOST_ORDER - XRAY_ORDER).toBe(1);
   });
 });

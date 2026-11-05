@@ -2,19 +2,24 @@
  * The terrain shaders (SP4a spec §6.4, master §4.6) and the decode-debug shaders of the spike's exactness test (§1.2).
  * Terrain: albedo(layer) × faceShade × AO × lightmap(block, sky), then the fog, then three's colour-space chunk; no
  * Lambert and no sun term. The defines `TERRAIN_AO`, `SMOOTH_LIGHT`, `CUTOUT` and `GHOST` (SP5c) come from the material.
+ * SP6a (spec §5.3): the vertex shader collapses every vertex while the X-ray is on (`xrayOn` 1), under `#ifndef
+ * GHOST`, so the ghost (the same source with `GHOST`) is never collapsed.
  */
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../../world/blocks/kinds';
 import type { MaterialVariant } from '../index';
-import { FOG_GLSL, FRAGMENT_OUTPUT, LIGHT_INTERP_GLSL, LIGHTMAP_GLSL, SKY_GLSL, vertexHead, vertexPlace } from './common.glsl';
+import {
+  COLLAPSED_GLSL, FOG_GLSL, FRAGMENT_OUTPUT, LIGHT_INTERP_GLSL, LIGHTMAP_GLSL, SKY_GLSL, vertexHead, vertexPlace,
+} from './common.glsl';
 import { packingGlsl } from './packing.glsl';
 
 /** A GLSL float literal. */
-const glslFloat = (n: number): string => (Number.isInteger(n) ? n.toFixed(1) : String(n));
-const floatArray = (name: string, values: readonly number[]): string =>
+export const glslFloat = (n: number): string => (Number.isInteger(n) ? n.toFixed(1) : String(n));
+/** A GLSL `const float name[n]` array of `values`. */
+export const floatArray = (name: string, values: readonly number[]): string =>
   `const float ${name}[${values.length}] = float[${values.length}](${values.map(glslFloat).join(', ')});`;
 
 /** faceShade by `kinds.ts` face id: up 1, down 0.5, north and south 0.8, east and west 0.6 (master §4.6). */
-const FACE_SHADE: readonly number[] = (() => {
+export const FACE_SHADE: readonly number[] = (() => {
   const s: number[] = [];
   s[FACE_NORTH] = 0.8;
   s[FACE_SOUTH] = 0.8;
@@ -40,11 +45,12 @@ export const GHOST_LIGHT_FLOOR = 0.6;
 
 /**
  * The terrain vertex shader: decodes the solid `data` word; layer, face and frame flat, sky, block and AO
- * interpolated.
+ * interpolated. Without `GHOST`, every vertex is collapsed while the X-ray is on (SP6a spec §5.3).
  */
 export function terrainVertex(variant: MaterialVariant): string {
   return `${vertexHead(variant)}${LIGHT_INTERP_GLSL}
 ${packingGlsl()}
+#ifndef GHOST${COLLAPSED_GLSL}#endif
 in uint data;
 flat out uint vLayer;
 flat out uint vFace;
@@ -68,6 +74,9 @@ void main() {
 #endif
 ${vertexPlace(variant, 'position')}  vViewPos = mvPos4.xyz;
   vWorldPos = worldPos4.xyz;
+#ifndef GHOST
+  if (xrayOn > 0.5) gl_Position = COLLAPSED;
+#endif
 }
 `;
 }

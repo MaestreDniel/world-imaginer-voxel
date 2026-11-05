@@ -1,11 +1,14 @@
-import { DoubleSide, FrontSide, GLSL3, NoBlending, ShaderMaterial, SRGBColorSpace, type DataArrayTexture } from 'three';
+import {
+  AdditiveBlending, DoubleSide, FrontSide, GLSL3, NoBlending, ShaderMaterial, SRGBColorSpace, type DataArrayTexture,
+} from 'three';
 import { dayFactor, duskFactor, skyColorsInto, sunDirectionInto } from '../../daynight/dayNight';
 import type { FrameState } from '../frameState';
 import { createLightmap } from '../lightmap';
 import { SKY_FRAGMENT, SKY_VERTEX } from './glsl/sky.glsl';
 import { DECODE_DEBUG_FRAGMENT, decodeDebugVertex, TERRAIN_FRAGMENT, terrainVertex } from './glsl/terrain.glsl';
 import { WATER_FRAGMENT, waterVertex } from './glsl/water.glsl';
-import { createSharedUniforms, ghostUniforms, skyUniforms, terrainUniforms, waterUniforms } from './uniforms';
+import { XRAY_FRAGMENT, xrayVertex } from './glsl/xray.glsl';
+import { createSharedUniforms, ghostUniforms, skyUniforms, terrainUniforms, waterUniforms, xrayUniforms } from './uniforms';
 
 /**
  * Materials v1 (SP4a spec §6.4-§6.6, master §4.6): terrain (opaque and cutout), Fast water, the sky dome and the
@@ -13,8 +16,9 @@ import { createSharedUniforms, ghostUniforms, skyUniforms, terrainUniforms, wate
  * in a RegionBatch variant (`'batch'`, three's batching chunks) and a RegionMesh variant (`'mesh'`, `REGION_MESH`, no
  * batching chunks), generated from the same GLSL (spec §6.2, D7). The selection tool's ghost (SP5c spec §6.2, D25) is
  * the cutout terrain with a `GHOST` define, translucent, turned by a uniform and floored in light; its boxes and the
- * outline use three's built-in line materials (`render/selection.ts`). Lava, clouds, lod and shadowDepth come with their
- * SPs.
+ * outline use three's built-in line materials (`render/selection.ts`). The X-ray (SP6a spec §5.2, §5.3) has its own
+ * material in both variants (`glsl/xray.glsl.ts`), additive and unlit, and the shared uniform `xrayOn` collapses either
+ * it (off) or the terrain and water (on). Lava, clouds, lod and shadowDepth come with their SPs.
  */
 
 /** Which section renderer the materials serve: RegionBatch or RegionMesh (spec §6.2). */
@@ -39,6 +43,11 @@ export interface MaterialSystem {
    * `CUTOUT` and `GHOST`, translucent (alpha `GHOST_ALPHA`), no depth write, depth-tested, double-sided in one pass.
    */
   readonly ghost: ShaderMaterial;
+  /**
+   * The X-ray's walls and film (SP6a spec §5.2): the variant's X-ray shaders, additive, no depth write or test,
+   * double-sided in one pass, transparent (three's transparent list, at the pass-3 objects' `XRAY_ORDER`).
+   */
+  readonly xray: ShaderMaterial;
   readonly lightmap: ReturnType<typeof createLightmap>;
   /**
    * Writes the frame's fog, eye light, sky and sun uniforms and hands the lightmap the frame's day, dusk and brightness
@@ -47,6 +56,11 @@ export interface MaterialSystem {
   setFrameUniforms(f: FrameState): void;
   /** Writes the ghost's `ghostTurns` uniform, its quarter turns `q` (0-3); allocates nothing (SP5c spec §6.2). */
   setGhostTurns(q: number): void;
+  /**
+   * Writes the X-ray's uniforms (SP6a spec §5.3): `xrayOn` (1 on, 0 off), the band `yMin` … `yMax` (world y) and the
+   * radius in blocks from the eye; uniforms only, allocates nothing.
+   */
+  setXray(on: boolean, yMin: number, yMax: number, radius: number): void;
   /** Frees the materials and the lightmap; the albedo array stays its owner's. */
   dispose(): void;
 }
@@ -128,7 +142,21 @@ export function createMaterialSystem(s: MaterialSettings, albedo: DataArrayTextu
     forceSinglePass: true,
   });
   const turns = ghostU['ghostTurns']!;
-  const materials = [terrainOpaque, terrainCutout, water, sky, decodeDebug, ghost];
+  const xray = new ShaderMaterial({
+    name: 'xray',
+    glslVersion: GLSL3,
+    uniforms: xrayUniforms(u),
+    vertexShader: xrayVertex(s.variant),
+    fragmentShader: XRAY_FRAGMENT,
+    blending: AdditiveBlending,
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    side: DoubleSide,
+    // As the ghost's (ruling P16): one pass of a double-sided transparent material, so the result needs no sorting.
+    forceSinglePass: true,
+  });
+  const materials = [terrainOpaque, terrainCutout, water, sky, decodeDebug, ghost, xray];
 
   // The frame's scratch: setFrameUniforms writes into these, so a frame allocates nothing (SP4b spec §3.10).
   const fog = { start: 0, end: 0 };
@@ -143,6 +171,7 @@ export function createMaterialSystem(s: MaterialSettings, albedo: DataArrayTextu
     sky,
     decodeDebug,
     ghost,
+    xray,
     lightmap,
     setFrameUniforms(f) {
       fogRange(f.rd, f.fogBand, fog);
@@ -158,6 +187,12 @@ export function createMaterialSystem(s: MaterialSettings, albedo: DataArrayTextu
     },
     setGhostTurns(q) {
       turns.value = q;
+    },
+    setXray(on, yMin, yMax, radius) {
+      u.xrayOn.value = on ? 1 : 0;
+      u.xrayYMin.value = yMin;
+      u.xrayYMax.value = yMax;
+      u.xrayRadius.value = radius;
     },
     dispose() {
       for (const m of materials) m.dispose();

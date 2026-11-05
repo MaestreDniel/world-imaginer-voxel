@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
-import { Color, DoubleSide, GLSL3, NoColorSpace, SRGBColorSpace, type ShaderMaterial } from 'three';
+import v8 from 'node:v8';
+import { runInNewContext } from 'node:vm';
+import { AdditiveBlending, Color, DoubleSide, GLSL3, NoColorSpace, SRGBColorSpace, type ShaderMaterial } from 'three';
 import { describe, expect, test } from 'vitest';
 import { skyColors, sunDirection } from '../../src/daynight/dayNight';
 import { FOG_GLSL } from '../../src/render/materials/glsl/common.glsl';
@@ -7,6 +9,7 @@ import { packingGlsl } from '../../src/render/materials/glsl/packing.glsl';
 import { GHOST_LIGHT_FLOOR, TERRAIN_FRAGMENT, terrainVertex } from '../../src/render/materials/glsl/terrain.glsl';
 import { createMaterialSystem, fogRange, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
 import { GHOST_ALPHA } from '../../src/render/materials/uniforms';
+import { XRAY_COLORS } from '../../src/render/xrayPalette';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
 import type { FrameState } from '../../src/render/frameState';
 import { createFlatColorArray } from '../../src/render/textureArray';
@@ -19,7 +22,7 @@ const VARIANTS = ['batch', 'mesh'] as const;
 
 const all = (m: MaterialSystem): Record<string, ShaderMaterial> => ({
   terrainOpaque: m.terrainOpaque, terrainCutout: m.terrainCutout, water: m.water, sky: m.sky, decodeDebug: m.decodeDebug,
-  ghost: m.ghost,
+  ghost: m.ghost, xray: m.xray,
 });
 /** The terrain and water materials: the ones with a batched and a RegionMesh variant. */
 const terrainAndWater = (m: MaterialSystem): ShaderMaterial[] => [m.terrainOpaque, m.terrainCutout, m.water];
@@ -323,7 +326,7 @@ describe('materials v1 (SP4a spec §6.4-§6.6)', () => {
     m.lightmap.texture.addEventListener('dispose', () => disposed.push('lightmap'));
     ALBEDO.addEventListener('dispose', () => disposed.push('albedo'));
     m.dispose();
-    expect(disposed.sort()).toEqual(['decodeDebug', 'ghost', 'lightmap', 'sky', 'terrainCutout', 'terrainOpaque', 'water']);
+    expect(disposed.sort()).toEqual(['decodeDebug', 'ghost', 'lightmap', 'sky', 'terrainCutout', 'terrainOpaque', 'water', 'xray']);
   });
 });
 
@@ -422,5 +425,175 @@ describe('the ghost material (SP5c spec §6.2, D25)', () => {
     m.ghost.addEventListener('dispose', () => freed++);
     m.dispose();
     expect(freed).toBe(1);
+  });
+});
+
+describe('the X-ray material and the collapse uniform (SP6a spec §5.2, §5.3)', () => {
+  /** `src` from `void main() {` on. */
+  const mainOf = (src: string): string => src.slice(src.indexOf('void main() {'));
+  /** The block `{ … }` opened by the first `head` in `src` (head included), braces nested. */
+  const braceBlock = (src: string, head: string): string => {
+    const at = src.indexOf(head);
+    expect(at, head).toBeGreaterThanOrEqual(0);
+    let depth = 0;
+    for (let i = src.indexOf('{', at); i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}' && --depth === 0) return src.slice(at, i + 1);
+    }
+    throw new Error(`unclosed ${head}`);
+  };
+  const PLACED = 'gl_Position = projectionMatrix * mvPos4;';
+
+  test('`xray` in both variants: additive, no depth write, no depth test, double-sided in one pass, the variant\'s vertex head', () => {
+    for (const v of VARIANTS) {
+      const x = SYSTEMS[v].xray;
+      expect(x.name, v).toBe('xray');
+      expect(x.isShaderMaterial, v).toBe(true);
+      expect(x.glslVersion, v).toBe(GLSL3);
+      expect(x.blending, v).toBe(AdditiveBlending);
+      expect(x.transparent, v).toBe(true);
+      expect(x.depthWrite, v).toBe(false);
+      expect(x.depthTest, v).toBe(false);
+      expect(x.side, v).toBe(DoubleSide);
+      expect(x.forceSinglePass, v).toBe(true);
+      expect(x.vertexShader, v).toContain(packingGlsl());
+      expect(x.vertexShader, v).toContain('vKind = pkX_kind(data);');
+      expect(x.vertexShader, v).toContain('vFace = pkX_face(data);');
+    }
+    expect(SYSTEMS.mesh.xray.vertexShader).toContain('#define REGION_MESH');
+    expect(SYSTEMS.mesh.xray.vertexShader).not.toContain('batching_vertex');
+    expect(SYSTEMS.batch.xray.vertexShader).toContain('#include <batching_pars_vertex>');
+    expect(SYSTEMS.batch.xray.vertexShader).toContain('#include <batching_vertex>');
+    // No light defines: the X-ray reads no light.
+    expect(SYSTEMS.batch.xray.defines ?? {}).toEqual({});
+  });
+
+  test('its colour is palette[kind] × FACE_SHADE[face], alpha 0.14 for walls and 0.05 for the film, faded to 0 at the fog end; it reads no lightmap', () => {
+    for (const v of VARIANTS) {
+      const src = SYSTEMS[v].xray.fragmentShader;
+      expect(src).toContain('uniform vec3 xrayPalette[16];');
+      expect(src).toContain('const float FACE_SHADE[6] = float[6](0.8, 0.6, 0.8, 0.6, 1.0, 0.5);');
+      const body = mainOf(src);
+      expect(body).toContain('vec3 color = xrayPalette[vKind] * FACE_SHADE[min(vFace, 5u)];');
+      expect(body).toContain('float alpha = vKind == 15u ? 0.05 : 0.14;');
+      expect(body).toContain('float fade = 1.0 - smoothstep(fogStart, fogEnd, dist);');
+      expect(body).toContain('gl_FragColor = vec4(color, alpha * fade);');
+      expect(body).toContain('#include <colorspace_fragment>');
+      expect(src + SYSTEMS[v].xray.vertexShader).not.toMatch(/lightmap|vSky|vBlock/);
+      expect(SYSTEMS[v].xray.uniforms['lightmap']).toBeUndefined();
+    }
+  });
+
+  test('it discards every fragment beyond xrayRadius, and outside the band [xrayYMin, xrayYMax + 1) only for kind ≠ 15 (the film ignores the band)', () => {
+    for (const v of VARIANTS) {
+      const body = mainOf(SYSTEMS[v].xray.fragmentShader);
+      const radius = body.indexOf('if (dist > xrayRadius) discard;');
+      expect(radius, 'the radius discard').toBeGreaterThanOrEqual(0);
+      const walls = braceBlock(body, 'if (vKind != 15u) {');
+      // The band's cell: the hollow voxel's y, a face's plane moved half a block into it (an up face of voxel y lies at
+      // y + 1, a down face at y), so a wall's fragments all test their own voxel's y.
+      expect(walls).toContain('float cellY = floor(vWorldPos.y - (vFace == 4u ? 0.5 : vFace == 5u ? -0.5 : 0.0));');
+      expect(walls).toContain('if (cellY < xrayYMin || cellY >= xrayYMax + 1.0) discard;');
+      // Exactly two discards: the radius (every fragment) and the band (walls only).
+      expect(body.split('discard').length - 1).toBe(2);
+      expect(body.indexOf('xrayYMin')).toBeGreaterThan(body.indexOf('if (vKind != 15u) {'));
+      expect(radius).toBeLessThan(body.indexOf('if (vKind != 15u) {'));
+    }
+  });
+
+  test('the collapse: the X-ray vertex shader collapses while xrayOn is 0; terrain (opaque, cutout) and water while it is 1; the ghost\'s compiled source has no xrayOn branch', () => {
+    for (const v of VARIANTS) {
+      const m = SYSTEMS[v];
+      const collapsed = 'const vec4 COLLAPSED = vec4(0.0, 0.0, 2.0, 1.0);';
+      // The X-ray's: after the placement, while off.
+      const x = mainOf(m.xray.vertexShader);
+      expect(m.xray.vertexShader).toContain('uniform float xrayOn;');
+      expect(m.xray.vertexShader).toContain(collapsed);
+      expect(x.indexOf('if (xrayOn < 0.5) gl_Position = COLLAPSED;')).toBeGreaterThan(x.indexOf(PLACED));
+      // Terrain: under #ifndef GHOST, so the opaque and cutout terrain collapse while on and the ghost never does.
+      for (const t of [m.terrainOpaque, m.terrainCutout]) {
+        const plain = resolveGhost(t.vertexShader, false);
+        expect(plain).toContain('uniform float xrayOn;');
+        expect(plain).toContain(collapsed);
+        const body = mainOf(plain);
+        expect(body.indexOf('if (xrayOn > 0.5) gl_Position = COLLAPSED;')).toBeGreaterThan(body.indexOf(PLACED));
+      }
+      const ghost = resolveGhost(m.ghost.vertexShader, true);
+      expect(ghost).not.toContain('xrayOn');
+      expect(ghost).not.toContain('COLLAPSED');
+      expect(m.ghost.vertexShader).toContain('#ifndef GHOST');
+      expect(m.ghost.uniforms['xrayOn']).toBeUndefined();
+      // Water: always (it has no ghost).
+      const w = mainOf(m.water.vertexShader);
+      expect(m.water.vertexShader).toContain('uniform float xrayOn;');
+      expect(w.indexOf('if (xrayOn > 0.5) gl_Position = COLLAPSED;')).toBeGreaterThan(w.indexOf(PLACED));
+      // The sky dome and the decode-debug material are not collapsed (the renderer hides the sky).
+      for (const o of [m.sky, m.decodeDebug]) expect(o.vertexShader + o.fragmentShader).not.toContain('xrayOn');
+    }
+  });
+
+  test('xrayOn is one uniform object in terrain, water and the X-ray; the X-ray shares the fog; defaults: off, every depth (−64 … 319); the palette is D10\'s in linear', () => {
+    for (const v of VARIANTS) {
+      const m = SYSTEMS[v];
+      const on = m.xray.uniforms['xrayOn']!;
+      for (const t of [m.terrainOpaque, m.terrainCutout, m.water]) expect(t.uniforms['xrayOn']).toBe(on);
+      for (const name of ['fogStart', 'fogEnd']) expect(m.xray.uniforms[name], name).toBe(m.terrainOpaque.uniforms[name]);
+      const fresh = system(v);
+      expect(fresh.xray.uniforms['xrayOn']!.value).toBe(0);
+      expect(fresh.xray.uniforms['xrayYMin']!.value).toBe(-64);
+      expect(fresh.xray.uniforms['xrayYMax']!.value).toBe(319);
+      const palette = m.xray.uniforms['xrayPalette']!.value as Color[];
+      expect(palette).toHaveLength(16);
+      palette.forEach((c, i) => {
+        expect(c.isColor, `kind ${i}`).toBe(true);
+        expect(`#${c.getHexString(SRGBColorSpace)}`, `kind ${i}`).toBe(XRAY_COLORS[i]);
+      });
+      // Stored linear (as every colour uniform): cheese's green 0xb0 converts below 0xb0 / 255.
+      expect(palette[1]!.g).toBeLessThan(0xb0 / 255);
+    }
+  });
+
+  test('setXray writes xrayOn, the band and the radius', () => {
+    const m = system('batch');
+    const u = m.xray.uniforms;
+    m.setXray(true, -40, -9, 176);
+    expect([u['xrayOn']!.value, u['xrayYMin']!.value, u['xrayYMax']!.value, u['xrayRadius']!.value]).toEqual([1, -40, -9, 176]);
+    expect(m.terrainOpaque.uniforms['xrayOn']!.value).toBe(1);
+    m.setXray(false, -64, 319, 112.5);
+    expect([u['xrayOn']!.value, u['xrayYMin']!.value, u['xrayYMax']!.value, u['xrayRadius']!.value]).toEqual([0, -64, 319, 112.5]);
+  });
+
+  test('10,000 setXray calls grow the heap by less than 256 KB (a toggle writes uniforms only, spec §5.3)', () => {
+    const m = system('mesh');
+    let k = 0;
+    const call = (): void => {
+      m.setXray((k & 1) === 0, -64 + (k & 31), 319 - (k & 15), 176 - (k & 7) * 0.5);
+      k++;
+    };
+    for (let i = 0; i < 100_000; i++) call();
+    v8.setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    const JIT_SPACE = /^(code|trusted|shared_trusted)_/;
+    const heapUsed = (): number => {
+      let b = 0;
+      for (const s of v8.getHeapSpaceStatistics()) if (!JIT_SPACE.test(s.space_name)) b += s.space_used_size;
+      return b;
+    };
+    const readings: number[] = [];
+    for (let t = 0; t < 3; t++) {
+      gc();
+      gc();
+      const before = heapUsed();
+      const profiler = new v8.GCProfiler();
+      profiler.start();
+      for (let i = 0; i < 10_000; i++) call();
+      const after = heapUsed();
+      const gcs = profiler.stop()?.statistics.length ?? 0;
+      if (gcs > 0) continue;
+      readings.push(after - before);
+      if (after - before < 256 * 1024) break;
+    }
+    expect(readings.length, 'every attempt saw a GC').toBeGreaterThan(0);
+    expect(readings[readings.length - 1]!, `heap growth over 10,000 calls (attempts: ${readings.join(', ')})`).toBeLessThan(256 * 1024);
   });
 });

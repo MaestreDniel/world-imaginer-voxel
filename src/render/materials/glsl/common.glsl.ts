@@ -77,6 +77,16 @@ vec3 applyFog(vec3 color, vec3 viewPos, vec3 worldPos) {
 `;
 
 /**
+ * The X-ray's collapse (SP6a spec §5.3): a clip-space position outside the view volume (z > w). A vertex shader that
+ * writes it to every vertex of a triangle leaves the triangle no area, so it draws nothing; the X-ray uniform `xrayOn`
+ * picks which passes do (the X-ray's while off, the terrain's and the water's while on).
+ */
+export const COLLAPSED_GLSL = `
+uniform float xrayOn;
+const vec4 COLLAPSED = vec4(0.0, 0.0, 2.0, 1.0);
+`;
+
+/**
  * The light varyings' interpolation: smooth with `SMOOTH_LIGHT` (spec §5.3's per-vertex values), flat without it (the
  * mesher then writes the face voxel's light on every vertex). Both stages include it, so the qualifiers match.
  */

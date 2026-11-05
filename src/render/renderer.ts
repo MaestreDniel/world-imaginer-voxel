@@ -1,7 +1,8 @@
 import {
-  LinearFilter, NearestFilter, PerspectiveCamera, Scene, SRGBColorSpace, WebGLRenderer, type Camera, type Mesh,
+  Color, LinearFilter, NearestFilter, PerspectiveCamera, Scene, SRGBColorSpace, WebGLRenderer, type Camera, type Mesh,
   type Object3D, type RenderItem,
 } from 'three';
+import { HEIGHT, MIN_Y } from '../core/constants';
 import { MEDIUM } from '../core/params/graphicsPresets';
 import { OPENING_T } from '../daynight/dayNight';
 import { firstOrigin, type FloatingOrigin } from './floatingOrigin';
@@ -29,7 +30,9 @@ import { createFlatColorArray } from './textureArray';
  *
  * Pass order (master §4.5): opaque (front side, front to back), the sky dome, cutout (double side, alpha test), then
  * translucent (blended, back to front). The first three share three's opaque list, ordered by `opaquePassSort`; the
- * water is in three's transparent list, which draws after it.
+ * water is in three's transparent list, which draws after it. SP6a (spec §5.2, §5.3): the X-ray pass (additive, in the
+ * transparent list at `XRAY_ORDER`) draws alone while the X-ray is on: the terrain and water passes collapse, the sky
+ * dome is hidden and the clear colour is `XRAY_CLEAR` (`createXrayControl`).
  */
 
 /** The camera's near plane walking and flying, in blocks (SP5a spec §3.5; flying as SP4a spec §6.1). */
@@ -187,6 +190,13 @@ export interface WorldRenderer {
   hideReplaced(): void;
   /** The near plane: `NEAR_WALK` walking, `NEAR_FLY` flying (`applyNear`, SP5a spec §3.5). */
   setNear(near: number): void;
+  /**
+   * The X-ray on or off (SP6a spec §5.3): the `xrayOn` uniform, the sky dome hidden and the clear colour `XRAY_CLEAR`
+   * while on (there are no clouds before SP11); allocates nothing (`createXrayControl`).
+   */
+  setXray(on: boolean): void;
+  /** The X-ray's depth band, world y `yMin` … `yMax` (its two uniforms only; SP6a spec §5.3). */
+  setXrayBand(yMin: number, yMax: number): void;
   /**
    * Follows the host's size now (aspect, pixel ratio, drawing buffer; `applyViewport`), as the ResizeObserver does a
    * frame later: the map's mode B calls it at the switch, then `frame`, so the painted frame is drawn (SP4c spec §2.2).
@@ -542,6 +552,68 @@ export async function compileWorldScene(
   }
 }
 
+/** The X-ray's clear colour, sRGB (SP6a spec §5.3: a dark background behind the additive walls). */
+export const XRAY_CLEAR = 0x0b0e14;
+
+/** The X-ray's toggle, band and radius over the materials, the sky dome and the clear colour (SP6a spec §5.3). */
+export interface XrayControl {
+  /**
+   * On: `xrayOn` 1, the sky dome hidden, the clear colour `XRAY_CLEAR` (the colour and alpha it replaces kept, read at
+   * the switch from off). Off: `xrayOn` 0, the sky dome shown, that colour restored. The band and the radius are written
+   * with it. Allocates nothing.
+   */
+  setXray(on: boolean): void;
+  /** The band `yMin` … `yMax` (world y), kept across toggles; writes the two band uniforms only. */
+  setXrayBand(yMin: number, yMax: number): void;
+  /**
+   * The radius follows the fog end ((RD − 1)·16, which a live render distance moves), so the X-ray covers the render
+   * distance; called once per frame after `setFrameUniforms`, it writes only when the fog end moved. Allocates nothing.
+   */
+  syncRadius(): void;
+}
+
+/**
+ * The X-ray's control (SP6a spec §5.3) over `materials`' X-ray uniforms (the radius from their shared `fogEnd`), the
+ * sky dome `sky` and the renderer's clear colour `clear`: off, every depth (−64 … 319), until `setXray`.
+ */
+export function createXrayControl(
+  materials: Pick<MaterialSystem, 'setXray' | 'xray'>,
+  sky: Pick<Object3D, 'visible'>,
+  clear: Pick<WebGLRenderer, 'getClearColor' | 'getClearAlpha' | 'setClearColor'>,
+): XrayControl {
+  const fogEnd = materials.xray.uniforms['fogEnd']!;
+  const xrayClear = new Color().setHex(XRAY_CLEAR, SRGBColorSpace);
+  const saved = new Color();
+  // [yMin, yMax, radius, the saved clear alpha] in a typed array: a double kept in a closure would be boxed on a write.
+  const state = new Float64Array([MIN_Y, MIN_Y + HEIGHT - 1, fogEnd.value as number, 1]);
+  let on = false;
+  const write = (): void => materials.setXray(on, state[0]!, state[1]!, state[2]!);
+  return {
+    setXray(next) {
+      if (next && !on) {
+        clear.getClearColor(saved);
+        state[3] = clear.getClearAlpha();
+      }
+      if (next !== on) clear.setClearColor(next ? xrayClear : saved, state[3]!);
+      on = next;
+      sky.visible = !next;
+      state[2] = fogEnd.value as number;
+      write();
+    },
+    setXrayBand(yMin, yMax) {
+      state[0] = yMin;
+      state[1] = yMax;
+      write();
+    },
+    syncRadius() {
+      const end = fogEnd.value as number;
+      if (end === state[2]) return;
+      state[2] = end;
+      write();
+    },
+  };
+}
+
 /** The world renderer in `host`, with the section renderer of `o.kind` over its own materials (spec §6.1). */
 export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions): WorldRenderer {
   const albedo = createFlatColorArray();
@@ -577,6 +649,7 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   canvas.style.width = '100%';
   canvas.style.height = '100%';
   host.appendChild(canvas);
+  const xray = createXrayControl(materials, sky, renderer);
 
   const camera = new PerspectiveCamera(o.fov, 1, NEAR_FLY, cameraFar(o.rd));
   const timer = createGpuTimer(renderer.getContext() as WebGL2RenderingContext);
@@ -606,6 +679,7 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     // The camera in scene coordinates, relative to the floating origin (ruling P17).
     sections.sortTranslucent(camera.position.x, camera.position.y, camera.position.z);
     materials.setFrameUniforms(state);
+    xray.syncRadius();
     toolCalls = toolDrawCallsOf(world);
     timer?.begin();
     renderer.render(scene, camera);
@@ -685,6 +759,12 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     },
     setNear(near) {
       applyNear(camera, near);
+    },
+    setXray(on) {
+      xray.setXray(on);
+    },
+    setXrayBand(yMin, yMax) {
+      xray.setXrayBand(yMin, yMax);
     },
     resize,
     gpuEstimate(out) {
