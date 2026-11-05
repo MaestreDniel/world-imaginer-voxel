@@ -2119,4 +2119,15 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(s63).toContain('(0,0) = the light floor: > 0 and ≤ 0.3 × the midnight sky-15 texel\'s luminance at every β, with night vision off (SP6a)');
     expect(text).not.toContain('(0,0) ≤ 0.02 luminance');
   });
+
+  test('§4.8\'s Lightmap gains night vision; §4.16\'s overridable settings gain it (SP6a spec §13 items 14, 15, §6.2)', () => {
+    const at48 = text.indexOf('### 4.8 Lighting');
+    const s48 = text.slice(at48, text.indexOf('### 4.9 ', at48));
+    expect(s48).toContain('night vision normalising each texel to its brightest channel, eased over 0.3 s (SP6a)');
+    const at416 = text.indexOf('### 4.16 ');
+    const s416 = text.slice(at416, text.indexOf('### 4.17 ', at416));
+    const overridable = s416.split('\n').find((l) => l.startsWith('- Every setting can be overridden individually'));
+    expect(overridable).toBeDefined();
+    expect(overridable).toContain('night vision (SP6a)');
+  });
 });

@@ -131,7 +131,7 @@ const CONTEXT_ATTRIBUTES: WebGLContextAttributes = {
   powerPreference: 'default', failIfMajorPerformanceCaveat: false,
 };
 /** The frame the materials see: the opening 08:00, full eye light, RD12's fog (SP4b spec §6.3). */
-const FRAME: FrameState = { t: OPENING_T, brightness: 0.5, eyeSky: 15, rd: RD, fogBand: MEDIUM.fogBand };
+const FRAME: FrameState = { t: OPENING_T, brightness: 0.5, eyeSky: 15, rd: RD, fogBand: MEDIUM.fogBand, nightVision: 0 };
 
 const text = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
 const stats = (values: ArrayLike<number>): Percentiles => {

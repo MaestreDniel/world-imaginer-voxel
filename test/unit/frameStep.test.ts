@@ -9,7 +9,7 @@ import type { Action } from '../../src/player/keymap';
 import { createFloatingOrigin } from '../../src/render/floatingOrigin';
 import { createFpsLimiter, type FpsCap } from '../../src/render/fpsLimiter';
 import { createFrameClock } from '../../src/ui/world/frameNotice';
-import { createFrameStep, displayInterval, eyeSkyLight, type FrameStepDeps } from '../../src/ui/world/frameStep';
+import { createFrameStep, displayInterval, eyeSkyLight, NIGHT_VISION_EASE_S, type FrameStepDeps } from '../../src/ui/world/frameStep';
 import { createTeleport } from '../../src/ui/world/teleport';
 import { EYE, createWalkState, type WalkState } from '../../src/player/walk';
 import { AIR } from '../../src/world/blocks/index';
@@ -42,6 +42,8 @@ interface Rig {
   readonly timed: number[];
   /** The walk step's reads (`blockAt`, `fluidAt`, `publishedAt`). */
   reads: number;
+  /** The night-vision setting the frame step eases toward (SP6a spec §6.2). */
+  nightVision: boolean;
 }
 
 /** A frame step over fakes: every call it makes is logged in order; the clock, limiter and throttle are real. */
@@ -52,7 +54,7 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
   const pushes: Rig['pushes'] = [];
   const fly: FlyState = { x: 8, y: o.y ?? 100, z: 8, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT, mode: o.mode ?? 'fly' };
   const walk = createWalkState();
-  const state = { t: 0.1, brightness: 0.5, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand };
+  const state = { t: 0.1, brightness: 0.5, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand, nightVision: 0 };
   const held: ReadonlySet<Action> = new Set(o.held ?? []);
   const origin = createFloatingOrigin(0, 0, 0);
   // The page's `stopped` flag, set by `update` when it raises a fatal synchronously (the page's failAfterReveal).
@@ -70,6 +72,7 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
     ms: 0,
     timed: [],
     reads: 0,
+    nightVision: false,
   };
   const store: FrameStepDeps['store'] = {
     enterRead: () => { log.push('enterRead'); },
@@ -168,6 +171,7 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
     state,
     timeSpeed: () => 1,
     fogStep: () => 12,
+    nightVision: () => r.nightVision,
     onRendered: (dt) => { r.rendered.push(dt); },
     // The page's apply control and aux policy (SP4c spec §4.3, §6.2), logged when the case asks for them.
     beforeUpdate: () => { if (o.hooks === true) log.push('beforeUpdate'); },
@@ -335,6 +339,34 @@ describe('createFrameStep (SP4b spec §7.2)', () => {
     // ×1: 1 s of a 20-minute day.
     expect(r.state.t - t0).toBeCloseTo(1000 / 1_200_000, 12);
     expect(r.state.rd).toBe(12);
+  });
+
+  test('night vision eases toward the setting by the rendered delta over NIGHT_VISION_EASE_S, on rendered ticks only (SP6a spec §6.2)', () => {
+    const r = rig({ cap: 30 });
+    const nv: number[] = [];
+    r.nightVision = true;
+    for (let i = 1; i <= 40; i++) {
+      r.step.tick(i * HZ60);
+      nv.push(r.state.nightVision);
+    }
+    // Under the cap of 30 every other tick renders, each with 33.3 ms: 9 rendered frames reach 1 (0.3 s).
+    expect(NIGHT_VISION_EASE_S).toBe(0.3);
+    const rendered = r.rendered.length;
+    expect(rendered).toBeGreaterThan(9);
+    expect(nv.at(-1)).toBe(1);
+    // It only moves on a rendered tick, by dt / 300 ms.
+    let k = 0;
+    for (let i = 0; i < nv.length; i++) {
+      const prev = i === 0 ? 0 : nv[i - 1]!;
+      if (nv[i] !== prev) {
+        expect(nv[i]! - prev).toBeCloseTo(Math.min(1 - prev, r.rendered[k]! / 300), 9);
+        k++;
+      }
+    }
+    expect(k).toBeGreaterThan(0);
+    r.nightVision = false;
+    for (let i = 41; i <= 80; i++) r.step.tick(i * HZ60);
+    expect(r.state.nightVision).toBe(0);
   });
 
   test('Review Focus 1: with the FPS cap at 30 and 16.667 ms ticks for 600 ticks with generation in flight, the throttle is fed 16.667 ms on every tick and genCap stays at its maximum', () => {

@@ -1,10 +1,11 @@
 /**
  * The Settings screen (SP5b spec §1.4, D9), over the start screen (its Settings) or over the world (G, and the help's
  * "Settings (G)"); it replaces the help's settings block (SP4a spec §7.4, D31). Two tabs: **Graphics**, the render
- * distance (applied live since SP4b, spec §5), the FPS cap, the field of view and the brightness, then the rows SP11
- * fills, greyed (disabled elements with no setting behind them); **Controls**, the mouse sensitivity and "Hold mouse
- * button to repeat" (SP5a spec §4.1). The rows keep the help's ids (`#setting-rd`, `#setting-fps-cap`, `#setting-fov`,
- * `#setting-brightness`, `#setting-sensitivity`, `#setting-hold-repeat`). Every change applies at once: `onSettings`
+ * distance (applied live since SP4b, spec §5), the FPS cap, the field of view, the brightness and "Night vision (L)"
+ * (SP6a spec §6.2, D15), then the rows SP11 fills, greyed (disabled elements with no setting behind them); **Controls**,
+ * the mouse sensitivity and "Hold mouse button to repeat" (SP5a spec §4.1). The rows keep the help's ids
+ * (`#setting-rd`, `#setting-fps-cap`, `#setting-fov`, `#setting-brightness`, `#setting-sensitivity`,
+ * `#setting-hold-repeat`), and night vision's is `#setting-night-vision`. Every change applies at once: `onSettings`
  * gets the whole new settings, which its owner keeps in this browser (`wi.world.settings`, `settings.ts`). The render
  * distance's choices are "Default (n)" and 4 … `rdMax` in the world; from the start screen, where no capability probe
  * runs, "Default" with no number and 4 … 16. Esc closes it and is consumed. All text goes through `textContent`.
@@ -41,6 +42,11 @@ export interface SettingsPanel {
    * change sends back (SP4b spec §5: nothing changes the saved RD except the user).
    */
   setRd(rd: number | null): void;
+  /**
+   * Shows night vision `on` in `#setting-night-vision` and the screen's copy of the settings, without calling
+   * `onSettings`: L changed it (SP6a spec §6.2), so the checkbox follows and a later change sends it back.
+   */
+  setNightVision(on: boolean): void;
   /** Removes the screen and its Esc listener; `onClose` is not called. */
   dispose(): void;
 }
@@ -182,6 +188,13 @@ export function mountSettingsPanel(host: HTMLElement, o: SettingsPanelOptions): 
     });
     section.append(settingRow(label, input, shown));
   }
+  // Night vision (SP6a spec §6.2, D15): right after the brightness; L changes it too (`setNightVision`).
+  const nightVision = el('input');
+  nightVision.id = 'setting-night-vision';
+  nightVision.type = 'checkbox';
+  nightVision.checked = settings.nightVision;
+  nightVision.addEventListener('change', () => change({ nightVision: nightVision.checked }));
+  graphics.append(settingRow('Night vision (L)', nightVision));
   graphics.append(greyedRows());
   // Hold to repeat (SP5a spec §4.1, D6): off by default, remembered with the other settings.
   const holdRepeat = el('input');
@@ -247,6 +260,10 @@ export function mountSettingsPanel(host: HTMLElement, o: SettingsPanelOptions): 
     setRd(value) {
       settings = normalizeSettings({ ...settings, rd: value });
       showRd(rd, settings.rd, rdMax);
+    },
+    setNightVision(on) {
+      settings = normalizeSettings({ ...settings, nightVision: on });
+      nightVision.checked = settings.nightVision;
     },
     dispose() {
       if (isOpen) document.removeEventListener('keydown', onKeyDown);

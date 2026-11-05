@@ -13,7 +13,8 @@ import { createMaterialSystem } from '../../src/render/materials/index';
 import { createXrayControl } from '../../src/render/renderer';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { createEpochs } from '../../src/ui/world/applyControl';
-import { createPageXray, XRAY_NOTICE_MS, xrayNotice } from '../../src/ui/world/worldPage';
+import { createPageXray, NIGHT_VISION_NOTICE_MS, nightVisionNotice, toggleNightVision, XRAY_NOTICE_MS, xrayNotice } from '../../src/ui/world/worldPage';
+import { easeNightVision } from '../../src/ui/world/frameStep';
 import { createXrayStrip, XRAY_ALL } from '../../src/ui/world/xrayStrip';
 import { evaluateWorldCapabilities, type CapabilityReport } from '../../src/engine/capabilityRules';
 import type { StreamEvent } from '../../src/engine/coordinator';
@@ -24,7 +25,7 @@ import { DEFAULT_KEYMAP } from '../../src/player/keymap';
 import { applyRenderDistance, cameraFar } from '../../src/render/renderer';
 import { mountHelp } from '../../src/ui/help';
 import type { DriverStatus } from '../../src/ui/map/previewDriver';
-import { SETTINGS_DEFAULTS, type WorldSettings } from '../../src/ui/settings';
+import { loadSettings, saveSettings, SETTINGS_DEFAULTS, SETTINGS_KEY, type WorldSettings } from '../../src/ui/settings';
 import { mountSettingsPanel } from '../../src/ui/settingsPanel';
 import { StoreCorrupt } from '../../src/world/store/pool';
 import { JobCancelled, WorkerFailed } from '../../src/engine/workerPool';
@@ -6716,4 +6717,123 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     for (const [k, v] of w.shown) expect(v, `column ${k}`).toEqual({ seq: w.lastSeq.get(k), epoch: 2 });
     expect([counts.stale, counts.epoch, counts.MESH.done]).toEqual([0, 2, counts.MESH.needed]);
   });
+});
+
+describe('night vision in the page: L, the notice, the setting and the Settings checkbox (SP6a spec §6.2, §7.1, §7.2; D15)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => { dom = installDom(); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+  const SRC = (): string => readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+  const HZ = 1000 / 60;
+
+  /** The page's L over a memory storage, the real Settings screen and the notices shown. */
+  const page = () => {
+    const items = new Map<string, string>();
+    const storage = { getItem: (k: string) => items.get(k) ?? null, setItem: (k: string, v: string) => { items.set(k, v); } };
+    let settings = loadSettings(storage);
+    const onSettings = vi.fn<(s: WorldSettings) => void>((s) => {
+      settings = s;
+      saveSettings(storage, s);
+    });
+    const panel = mountSettingsPanel(dom.body as unknown as HTMLElement, { settings, onSettings, rdMax: 12, defaultRd: 10, onClose: () => {} });
+    const shown: Array<[string, number | undefined]> = [];
+    const notices = { show: (text: string, o?: { timeoutMs?: number }) => { shown.push([text, o?.timeoutMs]); } };
+    const press = (): void => {
+      settings = toggleNightVision(settings, { save: (s) => saveSettings(storage, s), panel, notices });
+    };
+    const box = () => dom.el('setting-night-vision') as FakeElement & { checked: boolean };
+    return { items, storage, settings: () => settings, onSettings, panel, shown, press, box };
+  };
+
+  test('L shows the 1.5 s notice "Night vision on" / "Night vision off" and saves the setting; the Settings checkbox follows', () => {
+    expect(NIGHT_VISION_NOTICE_MS).toBe(1500);
+    expect([nightVisionNotice(true), nightVisionNotice(false)]).toEqual(['Night vision on', 'Night vision off']);
+    const p = page();
+    expect([p.settings().nightVision, p.box().checked]).toEqual([false, false]);
+    p.press();
+    expect(p.shown).toEqual([['Night vision on', 1500]]);
+    expect([p.settings().nightVision, p.box().checked]).toEqual([true, true]);
+    expect(JSON.parse(p.items.get(SETTINGS_KEY)!)).toMatchObject({ nightVision: true });
+    expect(loadSettings(p.storage)).toEqual({ ...SETTINGS_DEFAULTS, nightVision: true });
+    // The checkbox follows without the screen calling onSettings; the screen's copy has it for a later change.
+    expect(p.onSettings).not.toHaveBeenCalled();
+    const fov = dom.el('setting-fov');
+    fov.value = '80';
+    fov.dispatchEvent(new Event('input'));
+    expect(p.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, nightVision: true, fov: 80 });
+    p.press();
+    expect(p.shown).toEqual([['Night vision on', 1500], ['Night vision off', 1500]]);
+    expect([p.settings().nightVision, p.box().checked]).toEqual([false, false]);
+    expect(loadSettings(p.storage)).toEqual({ ...SETTINGS_DEFAULTS, fov: 80 });
+    // The checkbox is the other way in: it changes the setting through onSettings (the page's applySettings).
+    p.box().checked = true;
+    p.box().dispatchEvent(new Event('change'));
+    expect(p.settings().nightVision).toBe(true);
+    expect(loadSettings(p.storage).nightVision).toBe(true);
+    // The page wires L to `toggleNightVision`, its setting to the frame's ease and the screen to `setNightVision`.
+    const s = SRC();
+    expect(s).toMatch(/case 'nightVision':\s+settings = toggleNightVision\(settings, \{ save: \(next\) => saveSettings\(storage, next\), panel: settingsPanel, notices \}\);/);
+    expect(s.match(/nightVision: \(\) => settings\.nightVision,/g)).toHaveLength(2);
+  });
+
+  test('L toggled twice posts no worker message and leaves `litHash` of the loaded columns unchanged', async () => {
+    const flush = (): Promise<void> => new Promise((r) => { setImmediate(r); });
+    // Loaded columns: the spawn's column generated to L in process.
+    const params = resolveProfile('default');
+    const sp = findSpawn(createGenContext(seedFromInput('42'), params));
+    const { view } = await genRegion({ seed: '42', params, cx0: sp.x >> 4, cz0: sp.z >> 4, w: 1, h: 1, upTo: 'L', order: 'spiral', threads: 1 });
+    const lit0 = view.litHash();
+
+    // A streaming world at rest at RD 4: every job the coordinator runs is a worker message, counted.
+    const world = xrayWorld();
+    const { w } = world;
+    let runs = 0;
+    const jobs: CoordinatorJobs = { ...world.jobs, run: (stage, cx, cz, protoOnly, edit) => { runs++; return world.jobs.run(stage, cx, cz, protoOnly, edit); } };
+    const c = createCoordinator({
+      jobs, store: world.store, sink: world.sink, throttle: createThrottle({ max: 3 }), rd: 4, rdMax: 16,
+      retainAllProtos: true, strict: true, generation: 0, epoch: 1, onEvent: (e) => { throw new Error(`unexpected event ${e.kind}`); },
+    });
+    const cam = { x: 8.5, z: 8.5, yawDeg: 37.5 };
+    const counts = createCoordinatorCounts();
+    for (let i = 0; i < 400 && !(c.firstFill() && w.queue.length === 0 && c.counts(counts).MESH.done === counts.MESH.needed); i++) {
+      c.update(cam);
+      await flush();
+      world.settle();
+      await flush();
+    }
+    world.pump();
+    expect(c.firstFill()).toBe(true);
+
+    // The page's frame over a real material system (the lightmap), its L and the Settings screen.
+    const materials = createMaterialSystem({ variant: 'batch', ao: true, smoothLight: true }, createFlatColorArray());
+    const frame = { t: 0.75, brightness: 0.3, eyeSky: 0, rd: 4, fogBand: 64, nightVision: 0 };
+    materials.setFrameUniforms(frame);
+    const lightmap = materials.lightmap.texture;
+    const before = (lightmap.image.data as Uint8Array).slice();
+    const p = page();
+    const runs0 = runs;
+    const ops0 = w.ops;
+    let builds = 0;
+    for (let press = 0; press < 2; press++) {
+      p.press();
+      for (let f = 0; f < 30; f++) {
+        c.update(cam);
+        await flush();
+        world.settle();
+        const v = lightmap.version;
+        frame.nightVision = easeNightVision(frame.nightVision, p.settings().nightVision, HZ);
+        materials.setFrameUniforms(frame);
+        builds += lightmap.version - v;
+        if (press === 0 && f === 29) expect(frame.nightVision).toBe(1);
+      }
+    }
+    // The lightmap eased up and back (18 rebuilds each way), and is as it was.
+    expect(builds).toBe(36);
+    expect(frame.nightVision).toBe(0);
+    expect(lightmap.image.data as Uint8Array).toEqual(before);
+    // No job ran (no worker message), nothing was staged or removed, and the stored light is unchanged.
+    expect([runs - runs0, w.ops - ops0, w.queue.length]).toEqual([0, 0, 0]);
+    expect(view.litHash()).toBe(lit0);
+    expect(p.shown.map(([t]) => t)).toEqual(['Night vision on', 'Night vision off']);
+  }, 120_000);
 });

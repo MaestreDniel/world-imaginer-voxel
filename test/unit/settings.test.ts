@@ -12,7 +12,7 @@ function memoryStorage(): Pick<Storage, 'getItem' | 'setItem'> & { readonly item
 describe('loadSettings (SP4a spec §7.4, D31)', () => {
   test('the key and the defaults', () => {
     expect(SETTINGS_KEY).toBe('wi.world.settings');
-    expect(SETTINGS_DEFAULTS).toEqual({ rd: null, fpsCap: 0, fov: 70, sensitivity: 1, brightness: 0.3, mapMode: 'full', watchLive: true, holdRepeat: false });
+    expect(SETTINGS_DEFAULTS).toEqual({ rd: null, fpsCap: 0, fov: 70, sensitivity: 1, brightness: 0.3, mapMode: 'full', watchLive: true, holdRepeat: false, nightVision: false });
   });
 
   test('defaults with a null storage, with a throwing storage and with bad JSON', () => {
@@ -49,7 +49,7 @@ describe('loadSettings (SP4a spec §7.4, D31)', () => {
     }
     // SP4b's stored object (no mapMode, no watchLive): its fields kept, the two new ones at their defaults.
     const old = { rd: 8, fpsCap: 60, fov: 85, sensitivity: 1.7, brightness: 0.55 };
-    expect(loadSettings(holding(JSON.stringify(old)))).toEqual({ ...old, mapMode: 'full', watchLive: true, holdRepeat: false });
+    expect(loadSettings(holding(JSON.stringify(old)))).toEqual({ ...old, mapMode: 'full', watchLive: true, holdRepeat: false, nightVision: false });
   });
 
   test('`holdRepeat` false for a missing or non-boolean value; a boolean kept (SP5a spec §4.1, D6)', () => {
@@ -59,14 +59,28 @@ describe('loadSettings (SP4a spec §7.4, D31)', () => {
     expect(normalizeSettings({ holdRepeat: false }).holdRepeat).toBe(false);
     // SP4c's stored object (no holdRepeat): its fields kept, the setting off.
     const sp4c = { rd: 8, fpsCap: 60, fov: 85, sensitivity: 1.7, brightness: 0.55, mapMode: 'split', watchLive: false };
-    expect(loadSettings(holding(JSON.stringify(sp4c)))).toEqual({ ...sp4c, holdRepeat: false });
+    expect(loadSettings(holding(JSON.stringify(sp4c)))).toEqual({ ...sp4c, holdRepeat: false, nightVision: false });
+  });
+
+  test('`nightVision`: a stored object without it normalises to false; a non-boolean defaults; true survives a round trip (SP6a spec §6.2, D15)', () => {
+    expect(normalizeSettings({}).nightVision).toBe(false);
+    for (const bad of [undefined, null, 1, 'true', {}]) expect(normalizeSettings({ nightVision: bad }).nightVision, String(bad)).toBe(false);
+    // SP5c's stored object (no nightVision): its fields kept, night vision off.
+    const sp5c = { rd: 8, fpsCap: 60, fov: 85, sensitivity: 1.7, brightness: 0.55, mapMode: 'split', watchLive: false, holdRepeat: true };
+    expect(loadSettings(holding(JSON.stringify(sp5c)))).toEqual({ ...sp5c, nightVision: false });
+    const storage = memoryStorage();
+    saveSettings(storage, { ...SETTINGS_DEFAULTS, nightVision: true });
+    expect(JSON.parse(storage.items.get(SETTINGS_KEY)!)).toMatchObject({ nightVision: true });
+    expect(loadSettings(storage)).toEqual({ ...SETTINGS_DEFAULTS, nightVision: true });
+    saveSettings(storage, loadSettings(storage));
+    expect(loadSettings(storage).nightVision).toBe(true);
   });
 });
 
 describe('saveSettings', () => {
   test('a round-trip', () => {
     const storage = memoryStorage();
-    const s: WorldSettings = { rd: 10, fpsCap: 60, fov: 85, sensitivity: 1.7, brightness: 0.55, mapMode: 'split', watchLive: false, holdRepeat: true };
+    const s: WorldSettings = { rd: 10, fpsCap: 60, fov: 85, sensitivity: 1.7, brightness: 0.55, mapMode: 'split', watchLive: false, holdRepeat: true, nightVision: true };
     saveSettings(storage, s);
     expect([...storage.items.keys()]).toEqual(['wi.world.settings']);
     expect(loadSettings(storage)).toEqual(s);

@@ -771,7 +771,7 @@ describe('the X-ray toggle and band (SP6a spec §5.3)', () => {
   };
   const setup = () => {
     const materials = createMaterialSystem({ variant: 'mesh', ao: true, smoothLight: true }, createFlatColorArray());
-    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64 });
+    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0 });
     const sky = createSky(materials);
     const clear = fakeClear(0x123456, 0.5);
     const x = createXrayControl(materials, sky, clear as never);
@@ -818,7 +818,7 @@ describe('the X-ray toggle and band (SP6a spec §5.3)', () => {
   test('the radius follows the fog end (no radius forced): `syncRadius` after a render distance change', () => {
     const { materials, x, values } = setup();
     x.setXray(true);
-    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 16.5, fogBand: 64 });
+    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 16.5, fogBand: 64, nightVision: 0 });
     x.syncRadius();
     expect(values()).toEqual([1, -64, 319, 248]);
   });

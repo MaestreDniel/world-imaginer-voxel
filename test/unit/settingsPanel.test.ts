@@ -162,6 +162,45 @@ describe('mountSettingsPanel (SP5b spec §1.4, D9; the rows moved from the help,
     expect(loadSettings(storage)).toEqual(SETTINGS_DEFAULTS);
   });
 
+  test('"Night vision (L)": a checkbox right after Brightness under Graphics, off by default; a change calls onSettings with the whole new settings (SP6a spec §6.2, D15)', () => {
+    const { o } = mount();
+    const graphics = dom.el('settings-graphics');
+    const box = dom.el('setting-night-vision') as FakeElement & { checked: boolean };
+    expect([box.tagName, box.type, box.checked]).toEqual(['INPUT', 'checkbox', false]);
+    // The rows in order: the night-vision row directly after the brightness row, before the greyed rows.
+    const rows = graphics.children;
+    const brightnessRow = rows.findIndex((r) => r.querySelector('#setting-brightness') !== null);
+    const nvRow = rows.findIndex((r) => r.querySelector('#setting-night-vision') !== null);
+    expect(brightnessRow).toBeGreaterThanOrEqual(0);
+    expect(nvRow).toBe(brightnessRow + 1);
+    expect(rows[nvRow]!.querySelectorAll('span').map((sp) => sp.textContent)).toEqual(['Night vision (L)']);
+    expect(rows.at(-1)).toBe(dom.el('settings-greyed'));
+    box.checked = true;
+    box.dispatchEvent(new Event('change'));
+    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, nightVision: true });
+    // The screen's copy has it: a later brightness change sends it on.
+    change('setting-brightness', '0.5', 'input');
+    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, nightVision: true, brightness: 0.5 });
+    // A saved setting shows checked.
+    dom.body.replaceChildren();
+    mount({ settings: { ...SETTINGS_DEFAULTS, nightVision: true } });
+    expect((dom.el('setting-night-vision') as FakeElement & { checked: boolean }).checked).toBe(true);
+  });
+
+  test('setNightVision(on) sets the checkbox and the screen\'s copy without calling onSettings (L follows into the screen)', () => {
+    const { panel, o } = mount();
+    const box = dom.el('setting-night-vision') as FakeElement & { checked: boolean };
+    panel.setNightVision(true);
+    expect(box.checked).toBe(true);
+    expect(o.onSettings).not.toHaveBeenCalled();
+    // A later FOV change sends nightVision true, not the stale false.
+    change('setting-fov', '90', 'input');
+    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, fov: 90, nightVision: true });
+    panel.setNightVision(false);
+    expect(box.checked).toBe(false);
+    expect(o.onSettings).toHaveBeenCalledTimes(1);
+  });
+
   test('the greyed rows are disabled and change nothing', () => {
     const { o } = mount();
     const greyed = dom.el('settings-greyed');

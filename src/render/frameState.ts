@@ -15,4 +15,9 @@ export interface FrameState {
   readonly rd: number;
   /** Blocks from the fog's start to its end (`GraphicsPreset.fogBand`). */
   readonly fogBand: number;
+  /**
+   * Night vision nv ∈ [0, 1] (SP6a spec §6.2, D15): the setting eased over 0.3 s by the frame step, handed to the
+   * lightmap with the day, dusk and brightness; required, so every frame writes it.
+   */
+  readonly nightVision: number;
 }

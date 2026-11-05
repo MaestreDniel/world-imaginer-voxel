@@ -25,8 +25,9 @@
  * 5. the floating origin (`setOrigin` on a rebase, O(regions)) and the camera; the store's reclamation drain (§2.5);
  * 6. the frame's second read section (SP5a spec §3.5): `aim` (the page's DDA, queued clicks and outline), then the
  *    eye's sky light (`lightAt` >> 4; its last value, `state.eyeSky`, for a column not Published, SP4c spec §3.4; 15
- *    above y 319, 0 below −64); then the time, the fog's RD (`fogStep`), `world.frame` (materials, translucent sort,
- *    render), then `onRendered`. A skipped tick never aims.
+ *    above y 319, 0 below −64); then the time, the fog's RD (`fogStep`), night vision eased toward the setting
+ *    (`easeNightVision`, SP6a spec §6.2), `world.frame` (materials, translucent sort, render), then `onRendered`. A
+ *    skipped tick never aims.
  *
  * With `timing` (the bench, SP5a spec §6.2) the frame's input and motion step (1) and its `aim` (6) are timed on the
  * bench's clock, and their sum since the last rendered frame is recorded once per rendered frame, before `onRendered`:
@@ -55,6 +56,25 @@ const DELTA_WINDOW = 240;
 const FALLBACK_INTERVAL_MS = 1000 / 60;
 /** Only the vertical range: the world streams around the camera (SP4b spec §6.1). */
 const BOUNDS: FlyBounds = { yMin: -64, yMax: 400 };
+/** Night vision's ease, s: 0 ↔ 1 over this time, linearly (SP6a spec §6.2, D15). */
+export const NIGHT_VISION_EASE_S = 0.3;
+/** Within this of the target the ease lands on it, so a sum of rAF deltas that falls a rounding short still arrives. */
+const NIGHT_VISION_SNAP = 1e-9;
+
+/**
+ * Night vision after a rendered frame of `dtMs` (SP6a spec §6.2, D15): `nv` moved linearly toward 1 (`on`) or 0 by
+ * dtMs / (1000 · `NIGHT_VISION_EASE_S`), clamped to [0, 1]. At the target it stays there, so the lightmap, whose rebuild
+ * rule includes nv, rebuilds every frame only during the ease.
+ */
+export function easeNightVision(nv: number, on: boolean, dtMs: number): number {
+  const step = dtMs / (1000 * NIGHT_VISION_EASE_S);
+  if (on) {
+    const next = nv + step;
+    return next >= 1 - NIGHT_VISION_SNAP ? 1 : next;
+  }
+  const next = nv - step;
+  return next <= NIGHT_VISION_SNAP ? 0 : next;
+}
 
 export interface FrameStepDeps {
   readonly fly: FlyState;
@@ -83,14 +103,16 @@ export interface FrameStepDeps {
    */
   aim(read: Pick<VoxelStore, 'blockAt' | 'fluidAt'>, paused: boolean): void;
   /**
-   * The one reused FrameState (SP4b spec §3.10): `t`, `eyeSky` and `rd` are written here, `brightness` by the page; a
-   * teleport resets `eyeSky` to 15 (SP4c spec §3.4).
+   * The one reused FrameState (SP4b spec §3.10): `t`, `eyeSky`, `rd` and `nightVision` are written here, `brightness` by
+   * the page; a teleport resets `eyeSky` to 15 (SP4c spec §3.4).
    */
-  readonly state: { t: number; brightness: number; eyeSky: number; rd: number; fogBand: number };
+  readonly state: { t: number; brightness: number; eyeSky: number; rd: number; fogBand: number; nightVision: number };
   /** One of `TIME_SPEEDS`, or 0 when the clock is fixed. */
   timeSpeed(): number;
   /** The fog's RD after `dtMs` (the page's easing toward the target RD, `fogEase.ts`, SP4b spec §5). */
   fogStep(dtMs: number): number;
+  /** The night-vision setting (L, or Settings › Graphics), which `state.nightVision` eases toward (SP6a spec §6.2). */
+  nightVision(): boolean;
   /** After each rendered frame, with its delta (ms). */
   onRendered(dtMs: number): void;
   /** On every tick, just before `coordinator.update`: the page's apply control (SP4c spec §4.3). */
@@ -198,6 +220,7 @@ export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
       }
       state.t = advanceTime(state.t, dt, d.timeSpeed());
       state.rd = d.fogStep(dt);
+      state.nightVision = easeNightVision(state.nightVision, d.nightVision(), dt);
       world.frame(state);
       if (timing !== undefined) {
         timing.record(spans[0]!);

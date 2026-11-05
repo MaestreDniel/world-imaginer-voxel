@@ -385,7 +385,7 @@ interface AtRest {
   readonly counts: CoordinatorCounts;
   /** One frame step, at the next 144 Hz timestamp. */
   tick(): void;
-  readonly state: { readonly t: number; readonly eyeSky: number };
+  readonly state: { readonly t: number; readonly eyeSky: number; readonly nightVision: number };
   /** Ticks run, rendered frames, lightmap rebuilds. */
   stats(): { ticks: number; rendered: number; lightmapBuilds: number };
   readonly t0: number;
@@ -437,6 +437,8 @@ interface AtRest {
   setBeforeApply(gate: ((from: WorldStage | null) => boolean) | null): void;
   /** The page's X-ray (SP6a spec §5.3) over the renderer's control on the batch materials, off until its tests. */
   readonly xray: PageXray;
+  /** The night-vision setting the frame step eases toward (SP6a spec §6.2), off until its test. */
+  setNightVision(on: boolean): void;
   /** The X-ray's uniforms, the sky dome's visibility, the clear colour and the strip's element. */
   xrayState(): { on: number; yMin: number; yMax: number; sky: boolean; clear: number; strip: ReturnType<ReturnType<typeof installDom>['el']> };
 }
@@ -498,13 +500,14 @@ async function buildAtRest(): Promise<AtRest> {
   expect(speed60).toBeGreaterThanOrEqual(0);
   const fog = createFogEase(12);
   const frames = createFrameStats();
-  const state = { t: OPENING_T, brightness: 0.5, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand };
+  const state = { t: OPENING_T, brightness: 0.5, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand, nightVision: 0 };
+  let nightVision = false;
   const none: ReadonlySet<Action> = new Set();
   // A 144 Hz display under a cap of 144: the limiter's median runs on every tick and every tick renders. Enough
   // timestamps for the warm-ups and each frame-step test's attempts.
   // SP5a's two tests warm up again and measure on their own (`sp5a`); so do SP5c's tool tests (the box, the ghost).
-  // SP6a's X-ray test warms up and measures on its own too.
-  const times = boxedTimes(1000 / 144, FRAME_WARM_UP + SHOWN_WARM_UP + 5 * FRAME_WARM_UP + 4 * ATTEMPTS * ATTEMPTS * N);
+  // SP6a's X-ray test and its night-vision test warm up and measure on their own too.
+  const times = boxedTimes(1000 / 144, FRAME_WARM_UP + SHOWN_WARM_UP + 6 * FRAME_WARM_UP + 4 * ATTEMPTS * ATTEMPTS * N);
   let ticks = 0;
   // The budget's clock is the tick's timestamp: Node's `performance.now()` allocates on each call (88 B measured),
   // the browser's does not concern this code.
@@ -725,6 +728,7 @@ async function buildAtRest(): Promise<AtRest> {
     state,
     timeSpeed: () => TIME_SPEEDS[speed60]!,
     fogStep: (dtMs) => fog.step(dtMs, 12),
+    nightVision: () => nightVision,
     beforeUpdate,
     afterCounts,
     onRendered: (dtMs) => {
@@ -747,6 +751,7 @@ async function buildAtRest(): Promise<AtRest> {
   return {
     fly, coordinator, counts, tick, state, t0, sections, overlay, applied,
     xray: pageXray,
+    setNightVision(on) { nightVision = on; },
     xrayState: () => ({
       on: materials.xray.uniforms['xrayOn']!.value as number,
       yMin: materials.xray.uniforms['xrayYMin']!.value as number,
@@ -1233,6 +1238,30 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     }
     const off = f.xrayState();
     expect([off.on, off.yMin, off.yMax, off.sky, off.strip.hidden]).toEqual([0, -64, 319, true, true]);
+  }, TIMEOUT_MS);
+
+  test(`${N} frame steps at rest with night vision on after its ease grow the heap by less than the boxing budget of 256 B per tick (SP6a spec §6.2, D15)`, async () => {
+    const f = await atRest();
+    expect(f.state.nightVision).toBe(0);
+    f.setNightVision(true);
+    try {
+      // The ease (0.3 s, 44 ticks at 144 Hz) and the warm-up at nv 1.
+      for (let i = 0; i < FRAME_WARM_UP; i++) f.tick();
+      expect(f.state.nightVision).toBe(1);
+      const before = f.stats();
+      const g = allocationOver(f.tick, 0, FRAME_STEP_ALLOC_MAX);
+      expectAtRest(g, FRAME_STEP_ALLOC_MAX);
+      expectSp4cAtRest(f);
+      const after = f.stats();
+      expect(after.rendered - before.rendered).toBe(g.calls);
+      expect(f.state.nightVision).toBe(1);
+      // At nv 1 only the clock at ×60 rebuilds the lightmap (a 1/512 step of the day or dusk factor), not every frame.
+      expect(after.lightmapBuilds - before.lightmapBuilds).toBeLessThan(g.calls);
+    } finally {
+      f.setNightVision(false);
+      for (let i = 0; i < 100; i++) f.tick();
+    }
+    expect(f.state.nightVision).toBe(0);
   }, TIMEOUT_MS);
 
   test(`${N} toggles of X at a fixed band grow the heap by less than 256 KB (SP6a spec §5.3: a toggle writes uniforms and the clear colour only)`, async () => {

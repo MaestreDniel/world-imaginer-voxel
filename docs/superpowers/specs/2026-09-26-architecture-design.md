@@ -1142,7 +1142,8 @@ This replaces the ±15-block slab relight rejected in §9. L3 includes shaft cas
 - the sky axis scaled by the day factor, with a blue night tint and a moon floor;
 - warm block light, max-combined;
 - a light floor F = 0.02 lifting every texel before the brightness (SP6a);
-- a brightness setting.
+- a brightness setting;
+- night vision normalising each texel to its brightest channel, eased over 0.3 s (SP6a).
 
 **Shadows:**
 - High: 1 cascade 1024² over 64 blocks, updated every 2nd frame.
@@ -1254,7 +1255,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from th
 | audio: emitter+SFX voice cap / spatialisation / reverb | 16 / equal-power / off | 24 / equal-power / on | 32 / HRTF / on | 48 / HRTF / on |
 | upload budget | 1.5 ms | 2 ms | 3 ms | 4 ms |
 
-- Every setting can be overridden individually (SP5b: the Settings screen, G: Graphics with RD, FPS cap, FOV and brightness, the rest greyed until SP11; Controls with mouse sensitivity and hold to repeat): RD, LOD, FOV, brightness, fog start, resolution scale, FPS cap, anisotropy, biome blend, water tier, shadows, clouds, AO.
+- Every setting can be overridden individually (SP5b: the Settings screen, G: Graphics with RD, FPS cap, FOV and brightness, the rest greyed until SP11; Controls with mouse sensitivity and hold to repeat): RD, LOD, FOV, brightness, night vision (SP6a), fog start, resolution scale, FPS cap, anisotropy, biome blend, water tier, shadows, clouds, AO.
 - Changes are Live (the render distance live since SP4b, within the reservation's cap), except MSAA (a controlled renderer rebuild that keeps the world store) and AO or leaves (a remesh of loaded sections through mesh jobs).
 - Settings persist in localStorage (try/catch).
 - `core/params/graphicsPresets.ts` is created by SP4a with the Medium fields it uses; SP8c adds the audio rows, SP11 the other rows.

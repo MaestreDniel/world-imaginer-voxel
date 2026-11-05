@@ -2129,6 +2129,30 @@ export function createPageXray(o: {
   };
 }
 
+/** How long L's notice shows, ms (SP6a spec §7.2). */
+export const NIGHT_VISION_NOTICE_MS = 1_500;
+
+/** L's notice (SP6a spec §7.2): "Night vision on" or "Night vision off". */
+export const nightVisionNotice = (on: boolean): string => (on ? 'Night vision on' : 'Night vision off');
+
+/**
+ * L (SP6a spec §6.2, §7.1, §7.2; D15): night vision flipped in the settings, which `save` keeps in this browser (as the
+ * brightness), the Settings checkbox following (`setNightVision`, which calls no `onSettings`), and the 1.5 s notice.
+ * Returns the new settings; the frame eases toward them. It touches no worker, no store and no stored light: only the
+ * lightmap shows it.
+ */
+export function toggleNightVision(settings: WorldSettings, o: {
+  save(s: WorldSettings): void;
+  readonly panel: Pick<SettingsPanel, 'setNightVision'>;
+  readonly notices: Pick<WorldNotices, 'show'>;
+}): WorldSettings {
+  const next: WorldSettings = { ...settings, nightVision: !settings.nightVision };
+  o.save(next);
+  o.panel.setNightVision(next.nightVision);
+  o.notices.show(nightVisionNotice(next.nightVision), { timeoutMs: NIGHT_VISION_NOTICE_MS });
+  return next;
+}
+
 /** The aim's reach (SP5c spec §1.2, D2): `SELECT_REACH` with the selection tool on, else `REACH_WALK` / `REACH_FLY`. */
 export function aimReach(tool: Pick<SelectTool, 'mode'>, fly: Pick<FlyState, 'mode'>): number {
   return tool.mode !== 'off' ? SELECT_REACH : fly.mode === 'walk' ? REACH_WALK : REACH_FLY;
@@ -4232,10 +4256,14 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       applyCameraRotation(world.camera, fly);
     };
     // One FrameState for every frame, rewritten in place (SP4b spec §3.10); the frame step writes it after the reveal.
-    const frame = { t, brightness: settings.brightness, eyeSky: 15, rd: loadRd, fogBand: MEDIUM.fogBand };
+    // Night vision starts at the saved setting, not eased (SP6a spec §6.2); the frame step eases it after the reveal.
+    const frame = {
+      t, brightness: settings.brightness, eyeSky: 15, rd: loadRd, fogBand: MEDIUM.fogBand, nightVision: settings.nightVision ? 1 : 0,
+    };
     const frameState = (): FrameState => {
       frame.t = t;
       frame.brightness = settings.brightness;
+      frame.nightVision = settings.nightVision ? 1 : 0;
       frame.eyeSky = skyLightAt(store, fly.x, fly.y, fly.z);
       return frame;
     };
@@ -4625,6 +4653,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           state: frame,
           timeSpeed: () => benchClock.speed,
           fogStep: (dtMs) => fogStep.step(dtMs),
+          nightVision: () => settings.nightVision,
           // The apply control before the coordinator's update; the aux policy from its counts, no map covering the 3D
           // (SP4c spec §4.3, §6.2, §8.4).
           beforeUpdate: () => applyControl.tick(),
@@ -5217,6 +5246,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         // The X-ray's keys (SP6a spec §7.1, D10, D11): X toggles it, PageDown and PageUp move its band, Home shows every
         // depth; the band moves with the X-ray off too.
         case 'xray': case 'xrayDown': case 'xrayUp': case 'xrayAll': pageXray.action(a); break;
+        // L flips night vision, saves it, the Settings checkbox follows and the notice shows (SP6a spec §6.2, §7.1,
+        // §7.2; D15): the frame eases toward it; no worker message.
+        case 'nightVision':
+          settings = toggleNightVision(settings, { save: (next) => saveSettings(storage, next), panel: settingsPanel, notices });
+          break;
         default: break; // movement and sprint are held; Esc (releasePointer) is the browser's
       }
     };
@@ -5509,6 +5543,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       // The fog eases outward after a raise, following the filled radius (SP4b spec §5): scanned around the camera's
       // column every 30 rendered frames while the fog is below its target, never once it has arrived.
       fogStep: (dtMs) => fogStep.step(dtMs),
+      // Night vision eases toward the setting over 0.3 s (SP6a spec §6.2): L or the Settings checkbox.
+      nightVision: () => settings.nightVision,
       // The apply control before the coordinator's update; the aux policy from its counts (SP4c spec §4.3, §6.2).
       beforeUpdate: () => applyControl.tick(),
       afterCounts: (c) => updateAuxPolicy(workers, applyControl.generation, coversWorld(mapRef), c),

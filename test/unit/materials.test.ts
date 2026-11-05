@@ -27,7 +27,7 @@ const all = (m: MaterialSystem): Record<string, ShaderMaterial> => ({
 /** The terrain and water materials: the ones with a batched and a RegionMesh variant. */
 const terrainAndWater = (m: MaterialSystem): ShaderMaterial[] => [m.terrainOpaque, m.terrainCutout, m.water];
 
-const FRAME: FrameState = { t: 1 / 12, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64 };
+const FRAME: FrameState = { t: 1 / 12, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0 };
 
 /** The index of the `#endif` that closes the conditional block opened at `start` (nested blocks skipped). */
 function blockEnd(src: string, start: number): number {

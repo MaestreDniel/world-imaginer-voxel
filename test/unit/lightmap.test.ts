@@ -12,6 +12,12 @@ const at = (t: number, beta: number): Uint8Array => {
   lightmapRgba(dayFactor(t), duskFactor(t), beta, out);
   return out;
 };
+/** The same with night vision `nv` (SP6a spec §6.2). */
+const atNv = (t: number, beta: number, nv: number): Uint8Array => {
+  const out = new Uint8Array(1024);
+  lightmapRgba(dayFactor(t), duskFactor(t), beta, out, nv);
+  return out;
+};
 /** Texel (x = block, y = sky). */
 const texel = (m: Uint8Array, block: number, sky: number): number[] => {
   const o = (sky * 16 + block) * 4;
@@ -94,6 +100,98 @@ describe('the lightmap (SP4a spec §6.7, master §4.8)', () => {
     expect(row(0)).toBe(Math.round(255 * c));
     expect(row(1)).toBe(Math.round(255 * lifted));
     expect(row(0.3)).toBe(Math.round(255 * (c + (lifted - c) * 0.3)));
+  });
+});
+
+describe('night vision in the lightmap (SP6a spec §6.2, D15)', () => {
+  /** FNV-1a over Task 22's bytes (the light floor, no night vision) at the 96 times × β 0, 0.3, 1, recorded at 5f57308. */
+  const TASK22_BYTES_FNV = 0x14ec0128;
+  /** The texel value after the light floor F and before the brightness lift (SP6a spec §6.1, D14). */
+  const floored = (c: number): number => LIGHT_FLOOR + (1 - LIGHT_FLOOR) * c;
+
+  test('at nv 1 every texel\'s brightest channel is 255 at t 0.75 and t 0.25 at β 0, 0.3 and 1; alpha stays 255', () => {
+    for (const t of [0.75, 0.25]) {
+      for (const beta of BRIGHTNESS) {
+        const m = atNv(t, beta, 1);
+        for (let sky = 0; sky < 16; sky++) {
+          for (let block = 0; block < 16; block++) {
+            const [r, g, b, a] = texel(m, block, sky);
+            expect(Math.max(r!, g!, b!), `t ${t}, β ${beta}, (${block}, ${sky})`).toBe(255);
+            expect(a).toBe(255);
+          }
+        }
+      }
+    }
+  });
+
+  test('the exact bytes: c″ = mix(c′, c′ / max(c′.r, c′.g, c′.b), nv) after the floor and the lift, rounded', () => {
+    const lifted = (c: number, beta: number): number => c + (1 - (1 - c) ** 4 - c) * beta;
+    // Noon, block 15, sky 0 (the block tint after the floor): c′ = floored([1, 0.85, 0.65]) lifted by β.
+    for (const beta of BRIGHTNESS) {
+      const c = [1, 0.85, 0.65].map((v) => lifted(floored(v), beta));
+      const max = Math.max(...c);
+      for (const nv of [0, 0.5, 1]) {
+        const want = c.map((v) => Math.round(255 * (v * (1 - nv) + (v / max) * nv)));
+        expect(texel(atNv(0.25, beta, nv), 15, 0).slice(0, 3), `β ${beta}, nv ${nv}`).toEqual(want);
+      }
+    }
+    // The midnight sky-15 texel (the blue night tint): its blue channel is the brightest and becomes 255.
+    const c = [0.45, 0.55, 0.85].map((v) => lifted(floored(0.15 * v), 0.3));
+    const want = c.map((v) => Math.round(255 * (v / c[2]!)));
+    expect(texel(atNv(0.75, 0.3, 1), 0, 15).slice(0, 3)).toEqual(want);
+    expect(want[2]).toBe(255);
+    // (0, 0) is neutral grey: white at nv 1.
+    expect(texel(atNv(0.75, 0.3, 1), 0, 0)).toEqual([255, 255, 255, 255]);
+  });
+
+  test('at nv 0 the bytes equal Task 22\'s (the default argument and an explicit 0 alike)', () => {
+    let h = 0x811c9dc5;
+    for (const t of TIMES) {
+      for (const beta of BRIGHTNESS) {
+        const m = atNv(t, beta, 0);
+        expect(m, `t ${t}, β ${beta}`).toEqual(at(t, beta));
+        for (const v of m) h = Math.imul(h ^ v, 0x01000193) >>> 0;
+      }
+    }
+    expect(h).toBe(TASK22_BYTES_FNV);
+  });
+
+  test('createLightmap: nv 0 after nv 1 restores the exact bytes', () => {
+    const lm = createLightmap();
+    const data = lm.texture.image.data as Uint8Array;
+    for (const t of [0.75, 0.25]) {
+      for (const beta of BRIGHTNESS) {
+        lm.update(dayFactor(t), duskFactor(t), beta, 0);
+        const before = data.slice();
+        expect(before).toEqual(at(t, beta));
+        lm.update(dayFactor(t), duskFactor(t), beta, 1);
+        expect(data).toEqual(atNv(t, beta, 1));
+        expect(data).not.toEqual(before);
+        lm.update(dayFactor(t), duskFactor(t), beta, 0);
+        expect(data, `t ${t}, β ${beta}`).toEqual(before);
+      }
+    }
+  });
+
+  test('the rebuild rule includes nv: a change rebuilds, the same nv does not; nv is quantised to 1/512 like the day factor', () => {
+    const lm = createLightmap();
+    lm.update(0.5, 0.25, 0.3, 0);
+    const v0 = lm.texture.version;
+    lm.update(0.5, 0.25, 0.3, 0);
+    expect(lm.texture.version).toBe(v0);
+    lm.update(0.5, 0.25, 0.3, 0.5);
+    const v1 = lm.texture.version;
+    expect(v1).toBeGreaterThan(v0);
+    expect(lm.texture.image.data as Uint8Array).toEqual((() => {
+      const out = new Uint8Array(1024);
+      lightmapRgba(0.5, 0.25, 0.3, out, 0.5);
+      return out;
+    })());
+    // 0.5 · 512 = 256 and (0.5 + 1/2048) · 512 = 256.25 round to the same step.
+    lm.update(0.5, 0.25, 0.3, 0.5 + 1 / 2048);
+    expect(lm.texture.version).toBe(v1);
+    lm.update(0.5, 0.25, 0.3, 0.5 + 1 / 512);
+    expect(lm.texture.version).toBeGreaterThan(v1);
   });
 });
 

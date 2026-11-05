@@ -50,8 +50,8 @@ export interface MaterialSystem {
   readonly xray: ShaderMaterial;
   readonly lightmap: ReturnType<typeof createLightmap>;
   /**
-   * Writes the frame's fog, eye light, sky and sun uniforms and hands the lightmap the frame's day, dusk and brightness
-   * (it rebuilds only when they moved a step); allocates nothing (SP4b spec §3.10).
+   * Writes the frame's fog, eye light, sky and sun uniforms and hands the lightmap the frame's day, dusk, brightness and
+   * night vision (it rebuilds only when they moved a step); allocates nothing (SP4b spec §3.10, SP6a spec §6.2).
    */
   setFrameUniforms(f: FrameState): void;
   /** Writes the ghost's `ghostTurns` uniform, its quarter turns `q` (0-3); allocates nothing (SP5c spec §6.2). */
@@ -183,7 +183,7 @@ export function createMaterialSystem(s: MaterialSettings, albedo: DataArrayTextu
       u.skyHorizon.value.setRGB(horizon[0]!, horizon[1]!, horizon[2]!, SRGBColorSpace);
       sunDirectionInto(f.t, sun);
       u.sunDir.value.set(sun[0]!, sun[1]!, sun[2]!);
-      lightmap.update(dayFactor(f.t), duskFactor(f.t), f.brightness);
+      lightmap.update(dayFactor(f.t), duskFactor(f.t), f.brightness, f.nightVision);
     },
     setGhostTurns(q) {
       turns.value = q;
