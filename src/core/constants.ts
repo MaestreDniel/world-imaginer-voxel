@@ -180,5 +180,15 @@ export const CAVE_KIND = Object.freeze({
 /** The X-ray's surface film (SP6a spec §5.1): a kind in the X-ray pack only, never stored in the `cave` channel. */
 export const CAVE_FILM_KIND = 15;
 
+/**
+ * The carvers' window (SP6a spec §2.1, D21): a column reads the sources of the chunks within R of its chunk, 23 × 23 =
+ * 529. R is the largest integer with 16·R < 16 + L_max + r_max: L_max = 160 (`caves.worms.length`'s and
+ * `caves.ravines.lengthMax`' static maximum: each step moves 1 block), r_max = 9.5 (the largest horizontal radius along
+ * a path: (1.5 + 3)·2.0 for worms and underground worms, 1.5 + 8 for ravines; a start room sits at the start), so
+ * 185.5 and R = 11. Pinned by `test/unit/constants.test.ts` (recomputed from the leaves' static maxima) and by
+ * `reachOverflow`. Here rather than in `gen/caves/`, which exports functions and types only (gen exports no numeric data).
+ */
+export const CARVER_WINDOW_R = 11;
+
 /** The `rule` slice field's value on a voxel the rules never evaluate (air, water, the bedrock at y −64): n/a (§4.1). */
 export const SLICE_RULE_NA = 255;

@@ -5,7 +5,10 @@
  * - `CARVER_MAXIMA`: every carver leaf at its static maximum, the end of its range (spec §4; where §4 gives none, the
  *   plan's ranges: `branchChance`, `roomChance` 0 … 1, `roomYScaleMin`/`Max` 0.1 … 0.9, `startYMin`/`Max` −64 … 320,
  *   `ravines.plateau` 0 … 8, `ravines.vRotation` 0 … 0.5, `worms.shape.pitchKeep`, `.yawDriftKeep` and
- *   `.pitchDriftKeep` 0 … 1 and the other four shape leaves 0 … 8 (ruling P17)).
+ *   `.pitchDriftKeep` 0 … 1 and the other four shape leaves 0 … 8 (ruling P17)); `reachOverflow`'s static-maxima case
+ *   (Task 25 in `carverPaths.test.ts`, Task 30's C7) runs every path at these;
+ * - `carverReachOf` and `carverWindowROf`: spec §2.1's L_max, r_max and window R for given leaves, which
+ *   `test/unit/constants.test.ts` applies to `CARVER_MAXIMA` to recompute `CARVER_WINDOW_R`.
  */
 import type { CarverParams, WormShape } from '../../src/gen/caves/carvers';
 
@@ -42,3 +45,30 @@ export const CARVER_MAXIMA: CarverParams = {
   },
   limits: { waterDepth: 48, bandSpan: 32, capTop: 344 },
 };
+
+/** The worms' thickness t = 2·u + u (spec §2.2) stays below 3 whatever the leaves: it is not a leaf. */
+const WORM_THICKNESS_SUP = 3;
+/** Minecraft's cap: every step's radius is (1.5 + detSin(π·i/n)·t)·mul (spec §2.2-§2.3). */
+const CAP = 1.5;
+
+/**
+ * Spec §2.1's L_max (the longest path in steps: `worms.length` and the ravines' `max(lengthMin, lengthMax)`; each step
+ * moves 1 block) and r_max (the largest horizontal radius along a path: (1.5 + 3)·max(radiusMin, radiusMax) for worms
+ * and underground worms, 1.5 + thicknessMax for ravines, whose width factor only narrows them; a start room sits at the
+ * start and is not counted) for the leaves `p`.
+ */
+export function carverReachOf(p: CarverParams): { readonly lMax: number; readonly rMax: number } {
+  const lMax = Math.max(p.worms.length, p.ravines.lengthMin, p.ravines.lengthMax);
+  const worm = (CAP + WORM_THICKNESS_SUP) * Math.max(p.worms.radiusMin, p.worms.radiusMax);
+  const ravine = CAP + p.ravines.thicknessMax;
+  return { lMax, rMax: Math.max(worm, ravine) };
+}
+
+/** Spec §2.1's window: the largest integer R with 16·R < 16 + L_max + r_max for the leaves `p`. */
+export function carverWindowROf(p: CarverParams): number {
+  const { lMax, rMax } = carverReachOf(p);
+  const reach = 16 + lMax + rMax;
+  let r = 0;
+  while (16 * (r + 1) < reach) r++;
+  return r;
+}

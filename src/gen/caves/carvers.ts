@@ -2,7 +2,8 @@
  * The carvers' sources and paths (SP6a spec §2.1-§2.3, D5, D21, D35): a pure function of the world seed, the kind and
  * the source chunk (sx, sz), never of the column that asks for it, so two columns see the same path.
  * - Source (§2.1): `rng = Xoshiro128(hash2(deriveSeed(seed, 'caves.' + kind), sx, sz))`; its first `nextFloat()`
- *   against the kind's chance, else no path (null).
+ *   against the kind's chance, else no path (null). A source reaches only the chunks within `CARVER_WINDOW_R` of its
+ *   own (`core/constants.ts`; `reachOverflow` pins it on `box`).
  * - Worm and underground worm (§2.2), in this draw order (frozen by the golden `sp6a.carver.paths`):
  *   1. the start x `16·sx + 16·u`, z `16·sz + 16·u`, y `startYMin + (startYMax − startYMin)·u`; yaw `2π·u`; pitch
  *      `(u − 0.5)/4`;
@@ -21,6 +22,15 @@
  *      second's, and their ellipsoids follow the trunk's in `ell`.
  *   Underground worms take every worm leaf but their chance and their start range (`undergroundWorms.*`); their shrink
  *   below `maxY` is the carve's (§2.4).
+ * - Ravine (§2.3), in this draw order after the roll (frozen by the same golden):
+ *   1. the start x, z as worms, y `startYMin + (startYMax − startYMin)·u`; yaw `2π·u`; pitch `(u − 0.5)·2·vRotation`;
+ *   2. t from the trapezoid on [0, thicknessMax] with plateau `plateau`: `t = u·(thicknessMax − g) + u·g`,
+ *      g = (thicknessMax − min(plateau, thicknessMax))/2 (Minecraft's: at the defaults 0 … 6, flat over 2 … 4);
+ *   3. n `lengthMin + ⌊(max(lengthMin, lengthMax) − lengthMin + 1)·u⌋`;
+ *   4. the 384 width factors from y −64 up, one draw pair per `widthSmoothness` rows: `f = 1 + u·u`, stored as f² on
+ *      each of those rows (`widthSq`; the carve multiplies the horizontal term by it, so it only narrows the ravine);
+ *   5. per step i < n the ellipsoid with rh = 1.5 + detSin(π·i/n)·t, rv = rh·yScale and floor −1 (none), then the
+ *      move and the drift of rule 5 with the `caves.worms.shape` leaves (ravines start as worms; no room, no branch).
  * - `box` is the path's voxel reach: the union of its ellipsoids' boxes, each centre widened by its rh horizontally and
  *   its rv vertically. A voxel whose centre lies outside it is never carved by the path (the carve test `d < 1 − σ`
  *   with σ ≥ 0, §2.4).
@@ -29,6 +39,7 @@
  * `detCos`, every draw from the source's `Xoshiro128`.
  */
 import { detCos, detSin } from '../../core/detMath';
+import { HEIGHT } from '../../core/constants';
 import { deriveSeed, hash2 } from '../../core/hash';
 import { Xoshiro128 } from '../../core/rng';
 import type { GenContext } from '../context';
@@ -38,6 +49,8 @@ const HASH2 = hash2;
 const RNG = Xoshiro128;
 const SIN = detSin;
 const COS = detCos;
+/** The world's rows, y −64 … 319: a ravine's `widthSq` holds one f² per row. */
+const ROWS = HEIGHT;
 /** A source's stream (the `Xoshiro128` class through its alias). */
 type Rng = InstanceType<typeof RNG>;
 
@@ -50,6 +63,8 @@ const CHUNK = 16;
 const ELL = 6;
 /** Minecraft's cap: every step's radius is (CAP + detSin(π·i/n)·thickness)·mul. */
 const CAP = 1.5;
+/** A ravine's floor: −1, below every voxel an ellipsoid holds, so none (the carve's floor test always passes). */
+const NO_FLOOR = -1;
 
 export type CarverKind = 'worm' | 'ravine' | 'undergroundWorm';
 
@@ -269,14 +284,42 @@ function wormPath(rng: Rng, kind: CarverKind, sx: number, sz: number, p: CarverP
   return { kind, sx, sz, count, ell, box: reachOf(ell, count), widthSq: null };
 }
 
+/** The ravine path after a passed roll (§2.3, ravine rules 1-5 above). */
+function ravinePath(rng: Rng, sx: number, sz: number, p: CarverParams): CarverPath {
+  const r = p.ravines;
+  // 1. The start.
+  const x0 = CHUNK * sx + CHUNK * rng.nextFloat();
+  const z0 = CHUNK * sz + CHUNK * rng.nextFloat();
+  const y0 = r.startYMin + (r.startYMax - r.startYMin) * rng.nextFloat();
+  const yaw0 = TWO_PI * rng.nextFloat();
+  const pitch0 = (rng.nextFloat() - 0.5) * 2 * r.vRotation;
+  // 2. The thickness: the sum of two uniform draws on [0, thicknessMax − g) and [0, g), a trapezoid flat over its middle.
+  const g = (r.thicknessMax - Math.min(r.plateau, r.thicknessMax)) / 2;
+  const t = rng.nextFloat() * (r.thicknessMax - g) + rng.nextFloat() * g;
+  // 3. The steps.
+  const n = r.lengthMin + Math.floor((Math.max(r.lengthMin, r.lengthMax) - r.lengthMin + 1) * rng.nextFloat());
+  // 4. The width factors, one pair per run of `widthSmoothness` rows from y −64 (the last run cut at the world's top).
+  //    The leaf is an int in 1 … 16; the floor and the max only keep a malformed value from stalling the loop.
+  const widthSq = new Float64Array(ROWS);
+  const run = Math.max(1, Math.floor(r.widthSmoothness));
+  for (let j = 0; j < ROWS; j += run) {
+    const f = 1 + rng.nextFloat() * rng.nextFloat();
+    widthSq.fill(f * f, j, Math.min(j + run, ROWS));
+  }
+  // 5. The steps' ellipsoids: `walk` writes c·1 and c·yScale with c = 1.5 + detSin(π·i/n)·t, so rh = c, rv = rh·yScale.
+  const ell = new Float64Array(n * ELL);
+  const st = Float64Array.of(x0, y0, z0, yaw0, pitch0, 0, 0);
+  walk(rng, p.worms.shape, st, ell, 0, 0, n, -1, t, 1, r.yScale, NO_FLOOR);
+  return { kind: 'ravine', sx, sz, count: n, ell, box: reachOf(ell, n), widthSq };
+}
+
 /**
  * The path of the carver source (kind, sx, sz) of the world `seed` (§2.1): null when its roll fails. Worms and
- * underground worms (§2.2); ravine paths (§2.3) are not built yet and throw.
+ * underground worms (§2.2), ravines (§2.3).
  */
 export function carverPath(seed: GenContext['seed'], kind: CarverKind, sx: number, sz: number, p: CarverParams): CarverPath | null {
-  if (kind === 'ravine') throw new Error('carverPath: ravine paths (SP6a spec §2.3) are not built yet');
   const rng = new RNG(HASH2(DERIVE(seed, 'caves.' + kind), sx, sz));
-  const chance = kind === 'undergroundWorm' ? p.undergroundWorms.chance : p.worms.chance;
+  const chance = kind === 'ravine' ? p.ravines.chance : kind === 'undergroundWorm' ? p.undergroundWorms.chance : p.worms.chance;
   if (!(rng.nextFloat() < chance)) return null;
-  return wormPath(rng, kind, sx, sz, p);
+  return kind === 'ravine' ? ravinePath(rng, sx, sz, p) : wormPath(rng, kind, sx, sz, p);
 }
