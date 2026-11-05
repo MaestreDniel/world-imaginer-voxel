@@ -157,12 +157,44 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
       doc.dispatchEvent(key('keydown', 'KeyQ', 'q'));
       doc.dispatchEvent(key('keydown', 'KeyN', 'n'));
       expect(actions).toEqual(['copy', 'copy', 'cut', 'paste', 'selectTool', 'move']);
-      // Plain C, X and V are nobody's: not prevented.
-      for (const [code, k] of [['KeyC', 'c'], ['KeyX', 'x'], ['KeyV', 'v']] as const) {
+      // Plain C and V are nobody's: not prevented (plain X is the X-ray since SP6a, SP6a spec §7.1).
+      for (const [code, k] of [['KeyC', 'c'], ['KeyV', 'v']] as const) {
         const e = key('keydown', code, k);
         doc.dispatchEvent(e);
         expect(e.defaultPrevented, code).toBe(false);
       }
+      expect(input.held.size).toBe(0);
+      input.dispose();
+    });
+
+    test('SP6a\'s view keys: Ctrl+PageDown, Ctrl+PageUp, Ctrl+Home and Ctrl+L resolve nothing and are not prevented; plain X, PageDown, PageUp, Home and L resolve their actions, prevented; Ctrl+X stays cut (SP6a spec §7.1)', () => {
+      const { doc, actions, input, setPlacing } = setup();
+      for (const placing of [false, true]) {
+        setPlacing(placing);
+        for (const e of [
+          key('keydown', 'PageDown', 'PageDown', { ctrlKey: true }),
+          key('keydown', 'PageUp', 'PageUp', { ctrlKey: true }),
+          key('keydown', 'Home', 'Home', { ctrlKey: true }),
+          key('keydown', 'KeyL', 'l', { ctrlKey: true }),
+          key('keydown', 'KeyL', 'l', { metaKey: true }),
+        ]) {
+          doc.dispatchEvent(e);
+          expect(e.defaultPrevented, `Ctrl+${e.code} with placing ${placing}`).toBe(false);
+        }
+      }
+      expect(actions).toEqual([]);
+      setPlacing(false);
+      for (const [code, k] of [['KeyX', 'x'], ['PageDown', 'PageDown'], ['PageUp', 'PageUp'], ['Home', 'Home'], ['KeyL', 'l']] as const) {
+        const e = key('keydown', code, k);
+        doc.dispatchEvent(e);
+        expect(e.defaultPrevented, code).toBe(true);
+        doc.dispatchEvent(key('keyup', code, k));
+      }
+      expect(actions).toEqual(['xray', 'xrayDown', 'xrayUp', 'xrayAll', 'nightVision']);
+      const cut = key('keydown', 'KeyX', 'x', { ctrlKey: true });
+      doc.dispatchEvent(cut);
+      expect(cut.defaultPrevented).toBe(true);
+      expect(actions.at(-1)).toBe('cut');
       expect(input.held.size).toBe(0);
       input.dispose();
     });

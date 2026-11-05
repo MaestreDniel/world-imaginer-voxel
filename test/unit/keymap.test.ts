@@ -15,14 +15,17 @@ const SP5B: readonly Action[] = ['savePlace', 'settings'];
 /** SP5c's selection tool (SP5c spec §1.1, D4): Q, Ctrl+C, Ctrl+X, Ctrl+V, N, and while placing the wheel, ↑ and ↓. */
 const SELECT: readonly Action[] = ['selectTool', 'copy', 'cut', 'paste', 'move', 'turn', 'turnBack', 'raise', 'lower'];
 
+/** SP6a's view keys (SP6a spec §7.1, D10, D11, D15): X, PageDown, PageUp, Home and L, each without Ctrl. */
+const SP6A: readonly Action[] = ['xray', 'xrayDown', 'xrayUp', 'xrayAll', 'nightVision'];
+
 /**
  * Every action of SP4a spec §7.3 but R's loadHere (removed by SP4b spec §6.2), SP4c's M (SP4c spec §2.4), SP5a's build group
- * (SP5a spec §4.1), SP5b's B and G (SP5b spec §3.7) and SP5c's selection tool (SP5c spec §1.1), spelled out so that a
- * missing map entry fails here.
+ * (SP5a spec §4.1), SP5b's B and G (SP5b spec §3.7), SP5c's selection tool (SP5c spec §1.1) and SP6a's view keys (SP6a
+ * spec §7.1), spelled out so that a missing map entry fails here.
  */
 const ACTIONS: readonly Action[] = [
   'forward', 'back', 'left', 'right', 'up', 'down', 'sprint', 'speedUp', 'speedDown',
-  'timeSpeed', 'help', 'hud', 'releasePointer', 'map', ...BUILD, ...SP5B, ...SELECT,
+  'timeSpeed', 'help', 'hud', 'releasePointer', 'map', ...BUILD, ...SP5B, ...SELECT, ...SP6A,
 ];
 
 /** A code binding's Ctrl: absent (with or without), `+ctrl` (only with Ctrl or Cmd), `-ctrl` (only without). */
@@ -48,19 +51,22 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
       expect(entries[0]!.label, a).not.toBe('');
     }
     expect(DEFAULT_KEYMAP).toHaveLength(ACTIONS.length);
-    expect(DEFAULT_KEYMAP).toHaveLength(38);
+    expect(DEFAULT_KEYMAP).toHaveLength(43);
     // Esc is listed (the help names it) but the browser owns it: the input layer never resolves it.
     expect([...LISTED_ONLY]).toEqual(['releasePointer']);
     expect(resolveKey({ code: 'Escape', key: 'Escape' })).toBeNull();
     // Every entry is SP4a's except SP4c's map (SP4c spec §2.4), SP5a's build group (SP5a spec §4.1), SP5b's B and G
-    // (SP5b spec §3.7) and SP5c's selection tool (SP5c spec §1.1).
+    // (SP5b spec §3.7), SP5c's selection tool (SP5c spec §1.1) and SP6a's view keys (SP6a spec §7.1).
     const since = (a: Action) =>
-      (a === 'map' ? 'SP4c' : BUILD.includes(a) ? 'SP5a' : SP5B.includes(a) ? 'SP5b' : SELECT.includes(a) ? 'SP5c' : 'SP4a');
+      (a === 'map' ? 'SP4c' : BUILD.includes(a) ? 'SP5a' : SP5B.includes(a) ? 'SP5b' : SELECT.includes(a) ? 'SP5c'
+        : SP6A.includes(a) ? 'SP6a' : 'SP4a');
     for (const e of DEFAULT_KEYMAP) expect(e.since, e.action).toBe(since(e.action));
     for (const e of DEFAULT_KEYMAP) expect(e.group === 'build', e.action).toBe(BUILD.includes(e.action));
     for (const e of DEFAULT_KEYMAP) expect(e.group === 'select', e.action).toBe(SELECT.includes(e.action));
-    // Appended after slotPrev, in the spec's order.
-    expect(DEFAULT_KEYMAP.slice(-9).map((e) => e.action)).toEqual(SELECT);
+    // The selection tool appended after slotPrev, then SP6a's view keys after lower, each in its spec's order.
+    expect(DEFAULT_KEYMAP.slice(-14, -5).map((e) => e.action)).toEqual(SELECT);
+    expect(DEFAULT_KEYMAP.slice(-5).map((e) => e.action)).toEqual(SP6A);
+    for (const a of SP6A) expect(DEFAULT_KEYMAP.find((e) => e.action === a)!.group, a).toBe('view');
   });
 
   test('M opens the map: KeyM resolves to map, in the view group (SP4c spec §2.4, D15)', () => {
@@ -115,7 +121,8 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
     expect(resolveKey({ code: 'KeyC', key: 'c', metaKey: true })).toBe('copy');
     expect(resolveKey({ code: 'KeyX', key: 'x', ctrlKey: true })).toBe('cut');
     expect(resolveKey({ code: 'KeyV', key: 'v', ctrlKey: true })).toBe('paste');
-    expect(resolveKey({ code: 'KeyX', key: 'x' })).toBeNull();
+    // Plain X is the X-ray since SP6a (SP6a spec §7.1); Ctrl+X stays the cut above.
+    expect(resolveKey({ code: 'KeyX', key: 'x' })).toBe('xray');
     expect(resolveKey({ code: 'KeyV', key: 'v' })).toBeNull();
     expect(resolveKey({ code: 'KeyQ', key: 'q', ctrlKey: true })).toBeNull();
     expect(resolveKey({ code: 'KeyN', key: 'n', ctrlKey: true })).toBeNull();
@@ -126,6 +133,53 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
     expect(resolveKey({ code: 'KeyQ', key: 'a' })).toBe('selectTool');
     expect(resolveKey({ code: 'KeyW', key: 'w', ctrlKey: true })).toBe('forward');
     expect(resolveKey({ code: 'KeyW', key: 'w', metaKey: true })).toBe('forward');
+  });
+
+  test('SP6a\'s five view entries are spec §7.1\'s, each without Ctrl (D10, D11, D15)', () => {
+    const view = DEFAULT_KEYMAP.filter((e) => SP6A.includes(e.action));
+    const row = (action: Action, c: string, label: string): KeyEntry => ({
+      action, bindings: [{ kind: 'code', code: c, ctrl: false }], label, group: 'view', since: 'SP6a',
+    });
+    expect(view).toEqual([
+      row('xray', 'KeyX', 'X-ray on or off'),
+      row('xrayDown', 'PageDown', 'Move the X-ray band down'),
+      row('xrayUp', 'PageUp', 'Move the X-ray band up'),
+      row('xrayAll', 'Home', 'Show every depth in the X-ray'),
+      row('nightVision', 'KeyL', 'Night vision on or off'),
+    ]);
+    // None is a placing action: they act in both contexts.
+    for (const a of SP6A) expect(PLACING_ACTIONS.has(a), a).toBe(false);
+  });
+
+  test('no SP6a binding shares a code with another context-free binding: X without Ctrl and cut\'s Ctrl+X never overlap', () => {
+    for (const e of DEFAULT_KEYMAP.filter((x) => SP6A.includes(x.action))) {
+      for (const other of DEFAULT_KEYMAP) {
+        if (other === e) continue;
+        for (const b of e.bindings) {
+          for (const o of other.bindings) expect(overlaps(b, o), `${e.action} and ${other.action}`).toBe(false);
+        }
+      }
+    }
+    expect(overlaps({ kind: 'code', code: 'KeyX', ctrl: false }, { kind: 'code', code: 'KeyX', ctrl: true })).toBe(false);
+  });
+
+  test('Ctrl+X still resolves cut and plain X xray; plain PageDown, PageUp, Home and L resolve their actions; with Ctrl or Cmd they resolve nothing (the browser\'s tabs, top and address bar)', () => {
+    for (const placing of [false, true]) {
+      const active = placingContext(placing);
+      expect(resolveKey({ code: 'KeyX', key: 'x', ctrlKey: true }, DEFAULT_KEYMAP, active)).toBe('cut');
+      expect(resolveKey({ code: 'KeyX', key: 'x' }, DEFAULT_KEYMAP, active)).toBe('xray');
+      expect(resolveKey({ code: 'PageDown', key: 'PageDown' }, DEFAULT_KEYMAP, active)).toBe('xrayDown');
+      expect(resolveKey({ code: 'PageUp', key: 'PageUp' }, DEFAULT_KEYMAP, active)).toBe('xrayUp');
+      expect(resolveKey({ code: 'Home', key: 'Home' }, DEFAULT_KEYMAP, active)).toBe('xrayAll');
+      expect(resolveKey({ code: 'KeyL', key: 'l' }, DEFAULT_KEYMAP, active)).toBe('nightVision');
+    }
+    expect(resolveKey({ code: 'KeyX', key: 'x', metaKey: true })).toBe('cut');
+    for (const [c, k] of [['PageDown', 'PageDown'], ['PageUp', 'PageUp'], ['Home', 'Home'], ['KeyL', 'l']] as const) {
+      expect(resolveKey({ code: c, key: k, ctrlKey: true }), `Ctrl+${c}`).toBeNull();
+      expect(resolveKey({ code: c, key: k, metaKey: true }), `Cmd+${c}`).toBeNull();
+    }
+    // The physical key: a layout typing something else at KeyL still toggles night vision.
+    expect(resolveKey({ code: 'KeyL', key: 'ñ' })).toBe('nightVision');
   });
 
   test('a ctrl: true code binding is matched before the other code bindings, and `active` skips an entry for the next match', () => {
@@ -292,6 +346,12 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
     expect(bindingLabel({ kind: 'code', code: 'KeyC', ctrl: true })).toBe('Ctrl+C');
     expect(bindingLabel({ kind: 'code', code: 'KeyQ', ctrl: false })).toBe('Q');
     expect(bindingLabel({ kind: 'code', code: 'ArrowUp', ctrl: false })).toBe('↑');
+    // SP6a spec §7.1: the X-ray band's keys by their people's names.
+    expect(bindingLabel({ kind: 'code', code: 'PageUp', ctrl: false })).toBe('Page Up');
+    expect(bindingLabel({ kind: 'code', code: 'PageDown', ctrl: false })).toBe('Page Down');
+    expect(bindingLabel({ kind: 'code', code: 'Home', ctrl: false })).toBe('Home');
+    expect(bindingLabel({ kind: 'code', code: 'KeyX', ctrl: false })).toBe('X');
+    expect(bindingLabel({ kind: 'code', code: 'KeyL', ctrl: false })).toBe('L');
     for (const e of DEFAULT_KEYMAP) for (const b of e.bindings) expect(bindingLabel(b), bindingKey(b)).not.toBe('');
   });
 });

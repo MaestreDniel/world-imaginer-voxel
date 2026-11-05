@@ -1261,16 +1261,20 @@ describe('UI smoke test: the saved-world steps (SP5b spec §6.5)', () => {
     expect(rowTitleOk('New world 1 · amplified · seed smoke-77')).toBe(false);
   });
 
-  test('the keys the steps press are the key map\'s: F walks, T the time speed, B a place, G the Settings, H the help; Q, Ctrl+C, Ctrl+V and N the selection tool\'s (SP5c spec §10.8)', () => {
+  test('the keys the steps press are the key map\'s: F walks, T the time speed, B a place, G the Settings, H the help; Q, Ctrl+C, Ctrl+V and N the selection tool\'s (SP5c spec §10.8); X, PageDown, Home and L the X-ray\'s and night vision\'s (SP6a spec §7.1)', () => {
     const codeOf = (action: string) => DEFAULT_KEYMAP.find((k) => k.action === action)!.bindings.flatMap((b) => (b.kind === 'code' ? [b.code] : []))[0];
     expect(SMOKE_KEYS).toEqual(Object.fromEntries(Object.keys(SMOKE_KEYS).map((a) => [a, codeOf(a)])));
-    expect(Object.keys(SMOKE_KEYS)).toHaveLength(9);
+    expect(Object.keys(SMOKE_KEYS)).toHaveLength(13);
     expect(SMOKE_KEYS).toEqual({
       toggleWalk: 'KeyF', timeSpeed: 'KeyT', savePlace: 'KeyB', settings: 'KeyG', help: 'KeyH', selectTool: 'KeyQ', copy: 'KeyC', paste: 'KeyV', move: 'KeyN',
+      xray: 'KeyX', xrayDown: 'PageDown', xrayAll: 'Home', nightVision: 'KeyL',
     });
     // Ctrl+C and Ctrl+V are the map's Ctrl bindings, Q and N its plain ones: the step presses them with those modifiers.
     const ctrlOf = (action: string) => DEFAULT_KEYMAP.find((k) => k.action === action)!.bindings.some((b) => b.kind === 'code' && b.ctrl === true);
     expect(['selectTool', 'copy', 'paste', 'move'].map(ctrlOf)).toEqual([false, true, true, false]);
+    // SP6a's X, PageDown, Home and L are plain (`ctrl: false`): the steps press them without Ctrl.
+    const plainOf = (action: string) => DEFAULT_KEYMAP.find((k) => k.action === action)!.bindings.every((b) => b.kind === 'code' && b.ctrl === false);
+    expect(['xray', 'xrayDown', 'xrayAll', 'nightVision'].map(plainOf)).toEqual([true, true, true, true]);
   });
 
   test('`select`: the house\'s states are the registry\'s, and one turn names them oak_log[axis=z], wall_torch[facing=south], ladder[facing=west] (SP5c spec §10.8)', () => {

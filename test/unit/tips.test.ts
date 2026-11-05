@@ -10,7 +10,7 @@ describe('loading-screen tips (SP4a spec §8.3, §7.3; ruling P45)', () => {
     const named = new Set(TIP_TEMPLATES.flatMap(placeholders));
     const missing = DEFAULT_KEYMAP.map((e) => e.action).filter((a) => !named.has(a));
     expect(missing).toEqual([]);
-    expect(DEFAULT_KEYMAP.length).toBe(38);
+    expect(DEFAULT_KEYMAP.length).toBe(43);
     expect(named.has('map')).toBe(true);
     // SP5b's B and G (SP5b spec §3.7).
     expect(named.has('savePlace')).toBe(true);
@@ -19,6 +19,13 @@ describe('loading-screen tips (SP4a spec §8.3, §7.3; ruling P45)', () => {
     for (const a of ['toggleWalk', 'palette', 'slot1', 'slot5', 'slot9', 'slotNext', 'slotPrev']) expect(named.has(a), a).toBe(true);
     // SP5c's selection tool (SP5c spec §1.1, D4).
     for (const a of ['selectTool', 'copy', 'cut', 'paste', 'move', 'turn', 'turnBack', 'raise', 'lower']) expect(named.has(a), a).toBe(true);
+    // SP6a's view keys (SP6a spec §7.1, §7.5).
+    for (const a of ['xray', 'xrayDown', 'xrayUp', 'xrayAll', 'nightVision']) expect(named.has(a), a).toBe(true);
+  });
+
+  test('one tip names the X-ray\'s keys and night vision (SP6a spec §7.5)', () => {
+    expect(TIP_TEMPLATES).toContain('{xray} shows the caves through the rock; {xrayDown} and {xrayUp} move the depth band, {xrayAll} shows every depth; {nightVision} is night vision.');
+    expect(tips(DEFAULT_KEYMAP)).toContain('X shows the caves through the rock; Page Down and Page Up move the depth band, Home shows every depth; L is night vision.');
   });
 
   test('two tips name the selection tool\'s keys (SP5c spec §1.1, D4)', () => {

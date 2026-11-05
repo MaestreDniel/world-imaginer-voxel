@@ -92,6 +92,23 @@ describe('mountHelp (SP4a spec §7.4, D31)', () => {
     ]);
   });
 
+  test('the View table lists the X-ray\'s five keys after M, with their labels (SP6a spec §7.1, §7.5)', () => {
+    mount();
+    const section = dom.el('help-keys');
+    const headings = section.querySelectorAll('h4');
+    const tables = section.querySelectorAll('table');
+    const view = tables[headings.findIndex((h) => h.textContent === 'View')]!;
+    const cells = view.querySelectorAll('tr').map((r) => [r.dataset.action, ...r.querySelectorAll('td').map((td) => td.textContent)]);
+    expect(cells.slice(-5)).toEqual([
+      ['xray', 'X-ray on or off', 'X'],
+      ['xrayDown', 'Move the X-ray band down', 'Page Down'],
+      ['xrayUp', 'Move the X-ray band up', 'Page Up'],
+      ['xrayAll', 'Show every depth in the X-ray', 'Home'],
+      ['nightVision', 'Night vision on or off', 'L'],
+    ]);
+    expect(cells.map((c) => c[0])).toEqual(['help', 'settings', 'hud', 'releasePointer', 'map', 'xray', 'xrayDown', 'xrayUp', 'xrayAll', 'nightVision']);
+  });
+
   test('the help names undo and redo by who has the controls, which no key-map entry carries (SP4c spec §2.4; SP5a spec §4.5)', () => {
     mount();
     expect(dom.el('help-keys').textContent).toContain('Ctrl+Z undo · Ctrl+Y redo: blocks while you play, the map\'s settings while the map has the controls (Ctrl+Shift+Z also descends while flying; Ctrl+Y does not)');

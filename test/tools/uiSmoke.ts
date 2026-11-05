@@ -847,10 +847,12 @@ export function rowTitleOk(text: string): boolean {
 
 /**
  * The key codes the saved-world steps and `stream` press (`DEFAULT_KEYMAP`'s, mirrored: a unit test compares them);
- * `select` presses the selection tool's Q and N plain and C and V with Ctrl (SP5c spec §10.8).
+ * `select` presses the selection tool's Q and N plain and C and V with Ctrl (SP5c spec §10.8); the X-ray's X, PageDown
+ * and Home and night vision's L, all plain (SP6a spec §7.1, §10.9).
  */
 export const SMOKE_KEYS = {
   toggleWalk: 'KeyF', timeSpeed: 'KeyT', savePlace: 'KeyB', settings: 'KeyG', help: 'KeyH', selectTool: 'KeyQ', copy: 'KeyC', paste: 'KeyV', move: 'KeyN',
+  xray: 'KeyX', xrayDown: 'PageDown', xrayAll: 'Home', nightVision: 'KeyL',
 } as const;
 
 // ---------------------------------------------------------------- the select step (SP5c spec §10.8)

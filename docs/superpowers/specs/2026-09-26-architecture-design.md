@@ -1407,7 +1407,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from th
 
 ### 5.9 Controls
 
-WASD; Space (up/jump); Shift (down/sneak); R or double-tap W (sprint; SP5a, Ctrl+W closes the tab); F (walk/fly); M (map: SP4c's overlay, full screen or side by side); L (slice); I (inspector); P (params); G (settings; SP5b); B (save a place; SP5b); E (creative palette); Q (selection tool; SP5c); Ctrl+C / Ctrl+X / Ctrl+V (copy, cut, paste; SP5c); N (move the selection; SP5c); while placing a paste, the wheel, ↑, ↓ (turn, raise, lower it; SP5c); F3 (debug); H/F1 (help); 1-9 and wheel (hotbar), Ctrl+wheel and `+`/`-` (fly speed); LMB / RMB / MMB (break / place / pick); Ctrl+Z / Ctrl+Y (blocks while the world owns the controls, the map's settings while the map does; SP5a); Esc (release pointer); T (time speed, SP4a). Audio volumes and music frequency live in Settings.
+WASD; Space (up/jump); Shift (down/sneak); R or double-tap W (sprint; SP5a, Ctrl+W closes the tab); F (walk/fly); M (map: SP4c's overlay, full screen or side by side); L (slice); I (inspector); P (params); G (settings; SP5b); B (save a place; SP5b); E (creative palette); Q (selection tool; SP5c); Ctrl+C / Ctrl+X / Ctrl+V (copy, cut, paste; SP5c); N (move the selection; SP5c); while placing a paste, the wheel, ↑, ↓ (turn, raise, lower it; SP5c); X (X-ray; SP6a); PageUp / PageDown / Home (the X-ray band; SP6a); L (night vision; SP6a); F3 (debug); H/F1 (help); 1-9 and wheel (hotbar), Ctrl+wheel and `+`/`-` (fly speed); LMB / RMB / MMB (break / place / pick); Ctrl+Z / Ctrl+Y (blocks while the world owns the controls, the map's settings while the map does; SP5a); Esc (release pointer); T (time speed, SP4a). Audio volumes and music frequency live in Settings.
 
 ## 6. Testing
 

@@ -358,12 +358,12 @@ In `lightmapRgba` only (`src/render/lightmap.ts:41-57`): after the per-channel m
 | action | binding | label |
 |---|---|---|
 | `xray` | `KeyX`, without Ctrl | X-ray on or off |
-| `xrayDown` | `PageDown` | Move the X-ray band down |
-| `xrayUp` | `PageUp` | Move the X-ray band up |
-| `xrayAll` | `Home` | Show every depth in the X-ray |
-| `nightVision` | `KeyL` | Night vision on or off |
+| `xrayDown` | `PageDown`, without Ctrl | Move the X-ray band down |
+| `xrayUp` | `PageUp`, without Ctrl | Move the X-ray band up |
+| `xrayAll` | `Home`, without Ctrl | Show every depth in the X-ray |
+| `nightVision` | `KeyL`, without Ctrl | Night vision on or off |
 
-`KeyX` without Ctrl leaves Ctrl+X (cut, `keymap.ts:89`) as it is; L is free (`keymap.ts:57-96`). `CODE_LABELS` gains PageUp, PageDown, Home (`keymap.ts:178-194`); on laptops these are often Fn + an arrow, so the Caves tab's sliders are the other way (D11). Brackets are not used: on a Spanish layout `+` sits at BracketRight (`test/unit/keymap.test.ts:242-249`). The page's `onAction` switch gains the five (`src/ui/world/worldPage.ts:5076-5136`); keys act only while the world owns the controls (`worldPage.ts:5181-5182`). The action count pinned at 38 (`keymap.test.ts:51`, `tips.test.ts:13`) becomes 43. On a focused range input PageUp, PageDown and Home change its value; `worldIgnoresKeys` already leaves keys to a focused control in an open panel (`worldPage.ts:5178-5180`), and the smoke checks that PageDown on a focused band slider moves only the slider (§10.9).
+All five bindings are `ctrl: false`. A code binding without `ctrl` matches with Ctrl held too (`src/player/keymap.ts:20-24`), and a bound key has its default prevented (`src/player/input.ts:8-11`), so a plain binding would take the browser's Ctrl+PageDown and Ctrl+PageUp (the tabs), Ctrl+Home and Ctrl+L (the address bar); without Ctrl they stay the browser's. `KeyX` without Ctrl leaves Ctrl+X (cut, `keymap.ts:89`) as it is; L is free (`keymap.ts:57-96`). `CODE_LABELS` gains PageUp, PageDown, Home (`keymap.ts:178-194`); on laptops these are often Fn + an arrow, so the Caves tab's sliders are the other way (D11). Brackets are not used: on a Spanish layout `+` sits at BracketRight (`test/unit/keymap.test.ts:242-249`). The page's `onAction` switch gains the five (`src/ui/world/worldPage.ts:5076-5136`); keys act only while the world owns the controls (`worldPage.ts:5181-5182`). The action count pinned at 38 (`keymap.test.ts:51`, `tips.test.ts:13`) becomes 43. On a focused range input PageUp, PageDown and Home change its value; `worldIgnoresKeys` already leaves keys to a focused control in an open panel (`worldPage.ts:5178-5180`), and the smoke checks that PageDown on a focused band slider moves only the slider (§10.9).
 
 ### 7.2 The strip, the HUD, notices
 

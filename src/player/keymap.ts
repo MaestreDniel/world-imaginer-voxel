@@ -15,7 +15,8 @@ export type Action =
   | 'toggleWalk' | 'palette'
   | 'savePlace' | 'settings'
   | 'slot1' | 'slot2' | 'slot3' | 'slot4' | 'slot5' | 'slot6' | 'slot7' | 'slot8' | 'slot9' | 'slotNext' | 'slotPrev'
-  | 'selectTool' | 'copy' | 'cut' | 'paste' | 'move' | 'turn' | 'turnBack' | 'raise' | 'lower';
+  | 'selectTool' | 'copy' | 'cut' | 'paste' | 'move' | 'turn' | 'turnBack' | 'raise' | 'lower'
+  | 'xray' | 'xrayDown' | 'xrayUp' | 'xrayAll' | 'nightVision';
 
 /**
  * A wheel binding names its Ctrl modifier: Ctrl+wheel and the plain wheel are two bindings (SP5a spec §4.1, D9). A code
@@ -52,7 +53,10 @@ const wheel = (dir: 'up' | 'down', ctrl: boolean): Binding => ({ kind: 'wheel', 
  * help (SP5b spec §1.4, §3.7). SP5c adds the selection tool's group (SP5c spec §1.1, D4): Q and N without Ctrl, Ctrl+C,
  * Ctrl+X and Ctrl+V (`ctrl: true`, matched first), and the four keys that act only while placing a paste or a move (the
  * placing context, `placingContext`): there the plain wheel turns the paste instead of stepping the hotbar slot
- * (`slotNext`, `slotPrev`), and ↑ and ↓ raise and lower it.
+ * (`slotNext`, `slotPrev`), and ↑ and ↓ raise and lower it. SP6a adds five view keys (SP6a spec §7.1, D10, D11, D15):
+ * X, the X-ray; PageDown and PageUp, its depth band; Home, every depth; L, night vision. All five are `ctrl: false`, so
+ * Ctrl+X stays the cut and the browser keeps Ctrl+PageDown, Ctrl+PageUp (the tabs), Ctrl+Home and Ctrl+L (the address
+ * bar): a binding without `ctrl` would match them and have their default prevented.
  */
 export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   { action: 'forward', bindings: [code('KeyW')], label: 'Forward (at your height)', group: 'move', since: 'SP4a' },
@@ -93,6 +97,11 @@ export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   { action: 'turnBack', bindings: [wheel('up', false)], label: 'Turn the paste back 90°', group: 'select', since: 'SP5c' },
   { action: 'raise', bindings: [code('ArrowUp', false)], label: 'Raise the paste', group: 'select', since: 'SP5c' },
   { action: 'lower', bindings: [code('ArrowDown', false)], label: 'Lower the paste', group: 'select', since: 'SP5c' },
+  { action: 'xray', bindings: [code('KeyX', false)], label: 'X-ray on or off', group: 'view', since: 'SP6a' },
+  { action: 'xrayDown', bindings: [code('PageDown', false)], label: 'Move the X-ray band down', group: 'view', since: 'SP6a' },
+  { action: 'xrayUp', bindings: [code('PageUp', false)], label: 'Move the X-ray band up', group: 'view', since: 'SP6a' },
+  { action: 'xrayAll', bindings: [code('Home', false)], label: 'Show every depth in the X-ray', group: 'view', since: 'SP6a' },
+  { action: 'nightVision', bindings: [code('KeyL', false)], label: 'Night vision on or off', group: 'view', since: 'SP6a' },
 ];
 
 /**
@@ -191,6 +200,9 @@ const CODE_LABELS: Readonly<Record<string, string>> = {
   ArrowDown: '↓',
   ArrowLeft: '←',
   ArrowRight: '→',
+  PageUp: 'Page Up',
+  PageDown: 'Page Down',
+  Home: 'Home',
 };
 
 /**

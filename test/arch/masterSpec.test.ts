@@ -2102,4 +2102,10 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(t5).toContain("; SP6a: vs the pre-cave top (the top of the `precave` tap's run over the true top), the surface's cave holes being C9's (amended by SP6a) |");
     expect(t5!.endsWith('| median ≤ 1, p90 ≤ 2, p99 ≤ 6 |')).toBe(true);
   });
+
+  test('§5.9 names X, PageUp / PageDown / Home and L, the X-ray\'s and night vision\'s keys, after the placing keys (SP6a spec §13 item 15, §7.1)', () => {
+    const at59 = text.indexOf('### 5.9 Controls');
+    const s59 = text.slice(at59, text.indexOf('## 6. ', at59));
+    expect(s59).toContain('while placing a paste, the wheel, ↑, ↓ (turn, raise, lower it; SP5c); X (X-ray; SP6a); PageUp / PageDown / Home (the X-ray band; SP6a); L (night vision; SP6a);');
+  });
 });
