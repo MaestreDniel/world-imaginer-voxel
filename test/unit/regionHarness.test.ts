@@ -8,6 +8,9 @@ import { genKey, stageHashes } from '../../src/core/stage/hash';
 import { fillColumnT, genRegionInProcess, regionHash } from '../../src/metrics/region';
 import { CARVER_CACHE_PATHS, CAVE_FILM_KIND } from '../../src/core/constants';
 import { carverCacheOf, setCarverCacheCapacity } from '../../src/gen/caves/carverCache';
+import { caveTagAt } from '../../src/gen/caves/tags';
+import { createDensityContext } from '../../src/gen/density/context';
+import { probe } from '../../src/gen/density/probe';
 import { createMeshScratch, MESH_PASS_XRAY, meshColumnPayload, payloadProblem, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { AIR, DEEPSLATE, DIRT, STONE, TORCH } from '../../src/world/blocks/index';
 import { NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
@@ -20,7 +23,9 @@ import { fillColumnD } from '../../src/workers/worldJobs';
 import { regionCachePath, srcKey, type RegionCacheHeader } from '../harness/cache';
 import { ctxFor, paramsWith } from '../harness/gen';
 import { bruteFaces, bruteXrayFaces, meshFaceCounts } from '../harness/refs';
-import { dt1WorkerDir, genRegion, isolatedColumn, litRegionHash, regionColumns, regionDiff, regionView, type GenRegionOptions } from '../harness/region';
+import {
+  caveDebugColumn, dt1WorkerDir, genRegion, isolatedColumn, litRegionHash, regionColumns, regionDiff, regionView, type GenRegionOptions,
+} from '../harness/region';
 
 const MiB = 1 << 20;
 
@@ -297,6 +302,122 @@ describe('the carver path cache\'s capacity (SP6a spec §10.3, DT1.carverCache; 
     expect(() => setCarverCacheCapacity(0)).toThrow(RangeError);
     expect(() => setCarverCacheCapacity(1.5)).toThrow(RangeError);
     expect(carverCacheOf(ctxFor('42')).capacity).toBe(CARVER_CACHE_PATHS);
+  });
+});
+
+describe('the cave readings of a RegionView (SP6a spec §10.1, Spec correction 18)', () => {
+  // Seed 42's (2, −8) 2 × 2 holds pillar rock (column (2, −7)) and land positions an entrance breaches at the top.
+  const base: GenRegionOptions = { seed: '42', params: paramsWith(), cx0: 2, cz0: -8, w: 2, h: 2, upTo: 'T', order: 'spiral', threads: 1 };
+  const dc = createDensityContext(ctxFor('42'));
+  const threshold = paramsWith().caves.pillars.threshold;
+  const run = (() => {
+    let p: ReturnType<typeof genRegion> | null = null;
+    return () => (p ??= genRegion({ ...base, debugTags: true }));
+  })();
+
+  test('tag(x, y, z) is the store\'s cave channel, the tag caveTagAt gives', async () => {
+    const { view } = await run();
+    const col = view.store.proto(2, -7)!;
+    let tagged = 0;
+    for (let y = -64; y <= 319; y++) {
+      for (let lz = 0; lz < 16; lz++) {
+        for (let lx = 0; lx < 16; lx++) {
+          const t = view.tag(32 + lx, y, -112 + lz);
+          expect(t).toBe(col.cave(lx, y, lz));
+          if (t !== 0 && tagged++ % 97 === 0) expect(caveTagAt(dc, 32 + lx, y, -112 + lz)).toBe(t);
+        }
+      }
+    }
+    expect(tagged).toBeGreaterThan(0);
+    expect(() => view.tag(31, 0, -112)).toThrow(RangeError);
+  });
+
+  test('pillar(x, y, z): exactly the rock that keep holds where min(E, C, S3, S2) < 0 (column (2, −7))', async () => {
+    const { view } = await run();
+    let pillars = 0, keptOnly = 0;
+    for (let y = -64; y <= 319; y++) {
+      for (let z = -112; z < -96; z++) {
+        for (let x = 32; x < 48; x++) {
+          const got = view.pillar(x, y, z);
+          if (y === -64 || view.block(x, y, z) === AIR || !(probe(dc, x, y, z, 'precave') > 0)) { expect(got).toBe(false); continue; }
+          const pv = probe(dc, x, y, z, 'pillars');
+          const keep = pv * 0.0625 < threshold ? -1e6 : pv;
+          const low = Math.min(probe(dc, x, y, z, 'entrances'), probe(dc, x, y, z, 'cheese'), probe(dc, x, y, z, 'spag3d'), probe(dc, x, y, z, 'spag2d'));
+          expect(got, `(${x}, ${y}, ${z})`).toBe(keep > 0 && low < 0);
+          if (got) pillars++;
+          else if (keep > 0) keptOnly++;
+        }
+      }
+    }
+    expect(pillars).toBeGreaterThan(0);
+    expect(keptOnly).toBeGreaterThan(0);
+  });
+
+  test('terrainT(x, y, z) is the terrain tap\'s value (tapFn), voxel for voxel over column (2, −7)', async () => {
+    const { view } = await run();
+    for (let y = -64; y <= 319; y++) {
+      for (let z = -112; z < -96; z++) for (let x = 32; x < 48; x++) expect(Object.is(view.terrainT(x, y, z), probe(dc, x, y, z, 'terrain'))).toBe(true);
+    }
+  });
+
+  test('caveDebugColumn: the per-column buffers the view reads, in fillDensityColumn\'s index', () => {
+    const d = caveDebugColumn(dc, threshold, 2, -7);
+    expect(d.pillar.length).toBe(98304);
+    expect(d.terrainT.length).toBe(98304);
+    const i = ((100 + 64) * 16 + 5) * 16 + 3;
+    expect(d.terrainT[i]).toBe(probe(dc, 35, 100, -107, 'terrain'));
+    expect(caveDebugColumn(dc, threshold, 2, -7, d)).toBe(d);
+  });
+
+  test('preCaveTop(x, z): the true top where no cave breaches it, the breached voxel\'s height where one does', async () => {
+    const { view } = await run();
+    let breached = 0, kept = 0;
+    for (let z = -128; z < -96; z++) {
+      for (let x = 32; x < 64; x++) {
+        let top = 319;
+        while (view.block(x, top, z) === AIR) top--;
+        let tagTop = 319;
+        while (tagTop > -64 && view.tag(x, tagTop, z) === 0) tagTop--;
+        const pre = view.preCaveTop(x, z);
+        if (tagTop > top) {
+          breached++;
+          expect(pre).toBe(tagTop);
+          expect(view.block(x, pre, z)).toBe(AIR);
+        } else {
+          kept++;
+          expect(pre).toBe(top);
+        }
+      }
+    }
+    expect(breached).toBeGreaterThan(0);
+    expect(kept).toBeGreaterThan(breached);
+  });
+
+  test('preCaveTop on a canned column: solid to y 60; a pocket below; an entrance from y 55 through 63', () => {
+    const s = createStore({ shared: false, maxBlockBytes: 8 * MiB, maxByteBytes: 8 * MiB });
+    const w = s.claimColumn(0, 0, 0);
+    for (let sy = 0; sy < 24; sy++) {
+      const blocks = new Uint16Array(4096);
+      const cave = new Uint8Array(4096);
+      for (let i = 0; i < 4096; i++) {
+        const y = sy * 16 - 64 + (i >> 8);
+        const lz = (i >> 4) & 15, lx = i & 15;
+        blocks[i] = y <= 60 ? STONE : AIR;
+        // (1, 1): a sealed pocket at y 30 … 35; (2, 2): an entrance from y 55 through the top to y 63.
+        if (lx === 1 && lz === 1 && y >= 30 && y <= 35) { blocks[i] = AIR; cave[i] = 1; }
+        if (lx === 2 && lz === 2 && y >= 55 && y <= 63) { blocks[i] = AIR; cave[i] = 5; }
+      }
+      w.setProto(sy, blocks, new Uint8Array(4096), cave);
+    }
+    w.commit(1);
+    const v = regionView(s, 0, 0, 1, 1);
+    expect(v.preCaveTop(0, 0)).toBe(60);
+    expect(v.preCaveTop(1, 1)).toBe(60);
+    expect(v.preCaveTop(2, 2)).toBe(63);
+    expect(v.tag(2, 63, 2)).toBe(5);
+    expect(() => v.pillar(0, 0, 0)).toThrow(/debugTags/);
+    expect(() => v.terrainT(0, 0, 0)).toThrow(/debugTags/);
+    expect(() => v.preCaveTop(16, 0)).toThrow(RangeError);
   });
 });
 

@@ -10,7 +10,9 @@
  * SP5a (spec §6.3): `diff` hands each column's edit entries to its D (`fillColumnD`'s overlay, spec §2.5), on 1 thread
  * and without the cache only.
  * SP6a (spec §10.3): `carverCacheCapacity` sets the carver path cache's capacity in every thread that generates, and
- * `isolatedColumn` generates one column alone on a fresh store (`DT1.carverCache`, `DT1.isolated`).
+ * `isolatedColumn` generates one column alone on a fresh store (`DT1.carverCache`, `DT1.isolated`). SP6a (spec §10.1):
+ * the view reads the store's cave channel (`tag`) and the pre-cave top (`preCaveTop`), and with `debugTags` the pillar
+ * bit and the `terrain` tap per voxel (`caveDebugColumn`).
  */
 import { performance } from 'node:perf_hooks';
 import { Worker } from 'node:worker_threads';
@@ -22,11 +24,14 @@ import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
 import { carverCacheOf } from '../../src/gen/caves/carverCache';
+import { caveReadersOf } from '../../src/gen/caves/tags';
 import type { GenContext } from '../../src/gen/context';
+import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import { createLightScratch, type LightScratch } from '../../src/light/initial';
 import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { createMeshScratch, type ColumnMeshPayload } from '../../src/mesh/column';
 import type { MeshOptions } from '../../src/mesh/greedy';
+import { AIR } from '../../src/world/blocks/index';
 import type { ColumnDiff } from '../../src/world/store/api';
 import { protoAt, STATUS_PUBLISHED } from '../../src/world/store/columnTable';
 import { PROTO_INTS } from '../../src/world/store/section';
@@ -89,6 +94,12 @@ export interface GenRegionOptions {
    * generate nothing at it).
    */
   readonly carverCacheCapacity?: number;
+  /**
+   * The view's debug readings of the caves (SP6a spec §3.2, §10.1): `pillar` and `terrainT`, recomputed per column by
+   * `caveDebugColumn` on a DensityContext of the region's seed and params (default false: both throw). They move no
+   * output, so the dump's key ignores it.
+   */
+  readonly debugTags?: boolean;
 }
 
 /**
@@ -118,6 +129,20 @@ export interface RegionView {
    * id, or −1 − value; the cave entry is SP6a's, its spec §3.3).
    */
   descriptors(cx: number, cz: number): Int32Array;
+  /** The cave tag (`CAVE_KIND`) the store's cave channel holds at the voxel (SP6a spec §3.2, §3.3). */
+  tag(x: number, y: number, z: number): number;
+  /**
+   * The pillar bit (SP6a spec §3.2's debug channel; `debugTags` only, else it throws): rock (a non-air block above
+   * y −64) that is pre-cave solid and that `keep` holds (keep > 0) where min(E, C, S3, S2) < 0, from `caveDebugColumn`.
+   */
+  pillar(x: number, y: number, z: number): boolean;
+  /** The `terrain` tap's value at the voxel (`debugTags` only, else it throws; NaN without the tap), for C7.switchWall. */
+  terrainT(x: number, y: number, z: number): number;
+  /**
+   * The pre-cave top of position (x, z) (SP6a spec §10.1): the highest voxel that is solid (a non-air block) or tagged,
+   * so an entrance that breaches the top keeps it; not the carve's density top (Spec correction 18).
+   */
+  preCaveTop(x: number, z: number): number;
   /** hex64 of `regionHash` over the region, or over a sub-window of it (the proto data: no light). */
   hash(cx0?: number, cz0?: number, w?: number, h?: number): string;
   /** `litRegionHash` over the region or a sub-window (blocks, fluid, light, aux); 'L' and 'MESH' only (ruling P33). */
@@ -254,7 +279,66 @@ export interface RegionViewExtra {
   readonly upTo?: RegionUpTo;
   /** Keyed `${cx},${cz}`. */
   readonly meshes?: ReadonlyMap<string, ColumnMeshPayload>;
+  /** The DensityContext of `pillar` and `terrainT` (`debugTags`); without it both throw. */
+  readonly debug?: DensityContext;
 }
+
+/** One column's debug readings (`caveDebugColumn`), 98,304 entries each in `fillDensityColumn`'s index. */
+export interface CaveDebugColumn {
+  /** 1 where the pre-cave density is solid, keep > 0 and min(E, C, S3, S2) < 0 (the density's pillar rock), else 0. */
+  readonly pillar: Uint8Array;
+  /** The `terrain` tap's value per voxel (NaN without a `terrain` tap). */
+  readonly terrainT: Float64Array;
+}
+
+/**
+ * The debug readings of column (cx, cz) of `dc` (SP6a spec §3.2, §10.1), recomputed per voxel through Task 11's tap
+ * readers (`caveReadersOf`, at the voxel registers `atVoxel` sets, every cell's corners ready), into `out` (fresh when
+ * absent), index `((y + 64)·16 + lz)·16 + lx`. `pillar` is the density's pillar rock: above y −64, pre-cave solid (the
+ * `precave` tap > 0, else the `terrain` tap > 0, as the tag's step 2), keep > 0 (keep = −1e6 where pillars·(1/16) <
+ * `threshold`, else pillars; −∞ without a `pillars` tap) and min(E, C, S3, S2) < 0 over the family taps present (+∞
+ * with none); `RegionView.pillar` also asks the final block to be rock (a noodle or a carver opens pillar rock).
+ * `terrainT` is the `terrain` tap's value, equal to `tapFn('terrain', …)`.
+ */
+export function caveDebugColumn(dc: DensityContext, threshold: number, cx: number, cz: number, out?: CaveDebugColumn): CaveDebugColumn {
+  const o = out ?? { pillar: new Uint8Array(98304), terrainT: new Float64Array(98304) };
+  dc.column(cx, cz);
+  const c = dc.compiled;
+  const r = caveReadersOf(c);
+  const pre = r.precave ?? r.terrain;
+  const { terrain: ft, entrances: fe, cheese: fc, spaghetti3d: f3, spaghetti2d: f2, pillars: fp } = r;
+  const slots = c.interpolatedSlotCount > 0;
+  for (let ck = 0; ck < 48; ck++) {
+    for (let cj = 0; cj < 4; cj++) {
+      for (let ci = 0; ci < 4; ci++) {
+        if (slots) c.cellCorners(ci, ck, cj);
+        for (let y = -64 + 8 * ck; y < -56 + 8 * ck; y++) {
+          for (let lz = 4 * cj; lz < 4 * cj + 4; lz++) {
+            for (let lx = 4 * ci; lx < 4 * ci + 4; lx++) {
+              const i = ((y + 64) * 16 + lz) * 16 + lx;
+              c.atVoxel(lx, y, lz);
+              o.terrainT[i] = ft === null ? NaN : ft();
+              let bit = 0;
+              if (y > -64 && pre !== null && pre() > 0 && fp !== null) {
+                const pv = fp();
+                const keep = pv * 0.0625 < threshold ? -1e6 : pv;
+                if (keep > 0) {
+                  const low = Math.min(fe === null ? Infinity : fe(), fc === null ? Infinity : fc(), f3 === null ? Infinity : f3(), f2 === null ? Infinity : f2());
+                  if (low < 0) bit = 1;
+                }
+              }
+              o.pillar[i] = bit;
+            }
+          }
+        }
+      }
+    }
+  }
+  return o;
+}
+
+/** The columns of debug readings a view keeps (least recently used out). */
+const DEBUG_COLUMNS = 8;
 
 /**
  * A `RegionView` over the w × h region at (cx0, cz0) of `store`; every column must hold its proto set, and is read
@@ -279,6 +363,25 @@ export function regionView(store: VoxelStore, cx0: number, cz0: number, w: numbe
     return (cz - cz0) * w + (cx - cx0);
   };
   const col = (x: number, z: number): ColumnView => views[columnAt(x >> 4, z >> 4)]!;
+  const debugDc = extra.debug ?? null;
+  const debugCols = new Map<number, CaveDebugColumn>();
+  const debugAt = (what: string, x: number, y: number, z: number): { d: CaveDebugColumn; i: number } => {
+    if (debugDc === null) throw new Error(`regionView.${what}: needs debugTags`);
+    const k = columnAt(x >> 4, z >> 4);
+    if (!Number.isInteger(y) || y < -64 || y > 319) throw new RangeError(`regionView.${what}: y ${y} outside −64 … 319`);
+    let d = debugCols.get(k);
+    if (d === undefined) {
+      let reuse: CaveDebugColumn | undefined;
+      if (debugCols.size >= DEBUG_COLUMNS) {
+        const oldest = debugCols.keys().next().value!;
+        reuse = debugCols.get(oldest);
+        debugCols.delete(oldest);
+      }
+      d = caveDebugColumn(debugDc, debugDc.ctx.params.caves.pillars.threshold, x >> 4, z >> 4, reuse);
+    } else debugCols.delete(k);
+    debugCols.set(k, d);
+    return { d, i: ((y + 64) * 16 + (z & 15)) * 16 + (x & 15) };
+  };
   const aux = (x: number, z: number) => {
     const a = col(x, z).aux();
     if (a === null) throw new Error(`regionView: column (${x >> 4}, ${z >> 4}) has no aux A`);
@@ -289,6 +392,22 @@ export function regionView(store: VoxelStore, cx0: number, cz0: number, w: numbe
     block: (x, y, z) => col(x, z).block(x & 15, y, z & 15),
     fluid: (x, y, z) => col(x, z).fluid(x & 15, y, z & 15),
     light: (x, y, z) => col(x, z).light(x & 15, y, z & 15),
+    tag: (x, y, z) => col(x, z).cave(x & 15, y, z & 15),
+    pillar(x, y, z) {
+      const { d, i } = debugAt('pillar', x, y, z);
+      return d.pillar[i] === 1 && col(x, z).block(x & 15, y, z & 15) !== AIR;
+    },
+    terrainT(x, y, z) {
+      const { d, i } = debugAt('terrainT', x, y, z);
+      return d.terrainT[i]!;
+    },
+    preCaveTop(x, z) {
+      const v = col(x, z);
+      const lx = x & 15, lz = z & 15;
+      let y = 319;
+      while (y > -64 && v.block(lx, y, lz) === AIR && v.cave(lx, y, lz) === 0) y--;
+      return y;
+    },
     aux(cx, cz) {
       const a = views[columnAt(cx, cz)]!.aux();
       if (a === null) throw new Error(`regionView: column (${cx}, ${cz}) has no aux A`);
@@ -553,8 +672,9 @@ export async function genRegion(o: GenRegionOptions): Promise<RegionResult> {
   } finally {
     if (workers !== null) await Promise.all(workers.map((w) => w.terminate()));
   }
+  const debug = o.debugTags === true ? { debug: createDensityContext(genContextWith(o.seed, o.params)) } : {};
   return {
-    view: regionView(store, o.cx0, o.cz0, o.w, o.h, { upTo: o.upTo, meshes }), timings: { perColumnMs: ms, totalMs: performance.now() - t0 },
+    view: regionView(store, o.cx0, o.cz0, o.w, o.h, { upTo: o.upTo, meshes, ...debug }), timings: { perColumnMs: ms, totalMs: performance.now() - t0 },
     cacheHit: hitMs !== null, columnsPerThread, carverCacheSizes,
   };
 }
