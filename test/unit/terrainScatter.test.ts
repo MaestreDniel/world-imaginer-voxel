@@ -1,9 +1,17 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
+import type { JsonValue } from '../../src/core/params/json';
 import { biomeId } from '../../src/gen/biomes/registry';
+import { fillColumnT } from '../../src/metrics/region';
 import { AIR } from '../../src/world/blocks/index';
+import type { ColumnView } from '../../src/world/store/api';
+import { createStore } from '../../src/world/store/store';
+import { CARVERS_OFF } from '../harness/carverParams';
+import { ctxFor } from '../harness/gen';
+import { cavesMuted } from '../harness/sp5cTrees';
 import {
-  analyseColumn, newScatterScratch, newScattered, presetRecord, solidity, t1Values, t2Values, t3Values, t5Values, transitions,
-  type ScatterColumn, type Scattered,
+  analyseColumn, newScatterScratch, newScattered, preCaveSolidity, presetRecord, solidity, t1Values, t2Values, t3Values, t5Values,
+  transitions, type ScatterColumn, type Scattered,
 } from '../harness/terrainScatter';
 
 /**
@@ -17,24 +25,34 @@ const PLAINS = biomeId('plains');
 const FOREST = biomeId('forest');
 const STONY = biomeId('stony_peaks');
 
-/** A column from a per-position solidity rule and its aux A heightmaps (`ws`, `of`) and biomes. */
+/**
+ * A column from a per-position solidity rule and its aux A heightmaps (`ws`, `of`) and biomes; `cave` (default none)
+ * the cave tag of each voxel (SP6a spec §3.2: a tagged voxel is air the caves carved out of pre-cave rock).
+ */
 function column(
   solid: (p: number, y: number) => boolean,
   ws: (p: number) => number,
   of: (p: number) => number,
   biome: (p: number) => number,
+  cave: ((p: number, y: number) => number) | null = null,
 ): ScatterColumn {
   const sections = Array.from({ length: 24 }, (_, sy) => {
     const b = new Uint16Array(4096);
     for (let i = 0; i < 4096; i++) b[i] = solid(i & 255, sy * 16 - 64 + (i >> 8)) ? SOLID : AIR;
     return b;
   });
+  const caves = Array.from({ length: 24 }, (_, sy) => {
+    if (cave === null) return 0;
+    const c = new Uint8Array(4096);
+    for (let i = 0; i < 4096; i++) c[i] = cave(i & 255, sy * 16 - 64 + (i >> 8));
+    return c;
+  });
   const aux = {
     worldSurfaceWG: Int16Array.from({ length: 256 }, (_, p) => ws(p)),
     oceanFloorWG: Int16Array.from({ length: 256 }, (_, p) => of(p)),
     surfaceBiome: Uint8Array.from({ length: 256 }, (_, p) => biome(p)),
   };
-  return { sectionBlocks: (sy) => sections[sy]!, aux: () => aux };
+  return { sectionBlocks: (sy) => sections[sy]!, sectionCave: (sy) => caves[sy]!, aux: () => aux };
 }
 
 /**
@@ -44,7 +62,7 @@ function column(
  * holds a 4-block rock (y 80-83) on a 9-block air gap above its top, which is then 83 (ws 84). Biomes: x < 8 plains,
  * x ≥ 8 forest, row z = 15 stony peaks.
  */
-function testColumn(): ScatterColumn {
+function testColumn(cave: ((p: number, y: number) => number) | null = null): ScatterColumn {
   const top = (p: number): number => (p === 0 ? 40 : p === 3 ? 83 : 70);
   return column(
     (p, y) => {
@@ -57,6 +75,7 @@ function testColumn(): ScatterColumn {
     (p) => (p === 0 ? 64 : top(p) + 1),
     (p) => top(p) + 1,
     (p) => ((p >> 4) === 15 ? STONY : (p & 15) < 8 ? PLAINS : FOREST),
+    cave,
   );
 }
 
@@ -232,6 +251,75 @@ describe("population modes (SP3e spec §5.5: 'Populations are recorded, never en
       'T5 (large_biomes) single-surface positions: insufficient sample (0 < 1000)',
     ]);
     expect(Object.keys(all).filter((k) => k.includes('population'))).toEqual([]);
+  });
+});
+
+describe('T2 reads pre-cave solidity: solid or tagged (SP6a spec §10.4)', () => {
+  test('a tagged voxel is pre-cave solid: the overhang made of cave air under position 1\'s roof is no overhang', () => {
+    // Position 1's air at 60-62 tagged cheese, and an entrance (tag 5) opening position 2 at 66-70: the pre-cave column is
+    // solid to 70 at both, so T2 sees neither; T1 still reads the true top (66 − 1 = 65 at position 2) and T5's
+    // single-surface test the true solidity.
+    const cave = (p: number, y: number): number => (p === 1 && y >= 60 && y <= 62 ? 1 : p === 2 && y >= 66 && y <= 70 ? 5 : 0);
+    const solid = (p: number, y: number): boolean => y <= (p === 0 ? 40 : p === 3 ? 83 : 70) && cave(p, y) === 0 && !(p === 3 && y > 70 && y < 80) && !(p === 34 && y >= 30 && y <= 32);
+    const top = (p: number): number => (p === 0 ? 40 : p === 3 ? 83 : p === 2 ? 65 : 70);
+    const col = column(solid, (p) => (p === 0 ? 64 : top(p) + 1), (p) => top(p) + 1, (p) => ((p >> 4) === 15 ? STONY : (p & 15) < 8 ? PLAINS : FOREST), cave);
+    const pre = preCaveSolidity(col, new Uint8Array(98304));
+    expect(pre[((61 + 64) << 8) | 1]).toBe(1);
+    expect(pre[((68 + 64) << 8) | 2]).toBe(1);
+    expect(pre[((71 + 64) << 8) | 2]).toBe(0);
+    expect(pre[((31 + 64) << 8) | 34]).toBe(0);
+    const t = newScattered();
+    analyseColumn(t, col, 3, -2, () => 75, newScatterScratch());
+    // Only position 3's rock (2 transitions at y ≥ 83 − 30) is an overhang; with the true solidity position 1 was one too.
+    expect(t.over).toBe(1);
+    expect(t.hist[65 + 64]).toBe(1);
+    expect(t.floatPositions).toBe(1);
+    expect(t.floatVoxels).toBe(4);
+  });
+
+  /**
+   * Seed '42', chunk column (2, −1): an entrance holes its surface (the review pose of `caves.examples.json`, voxel
+   * (38, 84, −16)) and caves lie within 30 blocks under its tops. The same column with the carving family taps muted
+   * (`cavesMuted`) and the carvers off (`CARVERS_OFF`) is SP5c's solidity.
+   */
+  const CX = 2;
+  const CZ = -1;
+  const tColumn = (patched: boolean): ColumnView => {
+    const store = createStore({ shared: false, maxBlockBytes: 8 << 20, maxByteBytes: 8 << 20 });
+    const ctx = patched ? ctxFor('42', { ...CARVERS_OFF, density: { defs: cavesMuted(DEFAULT_DENSITY_TREE) as JsonValue } }) : ctxFor('42');
+    expect(fillColumnT(store, ctx, CX, CZ, () => false)).toBe(true);
+    return store.proto(CX, CZ)!;
+  };
+
+  test('on a column with caves under its top, the pre-cave solidity and T2\'s counts equal those with the caves muted and the carvers off', () => {
+    const carved = tColumn(false);
+    const muted = tColumn(true);
+    const pre = preCaveSolidity(carved, new Uint8Array(98304));
+    const plain = solidity(muted, new Uint8Array(98304));
+    const truth = solidity(carved, new Uint8Array(98304));
+    let differ = 0;
+    for (let i = 0; i < 98304; i++) {
+      expect.soft(pre[i], `voxel ${i}`).toBe(plain[i]);
+      if (truth[i] !== plain[i]) differ++;
+    }
+    // Not vacuous: the caves carve thousands of the column's voxels, and change the true solidity's transition count
+    // within 30 blocks of some land top.
+    expect(differ).toBeGreaterThan(1000);
+    const aux = carved.aux()!;
+    let changed = 0;
+    for (let p = 0; p < 256; p++) {
+      const ws = aux.worldSurfaceWG[p]!;
+      if (ws !== aux.oceanFloorWG[p]!) continue;
+      if (transitions(truth, p, ws - 31, ws - 1) !== transitions(plain, p, ws - 31, ws - 1)) changed++;
+    }
+    expect(changed).toBeGreaterThan(0);
+    const a = newScattered();
+    const b = newScattered();
+    analyseColumn(a, carved, CX, CZ, () => 0, newScatterScratch());
+    analyseColumn(b, muted, CX, CZ, () => 0, newScatterScratch());
+    expect(a.land).toBe(b.land);
+    expect([a.over, a.peakLand, a.peakOver, a.floatPositions, a.floatVoxels, a.peakFloatPositions])
+      .toEqual([b.over, b.peakLand, b.peakOver, b.floatPositions, b.floatVoxels, b.peakFloatPositions]);
   });
 });
 

@@ -1,12 +1,19 @@
 import { expect } from 'vitest';
+import { ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
+import type { JsonValue } from '../../src/core/params/json';
+import { applyPatch } from '../../src/core/params/kit';
 import { resolveProfile } from '../../src/core/params/profiles';
+import { SCHEMA, type Params } from '../../src/core/params/schema';
 import { Xoshiro128 } from '../../src/core/rng';
-import { REGISTRY } from '../../src/world/blocks/index';
+import { GRASS_BLOCK, REGISTRY } from '../../src/world/blocks/index';
+import { CARVERS_OFF } from '../harness/carverParams';
 import { metricTest } from '../harness/metric';
+import { cavesMuted } from '../harness/sp5cTrees';
 import { analyseColumnsThreaded, MIN_SURFACE_POPULATION, s1Values, s2Values, s3Values, surfaceCommonValues } from '../harness/surfaceAnalysis';
 import { newSurfaceAcc, SURFACE_STATES, type SurfaceAcc } from '../harness/surfaceScatter';
-import type { PopulationMode } from '../harness/terrainScatter';
+import { forEachColumnThreaded, type PopulationMode } from '../harness/terrainScatter';
+import { branchHoldsAtTop, columnStates, positionColumn, solidRuns } from '../harness/zMetrics';
 
 /**
  * S1, S2, S3, the B4 voxel parts and the B2 river check on the surfaced voxels (SP3c spec §5.1, §5.2), with the
@@ -47,7 +54,8 @@ import type { PopulationMode } from '../harness/terrainScatter';
  * - B2 (`B2.voxel.json`) `riverChannelWater` the share of positions whose nearest corner is river-wet and whose
  *   bilinear offset < 63 that have water above their top (with the same share over offset < 62 and < 61, and the dry
  *   positions' tops, as diagnostics).
- * Diagnostics (ungated): `landTopYmod16` (raw and against the neighbour-average expectation, with its χ²),
+ * Diagnostics (ungated): `landTopYmod16` (raw and against the neighbour-average expectation, with its χ²; SP3c :357,
+ * re-measured with SP6a's caves and recorded, SP6a spec §10.4: it stays SP12's),
  * `dryPitsBelowSea`, `lakeRimIslets` (land tops with an ocean-family biome at a corner with 0 < lakeMask < 1, as a
  * share of all positions), `oceanBiomeLandTops` (every land top with an ocean-family biome, as a share of all positions:
  * mostly sea-class density islands, the rim islets are a small part of it), `shorelineFringe` (near-shore positions, Chebyshev distance ≤ 2 inside the column from a
@@ -55,6 +63,20 @@ import type { PopulationMode } from '../harness/terrainScatter';
  * land-family biome under water; `shorelineFringeSea` the same without lake, lakeMask and river-wet corners; the top
  * blocks of the islets and of both fringe kinds, to judge how they look), the
  * surfaceDepth histogram, `patchCoverage` per (biome, patch block), and per-block voxel and top shares.
+ *
+ * `islandBranchOnGround` (SP6a spec §10.4, D31, Point 2; recorded, no part, `.out/S.islandBranchOnGround.json`): the
+ * share of floating_islands positions where the islands surface branch (`yAbove{181, runTop}` ∧
+ * `stoneDepth{ceiling ≤ 100}`, SP3e spec §4.1) fires on a run whose bottom is below `ISLAND_RUN_MIN_BOTTOM` (181): some
+ * solid run of the position with bottom < 181 has, at its top voxel, runTop ≥ 181 and top − bottom ≤ 100 (Z3's
+ * `branchFalsePositives` predicate, `presets.metric.ts`, over every run rather than the sky-open one, since the branch
+ * is not sky-gated). Measured on the same columns with caves (`after`) and before caves (`before`): the same
+ * floating_islands tree with its carving family taps muted to 1e6 (`cavesMuted`: entrances, cheese, spaghetti 3D and
+ * 2D, noodle) and the three carver chances 0 (`CARVERS_OFF`), whose solidity is SP5c's (`min(v, 1e6)` is v and
+ * `detailG` changes no sign). Seeds as above; `ISLAND_BRANCH_COLUMNS` chunk columns per seed (fast 64, quick 256, full
+ * 1024) drawn by `Xoshiro128(fnv1a32('islandBranchOnGround'))` in ±1024 chunks, generated up to T on 4 region workers.
+ * Recorded beside it: the positions (`positions`), the summit positions (a run with bottom < 181 and top ≥ 181), the
+ * firing positions and their share of the summits, the firing positions whose firing run tops with grass_block, and
+ * the positions that fire only after caves (`added`) or only before (`removed`).
  */
 type Tier = 'fast' | 'quick' | 'full';
 const TIER = (process.env.METRICS_TIER ?? 'fast') as Tier;
@@ -228,3 +250,86 @@ metricTest('B2', ['riverChannelWater'], async () => {
   common(rec, sc);
   return rec;
 }, 600_000, { outName: 'B2.voxel' });
+
+/** islandBranchOnGround's chunk columns per seed (header). */
+const ISLAND_BRANCH_COLUMNS = pick(64, 256, 1024);
+const ISLAND_BRANCH_RANGE = 1024;
+const ISLAND_WORKER_DIR = `surfaceIslandWorker-${TIER}`;
+/** The islands surface branch's `stoneDepth{ceiling}` offset (SP3e spec §4.1; a tree literal of the preset rules). */
+const BRANCH_CEILING_OFFSET = 100;
+
+/** floating_islands before caves: its carving family taps muted (`cavesMuted`) and the carvers off (`CARVERS_OFF`). */
+function floatingBeforeCaves(): Params {
+  const floating = resolveProfile('floating_islands');
+  const r = applyPatch(SCHEMA, floating, { ...CARVERS_OFF, density: { defs: cavesMuted(floating.density.defs) as JsonValue } });
+  if (!r.ok) throw new Error(`islandBranchOnGround: ${JSON.stringify(r.issues)}`);
+  return r.value;
+}
+
+/** One world's counts over the columns; `fired` holds each column's 256 firing flags, keyed `<seed>:<cx>,<cz>`. */
+interface BranchCounts { positions: number; summits: number; fires: number; grass: number; fired: Map<string, Uint8Array> }
+
+async function branchCounts(params: Params): Promise<BranchCounts> {
+  const r = new Xoshiro128(fnv1a32('islandBranchOnGround'));
+  const c: BranchCounts = { positions: 0, summits: 0, fires: 0, grass: 0, fired: new Map() };
+  const states = new Uint16Array(98304);
+  const col = new Uint8Array(384);
+  for (const seed of SEEDS) {
+    const cols: Array<[number, number]> = [];
+    for (let n = 0; n < ISLAND_BRANCH_COLUMNS; n++) {
+      cols.push([-ISLAND_BRANCH_RANGE + r.nextInt(2 * ISLAND_BRANCH_RANGE), -ISLAND_BRANCH_RANGE + r.nextInt(2 * ISLAND_BRANCH_RANGE)]);
+    }
+    await forEachColumnThreaded(ISLAND_WORKER_DIR, seed, params, cols, (view, cx, cz) => {
+      columnStates(view, states);
+      const fired = new Uint8Array(256);
+      for (let p = 0; p < 256; p++) {
+        positionColumn(states, p, col);
+        c.positions++;
+        let summit = false;
+        let fireTop = NaN;
+        for (const run of solidRuns(col)) {
+          if (run.bottom >= ISLAND_RUN_MIN_BOTTOM || run.top < ISLAND_RUN_MIN_BOTTOM) continue;
+          summit = true;
+          if (branchHoldsAtTop(run, ISLAND_RUN_MIN_BOTTOM, BRANCH_CEILING_OFFSET)) fireTop = run.top;
+        }
+        if (summit) c.summits++;
+        if (Number.isNaN(fireTop)) continue;
+        fired[p] = 1;
+        c.fires++;
+        if (states[((fireTop + 64) << 8) | p] === GRASS_BLOCK) c.grass++;
+      }
+      c.fired.set(`${seed}:${cx},${cz}`, fired);
+    });
+  }
+  return c;
+}
+
+metricTest('S1', [], async () => {
+  const t0 = performance.now();
+  const after = await branchCounts(resolveProfile('floating_islands'));
+  const before = await branchCounts(floatingBeforeCaves());
+  let added = 0;
+  let removed = 0;
+  for (const [k, a] of after.fired) {
+    const b = before.fired.get(k)!;
+    for (let p = 0; p < 256; p++) {
+      if (a[p] === 1 && b[p] === 0) added++;
+      if (a[p] === 0 && b[p] === 1) removed++;
+    }
+  }
+  const share = (n: number, d: number): number => (d === 0 ? NaN : n / d);
+  const rec: Record<string, number> = {};
+  for (const [name, c] of [['after', after], ['before', before]] as const) {
+    rec[`islandBranchOnGround.${name}`] = share(c.fires, c.positions);
+    rec[`firingPositions.${name}`] = c.fires;
+    rec[`summitPositions.${name}`] = c.summits;
+    rec[`firingShareOfSummits.${name}`] = share(c.fires, c.summits);
+    rec[`firingGrassTops.${name}`] = c.grass;
+  }
+  rec.added = added;
+  rec.removed = removed;
+  rec.positions = after.positions;
+  rec.columns = after.fired.size;
+  rec.seconds = Math.round(performance.now() - t0) / 1000;
+  return rec;
+}, 1_800_000, { outName: 'S.islandBranchOnGround' });

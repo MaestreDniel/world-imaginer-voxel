@@ -39,9 +39,11 @@ export function requireSample(what: string, n: number, min: number): void {
   expect.soft(n, `${what}: insufficient sample (${n} < ${min})`).toBeGreaterThanOrEqual(min);
 }
 
-/** What the per-column analysis reads of a column: its blocks and aux A (a `ColumnView` is one). */
+/** What the per-column analysis reads of a column: its blocks, its cave tags and aux A (a `ColumnView` is one). */
 export interface ScatterColumn {
   sectionBlocks(sy: number): Uint16Array | number;
+  /** The cave tag per voxel (SP6a spec §3.2-§3.3), or its uniform byte. */
+  sectionCave(sy: number): Uint8Array | number;
   aux(): Pick<AuxView, 'worldSurfaceWG' | 'oceanFloorWG' | 'surfaceBiome'> | null;
 }
 
@@ -52,6 +54,22 @@ export function solidity(view: ScatterColumn, out: Uint8Array): Uint8Array {
     const base = sy << 12;
     if (typeof b === 'number') out.fill(b === AIR ? 0 : 1, base, base + 4096);
     else for (let i = 0; i < 4096; i++) out[base + i] = b[i] === AIR ? 0 : 1;
+  }
+  return out;
+}
+
+/**
+ * The column's pre-cave solidity (SP6a spec §10.4: T2 reads it), index as `solidity`: 1 where the block is not air or
+ * the voxel carries a cave tag (§3.2: tagged air is air the caves made of pre-cave rock), else 0. With every family tap
+ * present (the built-in trees) it is the solidity with the caves muted and the carvers off.
+ */
+export function preCaveSolidity(view: ScatterColumn, out: Uint8Array): Uint8Array {
+  solidity(view, out);
+  for (let sy = 0; sy < 24; sy++) {
+    const c = view.sectionCave(sy);
+    const base = sy << 12;
+    if (typeof c === 'number') { if (c !== 0) out.fill(1, base, base + 4096); }
+    else for (let i = 0; i < 4096; i++) if (c[i] !== 0) out[base + i] = 1;
   }
   return out;
 }
@@ -170,10 +188,10 @@ export const newScattered = (): Scattered => ({
   walls: 0, water: 0, columns: 0, waterPositions: 0, seconds: 0,
 });
 
-/** Reusable buffers of `analyseColumn` (one per caller thread). */
-export interface ScatterScratch { solid: Uint8Array; g: Grid }
+/** Reusable buffers of `analyseColumn` (one per caller thread): the true and the pre-cave solidity, the grid. */
+export interface ScatterScratch { solid: Uint8Array; pre: Uint8Array; g: Grid }
 
-export const newScatterScratch = (): ScatterScratch => ({ solid: new Uint8Array(98304), g: newGrid(16, 16) });
+export const newScatterScratch = (): ScatterScratch => ({ solid: new Uint8Array(98304), pre: new Uint8Array(98304), g: newGrid(16, 16) });
 
 /** The true top (no caves to look through): `analyseColumn`'s default `preCaveTop`. */
 const TRUE_TOP = (_x: number, _z: number, top: number): number => top;
@@ -195,6 +213,10 @@ export function preCaveTop(dc: DensityContext, x: number, z: number, top: number
  * context; `preTop(x, z, top)` the pre-cave top over the true top, `preCaveTop` on that context, SP6a spec §10.4;
  * the population stays the single-surface land positions of the generated voxels), T3's in-column neighbour pairs and
  * the water-wall diagnostic.
+ * T2 reads the pre-cave solidity (SP6a spec §10.4, the master's row: "pre-cave"; `preCaveSolidity`: solid or tagged),
+ * over the pre-cave run that holds the land position's true top (climbed through the tagged voxels above it, so an
+ * entrance that opens the surface is looked through): cave transitions would inflate it. T1, T3, T5's single-surface
+ * test and the water walls read the generated voxels as before.
  */
 export function analyseColumn(
   s: Scattered,
@@ -205,9 +227,10 @@ export function analyseColumn(
   scratch: ScatterScratch,
   preTop: (x: number, z: number, top: number) => number = TRUE_TOP,
 ): void {
-  const { solid, g } = scratch;
+  const { solid, pre, g } = scratch;
   const aux = view.aux()!;
   solidity(view, solid);
+  preCaveSolidity(view, pre);
   s.columns++;
   let peakHere = false;
   for (let p = 0; p < 256; p++) {
@@ -216,9 +239,11 @@ export function analyseColumn(
     const top = ws - 1;
     s.land++;
     s.hist[top + 64]!++;
-    const over = transitions(solid, p, top - 30, top) >= 2;
+    let preTop = top;
+    while (preTop < 319 && pre[((preTop + 65) << 8) | p] === 1) preTop++;
+    const over = transitions(pre, p, preTop - 30, preTop) >= 2;
     if (over) s.over++;
-    const fv = floatingVoxels(solid, p, top);
+    const fv = floatingVoxels(pre, p, preTop);
     if (fv > 0) { s.floatPositions++; s.floatVoxels += fv; }
     if (PEAKS.has(aux.surfaceBiome[p]!)) {
       s.peakLand++;

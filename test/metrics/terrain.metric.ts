@@ -34,6 +34,8 @@ import {
  *   `above120` / `above200` the shares of land tops > 120 / > 200 (master §6.4 "share y > 120").
  * - T2: `overhangs` the share of land positions with ≥ 2 transitions at y ≥ top − 30; `overhangsPeaks` the same over land
  *   positions whose aux A `surfaceBiome` is windswept_hills, snowy_slopes, stony_peaks, jagged_peaks or frozen_peaks.
+ *   From SP6a (its spec §10.4) T2 reads the pre-cave solidity (solid or tagged, `preCaveSolidity`) from the pre-cave
+ *   top over the true top, so cave transitions do not count.
  * - T3 over the land neighbour pairs (x and z) inside each scattered column (15 × 16 per axis; the biome is aux A's
  *   per-block `surfaceBiome`, so borders cross columns at every position): same biome → biome b's inside pairs; steep =
  *   |Δtop| ≥ 4; p_b = biome b's inside steep share over the same columns. `value` = Σ steep / Σ (p_a + p_b) / 2 over the
