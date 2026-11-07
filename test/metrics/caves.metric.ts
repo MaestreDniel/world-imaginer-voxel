@@ -1,4 +1,7 @@
-import { expect } from 'vitest';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { expect, test } from 'vitest';
 import { CARVER_WINDOW_R } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
 import { resolveProfile, type ProfileId } from '../../src/core/params/profiles';
@@ -9,6 +12,7 @@ import { columnPoint } from '../../src/gen/column/columnPoint';
 import { createGenContext } from '../../src/gen/context';
 import { ringCandidates } from '../../src/metrics/sp3eGoldens';
 import { AIR } from '../../src/world/blocks/index';
+import { bandDetail, C1_C6_PARTS, c1c6Parts, caveGridOf, caveRegionCounts, ravinePathsOf, emptyBandCounts, type CaveRegionCounts } from '../harness/caveMetrics';
 import { CARVER_DEFAULTS, CARVER_MAXIMA } from '../harness/carverParams';
 import { metricTest } from '../harness/metric';
 import { referenceCarve } from '../harness/refs';
@@ -56,6 +60,9 @@ import { genRegion, type RegionView } from '../harness/region';
  *   which has no such region, NaN, which its tiers accept).
  * Recorded beside the parts: the regions measured, the carver-tagged voxels they hold, the paths and ends checked, and
  * the floating_islands region's island voxels (non-air at y ≥ 181, so the cap has islands to protect).
+ *
+ * C1-C6 (D26: tuning parts, recorded until Task 38 gates them): the plain test 'C1-C6 recorded (SP6a D26)' below, over
+ * the default regions only (`defaultSites`), with the instruments of `test/harness/caveMetrics.ts`.
  */
 type Tier = 'fast' | 'quick' | 'full';
 const TIER = (process.env.METRICS_TIER ?? 'fast') as Tier;
@@ -123,7 +130,8 @@ function presetRegion(preset: PresetId, seed: string): readonly [a: number, b: n
   return [a, b];
 }
 
-function sites(): Site[] {
+/** The tier's default regions (the default and large_biomes profiles), where the default parts (C1-C6) run. */
+function defaultSites(): Site[] {
   if (TIER === 'fast') {
     return [
       { label: "seed '42' default (-8, -8)", seed: '42', profile: 'default', cx0: -8, cz0: -8, size: 16 },
@@ -136,6 +144,12 @@ function sites(): Site[] {
     out.push({ label: `seed '${seed}' default (16, -16)`, seed, profile: 'default', cx0: 16, cz0: -16, size: 32 });
     out.push({ label: `seed '${seed}' large_biomes (-16, -16)`, seed, profile: 'large_biomes', cx0: -16, cz0: -16, size: 32 });
   }
+  return out;
+}
+
+/** Every region of the tier: the default regions, then the preset regions. */
+function sites(): Site[] {
+  const out = defaultSites();
   for (const seed of PRESET_SEEDS) {
     for (const [preset] of PRESET_REGIONS) {
       const [a, b] = presetRegion(preset, seed);
@@ -406,3 +420,66 @@ metricTest('C7', ['carverReference', 'reachOverflow', 'endTaper', 'islandCapAir'
     taperEnds: taper.ends, taperRooms: taper.rooms, taperBranched: taper.branched, islandVoxels,
   };
 });
+
+// ---------------------------------------------------------------- C1-C6, recorded (D26)
+
+const OUT_DIR = fileURLToPath(new URL('./.out/', import.meta.url));
+
+/**
+ * The parts allowed NaN on fast (ruling P32: an empty or undefined population is NaN, never ±Infinity): none. Fast's
+ * two 16 × 16 default regions at seed '42' give every part a population (Task 31's run). Quick and full assert every
+ * part finite; fast asserts each finite or listed here, and the record names the NaN parts (`nanParts`).
+ */
+const NAN_ON_FAST: readonly string[] = [];
+
+/**
+ * C1-C6 (SP6a spec §10.1, D26: tuning parts, no row before Task 38, which turns each into a `metricTest` part of the
+ * same id): measured over the tier's default regions (default and large_biomes; C1 per profile) by
+ * `test/harness/caveMetrics.ts`, whose header states each definition as built, and written to
+ * `.out/caves.C1-C6.json`: the parts, the value per profile, and per region its counts' summary.
+ */
+test('C1-C6 recorded (SP6a D26)', async () => {
+  const measured: Array<{ site: Site; counts: CaveRegionCounts; ms: number }> = [];
+  for (const s of defaultSites()) {
+    const params = resolveProfile(s.profile);
+    const { view } = await genRegion({
+      seed: s.seed, params, cx0: s.cx0, cz0: s.cz0, w: s.size, h: s.size, upTo: 'T', order: 'spiral', threads: 4,
+      cache: true, workerDir: `cavesRegionWorker-${TIER}`, debugTags: true,
+    });
+    const t0 = performance.now();
+    const grid = caveGridOf(view);
+    const counts = caveRegionCounts(grid, (x, y, z) => view.pillar(x, y, z), ravinePathsOf(grid, s.seed, params));
+    measured.push({ site: s, counts, ms: Math.round(performance.now() - t0) });
+  }
+  const parts = c1c6Parts(measured.map((m) => ({ profile: m.site.profile, counts: m.counts })));
+  const profiles = [...new Set(measured.map((m) => m.site.profile))];
+  const perProfile = Object.fromEntries(profiles.map((p) => [p, c1c6Parts(measured.filter((m) => m.site.profile === p).map((m) => ({ profile: p, counts: m.counts })))]));
+  const nan = C1_C6_PARTS.filter((p) => Number.isNaN(parts[p]));
+  // Per profile, the bands' carve rates and residue ratios behind C4.bands and C6.latticeBias.
+  const bands = Object.fromEntries(profiles.map((p) => {
+    const sum = emptyBandCounts();
+    for (const m of measured) {
+      if (m.site.profile !== p) continue;
+      for (const k of Object.keys(sum) as Array<keyof typeof sum>) for (let i = 0; i < sum[k].length; i++) sum[k][i]! += m.counts.bands[k][i]!;
+    }
+    return [p, bandDetail(sum)];
+  }));
+  const regions = measured.map(({ site, counts: c, ms }) => ({
+    label: site.label, profile: site.profile, ms,
+    ...c1c6Parts([{ profile: site.profile, counts: c }]),
+    tagged: c.kinds.reduce((a, k) => a + k, 0), components: c.components, skyComponentsAll: c.skyComponents,
+    tiles: c.pillars.tiles, tilesWithPillar: c.pillars.withPillar, ravineSources: c.ravines.sources,
+    ravineSkySources: c.ravines.skySources, ravineVoxels: c.ravines.voxels, landPositions: c.land.land,
+    thinnestComponents: c.thinnest.all.length, cheeseComponents: c.thinnest.cheese.length,
+    spaghetti3dComponents: c.thinnest.spaghetti3d.length,
+  }));
+  mkdirSync(OUT_DIR, { recursive: true });
+  writeFileSync(join(OUT_DIR, 'caves.C1-C6.json'), `${JSON.stringify({
+    id: 'C1-C6', tier: process.env.METRICS_TIER ?? null, values: parts, nanParts: nan, perProfile, bands, regions,
+  }, (_, v: unknown) => (typeof v === 'number' && !Number.isFinite(v) ? String(v) : v), 2)}\n`);
+  for (const p of C1_C6_PARTS) {
+    const v = parts[p];
+    if (TIER === 'fast' && Number.isNaN(v)) expect(NAN_ON_FAST, `${p} is NaN on fast`).toContain(p);
+    else expect(Number.isFinite(v), `${p} = ${v} is not finite`).toBe(true);
+  }
+}, 600_000);
