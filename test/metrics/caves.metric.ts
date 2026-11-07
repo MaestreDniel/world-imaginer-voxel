@@ -12,7 +12,12 @@ import { columnPoint } from '../../src/gen/column/columnPoint';
 import { createGenContext } from '../../src/gen/context';
 import { ringCandidates } from '../../src/metrics/sp3eGoldens';
 import { AIR } from '../../src/world/blocks/index';
-import { bandDetail, C1_C6_PARTS, c1c6Parts, caveGridOf, caveRegionCounts, ravinePathsOf, emptyBandCounts, type CaveRegionCounts } from '../harness/caveMetrics';
+import {
+  aperiodicRatios, bandDetail, borderPlaneRatio, C1_C6_PARTS, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, caveC7C9Counts,
+  caveComponents, caveExamples, caveGridOf, caveRegionCounts, emptyBandCounts, emptyLayerCounts, emptyWallResidues, EXAMPLE_IDS,
+  GRID_H, GRID_Y0, landMask, localThickness, preCaveTops, ravinePathsOf, riverMaskOf, verticalStepDetail, wetMask,
+  type CaveC7C9Counts, type CavePose, type CaveRegionCounts, type ExampleId,
+} from '../harness/caveMetrics';
 import { CARVER_DEFAULTS, CARVER_MAXIMA } from '../harness/carverParams';
 import { metricTest } from '../harness/metric';
 import { referenceCarve } from '../harness/refs';
@@ -63,6 +68,11 @@ import { genRegion, type RegionView } from '../harness/region';
  *
  * C1-C6 (D26: tuning parts, recorded until Task 38 gates them): the plain test 'C1-C6 recorded (SP6a D26)' below, over
  * the default regions only (`defaultSites`), with the instruments of `test/harness/caveMetrics.ts`.
+ *
+ * C7's tuning parts, C8 and C9 (D26: recorded until Task 38 gates them): the plain test 'C7-C9 recorded (SP6a D26)',
+ * over every region of the tier (the default group: default and large_biomes; and each preset's), with the definitions
+ * as built in `caveMetrics.ts`; it also writes `.out/caves.examples.json`, the review poses at seed '42' (§10.1, §10.10,
+ * D16). Each region is measured once for both tests (`measure`: one grid, one set of components).
  */
 type Tier = 'fast' | 'quick' | 'full';
 const TIER = (process.env.METRICS_TIER ?? 'fast') as Tier;
@@ -421,9 +431,67 @@ metricTest('C7', ['carverReference', 'reachOverflow', 'endTaper', 'islandCapAir'
   };
 });
 
-// ---------------------------------------------------------------- C1-C6, recorded (D26)
+// ---------------------------------------------------------------- C1-C9, recorded (D26)
 
 const OUT_DIR = fileURLToPath(new URL('./.out/', import.meta.url));
+
+/** C7.switchWall's chunk stride: the T of every 2nd chunk's columns in x and z on fast, every 4th on quick and full. */
+const SWITCH_STRIDE = pick(2, 4, 4);
+
+/** One region's measurements: C1-C6 (the default group only), C7-C9, and at seed '42' default the review poses. */
+interface Measured {
+  readonly site: Site;
+  readonly c16: CaveRegionCounts | null;
+  readonly c79: CaveC7C9Counts;
+  readonly examples: Record<ExampleId, CavePose | null> | null;
+  /** The ms of the shared grid and components, of C1-C6 (with the thickness), of C7-C9, of the poses. */
+  readonly ms: { shared: number; c16: number; c79: number; examples: number };
+}
+
+/** The measured regions by label: each region is measured once, by whichever of the two tests asks first. */
+const MEASURED = new Map<string, Measured>();
+
+/** The group of C7-C9's "default and presets": 'default' for the default and large_biomes profiles, else the preset. */
+const groupOf = (s: Site): string => (s.profile === 'default' || s.profile === 'large_biomes' ? 'default' : s.profile);
+
+async function measure(s: Site): Promise<Measured> {
+  const done = MEASURED.get(s.label);
+  if (done !== undefined) return done;
+  const params = resolveProfile(s.profile);
+  const { view } = await genRegion({
+    seed: s.seed, params, cx0: s.cx0, cz0: s.cz0, w: s.size, h: s.size, upTo: 'T', order: 'spiral', threads: 4,
+    cache: true, workerDir: `cavesRegionWorker-${TIER}`, debugTags: true,
+  });
+  const isDefault = groupOf(s) === 'default';
+  const t0 = performance.now();
+  const grid = caveGridOf(view);
+  const tops = preCaveTops(grid);
+  const c = caveComponents(grid, tops);
+  const t1 = performance.now();
+  const pillar = (x: number, y: number, z: number): boolean => view.pillar(x, y, z);
+  const thick = isDefault ? localThickness(c, grid.w, grid.d) : null;
+  const c16 = isDefault ? caveRegionCounts(grid, pillar, ravinePathsOf(grid, s.seed, params), 128, { tops, c, thick }) : null;
+  const t2 = performance.now();
+  const land = landMask(grid);
+  const river = riverMaskOf(grid, s.seed, params);
+  const eligible = land.map((v, p) => (v === 1 && river[p] === 0 ? 1 : 0));
+  const c79 = caveC7C9Counts(grid, tops, c, {
+    T: isDefault ? (x, y, z) => view.terrainT(x, y, z) : null, stride: SWITCH_STRIDE, eligible,
+    seaFloor: s.profile === 'archipelago' ? wetMask(grid) : null,
+  });
+  const t3 = performance.now();
+  const examples = s.seed === '42' && s.profile === 'default' ? caveExamples(grid, tops, c, thick, pillar) : null;
+  const t4 = performance.now();
+  const m: Measured = {
+    site: s, c16, c79, examples,
+    ms: { shared: Math.round(t1 - t0), c16: Math.round(t2 - t1), c79: Math.round(t3 - t2), examples: Math.round(t4 - t3) },
+  };
+  MEASURED.set(s.label, m);
+  return m;
+}
+
+/** JSON with every non-finite number written as its string ("NaN"). */
+const json = (v: unknown): string => `${JSON.stringify(v, (_, x: unknown) => (typeof x === 'number' && !Number.isFinite(x) ? String(x) : x), 2)}\n`;
 
 /**
  * The parts allowed NaN on fast (ruling P32: an empty or undefined population is NaN, never ±Infinity): none. Fast's
@@ -442,15 +510,8 @@ const NAN_ON_FAST: readonly string[] = [];
 test('C1-C6 recorded (SP6a D26)', async () => {
   const measured: Array<{ site: Site; counts: CaveRegionCounts; ms: number }> = [];
   for (const s of defaultSites()) {
-    const params = resolveProfile(s.profile);
-    const { view } = await genRegion({
-      seed: s.seed, params, cx0: s.cx0, cz0: s.cz0, w: s.size, h: s.size, upTo: 'T', order: 'spiral', threads: 4,
-      cache: true, workerDir: `cavesRegionWorker-${TIER}`, debugTags: true,
-    });
-    const t0 = performance.now();
-    const grid = caveGridOf(view);
-    const counts = caveRegionCounts(grid, (x, y, z) => view.pillar(x, y, z), ravinePathsOf(grid, s.seed, params));
-    measured.push({ site: s, counts, ms: Math.round(performance.now() - t0) });
+    const m = await measure(s);
+    measured.push({ site: s, counts: m.c16!, ms: m.ms.shared + m.ms.c16 });
   }
   const parts = c1c6Parts(measured.map((m) => ({ profile: m.site.profile, counts: m.counts })));
   const profiles = [...new Set(measured.map((m) => m.site.profile))];
@@ -482,12 +543,107 @@ test('C1-C6 recorded (SP6a D26)', async () => {
   };
   const thinnest = { all: histOf((t) => t.all), cheese: histOf((t) => t.cheese), spaghetti3d: histOf((t) => t.spaghetti3d) };
   mkdirSync(OUT_DIR, { recursive: true });
-  writeFileSync(join(OUT_DIR, 'caves.C1-C6.json'), `${JSON.stringify({
+  writeFileSync(join(OUT_DIR, 'caves.C1-C6.json'), json({
     id: 'C1-C6', tier: process.env.METRICS_TIER ?? null, values: parts, nanParts: nan, perProfile, bands, thinnest, regions,
-  }, (_, v: unknown) => (typeof v === 'number' && !Number.isFinite(v) ? String(v) : v), 2)}\n`);
+  }));
   for (const p of C1_C6_PARTS) {
     const v = parts[p];
     if (TIER === 'fast' && Number.isNaN(v)) expect(NAN_ON_FAST, `${p} is NaN on fast`).toContain(p);
     else expect(Number.isFinite(v), `${p} = ${v} is not finite`).toBe(true);
   }
 }, 600_000);
+
+/**
+ * The C7-C9 parts allowed NaN on fast (ruling P32): C8.aperiodicity, C8.sizeSpread and C8.largeShare read only 32 × 32
+ * regions (fast's are 16 × 16: largeShare is undefined there, and the other two are kept to the spec's region size so
+ * that their values do not move with the tier's region; Task 38 gates the three on quick and full).
+ */
+const C79_NAN_ON_FAST: readonly string[] = ['C8.aperiodicity', 'C8.sizeSpread', 'C8.largeShare'];
+
+/**
+ * C7's tuning parts, C8 and C9 (SP6a spec §10.1, D26: recorded, no row before Task 38): measured over every region of
+ * the tier by `caveC7C9Counts` (definitions as built in `test/harness/caveMetrics.ts`) and written to
+ * `.out/caves.C7-C9.json` (the parts, the per-group values of the "default and presets" parts, each part's detail, and
+ * per region its counts' summary). The review poses at seed '42' (§10.1, §10.10, D16) go to `.out/caves.examples.json`:
+ * per pose, the first of the tier's seed '42' default regions (in `defaultSites`' order) holding one.
+ */
+test('C7-C9 recorded (SP6a D26)', async () => {
+  const measured: Measured[] = [];
+  for (const s of sites()) measured.push(await measure(s));
+  const regions = measured.map((m) => ({ group: groupOf(m.site), full: m.site.size === 32, counts: m.c79 }));
+  const parts = c7c9Parts(regions);
+  const nan = C7_C9_PARTS.filter((p) => Number.isNaN(parts[p]));
+  const def = measured.filter((m) => groupOf(m.site) === 'default').map((m) => m.c79);
+  const full = measured.filter((m) => groupOf(m.site) === 'default' && m.site.size === 32).map((m) => m.c79);
+  const residues = emptyWallResidues();
+  for (const r of def) for (let k = 0; k < 32; k++) { residues.faces[k]! += r.residues.faces[k]!; residues.slots[k]! += r.residues.slots[k]!; }
+  const sw = def.map((r) => r.switchWall).filter((v) => v !== null);
+  const groups = [...new Set(regions.map((r) => r.group))];
+  const ofGroup = (g: string): CaveC7C9Counts[] => regions.filter((r) => r.group === g).map((r) => r.counts);
+  // Per group: where its vertical step lies, and its flat walls per orientation and the layers holding most flat
+  // floors and ceilings (and the share of them on the density cells' corner layers, y ≡ 0 mod 8).
+  const perGroup = Object.fromEntries(groups.map((g) => {
+    const rs = ofGroup(g);
+    const layers = emptyLayerCounts();
+    for (const r of rs) for (let k = 0; k < GRID_H; k++) { layers.voxels[k]! += r.layers.voxels[k]!; layers.tagged[k]! += r.layers.tagged[k]!; }
+    const facesBy = [0, 0, 0, 0, 0, 0];
+    const flatBy = [0, 0, 0, 0, 0, 0];
+    const flatY = new Float64Array(GRID_H);
+    for (const r of rs) {
+      for (let o = 0; o < 6; o++) { facesBy[o]! += r.flat.facesBy[o]!; flatBy[o]! += r.flat.flatBy[o]!; }
+      for (let k = 0; k < GRID_H; k++) flatY[k]! += r.flat.flatFloorsByY[k]! + r.flat.flatCeilingsByY[k]!;
+    }
+    let horizontal = 0;
+    let corner = 0;
+    for (let k = 0; k < GRID_H; k++) {
+      horizontal += flatY[k]!;
+      if ((k + GRID_Y0) % 8 === 0) corner += flatY[k]!;
+    }
+    const topLayers = Array.from(flatY, (v, k) => [k + GRID_Y0, v] as const).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    return [g, {
+      verticalStep: verticalStepDetail(layers),
+      flatWalls: { facesBy, flatBy, horizontalFlatOnCornerLayers: horizontal === 0 ? Number.NaN : corner / horizontal, topLayers },
+    }];
+  }));
+  const detail = {
+    perGroup,
+    borderPlaneRatio: { ...borderPlaneRatio(residues), wallsPerResidue: Array.from(residues.faces) },
+    switchWall: {
+      faces: sw.reduce((a, v) => a + v.faces, 0), shellFaces: sw.reduce((a, v) => a + v.shellFaces, 0),
+      voxels: sw.reduce((a, v) => a + v.voxels, 0), shellVoxels: sw.reduce((a, v) => a + v.shellVoxels, 0), stride: SWITCH_STRIDE,
+    },
+    aperiodicity: full.length === 0 ? [] : aperiodicRatios(full.flatMap((r) => r.lags)),
+    typeMixPairs: def.reduce((a, r) => a + r.mix.length, 0),
+    sizeSpreadComponents: full.reduce((a, r) => a + r.volumes.length, 0),
+    largeShareRegions: full.map((r) => r.largest),
+    entranceSamples: measured.reduce((a, m) => a + m.c79.distances.length, 0),
+    entranceSamplesWithoutOpening: measured.reduce((a, m) => a + m.c79.distances.filter(Number.isNaN).length, 0),
+  };
+  const perRegion = measured.map((m) => ({
+    label: m.site.label, group: groupOf(m.site), ms: m.ms,
+    ...c7c9Parts([{ group: 'default', full: m.site.size === 32, counts: m.c79 }]),
+    walls: m.c79.flat.faces, flatWalls: m.c79.flat.flat, waterWall: m.c79.waterWall, deepSky: m.c79.deepSky,
+    openings: m.c79.openings, land: m.c79.surface.land, holed: m.c79.surface.holed, thinRoof: m.c79.surface.thinRoof,
+    entranceSamples: m.c79.distances.length, largestComponent: m.c79.largest,
+  }));
+  mkdirSync(OUT_DIR, { recursive: true });
+  writeFileSync(join(OUT_DIR, 'caves.C7-C9.json'), json({
+    id: 'C7-C9', tier: process.env.METRICS_TIER ?? null, values: parts, nanParts: nan, groups: c7c9Groups(regions), detail,
+    regions: perRegion,
+  }));
+  // The review poses: per id the first seed '42' default region holding one.
+  const poses: Record<string, (CavePose & { region: string }) | null> = {};
+  for (const id of EXAMPLE_IDS) {
+    const m = measured.find((r) => r.examples !== null && r.examples[id] !== null);
+    poses[id] = m === undefined ? null : { ...m.examples![id]!, region: m.site.label };
+  }
+  writeFileSync(join(OUT_DIR, 'caves.examples.json'), json({
+    id: 'caves.examples', tier: process.env.METRICS_TIER ?? null, seed: '42', profile: 'default', poses,
+  }));
+  for (const p of C7_C9_PARTS) {
+    const v = parts[p];
+    if (TIER === 'fast' && Number.isNaN(v)) expect(C79_NAN_ON_FAST, `${p} is NaN on fast`).toContain(p);
+    else expect(Number.isFinite(v), `${p} = ${v} is not finite`).toBe(true);
+  }
+  for (const id of EXAMPLE_IDS) expect(poses[id], `the ${id} pose`).not.toBeNull();
+}, 900_000);

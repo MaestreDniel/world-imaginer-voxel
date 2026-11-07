@@ -2,9 +2,13 @@ import { describe, expect, test } from 'vitest';
 import { CAVE_KIND } from '../../src/core/constants';
 import type { CarverPath } from '../../src/gen/caves/carvers';
 import {
-  bandCounts, bandsMin, c1c6Parts, C1_C6_PARTS, caveComponents, caveRegionCounts, COMP_Y_MIN, emptyCaveGrid, floorCounts,
-  floorPeak, GRID_H, GRID_Y0, kindCounts, landCounts, largestCounts, latticeBias, localThickness, median, pillarTiles, preCaveTops,
-  ravineCounts, setCell, skyCounts, thinnestAxes, voidCounts, type CaveGrid,
+  aperiodicCounts, aperiodicity, aperiodicLags, bandCounts, bandsMin, borderPlaneRatio, c1c6Parts, C1_C6_PARTS, c7c9Parts,
+  C7_C9_PARTS, caveC7C9Counts, caveComponents, caveExamples, caveRegionCounts, COMP_Y_MIN, emptyCaveGrid, flatWallCounts, flatWallDetail,
+  floorCounts, floorPeak, GRID_H, GRID_Y0, jensenShannon, kindCounts, landCounts, largestCounts, latticeBias, layerCounts,
+  localThickness, logSd, median, nearestEntranceDistances, openingMask, percentile, pillarTiles, preCaveTops, ravineCounts,
+  setCell, skyCounts, surfaceCounts, switchWall, switchWallCounts, thinnestAxes, typeMixDivergences, verticalStep, verticalStepDetail,
+  voidCounts,
+  wallResidues, waterWallCount, type CaveGrid,
 } from '../harness/caveMetrics';
 import { components3d } from '../harness/flood';
 
@@ -364,3 +368,334 @@ describe('the caves instruments on fixtures (SP6a §10.1, C1-C6)', () => {
     expect(GRID_H).toBe(384);
   });
 });
+
+describe('the caves instruments on fixtures (SP6a §10.1, C7-C9)', () => {
+  /** A checkerboard of single cave voxels ((x + z) even) at y 10 over the grid: every residue has the same walls. */
+  function checker(g: CaveGrid): void {
+    for (let z = g.z0; z < g.z0 + g.d; z++) for (let x = g.x0; x < g.x0 + g.w; x++) if ((x + z) % 2 === 0) setCell(g, x, 10, z, K.cheese, false);
+  }
+
+  test('C7.borderPlaneRatio is 1 on a lattice-uniform fixture and > 1.1 on a cave cut at the planes x mod 16 = 0', () => {
+    const g = rock(48, 32, 100);
+    checker(g);
+    const u = borderPlaneRatio(wallResidues(g));
+    for (const k of ['x0', 'x15', 'z0', 'z15'] as const) expect(u[k], k).toBeCloseTo(1, 12);
+    expect(u.value).toBeCloseTo(1, 12);
+    // A cave filling the chunk x 16 … 31 (y 50 … 59, every z) ends on flat walls at the chunk's borders: the cave voxels
+    // x 16 (x mod 16 = 0) and x 31 (x mod 16 = 15) hold 320 x-facing walls each, the residues 4, 8, 12 and 3, 7, 11 none.
+    carve(g, K.worm, 16, 31, 50, 59, 0, 31);
+    const r = wallResidues(g);
+    // The checker's walls: x 0 (16, the box's face cuts the other), x 16 and x 32 (32 each); likewise x 15, 31, 47.
+    expect(r.faces[0]! - 80).toBe(320);
+    expect(r.faces[15]! - 80).toBe(320);
+    const cut = borderPlaneRatio(r);
+    expect(cut.x0).toBeGreaterThan(1.1);
+    expect(cut.x15).toBeGreaterThan(1.1);
+    expect(cut.z0).toBeCloseTo(1, 12);
+    expect(cut.value).toBeGreaterThan(1.1);
+    // The farthest ratio from 1 is the part, below 1 as well: walls only at the residues 4, 8, 12 read 0.
+    const lean = rock(32, 32, 100);
+    for (const x of [4, 8, 12, 20, 24, 28]) carve(lean, K.cheese, x, x, 20, 20, 3, 3);
+    for (const x of [3, 7, 11, 15, 19, 23, 27]) carve(lean, K.cheese, x, x, 30, 30, 9, 9);
+    const l = borderPlaneRatio(wallResidues(lean));
+    expect(l.x0).toBe(0);
+    expect(l.value).toBe(0);
+    expect(borderPlaneRatio(wallResidues(rock(16, 16, 50))).value).toBeNaN();
+  });
+
+  test('C7.flatWallShare counts a 6 × 6 planar patch of walls and not a 5 × 6 one; a position mask keeps its positions', () => {
+    const g = rock(16, 16, 100);
+    carve(g, K.cheese, 2, 7, 20, 20, 2, 7);
+    // A 6 × 1 × 6 slab: its floor and ceiling are 6 × 6 patches (72 faces), its four sides 6 × 1 (24 faces).
+    expect(flatWallCounts(g)).toEqual({ faces: 96, flat: 72 });
+    const h = rock(16, 16, 100);
+    carve(h, K.cheese, 2, 6, 20, 20, 2, 7);
+    expect(flatWallCounts(h)).toEqual({ faces: 2 * 30 + 2 * 5 + 2 * 6, flat: 0 });
+    // A 6 × 6 wall face patch (an x-facing wall 6 high and 6 deep) beside a 5 × 6 one.
+    const w = rock(16, 16, 100);
+    carve(w, K.cheese, 3, 3, 30, 35, 2, 7);
+    carve(w, K.cheese, 10, 10, 30, 34, 2, 7);
+    const f = flatWallCounts(w);
+    expect(f.flat).toBe(2 * 36);
+    // An L of two 6 × 6 squares overlapping in 3 × 6 faces counts each face once (54 faces per side).
+    const l = rock(16, 16, 100);
+    carve(l, K.cheese, 2, 10, 20, 20, 2, 7);
+    carve(l, K.cheese, 2, 7, 20, 20, 8, 10);
+    expect(flatWallCounts(l).flat).toBe(2 * (9 * 6 + 6 * 3));
+    // The mask: only the positions with z ≤ 4 (3 of the slab's 6 rows): no 6 × 6 patch left.
+    const mask = new Uint8Array(256);
+    for (let z = 0; z <= 4; z++) for (let x = 0; x < 16; x++) mask[z * 16 + x] = 1;
+    expect(flatWallCounts(g, mask).flat).toBe(0);
+    // The floor and ceiling's 18 faces each, the x sides' 3 each, the z = 2 side's 6.
+    expect(flatWallCounts(g, mask).faces).toBe(2 * 18 + 2 * 3 + 6);
+  });
+
+  test('flatWallCounts equals a brute force over every 6 × 6 square on random blobs; the detail splits it per orientation', () => {
+    let seed = 99;
+    const rnd = (): number => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return seed / 2 ** 32; };
+    for (let trial = 0; trial < 4; trial++) {
+      const w = 20;
+      const d = 18;
+      const g = rock(w, d, 0);
+      for (let b = 0; b < 5; b++) {
+        // Boxes, so planar patches of every size occur.
+        const x0 = Math.floor(rnd() * 14), z0 = Math.floor(rnd() * 12), y0 = -60 + Math.floor(rnd() * 40);
+        carve(g, K.cheese, x0, x0 + 2 + Math.floor(rnd() * 8), y0, y0 + Math.floor(rnd() * 9), z0, z0 + 2 + Math.floor(rnd() * 8));
+      }
+      for (let k = 0; k < 300; k++) setCell(g, Math.floor(rnd() * w), -60 + Math.floor(rnd() * 50), Math.floor(rnd() * d), 0, true);
+      const cell = (x: number, y: number, z: number): number =>
+        x < 0 || x >= w || z < 0 || z >= d || y < GRID_Y0 || y >= GRID_Y0 + GRID_H ? -1 : g.cells[((y - GRID_Y0) * d + z) * w + x]!;
+      const isWall = (x: number, y: number, z: number, o: number): boolean => {
+        const c = cell(x, y, z);
+        if (c < 0 || (c & 15) === 0 || (c & 16) !== 0) return false;
+        const [dx, dy, dz] = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]][o]!;
+        const n = cell(x + dx!, y + dy!, z + dz!);
+        return n >= 0 && (n & 16) !== 0;
+      };
+      let faces = 0;
+      let flat = 0;
+      for (let y = GRID_Y0; y < GRID_Y0 + GRID_H; y++) for (let z = 0; z < d; z++) for (let x = 0; x < w; x++) for (let o = 0; o < 6; o++) {
+        if (!isWall(x, y, z, o)) continue;
+        faces++;
+        // The plane's two axes: (y, z) for x walls, (x, z) for y walls, (x, y) for z walls.
+        const at = (u: number, v: number): boolean =>
+          o < 2 ? isWall(x, u, v, o) : o < 4 ? isWall(u, y, v, o) : isWall(u, v, z, o);
+        const [u0, v0] = o < 2 ? [y, z] : o < 4 ? [x, z] : [x, y];
+        let hit = false;
+        for (let a = u0 - 5; a <= u0 && !hit; a++) for (let b = v0 - 5; b <= v0 && !hit; b++) {
+          let all = true;
+          for (let i = 0; i < 6 && all; i++) for (let j = 0; j < 6 && all; j++) if (!at(a + i, b + j)) all = false;
+          if (all) hit = true;
+        }
+        if (hit) flat++;
+      }
+      expect(flatWallCounts(g), `trial ${trial}`).toEqual({ faces, flat });
+      expect(flat, `trial ${trial} has flat walls`).toBeGreaterThan(0);
+      const det = flatWallDetail(g);
+      expect(det.flatBy.reduce((a, v) => a + v, 0)).toBe(flat);
+      expect(det.flatFloorsByY.reduce((a, v) => a + v, 0)).toBe(det.flatBy[2]);
+      expect(det.flatCeilingsByY.reduce((a, v) => a + v, 0)).toBe(det.flatBy[3]);
+    }
+  });
+
+  test('C7.verticalStep: the largest ratio of 3-layer smoothed carve rates between neighbouring layers, rates ≥ 0.1 %', () => {
+    // A uniform rate gives 1; a step from 1 in 16 to 1 in 4 positions at y 0 gives (2a + b)/3 over (a + b)… the smoothed
+    // rates around the step.
+    const g = rock(16, 16, 200);
+    for (let y = -63; y < 0; y++) carve(g, K.cheese, 0, 3, y, y, 0, 3);
+    for (let y = 0; y <= 150; y++) carve(g, K.cheese, 0, 7, y, y, 0, 7);
+    const c = layerCounts(g, preCaveTops(g));
+    expect(c.voxels[0 + 64]).toBe(256);
+    expect(c.tagged[0 + 64]).toBe(64);
+    const a = 16 / 256;
+    const b = 64 / 256;
+    // The smoothed rates: a at y ≤ −2, (2a + b)/3 at −1, (a + 2b)/3 at 0, b from 1: the largest step is b / ((a + 2b)/3).
+    expect(verticalStep(c)).toBeCloseTo(Math.max(((a + 2 * b) / 3) / ((2 * a + b) / 3), b / ((a + 2 * b) / 3), ((2 * a + b) / 3) / a), 12);
+    // The largest is (2a + b)/3 over a: y −1 against −2, over 3 · 256 voxels.
+    expect(verticalStepDetail(c)).toMatchObject({ y: -1, n: -2, voxels: 768 });
+    expect(verticalStepDetail(c).rate).toBeCloseTo((2 * a + b) / 3, 12);
+    const uniform = rock(16, 16, 200);
+    for (let y = -63; y <= 150; y++) carve(uniform, K.cheese, 0, 7, y, y, 0, 7);
+    expect(verticalStep(layerCounts(uniform, preCaveTops(uniform)))).toBeCloseTo(1, 12);
+    // Rates under 0.1 % are left out: nothing carved is NaN.
+    const none = rock(16, 16, 200);
+    expect(verticalStep(layerCounts(none, preCaveTops(none)))).toBeNaN();
+  });
+
+  test('C7.switchWall: walls in the shell |T − 8| < 1 over the shell\'s share of the pre-cave rock, on a known T', () => {
+    const g = rock(16, 16, 100);
+    // T = 100 − y: the shell is y 92 (T 8; y 91 and 93 have |T − 8| = 1).
+    carve(g, K.cheese, 4, 11, 80, 92, 4, 11);
+    const c = switchWallCounts(g, (_x, y) => 100 - y);
+    // Walls: the ceiling (64) and the sides of y 92 (32) in the shell; the floor (64) and the sides of y 80 … 91 (384).
+    expect(c).toEqual({ faces: 544, shellFaces: 96, voxels: 256 * (100 - COMP_Y_MIN + 1), shellVoxels: 256 });
+    expect(switchWall(c)).toBeCloseTo((96 / 544) / (256 / (256 * 157)), 12);
+    // A stride of 2 chunks reads the columns of every second chunk only (here the one chunk, cx 0).
+    const big = rock(48, 16, 100);
+    carve(big, K.cheese, 4, 11, 80, 92, 4, 11);
+    carve(big, K.cheese, 20, 27, 80, 92, 4, 11);
+    let asked = 0;
+    const s = switchWallCounts(big, (x, y) => { asked++; expect(x >> 4).not.toBe(1); return 100 - y; }, 2);
+    expect(s.shellFaces).toBe(96);
+    expect(s.faces).toBe(544);
+    expect(asked).toBeGreaterThan(0);
+  });
+
+  test('C7.waterWall counts the water voxels horizontally next to tagged air', () => {
+    const g = rock(16, 16, 60);
+    for (let y = 61; y <= 62; y++) for (let z = 0; z < 16; z++) for (let x = 0; x < 16; x++) setCell(g, x, y, z, 0, false, true);
+    expect(waterWallCount(g)).toBe(0);
+    // An entrance opening at y 61 … 62 beside water: its 4 horizontal neighbours on each of 2 layers.
+    carve(g, K.entrance, 8, 8, 40, 62, 8, 8);
+    expect(waterWallCount(g)).toBe(8);
+    // Tagged water is not tagged air.
+    setCell(g, 8, 61, 8, K.entrance, false, true);
+    setCell(g, 8, 62, 8, K.entrance, false, true);
+    expect(waterWallCount(g)).toBe(0);
+  });
+
+  test('C8.aperiodicity is < 0.9 on a 16-periodic fixture, about 1 on a random one, and computed only for L ≤ width − 16', () => {
+    expect(aperiodicLags(64)).toEqual([16, 32]);
+    expect(aperiodicLags(256)).toEqual([16, 32, 64, 128]);
+    expect(aperiodicLags(512)).toEqual([16, 32, 64, 128, 256]);
+    expect(aperiodicLags(32)).toEqual([16]);
+    expect(aperiodicLags(16)).toEqual([]);
+    const g = rock(64, 48, 100);
+    for (const y of [-40, 0, 40]) for (let z = 0; z < 48; z++) for (let x = 0; x < 64; x++) if (x % 16 < 4 && z % 5 !== 0) setCell(g, x, y, z, K.cheese, false);
+    const counts = aperiodicCounts(g);
+    expect(counts.filter((c) => c.axis === 'x').map((c) => c.lag)).toEqual([16, 32, 16, 32, 16, 32]);
+    expect(counts.filter((c) => c.axis === 'z').map((c) => c.lag)).toEqual([16, 32, 16, 32, 16, 32]);
+    const x16 = counts.find((c) => c.axis === 'x' && c.lag === 16 && c.y === 0)!;
+    expect(x16.pairs).toBe((64 - 16) * 48);
+    expect(x16.diff).toBe(0);
+    expect(aperiodicity(counts)).toBeLessThan(0.9);
+    expect(aperiodicity(counts)).toBe(0);
+    let s = 7;
+    const rnd = (): number => { s = (Math.imul(s, 1103515245) + 12345) >>> 0; return s / 2 ** 32; };
+    const r = rock(128, 128, 100);
+    for (const y of [-40, 0, 40]) for (let z = 0; z < 128; z++) for (let x = 0; x < 128; x++) if (rnd() < 0.2) setCell(r, x, y, z, K.cheese, false);
+    const v = aperiodicity(aperiodicCounts(r));
+    expect(v).toBeGreaterThan(0.9);
+    expect(v).toBeLessThan(1.1);
+    // Nothing carved: every expected difference is 0, an undefined population.
+    expect(aperiodicity(aperiodicCounts(rock(64, 64, 100)))).toBeNaN();
+  });
+
+  test('C8.typeMixVariation: Jensen-Shannon divergences (bits) of the kind shares between edge-adjacent tiles', () => {
+    expect(jensenShannon([1, 0, 0, 0, 0], [0, 1, 0, 0, 0])).toBeCloseTo(1, 12);
+    expect(jensenShannon([2, 2, 0, 0, 0], [1, 1, 0, 0, 0])).toBe(0);
+    expect(jensenShannon([1, 1, 0, 0, 0], [1, 0, 0, 0, 0])).toBeCloseTo(1.5 - 0.75 * Math.log2(3), 12);
+    const g = rock(32, 32, 100);
+    // Tiles of 16: (0, 0) cheese, (1, 0) cheese, (0, 1) cheese and spaghetti 3D equally, (1, 1) nothing.
+    carve(g, K.cheese, 2, 5, 10, 10, 2, 5);
+    carve(g, K.cheese, 20, 23, 10, 10, 2, 5);
+    carve(g, K.cheese, 2, 5, 10, 10, 20, 23);
+    carve(g, K.spaghetti3d, 2, 5, 20, 20, 20, 23);
+    const d = typeMixDivergences(g, 16);
+    // Pairs with both tiles holding cave air: (0,0)-(1,0) 0 and (0,0)-(0,1) the half-split's divergence.
+    expect(d.slice().sort((a, b) => a - b)).toEqual([0, jensenShannon([1, 0, 0, 0, 0], [1, 1, 0, 0, 0])]);
+    // Spaghetti 3D and 2D are one share (C3's), as are the three carvers.
+    const h = rock(32, 16, 100);
+    carve(h, K.spaghetti3d, 2, 5, 10, 10, 2, 5);
+    carve(h, K.spaghetti2d, 20, 23, 10, 10, 2, 5);
+    expect(typeMixDivergences(h, 16)).toEqual([0]);
+  });
+
+  test('C8.sizeSpread\'s log-sd and percentile', () => {
+    expect(logSd([Math.E, Math.E ** 3])).toBeCloseTo(Math.SQRT2, 12);
+    expect(logSd([100])).toBeNaN();
+    expect(percentile([5, 1, 3, 2, 4, 6, 7, 8, 9, 10], 0.9)).toBe(9);
+    expect(percentile([3], 0.9)).toBe(3);
+    expect(percentile([], 0.9)).toBeNaN();
+    expect(percentile([1, Number.NaN, 2], 0.5)).toBe(1);
+  });
+
+  test('C9.nearestEntrance: the distances from land positions to a fixture\'s one opening; NaN without one', () => {
+    const g = rock(32, 32, 60);
+    // An entrance shaft at (5, 5) from y 40 to the top: one sky component reaching 8 below the top, opening at (5, 5).
+    carve(g, K.entrance, 5, 5, 40, 60, 5, 5);
+    // A sealed pocket is no opening.
+    carve(g, K.cheese, 20, 22, 10, 12, 20, 22);
+    const tops = preCaveTops(g);
+    const c = caveComponents(g, tops);
+    const open = openingMask(g, tops, c);
+    expect(open.reduce((a, v) => a + v, 0)).toBe(1);
+    expect(open[5 * 32 + 5]).toBe(1);
+    const eligible = new Uint8Array(1024).fill(1);
+    const { distances, positions } = nearestEntranceDistances(g, open, eligible);
+    expect(distances.length).toBe(256);
+    expect(new Set(positions).size).toBe(256);
+    for (let i = 0; i < 256; i++) {
+      const p = positions[i]!;
+      expect(distances[i]).toBeCloseTo(Math.hypot((p % 32) - 5, Math.floor(p / 32) - 5), 12);
+    }
+    // Only eligible positions are drawn; fewer than 256 eligible gives all of them.
+    const few = new Uint8Array(1024);
+    few[3] = 1;
+    few[1000] = 1;
+    expect(Array.from(nearestEntranceDistances(g, open, few).positions).sort((a, b) => a - b)).toEqual([3, 1000]);
+    // A shaft only 5 deep is not a C2 component: no opening, every distance NaN.
+    const shallow = rock(32, 32, 60);
+    carve(shallow, K.entrance, 5, 5, 56, 60, 5, 5);
+    const st = preCaveTops(shallow);
+    const none = openingMask(shallow, st, caveComponents(shallow, st));
+    expect(none.reduce((a, v) => a + v, 0)).toBe(0);
+    expect(Array.from(nearestEntranceDistances(shallow, none, eligible).distances).every(Number.isNaN)).toBe(true);
+  });
+
+  test('C9.holedSurface and C9.thinRoof: land positions holed at the pre-cave top, or with cave air 1 … 3 under the top', () => {
+    const g = rock(8, 8, 60);
+    carve(g, K.entrance, 1, 1, 40, 60, 1, 1);
+    carve(g, K.cheese, 4, 5, 57, 58, 4, 4);
+    carve(g, K.cheese, 6, 6, 50, 56, 6, 6);
+    // Water over one position: not land.
+    setCell(g, 7, 61, 7, 0, false, true);
+    expect(surfaceCounts(g, preCaveTops(g))).toEqual({ land: 63, holed: 1, thinRoof: 2 });
+  });
+
+  test('the C7-C9 parts: one region\'s counts, the groups, NaN for an empty population, never ±Infinity', () => {
+    const g = rock(16, 16, 60);
+    carve(g, K.cheese, 0, 15, 0, 9, 0, 15);
+    carve(g, K.entrance, 5, 5, 10, 60, 5, 5);
+    const tops = preCaveTops(g);
+    const c = caveComponents(g, tops);
+    const all = new Uint8Array(256).fill(1);
+    const counts = caveC7C9Counts(g, tops, c, { T: (_x, y) => 60 - y, stride: 1, eligible: all, seaFloor: null, tile: 16 });
+    const solid = rock(16, 16, 60);
+    const st = preCaveTops(solid);
+    const empty = caveC7C9Counts(solid, st, caveComponents(solid, st), { T: (_x, y) => 60 - y, stride: 1, eligible: all, seaFloor: null, tile: 16 });
+    const parts = c7c9Parts([{ group: 'default', full: false, counts }, { group: 'default', full: false, counts: empty }]);
+    expect(Object.keys(parts).sort()).toEqual([...C7_C9_PARTS].sort());
+    for (const part of C7_C9_PARTS) expect(Number.isFinite(parts[part]) || Number.isNaN(parts[part]), part).toBe(true);
+    // Regions smaller than 32 × 32 chunks: C8's aperiodicity, sizeSpread and largeShare are NaN.
+    expect(parts['C8.aperiodicity']).toBeNaN();
+    expect(parts['C8.sizeSpread']).toBeNaN();
+    expect(parts['C8.largeShare']).toBeNaN();
+    // One C2 component (the shaft and the slab) over 2 × 256 m²; the shaft's top holed, 1 of 512 land positions.
+    expect(parts['C9.entrancesMax']).toBeCloseTo(1 / (512 / 1e6), 6);
+    expect(parts['C9.holedSurface']).toBeCloseTo(1 / 512, 12);
+    expect(parts['C9.nearestEntrance']).toBeGreaterThan(0);
+    // The same regions counted as full-size ones: the slab (2,560 voxels) is one component ≥ 64, its log-sd undefined.
+    const full = c7c9Parts([{ group: 'default', full: true, counts }]);
+    expect(full['C8.sizeSpread']).toBeNaN();
+    expect(full['C8.largeShare']).toBe(0);
+    // A preset group's part is the worse of the groups: holedSurface over the preset alone is 1 / 256.
+    const both = c7c9Parts([{ group: 'default', full: false, counts: empty }, { group: 'amplified', full: false, counts }]);
+    expect(both['C9.holedSurface']).toBeCloseTo(1 / 256, 12);
+    // …but the default-only parts read the default group only.
+    expect(both['C9.entrancesMax']).toBe(0);
+  });
+
+  test('the cave examples: per kind its largest component\'s voxel nearest the centre, the entrance at its top, a pillar, an interior', () => {
+    const g = rock(32, 32, 60);
+    carve(g, K.cheese, 2, 11, 10, 19, 2, 11);
+    carve(g, K.cheese, 20, 21, 10, 11, 20, 21);
+    carve(g, K.spaghetti3d, 0, 31, 30, 31, 16, 17);
+    carve(g, K.entrance, 25, 25, 40, 60, 5, 5);
+    const tops = preCaveTops(g);
+    const c = caveComponents(g, tops);
+    const thick = localThickness(c, 32, 32);
+    // The pillar: the rock voxel (12, 15, 7) beside the big cavern.
+    const ex = caveExamples(g, tops, c, thick, (x, y, z) => x === 12 && y === 15 && z === 7);
+    // The cheese: the 10³ cavern (not the 2³ one), its voxel nearest the centre (16, 16): (11, ·, 11), lowest y first.
+    expect(ex.cheese).toMatchObject({ voxel: [11, 10, 11] });
+    expect(ex.spaghetti3d).toMatchObject({ voxel: [15, 30, 16] });
+    expect(ex.entrance).toMatchObject({ voxel: [25, 60, 5], pitch: -60 });
+    expect(ex.pillars).toMatchObject({ voxel: [11, 15, 7], yaw: 90, pitch: 0, component: 1000 });
+    // A pillar beside the small pocket, nearer the centre, is passed over for the cavern's (a cavern ≥ 500 voxels here);
+    // with no cavern holding a pillar the pocket's is taken.
+    const two = (x: number, y: number, z: number): boolean => (x === 12 && y === 15 && z === 7) || (x === 22 && y === 10 && z === 20);
+    expect(caveExamples(g, tops, c, thick, two, 500).pillars).toMatchObject({ voxel: [11, 15, 7], yaw: 90 });
+    expect(caveExamples(g, tops, c, thick, two, 2000).pillars).toMatchObject({ voxel: [21, 10, 20], yaw: 90, component: 8 });
+    expect(ex.noodle).toBeNull();
+    expect(ex.worm).toBeNull();
+    // The largest interior: the cavern (1,000 voxels; the tube is 128), at a voxel of its thickest ball (10).
+    expect(ex.interior).not.toBeNull();
+    const [ix, iy, iz] = ex.interior!.voxel;
+    expect(ix >= 2 && ix <= 11 && iy >= 10 && iy <= 19 && iz >= 2 && iz <= 11).toBe(true);
+    // A pose stands at the voxel's centre and looks along its longest run of open voxels (yaw in degrees, 0 = −z).
+    expect(ex.spaghetti3d).toMatchObject({ x: 15.5, y: 30.5, z: 16.5 });
+    expect([90, 270]).toContain(ex.spaghetti3d!.yaw);
+  });
+});
+

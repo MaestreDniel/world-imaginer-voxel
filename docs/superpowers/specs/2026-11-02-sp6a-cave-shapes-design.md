@@ -440,7 +440,7 @@ Over harness regions up to 'T' with the tag read from the store (`RegionView.tag
 | C7 | `flatWallShare` | cave-wall faces in axis-aligned planar patches ≥ 6 × 6 faces (default and the archipelago sea floor) | ≤ 0.5 % | tuning |
 | C7 | `switchWall` | faces in the shell \|T − 8\| < 1 / the shell's share of all faces | ≤ 2 | tuning |
 | C7 | `waterWall` | water voxels horizontally adjacent to tagged air, per km² (default and archipelago) | ≤ 1 | tuning |
-| C8 | `aperiodicity` | at y −40, 0, 40: mean \|m(p) − m(p + L·e)\| for L 16, 32, 64 … 512, e x or z, over the random-pair mean | ≥ 0.9 | tuning |
+| C8 | `aperiodicity` | at y −40, 0, 40: mean \|m(p) − m(p + L·e)\| for L 16, 32, 64 … up to the region's width − 16, over pairs inside one region, e x or z, over the random-pair mean | ≥ 0.9 | tuning |
 | C8 | `typeMixVariation` | median Jensen-Shannon divergence of C3's shares between edge-adjacent 128 × 128 tiles | ≥ 0.05 | tuning |
 | C8 | `sizeSpread` | log-sd of component volumes ≥ 64; share of 32 × 32 regions with a component ≥ 50k voxels (D3's "about one in five", ×½ … ×2) | ≥ 1.5; 10-40 % | tuning |
 | C9 | `nearestEntrance` | from 256 land positions per region (not river), horizontal distance to the nearest C2 opening (default and presets) | p90 ≤ 192 | tuning |
