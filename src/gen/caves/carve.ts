@@ -29,8 +29,9 @@
  * output.
  * The point probe (spec §3.4, D22): `carvedAt(dc, x, y, z)` is `carvedKind` through `carverCacheOf(dc.ctx)` with the
  * column sample of `dc` and the density top read by a downward scan of the density probe (`voxelFn`) with
- * `densityTopOf`'s island rule, only when the answer needs it; `densityTopColumn` is T's and the surface probe's per
- * position density top over a filled solidity. Follows the gen determinism rules.
+ * `densityTopOf`'s island rule, only when the answer needs it, once per position of the column last probed (ruling
+ * R18); `densityTopColumn` is T's and the surface probe's per position density top over a filled solidity. Follows the
+ * gen determinism rules.
  */
 import { CARVER_WINDOW_R, CAVE_KIND, HEIGHT, ISLAND_RUN_MIN_BOTTOM, MIN_Y } from '../../core/constants';
 import { CARVABLE, STONE } from '../../world/blocks/index';
@@ -321,21 +322,52 @@ export function carvedKind(
 }
 
 /**
+ * `carvedAt`'s density-top memo (ruling R18): the column last probed (its density context and (cx, cz)) and, per
+ * position `lz·16 + lx`, its density top once an answer needed it (`UNKNOWN_TOP` before). A position's top is a pure
+ * function of the context (its compiled tree and `islands.enabled`, both frozen) and the position, so the memo changes
+ * no output; it is dropped when the context or the column changes. Probes down one column (`solidAt`, `caveTagAt`)
+ * then scan each position's top once, and no closure is allocated per call.
+ */
+let AT_DC: DensityContext | null = null;
+let AT_CX = 0;
+let AT_CZ = 0;
+/** The position `lz·16 + lx` the current `carvedAt` call asks about. */
+let AT_Q = 0;
+/** No top known yet for that position (a top is an integer in −65 … 319). */
+const UNKNOWN_TOP = -32768;
+const AT_TOPS = new Int16Array(256);
+/** The density probe's solidity at y of the current call's position (its column is current: `carvedAt` made it so). */
+const AT_SOLID = (y: number): boolean => AT_DC!.compiled.voxelFn(AT_Q & 15, y, AT_Q >> 4) > 0;
+/** The current call's position's density top, from the memo or scanned once (`densityTopOf`'s island rule). */
+const AT_TOP_OF = (): number => {
+  let t = AT_TOPS[AT_Q]!;
+  if (t === UNKNOWN_TOP) {
+    t = densityTopOf(AT_SOLID, AT_DC!.ctx.params.islands.enabled);
+    AT_TOPS[AT_Q] = t;
+  }
+  return t;
+};
+
+/**
  * The carver kind that carves world voxel (x, y, z) (spec §3.4, D22): `carvedKind` through `carverCacheOf(dc.ctx)` and
  * its carver leaves, with `dc`'s column sample (`dc.column`, which makes the column current) and, only when the answer
  * needs it, the position's density top by a downward scan of the density probe (`voxelFn > 0` from y 319, with
- * `densityTopOf`'s island rule under `islands.enabled`). 0 when no carver carves it (and at y −64). Like `carvedKind`,
- * the result means anything only for a voxel the density fill leaves solid (ruling P19): there it equals the T stage's
- * carve (`carveColumn`'s tag). x, z integers in the world window, y an integer in −64 … 319 (the caller's to check, as
- * `probe` does).
+ * `densityTopOf`'s island rule under `islands.enabled`; memoised per position of the column last probed, ruling R18).
+ * 0 when no carver carves it (and at y −64). Like `carvedKind`, the result means anything only for a voxel the density
+ * fill leaves solid (ruling P19): there it equals the T stage's carve (`carveColumn`'s tag). x, z integers in the world
+ * window, y an integer in −64 … 319 (the caller's to check, as `probe` does).
  */
 export function carvedAt(dc: DensityContext, x: number, y: number, z: number): number {
   if (y <= Y0 || y > TOP_Y) return 0;
   const cx = x >> 4, cz = z >> 4;
   const s = dc.column(cx, cz);
   const cache = CACHE_OF(dc.ctx);
-  const c = dc.compiled;
-  const lx = x - 16 * cx, lz = z - 16 * cz;
-  const islands = dc.ctx.params.islands.enabled;
-  return carvedKind(cache, cache.params, s, x, y, z, () => densityTopOf((yy) => c.voxelFn(lx, yy, lz) > 0, islands));
+  if (dc !== AT_DC || cx !== AT_CX || cz !== AT_CZ) {
+    AT_DC = dc;
+    AT_CX = cx;
+    AT_CZ = cz;
+    AT_TOPS.fill(UNKNOWN_TOP);
+  }
+  AT_Q = ((z - 16 * cz) << 4) | (x - 16 * cx);
+  return carvedKind(cache, cache.params, s, x, y, z, AT_TOP_OF);
 }

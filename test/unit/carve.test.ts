@@ -12,7 +12,8 @@
  * - `carvedKind` equals `carveColumn`'s tags on every density-solid voxel of 8 columns (ruling P19), column by column;
  * - `carverCacheOf` (Task 27): one cache per GenContext over `carverParamsOf(ctx.params)` with capacity 1,024, a new one
  *   for a new context (a `configure`); `carvedAt` equals the T stage's carve on every density-solid voxel of 8 columns,
- *   an island-over-sea column of floating_islands among them;
+ *   an island-over-sea column of floating_islands among them; its density-top memo (ruling R18) answers as a fresh scan
+ *   with probes interleaved over two contexts and two columns;
  * - Review Focus 5 (Task 28): a column a worm carves from a source 10 chunks away hashes the same in a region, alone on a
  *   fresh store (`isolatedColumn`), after a teleport filled the 1,024-path LRU, after a configure emptied it and with an
  *   LRU of 1; the two columns either side of the worm's chunk border carve the voxels next to it as the box carve does
@@ -600,6 +601,55 @@ describe('carverCacheOf and carvedAt (SP6a spec §2.5, §3.4; Task 27)', () => {
     expect(carved).toBeGreaterThan(0);
     expect([...kinds].sort()).toEqual([CAVE_KIND.worm, CAVE_KIND.ravine, CAVE_KIND.undergroundWorm].filter((k) => kinds.has(k)).sort());
     expect(kinds.has(CAVE_KIND.worm) && kinds.has(CAVE_KIND.ravine)).toBe(true);
+  });
+
+  test('carvedAt\'s density-top memo (ruling R18): probes interleaved over two contexts and two columns, voxel by voxel, answer as a fresh scan of the density top does', () => {
+    // Two worlds whose density tops differ at one position and whose wet roof is as deep as it goes (waterDepth 48,
+    // bandSpan 32: σ_w reaches 88 blocks under a wet top), so which top a voxel reads changes its answer: floating_islands
+    // at seeds 42 and 1, beside its island-over-sea column (wet′ 1, the density top the sea bed's under the island rule).
+    const fi = resolveProfile('floating_islands');
+    const deep = { ...fi, caves: { ...fi.caves, limits: { ...fi.caves.limits, waterDepth: 48, bandSpan: 32 } } };
+    const s42 = createDensityContext(createGenContext(seedFromInput('42'), deep));
+    const s1 = createDensityContext(createGenContext(seedFromInput('1'), deep));
+    // Interleaved voxel by voxel: one column through both contexts (seed 42 after seed 1, which would read seed 1's tops
+    // if the memo ignored the context), and a column two chunks east (which would read the first column's if the memo
+    // ignored the column).
+    const streams: ReadonlyArray<readonly [DensityContext, number, number]> = [
+      [s1, 19356, -22221], [s42, 19356, -22221], [s42, 19358, -22221],
+    ];
+    /** carvedAt as Task 27 wrote it: the position's top by a fresh downward scan, no memo. */
+    const fresh = (d: DensityContext, x: number, y: number, z: number): number => {
+      const cx = x >> 4, cz = z >> 4;
+      const s = d.column(cx, cz);
+      const cache = carverCacheOf(d.ctx);
+      const islands = d.ctx.params.islands.enabled;
+      return carvedKind(cache, cache.params, s, x, y, z, () => densityTopOf((yy) => d.compiled.voxelFn(x - 16 * cx, yy, z - 16 * cz) > 0, islands));
+    };
+    // 37 positions (every 7th) keep it fast: the fresh scan reads up to 383 voxels per answer that needs the top.
+    const bad: string[] = [];
+    const carvedBy = [0, 0, 0];
+    for (let y = -63; y <= 140; y++) {
+      for (let q = 0; q < 256; q += 7) {
+        streams.forEach(([d, cx, cz], k) => {
+          const x = 16 * cx + (q & 15), z = 16 * cz + (q >> 4);
+          if (!(probe(d, x, y, z) > 0)) return;
+          const got = carvedAt(d, x, y, z);
+          const want = fresh(d, x, y, z);
+          if (got !== want) bad.push(`stream ${k} (${x}, ${y}, ${z}): carvedAt ${got} ≠ fresh ${want}`);
+          if (got !== 0) carvedBy[k]!++;
+        });
+      }
+    }
+    expect(bad.slice(0, 5)).toEqual([]);
+    expect(carvedBy[1]! > 0 && carvedBy[2]! > 0, `seed 42 carves in both columns: ${carvedBy}`).toBe(true);
+    // Down one column (the memo kept), as the test above probes: the same answers again.
+    for (let y = -63; y <= 140; y++) {
+      for (let q = 0; q < 256; q += 7) {
+        const x = 16 * 19356 + (q & 15), z = 16 * -22221 + (q >> 4);
+        if (probe(s42, x, y, z) > 0 && carvedAt(s42, x, y, z) !== fresh(s42, x, y, z)) bad.push(`(${x}, ${y}, ${z})`);
+      }
+    }
+    expect(bad.slice(0, 5)).toEqual([]);
   });
 });
 
