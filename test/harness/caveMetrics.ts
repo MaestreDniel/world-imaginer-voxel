@@ -22,9 +22,14 @@
  *   whose voxel below is not tagged; `floorPeak` is the largest share one y holds of those floors.
  * - C5: `largest` per region (the largest component over the region's tagged voxels in the components' box), the
  *   worst region's; a land position's first voxel from y 319 down that is solid or holds fluid is solid without fluid;
- *   a component's thinnest axis is the median over its voxels of the voxel's shortest axis-aligned run inside the
- *   component (x, y or z; capped at 255): a 10 × 10 × 10 cavern gives 10, a straight 4 × 4 tunnel 4, and unlike a
- *   bounding box it follows a winding tunnel. "Mostly" a kind: more than half its voxels.
+ *   a component's thinnest axis is the median over its voxels of the voxel's local thickness (`localThickness`): the
+ *   largest ball inside the components that holds the voxel, centred on a voxel centre or a voxel corner, read as its
+ *   least extent in voxels along x, y or z (capped at 255). A 10 × 10 × 10 cavern gives 10, a straight 4 × 4 tunnel 4,
+ *   a round tube of diameter D (its voxels' centres within D/2 of its axis) D, a diagonal one of diameter 6 within 1
+ *   of 6. Unlike a bounding box it follows a winding tunnel, and unlike the shortest axis-aligned run through a voxel
+ *   it does not read a round section's edge voxels as thin (that run gave 2, 3, 5, 6, 8 for D 4, 5, 6, 8, 10). The
+ *   box's faces cut the components (a component cut by the region's border or by y −56 reads thinner there). "Mostly"
+ *   a kind: more than half its voxels.
  * - C6: per band, the carve rate of the underground voxels with y ≡ r (mod 8), x ≡ r (mod 4) and z ≡ r (mod 4), each
  *   over the band's rate; the maximum over residues and the bands whose rate is > 0.
  * The region parts pool their counts over the regions (C1 per profile); the per-km² parts divide by the regions' area.
@@ -527,8 +532,8 @@ export function landCounts(g: CaveGrid): { land: number; carved: number } {
 
 /** The components C5's thinnest axis reads: ≥ 64 voxels. */
 export const THIN_MIN_VOXELS = 64;
-/** The cap of a run length (the per-voxel runs are bytes). */
-const RUN_CAP = 255;
+/** The cap of a local thickness (the per-voxel thicknesses are bytes). */
+const THICK_CAP = 255;
 
 /** The median of `v` (the mean of the two middle values for an even count); NaN when empty. */
 export function median(v: ArrayLike<number>): number {
@@ -554,43 +559,243 @@ function histMedian(hist: Int32Array, from: number, n: number): number {
   return total % 2 === 1 ? kth(total >> 1) : (kth((total >> 1) - 1) + kth(total >> 1)) / 2;
 }
 
+/** The largest integer t ≥ 0 with t² < n; −1 when n ≤ 0. */
+function rootBelow(n: number): number {
+  if (n <= 0) return -1;
+  let t = Math.floor(Math.sqrt(n));
+  while (t > 0 && t * t >= n) t--;
+  while ((t + 1) * (t + 1) < n) t++;
+  return t;
+}
+
 /**
- * C5.thinnest's values: per component ≥ `minSize` voxels, its thinnest axis (the median over its voxels of the
- * shortest axis-aligned run inside it, capped at 255), all of them and those of the components mostly cheese and mostly
- * spaghetti 3D (more than half their voxels of that tag).
+ * One line of the half-block distance transform (Felzenszwalb and Huttenlocher's lower envelope of parabolas): the
+ * sites are the voxel centres of a run [a, b] and its two boundary voxels, at half-block positions 2(a − 1), 2a, …,
+ * 2(b + 1), with `vals[0 … m − 1]` their values (quarter-block² units; the boundaries' the line's floor); writes
+ * min over the sites of vals + (p − site)² at every half-block position p = 2a … 2b into `out[0 … 2(m − 2) − 2]`.
  */
-export function thinnestAxes(g: CaveGrid, c: CaveComponents, minSize = THIN_MIN_VOXELS): { all: number[]; cheese: number[]; spaghetti3d: number[] } {
-  const { w, d } = g;
-  const plane = w * d;
+function envelope(vals: Float64Array, m: number, out: Float64Array, v: Int32Array, zb: Float64Array): void {
+  let k = 0;
+  v[0] = 0;
+  zb[0] = -Infinity;
+  zb[1] = Infinity;
+  for (let q = 1; q < m; q++) {
+    const fq = vals[q]! + 4 * q * q;
+    let r = v[k]!;
+    let s = (fq - vals[r]! - 4 * r * r) / (4 * (q - r));
+    while (s <= zb[k]!) {
+      k--;
+      r = v[k]!;
+      s = (fq - vals[r]! - 4 * r * r) / (4 * (q - r));
+    }
+    k++;
+    v[k] = q;
+    zb[k] = s;
+    zb[k + 1] = Infinity;
+  }
+  k = 0;
+  const n = 2 * (m - 2) - 1;
+  for (let i = 0; i < n; i++) {
+    const p = i + 2;
+    while (zb[k + 1]! < p) k++;
+    const dp = p - 2 * v[k]!;
+    out[i] = dp * dp + vals[v[k]!]!;
+  }
+}
+
+/**
+ * The thickness of the ball {voxel centres p : |p − c|² < F/4} (F in quarter-block² units) centred at the half-block
+ * point c whose offsets from a voxel centre are (ox, oy, oz) half blocks (0 or 1): the least of its three extents in
+ * voxels along the axes (its extent along an axis is the voxels on the axis-parallel line nearest c), capped at 255.
+ */
+function ballThickness(f: number, ox: number, oy: number, oz: number): number {
+  const extent = (o: number, e: number): number => {
+    const t = rootBelow(f - e);
+    return t < 0 ? 0 : o === 1 ? 2 * ((t + 1) >> 1) : 2 * (t >> 1) + 1;
+  };
+  return Math.min(THICK_CAP, extent(ox, oy + oz), extent(oy, ox + oz), extent(oz, ox + oy));
+}
+
+/** The half-block distance between a voxel centre and a nearest voxel corner. */
+const SQRT3 = Math.sqrt(3);
+
+/**
+ * The local thickness of every voxel of `c`'s components (box index `(y·d + z)·w + x`, y from `c.yMin`; 0 outside the
+ * components): the largest thickness (`ballThickness`) of a ball that contains it, over the balls centred on voxel
+ * centres and on voxel corners (so that an odd and an even width each have a centre), each with the largest radius
+ * that keeps every voxel centre outside the components out (a voxel of no component, or any voxel beyond the box: the
+ * box's faces cut a component). The distance to the nearest outside voxel centre is an exact separable Euclidean
+ * distance transform on the half-block lattice (in y, then x, then z, run by run along each line: a point is inside
+ * when every voxel nearest it is), one y plane at a time; a ball that the ball of one of its 8 nearest centres of the
+ * other class holds is skipped (Hildebrand and Rüegsegger's local thickness, with the two centre classes). A round
+ * tube of diameter D reads D; a square one, its side.
+ */
+export function localThickness(c: CaveComponents, w: number, d: number): Uint8Array {
   const h = c.yMax - c.yMin + 1;
-  const n = plane * h;
+  const plane = w * d;
   const label = c.label;
-  const run = new Uint8Array(n).fill(RUN_CAP);
-  /** Writes min(run, length) along each run of labelled voxels of the line from `start` by `step`, `len` voxels. */
-  const line = (start: number, step: number, len: number): void => {
-    let k = 0;
-    while (k < len) {
-      if (label[start + k * step]! === 0) {
-        k++;
-        continue;
+  const thick = new Uint8Array(plane * h);
+  const w2 = 2 * w - 1;
+  const d2 = 2 * d - 1;
+  const h2 = 2 * h - 1;
+  const plane2 = w2 * d2;
+  // Per position, the nearest non-component voxel at or below the current y (−1 below the box) and at or above it.
+  const lo = new Int32Array(plane).fill(-1);
+  const hi = new Int32Array(plane).fill(-1);
+  const f1 = new Float64Array(plane);
+  const f2 = new Float64Array(w2 * d);
+  // The squared distances (quarter-block² units, 0 = no ball) of three consecutive half-block planes, and their roots.
+  let fPrev = new Float64Array(plane2);
+  let fCur = new Float64Array(plane2);
+  let fNext = new Float64Array(plane2);
+  let rPrev = new Float64Array(plane2);
+  let rCur = new Float64Array(plane2);
+  let rNext = new Float64Array(plane2);
+  const maxLen = Math.max(w, d) + 2;
+  const vals = new Float64Array(maxLen);
+  const out = new Float64Array(2 * maxLen);
+  const env = new Int32Array(maxLen);
+  const zb = new Float64Array(maxLen + 1);
+
+  /** The half-block plane `yy`'s squared distances into `f` and their roots (half blocks) into `r`. */
+  const planeOf = (yy: number, f: Float64Array, r: Float64Array): void => {
+    f.fill(0);
+    r.fill(0);
+    const y = yy >> 1;
+    const odd = yy & 1;
+    const row = y * plane;
+    if (odd === 0) {
+      for (let p = 0; p < plane; p++) {
+        if (label[row + p]! === 0) { lo[p] = y; hi[p] = y; } else if (hi[p]! < y) {
+          let k = y + 1;
+          while (k < h && label[k * plane + p]! !== 0) k++;
+          hi[p] = k;
+        }
       }
-      let e = k;
-      while (e < len && label[start + e * step]! !== 0) e++;
-      const r = Math.min(RUN_CAP, e - k);
-      for (let j = k; j < e; j++) {
-        const i = start + j * step;
-        if (r < run[i]!) run[i] = r;
+    }
+    // y: the distance along the column to the nearest outside voxel centre; −1 where a nearest voxel is outside.
+    for (let p = 0; p < plane; p++) {
+      if (label[row + p]! === 0) { f1[p] = -1; continue; }
+      if (odd === 0) {
+        const t = 2 * Math.min(y - lo[p]!, hi[p]! - y);
+        f1[p] = t * t;
+      } else if (hi[p]! > y + 1) {
+        const t = Math.min(2 * (y - lo[p]!) + 1, 2 * (hi[p]! - y) - 1);
+        f1[p] = t * t;
+      } else f1[p] = -1;
+    }
+    // x, then z: a run's boundary points have the line's floor, the squared half-block offsets already taken.
+    const floor1 = odd;
+    f2.fill(-1);
+    for (let z = 0; z < d; z++) {
+      const base = z * w;
+      let x = 0;
+      while (x < w) {
+        if (f1[base + x]! < 0) { x++; continue; }
+        let e = x;
+        while (e < w && f1[base + e]! >= 0) e++;
+        const len = e - x;
+        vals[0] = floor1;
+        for (let i = 0; i < len; i++) vals[i + 1] = f1[base + x + i]!;
+        vals[len + 1] = floor1;
+        envelope(vals, len + 2, out, env, zb);
+        const o2 = z * w2 + 2 * x;
+        for (let i = 0; i < 2 * len - 1; i++) f2[o2 + i] = out[i]!;
+        x = e;
       }
-      k = e;
+    }
+    for (let xx = 0; xx < w2; xx++) {
+      const floor2 = floor1 + (xx & 1);
+      let z = 0;
+      while (z < d) {
+        if (f2[z * w2 + xx]! < 0) { z++; continue; }
+        let e = z;
+        while (e < d && f2[e * w2 + xx]! >= 0) e++;
+        const len = e - z;
+        vals[0] = floor2;
+        for (let i = 0; i < len; i++) vals[i + 1] = f2[(z + i) * w2 + xx]!;
+        vals[len + 1] = floor2;
+        envelope(vals, len + 2, out, env, zb);
+        for (let i = 0; i < 2 * len - 1; i++) {
+          const k = (2 * z + i) * w2 + xx;
+          f[k] = out[i]!;
+          r[k] = Math.sqrt(out[i]!);
+        }
+        z = e;
+      }
     }
   };
-  for (let y = 0; y < h; y++) for (let z = 0; z < d; z++) line(y * plane + z * w, 1, w);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) line(y * plane + x, w, d);
-  for (let p = 0; p < plane; p++) line(p, plane, h);
-  // A histogram of run lengths per large component, and its cheese and spaghetti 3D voxels.
+
+  /** Paints the balls of half-block plane `yy`'s centres that no ball of a nearest centre of the other class holds. */
+  const paint = (yy: number): void => {
+    const planes = [rPrev, rCur, rNext];
+    const odd = yy & 1;
+    for (let zz = odd; zz < d2; zz += 2) {
+      for (let xx = odd; xx < w2; xx += 2) {
+        const k = zz * w2 + xx;
+        const f = fCur[k]!;
+        if (f <= 0) continue;
+        const r = rCur[k]! + SQRT3 + 1e-9;
+        let covered = false;
+        for (let dy = -1; dy <= 1 && !covered; dy += 2) {
+          if (yy + dy < 0 || yy + dy >= h2) continue;
+          const rp = planes[dy + 1]!;
+          for (let dz = -1; dz <= 1 && !covered; dz += 2) {
+            const z2 = zz + dz;
+            if (z2 < 0 || z2 >= d2) continue;
+            for (let dx = -1; dx <= 1; dx += 2) {
+              const x2 = xx + dx;
+              if (x2 < 0 || x2 >= w2) continue;
+              if (rp[z2 * w2 + x2]! >= r) { covered = true; break; }
+            }
+          }
+        }
+        if (covered) continue;
+        const t = ballThickness(f, xx & 1, yy & 1, zz & 1);
+        const qy = rootBelow(f);
+        for (let vy = Math.max(0, Math.ceil((yy - qy) / 2)); vy <= Math.min(h - 1, (yy + qy) >> 1); vy++) {
+          const ey = f - (2 * vy - yy) * (2 * vy - yy);
+          const qz = rootBelow(ey);
+          for (let vz = Math.max(0, Math.ceil((zz - qz) / 2)); vz <= Math.min(d - 1, (zz + qz) >> 1); vz++) {
+            const ez = ey - (2 * vz - zz) * (2 * vz - zz);
+            const qx = rootBelow(ez);
+            const o = (vy * d + vz) * w;
+            for (let vx = Math.max(0, Math.ceil((xx - qx) / 2)); vx <= Math.min(w - 1, (xx + qx) >> 1); vx++) {
+              if (thick[o + vx]! < t) thick[o + vx] = t;
+            }
+          }
+        }
+      }
+    }
+  };
+
+  planeOf(0, fCur, rCur);
+  for (let yy = 0; yy < h2; yy++) {
+    if (yy + 1 < h2) planeOf(yy + 1, fNext, rNext);
+    else { fNext.fill(0); rNext.fill(0); }
+    paint(yy);
+    [fPrev, fCur, fNext] = [fCur, fNext, fPrev];
+    [rPrev, rCur, rNext] = [rCur, rNext, rPrev];
+  }
+  return thick;
+}
+
+/**
+ * C5.thinnest's values: per component ≥ `minSize` voxels, its thinnest axis (the median over its voxels of their
+ * local thickness, `localThickness`), all of them and those of the components mostly cheese and mostly spaghetti 3D
+ * (more than half their voxels of that tag).
+ */
+export function thinnestAxes(g: CaveGrid, c: CaveComponents, minSize = THIN_MIN_VOXELS): { all: number[]; cheese: number[]; spaghetti3d: number[] } {
+  const plane = g.w * g.d;
+  const n = plane * (c.yMax - c.yMin + 1);
+  const label = c.label;
   const slot = new Map<number, number>();
   for (const [l, s] of c.size) if (s >= minSize) slot.set(l, slot.size);
-  const hist = new Int32Array(slot.size * (RUN_CAP + 1));
+  const out = { all: [] as number[], cheese: [] as number[], spaghetti3d: [] as number[] };
+  if (slot.size === 0) return out;
+  const thick = localThickness(c, g.w, g.d);
+  // A histogram of thicknesses per large component, and its cheese and spaghetti 3D voxels.
+  const hist = new Int32Array(slot.size * (THICK_CAP + 1));
   const cheese = new Int32Array(slot.size);
   const spag = new Int32Array(slot.size);
   for (let i = 0; i < n; i++) {
@@ -598,14 +803,13 @@ export function thinnestAxes(g: CaveGrid, c: CaveComponents, minSize = THIN_MIN_
     if (l === 0) continue;
     const s = slot.get(l);
     if (s === undefined) continue;
-    hist[s * (RUN_CAP + 1) + run[i]!]!++;
+    hist[s * (THICK_CAP + 1) + thick[i]!]!++;
     const t = g.cells[i + (c.yMin - GRID_Y0) * plane]! & TAG_MASK;
     if (t === CAVE_KIND.cheese) cheese[s]!++;
     else if (t === CAVE_KIND.spaghetti3d) spag[s]!++;
   }
-  const out = { all: [] as number[], cheese: [] as number[], spaghetti3d: [] as number[] };
   for (const [l, s] of slot) {
-    const v = histMedian(hist, s * (RUN_CAP + 1), RUN_CAP + 1);
+    const v = histMedian(hist, s * (THICK_CAP + 1), THICK_CAP + 1);
     out.all.push(v);
     const size = c.size.get(l)!;
     if (2 * cheese[s]! > size) out.cheese.push(v);

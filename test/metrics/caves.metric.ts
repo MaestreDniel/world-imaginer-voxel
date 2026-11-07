@@ -436,7 +436,8 @@ const NAN_ON_FAST: readonly string[] = [];
  * C1-C6 (SP6a spec §10.1, D26: tuning parts, no row before Task 38, which turns each into a `metricTest` part of the
  * same id): measured over the tier's default regions (default and large_biomes; C1 per profile) by
  * `test/harness/caveMetrics.ts`, whose header states each definition as built, and written to
- * `.out/caves.C1-C6.json`: the parts, the value per profile, and per region its counts' summary.
+ * `.out/caves.C1-C6.json`: the parts, the value per profile, C5.thinnest's components per value, and per region its
+ * counts' summary.
  */
 test('C1-C6 recorded (SP6a D26)', async () => {
   const measured: Array<{ site: Site; counts: CaveRegionCounts; ms: number }> = [];
@@ -473,9 +474,16 @@ test('C1-C6 recorded (SP6a D26)', async () => {
     thinnestComponents: c.thinnest.all.length, cheeseComponents: c.thinnest.cheese.length,
     spaghetti3dComponents: c.thinnest.spaghetti3d.length,
   }));
+  // C5.thinnest's population: how many components ≥ 64 voxels read each thinnest axis, pooled over the regions.
+  const histOf = (pick: (t: CaveRegionCounts['thinnest']) => number[]): Record<string, number> => {
+    const hist: Record<string, number> = {};
+    for (const m of measured) for (const v of pick(m.counts.thinnest)) hist[String(v)] = (hist[String(v)] ?? 0) + 1;
+    return hist;
+  };
+  const thinnest = { all: histOf((t) => t.all), cheese: histOf((t) => t.cheese), spaghetti3d: histOf((t) => t.spaghetti3d) };
   mkdirSync(OUT_DIR, { recursive: true });
   writeFileSync(join(OUT_DIR, 'caves.C1-C6.json'), `${JSON.stringify({
-    id: 'C1-C6', tier: process.env.METRICS_TIER ?? null, values: parts, nanParts: nan, perProfile, bands, regions,
+    id: 'C1-C6', tier: process.env.METRICS_TIER ?? null, values: parts, nanParts: nan, perProfile, bands, thinnest, regions,
   }, (_, v: unknown) => (typeof v === 'number' && !Number.isFinite(v) ? String(v) : v), 2)}\n`);
   for (const p of C1_C6_PARTS) {
     const v = parts[p];

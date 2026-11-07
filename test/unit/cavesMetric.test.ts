@@ -3,7 +3,7 @@ import { CAVE_KIND } from '../../src/core/constants';
 import type { CarverPath } from '../../src/gen/caves/carvers';
 import {
   bandCounts, bandsMin, c1c6Parts, C1_C6_PARTS, caveComponents, caveRegionCounts, COMP_Y_MIN, emptyCaveGrid, floorCounts,
-  floorPeak, GRID_H, GRID_Y0, kindCounts, landCounts, largestCounts, latticeBias, median, pillarTiles, preCaveTops,
+  floorPeak, GRID_H, GRID_Y0, kindCounts, landCounts, largestCounts, latticeBias, localThickness, median, pillarTiles, preCaveTops,
   ravineCounts, setCell, skyCounts, thinnestAxes, voidCounts, type CaveGrid,
 } from '../harness/caveMetrics';
 import { components3d } from '../harness/flood';
@@ -53,6 +53,118 @@ describe('the caves instruments on fixtures (SP6a §10.1, C1-C6)', () => {
     // A component under 64 voxels (3 × 3 × 3) is left out.
     carve(g, K.cheese, 20, 22, 10, 12, 2, 4);
     expect(thinnestAxes(g, caveComponents(g, preCaveTops(g))).all.length).toBe(2);
+  });
+
+  /**
+   * Carves a straight round tube of diameter `dia` along `axis`, from `from` to `to` on that axis, its axis at (a, b)
+   * in the two other axes in order (y, z for 'x'; x, z for 'y'; x, y for 'z'): a voxel is in when its centre lies
+   * within dia/2 of the tube's axis. An even diameter's axis runs along voxel corners, an odd one's through centres.
+   */
+  function tube(g: CaveGrid, tag: number, axis: 'x' | 'y' | 'z', dia: number, a: number, b: number, from: number, to: number): void {
+    const off = dia % 2 === 0 ? 0 : 0.5;
+    const r2 = (dia / 2) * (dia / 2);
+    const half = Math.ceil(dia / 2);
+    for (let t = from; t <= to; t++) {
+      for (let i = a - half; i <= a + half; i++) {
+        for (let j = b - half; j <= b + half; j++) {
+          const di = i + 0.5 - (a + off);
+          const dj = j + 0.5 - (b + off);
+          if (di * di + dj * dj >= r2) continue;
+          if (axis === 'x') setCell(g, t, i, j, tag, false);
+          else if (axis === 'y') setCell(g, i, t, j, tag, false);
+          else setCell(g, i, j, t, tag, false);
+        }
+      }
+    }
+  }
+
+  test('a round tube of diameter D has thinnest axis D (4, 5, 6, 8, 10) along each axis; a round cavern of diameter 10, 10', () => {
+    // The per-voxel shortest axis-aligned run read a round section at about half its width (D 4 → 2, 5 → 3, 6 → 5,
+    // 8 → 6, 10 → 8): a round section's edge voxels have short runs. The local thickness reads its diameter.
+    const g = rock(40, 40, 140);
+    const dias = [4, 5, 6, 8, 10];
+    dias.forEach((dia, k) => tube(g, K.spaghetti3d, 'x', dia, -40 + 16 * k, 20, 0, 39));
+    const t = thinnestAxes(g, caveComponents(g, preCaveTops(g)));
+    expect([...t.all].sort((a, b) => a - b)).toEqual(dias);
+
+    for (const axis of ['y', 'z'] as const) {
+      const h = rock(40, 40, 140);
+      if (axis === 'y') { tube(h, K.cheese, 'y', 4, 8, 8, 0, 60); tube(h, K.cheese, 'y', 7, 26, 26, 0, 60); }
+      else { tube(h, K.cheese, 'z', 4, 10, 8, 0, 39); tube(h, K.cheese, 'z', 7, 30, 26, 0, 39); }
+      expect([...thinnestAxes(h, caveComponents(h, preCaveTops(h))).all].sort((a, b) => a - b), axis).toEqual([4, 7]);
+    }
+
+    const s = rock(32, 32, 100);
+    for (let y = 30; y < 40; y++) for (let z = 10; z < 20; z++) for (let x = 10; x < 20; x++) {
+      const dx = x + 0.5 - 15;
+      const dy = y + 0.5 - 35;
+      const dz = z + 0.5 - 15;
+      if (dx * dx + dy * dy + dz * dz < 25) setCell(s, x, y, z, K.cheese, false);
+    }
+    expect(thinnestAxes(s, caveComponents(s, preCaveTops(s))).all).toEqual([10]);
+  });
+
+  test('a diagonal round tube reads within one block of its diameter; a junction of thin tubes stays thin', () => {
+    // A tube of diameter 6 along the x = z diagonal, its axis at y 40.
+    const g = rock(48, 48, 100);
+    for (let y = 30; y < 50; y++) for (let z = 0; z < 48; z++) for (let x = 0; x < 48; x++) {
+      const u = (x - z) / Math.SQRT2;
+      const v = y + 0.5 - 40;
+      if (u * u + v * v < 9) setCell(g, x, y, z, K.spaghetti3d, false);
+    }
+    const [diag] = thinnestAxes(g, caveComponents(g, preCaveTops(g))).all;
+    expect(Math.abs(diag! - 6)).toBeLessThanOrEqual(1);
+    // Three 2 × 2 tubes crossing: every axis-aligned run through the crossing is long, but no wide ball fits there.
+    const j = rock(40, 40, 100);
+    carve(j, K.noodle, 0, 39, 50, 51, 20, 21);
+    carve(j, K.noodle, 20, 21, 50, 51, 0, 39);
+    carve(j, K.noodle, 20, 21, 30, 70, 20, 21);
+    expect(thinnestAxes(j, caveComponents(j, preCaveTops(j))).all).toEqual([2]);
+  });
+
+  test('localThickness equals a brute force over every voxel centre and corner on random blobs (the transform and the skipping exact)', () => {
+    let seed = 12345;
+    const rnd = (): number => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return seed / 2 ** 32; };
+    for (let trial = 0; trial < 6; trial++) {
+      const w = 11;
+      const d = 9;
+      const g = rock(w, d, -44);
+      for (let b = 0; b < 4; b++) {
+        const cx = rnd() * w;
+        const cy = -56 + rnd() * 12;
+        const cz = rnd() * d;
+        const rr = 1 + rnd() * 3.5;
+        const ky = 0.3 + rnd() * 1.5;
+        for (let y = -56; y <= -44; y++) for (let z = 0; z < d; z++) for (let x = 0; x < w; x++) {
+          const q = (x + 0.5 - cx) ** 2 + ky * (y + 0.5 - cy) ** 2 + (z + 0.5 - cz) ** 2;
+          if (q < rr * rr) setCell(g, x, y, z, K.cheese, false);
+        }
+      }
+      const c = caveComponents(g, preCaveTops(g));
+      const h = c.yMax - c.yMin + 1;
+      const inside = (x: number, y: number, z: number): boolean =>
+        x >= 0 && x < w && z >= 0 && z < d && y >= 0 && y < h && c.label[(y * d + z) * w + x]! !== 0;
+      const want = new Uint8Array(w * d * h);
+      for (let yy = 0; yy < 2 * h - 1; yy++) for (let zz = 0; zz < 2 * d - 1; zz++) for (let xx = 0; xx < 2 * w - 1; xx++) {
+        // The centres: voxel centres and voxel corners.
+        if ((xx & 1) !== (yy & 1) || (zz & 1) !== (yy & 1)) continue;
+        // Half-block units: a voxel's centre at twice its index. The squared distance to the nearest outside centre.
+        let f = Infinity;
+        for (let y = -1; y <= h; y++) for (let z = -1; z <= d; z++) for (let x = -1; x <= w; x++) {
+          if (inside(x, y, z)) continue;
+          f = Math.min(f, (2 * x - xx) ** 2 + (2 * y - yy) ** 2 + (2 * z - zz) ** 2);
+        }
+        const ball: number[][] = [];
+        for (let y = 0; y < h; y++) for (let z = 0; z < d; z++) for (let x = 0; x < w; x++) {
+          if ((2 * x - xx) ** 2 + (2 * y - yy) ** 2 + (2 * z - zz) ** 2 < f) ball.push([x, y, z]);
+        }
+        if (ball.length === 0) continue;
+        const ext = [0, 1, 2].map((a) => Math.max(...ball.map((v) => v[a]!)) - Math.min(...ball.map((v) => v[a]!)) + 1);
+        const t = Math.min(...ext);
+        for (const [x, y, z] of ball) want[(y! * d + z!) * w + x!] = Math.max(want[(y! * d + z!) * w + x!]!, t);
+      }
+      expect(Array.from(localThickness(c, w, d)), `trial ${trial}`).toEqual(Array.from(want));
+    }
   });
 
   test('a lattice-aligned slab of carving at y ≡ 0 mod 8 has latticeBias 8; uniform carving 1; x ≡ 0 mod 4 carving 4', () => {
