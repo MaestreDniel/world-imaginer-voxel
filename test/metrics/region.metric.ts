@@ -1,5 +1,5 @@
 import { expect } from 'vitest';
-import { fnv1a32 } from '../../src/core/hash';
+import { fnv1a32, hex64 } from '../../src/core/hash';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { applyPatch } from '../../src/core/params/kit';
 import { resolveProfile } from '../../src/core/params/profiles';
@@ -12,7 +12,9 @@ import { createDensityContext } from '../../src/gen/density/context';
 import { probe } from '../../src/gen/density/probe';
 import { createDensityReference, interpolatedNodes } from '../../src/gen/density/reference';
 import { caveTagAt } from '../../src/gen/caves/tags';
-import { fillColumnT } from '../../src/metrics/region';
+import { carverCacheOf } from '../../src/gen/caves/carverCache';
+import { CARVER_CACHE_PATHS, CARVER_WINDOW_R } from '../../src/core/constants';
+import { fillColumnT, genRegionInProcess, regionHash } from '../../src/metrics/region';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import type { JsonValue } from '../../src/core/params/json';
 import { terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
@@ -23,7 +25,7 @@ import { expectGolden } from '../harness/goldens';
 import { metricTest } from '../harness/metric';
 import { integerEnv } from '../harness/env';
 import { DT2_VOXELS_PER_COLUMN, dt2Column, dt2Setup, newDt2Acc } from '../harness/dt2';
-import { dt1WorkerDir, genRegion, type GenRegionOptions, type RegionResult } from '../harness/region';
+import { dt1WorkerDir, genRegion, isolatedColumn, type GenRegionOptions, type RegionResult } from '../harness/region';
 import { mutateTree } from '../harness/treeMutator';
 
 /**
@@ -34,6 +36,17 @@ import { mutateTree } from '../harness/treeMutator';
  * 2. Golden: in the seed '42' cold spiral run of each profile, the hash of the 8 × 8 window at (−4, −4) is
  *    `sp3a.region.T.<profile>` (in `npm run test:goldens` it is recorded as an observation instead, so it must agree
  *    with the unit test's `genRegionInProcess` value).
+ * 3. `carverCache` (SP6a spec §10.3, §2.5): per profile and seed, the hash of the 8 × 8 golden window generated as a
+ *    region of its own (every tier: T is per column, so it equals that window of the tier's region, and a 32 × 32 run
+ *    on 1 thread would add about 20 s per run to the quick tier) with a carver path cache of 1 path
+ *    (shuffled / 4 threads, `carverCacheCapacity: 1`; a worker that held more than 1 path also counts), of 1,024
+ *    (spiral / 1 thread, `carverCacheCapacity: 1024`) and warm from another region (1 thread in process: one context's
+ *    cache asked for every window source of the 48 × 48 columns 1,250 chunks east of the region's corner, column by
+ *    column in the window's order, as T asks it, which leaves it full, `CARVER_CACHE_PATHS` paths, else a mismatch;
+ *    then the window generated with that context), each against the window of the cold spiral run: mismatches.
+ * 4. `isolated` (SP6a spec §10.3): per profile and seed, `ISOLATED` columns of the region drawn by
+ *    `Xoshiro128(fnv1a32('DT1.isolated'))`, each generated alone on a fresh store (`isolatedColumn`), against the same
+ *    column's window of the cold spiral run: mismatches.
  * `DT1_SHUFFLE_SEED` (default 1) seeds the shuffled order; it is printed with every mismatch.
  */
 type Tier = 'fast' | 'quick' | 'full';
@@ -47,6 +60,16 @@ const REGION = pick({ cx0: -4, cz0: -4, w: 8, h: 8 }, { cx0: -16, cz0: -16, w: 3
 const SEEDS: readonly string[] = pick(['42'], ['42'], ['42', '1', '2', '3']);
 const SHUFFLE_SEED = integerEnv('DT1_SHUFFLE_SEED', 1);
 const GOLDEN_WINDOW = [-4, -4, 8, 8] as const;
+/** DT1.carverCache's region on every tier: the golden window. */
+const CARVER_REGION = { cx0: GOLDEN_WINDOW[0], cz0: GOLDEN_WINDOW[1], w: GOLDEN_WINDOW[2], h: GOLDEN_WINDOW[3] } as const;
+/** DT1.isolated's columns per profile and seed. */
+const ISOLATED = pick(4, 8, 16);
+/**
+ * DT1.carverCache's warm-up region: 48 × 48 columns (about 1,200 paths at the defaults, more than the cache holds) at the
+ * tier's region's corner moved this many chunks east (20,000 blocks).
+ */
+const WARM_SHIFT = 1250;
+const WARM_SIDE = 48;
 
 interface Run {
   readonly label: string;
@@ -63,17 +86,45 @@ const RUNS: readonly Run[] = [
   { label: 'spiral/1/cache (must hit)', order: 'spiral', threads: 1, cache: true },
 ];
 
-metricTest('DT1', ['mismatches'], async () => {
+/**
+ * DT1.carverCache's warm run: a context whose carver cache was asked for every window source of the `WARM_SIDE`²
+ * columns `WARM_SHIFT` chunks east of `CARVER_REGION`'s corner (column by column, the window's order: what T asks of
+ * it), then `CARVER_REGION` generated in process with it; its hash, and the paths the cache held before it.
+ */
+function warmRegionHash(seed: string, params: Params): { hash: string; warmSize: number } {
+  const ctx = createGenContext(seedFromInput(seed), params);
+  const cache = carverCacheOf(ctx);
+  const R = CARVER_WINDOW_R;
+  const kinds = ['worm', 'ravine', 'undergroundWorm'] as const;
+  const { cx0, cz0, w, h } = CARVER_REGION;
+  for (let cz = cz0; cz < cz0 + WARM_SIDE; cz++) {
+    for (let cx = cx0 + WARM_SHIFT; cx < cx0 + WARM_SHIFT + WARM_SIDE; cx++) {
+      for (let sz = cz - R; sz <= cz + R; sz++) for (let sx = cx - R; sx <= cx + R; sx++) for (const k of kinds) cache.path(k, sx, sz);
+    }
+  }
+  const warmSize = cache.size;
+  const store = createStore({ shared: false });
+  genRegionInProcess(store, ctx, cx0, cz0, w, h);
+  return { hash: hex64(regionHash(store, cx0, cz0, w, h)), warmSize };
+}
+
+metricTest('DT1', ['mismatches', 'carverCache', 'isolated'], async () => {
   const problems: string[] = [];
   let invariance = 0;
   let golden = 0;
   let firstCacheHits = 0;
   let genMs = 0;
+  let carverCache = 0;
+  let carverCacheRuns = 0;
+  let isolated = 0;
+  let isolatedColumns = 0;
+  let isolatedMs = 0;
   for (const profile of PROFILES) {
     const params = resolveProfile(profile);
     for (const seed of SEEDS) {
       const at = `profile ${profile}, seed '${seed}', shuffleSeed ${SHUFFLE_SEED}`;
       let ref = '';
+      let refView: RegionResult['view'] | null = null;
       for (const [i, run] of RUNS.entries()) {
         const r: RegionResult = await genRegion({
           seed, params, ...REGION, upTo: 'T', order: run.order, threads: run.threads, cache: run.cache,
@@ -83,6 +134,7 @@ metricTest('DT1', ['mismatches'], async () => {
         const hash = r.view.hash();
         if (i === 0) {
           ref = hash;
+          refView = r.view;
           if (seed === '42') {
             try {
               expectGolden(`sp3a.region.T.${profile}`, r.view.hash(...GOLDEN_WINDOW));
@@ -101,12 +153,51 @@ metricTest('DT1', ['mismatches'], async () => {
           problems.push(`${at}: ${run.label} was not a cache hit`);
         }
       }
+      // 3. DT1.carverCache: an LRU of 1 and of 1,024, and warm from another region, against the cold default.
+      const window = refView!.hash(...GOLDEN_WINDOW);
+      for (const [label, capacity, order, threads] of [['LRU 1, shuffled/4', 1, 'shuffled', 4], ['LRU 1024, spiral/1', 1024, 'spiral', 1]] as const) {
+        const r = await genRegion({
+          seed, params, ...CARVER_REGION, upTo: 'T', order, threads, carverCacheCapacity: capacity, shuffleSeed: SHUFFLE_SEED,
+          workerDir: dt1WorkerDir(TIER),
+        });
+        genMs += r.timings.totalMs;
+        carverCacheRuns++;
+        const most = Math.max(...r.carverCacheSizes);
+        if (r.view.hash() !== window || most > capacity) {
+          carverCache++;
+          problems.push(`${at}: carverCache ${label}: hash ${r.view.hash()} vs ${window}, the most paths a thread held ${most}`);
+        }
+      }
+      const w0 = performance.now();
+      const warm = warmRegionHash(seed, params);
+      genMs += performance.now() - w0;
+      carverCacheRuns++;
+      if (warm.hash !== window || warm.warmSize !== CARVER_CACHE_PATHS) {
+        carverCache++;
+        problems.push(`${at}: carverCache warm: hash ${warm.hash} vs ${window}, ${warm.warmSize} paths held before the window`);
+      }
+      // 4. DT1.isolated: columns of the region generated alone on a fresh store.
+      const rng = new Xoshiro128(fnv1a32('DT1.isolated'));
+      for (let n = 0; n < ISOLATED; n++) {
+        const cx = REGION.cx0 + rng.nextInt(REGION.w);
+        const cz = REGION.cz0 + rng.nextInt(REGION.h);
+        const t0 = performance.now();
+        const got = hex64(await isolatedColumn({ seed, params, cx, cz }));
+        isolatedMs += performance.now() - t0;
+        isolatedColumns++;
+        const want = refView!.hash(cx, cz, 1, 1);
+        if (got !== want) {
+          isolated++;
+          problems.push(`${at}: isolated column (${cx}, ${cz}): ${got} vs the region's ${want}`);
+        }
+      }
     }
   }
   expect.soft(problems, `DT1 mismatches (tier ${TIER}, DT1_SHUFFLE_SEED=${SHUFFLE_SEED})`).toEqual([]);
   return {
     mismatches: invariance + golden, invarianceMismatches: invariance, goldenMismatches: golden,
     firstCacheHits, regions: PROFILES.length * SEEDS.length * RUNS.length, genSeconds: Math.round(genMs) / 1000,
+    carverCache, carverCacheRuns, isolated, isolatedColumns, isolatedSeconds: Math.round(isolatedMs) / 1000,
   };
 });
 

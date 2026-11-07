@@ -1,5 +1,5 @@
 {
-  "sha256": "7a4a124f73693a43030adbc52cd98f405f14fc9a692ccc33a778fc5244487ceb",
+  "sha256": "4129915a9534c9985db0b65f3dddcf9eb8cfedd0688709c750110f4a12395870",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -146,6 +146,14 @@
         }
       },
       "DT1": {
+        "carverCache": {
+          "activeFrom": "SP6a",
+          "max": 0
+        },
+        "isolated": {
+          "activeFrom": "SP6a",
+          "max": 0
+        },
         "lightMismatches": {
           "activeFrom": "SP4a",
           "max": 0

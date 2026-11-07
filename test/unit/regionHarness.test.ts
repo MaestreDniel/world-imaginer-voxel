@@ -6,7 +6,8 @@ import { hex64 } from '../../src/core/hash';
 import { seedFromInput } from '../../src/core/seed';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
 import { fillColumnT, genRegionInProcess, regionHash } from '../../src/metrics/region';
-import { CAVE_FILM_KIND } from '../../src/core/constants';
+import { CARVER_CACHE_PATHS, CAVE_FILM_KIND } from '../../src/core/constants';
+import { carverCacheOf, setCarverCacheCapacity } from '../../src/gen/caves/carverCache';
 import { createMeshScratch, MESH_PASS_XRAY, meshColumnPayload, payloadProblem, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { AIR, DEEPSLATE, DIRT, STONE, TORCH } from '../../src/world/blocks/index';
 import { NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
@@ -19,7 +20,7 @@ import { fillColumnD } from '../../src/workers/worldJobs';
 import { regionCachePath, srcKey, type RegionCacheHeader } from '../harness/cache';
 import { ctxFor, paramsWith } from '../harness/gen';
 import { bruteFaces, bruteXrayFaces, meshFaceCounts } from '../harness/refs';
-import { dt1WorkerDir, genRegion, litRegionHash, regionColumns, regionDiff, regionView, type GenRegionOptions } from '../harness/region';
+import { dt1WorkerDir, genRegion, isolatedColumn, litRegionHash, regionColumns, regionDiff, regionView, type GenRegionOptions } from '../harness/region';
 
 const MiB = 1 << 20;
 
@@ -251,6 +252,51 @@ describe('genRegion with 1 thread (§6.1)', () => {
     await expect(genRegion({ ...base, threads: 2 as 1 })).rejects.toThrow(/threads/);
     await expect(genRegion({ ...base, upTo: 'S' as 'T' })).rejects.toThrow(/upTo/);
     await expect(genRegion({ ...base, order: 'zigzag' as 'spiral' })).rejects.toThrow(/order/);
+  });
+});
+
+describe('the carver path cache\'s capacity (SP6a spec §10.3, DT1.carverCache; ruling P28)', () => {
+  const base: GenRegionOptions = {
+    seed: '42', params: paramsWith(), cx0: 0, cz0: 0, w: 2, h: 2, upTo: 'T', order: 'shuffled', threads: 4,
+    workerDir: 'regionHarnessWorker',
+  };
+
+  test('carverCacheCapacity reaches the 4 workers: at 1 each holds at most 1 path, at 1,024 more; both regions hash the same', async () => {
+    const one = await genRegion({ ...base, carverCacheCapacity: 1 });
+    const many = await genRegion({ ...base, carverCacheCapacity: 1024 });
+    expect(one.carverCacheSizes.length).toBe(4);
+    expect(Math.max(...one.carverCacheSizes)).toBe(1);
+    expect(many.carverCacheSizes.length).toBe(4);
+    expect(Math.max(...many.carverCacheSizes)).toBeGreaterThan(1);
+    expect(Math.max(...many.carverCacheSizes)).toBeLessThanOrEqual(1024);
+    expect(one.view.hash()).toBe(many.view.hash());
+    expect(regionDiff(one.view, many.view)).toBeNull();
+  });
+
+  test('on 1 thread too, and the module\'s capacity is back at CARVER_CACHE_PATHS after the run', async () => {
+    const one = await genRegion({ ...base, threads: 1, order: 'spiral', carverCacheCapacity: 1 });
+    expect(one.carverCacheSizes).toEqual([1]);
+    const dflt = await genRegion({ ...base, threads: 1, order: 'spiral' });
+    expect(dflt.carverCacheSizes[0]).toBeGreaterThan(1);
+    expect(one.view.hash()).toBe(dflt.view.hash());
+    expect(carverCacheOf(ctxFor('42')).capacity).toBe(CARVER_CACHE_PATHS);
+  });
+
+  test('isolatedColumn: the column alone on a fresh store, its regionHash; equal to the column inside a region, at any capacity', async () => {
+    const r = await genRegion({ ...base, threads: 1, order: 'spiral' });
+    for (const [cx, cz] of [[0, 0], [1, 1]] as const) {
+      const want = r.view.hash(cx, cz, 1, 1);
+      expect(hex64(await isolatedColumn({ seed: '42', params: base.params, cx, cz })), `(${cx}, ${cz})`).toBe(want);
+      expect(hex64(await isolatedColumn({ seed: '42', params: base.params, cx, cz, carverCacheCapacity: 1 })), `(${cx}, ${cz}) LRU 1`).toBe(want);
+    }
+    expect(carverCacheOf(ctxFor('42')).capacity).toBe(CARVER_CACHE_PATHS);
+  });
+
+  test('a capacity with the region cache, or outside the integers ≥ 1, throws', async () => {
+    await expect(genRegion({ ...base, threads: 1, cache: true, carverCacheCapacity: 1 })).rejects.toThrow('genRegion: carverCacheCapacity needs no cache');
+    expect(() => setCarverCacheCapacity(0)).toThrow(RangeError);
+    expect(() => setCarverCacheCapacity(1.5)).toThrow(RangeError);
+    expect(carverCacheOf(ctxFor('42')).capacity).toBe(CARVER_CACHE_PATHS);
   });
 });
 

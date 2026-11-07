@@ -12,7 +12,11 @@
  * - `carvedKind` equals `carveColumn`'s tags on every density-solid voxel of 8 columns (ruling P19), column by column;
  * - `carverCacheOf` (Task 27): one cache per GenContext over `carverParamsOf(ctx.params)` with capacity 1,024, a new one
  *   for a new context (a `configure`); `carvedAt` equals the T stage's carve on every density-solid voxel of 8 columns,
- *   an island-over-sea column of floating_islands among them.
+ *   an island-over-sea column of floating_islands among them;
+ * - Review Focus 5 (Task 28): a column a worm carves from a source 10 chunks away hashes the same in a region, alone on a
+ *   fresh store (`isolatedColumn`), after a teleport filled the 1,024-path LRU, after a configure emptied it and with an
+ *   LRU of 1; the two columns either side of the worm's chunk border carve the voxels next to it as the box carve does
+ *   (the global reference `referenceCarve` takes its place in Task 30).
  */
 import { describe, expect, test } from 'vitest';
 import { CARVER_CACHE_PATHS, CARVER_WINDOW_R, CAVE_KIND, HEIGHT, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
@@ -31,8 +35,11 @@ import { fillDensityColumn } from '../../src/gen/density/bounds';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import type { Expr } from '../../src/gen/density/expr';
 import { createDensityReference } from '../../src/gen/density/reference';
+import { hex64 } from '../../src/core/hash';
+import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { CARVER_DEFAULTS } from '../harness/carverParams';
-import { ctxFor } from '../harness/gen';
+import { ctxFor, paramsWith } from '../harness/gen';
+import { genRegion, isolatedColumn, type GenRegionOptions, type RegionResult } from '../harness/region';
 
 const NEVER = (): boolean => false;
 const R = CARVER_WINDOW_R;
@@ -129,45 +136,57 @@ function layers(paths: readonly CarverPath[], p: CarverParams, c: Filled): Int32
 
 const withLimits = (p: CarverParams, limits: Partial<CarverParams['limits']>): CarverParams => ({ ...p, limits: { ...p.limits, ...limits } });
 
+/**
+ * The test-local carve of the 32 × 16 × 384 box of two columns side by side along x (ruling P20): the sources of both
+ * windows in the window's order (sz, then sx, then the kind), each path's ellipsoids in index order, `carveTest` on
+ * every voxel of the box the density fill left solid. `straddling` counts the ellipsoids that carve on both sides of the
+ * border between them.
+ */
+function boxCarve(seed: typeof ctx.seed, p: CarverParams, cols: readonly [Filled, Filled]): { solid: Uint8Array[]; tags: Uint8Array[]; straddling: number } {
+  const [a, b] = cols;
+  expect([b.cx - a.cx, b.cz - a.cz], 'boxCarve: two columns side by side along x').toEqual([1, 0]);
+  const x0 = 16 * a.cx, z0 = 16 * a.cz;
+  const solid = cols.map((c) => c.solid.slice());
+  const tags = cols.map(() => new Uint8Array(98304));
+  let straddling = 0;
+  for (let sz = a.cz - R; sz <= a.cz + R; sz++) {
+    for (let sx = a.cx - R; sx <= b.cx + R; sx++) {
+      for (const kind of KINDS) {
+        const path = carverPath(seed, kind, sx, sz, p);
+        if (path === null) continue;
+        for (let e = 0; e < path.count; e++) {
+          const [ex, ey, ez, rh, rv] = path.ell.subarray(6 * e, 6 * e + 5) as unknown as number[];
+          if (ex! + rh! < x0 - 1 || ex! - rh! > x0 + 33 || ez! + rh! < z0 - 1 || ez! - rh! > z0 + 17) continue;
+          const both = [0, 0];
+          for (let y = Math.max(-64, Math.floor(ey! - rv!) - 1); y <= Math.min(319, Math.ceil(ey! + rv!) + 1); y++) {
+            for (let z = z0; z < z0 + 16; z++) {
+              for (let x = x0; x < x0 + 32; x++) {
+                const c = (x - x0) >> 4, v = idx(x & 15, y, z & 15);
+                if (cols[c]!.solid[v] !== 1) continue;
+                if (carveTest(p, path, e, x, y, z, wetAt(cols[c]!.s, x, z), cols[c]!.top[16 * (z & 15) + (x & 15)]!) !== 1) continue;
+                both[c]!++;
+                if (solid[c]![v] === 1) {
+                  solid[c]![v] = 0;
+                  tags[c]![v] = TAG_OF[kind];
+                }
+              }
+            }
+          }
+          if (both[0]! > 0 && both[1]! > 0) straddling++;
+        }
+      }
+    }
+  }
+  return { solid, tags, straddling };
+}
+
 // ---------------------------------------------------------------- the tests
 
 describe('the carve across a chunk border (SP6a spec §2.4; ruling P20)', () => {
   test('columns (0, 0) and (1, 0) carve exactly the voxels a carve of the 32 × 16 box computes, an ellipsoid on both sides', () => {
     const p = CARVER_DEFAULTS;
-    const cols = [filled(dc, 0, 0), filled(dc, 1, 0)];
-    // The test-local box carve: the sources of both windows in the window's order (sz, then sx, then the kind), each
-    // path's ellipsoids in index order, `carveTest` on every voxel of the box the density fill left solid.
-    const solid = cols.map((c) => c.solid.slice());
-    const tags = cols.map(() => new Uint8Array(98304));
-    let straddling = 0;
-    for (let sz = -R; sz <= R; sz++) {
-      for (let sx = -R; sx <= 1 + R; sx++) {
-        for (const kind of KINDS) {
-          const path = carverPath(ctx.seed, kind, sx, sz, p);
-          if (path === null) continue;
-          for (let e = 0; e < path.count; e++) {
-            const [ex, ey, ez, rh, rv] = path.ell.subarray(6 * e, 6 * e + 5) as unknown as number[];
-            if (ex! + rh! < -1 || ex! - rh! > 33 || ez! + rh! < -1 || ez! - rh! > 17) continue;
-            const both = [0, 0];
-            for (let y = Math.max(-64, Math.floor(ey! - rv!) - 1); y <= Math.min(319, Math.ceil(ey! + rv!) + 1); y++) {
-              for (let z = 0; z < 16; z++) {
-                for (let x = 0; x < 32; x++) {
-                  const c = x >> 4, v = idx(x & 15, y, z);
-                  if (cols[c]!.solid[v] !== 1) continue;
-                  if (carveTest(p, path, e, x, y, z, wetAt(cols[c]!.s, x, z), cols[c]!.top[16 * z + (x & 15)]!) !== 1) continue;
-                  both[c]!++;
-                  if (solid[c]![v] === 1) {
-                    solid[c]![v] = 0;
-                    tags[c]![v] = TAG_OF[kind];
-                  }
-                }
-              }
-            }
-            if (both[0]! > 0 && both[1]! > 0) straddling++;
-          }
-        }
-      }
-    }
+    const cols = [filled(dc, 0, 0), filled(dc, 1, 0)] as const;
+    const { solid, tags, straddling } = boxCarve(ctx.seed, p, cols);
     expect(straddling, 'no ellipsoid carves on both sides of x = 16').toBeGreaterThan(0);
     const cache = createCarverCache(ctx, p, 1024);
     let carvedVoxels = 0;
@@ -581,5 +600,103 @@ describe('carverCacheOf and carvedAt (SP6a spec §2.5, §3.4; Task 27)', () => {
     expect(carved).toBeGreaterThan(0);
     expect([...kinds].sort()).toEqual([CAVE_KIND.worm, CAVE_KIND.ravine, CAVE_KIND.undergroundWorm].filter((k) => kinds.has(k)).sort());
     expect(kinds.has(CAVE_KIND.worm) && kinds.has(CAVE_KIND.ravine)).toBe(true);
+  });
+});
+
+describe('a worm from a source 10 chunks away, the LRU and a configure (Review Focus 5; SP6a spec §2.5, §10.3; Task 28)', () => {
+  // At the defaults no worm reaches 10 chunks (seed 42: at most 6 chunks over the 973 worm and underground-worm sources
+  // of ±40 chunks). With `worms.length` 160 (its static maximum), `lengthVar` 0 and no yaw drift (`shape.yawStep` 0,
+  // `shape.yawDriftMul` 0) a worm runs straight for 160 blocks: seed 42's worm of source (0, −1) carves column (10, −2),
+  // 10 chunks away, across its border with (9, −2) (x = 160).
+  const PATCH = { caves: { worms: { length: 160, lengthVar: 0, shape: { yawStep: 0, yawDriftMul: 0 } } } };
+  const params = paramsWith(PATCH);
+  const [SX, SZ] = [0, -1] as const;
+  const [CX, CZ] = [10, -2] as const;
+  const far = createGenContext(seedFromInput('42'), params);
+  const p = carverParamsOf(params);
+  /** The 3 × 3 region around (CX, CZ), generated once (the default capacity; and at an LRU of 1). */
+  let regions: Promise<{ dflt: RegionResult; one: RegionResult }> | null = null;
+  const generated = () => (regions ??= (async () => {
+    const o: GenRegionOptions = { seed: '42', params, cx0: CX - 1, cz0: CZ - 1, w: 3, h: 3, upTo: 'T', order: 'spiral', threads: 1 };
+    return { dflt: await genRegion(o), one: await genRegion({ ...o, carverCacheCapacity: 1 }) };
+  })());
+  /** Column (cx, cz) generated alone on a fresh store with the context `g`, its regionHash as hex64. */
+  const alone = (g: typeof far, cx: number, cz: number): string => {
+    const store = createStore({ shared: false });
+    expect(fillColumnT(store, g, cx, cz, NEVER)).toBe(true);
+    return hex64(regionHash(store, cx, cz, 1, 1));
+  };
+  /** `cache` without the worm of source (SX, SZ). */
+  const withoutSource = (cache: CarverCache): CarverCache => ({
+    ...cache, path: (kind, sx, sz) => (kind === 'worm' && sx === SX && sz === SZ ? null : cache.path(kind, sx, sz)),
+  });
+
+  test('the column carved by it: in a region, alone on a fresh store (isolatedColumn), after a teleport filled the 1,024-path LRU and after a configure cleared it, and with an LRU of 1: equal region hashes', async () => {
+    expect(carverPath(far.seed, 'worm', SX, SZ, p)).not.toBeNull();
+    expect(Math.max(Math.abs(CX - SX), Math.abs(CZ - SZ))).toBe(10);
+    // The column's carve depends on that source: without it, other voxels are carved.
+    const c = filled(createDensityContext(far), CX, CZ);
+    const cache = createCarverCache(far, p, 1024);
+    expect(firstDiff(carved(cache, p, c).solid, carved(withoutSource(cache), p, c).solid), 'the source carves nothing in the column').not.toBe(-1);
+
+    const { dflt, one } = await generated();
+    const want = dflt.view.hash(CX, CZ, 1, 1);
+    const isolated = hex64(await isolatedColumn({ seed: '42', params, cx: CX, cz: CZ }));
+    // The teleport: the column generated, then every window source of 2,000 columns 20,000 blocks away asked of the same
+    // context's cache in the window's order (what T asks of it; no T generation), then the column again on a fresh store.
+    const g = createGenContext(seedFromInput('42'), params);
+    const before = alone(g, CX, CZ);
+    const lru = carverCacheOf(g);
+    const held = lru.path('worm', SX, SZ);
+    expect(held).not.toBeNull();
+    for (let cz = 1250; cz < 1300; cz++) {
+      for (let cx = 1250; cx < 1290; cx++) {
+        for (let sz = cz - R; sz <= cz + R; sz++) for (let sx = cx - R; sx <= cx + R; sx++) for (const kind of KINDS) lru.path(kind, sx, sz);
+      }
+    }
+    expect(lru.size).toBe(CARVER_CACHE_PATHS);
+    expect(lru.path('worm', SX, SZ), 'the source\'s path left the LRU (rebuilt)').not.toBe(held);
+    const back = alone(g, CX, CZ);
+    // A configure builds a new GenContext: its cache starts empty.
+    const configured = createGenContext(seedFromInput('42'), params);
+    expect(carverCacheOf(configured).size).toBe(0);
+    const afterConfigure = alone(configured, CX, CZ);
+    const isolatedOne = hex64(await isolatedColumn({ seed: '42', params, cx: CX, cz: CZ, carverCacheCapacity: 1 }));
+    expect({ isolated, before, back, afterConfigure, isolatedOne, regionOne: one.view.hash(CX, CZ, 1, 1) }).toEqual({
+      isolated: want, before: want, back: want, afterConfigure: want, isolatedOne: want, regionOne: want,
+    });
+    expect(one.carverCacheSizes).toEqual([1]);
+    expect(one.view.hash()).toBe(dflt.view.hash());
+  });
+
+  test('the two columns either side of the worm\'s chunk border carve the voxels next to it exactly as the box carve does (until Task 30\'s referenceCarve; ruling P20)', async () => {
+    const d = createDensityContext(far);
+    const cols = [filled(d, CX - 1, CZ), filled(d, CX, CZ)] as const;
+    const box = boxCarve(far.seed, p, cols);
+    const cache = createCarverCache(far, p, 1024);
+    const { dflt } = await generated();
+    let border = 0;
+    const fromSource = [0, 0];
+    cols.forEach((c, k) => {
+      const got = carved(cache, p, c);
+      expect(firstDiff(got.solid, box.solid[k]!), `column (${c.cx}, ${c.cz}) solidity`).toBe(-1);
+      expect(firstDiff(got.tags, box.tags[k]!), `column (${c.cx}, ${c.cz}) tags`).toBe(-1);
+      const without = carved(withoutSource(cache), p, c);
+      const view = dflt.view.store.proto(c.cx, c.cz)!;
+      // The voxels next to the border x = 16·CX: lx 15 of the west column, lx 0 of the east one.
+      const lx = k === 0 ? 15 : 0;
+      for (let y = -63; y <= 319; y++) {
+        for (let lz = 0; lz < 16; lz++) {
+          const v = idx(lx, y, lz);
+          if (c.solid[v] !== 1) continue;
+          border++;
+          // The region's T stage stored the box carve's tag (a density-solid voxel's tag is its carver's, or 0).
+          if (view.cave(lx, y, lz) !== box.tags[k]![v]) expect(view.cave(lx, y, lz), `stored tag at (${16 * c.cx + lx}, ${y}, ${16 * c.cz + lz})`).toBe(box.tags[k]![v]);
+          if (without.solid[v] !== got.solid[v]) fromSource[k]!++;
+        }
+      }
+    });
+    expect(border).toBeGreaterThan(0);
+    expect(fromSource.every((n) => n > 0), `the worm carves next to the border on both sides: ${fromSource}`).toBe(true);
   });
 });

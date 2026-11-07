@@ -9,17 +9,20 @@
  * read through a `RegionView`, which reads the store per column and never stitches the region into one array.
  * SP5a (spec §6.3): `diff` hands each column's edit entries to its D (`fillColumnD`'s overlay, spec §2.5), on 1 thread
  * and without the cache only.
+ * SP6a (spec §10.3): `carverCacheCapacity` sets the carver path cache's capacity in every thread that generates, and
+ * `isolatedColumn` generates one column alone on a fresh store (`DT1.carverCache`, `DT1.isolated`).
  */
 import { performance } from 'node:perf_hooks';
 import { Worker } from 'node:worker_threads';
 import { colKey } from '../../src/core/coords';
-import { createFnv64, hex64, type Fnv64 } from '../../src/core/hash';
+import { createFnv64, hex64, type Fnv64, type Hash64 } from '../../src/core/hash';
 import { MEDIUM } from '../../src/core/params/graphicsPresets';
 import type { Params } from '../../src/core/params/schema';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
-import { createGenContext, type GenContext } from '../../src/gen/context';
+import { carverCacheOf } from '../../src/gen/caves/carverCache';
+import type { GenContext } from '../../src/gen/context';
 import { createLightScratch, type LightScratch } from '../../src/light/initial';
 import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { createMeshScratch, type ColumnMeshPayload } from '../../src/mesh/column';
@@ -31,7 +34,7 @@ import { createStore, type AuxView, type ColumnView, type VoxelStore } from '../
 import { fillColumnD, fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
 import { readRegionDump, regionCachePath, srcKey, writeRegionDump, type RegionCacheHeader, type RegionUpTo } from './cache';
 import { ask, buildNodeTaskWorker } from './nodeWorker';
-import type { RegionAttachMsg, RegionColumnMsg, RegionMeshMsg, RegionWorkerReply } from './regionWorker';
+import { genContextWith, type RegionAttachMsg, type RegionColumnMsg, type RegionMeshMsg, type RegionWorkerReply } from './regionWorker';
 
 export type RegionOrder = 'spiral' | 'shuffled';
 
@@ -79,6 +82,13 @@ export interface GenRegionOptions {
    * `regionWorker.ts` with no diff, and the dump's key ignores it.
    */
   readonly diff?: ReadonlyMap<number, ColumnDiff>;
+  /**
+   * The capacity (an integer ≥ 1) of the carver path cache of every thread that generates (SP6a spec §10.3,
+   * `DT1.carverCache`): each builds its GenContext's cache at it (`setCarverCacheCapacity`; default
+   * `CARVER_CACHE_PATHS`). It moves no output, so the dump's key ignores it, and it needs no `cache` (a hit would
+   * generate nothing at it).
+   */
+  readonly carverCacheCapacity?: number;
 }
 
 /**
@@ -125,6 +135,11 @@ export interface RegionResult {
   readonly cacheHit: boolean;
   /** T, D and L column jobs run by each thread, every stage counted (one entry per thread; `[0]` on a cache hit). */
   readonly columnsPerThread: number[];
+  /**
+   * The most paths each thread's carver path cache held after a T, D or L job (one entry per thread; `[0]` on a cache
+   * hit; ruling P28): at most `carverCacheCapacity`.
+   */
+  readonly carverCacheSizes: number[];
 }
 
 function checkSize(what: string, w: number, h: number): void {
@@ -380,7 +395,11 @@ async function openWorkers(store: VoxelStore, o: GenRegionOptions): Promise<Work
   const workers = Array.from({ length: 4 }, () => new Worker(script));
   spawned += workers.length;
   try {
-    const ready = await Promise.all(workers.map((w) => askRegion(w, { type: 'attach', handles: store.handles(), seedText: o.seed, params: o.params })));
+    const attach: RegionAttachMsg = {
+      type: 'attach', handles: store.handles(), seedText: o.seed, params: o.params,
+      ...(o.carverCacheCapacity === undefined ? {} : { carverCacheCapacity: o.carverCacheCapacity }),
+    };
+    const ready = await Promise.all(workers.map((w) => askRegion(w, attach)));
     for (const r of ready) if (r.type !== 'ready') throw new Error(`region worker: ${r.type === 'error' ? r.message : r.type}`);
   } catch (e) {
     await Promise.all(workers.map((w) => w.terminate()));
@@ -444,6 +463,7 @@ const STAGE_MSG: Readonly<Record<Stage, RegionColumnMsg['type']>> = Object.freez
 export async function genRegion(o: GenRegionOptions): Promise<RegionResult> {
   if (o.threads !== 1 && o.threads !== 4) throw new Error(`genRegion: threads ${String(o.threads)} (1 or 4)`);
   if (o.diff !== undefined && (o.threads !== 1 || o.cache === true)) throw new Error('genRegion: diff needs threads 1 and no cache');
+  if (o.carverCacheCapacity !== undefined && o.cache === true) throw new Error('genRegion: carverCacheCapacity needs no cache');
   if (!UP_TO.includes(o.upTo)) throw new Error(`genRegion: upTo '${String(o.upTo)}' (T, D, L or MESH)`);
   checkSize('genRegion', o.w, o.h);
   const region: Rect = { cx0: o.cx0, cz0: o.cz0, w: o.w, h: o.h };
@@ -470,6 +490,7 @@ export async function genRegion(o: GenRegionOptions): Promise<RegionResult> {
   const hitMs = header === null ? null : readRegionDump(store, header, path);
   let workers: Worker[] | null = null;
   let columnsPerThread = [0];
+  let carverCacheSizes = [0];
   let ms: Float64Array;
   const meshes = new Map<string, ColumnMeshPayload>();
   try {
@@ -477,9 +498,10 @@ export async function genRegion(o: GenRegionOptions): Promise<RegionResult> {
     if (hitMs !== null) genMs = hitMs;
     else {
       const perThread = o.threads === 4 ? [0, 0, 0, 0] : [0];
+      const cacheSizes = o.threads === 4 ? [0, 0, 0, 0] : [0];
       genMs = new Float64Array(gen.w * gen.h);
       if (o.threads === 4) workers = await openWorkers(store, o);
-      const ctx = o.threads === 1 ? createGenContext(seedFromInput(o.seed), o.params) : null;
+      const ctx = o.threads === 1 ? genContextWith(o.seed, o.params, o.carverCacheCapacity) : null;
       let lightScratch: LightScratch | null = null;
       const light = (): LightScratch => (lightScratch ??= createLightScratch());
       for (let i = 0; i <= k; i++) {
@@ -491,6 +513,7 @@ export async function genRegion(o: GenRegionOptions): Promise<RegionResult> {
           await drainThreaded(workers, r, cols, (cx, cz) => ({ type: STAGE_MSG[stage], cx, cz }), (t, j, reply) => {
             stageMs[j] = reply.ms;
             perThread[t]!++;
+            if (reply.type === 'done') cacheSizes[t] = Math.max(cacheSizes[t]!, reply.carverCacheSize);
           });
         } else {
           for (const [cx, cz] of cols) {
@@ -499,11 +522,13 @@ export async function genRegion(o: GenRegionOptions): Promise<RegionResult> {
             stageMs[(cz - r.cz0) * r.w + (cx - r.cx0)] = performance.now() - c0;
           }
           perThread[0]! += cols.length;
+          cacheSizes[0] = Math.max(cacheSizes[0]!, carverCacheOf(ctx!).size);
         }
         if (i === k) genMs = stageMs;
       }
       if (header !== null) writeRegionDump(store, header, path);
       columnsPerThread = perThread;
+      carverCacheSizes = cacheSizes;
     }
     if (!isMesh) ms = genMs;
     else {
@@ -530,6 +555,20 @@ export async function genRegion(o: GenRegionOptions): Promise<RegionResult> {
   }
   return {
     view: regionView(store, o.cx0, o.cz0, o.w, o.h, { upTo: o.upTo, meshes }), timings: { perColumnMs: ms, totalMs: performance.now() - t0 },
-    cacheHit: hitMs !== null, columnsPerThread,
+    cacheHit: hitMs !== null, columnsPerThread, carverCacheSizes,
   };
+}
+
+/**
+ * Column (cx, cz) generated alone (SP6a spec §10.3, `DT1.isolated`): T on a fresh plain store with a fresh GenContext
+ * (its carver path cache empty, at `carverCacheCapacity`, default `CARVER_CACHE_PATHS`), nothing else generated; its
+ * `regionHash` (the 1 × 1 window). Equal to the column's window of any region that holds it.
+ */
+export async function isolatedColumn(o: {
+  seed: string; params: Params; cx: number; cz: number; carverCacheCapacity?: number;
+}): Promise<Hash64> {
+  const ctx = genContextWith(o.seed, o.params, o.carverCacheCapacity);
+  const store = createStore({ shared: false });
+  if (!fillColumnT(store, ctx, o.cx, o.cz, NEVER)) throw new Error(`isolatedColumn: T of (${o.cx}, ${o.cz}) stopped`);
+  return regionHash(store, o.cx, o.cz, 1, 1);
 }

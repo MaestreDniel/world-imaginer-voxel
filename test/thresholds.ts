@@ -51,7 +51,12 @@ export const THRESHOLDS: ThresholdTable = {
   B5: { perKm2Min: { min: 0.2, activeFrom: 'SP2a' }, perKm2Max: { max: 2, activeFrom: 'SP2a' }, highShare: { min: 0.3, activeFrom: 'SP2a' } },
   U2: { value: { min: 1, activeFrom: 'SP2b' } },
   // SP4a spec §9.1 (D25): the light part, the upTo 'L' region hash over threads and orders (`light.metric.ts`).
-  DT1: { mismatches: { max: 0, activeFrom: 'SP3a' }, lightMismatches: { max: 0, activeFrom: 'SP4a' } },
+  // SP6a spec §10.3: the carver path cache's parts, the region hash at an LRU of 1, of 1,024 and warm from another
+  // region, and a column generated alone (`isolatedColumn`), each against the cold region (`region.metric.ts`).
+  DT1: {
+    mismatches: { max: 0, activeFrom: 'SP3a' }, lightMismatches: { max: 0, activeFrom: 'SP4a' },
+    carverCache: { max: 0, activeFrom: 'SP6a' }, isolated: { max: 0, activeFrom: 'SP6a' },
+  },
   T1: {
     band: { max: 0.25, activeFrom: 'SP3b' }, span: { min: 60, activeFrom: 'SP3b' },
     above120: { min: 0.06, activeFrom: 'SP3b' }, above200: { min: 0.005, activeFrom: 'SP3b' },

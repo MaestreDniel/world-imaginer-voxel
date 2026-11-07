@@ -10,6 +10,9 @@
  * `carverParamsOf(ctx.params)` with the capacity `CARVER_CACHE_PATHS` (`core/constants.ts`) and memoised in a WeakMap
  * (as `surfaceContextOf`), so a `configure`, which builds a new GenContext, drops it with the old context. Follows the
  * gen determinism rules.
+ * `setCarverCacheCapacity(n)` (SP6a spec §10.3, `DT1.carverCache`) sets the capacity `carverCacheOf` gives the caches it
+ * builds afterwards (a module-level value, default `CARVER_CACHE_PATHS`); the region harness sets it before it builds a
+ * GenContext's cache and restores the default after. Only the tests call it: the page always runs at the default.
  */
 import { CARVER_CACHE_PATHS } from '../../core/constants';
 import type { GenContext } from '../context';
@@ -64,15 +67,27 @@ export function createCarverCache(ctx: GenContext, p: CarverParams, capacity: nu
 }
 
 const CACHES = new WeakMap<GenContext, CarverCache>();
+/** The capacity of the caches `carverCacheOf` builds from now on (`setCarverCacheCapacity`). */
+let capacityOf = CAPACITY;
+
+/**
+ * Sets the capacity (an integer ≥ 1) of the caches `carverCacheOf` builds from now on; a cache already built keeps its
+ * own. Never changes output (a path is pure); the default is `CARVER_CACHE_PATHS`. Throws a RangeError otherwise.
+ */
+export function setCarverCacheCapacity(n: number): void {
+  if (!IS_INT(n) || n < 1) throw new RangeError(`setCarverCacheCapacity: ${n} is not an integer ≥ 1`);
+  capacityOf = n;
+}
 
 /**
  * The carver path cache of `ctx` (spec §2.5): built on first use from `carverParamsOf(ctx.params)` with the capacity
- * `CARVER_CACHE_PATHS`, then the same object for that context; a new context (a `configure`) gets a new, empty one.
+ * `CARVER_CACHE_PATHS` (or the one `setCarverCacheCapacity` set), then the same object for that context; a new context
+ * (a `configure`) gets a new, empty one.
  */
 export function carverCacheOf(ctx: GenContext): CarverCache {
   let c = CACHES.get(ctx);
   if (c === undefined) {
-    c = createCarverCache(ctx, PARAMS_OF(ctx.params), CAPACITY);
+    c = createCarverCache(ctx, PARAMS_OF(ctx.params), capacityOf);
     CACHES.set(ctx, c);
   }
   return c;
