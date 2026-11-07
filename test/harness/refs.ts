@@ -5,9 +5,17 @@
  * and `meshFaceCounts` are R1's two sides (ruling P32): every visible unit face by §5.2's rules, read voxel by voxel
  * through a `RegionView`, against the unit faces a column's mesh payload covers, decoded from its quads' corners. They
  * share no code with `mesh/` beyond the block tables. SP6a (spec §5.1, §10.4): `bruteXrayFaces`, the X-ray's walls and
- * film voxel by voxel, against the X-ray rows (pass 3) `meshFaceCounts` files apart (R1.xray).
+ * film voxel by voxel, against the X-ray rows (pass 3) `meshFaceCounts` files apart (R1.xray). SP6a (spec §10.1):
+ * `referenceCarve`, the global carver reference of `C7.carverReference`: every path whose box meets a region, carved
+ * into the region's box from `carverPath` directly, with no path cache and no per-column window.
  */
-import { CAVE_FILM_KIND } from '../../src/core/constants';
+import { CARVER_WINDOW_R, CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
+import type { Params } from '../../src/core/params/schema';
+import { seedFromInput } from '../../src/core/seed';
+import { carveTest, densityTopOf, wetAt } from '../../src/gen/caves/carve';
+import { carverParamsOf, carverPath, type CarverKind } from '../../src/gen/caves/carvers';
+import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
+import { createGenContext } from '../../src/gen/context';
 import { DEFAULT_MESH_TABLES, type MeshTables } from '../../src/mesh/greedy';
 import { PACK_LAYOUT } from '../../src/mesh/packing';
 import { MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, type ColumnMeshPayload } from '../../src/mesh/column';
@@ -277,4 +285,105 @@ export function meshFaceCounts(p: ColumnMeshPayload): {
     opaque: Uint32Array.from(opaque).sort(), water: Uint32Array.from(water).sort(), xray: Uint32Array.from(xray).sort(),
     quadsOpaque, quadsWater, quadsXray,
   };
+}
+
+/** The carver kinds in the window's order (`carve.ts`: worm, ravine, underground worm), with their `CAVE_KIND` tags. */
+const CARVER_KINDS: ReadonlyArray<readonly [CarverKind, number]> = [
+  ['worm', CAVE_KIND.worm], ['ravine', CAVE_KIND.ravine], ['undergroundWorm', CAVE_KIND.undergroundWorm],
+];
+
+/**
+ * How far past the window `referenceCarve` looks for sources, in chunks: a path of a source up to R + 2 chunks from the
+ * region whose box meets it is carved too, so a path that outgrew the window (`C7.reachOverflow`'s failure) shows here as
+ * a voxel the stage did not carve.
+ */
+const REF_SOURCE_MARGIN = 2;
+
+/**
+ * The global carver reference (SP6a spec §2.4, §10.1; `C7.carverReference`): the carver kind (`CAVE_KIND` worm 6, ravine
+ * 7, underground worm 8; 0 where no carver carves) of every voxel of the view's box, x ∈ [16·cx0, 16·(cx0 + w)),
+ * z ∈ [16·cz0, 16·(cz0 + h)), y ∈ [−64, 320), indexed `((y + 64)·D + (z − z0))·W + (x − x0)` with W = 16·w, D = 16·h,
+ * x0 = 16·cx0, z0 = 16·cz0. It shares with the T stage only `carverPath`, the per-voxel test `carveTest` (ruling P21),
+ * `densityTopOf` and `wetAt`: no path cache, no window and no per-column carve.
+ * - The paths: every source (kind, sx, sz) with sx in cx0 − R − 2 … cx0 + w − 1 + R + 2 (likewise sz) whose path's box
+ *   meets the box, in one global order, sz then sx then the kind (worm, ravine, underground worm), each path's
+ *   ellipsoids in index order. Restricted to one column's window this is the window's order, so a voxel takes the kind
+ *   of the first source that carves it, as T's (§3.2 step 4).
+ * - The pre-carve solidity, read from the region: a voxel is density-solid when its block is not air (T leaves a
+ *   density-air voxel air or water and gives every density-solid voxel it keeps a block) or its tag is a carver's (6-8:
+ *   the voxels T carved). Only density-solid voxels are carved.
+ * - σ_w's density top per position: `densityTopOf` over that solidity with `islands.enabled`'s island rule (the carve
+ *   step's own top), never the harness's `preCaveTop`, which counts tagged noise air and differs wherever an entrance
+ *   breaches the top. wet′ is `wetAt` over the position's column sample (`buildColumnSample`).
+ * Reads `cx0`, `cz0`, `w`, `h`, `block` and `tag` only, so a test may pass a synthetic view.
+ */
+export function referenceCarve(
+  view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 'block' | 'tag'>, seed: string, params: Params,
+): Uint8Array {
+  const { cx0, cz0, w, h } = view;
+  const W = 16 * w;
+  const D = 16 * h;
+  const x0 = 16 * cx0;
+  const z0 = 16 * cz0;
+  const x1 = x0 + W - 1;
+  const z1 = z0 + D - 1;
+  const ctx = createGenContext(seedFromInput(seed), params);
+  const p = carverParamsOf(params);
+  const islands = params.islands.enabled;
+  const isCarverTag = (t: number): boolean => t === CAVE_KIND.worm || t === CAVE_KIND.ravine || t === CAVE_KIND.undergroundWorm;
+  const densitySolid = (x: number, y: number, z: number): boolean => view.block(x, y, z) !== AIR || isCarverTag(view.tag(x, y, z));
+  // Per position (z − z0)·W + (x − x0): wet′ and the density top.
+  const wet = new Float64Array(W * D);
+  const top = new Int16Array(W * D);
+  const sample = newColumnSample();
+  for (let cz = cz0; cz < cz0 + h; cz++) {
+    for (let cx = cx0; cx < cx0 + w; cx++) {
+      buildColumnSample(ctx, cx, cz, sample);
+      for (let lz = 0; lz < 16; lz++) {
+        for (let lx = 0; lx < 16; lx++) {
+          const x = 16 * cx + lx;
+          const z = 16 * cz + lz;
+          const q = (z - z0) * W + (x - x0);
+          wet[q] = wetAt(sample, x, z);
+          top[q] = densityTopOf((y) => densitySolid(x, y, z), islands);
+        }
+      }
+    }
+  }
+  /** 0: not decided; a carver tag: carved by that kind; NOT_SOLID: density air, never carved. */
+  const NOT_SOLID = 255;
+  const out = new Uint8Array(W * D * 384);
+  const R = CARVER_WINDOW_R + REF_SOURCE_MARGIN;
+  for (let sz = cz0 - R; sz <= cz0 + h - 1 + R; sz++) {
+    for (let sx = cx0 - R; sx <= cx0 + w - 1 + R; sx++) {
+      for (const [kind, tag] of CARVER_KINDS) {
+        const path = carverPath(ctx.seed, kind, sx, sz, p);
+        if (path === null) continue;
+        const b = path.box;
+        if (b[3]! < x0 - 1 || b[0]! > x1 + 1 || b[5]! < z0 - 1 || b[2]! > z1 + 1 || b[4]! < -64 || b[1]! > 320) continue;
+        const ell = path.ell;
+        for (let e = 0; e < path.count; e++) {
+          const o = 6 * e;
+          const ex = ell[o]!, ey = ell[o + 1]!, ez = ell[o + 2]!, rh = ell[o + 3]!, rv = ell[o + 4]!;
+          // Every voxel whose centre lies in the ellipsoid's open box, widened by a block (the test decides).
+          const xlo = Math.max(x0, Math.floor(ex - rh) - 1), xhi = Math.min(x1, Math.ceil(ex + rh) + 1);
+          const zlo = Math.max(z0, Math.floor(ez - rh) - 1), zhi = Math.min(z1, Math.ceil(ez + rh) + 1);
+          const ylo = Math.max(-63, Math.floor(ey - rv) - 1), yhi = Math.min(319, Math.ceil(ey + rv) + 1);
+          for (let y = ylo; y <= yhi; y++) {
+            for (let z = zlo; z <= zhi; z++) {
+              for (let x = xlo; x <= xhi; x++) {
+                const v = ((y + 64) * D + (z - z0)) * W + (x - x0);
+                if (out[v] !== 0) continue;
+                const q = (z - z0) * W + (x - x0);
+                if (carveTest(p, path, e, x, y, z, wet[q]!, top[q]!) !== 1) continue;
+                out[v] = densitySolid(x, y, z) ? tag : NOT_SOLID;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  for (let v = 0; v < out.length; v++) if (out[v] === NOT_SOLID) out[v] = 0;
+  return out;
 }

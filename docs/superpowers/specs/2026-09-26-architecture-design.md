@@ -219,6 +219,7 @@ world-imaginer-voxel/          (repository root)
         (SP5a: metrics/edit.metric.ts, integration/edit.test.ts)
         (SP5b: metrics/persist.metric.ts)
         (SP5c: metrics/clipboard.metric.ts)
+        (SP6a: metrics/caves.metric.ts)
         schema-shape.lock.json (SP1) stateIds.lock.json (SP3a)
         thresholds.ts thresholds.lock.json goldens.json baselines.json
 ```
@@ -1419,12 +1420,14 @@ WASD; Space (up/jump); Shift (down/sneak); R or double-tap W (sprint; SP5a, Ctrl
 - It runs the **real stage functions and coordinator prerequisite rules** in-process, on a real SAB store (or a plain ArrayBuffer), with `worker_threads` for the thread matrix.
 - It returns a `RegionView` (block, fluid, light, fields, biome, tags) plus per-stage timings. The view reads through the store per column and is never stitched into one array (a 32 × 32 region would be about 300 MB; amended by SP3a).
 - SP3a's `genRegion` has `upTo: 'T'` only, plus `cache?` and `shuffleSeed?`, and no coordinator prerequisite rules until SP4a (amended by SP3a).
+- SP6a: `debugTags` reads the store's `cave` channel and adds the pillar bit (and, for `C7.switchWall`, the `terrain` tap's value per voxel), both recomputed per column by `caveDebugColumn`; the view's `tag` reads the channel with or without it (amended by SP6a).
 
 **References** (`refs.ts`):
 - global reference light BFS;
 - brute-force visible-face count;
 - flood from sky and connected components;
-- a raycast visibility reference for cave culling.
+- 3D sky flood and components; a global carver reference (SP6a);
+- a raycast visibility reference for cave culling (it stays with cave culling, SP6b; amended by SP6a).
 
 **Region cache** (`cache.ts`): binary dumps keyed by `genKey + srcKey + REGION_CACHE_FORMAT + region + upTo` (SP4a: upTo 'MESH' meshes the cached 'L' region in process and is not cached; format 3 dumps the final light), in `test/.cache/regions`. `srcKey` hashes the generator sources and the format version is bumped when the dump layout changes, because `genKey` does not track code changes made without a stage bump (amended by SP3a). Format 2 stores each column's aux A and then aux B, and the region hash covers aux B too; CI restores `test/.cache/regions` with `actions/cache` before `npm run test:metrics` (amended by SP3b), with a key of its own in each metrics job (amended 2026-10-20: parallel CI jobs).
 
@@ -1508,6 +1511,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | C4 | carve per 16-block y band −56..40 / largest single y of large-component floors | ≥ 2% each / ≤ 10% |
 | C5 | largest component / land columns with carved voxels / median thinnest axis | < 60% of void / ≥ 60% / ≥ 4 |
 | C6 | lattice-plane bias: max y-plane carve rate / mean | ≤ 1.1 |
+| C7 | abrupt cuts (SP6a), its construction parts, gated from SP6a: `carverReference`, interior voxels where the stage's carver-tagged set ≠ the global carver reference's / `reachOverflow`, over 100,000 sources per kind at the defaults and with every carver leaf at its static maximum, paths whose voxel reach (each ellipsoid's centre widened by its own radii) leaves the chunks within R of the source chunk / `endTaper`, over 100,000 sources per kind, path ends (branch points and the start room excluded) whose last ellipsoid is larger than any of the 4 before it or than the path's median / `islandCapAir`, cave air at y ≥ 176 in the floating_islands region (gated on quick and full) (amended by SP6a) | 0 / 0 / 0 / 0 |
 | A1 | dry share of cave air below y 63 not connected to sea or rivers | ≥ 40% |
 | A2 | fluid voxels unsupported below or sideways after settle, **counting unsettled** / unsettled share | ≤ 0.1% / ≤ 0.1% of fluid voxels |
 | A3 | 32×32-column harness regions with lava below −54 / aquifer lava above −10 / lava with support / regions where lava touches sky-connected cave air | ≥ 50% / 0 / ≥ 99% / ≥ 25% |

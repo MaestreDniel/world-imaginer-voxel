@@ -77,6 +77,12 @@ export const THRESHOLDS: ThresholdTable = {
     // SP6a spec §10.3, D22: the stored cave tag against `caveTagAt`, on the default tree and on edited trees.
     tagProbe: { max: 0, activeFrom: 'SP6a' },
   },
+  // SP6a spec §10.1 (D26): C7's construction parts (`caves.metric.ts`), which hold by construction, gated from SP6a's
+  // commit; `islandCapAir` on the quick and full tiers (fast has no floating_islands region and records NaN).
+  C7: {
+    carverReference: { max: 0, activeFrom: 'SP6a' }, reachOverflow: { max: 0, activeFrom: 'SP6a' }, endTaper: { max: 0, activeFrom: 'SP6a' },
+    islandCapAir: { max: 0, activeFrom: 'SP6a', tiers: ['quick', 'full'] },
+  },
   // SP4a spec §9.1 (D26): `grassSky0`, the master's grass at sky 0, recorded from SP4a (`light.metric.ts`), gated by SP6a.
   S1: {
     buried: { max: 0, activeFrom: 'SP3c' }, grassNoSky: { max: 0, activeFrom: 'SP3c' }, ymod16: { min: 0.001, activeFrom: 'SP3c' },

@@ -1,5 +1,5 @@
 {
-  "sha256": "4129915a9534c9985db0b65f3dddcf9eb8cfedd0688709c750110f4a12395870",
+  "sha256": "dd4118dd035b136a483144fdd09febed48633fab94170212b2d39bd034240c0b",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -143,6 +143,28 @@
         "perKm2Min": {
           "activeFrom": "SP2a",
           "min": 0.2
+        }
+      },
+      "C7": {
+        "carverReference": {
+          "activeFrom": "SP6a",
+          "max": 0
+        },
+        "endTaper": {
+          "activeFrom": "SP6a",
+          "max": 0
+        },
+        "islandCapAir": {
+          "activeFrom": "SP6a",
+          "max": 0,
+          "tiers": [
+            "quick",
+            "full"
+          ]
+        },
+        "reachOverflow": {
+          "activeFrom": "SP6a",
+          "max": 0
         }
       },
       "DT1": {

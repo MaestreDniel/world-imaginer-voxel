@@ -16,8 +16,8 @@
  *   with probes interleaved over two contexts and two columns;
  * - Review Focus 5 (Task 28): a column a worm carves from a source 10 chunks away hashes the same in a region, alone on a
  *   fresh store (`isolatedColumn`), after a teleport filled the 1,024-path LRU, after a configure emptied it and with an
- *   LRU of 1; the two columns either side of the worm's chunk border carve the voxels next to it as the box carve does
- *   (the global reference `referenceCarve` takes its place in Task 30).
+ *   LRU of 1; the two columns either side of the worm's chunk border carve what the global carver reference
+ *   `referenceCarve` (`test/harness/refs.ts`, Task 30) carves over the region, and store it, at the voxels next to it.
  */
 import { describe, expect, test } from 'vitest';
 import { CARVER_CACHE_PATHS, CARVER_WINDOW_R, CAVE_KIND, HEIGHT, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
@@ -40,6 +40,7 @@ import { hex64 } from '../../src/core/hash';
 import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { CARVER_DEFAULTS } from '../harness/carverParams';
 import { ctxFor, paramsWith } from '../harness/gen';
+import { referenceCarve } from '../harness/refs';
 import { genRegion, isolatedColumn, type GenRegionOptions, type RegionResult } from '../harness/region';
 
 const NEVER = (): boolean => false;
@@ -719,18 +720,32 @@ describe('a worm from a source 10 chunks away, the LRU and a configure (Review F
     expect(one.view.hash()).toBe(dflt.view.hash());
   });
 
-  test('the two columns either side of the worm\'s chunk border carve the voxels next to it exactly as the box carve does (until Task 30\'s referenceCarve; ruling P20)', async () => {
+  test('the two columns either side of the worm\'s chunk border carve and store what the global reference referenceCarve carves (Task 30; ruling P20)', async () => {
     const d = createDensityContext(far);
     const cols = [filled(d, CX - 1, CZ), filled(d, CX, CZ)] as const;
-    const box = boxCarve(far.seed, p, cols);
     const cache = createCarverCache(far, p, 1024);
     const { dflt } = await generated();
+    // The global reference over the 3 × 3 region around (CX, CZ): every path whose box meets it, no per-column window.
+    const ref = referenceCarve(dflt.view, '42', params);
+    const W = 16 * dflt.view.w, D = 16 * dflt.view.h;
+    const refAt = (x: number, y: number, z: number): number => ref[((y + 64) * D + (z - 16 * dflt.view.cz0)) * W + (x - 16 * dflt.view.cx0)]!;
     let border = 0;
     const fromSource = [0, 0];
     cols.forEach((c, k) => {
       const got = carved(cache, p, c);
-      expect(firstDiff(got.solid, box.solid[k]!), `column (${c.cx}, ${c.cz}) solidity`).toBe(-1);
-      expect(firstDiff(got.tags, box.tags[k]!), `column (${c.cx}, ${c.cz}) tags`).toBe(-1);
+      // carveColumn's tags (its carver kinds) are the reference's over the whole column.
+      let diff = -1;
+      for (let y = -64; y <= 319 && diff < 0; y++) {
+        for (let lz = 0; lz < 16 && diff < 0; lz++) {
+          for (let lx = 0; lx < 16; lx++) {
+            if (got.tags[idx(lx, y, lz)] !== refAt(16 * c.cx + lx, y, 16 * c.cz + lz)) {
+              diff = idx(lx, y, lz);
+              break;
+            }
+          }
+        }
+      }
+      expect(diff, `column (${c.cx}, ${c.cz}) tags against referenceCarve`).toBe(-1);
       const without = carved(withoutSource(cache), p, c);
       const view = dflt.view.store.proto(c.cx, c.cz)!;
       // The voxels next to the border x = 16·CX: lx 15 of the west column, lx 0 of the east one.
@@ -740,8 +755,9 @@ describe('a worm from a source 10 chunks away, the LRU and a configure (Review F
           const v = idx(lx, y, lz);
           if (c.solid[v] !== 1) continue;
           border++;
-          // The region's T stage stored the box carve's tag (a density-solid voxel's tag is its carver's, or 0).
-          if (view.cave(lx, y, lz) !== box.tags[k]![v]) expect(view.cave(lx, y, lz), `stored tag at (${16 * c.cx + lx}, ${y}, ${16 * c.cz + lz})`).toBe(box.tags[k]![v]);
+          // The region's T stage stored the reference's kind (a density-solid voxel's tag is its carver's, or 0).
+          const want = refAt(16 * c.cx + lx, y, 16 * c.cz + lz);
+          if (view.cave(lx, y, lz) !== want) expect(view.cave(lx, y, lz), `stored tag at (${16 * c.cx + lx}, ${y}, ${16 * c.cz + lz})`).toBe(want);
           if (without.solid[v] !== got.solid[v]) fromSource[k]!++;
         }
       }

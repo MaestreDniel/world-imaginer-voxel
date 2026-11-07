@@ -1,0 +1,408 @@
+import { expect } from 'vitest';
+import { CARVER_WINDOW_R } from '../../src/core/constants';
+import { fnv1a32 } from '../../src/core/hash';
+import { resolveProfile, type ProfileId } from '../../src/core/params/profiles';
+import { Xoshiro128 } from '../../src/core/rng';
+import { seedFromInput } from '../../src/core/seed';
+import { carverPath, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
+import { columnPoint } from '../../src/gen/column/columnPoint';
+import { createGenContext } from '../../src/gen/context';
+import { ringCandidates } from '../../src/metrics/sp3eGoldens';
+import { AIR } from '../../src/world/blocks/index';
+import { CARVER_DEFAULTS, CARVER_MAXIMA } from '../harness/carverParams';
+import { metricTest } from '../harness/metric';
+import { referenceCarve } from '../harness/refs';
+import { genRegion, type RegionView } from '../harness/region';
+
+/**
+ * The caves' metrics (SP6a spec §10.1, D26), over harness regions up to 'T' with the tag read from the store
+ * (`RegionView.tag`). The regions:
+ * - fast: 2 regions 16 × 16 of seed '42', profile default;
+ * - quick: per seed '42' and '1', 2 regions 32 × 32 of the default profile and 1 of large_biomes; and one 32 × 32 region
+ *   of seed '42' on each of archipelago (a coast and sea floor), amplified (summits and deep columns) and
+ *   floating_islands (the island cap), found by the scan below and fixed here;
+ * - full: the quick set over seeds '42', '1', '2', '3': per seed 2 default regions, 1 of large_biomes and one per preset,
+ *   the preset regions of seeds '1', '2' and '3' found by the same scan when the tier runs.
+ * The preset regions' scan (seed '42' run once: `PRESET_REGIONS` holds what it found, and the metric re-checks that each
+ * still satisfies its predicate): candidate R(a, b) is the 32 × 32 chunks centred on block (128a, 128b), chunk origin
+ * (8a − 16, 8b − 16), in the rings of `sp3eGoldens.ts`' window search (r = 0, 1, …; within a ring a then b ascending);
+ * its 256 lattice points are the block centres (x0 + 32i + 16, z0 + 32j + 16), i, j in 0 … 15, read through
+ * `columnPoint` on the preset's context; the first candidate whose predicate holds is the preset's region (at seed '42'):
+ * - archipelago: 64 … 192 of the points have offset0 < 63 (a coast and its sea floor): R(1, −2), 68 points at sea;
+ * - amplified: the largest offset0 ≥ 200 (summits) and ≥ 64 points with offset0 ≥ 180 (deep columns of rock):
+ *   R(−5, −1), 65 points ≥ 180, the largest 209;
+ * - floating_islands: ≥ 64 points with islandMask ≥ 0.9 (islands overhead, under the cap): R(−2, −1), 81 points.
+ *
+ * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
+ * - `carverReference`: over every region of the tier (the preset regions included), the voxels of the region whose
+ *   carver kind in the store (the tag when it is a carver's, 6-8, else 0) differs from `referenceCarve`'s, the global
+ *   reference that carves every path whose box meets the region with no per-column window. The reference has no border
+ *   (it reads only the region's own columns), so every voxel of the region is interior and counted;
+ * - `reachOverflow`: pure, no terrain. 100,000 source chunks per kind, drawn by `Xoshiro128(fnv1a32('C7.sources'))` in
+ *   [−65,536, 65,536)², each source's path (the chance leaves at 1: the roll is a source's first draw, so a path does
+ *   not depend on its chance, which only decides whether the source has one) at the defaults, at the static maxima
+ *   (`CARVER_MAXIMA`) and at the straightest paths (the maxima with no turning and no branch, which reach the window's
+ *   outermost ring, so a smaller R fails; Task 25's unit case): the paths whose voxel reach (`box`, already each
+ *   ellipsoid's centre widened by its own rh and rv) leaves the chunks within `CARVER_WINDOW_R` of the source chunk, or
+ *   that hold a value that is not finite in `ell`, `box` or `widthSq` (ruling P17);
+ * - `endTaper`: pure. The same 100,000 sources per kind at the defaults (chances at 1): the path ends whose last
+ *   ellipsoid's rh or rv is larger than that of any of the up to 4 ellipsoids before it on its segment, or than the
+ *   path's median over its step ellipsoids. A path's segments are read from `ell`'s layout (`carvers.ts` rule 6): a
+ *   room is the first ellipsoid, at the first step's centre; a branching worm's trunk ends at its fork, and two
+ *   branches of equal length follow, each starting at the fork's centre. The start room and the branch points (the
+ *   trunk's end when it branches, each branch's start) are not ends (Spec correction 17); a layout that reads otherwise
+ *   counts as a failing end;
+ * - `islandCapAir`: the tagged (cave) voxels at y ≥ 176 in the floating_islands regions (quick and full; on fast,
+ *   which has no such region, NaN, which its tiers accept).
+ * Recorded beside the parts: the regions measured, the carver-tagged voxels they hold, the paths and ends checked, and
+ * the floating_islands region's island voxels (non-air at y ≥ 181, so the cap has islands to protect).
+ */
+type Tier = 'fast' | 'quick' | 'full';
+const TIER = (process.env.METRICS_TIER ?? 'fast') as Tier;
+const pick = <T>(fast: T, quick: T, full: T): T => (TIER === 'full' ? full : TIER === 'quick' ? quick : fast);
+
+/** A region of the tier: a seed, a profile and R's rectangle. */
+interface Site {
+  readonly label: string;
+  readonly seed: string;
+  readonly profile: ProfileId;
+  readonly cx0: number;
+  readonly cz0: number;
+  readonly size: number;
+}
+
+type PresetId = 'archipelago' | 'amplified' | 'floating_islands';
+
+/** The preset regions' scan candidates R(a, b) as found at seed '42' (see the header). */
+const PRESET_REGIONS: ReadonlyArray<readonly [PresetId, a: number, b: number]> = [
+  ['archipelago', 1, -2],
+  ['amplified', -5, -1],
+  ['floating_islands', -2, -1],
+];
+
+/** The scan's predicate on R(a, b) of `preset` at world seed `seed` (see the header). */
+function presetRegionHolds(preset: PresetId, seed: string, a: number, b: number): boolean {
+  const ctx = createGenContext(seedFromInput(seed), resolveProfile(preset));
+  const x0 = 128 * a - 256;
+  const z0 = 128 * b - 256;
+  let sea = 0;
+  let deep = 0;
+  let highest = -Infinity;
+  let islands = 0;
+  for (let j = 0; j < 16; j++) {
+    for (let i = 0; i < 16; i++) {
+      const p = columnPoint(ctx, x0 + 32 * i + 16, z0 + 32 * j + 16);
+      if (p.offset0 < 63) sea++;
+      if (p.offset0 >= 180) deep++;
+      highest = Math.max(highest, p.offset0);
+      if (p.islandMask >= 0.9) islands++;
+    }
+  }
+  if (preset === 'archipelago') return sea >= 64 && sea <= 192;
+  if (preset === 'amplified') return highest >= 200 && deep >= 64;
+  return islands >= 64;
+}
+
+/** The scan (see the header): the first candidate R(a, b), rings 0 … 64, whose predicate holds at `seed`. */
+function findPresetRegion(preset: PresetId, seed: string): readonly [a: number, b: number] {
+  for (let r = 0; r <= 64; r++) {
+    for (const [a, b] of ringCandidates(r)) if (presetRegionHolds(preset, seed, a, b)) return [a, b];
+  }
+  throw new Error(`caves.metric: no ${preset} region at seed '${seed}' within ring 64`);
+}
+
+const DEFAULT_SEEDS: readonly string[] = pick(['42'], ['42', '1'], ['42', '1', '2', '3']);
+/** The seeds of the preset regions: '42' (fixed) on quick, and the full tier's other seeds (scanned). */
+const PRESET_SEEDS: readonly string[] = pick([], ['42'], ['42', '1', '2', '3']);
+
+/** A preset's region at `seed`: the fixed one at seed '42', which still holds its predicate, else the scan's. */
+function presetRegion(preset: PresetId, seed: string): readonly [a: number, b: number] {
+  if (seed !== '42') return findPresetRegion(preset, seed);
+  const [, a, b] = PRESET_REGIONS.find(([p]) => p === preset)!;
+  expect(presetRegionHolds(preset, seed, a, b), `${preset}'s region R(${a}, ${b}) no longer holds its scan's predicate`).toBe(true);
+  return [a, b];
+}
+
+function sites(): Site[] {
+  if (TIER === 'fast') {
+    return [
+      { label: "seed '42' default (-8, -8)", seed: '42', profile: 'default', cx0: -8, cz0: -8, size: 16 },
+      { label: "seed '42' default (8, -8)", seed: '42', profile: 'default', cx0: 8, cz0: -8, size: 16 },
+    ];
+  }
+  const out: Site[] = [];
+  for (const seed of DEFAULT_SEEDS) {
+    out.push({ label: `seed '${seed}' default (-16, -16)`, seed, profile: 'default', cx0: -16, cz0: -16, size: 32 });
+    out.push({ label: `seed '${seed}' default (16, -16)`, seed, profile: 'default', cx0: 16, cz0: -16, size: 32 });
+    out.push({ label: `seed '${seed}' large_biomes (-16, -16)`, seed, profile: 'large_biomes', cx0: -16, cz0: -16, size: 32 });
+  }
+  for (const seed of PRESET_SEEDS) {
+    for (const [preset] of PRESET_REGIONS) {
+      const [a, b] = presetRegion(preset, seed);
+      out.push({ label: `seed '${seed}' ${preset} R(${a}, ${b})`, seed, profile: preset, cx0: 8 * a - 16, cz0: 8 * b - 16, size: 32 });
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- the pure parts
+
+const KINDS: readonly CarverKind[] = ['worm', 'ravine', 'undergroundWorm'];
+const SOURCES = 100_000;
+const SOURCE_SPAN = 65_536;
+const WORLD_SEED = seedFromInput('42');
+
+/** `SOURCES` source chunks in [−65,536, 65,536)², the same for every kind and case. */
+function sourceChunks(): Int32Array {
+  const rng = new Xoshiro128(fnv1a32('C7.sources'));
+  const out = new Int32Array(2 * SOURCES);
+  for (let i = 0; i < out.length; i++) out[i] = rng.nextInt(2 * SOURCE_SPAN) - SOURCE_SPAN;
+  return out;
+}
+
+/** `p` with the three chances at 1: every source has its path. */
+function always(p: CarverParams): CarverParams {
+  return {
+    ...p,
+    worms: { ...p.worms, chance: 1 },
+    undergroundWorms: { ...p.undergroundWorms, chance: 1 },
+    ravines: { ...p.ravines, chance: 1 },
+  };
+}
+
+/** The maxima with no turning and no branch: each path runs straight and level (Task 25's straightest case). */
+const STRAIGHT: CarverParams = {
+  ...CARVER_MAXIMA,
+  worms: {
+    ...CARVER_MAXIMA.worms, branchChance: 0, lengthVar: 0,
+    shape: { ...CARVER_MAXIMA.worms.shape, pitchKeep: 0, yawStep: 0, pitchStep: 0 },
+  },
+  ravines: { ...CARVER_MAXIMA.ravines, vRotation: 0 },
+};
+
+const finite = (a: Float64Array | null): boolean => {
+  if (a === null) return true;
+  for (let i = 0; i < a.length; i++) if (!Number.isFinite(a[i]!)) return false;
+  return true;
+};
+
+/** Paths whose box leaves the chunks within R of the source chunk, or with a value that is not finite. */
+function reachOverflow(src: Int32Array): { overflow: number; paths: number; deepest: number; examples: string[] } {
+  const R = CARVER_WINDOW_R;
+  let overflow = 0;
+  let paths = 0;
+  let deepest = 0;
+  const examples: string[] = [];
+  for (const [name, p] of [['defaults', CARVER_DEFAULTS], ['maxima', CARVER_MAXIMA], ['straightest', STRAIGHT]] as const) {
+    const q = always(p);
+    for (const kind of KINDS) {
+      for (let i = 0; i < SOURCES; i++) {
+        const sx = src[2 * i]!;
+        const sz = src[2 * i + 1]!;
+        const path = carverPath(WORLD_SEED, kind, sx, sz, q);
+        if (path === null) continue;
+        paths++;
+        const b = path.box;
+        const inside = b[0]! >= 16 * (sx - R) && b[3]! <= 16 * (sx + R + 1) && b[2]! >= 16 * (sz - R) && b[5]! <= 16 * (sz + R + 1);
+        if (!inside || !finite(path.ell) || !finite(path.box) || !finite(path.widthSq)) {
+          overflow++;
+          if (examples.length < 10) examples.push(`${name} ${kind} (${sx}, ${sz}) box ${Array.from(b).join(', ')}`);
+          continue;
+        }
+        deepest = Math.max(deepest, 16 * sx + 16 - b[0]!, b[3]! - 16 * sx, 16 * sz + 16 - b[2]!, b[5]! - 16 * sz);
+      }
+    }
+  }
+  return { overflow, paths, deepest, examples };
+}
+
+/** Whether ellipsoids i and j of `path` share their centre. */
+function sameCentre(path: CarverPath, i: number, j: number): boolean {
+  const e = path.ell;
+  return e[6 * i] === e[6 * j] && e[6 * i + 1] === e[6 * j + 1] && e[6 * i + 2] === e[6 * j + 2];
+}
+
+/**
+ * A path's segments as [from, to) ellipsoid ranges, the room excluded: the trunk alone, or the trunk then its two
+ * branches; null when `ell` does not read as `carvers.ts`' layout.
+ */
+function segmentsOf(path: CarverPath): Array<[number, number]> | null {
+  const n = path.count;
+  // A room is the first ellipsoid at the first step's centre (consecutive steps move one block, so never share one).
+  const r = path.kind !== 'ravine' && n >= 2 && sameCentre(path, 0, 1) ? 1 : 0;
+  let fork = -1;
+  for (let j = r; j + 1 < n; j++) {
+    if (sameCentre(path, j, j + 1)) {
+      fork = j;
+      break;
+    }
+  }
+  if (fork < 0) return [[r, n]];
+  const rest = n - (fork + 1);
+  if (path.kind === 'ravine' || rest % 2 !== 0) return null;
+  const b = rest / 2;
+  if (!sameCentre(path, fork, fork + 1 + b)) return null;
+  return [[r, fork + 1], [fork + 1, fork + 1 + b], [fork + 1 + b, n]];
+}
+
+function median(values: Float64Array): number {
+  const s = values.slice().sort();
+  const m = s.length >> 1;
+  return s.length % 2 === 1 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+}
+
+/** Path ends that are not tapered (§10.1's `endTaper`; the start room and the branch points excluded). */
+function endTaper(src: Int32Array): { bad: number; ends: number; rooms: number; branched: number; examples: string[] } {
+  const q = always(CARVER_DEFAULTS);
+  let bad = 0;
+  let ends = 0;
+  let rooms = 0;
+  let branched = 0;
+  const examples: string[] = [];
+  for (const kind of KINDS) {
+    for (let i = 0; i < SOURCES; i++) {
+      const sx = src[2 * i]!;
+      const sz = src[2 * i + 1]!;
+      const path = carverPath(WORLD_SEED, kind, sx, sz, q)!;
+      const segs = segmentsOf(path);
+      if (segs === null) {
+        bad++;
+        if (examples.length < 10) examples.push(`${kind} (${sx}, ${sz}): ell does not read as a trunk and two branches`);
+        continue;
+      }
+      if (segs[0]![0] === 1) rooms++;
+      if (segs.length === 3) branched++;
+      const first = segs[0]![0];
+      for (const col of [3, 4]) {
+        const steps = new Float64Array(path.count - first);
+        for (let k = first; k < path.count; k++) steps[k - first] = path.ell[6 * k + col]!;
+        const med = median(steps);
+        /** The end `end` against the up to 4 ellipsoids of [from, to) next to it inward (`dir`) and the median. */
+        const check = (end: number, from: number, to: number, dir: 1 | -1): void => {
+          ends++;
+          const v = path.ell[6 * end + col]!;
+          let tapered = v <= med;
+          for (let k = 1; k <= 4 && tapered; k++) {
+            const j = end + dir * k;
+            if (j >= from && j < to && v > path.ell[6 * j + col]!) tapered = false;
+          }
+          if (!tapered) {
+            bad++;
+            if (examples.length < 10) examples.push(`${kind} (${sx}, ${sz}) end ${end} col ${col}`);
+          }
+        };
+        const [t0, t1] = segs[0]!;
+        check(t0, t0, t1, 1);
+        if (segs.length === 1) check(t1 - 1, t0, t1, -1);
+        for (const [b0, b1] of segs.slice(1)) check(b1 - 1, b0, b1, -1);
+      }
+    }
+  }
+  return { bad, ends, rooms, branched, examples };
+}
+
+// ---------------------------------------------------------------- the region parts
+
+/** A column's set in the view: its final set at Decorated or above, else its proto set. */
+function columnOf(view: RegionView, cx: number, cz: number) {
+  const c = view.store.final(cx, cz) ?? view.store.proto(cx, cz);
+  if (c === null) throw new Error(`caves.metric: column (${cx}, ${cz}) has no set`);
+  return c;
+}
+
+/**
+ * The voxels of the region whose store carver kind (the tag when 6-8, else 0) differs from `ref`'s, the carver-tagged
+ * voxels, and with `capY` the tagged voxels at y ≥ capY and the non-air voxels at y ≥ 181.
+ */
+function regionCounts(view: RegionView, ref: Uint8Array, capY: number | null): { mismatches: number; carved: number; capAir: number; islandVoxels: number; examples: string[] } {
+  const W = 16 * view.w;
+  const D = 16 * view.h;
+  let mismatches = 0;
+  let carved = 0;
+  let capAir = 0;
+  let islandVoxels = 0;
+  const examples: string[] = [];
+  for (let cz = view.cz0; cz < view.cz0 + view.h; cz++) {
+    for (let cx = view.cx0; cx < view.cx0 + view.w; cx++) {
+      const col = columnOf(view, cx, cz);
+      const bx = 16 * (cx - view.cx0);
+      const bz = 16 * (cz - view.cz0);
+      for (let sy = 0; sy < 24; sy++) {
+        const cave = col.sectionCave(sy);
+        const blocks = col.sectionBlocks(sy);
+        for (let ly = 0; ly < 16; ly++) {
+          const y = 16 * sy - 64 + ly;
+          for (let lz = 0; lz < 16; lz++) {
+            const row = ((y + 64) * D + bz + lz) * W + bx;
+            for (let lx = 0; lx < 16; lx++) {
+              const i = ly * 256 + lz * 16 + lx;
+              const tag = typeof cave === 'number' ? cave : cave[i]!;
+              const kind = tag >= 6 && tag <= 8 ? tag : 0;
+              if (kind !== 0) carved++;
+              const want = ref[row + lx]!;
+              if (kind !== want) {
+                mismatches++;
+                if (examples.length < 10) examples.push(`(${16 * cx + lx}, ${y}, ${16 * cz + lz}) stored ${tag}, reference ${want}`);
+              }
+              if (capY !== null) {
+                if (y >= capY && tag !== 0) capAir++;
+                const block = typeof blocks === 'number' ? blocks : blocks[i]!;
+                if (y >= 181 && block !== AIR) islandVoxels++;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return { mismatches, carved, capAir, islandVoxels, examples };
+}
+
+/** The y from which the floating_islands region holds no cave air (§10.1's `islandCapAir`). */
+const CAP_AIR_Y = 176;
+
+metricTest('C7', ['carverReference', 'reachOverflow', 'endTaper', 'islandCapAir'], async () => {
+  const src = sourceChunks();
+  const reach = reachOverflow(src);
+  expect(reach.examples, 'C7.reachOverflow').toEqual([]);
+  // Every source of the three cases has its path (the chances at 1): 3 cases × 3 kinds × 100,000.
+  expect(reach.paths).toBe(9 * SOURCES);
+  // The straightest paths reach into the window's outermost ring of chunks, so a window of R − 1 would fail.
+  expect(reach.deepest).toBeGreaterThan(16 * CARVER_WINDOW_R);
+  const taper = endTaper(src);
+  expect(taper.examples, 'C7.endTaper').toEqual([]);
+  // The defaults' room and branch chances (0.25 each) put rooms and branches among the worms' 200,000 paths.
+  expect(taper.rooms).toBeGreaterThan(20_000);
+  expect(taper.branched).toBeGreaterThan(20_000);
+
+  let mismatches = 0;
+  let carved = 0;
+  let capAir = Number.NaN;
+  let islandVoxels = Number.NaN;
+  const all = sites();
+  for (const s of all) {
+    const params = resolveProfile(s.profile);
+    const { view } = await genRegion({
+      seed: s.seed, params, cx0: s.cx0, cz0: s.cz0, w: s.size, h: s.size, upTo: 'T', order: 'spiral', threads: 4,
+      cache: true, workerDir: `cavesRegionWorker-${TIER}`,
+    });
+    const island = s.profile === 'floating_islands';
+    const c = regionCounts(view, referenceCarve(view, s.seed, params), island ? CAP_AIR_Y : null);
+    expect(c.examples, `C7.carverReference at ${s.label}`).toEqual([]);
+    // Each region holds carved voxels, so the comparison is not vacuous.
+    expect(c.carved, `carver-tagged voxels at ${s.label}`).toBeGreaterThan(0);
+    mismatches += c.mismatches;
+    carved += c.carved;
+    if (island) {
+      // Summed over the floating_islands regions (one per preset seed).
+      capAir = (Number.isNaN(capAir) ? 0 : capAir) + c.capAir;
+      islandVoxels = (Number.isNaN(islandVoxels) ? 0 : islandVoxels) + c.islandVoxels;
+      expect(c.islandVoxels, `the floating_islands region at ${s.label} holds no island voxels`).toBeGreaterThan(0);
+    }
+  }
+  return {
+    carverReference: mismatches, reachOverflow: reach.overflow, endTaper: taper.bad, islandCapAir: capAir,
+    regions: all.length, carverVoxels: carved, reachPaths: reach.paths, reachDeepest: reach.deepest,
+    taperEnds: taper.ends, taperRooms: taper.rooms, taperBranched: taper.branched, islandVoxels,
+  };
+});

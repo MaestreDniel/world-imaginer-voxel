@@ -20,6 +20,9 @@ const DIR = 'test/metrics';
 export const SHARDS = {
   terrain: [`${DIR}/terrain.metric.ts`],
   surface: [`${DIR}/surface.metric.ts`],
+  // SP6a spec §11 (D26): the caves' metrics (`caves.metric.ts`), planned at 20-40 s on fast, in a shard of its own
+  // (Task 30: 24 s alone, a cold region cache for one of its two regions).
+  caves: [`${DIR}/caves.metric.ts`],
   rest: null,
 };
 

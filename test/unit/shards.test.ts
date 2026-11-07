@@ -2,8 +2,9 @@
  * The CI shard tables (SP4b spec §1.1, D1): `shardArgs` selects a named shard's files or excludes every named file for
  * the catch-all, and `coverageProblems` holds every rule a table's `check` enforces, on synthetic file lists (no
  * `vitest list`). The unit table is the spec's ten heavy files, plus the five slowest of `rest` in CI run 41132868697
- * (final review GOV-8), SP6a's slow cave files (Task 8's `caveContinuity`, Task 11's `caveTags`, Task 17's `meshXray`, Task 24's `carverPaths`), and `rest`; the metrics-quick table keeps its shards; the
- * metrics-fast table (SP4b spec §9's lever, taken after SP4c's merge run) is `terrain` and `surface` alone plus `rest`.
+ * (final review GOV-8), SP6a's slow cave files (Task 8's `caveContinuity`, Task 11's `caveTags`, Task 17's `meshXray`, Task 24's `carverPaths`), and `rest`; the metrics-quick table keeps its shards and
+ * gains SP6a's `caves` (spec §11: `caves.metric.ts` in a shard of its own); the metrics-fast table (SP4b spec §9's
+ * lever, taken after SP4c's merge run) is `terrain`, `surface` and SP6a's `caves` alone plus `rest`.
  */
 import { existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -33,8 +34,8 @@ describe('shardArgs (SP4b spec §1.1)', () => {
     expect(() => shardArgs(SHARDS, 'nope')).toThrow('unknown shard nope; shards: heavy, rest');
   });
 
-  test('the metrics-quick table keeps its shards and files', () => {
-    expect(Object.keys(METRIC_SHARDS)).toEqual(['terrain', 'surface', 'render', 'edit', 'persist', 'clipboard', 'rest']);
+  test('the metrics-quick table keeps its shards and files, and gains caves (SP6a spec §11)', () => {
+    expect(Object.keys(METRIC_SHARDS)).toEqual(['terrain', 'surface', 'render', 'edit', 'persist', 'clipboard', 'caves', 'rest']);
     expect(METRIC_SHARDS).toEqual({
       terrain: ['test/metrics/terrain.metric.ts', 'test/metrics/apply.metric.ts'],
       surface: ['test/metrics/surface.metric.ts'],
@@ -42,17 +43,24 @@ describe('shardArgs (SP4b spec §1.1)', () => {
       edit: ['test/metrics/edit.metric.ts'],
       persist: ['test/metrics/persist.metric.ts'],
       clipboard: ['test/metrics/clipboard.metric.ts'],
+      caves: ['test/metrics/caves.metric.ts'],
       rest: null,
     });
+    expect(shardArgs(METRIC_SHARDS, 'caves')).toEqual(['test/metrics/caves.metric.ts']);
+    expect(shardArgs(METRIC_SHARDS, 'rest')).toContain('test/metrics/caves.metric.ts');
   });
 
-  test('the metrics-fast table: terrain and surface each alone, rest excludes both', () => {
+  test('the metrics-fast table: terrain, surface and caves (SP6a spec §11) each alone, rest excludes the three', () => {
     expect(FAST_SHARDS).toEqual({
       terrain: ['test/metrics/terrain.metric.ts'],
       surface: ['test/metrics/surface.metric.ts'],
+      caves: ['test/metrics/caves.metric.ts'],
       rest: null,
     });
-    expect(shardArgs(FAST_SHARDS, 'rest')).toEqual(['--exclude', 'test/metrics/terrain.metric.ts', '--exclude', 'test/metrics/surface.metric.ts']);
+    expect(shardArgs(FAST_SHARDS, 'rest')).toEqual([
+      '--exclude', 'test/metrics/terrain.metric.ts', '--exclude', 'test/metrics/surface.metric.ts', '--exclude', 'test/metrics/caves.metric.ts',
+    ]);
+    expect(existsSync(`${ROOT}test/metrics/caves.metric.ts`)).toBe(true);
   });
 
   test('the metrics-fast table against the .metric.ts files on disk: one catch-all, each named file on disk and in one shard, rest gets the others (a listing simulated from the table, not vitest list)', () => {
@@ -61,7 +69,7 @@ describe('shardArgs (SP4b spec §1.1)', () => {
     const listed = Object.fromEntries(Object.entries(FAST_SHARDS).map(([name, files]) =>
       [name, files ?? onDisk.filter((f) => !named.includes(f))]));
     expect(coverageProblems({ project: 'metrics-fast', shards: FAST_SHARDS, all: onDisk, onDisk, listed })).toEqual([]);
-    expect(listed.rest!.length).toBe(onDisk.length - 2);
+    expect(listed.rest!.length).toBe(onDisk.length - 3);
   });
 });
 

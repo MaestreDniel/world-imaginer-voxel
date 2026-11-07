@@ -122,7 +122,10 @@
  * entry, which exists (`SP6A_MODULES`, its first row added with `tags.ts`; Tasks 17, 18, 21, 24, 26 and 43 append theirs).
  * The carve commit (Task 27) pins item 12, §3.8's carvers as built (the window R = 11, the paths with the rooms and the
  * underground worm's shrink, the carving rules), whose values state the schema defaults of the carver leaves, and moves
- * item 20's U2 count to the carver leaves.
+ * item 20's U2 count to the carver leaves. The caves metric's commit (Task 30) pins item 17 (§6.1: `debugTags` reads the
+ * store's `cave` channel and adds the pillar bit; the references gain the 3D sky flood and components and a global
+ * carver reference), item 8's test entry (`metrics/caves.metric.ts`, an `SP6A_MODULES` row; Task 35 adds
+ * `bench/inlined.ts`) and item 18's C7 row with its four construction parts, cross-checked against `THRESHOLDS`.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2102,6 +2105,7 @@ describe('master spec amendments (SP6a §13)', () => {
     [/^\s+mesh\/greedy\.ts /, 'xray.ts (SP6a)', 'src/mesh/xray.ts'],
     [/^\s+materials\/index\.ts /, '(SP6a: the X-ray material, glsl/xray.glsl.ts)', 'src/render/materials/glsl/xray.glsl.ts'],
     [/^\s+ui\/world\/\* /, 'xrayStrip.ts (SP6a)', 'src/ui/world/xrayStrip.ts'],
+    [/^\s+test\/ unit\/ metrics\//, '(SP6a: metrics/caves.metric.ts', 'test/metrics/caves.metric.ts'],
   ];
 
   test('§1 names each SP6a module in its entry, which exists; the line under gen/ names carve.ts and tags.ts (SP6a spec §13 item 8)', () => {
@@ -2170,5 +2174,44 @@ describe('master spec amendments (SP6a §13)', () => {
     const overridable = s416.split('\n').find((l) => l.startsWith('- Every setting can be overridden individually'));
     expect(overridable).toBeDefined();
     expect(overridable).toContain('night vision (SP6a)');
+  });
+
+  test('§6.1: debugTags reads the store\'s cave channel and adds the pillar bit; the references gain the 3D sky flood and components and a global carver reference (SP6a spec §13 item 17)', () => {
+    const at = text.indexOf('### 6.1 Harness and suites');
+    const s61 = text.slice(at, text.indexOf('### 6.2 ', at));
+    const harness = s61.slice(s61.indexOf('**Harness**'), s61.indexOf('**References**'));
+    const debug = harness.split('\n').find((l) => l.startsWith('- SP6a: `debugTags`'));
+    expect(debug, 'no SP6a debugTags line under §6.1\'s Harness').toBeDefined();
+    expect(debug).toContain('`debugTags` reads the store\'s `cave` channel and adds the pillar bit');
+    expect(debug).toContain('(amended by SP6a)');
+    const refs = s61.slice(s61.indexOf('**References**'), s61.indexOf('**Region cache**')).split('\n');
+    expect(refs).toContain('- 3D sky flood and components; a global carver reference (SP6a);');
+    // The raycast visibility reference stays with cave culling (SP6b).
+    const raycast = refs.find((l) => l.startsWith('- a raycast visibility reference for cave culling'));
+    expect(raycast).toContain('SP6b');
+  });
+
+  test('§6.4\'s C7 row holds the four construction parts with their 0 bounds, which THRESHOLDS holds activeFrom SP6a; MetricId names C7-C9 (SP6a spec §13 item 18, §10.1, D26)', () => {
+    const c7 = text.split('\n').find((l) => l.startsWith('| C7 |'));
+    expect(c7, 'no C7 row in §6.4').toBeDefined();
+    const cells = c7!.split(' | ');
+    // [ '| C7', definition, 'threshold |' ]: the parts in the definition in order, one 0 bound each.
+    const parts = ['carverReference', 'reachOverflow', 'endTaper', 'islandCapAir'];
+    let from = 0;
+    for (const part of parts) {
+      const i = cells[1]!.indexOf(`\`${part}\``, from);
+      expect(i, `§6.4's C7 row does not name \`${part}\` after the previous part`).toBeGreaterThan(-1);
+      from = i;
+    }
+    expect(c7!.endsWith(' | 0 / 0 / 0 / 0 |')).toBe(true);
+    for (const part of parts) {
+      const tiers = part === 'islandCapAir' ? { tiers: ['quick', 'full'] } : {};
+      expect(THRESHOLDS.C7?.[part], `THRESHOLDS.C7.${part}`).toEqual({ max: 0, activeFrom: 'SP6a', ...tiers });
+    }
+    expect(Object.keys(THRESHOLDS.C7 ?? {})).toEqual(parts);
+    // The row says where islandCapAir is gated, as THRESHOLDS does.
+    expect(cells[1]).toContain('quick and full');
+    const ids = readFileSync(fileURLToPath(new URL('../../src/core/ids.ts', import.meta.url)), 'utf8');
+    expect(ids).toContain("| 'C1' | 'C2' | 'C3' | 'C4' | 'C5' | 'C6' | 'C7' | 'C8' | 'C9'");
   });
 });

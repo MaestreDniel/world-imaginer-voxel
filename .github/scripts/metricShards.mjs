@@ -36,6 +36,10 @@ export const SHARDS = {
   // 10 × 10 region on every tier, the leave and the buried-house cases), which `rest` (the long pole) cannot take, so it
   // runs in a shard of its own, as SP5a's and SP5b's files ended (prototype: 41 s on quick, 35 s on fast).
   clipboard: [`${DIR}/clipboard.metric.ts`],
+  // SP6a spec §10.1, §11 (D26): the caves' metrics (`caves.metric.ts`: C7's construction parts, later C1-C9), planned at
+  // 80-160 s on quick plus setup (nine 32 × 32 regions up to T with the global carver reference), which no shard has
+  // room for, so it runs in a shard of its own (Task 30: 106 s alone, cold region cache).
+  caves: [`${DIR}/caves.metric.ts`],
   rest: null,
 };
 
