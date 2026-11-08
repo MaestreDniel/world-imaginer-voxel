@@ -16,6 +16,15 @@
  *   sz = −r, then sx = r, sz = r, sx = −r, as `liveness.ts`' lake-cell spiral); per path, in that order: sx, sz, its
  *   ellipsoid count, its box (6 values), its ellipsoids (6 values each: x, y, z, rh, rv, floor) and, for a ravine, its
  *   384 f² values. Every value is hashed as its IEEE double bits in one array (`hashF64`).
+ * - `sp6a.region.T.caves` (push B, Task 39; §10.8): `regionHash` of an 8 × 8-chunk window, world seed '42', default
+ *   profile, generated up to T in process on a fresh `ArrayBuffer` store (as `regionDigest`, `sp3aGoldens.ts`), so the
+ *   digest covers the window's blocks, fluid, cave tags and aux. The window is the first of the scan's candidates
+ *   holding at least one voxel of each cave kind 1-8 (`CAVE_KIND` cheese … undergroundWorm, the store's tag; ruling
+ *   P36). The candidates, in this fixed order: the 8 × 8 tiles of the default quick regions of `caves.metric.ts` at seed
+ *   '42', the 32 × 32 chunks at (−16, −16), then at (16, −16); within a region, its four rows of tiles from low z to
+ *   high z, each from low x to high x (tile (i, j) at chunk (cx0 + 8i, cz0 + 8j)). The scan, run once at push B's tree
+ *   (the tuning fb1e5d1), found the first candidate, chunks (−16, −16) … (−9, −9); it is pinned in `CAVES_WINDOW`, and
+ *   `goldens.sp6a.test.ts` checks that it is the first candidate and holds every kind.
  * Follows the core determinism rules (in `DET_FILES`, arch-tested). Every value is hex64.
  */
 import { fnv1a32, hashF64, hex64 } from '../core/hash';
@@ -32,6 +41,9 @@ import type { DensityExpr } from '../gen/density/expr';
 import { probe } from '../gen/density/probe';
 import { resolveDensity } from '../gen/density/source';
 import type { DensitySource, SourceExpr, SourceNumber } from '../gen/density/source';
+import { createStore } from '../world/store/store';
+import type { VoxelStore } from '../world/store/store';
+import { genRegionInProcess, regionHash } from './region';
 
 const FNV32 = fnv1a32;
 const HASH_F64 = hashF64;
@@ -46,6 +58,9 @@ const PROBE = probe;
 const RESOLVE_DENSITY = resolveDensity;
 const CARVER_PATH = carverPath;
 const CARVER_PARAMS_OF = carverParamsOf;
+const CREATE_STORE = createStore;
+const GEN_REGION = genRegionInProcess;
+const REGION_HASH = regionHash;
 
 const CORNERS = 1225;
 /** The column the ops fixture is evaluated over. */
@@ -153,12 +168,47 @@ export function carverPathsValues(): Float64Array {
   return Float64Array.from(parts);
 }
 
+/** The side of `sp6a.region.T.caves`' window, in chunks. */
+const CAVES_WINDOW_SIZE = 8;
+/** The default quick regions of `caves.metric.ts` at seed '42' (chunk origins; 32 × 32 chunks each), the scan's order. */
+const CAVES_SCAN_REGIONS: ReadonlyArray<readonly [number, number]> = [[-16, -16], [16, -16]];
+const CAVES_SCAN_REGION_SIZE = 32;
+/** `sp6a.region.T.caves`' window, its first chunk (the scan's first candidate, module comment). */
+export const CAVES_WINDOW: readonly [number, number] = [-16, -16];
+const MiB = 1048576;
+
+/** The scan's candidates for `sp6a.region.T.caves`, each window's first chunk, in the module comment's order. */
+export function cavesWindowCandidates(): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  const tiles = CAVES_SCAN_REGION_SIZE / CAVES_WINDOW_SIZE;
+  for (const [rx, rz] of CAVES_SCAN_REGIONS) {
+    for (let j = 0; j < tiles; j++) {
+      for (let i = 0; i < tiles; i++) out.push([rx + CAVES_WINDOW_SIZE * i, rz + CAVES_WINDOW_SIZE * j]);
+    }
+  }
+  return out;
+}
+
+/** The 8 × 8 window at chunk (cx0, cz0), seed '42', default profile, generated up to T in process on a fresh store. */
+export function cavesWindowStore(cx0 = CAVES_WINDOW[0], cz0 = CAVES_WINDOW[1]): VoxelStore {
+  const store = CREATE_STORE({ shared: false, maxBlockBytes: 32 * MiB, maxByteBytes: 16 * MiB });
+  GEN_REGION(store, ctx42(), cx0, cz0, CAVES_WINDOW_SIZE, CAVES_WINDOW_SIZE);
+  return store;
+}
+
+/** `sp6a.region.T.caves`: `regionHash` of the pinned window. */
+function cavesWindowDigest(): string {
+  const [cx0, cz0] = CAVES_WINDOW;
+  return HEX64(REGION_HASH(cavesWindowStore(cx0, cz0), cx0, cz0, CAVES_WINDOW_SIZE, CAVES_WINDOW_SIZE));
+}
+
 export function sp6aGoldenKeys(): string[] {
-  return ['sp6a.density.ops', 'sp6a.carver.paths'];
+  return ['sp6a.density.ops', 'sp6a.carver.paths', 'sp6a.region.T.caves'];
 }
 
 export function computeSp6aGolden(key: string): string {
   if (key === 'sp6a.density.ops') return HEX64(HASH_F64(densityScaledValues()));
   if (key === 'sp6a.carver.paths') return HEX64(HASH_F64(carverPathsValues()));
+  if (key === 'sp6a.region.T.caves') return cavesWindowDigest();
   throw new Error(`unknown golden ${key}`);
 }

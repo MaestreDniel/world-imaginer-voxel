@@ -918,6 +918,47 @@ Measured at 2781b1d (push B's tree before any tuning) and after Step 2's tuning 
 - **Missed after the tuning** (Step 3b, the user's): C6.latticeBias (a master bound); C7.verticalStep (archipelago, seed 42, y 99 against 100 over 1,867 underground voxels: the top of a sea region; the default group 1.13 on quick), C7.flatWallShare (0.029: 76,418 of the default group's 314,590 flat faces on quick are cave floors on the bedrock layer y −63, most of the rest on vertical walls), C7.waterWall (2.54 per km² on quick, 2.86 on full; unchanged by the tuning), C8.aperiodicity (0.76: its smallest ratio is always at lag 16, inside a cave's own extent; lags ≥ 64 read 0.96-1.03), C8.typeMixVariation (0.030 / 0.049) and C8.largeShare (1: every 32 × 32 default region holds a component ≥ 50k voxels; their largest 619k-1.18M voxels on quick), all this spec's proposals; on fast only, C5.largest (16 × 16 regions: 0.84) and C9.entrancesMax (152.6 = 20 components over fast's 0.131 km²).
 - **The rows** (Step 4, after the user's answer at Step 3/3b, ruling R21; Threshold log): every part gated from SP6a at its bound in the table, except C6.latticeBias max 1.25 (the master's 1.1 pending), the missed proposals as regression guards at the measured worst × 1.15 or × 0.85 (C7.verticalStep max 8.1, flatWallShare max 0.037, waterWall max 3.3; C8.aperiodicity min 0.63, typeMixVariation min 0.021) and C8.largeShare recorded, not gated; C5.largest, C8.aperiodicity, C8.sizeSpread and C9.entrancesMax gated on quick and full only. Re-run gated on full at the tuned tree (`caves.metric.ts` alone, 10 tests passed in 572 s): every value equals the "tuned: full" column.
 
+### Push B (Task 39)
+
+Recorded on 2026-11-08 at 4c83f9f (this commit's parent; push B's tree after the tuning fb1e5d1 and the rows 7e4a859), on the reference machine (i7-12700H, Node v24.21.0, Bun 1.4.4, headless Chrome through SwiftShader for the smoke). The last key, `sp6a.region.T.caves`, is the `regionHash` of an 8 × 8-chunk window at seed 42, default profile, up to T (blocks, fluid, the cave tag and the aux), found by a scan (ruling P36) over the 8 × 8 tiles of `caves.metric.ts`' default quick regions at (−16, −16) and (16, −16), each in z rows then x (the order is stated in `src/metrics/sp6aGoldens.ts`' comment). The first tile, chunks (−16, −16) … (−9, −9), already holds every kind 1-8: cheese 239,987 voxels, spaghetti 3D 30,331, spaghetti 2D 13,941, noodle 5,896, entrance 14,780, worm 10,149, ravine 33,816, underground worm 6,500 (none tagged `other`). Of the scan's 32 tiles, 7 hold no ravine and every tile holds each other kind. The window is pinned as `CAVES_WINDOW`; `goldens.sp6a.test.ts` checks that it is the scan's first candidate and that it holds each kind.
+
+§12.3's record: `git checkout 54dd34a -- test/goldens.json` (push A's head), then `npm run test:goldens`. Its first stage passed with no timeout (321 files, 5,961 tests, 497 s), and the merge passed (1/1). `GENERATOR_VERSION` is 7 (Task 27). The golden diff against push A's head, `git diff 54dd34a -- test/goldens.json`, key by key (60 keys → 62):
+
+| key | push A (54dd34a) | push B |
+|---|---|---|
+| `generatorVersion` | 6 | 7 |
+| `sp1.params` | `3a8e213e97fd51d6` | `6cb1c6bfca1cc730` |
+| `sp3a.region.T.default` | `d6b82017a311b71c` | `147675f158636952` |
+| `sp3a.region.T.large_biomes` | `b4efc8f80215afc9` | `b1cef671cb45e9dd` |
+| `sp3b.density.default` | `d3219e909dc7e47d` | `a2d65c788fc3a90b` |
+| `sp3c.surface.ops` | `63ce1a4012e60684` | `7a8758c790a0067d` |
+| `sp3e.region.T.amplified` | `98c0688b9bd6d91f` | `fd1b311fce28a12b` |
+| `sp3e.region.T.archipelago` | `96acbc8e675cf384` | `9610bd63910ac34c` |
+| `sp3e.region.T.floating_islands` | `05ca039b97a877bb` | `72fd4df03856cc14` |
+| `sp6a.carver.paths` (new) | — | `f01d27e99576808f` |
+| `sp6a.region.T.caves` (new) | — | `fbfd737769f463b5` |
+
+These are within §12.3's allowed keys for push B. `sp6a.density.ops` (`631964217f1d4c07`) did not move: its fixture reads none of the leaves push B moved. No other key moved: every `sp2a.*` key (`sp2a.spawn` included), `sp3e.column.point.*`, `sp3b.density.ops`, `sp3a.registry` and `sp3c.registry` equal push A's.
+
+- **Bun:** `npx --yes bun@1 test/tools/goldensJsc.ts`: `62/62 match on Bun 1.4.4 (JavaScriptCore)`.
+- **`?selftest=1` in Chrome** (the smoke, on its own build of this tree): `✓ all 62 goldens match (10.9 s)` and `IndexedDB contract: 10/10 passed`. Firefox's run is the user's, at Task 51.
+- **The smoke** (`node test/tools/uiSmoke.ts`, its own headless Chrome on a fresh profile): 464/464 checks pass, 0 page errors.
+- **`npm run typecheck && npm test`:** 349 files passed, 2 skipped; 6,248 tests passed, 1 expected fail, 12 skipped (379 s), no timeouts. **`npm run test:metrics`** (quick): 19 files, 68 tests passed, 7 skipped (408 s). T1 and S1 alone on the carved world (ruling R18), quick: `terrain.metric.ts` 4 passed, 1 skipped (171 s); `surface.metric.ts` 5 passed, 1 skipped (165 s).
+- **The bench** (Step 2; the first after the tuning, ruling R21 (g)): turbo on (`intel_pstate/no_turbo` 0), x86_pkg_temp 46, 39 and 40 °C and 1-minute load 0.83, 0.82 and 0.89 before the three runs, every row's calibration 0.636-0.640 ns. `BENCH_EXEMPT=terrain.real,terrain.islands,density.corner,slice.vertical128,slice.horizontal128,light.column,mesh.section,surface.column npm run bench` exited 0, then `npm run bench:record` re-recorded `test/baselines.json`, then `npm run bench` with no exemption exited 0: every gate and the +30 % rule held. The three runs (exempt / record / final):
+
+  | row | exempt | record | final | gate |
+  |---|---|---|---|---|
+  | `terrain.real` p50 / p99 | 10.46 / 17.39 ms | 10.55 / 17.31 ms | 10.43 / 17.21 ms | ≤ 13 / ≤ 20 (R14) |
+  | `terrain.islands` p50 / p99 | 11.88 / 19.57 ms | 11.83 / 19.80 ms | 11.70 / 19.04 ms | ≤ 14.5 / ≤ 26.5 (R14) |
+  | `slice.vertical128` p50 | 109.5 ms | 109.6 ms | 109.7 ms | ≤ 300 |
+  | `mesh.section` p50 / p99 | 0.346 / 0.624 ms | 0.346 / 0.638 ms | 0.334 / 1.158 ms | ≤ 1.0 / ≤ 2.5 |
+  | `light.column` p50 / p99 | 2.22 / 3.33 ms | 2.27 / 3.38 ms | 2.24 / 3.32 ms | ≤ 4 / ≤ 8 |
+  | `terrain.caves.warm` p50 / p99 | 9.86 / 15.78 ms | 10.17 / 16.24 ms | 9.70 / 15.52 ms | recorded |
+  | killRatio | 0.977 | 0.841 | 0.870 | ≤ 1.6 |
+
+  The kill criterion (§10.5) in the final run: the DAG-closure overhead is 1.768 ms, 17.0 % of `terrain.real`'s p50 (within 25 %). The tuning left T where Task 36 measured it (10.79 / 17.78 ms there).
+- **CI:** push B's run is the controller's (Task 39 Step 5), recorded with it.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)

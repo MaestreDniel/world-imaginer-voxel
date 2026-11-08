@@ -1,10 +1,12 @@
 /**
- * The SP6a goldens (SP6a spec §12.3, D28): `sp6a.density.ops` and `sp6a.carver.paths` (push B, Task 27), chained last
- * into `allGoldenKeys` (Task 39 appends `sp6a.region.T.caves`). `sp6a.density.ops`' fixture is a density source tree
+ * The SP6a goldens (SP6a spec §12.3, D28): `sp6a.density.ops`, `sp6a.carver.paths` (push B, Task 27) and
+ * `sp6a.region.T.caves` (push B, Task 39), chained last into `allGoldenKeys`. `sp6a.density.ops`' fixture is a density source tree
  * that uses `noiseScaled` (D18, §1.5) inside and outside `interpolated`, with literal scales and a `{param}` scale; the
  * values are the compiled corners and voxels of column (0, 0), equal to the reference. `sp6a.carver.paths` digests the
  * paths of 64 fixed sources per kind at seed 42 and the defaults (the first 64 per kind whose roll passes, in a spiral
- * from (0, 0)). Both keys match `test/goldens.json`.
+ * from (0, 0)). `sp6a.region.T.caves` digests the 8 × 8 window at seed 42 that the scan found holding a voxel of every
+ * kind 1-8 (§10.8): the first of the scan's candidates, so the test re-runs the scan by checking that one. The three
+ * keys match `test/goldens.json`.
  */
 import { describe, expect, test } from 'vitest';
 import { hashF64, hex64 } from '../../src/core/hash';
@@ -18,9 +20,11 @@ import { createDensityReference, interpolatedNodes } from '../../src/gen/density
 import { validateDensitySource } from '../../src/gen/density/source';
 import { allGoldenKeys, computeAnyGolden } from '../../src/metrics/sp2aGoldens';
 import {
-  carverGoldenPaths, carverPathsValues, computeSp6aGolden, densityScaledExpr, densityScaledPoints, densityScaledSource,
-  densityScaledValues, sp6aGoldenKeys,
+  CAVES_WINDOW, carverGoldenPaths, carverPathsValues, cavesWindowCandidates, cavesWindowStore, computeSp6aGolden,
+  densityScaledExpr, densityScaledPoints, densityScaledSource, densityScaledValues, sp6aGoldenKeys,
 } from '../../src/metrics/sp6aGoldens';
+import { regionHash } from '../../src/metrics/region';
+import { CAVE_KIND } from '../../src/core/constants';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { carverParamsOf, carverPath } from '../../src/gen/caves/carvers';
 import { expectGolden } from '../harness/goldens';
@@ -39,13 +43,17 @@ function nodesOf(root: Expr): Array<{ readonly node: Expr; readonly inside: bool
   return out;
 }
 
-test('2 SP6a keys, chained last into allGoldenKeys after SP3e\'s: 61 goldens', () => {
-  expect(sp6aGoldenKeys()).toEqual(['sp6a.density.ops', 'sp6a.carver.paths']);
-  expect(allGoldenKeys().slice(-2)).toEqual(['sp6a.density.ops', 'sp6a.carver.paths']);
-  expect(allGoldenKeys().slice(-3, -2)).toEqual(['sp3e.column.point.floating_islands']);
-  expect(allGoldenKeys()).toHaveLength(61);
-  expect(new Set(allGoldenKeys()).size).toBe(61);
-  for (const bad of ['sp6a.density', 'sp6a.density.ops.x', 'sp6a.carver', 'sp6a.carver.paths.x', 'sp6a.region.T.caves', 'sp6a.nope']) {
+test('3 SP6a keys, chained last into allGoldenKeys after SP3e\'s: 62 goldens', () => {
+  const keys = ['sp6a.density.ops', 'sp6a.carver.paths', 'sp6a.region.T.caves'];
+  expect(sp6aGoldenKeys()).toEqual(keys);
+  expect(allGoldenKeys().slice(-3)).toEqual(keys);
+  expect(allGoldenKeys().slice(-4, -3)).toEqual(['sp3e.column.point.floating_islands']);
+  expect(allGoldenKeys()).toHaveLength(62);
+  expect(new Set(allGoldenKeys()).size).toBe(62);
+  for (const bad of [
+    'sp6a.density', 'sp6a.density.ops.x', 'sp6a.carver', 'sp6a.carver.paths.x', 'sp6a.region.T', 'sp6a.region.T.caves.x',
+    'sp6a.region.T.default', 'sp6a.nope',
+  ]) {
     expect(() => computeSp6aGolden(bad)).toThrow(/unknown golden/);
     expect(() => computeAnyGolden(bad)).toThrow(/unknown golden/);
   }
@@ -142,6 +150,43 @@ describe('sp6a.carver.paths (§12.3; spec §2.1-§2.3)', () => {
     expect(computeSp6aGolden('sp6a.carver.paths')).toBe(hex64(hashF64(v)));
     expect(computeAnyGolden('sp6a.carver.paths')).toBe(computeSp6aGolden('sp6a.carver.paths'));
   });
+});
+
+describe('sp6a.region.T.caves (§12.3, §10.8)', () => {
+  test('the scan\'s candidates: the 8 × 8 tiles of the default quick regions (-16, -16) and (16, -16), z rows then x', () => {
+    const want: Array<[number, number]> = [];
+    for (const rx of [-16, 16]) {
+      for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) want.push([rx + 8 * i, -16 + 8 * j]);
+    }
+    expect(cavesWindowCandidates()).toEqual(want);
+    expect(cavesWindowCandidates()[0]).toEqual(CAVES_WINDOW);
+  });
+
+  test('the window is the scan\'s first candidate and holds a voxel of each kind 1-8; the key is its regionHash', () => {
+    const [cx0, cz0] = CAVES_WINDOW;
+    const store = cavesWindowStore();
+    const counts = new Array<number>(16).fill(0);
+    for (let cz = cz0; cz < cz0 + 8; cz++) {
+      for (let cx = cx0; cx < cx0 + 8; cx++) {
+        const v = store.proto(cx, cz);
+        expect(v, `column (${cx}, ${cz}) has a proto set`).not.toBeNull();
+        for (let sy = 0; sy < 24; sy++) {
+          const c = v!.sectionCave(sy);
+          if (typeof c === 'number') counts[c]! += 4096;
+          else for (let i = 0; i < 4096; i++) counts[c[i]!]!++;
+        }
+      }
+    }
+    const kinds = [
+      CAVE_KIND.cheese, CAVE_KIND.spaghetti3d, CAVE_KIND.spaghetti2d, CAVE_KIND.noodle, CAVE_KIND.entrance, CAVE_KIND.worm,
+      CAVE_KIND.ravine, CAVE_KIND.undergroundWorm,
+    ];
+    expect(kinds).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(kinds.filter((k) => counts[k]! === 0)).toEqual([]);
+    expect(counts.reduce((a, b) => a + b, 0)).toBe(64 * 384 * 256);
+    expect(computeSp6aGolden('sp6a.region.T.caves')).toBe(hex64(regionHash(store, cx0, cz0, 8, 8)));
+    expect(computeAnyGolden('sp6a.region.T.caves')).toBe(computeSp6aGolden('sp6a.region.T.caves'));
+  }, 120_000);
 });
 
 describe('SP6a goldens', () => {
