@@ -4,6 +4,8 @@ import type { NoiseDef } from '../../src/core/noise/types';
 import { q15 } from '../../src/core/params/canonical';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { applyPatch, bool, buildSchema, getPath, group, NOISE_KEYS, num, patchAt, type Issue } from '../../src/core/params/kit';
+import { metaOf } from '../../src/core/params/meta';
+import { PROFILE_IDS, resolveProfile } from '../../src/core/params/profiles';
 import { SCHEMA, type Params } from '../../src/core/params/schema';
 import { WorldSession, type SessionResult } from '../../src/engine/session';
 import { paramLints } from '../../src/ui/paramPanel/lints';
@@ -92,6 +94,8 @@ describe('panel tree', () => {
     expect(caves.sections[8]!.controls.length).toBe(10);
     expect(caves.sections[9]!.controls.map((c) => c.path)).toEqual(['caves.limits.surfaceDepth', 'caves.limits.waterDepth', 'caves.limits.bandSpan', 'caves.limits.capTop']);
     for (const c of controlsOf(caves)) expect([c.path, c.scope]).toEqual([c.path, 'terrain']);
+    // Every caves.* control's badge reads Terrain (the terrain stage reads `caves`, SP6a spec §4).
+    for (const c of controlsOf(caves)) expect([c.path, scopeBadge(c.scope).label]).toEqual([c.path, 'Terrain']);
   });
 
   test("a section's own controls come before its sub-sections (climate: the fields, then Warps)", () => {
@@ -349,6 +353,98 @@ describe('cross-field lints', () => {
     const all = params({ rivers: { coastFadeLo: 0.5, altFadeHi: 64 }, lakes: { offsetMax: 0 } });
     expect(paramLints(all).map((l) => l.paths[0])).toEqual(['rivers.coastFadeLo', 'rivers.altFadeLo', 'lakes.offsetMin']);
     expect(paramLints(params({ rivers: { coastFadeLo: 0.5, coastFadeHi: 0.6 } }))).toEqual([]);
+  });
+});
+
+/** SP6a spec §4's caves pairs, in the schema's order: every family's depth band, then every carver's drawn range. */
+const INVERTED = 'the range is inverted: the family narrows across it';
+const EMPTY = 'the range is empty';
+const CAVE_PAIRS: ReadonlyArray<readonly [lo: string, hi: string, effect: string]> = [
+  ...['cheese', 'spaghetti3d', 'spaghetti2d', 'noodles', 'entrances'].map((f) => [`caves.${f}.minY`, `caves.${f}.maxY`, INVERTED] as const),
+  ...['radius', 'vRatio', 'floor', 'roomYScale', 'startY'].map((l) => [`caves.worms.${l}Min`, `caves.worms.${l}Max`, EMPTY] as const),
+  ['caves.undergroundWorms.startYMin', 'caves.undergroundWorms.startYMax', EMPTY],
+  ...['length', 'startY'].map((l) => [`caves.ravines.${l}Min`, `caves.ravines.${l}Max`, EMPTY] as const),
+];
+/** A patch setting the leaf at `path` to `v`. */
+const at = (path: string, v: unknown): unknown => patchAt(path, v);
+/** Two patches deep-merged (the second's leaves win). */
+const mergePatch = (a: unknown, b: unknown): unknown => {
+  if (typeof a !== 'object' || a === null || typeof b !== 'object' || b === null) return b;
+  const out: Record<string, unknown> = { ...(a as Record<string, unknown>) };
+  for (const [k, v] of Object.entries(b as Record<string, unknown>)) out[k] = k in out ? mergePatch(out[k], v) : v;
+  return out;
+};
+
+describe('cross-field lints of the caves (SP6a spec §4, D8)', () => {
+  test('the pairs are every minY/maxY and every *Min/*Max sibling pair under caves.* in the schema', () => {
+    const paths = new Set(SCHEMA.leaves.map((l) => l.meta.path).filter((p) => p.startsWith('caves.')));
+    const pairs: string[] = [];
+    for (const p of paths) {
+      if (p.endsWith('.minY') && paths.has(`${p.slice(0, -4)}maxY`)) pairs.push(p);
+      else if (/[a-zA-Z]Min$/.test(p) && paths.has(`${p.slice(0, -3)}Max`)) pairs.push(p);
+    }
+    expect(pairs.sort()).toEqual(CAVE_PAIRS.map(([lo]) => lo).sort());
+    expect(CAVE_PAIRS).toHaveLength(13);
+  });
+
+  test.each(CAVE_PAIRS)('%s ≥ %s gives one lint, "%s"; one below clears it', (lo, hi, effect) => {
+    const b = getPath(DEFAULTS, hi) as number;
+    expect(getPath(DEFAULTS, lo) as number).toBeLessThan(b);
+    expect(paramLints(params(at(lo, b)))).toEqual([{
+      paths: [lo, hi], message: `${metaOf(lo)!.label} (${b}) should be below ${metaOf(hi)!.label} (${b}): ${effect}.`,
+    }]);
+    const below = metaOf(lo)!.kind === 'int' ? b - 1 : b - 0.05;
+    expect(paramLints(params(at(lo, below)))).toEqual([]);
+  });
+
+  test('the messages name the leaves and the effect', () => {
+    expect(paramLints(params({ caves: { cheese: { minY: 100, maxY: 50 } } }))).toEqual([{
+      paths: ['caves.cheese.minY', 'caves.cheese.maxY'],
+      message: 'Lowest y (100) should be below Highest y (50): the range is inverted: the family narrows across it.',
+    }]);
+    expect(paramLints(params({ caves: { ravines: { lengthMin: 120 } } }))).toEqual([{
+      paths: ['caves.ravines.lengthMin', 'caves.ravines.lengthMax'],
+      message: 'Shortest (120) should be below Longest (112): the range is empty.',
+    }]);
+  });
+
+  test('worms.lengthVar ≥ worms.length warns that some worms are 1 step long; below it, nothing', () => {
+    expect(paramLints(params({ caves: { worms: { length: 64, lengthVar: 64 } } }))).toEqual([{
+      paths: ['caves.worms.lengthVar', 'caves.worms.length'],
+      message: 'Length variation (64) should be below Length (64): some worms are 1 step long.',
+    }]);
+    expect(paramLints(params({ caves: { worms: { length: 40, lengthVar: 64 } } })).map((l) => l.paths)).toEqual([['caves.worms.lengthVar', 'caves.worms.length']]);
+    expect(paramLints(params({ caves: { worms: { length: 64, lengthVar: 63 } } }))).toEqual([]);
+  });
+
+  test('islands.enabled on with capTop above 180 warns (D8): default + islands on fires, floating_islands (capTop 180) does not', () => {
+    const lint = {
+      paths: ['islands.enabled', 'caves.limits.capTop'],
+      message: 'Islands are on with Cap top (344) above 180: caves may detach runs above y 180; the island rules then treat them as islands.',
+    };
+    expect(paramLints(params({ islands: { enabled: true } }))).toEqual([lint]);
+    expect(paramLints(params({ islands: { enabled: true }, caves: { limits: { capTop: 181 } } })).map((l) => l.paths)).toEqual([lint.paths]);
+    expect(paramLints(params({ islands: { enabled: true }, caves: { limits: { capTop: 180 } } }))).toEqual([]);
+    expect(paramLints(params({ caves: { limits: { capTop: 344 } } }))).toEqual([]);
+    const floating = resolveProfile('floating_islands');
+    expect([floating.islands.enabled, floating.caves.limits.capTop]).toEqual([true, 180]);
+    expect(paramLints(floating)).toEqual([]);
+    // floating_islands with the islands switched off and the cap lifted: no island rules, no lint.
+    const off = applyPatch(SCHEMA, floating, { islands: { enabled: false }, caves: { limits: { capTop: 344 } } });
+    if (!off.ok) throw new Error(JSON.stringify(off.issues));
+    expect(paramLints(off.value)).toEqual([]);
+  });
+
+  test('no built-in profile has a lint', () => {
+    for (const id of PROFILE_IDS) expect([id, paramLints(resolveProfile(id))]).toEqual([id, []]);
+  });
+
+  test('the caves lints come after the earlier pairs, in a fixed order: the bands, the carvers\' ranges, lengthVar, the island cap', () => {
+    let patch: unknown = { lakes: { offsetMin: 210 }, islands: { enabled: true }, caves: { worms: { lengthVar: 64, length: 64 } } };
+    for (const [lo, hi] of CAVE_PAIRS) patch = mergePatch(patch, at(lo, getPath(DEFAULTS, hi)));
+    expect(paramLints(params(patch)).map((l) => l.paths[0])).toEqual([
+      'lakes.offsetMin', ...CAVE_PAIRS.map(([lo]) => lo), 'caves.worms.lengthVar', 'islands.enabled',
+    ]);
   });
 });
 

@@ -12,8 +12,10 @@ import { createCoordinatorCounts, type CoordinatorCounts } from '../../src/engin
 import { appliedDraftOf, type WorldStage } from '../../src/engine/invalidation';
 import type { SessionState, WorldSession } from '../../src/engine/session';
 import type { AuxFirst } from '../../src/engine/workerPool';
+import { LAYERS, layerStage } from '../../src/gen/map/layers';
 import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
-import { createPreviewDriver, draftOf, type Configured, type DriverStatus } from '../../src/ui/map/previewDriver';
+import { createPreviewDriver, draftOf, type Configured, type DriverCanvas, type DriverStatus } from '../../src/ui/map/previewDriver';
+import { createTileSource } from '../../src/ui/map/tileSource';
 import {
   APPLY_QUIET_MS, auxCap, auxFirst, coversWorld, createApplyControl, createEpochs, updateAuxPolicy,
 } from '../../src/ui/world/applyControl';
@@ -474,6 +476,169 @@ describe('undo and redo bursts (SP4c spec §4.8; Review Focus 2)', () => {
     expect(r.calls[0]!.at - last).toBeGreaterThanOrEqual(APPLY_QUIET_MS);
     expect(r.control.applied.genKey).toBe(applied);
     expect(r.control.generation).toBe(r.pool.epoch);
+  });
+});
+
+/**
+ * The world with the map shown (SP6a spec §4, §10.7): the real configure driver with its preview wanted, over a fake pool
+ * whose configures resolve CONFIGURE_MS after they start with the real stage hashes, and a canvas modelled on `mapView.ts`:
+ * the real tile source keys its 3 × 3 level-256 preview tiles (layer, seed words, the layer's stage hash, the map
+ * version), a tile not in its cache is requested and arrives TILE_MS later, and each frame it was asked to draw it reports
+ * the nearest-first prefix of current tiles to `previewProgress`. Frames every FRAME_MS: the due timers, the promise
+ * callbacks, the canvas's draw, then the control's tick.
+ */
+const FRAME_MS = 16;
+const CONFIGURE_MS = 30;
+const TILE_MS = 2000;
+const WATCHDOG_MIN_MS = 1000;
+
+function mapShownRig() {
+  const session = openMapSession(DEFAULT_MAP_STATE, () => [1, 2]);
+  const clock = fakeClock();
+  let epoch = 0;
+  const pool = {
+    size: 4,
+    get epoch() { return epoch; },
+    configure(seedText: string, params: SessionState['params']) {
+      const e = ++epoch;
+      const s = openMapSession({ ...DEFAULT_MAP_STATE, seed: seedText }, () => [1, 2]).state;
+      const h = stageHashes(params);
+      const hex: Record<string, string> = {};
+      for (const [k, v] of Object.entries(h)) hex[k] = hex64(v!);
+      const ready = { epoch: e, stageHashes: hex, genKey: hex64(genKey(s.seed, h)) };
+      return new Promise<typeof ready>((resolve) => { clock.setTimeout(() => resolve(ready), CONFIGURE_MS); });
+    },
+    spawn: () => new Promise<never>(() => {}),
+  };
+  const source = createTileSource();
+  const cached = new Set<string>();
+  const pending = new Set<string>();
+  const requested: string[] = [];
+  let wantDraw = false;
+  const positions: Array<readonly [number, number]> = [];
+  for (const r of [0, 1]) for (let tz = -r; tz <= r; tz++) for (let tx = -r; tx <= r; tx++) if (Math.max(Math.abs(tx), Math.abs(tz)) === r) positions.push([tx, tz]);
+  const canvas: DriverCanvas = {
+    setSource(e, seedKey, hashes) { source.set(e, seedKey, hashes); wantDraw = true; },
+    setInteractive() {},
+    setSpawn() {},
+  };
+  const driver = createPreviewDriver(pool, canvas, clock);
+  const draw = () => {
+    wantDraw = false;
+    let nearest = 0;
+    let prefix = true;
+    for (const [tx, tz] of positions) {
+      const key = source.keyFor('biome', 256, tx, tz, pool.epoch);
+      if (key === null) { prefix = false; continue; }
+      const current = cached.has(key);
+      if (!current && !pending.has(key)) {
+        pending.add(key);
+        requested.push(key);
+        clock.setTimeout(() => { pending.delete(key); cached.add(key); wantDraw = true; }, TILE_MS);
+      }
+      if (prefix && current) nearest++;
+      else prefix = false;
+    }
+    if (source.epoch !== null && source.epoch === pool.epoch) driver.previewProgress(source.epoch, nearest, positions.length);
+  };
+  const first = readyOf(session.state);
+  driver.adopt({ poolEpoch: 0, sessionEpoch: session.state.epoch, seedKey: draftOf(session.state).seedKey, ready: first });
+  session.subscribe((s, ch) => driver.change(draftOf(s), ch, clock.now()));
+  const calls: Call[] = [];
+  const epochs = createEpochs();
+  epochs.of(first.genKey);
+  const control = createApplyControl({
+    coordinator: {
+      apply: (a) => { calls.push({ kind: 'apply', ...a, at: clock.now() }); },
+      adopt: (g) => { calls.push({ kind: 'adopt', generation: g, at: clock.now() }); },
+    },
+    driver, session, pool, clock, epochs,
+    initial: appliedDraftOf(draftOf(session.state).seedKey, first),
+    initialGeneration: 0,
+    beforeApply: () => true,
+    onApplied: () => {},
+  });
+  /** One frame per FRAME_MS up to `to`. */
+  const runTo = async (to: number): Promise<void> => {
+    for (let t = clock.now() + FRAME_MS; t <= to; t += FRAME_MS) {
+      clock.runTo(t);
+      for (let i = 0; i < 4; i++) await Promise.resolve();
+      if (wantDraw) draw();
+      control.tick();
+    }
+  };
+  return { session, clock, pool, driver, calls, requested, positions, control, runTo };
+}
+
+describe('a cave-only Apply with the map shown (SP6a spec §4, §10.7)', () => {
+  const CHEESE = 'caves.cheese.offset';
+
+  test('a cave leaf changes no map layer\'s stage hash (the map stage reads no cave leaf), and the terrain\'s', () => {
+    const s = openMapSession(DEFAULT_MAP_STATE, () => [1, 2]);
+    const a = readyOf(s.state);
+    expect(s.set(CHEESE, 0.4).ok).toBe(true);
+    const b = readyOf(s.state);
+    for (const layer of LAYERS) expect([layer, b.stageHashes[layerStage(layer)]]).toEqual([layer, a.stageHashes[layerStage(layer)]]);
+    expect(b.stageHashes['map']).toBe(a.stageHashes['map']);
+    expect(b.stageHashes['terrain']).not.toBe(a.stageHashes['terrain']);
+    expect(b.genKey).not.toBe(a.genKey);
+  });
+
+  test('an edit of caves.cheese.offset alone (every tile cached) is applied APPLY_QUIET_MS (150) after the release plus one frame, not after the watchdog\'s WATCHDOG_MIN_MS 1,000', async () => {
+    const r = mapShownRig();
+    // The map draws the first world: its tiles load, then the first draft is shown.
+    await r.runTo(TILE_MS + 5 * FRAME_MS);
+    expect(r.requested).toHaveLength(r.positions.length);
+    r.requested.length = 0;
+    // A drag of the slider, one value per frame, then the release.
+    await r.runTo(3200);
+    r.session.beginGesture();
+    for (let i = 1; i <= 8; i++) {
+      expect(r.session.set(CHEESE, 0.5 - 0.025 * i).ok).toBe(true);
+      await r.runTo(r.clock.now() + FRAME_MS);
+    }
+    expect(r.calls).toEqual([]);
+    r.session.endGesture();
+    const release = r.clock.now();
+    await r.runTo(release + 2 * WATCHDOG_MIN_MS);
+    expect(r.calls).toHaveLength(1);
+    const c = r.calls[0]!;
+    expect(c.kind === 'apply' && c.from).toBe('T');
+    expect(c.at - release).toBeGreaterThanOrEqual(APPLY_QUIET_MS);
+    expect(c.at - release).toBeLessThanOrEqual(APPLY_QUIET_MS + FRAME_MS);
+    expect(r.control.applied.genKey).toBe(readyOf(r.session.state).genKey);
+    // The map redrew from its cache: no tile was requested.
+    expect(r.requested).toEqual([]);
+
+    // Two quick steps (the slider's keys: urgent edits one frame apart, the second waiting in the driver's slot) land the
+    // same way: the first cycle lands at its first draw, so the second is applied 150 ms after it plus one frame.
+    r.calls.length = 0;
+    await r.runTo(r.clock.now() + 500);
+    expect(r.session.set(CHEESE, 0.25).ok).toBe(true);
+    await r.runTo(r.clock.now() + FRAME_MS);
+    expect(r.session.set(CHEESE, 0.24).ok).toBe(true);
+    expect(r.driver.status.queued).toBe(true);
+    const last = r.clock.now();
+    await r.runTo(last + 2 * WATCHDOG_MIN_MS);
+    expect(r.calls).toHaveLength(1);
+    expect(r.calls[0]!.at - last).toBeGreaterThanOrEqual(APPLY_QUIET_MS);
+    expect(r.calls[0]!.at - last).toBeLessThanOrEqual(APPLY_QUIET_MS + FRAME_MS);
+    expect(r.control.applied.genKey).toBe(readyOf(r.session.state).genKey);
+    expect(r.requested).toEqual([]);
+  });
+
+  test('the rig\'s control: two quick steps of a leaf the map reads (climate.scaleMul, its tiles not cached) wait for the first cycle\'s watchdog', async () => {
+    const r = mapShownRig();
+    await r.runTo(TILE_MS + 5 * FRAME_MS);
+    r.requested.length = 0;
+    expect(r.session.set('climate.scaleMul', 1.25).ok).toBe(true);
+    await r.runTo(r.clock.now() + FRAME_MS);
+    expect(r.session.set('climate.scaleMul', 1.5).ok).toBe(true);
+    const last = r.clock.now();
+    await r.runTo(last + 2 * WATCHDOG_MIN_MS);
+    expect(r.requested.length).toBeGreaterThan(0);
+    expect(r.calls).toHaveLength(1);
+    expect(r.calls[0]!.at - last).toBeGreaterThanOrEqual(WATCHDOG_MIN_MS - FRAME_MS);
   });
 });
 

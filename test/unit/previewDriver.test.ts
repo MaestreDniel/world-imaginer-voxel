@@ -655,6 +655,35 @@ describe('the configure driver in the world (SP4c spec §4.2, §6.3)', () => {
     expect(r.driver.status).toMatchObject({ pending: false, settled: true, poolEpoch: 5, lastLatencyMs: 40 });
   });
 
+  test('SP6a spec §4, §10.7: with the preview wanted, a cycle whose tiles are all cached (a cave-only edit: the canvas draws the whole preview at its first frame after setSource) lands by its preview then; an edit waiting in the slot starts at once, not after the ≥ 1 s watchdog', async () => {
+    const FRAME = 16;
+    const r = rig(4);
+    // Configures resolve 2 ms after they start; the canvas, every tile cached, reports the whole preview one frame later.
+    r.pool.onConfigure = (c) => { r.clock.setTimeout(() => c.resolve(), 2); };
+    r.canvas.onSource = (epoch) => {
+      r.clock.setTimeout(() => { if (r.canvas.source === epoch) r.driver.previewProgress(epoch, 9, 9); }, FRAME);
+    };
+    adoptFirst(r);
+    edit(r, 4, URGENT);
+    edit(r, 5, URGENT);
+    expect(r.driver.status).toMatchObject({ pending: true, queued: true });
+    await r.clock.advance(2 + FRAME);
+    // The first cycle landed by its preview (a latency sample), and the slot's draft started then.
+    expect(configured(r)).toEqual(['s4', 's5']);
+    expect(r.driver.status).toMatchObject({ queued: false, lastLatencyMs: 2 + FRAME });
+    await r.clock.advance(2 + FRAME);
+    expect(r.driver.status).toMatchObject({ pending: false, queued: false, settled: true, poolEpoch: 6, sessionEpoch: 5, lastLatencyMs: 2 * (2 + FRAME) });
+    expect(r.clock.now()).toBeLessThan(1000);
+    // A gesture's drafts land the same way, one cycle per frame or so, and the release starts the last draft at once.
+    edit(r, 5, BEGIN);
+    for (let e = 6; e < 12; e++) { edit(r, e, DRAG); await r.clock.advance(FRAME); }
+    edit(r, 11, END);
+    expect(r.driver.status.queued).toBe(false);
+    await r.clock.advance(2 + FRAME);
+    expect(r.driver.status).toMatchObject({ pending: false, settled: true, sessionEpoch: 11 });
+    expect(r.clock.now()).toBeLessThan(1000);
+  });
+
   test('onConfigured fires once per resolved configure with the change\'s gesture and urgent and the ready\'s genKey; never for a configure superseded before it resolved', async () => {
     const r = rig();
     const heard: Configured[] = [];
