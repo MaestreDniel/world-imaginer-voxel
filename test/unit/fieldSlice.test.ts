@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import { DENSITY_COLUMN_COST_MAX, SLICE_RULE_NA } from '../../src/core/constants';
+import { CAVE_KIND, CAVE_SLICE_SOLID, DENSITY_COLUMN_COST_MAX, SLICE_RULE_NA } from '../../src/core/constants';
+import { caveTagAt, caveTagBatch } from '../../src/gen/caves/tags';
+import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import type { GenContext } from '../../src/gen/context';
 import { createCornerMemo, createDensityReference } from '../../src/gen/density/reference';
-import { probe } from '../../src/gen/density/probe';
+import { probe, solidAt } from '../../src/gen/density/probe';
 import { resolveDensity } from '../../src/gen/density/source';
 import { densityColumnCost } from '../../src/gen/inspect/cost';
 import {
@@ -229,6 +231,8 @@ describe('evaluateFieldSlice: parts and stop (SP3d spec §5.1, §5.2)', () => {
     ['node horizontal', horizontal(32, 512, 100, -300, 70), 'node', 'root.a.a.a.x.b'],
     ['blocks vertical', vertical(COAST), 'blocks', ''],
     ['rule vertical', vertical(COAST), 'rule', 'root.rules[1].then'],
+    ['caves vertical', vertical(MOUNTAIN), 'caves', ''],
+    ['caves horizontal', horizontal(32, 256, 0, 0, 30), 'caves', ''],
   ];
 
   test.each(cases)('%s: the concatenated parts equal the whole, bit for bit, on another context', (_name, g, field, path) => {
@@ -240,7 +244,7 @@ describe('evaluateFieldSlice: parts and stop (SP3d spec §5.1, §5.2)', () => {
     expect(parts.map((p) => p.values.length)).toEqual([7 * 32, 32, 24 * 32]);
   });
 
-  test.each(cases.filter(([, , f]) => f !== 'blocks'))('%s: stop() is polled once per sample, and a stop returns null', (_name, g, field, path) => {
+  test.each(cases.filter(([, , f]) => f !== 'blocks' && f !== 'caves'))('%s: stop() is polled once per sample, and a stop returns null', (_name, g, field, path) => {
     const ctx = ctxFor('42');
     let polls = 0;
     const req: FieldSliceRequest = { geometry: g, field, path, from: 3, to: 9 };
@@ -248,6 +252,23 @@ describe('evaluateFieldSlice: parts and stop (SP3d spec §5.1, §5.2)', () => {
     // rule: plus 6 polls in each of the 6 probe-column builds (the density fill polls every 8 of its 48 corner rows).
     expect(polls).toBe(field === 'rule' ? 6 * 32 + 6 * 6 : 6 * 32);
     let left = 40;
+    expect(evaluateFieldSlice(ctx, req, () => --left < 0)).toBeNull();
+    expect(left).toBe(-1);
+  });
+
+  test.each(cases.filter(([, , f]) => f === 'caves'))('%s: stop() is polled once per chunk column the part visits, and a stop returns null', (_name, g, field, path) => {
+    const ctx = ctxFor('42');
+    const req: FieldSliceRequest = { geometry: g, field, path, from: 3, to: 9 };
+    const chunks = new Set<string>();
+    for (let c = 3; c < 9; c++) for (let k = 0; k < g.n; k++) {
+      const [x, , z] = sliceSampleVoxel(g, c, k);
+      chunks.add(`${x >> 4},${z >> 4}`);
+    }
+    let polls = 0;
+    expect(evaluateFieldSlice(ctx, req, () => { polls++; return false; })).not.toBeNull();
+    expect(polls).toBe(chunks.size);
+    expect(polls).toBeGreaterThan(1);
+    let left = 1;
     expect(evaluateFieldSlice(ctx, req, () => --left < 0)).toBeNull();
     expect(left).toBe(-1);
   });
@@ -356,6 +377,82 @@ describe('probeField (SP3d spec §5.3): one sample, exactly as the slice', () =>
   });
 });
 
+describe('evaluateFieldSlice: caves, the cave type (SP6a spec §7.4, D13)', () => {
+  /** The field's value at a voxel by the point probes: the tag, else other solid where solid (and at y −64), else 0. */
+  const pointCode = (dc: DensityContext, x: number, y: number, z: number): number => {
+    const t = caveTagAt(dc, x, y, z);
+    if (t !== 0) return t;
+    return y === -64 || solidAt(dc, x, y, z) ? CAVE_SLICE_SOLID : 0;
+  };
+  const CARVERS = [CAVE_KIND.worm, CAVE_KIND.ravine, CAVE_KIND.undergroundWorm];
+
+  test.each<[string, SliceGeometry]>([
+    ['vertical (the mountain line)', vertical(MOUNTAIN)],
+    ['horizontal (256 blocks across at y 30)', horizontal(32, 256, 0, 0, 30)],
+  ])('a 32² %s slice equals caveTagAt / solidAt per sample, carvers included', (_name, g) => {
+    const r = run(ctxFor('42'), g, 'caves');
+    if (r.field !== 'caves') throw new Error('not a caves slice');
+    expect(r.values).toBeInstanceOf(Uint8Array);
+    expect(r.values.length).toBe(32 * 32);
+    const dc = createDensityContext(ctxFor('42'));
+    const kinds = new Set<number>();
+    for (let c = 0; c < 32; c++) {
+      for (let k = 0; k < 32; k++) {
+        const [x, y, z] = sliceSampleVoxel(g, c, k);
+        const want = pointCode(dc, x, y, z);
+        if (r.values[c * 32 + k] !== want) throw new Error(`sample (${c}, ${k}) at (${x}, ${y}, ${z}): ${r.values[c * 32 + k]} ≠ ${want}`);
+        kinds.add(want);
+      }
+    }
+    expect(kinds.has(CAVE_SLICE_SOLID)).toBe(true);
+    expect(CARVERS.some((k) => kinds.has(k)), `a carver kind among ${[...kinds].join(', ')}`).toBe(true);
+    expect([...kinds].some((k) => k >= 1 && k <= 5), `a noise kind among ${[...kinds].join(', ')}`).toBe(true);
+  });
+
+  test('the bedrock at y −64 is other solid; the sky at y 319 open air', () => {
+    for (const [y, want] of [[-64, CAVE_SLICE_SOLID], [319, 0]] as const) {
+      const r = run(ctxFor('42'), horizontal(32, 256, 0, 0, y), 'caves');
+      expect(new Set(r.values)).toEqual(new Set([want]));
+    }
+  });
+
+  test('caveTagBatch equals the point probes at every sample, in any order, across columns and contexts', () => {
+    const rng = testRng(4207);
+    const next = (): number => rng() / 4294967296;
+    const n = 3000;
+    const xs = new Int32Array(n), ys = new Int32Array(n), zs = new Int32Array(n);
+    // Six chunk columns around the mountain line and the coast, every y, interleaved so that consecutive samples change column.
+    const cols = [[-104, 0], [-103, 0], [-80, 0], [-1697, -2000], [-1696, -2000], [0, 0]] as const;
+    for (let q = 0; q < n; q++) {
+      const [cx, cz] = cols[q % cols.length]!;
+      xs[q] = 16 * cx + Math.floor(next() * 16);
+      zs[q] = 16 * cz + Math.floor(next() * 16);
+      ys[q] = q < 12 ? (q & 1 ? -64 : 319) : -64 + Math.floor(next() * 384);
+    }
+    const out = new Uint8Array(n);
+    caveTagBatch(surfaceContextOf(ctxFor('42')).density, xs, ys, zs, out);
+    const dc = createDensityContext(ctxFor('42'));
+    const kinds = new Set<number>();
+    for (let q = 0; q < n; q++) {
+      const want = pointCode(dc, xs[q]!, ys[q]!, zs[q]!);
+      if (out[q] !== want) throw new Error(`sample ${q} at (${xs[q]}, ${ys[q]}, ${zs[q]}): ${out[q]} ≠ ${want}`);
+      kinds.add(want);
+    }
+    expect(kinds.size).toBeGreaterThanOrEqual(4);
+    expect(CARVERS.some((k) => kinds.has(k)), `a carver kind among ${[...kinds].join(', ')}`).toBe(true);
+    // The same batch on one context twice, then reversed: the same codes.
+    const dc2 = surfaceContextOf(ctxFor('42')).density;
+    const again = new Uint8Array(n);
+    caveTagBatch(dc2, xs, ys, zs, again);
+    expect([...again]).toEqual([...out]);
+    const rev = new Uint8Array(n);
+    caveTagBatch(dc2, xs.slice().reverse(), ys.slice().reverse(), zs.slice().reverse(), rev);
+    expect([...rev].reverse()).toEqual([...out]);
+    expect(() => caveTagBatch(dc2, xs, ys, zs, new Uint8Array(n - 1))).toThrow(RangeError);
+    expect(() => caveTagBatch(dc2, Int32Array.of(0), Int32Array.of(320), Int32Array.of(0), new Uint8Array(1))).toThrow(RangeError);
+  });
+});
+
 describe('field problems and argument checks (SP3d spec §5.1)', () => {
   const ctx = ctxFor('42');
 
@@ -373,6 +470,10 @@ describe('field problems and argument checks (SP3d spec §5.1)', () => {
     expect(fieldSliceProblem(ctx, 'rule', 'root', 'horizontal')).toBe('field rule has no horizontal slice');
     expect(fieldSliceProblem(ctx, 'blocks', '', 'horizontal')).toBe('field blocks has no horizontal slice');
     expect(fieldSliceProblem(ctx, 'blocks', 'root', 'vertical')).toBe('field blocks takes no node path (got "root")');
+    // SP6a §7.4: caves on both planes, with the path ''.
+    expect(fieldSliceProblem(ctx, 'caves', '', 'vertical')).toBeNull();
+    expect(fieldSliceProblem(ctx, 'caves', '', 'horizontal')).toBeNull();
+    expect(fieldSliceProblem(ctx, 'caves', 'root', 'horizontal')).toBe('field caves takes no node path (got "root")');
   });
 
   test('evaluateFieldSlice refuses bad ranges, geometries, fields and a blocks request without a T-column source', () => {

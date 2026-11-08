@@ -199,3 +199,9 @@ export const CARVER_CACHE_PATHS = 1024;
 
 /** The `rule` slice field's value on a voxel the rules never evaluate (air, water, the bedrock at y −64): n/a (§4.1). */
 export const SLICE_RULE_NA = 255;
+/**
+ * The `caves` slice field's code of a solid voxel that no carver opened (SP6a spec §7.4, D13: "other solid", drawn pale
+ * grey), beside 0 open air and the cave kinds 1-9 of `CAVE_KIND` (`caveTagBatch`, `gen/caves/tags.ts`); outside the
+ * cave byte's low 4 bits, so it is never a kind.
+ */
+export const CAVE_SLICE_SOLID = 16;

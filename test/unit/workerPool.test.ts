@@ -814,7 +814,8 @@ describe('worker pool: slice jobs (SP3a spec §5.1, split across workers: SP3b s
     expect(slicesOf(log).map((s) => s.slice(1))).toEqual([[0, COAST.ax, COAST.az, COAST.bx, COAST.bz, 0, 256], [0, COAST.ax, COAST.az, COAST.bx, COAST.bz, 256, 512]]);
     expect(r.blocks).toBeInstanceOf(Uint16Array);
     expect(r.fluid).toBeInstanceOf(Uint8Array);
-    expect([r.blocks.length, r.fluid.length]).toEqual([SLICE_SAMPLES, SLICE_SAMPLES]);
+    expect(r.cave).toBeInstanceOf(Uint8Array);
+    expect([r.blocks.length, r.fluid.length, r.cave.length]).toEqual([SLICE_SAMPLES, SLICE_SAMPLES, SLICE_SAMPLES]);
     for (const [size, ranges] of [
       [1, [[0, 512]]],
       [3, [[0, 170], [170, 341], [341, 512]]],
@@ -836,6 +837,8 @@ describe('worker pool: slice jobs (SP3a spec §5.1, split across workers: SP3b s
       const r = await pool.slice(s);
       expect(same(r.blocks, want.blocks), `blocks ${JSON.stringify(s)}`).toBe(true);
       expect(same(r.fluid, want.fluid), `fluid ${JSON.stringify(s)}`).toBe(true);
+      // SP6a §7.4: the cave bytes are assembled from the parts as the blocks are.
+      expect(same(r.cave, want.cave), `cave ${JSON.stringify(s)}`).toBe(true);
     }
     pool.terminate();
   }, 60_000);

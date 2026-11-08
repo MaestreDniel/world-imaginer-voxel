@@ -286,8 +286,10 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHa
             if (problem !== null) return err(m.jobId, m.epoch, 'BAD_ARGS', problem);
             const r = slices.run(ctx, m.epoch, segment, stopFor(m.type, m.scope), m.from, m.to);
             if (r === null) return aborted();
-            const msg: FromWorker = { type: 'sliceResult', jobId: m.jobId, epoch, from: m.from, to: m.to, blocks: r.blocks.buffer, fluid: r.fluid.buffer };
-            return { msg, transfer: [r.blocks.buffer, r.fluid.buffer] };
+            const msg: FromWorker = {
+              type: 'sliceResult', jobId: m.jobId, epoch, from: m.from, to: m.to, blocks: r.blocks.buffer, fluid: r.fluid.buffer, cave: r.cave.buffer,
+            };
+            return { msg, transfer: [r.blocks.buffer, r.fluid.buffer, r.cave.buffer] };
           }
           case 'surfaceProbe': {
             const problem = PROBE_PROBLEM(m.x, m.y, m.z);

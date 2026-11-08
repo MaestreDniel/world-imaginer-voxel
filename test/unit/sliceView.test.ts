@@ -14,8 +14,10 @@ import type { FieldSliceResult } from '../../src/engine/workerPool';
 import { sliceSampleVoxel, type SliceGeometry } from '../../src/gen/inspect/fieldSlice';
 import type { Segment } from '../../src/metrics/crossSection';
 import type { Selection } from '../../src/ui/inspector/model';
+import { XRAY_COLORS, XRAY_LABELS } from '../../src/render/xrayPalette';
+import { VOXEL_COLORS } from '../../src/ui/crossSection/voxels';
 import {
-  createDraftLog, fieldOptionLabel, formatSliceValue, hoverLineText, initialSliceState, mapHoverVoxel, parseSliceY, pixelVoxel,
+  CAVES_SOLID, CAVES_SOLID_RGB, cavesLegend, createDraftLog, fieldOptionLabel, formatSliceValue, hoverLineText, initialSliceState, mapHoverVoxel, parseSliceY, pixelVoxel,
   pointerPixel, RULE_NA, SLICE_BOX_MIN_PX, sliceBoxSide, sliceGeometryOf, sliceHoverText, slicePixel, sliceSquare, sliceStatusText, withCentre,
   slicePointer, withExtent, type SliceShown, type SliceState,
 } from '../../src/ui/inspector/sliceModel';
@@ -146,6 +148,21 @@ describe('the slice hover readout (§3.6: the sample\'s voxel and the shown fiel
     expect([0, 1, 2].map((py) => sliceHoverText(rule, 0, py).text.split(' · ')[1])).toEqual(['rule yes', 'rule n/a', 'rule no']);
   });
 
+  test('caves name the kind (the X-ray\'s label), other solid or open air (SP6a §7.4)', () => {
+    const n = 32;
+    const g = geometryOf({ ...HORIZONTAL, field: 'caves', y: 30 }, null, n);
+    const values = new Uint8Array(n * n).fill(CAVES_SOLID);
+    values[9 * n + 5] = 1;
+    values[9 * n + 6] = 0;
+    values[9 * n + 7] = 7;
+    const shown = shownOf(g, { field: 'caves', values, fluid: null, n });
+    const [x, , z] = sliceSampleVoxel(g, 9, 5);
+    expect(sliceHoverText(shown, 5, 9).text).toBe(`(${x}, 30, ${z}) · caves Cheese`);
+    expect(sliceHoverText(shown, 6, 9).text).toMatch(/· caves open air$/);
+    expect(sliceHoverText(shown, 7, 9).text).toMatch(/· caves Ravine$/);
+    expect(sliceHoverText(shown, 0, 0).text).toMatch(/· caves other solid$/);
+  });
+
   test('outside the slice\'s size it throws (the pointer helper never gives such a pixel)', () => {
     const g = geometryOf(HORIZONTAL, null, 32);
     const shown = shownOf(g, { field: 'density', values: ramp(32), fluid: null, n: 32 });
@@ -196,6 +213,23 @@ describe('the plane controls (§4.2, §3.7)', () => {
     expect(fieldOptionLabel('selected', RULE_SEL)).toBe('selected (root.rules[1])');
     expect(fieldOptionLabel('density', DENSITY_SEL)).toBe('density');
     expect(fieldOptionLabel('blocks', RULE_SEL)).toBe('blocks');
+    expect(fieldOptionLabel('caves', DENSITY_SEL)).toBe('Cave type');
+  });
+});
+
+describe('the caves legend (SP6a §7.4, D13: in the histogram\'s place)', () => {
+  const hex = (h: string): number[] => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  test('the kinds present in kind order with the X-ray\'s colours and labels, then other solid and open air', () => {
+    const values = Uint8Array.from([7, CAVES_SOLID, 1, 0, 3, 7, 1, 9, CAVES_SOLID]);
+    const legend = cavesLegend(values);
+    expect(legend.map((k) => k.label)).toEqual(['Cheese', 'Spaghetti 2D', 'Ravine', 'Other density air', 'other solid', 'open air']);
+    expect(legend.slice(0, 4).map((k) => k.label)).toEqual([1, 3, 7, 9].map((k) => XRAY_LABELS[k]));
+    expect(legend.slice(0, 4).map((k) => [...k.rgb])).toEqual([1, 3, 7, 9].map((k) => hex(XRAY_COLORS[k]!)));
+    expect([...legend[4]!.rgb]).toEqual([...CAVES_SOLID_RGB]);
+    expect([...legend[5]!.rgb]).toEqual([...VOXEL_COLORS.sky]);
+    // Only what is present: a slice of rock and one worm.
+    expect(cavesLegend(Uint8Array.from([CAVES_SOLID, 6])).map((k) => k.label)).toEqual(['Worm', 'other solid']);
+    expect(cavesLegend(new Uint8Array(4))).toEqual([{ label: 'open air', rgb: VOXEL_COLORS.sky }]);
   });
 });
 

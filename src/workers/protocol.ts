@@ -105,7 +105,7 @@ export interface SliceMsg extends Scoped {
  * BAD_ARGS (`surfaceProbeProblem`).
  */
 export interface SurfaceProbeMsg extends Scoped { readonly type: 'surfaceProbe'; readonly x: number; readonly y: number; readonly z: number }
-/** What a fieldSlice job evaluates (SP3d spec §5.1): `path` is the node path inside its leaf ('' for density and blocks). */
+/** What a fieldSlice job evaluates (SP3d spec §5.1): `path` is the node path inside its leaf ('' for density, blocks and caves). */
 interface FieldSliceArgs { readonly y: number; readonly n: number; readonly field: SliceField; readonly path: string }
 /** A vertical plane along A = (ax, az) → B = (bx, bz); `y` is carried but unused. */
 export interface VerticalFieldSlice extends FieldSliceArgs { readonly plane: 'vertical'; readonly ax: number; readonly az: number; readonly bx: number; readonly bz: number }
@@ -186,12 +186,13 @@ export interface SpawnResultMsg { readonly type: 'spawnResult'; readonly jobId: 
 /** `data` holds a Float64Array of the job's raw, unnormalised sums (transferred). */
 export interface StatsResultMsg { readonly type: 'statsResult'; readonly jobId: number; readonly epoch: number; readonly kind: StatsKind; readonly data: ArrayBuffer }
 /**
- * The voxels of samples [from, to) of a slice (transferred): `blocks` holds (to − from)·SLICE_ROWS u16 block states and
- * `fluid` as many fluid bytes, sample (i, y) at `slicePartIndex(i, y, from, to)` (SP3b spec §6).
+ * The voxels of samples [from, to) of a slice (transferred): `blocks` holds (to − from)·SLICE_ROWS u16 block states,
+ * `fluid` as many fluid bytes and `cave` as many cave bytes (the store's cave channel, the kind per voxel, SP6a spec
+ * §3.3, §7.4), sample (i, y) at `slicePartIndex(i, y, from, to)` (SP3b spec §6).
  */
 export interface SliceResultMsg {
   readonly type: 'sliceResult'; readonly jobId: number; readonly epoch: number;
-  readonly from: number; readonly to: number; readonly blocks: ArrayBuffer; readonly fluid: ArrayBuffer;
+  readonly from: number; readonly to: number; readonly blocks: ArrayBuffer; readonly fluid: ArrayBuffer; readonly cave: ArrayBuffer;
 }
 /** One recomputed golden: the digest, or the error that stopped it. */
 export interface SelftestResultMsg { readonly type: 'selftestResult'; readonly jobId: number; readonly key: string; readonly actual: string | null; readonly error: string | null }
@@ -203,7 +204,8 @@ export interface SurfaceProbeResultMsg { readonly type: 'surfaceProbeResult'; re
 /**
  * Sample columns [from, to) of a field slice of n (transferred), each sample column's n samples in row order at
  * (c − from)·n + k: Float64 values for density and node, u16 states plus u8 `fluid` for blocks, u8 for rule (0, 1 or
- * SLICE_RULE_NA); `fluid` is null but for blocks (byte lengths: `fieldSliceBytes`).
+ * SLICE_RULE_NA) and for caves (0, the cave kinds 1-9 or CAVE_SLICE_SOLID, SP6a spec §7.4); `fluid` is null but for
+ * blocks (byte lengths: `fieldSliceBytes`).
  */
 export interface FieldSliceResultMsg {
   readonly type: 'fieldSliceResult'; readonly jobId: number; readonly epoch: number;
@@ -280,7 +282,7 @@ const SLICE_KEYS = [...SEGMENT_KEYS, 'from', 'to'] as const;
 const VOXEL_KEYS = ['x', 'y', 'z'] as const;
 /** The longest node path a fieldSlice or fieldProbe message may carry. */
 export const FIELD_PATH_MAX = 512;
-const SLICE_FIELDS: readonly string[] = ['density', 'node', 'blocks', 'rule'];
+const SLICE_FIELDS: readonly string[] = ['density', 'node', 'blocks', 'rule', 'caves'];
 const PROBE_FIELDS: readonly string[] = ['density', 'node', 'rule'];
 const PLANE_KEYS = { vertical: ['ax', 'az', 'bx', 'bz'], horizontal: ['cx', 'cz', 'extent'] } as const;
 const FIELD_SLICE_KEYS = ['y', 'n', 'from', 'to'] as const;
@@ -301,12 +303,16 @@ export function fieldSliceBytes(n: number, field: SliceField, columns: number): 
   switch (field) {
     case 'density': case 'node': return { values: 8 * samples, fluid: 0 };
     case 'blocks': return { values: 2 * samples, fluid: samples };
+    // rule, and SP6a's caves (spec §7.4): one byte per sample.
     default: return { values: samples, fluid: 0 };
   }
 }
 
-/** Whether a field's slices can be refused by the work bound (density, node); blocks and rule never are (spec §5.2). */
-export const isRefusableField = (field: SliceField): boolean => field === 'density' || field === 'node';
+/**
+ * Whether a field's slices can be refused by the work bound (density, node, and SP6a's caves, spec §7.4); blocks and rule
+ * never are (spec §5.2).
+ */
+export const isRefusableField = (field: SliceField): boolean => field === 'density' || field === 'node' || field === 'caves';
 
 /** Sample columns a part may hold: max(1, ⌊PART_BUDGET / columnCost⌋). */
 const partColumns = (columnCost: number): number => Math.max(1, Math.floor(PART_BUDGET / columnCost));
@@ -319,8 +325,8 @@ export type FieldSlicePlan =
 /**
  * The split and refusal math of a field slice (SP3d spec §5.2), the only implementation (the pool, the UI's notices and the
  * bench call it): a part holds at most k = max(1, ⌊PART_BUDGET / columnCost⌋) sample columns, and the parts are
- * min(n, max(poolSize, ⌈n / k⌉)) equal contiguous ranges of [0, n), as `slice` and `stats` split. With a `budget` (density
- * and node) the slice is refused when columnCost exceeds limit = min(PART_BUDGET, ⌊budget / n⌋), that is when one sample
+ * min(n, max(poolSize, ⌈n / k⌉)) equal contiguous ranges of [0, n), as `slice` and `stats` split. With a `budget` (density,
+ * node and caves) the slice is refused when columnCost exceeds limit = min(PART_BUDGET, ⌊budget / n⌋), that is when one sample
  * column exceeds PART_BUDGET or n × columnCost exceeds the budget; `budget` null (blocks and rule) is never refused.
  * Depends only on its arguments. RangeError for n or poolSize not a positive integer, a columnCost not finite and
  * positive, or a budget not finite and positive.
@@ -342,8 +348,8 @@ export function planFieldSlice(n: number, columnCost: number, poolSize: number, 
 }
 
 /**
- * The worker's bound check of a part of `columns` sample columns of `columnCost` (SP3d spec §5.2), or null: a density or
- * node part above PART_BUDGET in all (one sample column above it included), a blocks or rule part of more than k
+ * The worker's bound check of a part of `columns` sample columns of `columnCost` (SP3d spec §5.2), or null: a density,
+ * node or caves part above PART_BUDGET in all (one sample column above it included), a blocks or rule part of more than k
  * sample columns (`planFieldSlice`'s k, so its parts always pass). A fieldProbe is a part of one column of one sample.
  */
 export function fieldSlicePartProblem(columns: number, columnCost: number, field: SliceField): string | null {
@@ -513,7 +519,8 @@ const sliceCheck: ReplyCheck = (m) => {
   const n = (to - from) * SLICE_ROWS;
   return all(epochProblem(m),
     m['blocks'] instanceof ArrayBuffer && m['blocks'].byteLength === 2 * n ? null : `blocks is not an ArrayBuffer of ${2 * n} bytes`,
-    m['fluid'] instanceof ArrayBuffer && m['fluid'].byteLength === n ? null : `fluid is not an ArrayBuffer of ${n} bytes`);
+    m['fluid'] instanceof ArrayBuffer && m['fluid'].byteLength === n ? null : `fluid is not an ArrayBuffer of ${n} bytes`,
+    m['cave'] instanceof ArrayBuffer && m['cave'].byteLength === n ? null : `cave is not an ArrayBuffer of ${n} bytes`);
 };
 const surfaceProbeCheck: ReplyCheck = (m) => {
   const path = m['path'];

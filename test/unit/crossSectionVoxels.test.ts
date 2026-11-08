@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'vitest';
-import { SEA_LEVEL } from '../../src/core/constants';
+import { CAVE_KIND, SEA_LEVEL } from '../../src/core/constants';
+import { XRAY_COLORS } from '../../src/render/xrayPalette';
 import { JobCancelled, type SliceResult, type SurfaceProbeResult, type WorkerPool } from '../../src/engine/workerPool';
 import { segmentPointAt, type Segment } from '../../src/metrics/crossSection';
 import { genRegionInProcess } from '../../src/metrics/region';
 import { createSliceRequests, sectionStatus, SECTION_MODES } from '../../src/ui/crossSection/model';
 import {
-  blockName, createRuleReadout, fluidText, RULE_WAITING, ruleSuffix, sliceRgba, sliceSummary, SEA_LEVEL_Y, VOXEL_COLORS, voxelCell, voxelLegend, voxelPlots,
+  blockName, caveRgb, createRuleReadout, fluidText, RULE_WAITING, ruleSuffix, sliceRgba, sliceSummary, SEA_LEVEL_Y, VOXEL_COLORS, voxelCell, voxelLegend, voxelPlots,
   voxelPosition, voxelReadout, voxelRgb, type Rgb, type RuleCell,
 } from '../../src/ui/crossSection/voxels';
 import { toPx } from '../../src/ui/splineEditor/model';
@@ -23,18 +24,23 @@ import { regionView } from '../harness/region';
 
 const MiB = 1 << 20;
 
-/** An empty slice (air, no fluid) and a writer of one sample column: `fill(i, y)` gives [state, fluid] for y −64 … 319. */
-function slice(columns: Record<number, (y: number) => readonly [number, number]> = {}): SliceResult {
+/**
+ * An empty slice (air, no fluid, no cave tag) and a writer of one sample column: `fill(i, y)` gives [state, fluid] or
+ * [state, fluid, cave] for y −64 … 319.
+ */
+function slice(columns: Record<number, (y: number) => readonly [number, number] | readonly [number, number, number]> = {}): SliceResult {
   const blocks = new Uint16Array(SLICE_SAMPLES);
   const fluid = new Uint8Array(SLICE_SAMPLES);
+  const cave = new Uint8Array(SLICE_SAMPLES);
   for (const [k, f] of Object.entries(columns)) {
     for (let y = -64; y <= 319; y++) {
-      const [s, b] = f(y);
+      const [s, b, c = 0] = f(y);
       blocks[sliceIndex(Number(k), y)] = s;
       fluid[sliceIndex(Number(k), y)] = b;
+      cave[sliceIndex(Number(k), y)] = c;
     }
   }
-  return { blocks, fluid };
+  return { blocks, fluid, cave };
 }
 /** Bedrock at −64, stone up to `top`, water sources up to `water`, air above. */
 const ground = (top: number, water = -Infinity) => (y: number): readonly [number, number] =>
@@ -177,6 +183,26 @@ describe('sliceRgba: one pixel per sample, row 0 at y 319', () => {
     expect(pixel(rgba, 511, 201)).toEqual(opaque(VOXEL_COLORS.sky));
     expect(pixel(rgba, 300, 0)).toEqual(opaque(VOXEL_COLORS.sky));
   });
+  test('dry air with a cave tag is drawn in its kind\'s X-ray colour (SP6a §7.4, D13): tag 1 amber, tag 0 sky', () => {
+    const hex = (h: string): number[] => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    // Column 2: a cheese room 10 … 20 (tag 1), a worm 30 … 32 (tag 6) under stone; a flooded cave 40 … 42 (water, tag 2);
+    // stone tagged 7 (a tag on a block draws the block); air above 60 untagged.
+    const s = slice({
+      2: (y) => (y >= 10 && y <= 20 ? [AIR, 0, CAVE_KIND.cheese] : y >= 30 && y <= 32 ? [AIR, 0, CAVE_KIND.worm]
+        : y >= 40 && y <= 42 ? [AIR, WATER_SOURCE, CAVE_KIND.spaghetti3d] : y === 50 ? [STONE, 0, CAVE_KIND.ravine] : y < 60 ? [STONE, 0] : [AIR, 0]),
+    });
+    const rgba = sliceRgba(s);
+    expect(XRAY_COLORS[CAVE_KIND.cheese]).toBe('#ffb000');
+    for (const y of [10, 15, 20]) expect(pixel(rgba, 2, y)).toEqual([0xff, 0xb0, 0x00, 255]);
+    expect(pixel(rgba, 2, 31)).toEqual([...hex(XRAY_COLORS[CAVE_KIND.worm]!), 255]);
+    expect(pixel(rgba, 2, 41)).toEqual(opaque(voxelRgb(AIR, WATER_SOURCE, 1)));
+    expect(pixel(rgba, 2, 50)).toEqual(opaque(VOXEL_COLORS.stone));
+    expect(pixel(rgba, 2, 100)).toEqual(opaque(VOXEL_COLORS.sky));
+    expect(pixel(rgba, 3, 15)).toEqual(opaque(VOXEL_COLORS.sky));
+    for (let k = 1; k <= 9; k++) expect([...caveRgb(k)]).toEqual(hex(XRAY_COLORS[k]!));
+    for (const k of [0, 10, 15, 16, 1.5]) expect(caveRgb(k)).toBe(VOXEL_COLORS.unknown);
+  });
+
   test('a real slice across a coast equals the harness PNG colours of the same voxels (depth below worldSurfaceWG)', () => {
     // Seed '42', default profile: sea at (−2000, −2000), land at (−1963, −2000) (Task 9's columns).
     const line: Segment = { ax: -2030.5, az: -2007.25, bx: -1950.75, bz: -1990.5 };
@@ -189,7 +215,7 @@ describe('sliceRgba: one pixel per sample, row 0 at y 319', () => {
     const cz0 = -126;
     genRegionInProcess(store, ctx, cx0, cz0, 7, 2);
     const view = regionView(store, cx0, cz0, 7, 2);
-    let water = 0, fromSurface = 0;
+    let water = 0, fromSurface = 0, tinted = 0;
     for (let i = 0; i < SLICE_POINTS; i++) {
       const [px, pz] = segmentPointAt(line, i);
       const x = Math.floor(px);
@@ -202,7 +228,12 @@ describe('sliceRgba: one pixel per sample, row 0 at y 319', () => {
         const isWater = view.fluid(x, y, z) !== 0;
         if (isWater && !wet) runTop = y;
         wet = isWater;
-        const want = png.voxelRgb(view.block(x, y, z), view.fluid(x, y, z), isWater ? runTop - y : 0);
+        // Dry cave air takes its kind's colour (SP6a §7.4): the store's cave channel, which the slice carries.
+        const tag = view.tag(x, y, z);
+        if (r.cave[sliceIndex(i, y)] !== tag) throw new Error(`sample (${i}, ${y}) at (${x}, ${z}): cave ${r.cave[sliceIndex(i, y)]} ≠ the store's ${tag}`);
+        const dryCave = tag !== 0 && view.block(x, y, z) === AIR && view.fluid(x, y, z) === 0;
+        const want = dryCave ? caveRgb(tag) : png.voxelRgb(view.block(x, y, z), view.fluid(x, y, z), isWater ? runTop - y : 0);
+        if (dryCave) tinted++;
         const got = pixel(rgba, i, y);
         if (got[0] !== want[0] || got[1] !== want[1] || got[2] !== want[2]) throw new Error(`sample (${i}, ${y}) at (${x}, ${z}): ${got} ≠ ${want}`);
         if (isWater) water++;
@@ -212,6 +243,7 @@ describe('sliceRgba: one pixel per sample, row 0 at y 319', () => {
     expect(water).toBeGreaterThan(1000);
     // Most water lies in the sea's own run, where the two depths agree.
     expect(fromSurface).toBeGreaterThan(0.9 * water);
+    console.log(`MEASUREMENT: the coast slice's dry cave air drawn by kind: ${tinted} samples`);
   });
 });
 

@@ -391,6 +391,46 @@ describe('the slice reference\'s corner memo (SP6a §7.4)', () => {
     }
   });
 
+  test('the memo is bounded per request (ruling R17): at most 8 MiB of cells, emptied before a cell would pass it, values bit for bit', () => {
+    const MAX = 8 * 1024 * 1024;
+    // 1,500 interpolated slots (a balanced sum of interpolated(y + k)): 13,660 bytes per cell (9 per slot plus 160), so
+    // at most 614 cells, fewer than the 1,568 corners of 8 cell columns' 49 layers that the voxels below read.
+    const sum = (lo: number, hi: number): Expr => (hi - lo === 1 ? interp(add(Y, C(lo))) : add(sum(lo, (lo + hi) >> 1), sum((lo + hi) >> 1, hi)));
+    const r = createDensityReference(only(sum(0, 1500)), source({}));
+    const sm = buildColumnSample(ctxFor('42'), 0, 0, newColumnSample());
+    const memo = createCornerMemo();
+    expect(memo.bytes).toBe(0);
+    let most = 0, drops = 0, last = 0;
+    for (let p = 0; p < 8; p++) {
+      const x = 4 * (p & 3) + 1, z = 4 * (p >> 2) + 2;
+      for (let k = 0; k < 128; k += 3) {
+        const y = 319 - Math.floor(((2 * k + 1) * 384) / 256);
+        const want = r.voxel(sm, x, y, z);
+        const got = r.voxel(sm, x, y, z, undefined, memo);
+        if (!Object.is(got, want)) throw new Error(`(${x}, ${y}, ${z}): plain ${want}, memo ${got}`);
+        expect(memo.bytes).toBeLessThanOrEqual(MAX);
+        if (memo.bytes < last) drops++;
+        last = memo.bytes;
+        most = Math.max(most, memo.bytes);
+      }
+    }
+    expect(most).toBeGreaterThan(MAX - 2 * 13660);
+    expect(drops).toBeGreaterThan(0);
+    // The default tree: a cell holds its reachable interpolated nodes and the defs read at corners only.
+    const dc = surfaceContextOf(ctxFor('42')).density;
+    const d = createDensityReference(dc.expr, dc.noises);
+    const m = createCornerMemo();
+    const s0 = dc.columns.get(-104, 0);
+    for (let y = -64; y < 320; y++) d.voxel(s0, -1664 + 5, y, 9, undefined, m);
+    const cells = 4 * 49;
+    expect(m.bytes % cells).toBe(0);
+    const perCell = m.bytes / cells;
+    console.log(`MEASUREMENT: the default tree's memo cell is ${perCell} bytes (${(perCell - 160) / 9} slots); a vertical sample column's 196 cells ${m.bytes} bytes`);
+    expect(perCell).toBeLessThan(160 + 9 * 100);
+    m.clear();
+    expect(m.bytes).toBe(0);
+  });
+
   test('a 128-sample vertical line of the default tree: with a memo, fewer than 1/5 of the noise evaluations (a counting noise stub)', () => {
     const ctx = ctxFor('42');
     const dc = surfaceContextOf(ctx).density;

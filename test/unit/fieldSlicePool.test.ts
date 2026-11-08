@@ -107,6 +107,34 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
     }
     pool.terminate();
   }, 120_000);
+  test('a caves slice (SP6a §7.4) assembles its parts as Uint8Array, bit-identical to the single evaluation, on both planes', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(3, () => fakeWorker(log));
+    await pool.configure('42', DEFAULTS);
+    const reqs: FieldSliceSpec[] = [vReq(MOUNTAIN, 'caves'), { plane: 'horizontal', cx: 0, cz: 0, y: 30, extent: 256, n: 32, field: 'caves', path: '' }];
+    for (const req of reqs) {
+      const want = single(req);
+      // Its own cost over a budget that admits it, then PART_BUDGET / 4, which forces parts of 4 sample columns.
+      for (const columnCost of [costOf(req), PART_BUDGET / 4]) {
+        log.length = 0;
+        const r = await pool.fieldSlice(req, { priority: 500, columnCost, budget: 2 ** 40 }).promise;
+        expect([r.n, r.field, r.fluid]).toEqual([32, 'caves', null]);
+        expect(r.values).toBeInstanceOf(Uint8Array);
+        expect(r.values.length).toBe(32 * 32);
+        expect(bytes(r.values).equals(bytes(want.values)), `${req.plane} cost ${columnCost}`).toBe(true);
+        const plan = planFieldSlice(32, columnCost, 3, 2 ** 40);
+        if (plan.refused) throw new Error('refused');
+        expect(partsOf(log)).toEqual(plan.ranges);
+        expect(new Set(r.values).size).toBeGreaterThan(2);
+      }
+    }
+    // Refusable like density: a 32² horizontal draft at 2048 blocks is refused by DRAFT_BUDGET before any job.
+    log.length = 0;
+    const wide: FieldSliceSpec = { ...reqs[1]!, extent: 2048 } as FieldSliceSpec;
+    const e = await settle(pool.fieldSlice(wide, { priority: 2, columnCost: costOf(wide), budget: DRAFT_BUDGET }).promise);
+    expect([e instanceof SliceTooHeavy, log.filter((m) => m.type === 'fieldSlice').length]).toEqual([true, 0]);
+    pool.terminate();
+  }, 120_000);
   test('a 128² vertical density slice at the defaults: admitted by REQUEST_BUDGET since SP6a Task 13\'s memo-aware bound (272,064 per sample column since D25\'s lever 5, 274,416 before it, limit 1,048,576; 2,278,784 and refused at Tasks 7-12), 6 parts on 6 workers, k = 30 sample columns (6 of k = 78 before SP6a)', async () => {
     const log: ToWorker[] = [];
     const pool = createWorkerPool(6, () => fakeWorker(log));

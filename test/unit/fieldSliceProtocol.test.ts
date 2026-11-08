@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import * as core from '../../src/core/constants';
 import {
   COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, DRAFT_BUDGET, fieldSliceBytes, fieldSlicePartProblem, isRefusableField, PART_BUDGET,
-  parseFromWorker, parseToWorker, planFieldSlice, REQUEST_BUDGET, SLICE_RULE_NA, type FieldSlicePlan,
+  parseFromWorker, parseToWorker, planFieldSlice, REQUEST_BUDGET, SLICE_ROWS, SLICE_RULE_NA, type FieldSlicePlan,
 } from '../../src/workers/protocol';
 import { workCost } from '../../src/gen/inspect/cost';
 import { evaluatedExpression, sliceCostOf } from '../../src/gen/inspect/fieldSlice';
@@ -16,7 +16,8 @@ const without = (m: Record<string, unknown>, k: string) => Object.fromEntries(Ob
 
 describe('fieldSlice and fieldProbe messages: parseToWorker checks the shape only (SP3d spec §5.1, §5.3)', () => {
   test('both planes and the probe parse; values the handler refuses (n, window, y, extent, range, path) still parse', () => {
-    for (const m of [V, H, P, { ...V, n: 64, ax: 9e9, y: 1000, from: -3, to: 1.5, path: 'nope' }, { ...H, extent: 300, cx: 0.5, field: 'blocks' }, { ...P, x: Number.NaN, field: 'density', path: '' }]) {
+    for (const m of [V, H, P, { ...V, n: 64, ax: 9e9, y: 1000, from: -3, to: 1.5, path: 'nope' }, { ...H, extent: 300, cx: 0.5, field: 'blocks' }, { ...P, x: Number.NaN, field: 'density', path: '' },
+      { ...V, field: 'caves', path: '' }, { ...H, field: 'caves', path: '' }]) {
       expect(parseToWorker(m), JSON.stringify(m)).not.toBeNull();
     }
     expect(parseToWorker({ ...V, path: 'x'.repeat(512) })).not.toBeNull();
@@ -33,7 +34,7 @@ describe('fieldSlice and fieldProbe messages: parseToWorker checks the shape onl
       { ...V, jobId: 1.5 }, { ...V, epoch: null }, { ...V, plane: 'diagonal' }, { ...V, field: 'steep' }, { ...V, field: 'constructor' }, { ...V, path: 3 },
       { ...V, path: 'x'.repeat(513) }, { ...V, ax: '0' }, { ...V, y: null }, { ...V, n: '128' }, { ...V, from: undefined }, { ...H, extent: '2048' }, { ...H, cz: null },
     ]) expect(parseToWorker(m), JSON.stringify(m).slice(0, 120)).toBeNull();
-    for (const m of [{ ...P, field: 'blocks' }, { ...P, path: null }, { ...P, path: 'x'.repeat(513) }, { ...P, x: '1' }, without(P, 'z'), { ...P, jobId: 'a' }]) {
+    for (const m of [{ ...P, field: 'blocks' }, { ...P, field: 'caves', path: '' }, { ...P, path: null }, { ...P, path: 'x'.repeat(513) }, { ...P, x: '1' }, without(P, 'z'), { ...P, jobId: 'a' }]) {
       expect(parseToWorker(m), JSON.stringify(m).slice(0, 120)).toBeNull();
     }
   });
@@ -47,10 +48,10 @@ describe('fieldSliceResult and fieldProbeResult: parseFromWorker and the guard-f
     return result(field, n, from, to, new ArrayBuffer(b.values), b.fluid === 0 ? null : new ArrayBuffer(b.fluid));
   };
 
-  test('the exact byte lengths: Float64 for density and node, u16 states plus u8 fluid for blocks, u8 for rule', () => {
-    expect([fieldSliceBytes(128, 'density', 3), fieldSliceBytes(32, 'node', 32), fieldSliceBytes(128, 'blocks', 1), fieldSliceBytes(32, 'rule', 5)])
-      .toEqual([{ values: 3072, fluid: 0 }, { values: 8192, fluid: 0 }, { values: 256, fluid: 128 }, { values: 160, fluid: 0 }]);
-    for (const field of ['density', 'node', 'blocks', 'rule']) {
+  test('the exact byte lengths: Float64 for density and node, u16 states plus u8 fluid for blocks, u8 for rule and caves', () => {
+    expect([fieldSliceBytes(128, 'density', 3), fieldSliceBytes(32, 'node', 32), fieldSliceBytes(128, 'blocks', 1), fieldSliceBytes(32, 'rule', 5), fieldSliceBytes(128, 'caves', 7)])
+      .toEqual([{ values: 3072, fluid: 0 }, { values: 8192, fluid: 0 }, { values: 256, fluid: 128 }, { values: 160, fluid: 0 }, { values: 896, fluid: 0 }]);
+    for (const field of ['density', 'node', 'blocks', 'rule', 'caves']) {
       for (const [n, from, to] of [[128, 0, 128], [32, 31, 32], [128, 79, 100]] as const) expect(parseFromWorker(ok(field, n, from, to)), `${field} ${n} [${from}, ${to})`).toMatchObject({ type: 'fieldSliceResult' });
     }
   });
@@ -62,6 +63,9 @@ describe('fieldSliceResult and fieldProbeResult: parseFromWorker and the guard-f
       result('steep', 32, 0, 1, f64(32)), result('density', 32, 0, 1, f64(31)), result('density', 32, 0, 1, new Float64Array(32)), result('density', 32, 0, 1, f64(32), new ArrayBuffer(32)),
       result('blocks', 32, 0, 1, new ArrayBuffer(64), null), result('blocks', 32, 0, 1, new ArrayBuffer(64), new ArrayBuffer(31)), result('blocks', 32, 0, 1, new ArrayBuffer(32), new ArrayBuffer(32)),
       result('rule', 32, 0, 2, new ArrayBuffer(63)), result('node', 32, 0, 1, f64(32), new ArrayBuffer(0)), { ...ok('rule', 32, 0, 1), epoch: null },
+      // SP6a §7.4: caves is u8 values and no fluid.
+      result('caves', 32, 0, 2, new ArrayBuffer(63)), result('caves', 32, 0, 1, f64(32)), result('caves', 32, 0, 1, new ArrayBuffer(32), new ArrayBuffer(32)),
+      result('caves', 32, 0, 1, new Uint8Array(32)),
     ]) {
       const r = bad(m);
       expect(r, JSON.stringify(m)).toMatchObject({ bad: true, jobId: 7 });
@@ -74,6 +78,19 @@ describe('fieldSliceResult and fieldProbeResult: parseFromWorker and the guard-f
     expect(parseFromWorker(result('density', 64, 0, 64, f64(64 * 64), null, 1.5))).toBeNull();
     expect(parseFromWorker(result('density', 32, 0, 1, f64(32), null, null))).toBeNull();
   });
+  test('the Cross-section\'s sliceResult carries cave bytes, (to − from)·SLICE_ROWS of them in an ArrayBuffer (SP6a §7.4)', () => {
+    const reply = (from: number, to: number, cave: unknown) => ({
+      type: 'sliceResult', jobId: 3, epoch: 2, from, to,
+      blocks: new ArrayBuffer(2 * (to - from) * SLICE_ROWS), fluid: new ArrayBuffer((to - from) * SLICE_ROWS), cave,
+    });
+    for (const [from, to] of [[0, 512], [170, 341], [511, 512]] as const) {
+      expect(parseFromWorker(reply(from, to, new ArrayBuffer((to - from) * SLICE_ROWS)))).toMatchObject({ type: 'sliceResult', from, to });
+    }
+    for (const cave of [undefined, null, new ArrayBuffer(SLICE_ROWS - 1), new ArrayBuffer(2 * SLICE_ROWS), new Uint8Array(SLICE_ROWS)]) {
+      expect(parseFromWorker(reply(4, 5, cave)), String(cave)).toEqual({ bad: true, jobId: 3, reason: `sliceResult: cave is not an ArrayBuffer of ${SLICE_ROWS} bytes` });
+    }
+  });
+
   test('fieldProbeResult accepts any number, NaN and ±∞ included', () => {
     for (const value of [0, -1.5e300, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, SLICE_RULE_NA]) {
       const r = parseFromWorker({ type: 'fieldProbeResult', jobId: 3, epoch: 1, value });
@@ -157,7 +174,7 @@ describe('planFieldSlice: the one split and refusal math (SP3d spec §5.2, P3)',
     }
   });
   test('budget null (blocks, rule) is never refused: k = 1 and one part per sample column above PART_BUDGET / 2', () => {
-    expect(['density', 'node', 'blocks', 'rule'].map((f) => isRefusableField(f as never))).toEqual([true, true, false, false]);
+    expect(['density', 'node', 'blocks', 'rule', 'caves'].map((f) => isRefusableField(f as never))).toEqual([true, true, false, false, true]);
     const t = accepted(planFieldSlice(32, 5_498_413, 6, null));
     expect([t.k, t.ranges.length, t.ranges[31]]).toEqual([1, 32, [31, 32]]);
     expect(accepted(planFieldSlice(128, 64 * 5_498_413, 2, null)).ranges.length).toBe(128);
@@ -187,6 +204,10 @@ describe('planFieldSlice: the one split and refusal math (SP3d spec §5.2, P3)',
     expect(fieldSlicePartProblem(78, 106_240, 'density')).toBeNull();
     expect(fieldSlicePartProblem(79, 106_240, 'node')).toBe(`too heavy: 79 × 106240 work units exceed the part budget ${PART_BUDGET}`);
     expect(fieldSlicePartProblem(1, PART_BUDGET + 1, 'density')).toMatch(/^too heavy: /);
+    // SP6a §7.4: a caves part is bounded as a density part.
+    expect(fieldSlicePartProblem(29, 287_668, 'caves')).toBeNull();
+    expect(fieldSlicePartProblem(30, 287_668, 'caves')).toBe(`too heavy: 30 × 287668 work units exceed the part budget ${PART_BUDGET}`);
+    expect(fieldSlicePartProblem(1, PART_BUDGET + 1, 'caves')).toMatch(/^too heavy: /);
     expect(fieldSlicePartProblem(1, 2 ** 31, 'blocks')).toBeNull();
     expect(fieldSlicePartProblem(2, 5_498_413, 'rule')).toBe('too heavy: 2 sample columns of cost 5498413, at most 1 per part');
     expect(fieldSlicePartProblem(3, 2_000_000, 'blocks')).toBeNull();

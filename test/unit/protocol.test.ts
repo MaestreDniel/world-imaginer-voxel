@@ -376,30 +376,40 @@ describe('slice messages and the slice job (SP3a spec §5.1)', () => {
       expect(parseToWorker(m)).toBeNull();
     }
   });
-  test('parseFromWorker: sliceResult carries its range [from, to) and (to − from)·384 u16 block states and fluid bytes in ArrayBuffers', () => {
-    const result = (blocks: unknown, fluid: unknown, jobId: unknown = 4, from: unknown = 0, to: unknown = 512) => ({ type: 'sliceResult', jobId, epoch: 2, from, to, blocks, fluid });
+  test('parseFromWorker: sliceResult carries its range [from, to) and (to − from)·384 u16 block states, fluid bytes and cave bytes in ArrayBuffers', () => {
+    const result = (blocks: unknown, fluid: unknown, jobId: unknown = 4, from: unknown = 0, to: unknown = 512, cave: unknown = new ArrayBuffer(SLICE_SAMPLES)) =>
+      ({ type: 'sliceResult', jobId, epoch: 2, from, to, blocks, fluid, cave });
     expect(valid(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES)))).toBe(true);
+    // SP6a §7.4: the cave bytes, one per sample, in an ArrayBuffer.
+    for (const cave of [null, new ArrayBuffer(SLICE_SAMPLES - 1), new ArrayBuffer(2 * SLICE_SAMPLES), new Uint8Array(SLICE_SAMPLES)]) {
+      expect(invalid(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES), 4, 0, 512, cave)), String(cave)).toBe(true);
+    }
+    const { cave: _cave, ...noCave } = result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES));
+    expect(invalid(noCave)).toBe(true);
     expect(invalid(result(new ArrayBuffer(SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES)))).toBe(true);
     expect(invalid(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(2 * SLICE_SAMPLES)))).toBe(true);
     expect(invalid(result(new Uint16Array(SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES)))).toBe(true);
     expect(invalid(result(new ArrayBuffer(2 * SLICE_SAMPLES), new Uint8Array(SLICE_SAMPLES)))).toBe(true);
     expect(invalid(result(new ArrayBuffer(2 * SLICE_SAMPLES), new ArrayBuffer(SLICE_SAMPLES), null))).toBe(true);
-    const part = (from: unknown, to: unknown, w: number) => ({ type: 'sliceResult', jobId: 4, epoch: 2, from, to, blocks: new ArrayBuffer(2 * SLICE_ROWS * w), fluid: new ArrayBuffer(SLICE_ROWS * w) });
+    const part = (from: unknown, to: unknown, w: number) => ({
+      type: 'sliceResult', jobId: 4, epoch: 2, from, to, blocks: new ArrayBuffer(2 * SLICE_ROWS * w), fluid: new ArrayBuffer(SLICE_ROWS * w), cave: new ArrayBuffer(SLICE_ROWS * w),
+    });
     for (const [from, to] of [[170, 341], [0, 1], [511, 512], [0, 512]] as const) expect(valid(part(from, to, to - from))).toBe(true);
     for (const [from, to, w] of [[170, 341, 170], [170, 341, 512], [0, 513, 513], [-1, 1, 2], [5, 5, 0], [1.5, 3, 1.5], ['0', 1, 1], [0, undefined, 512], [undefined, 512, 512]] as const) {
       expect(invalid(part(from, to, w)), `[${from}, ${to}) with ${w} samples`).toBe(true);
     }
   });
-  test('a slice replies with the slice job\'s blocks and fluid, both transferred, at the job\'s epoch', () => {
+  test('a slice replies with the slice job\'s blocks, fluid and cave bytes, all transferred, at the job\'s epoch', () => {
     const h = createTaskHandler();
     h.handle(configure(3));
     const r = h.handle(coast(7, 3));
     expect(r.msg).toMatchObject({ type: 'sliceResult', jobId: 7, epoch: 3, from: 0, to: 512 });
     if (r.msg.type !== 'sliceResult') return;
-    expect(r.transfer).toEqual([r.msg.blocks, r.msg.fluid]);
+    expect(r.transfer).toEqual([r.msg.blocks, r.msg.fluid, r.msg.cave]);
     const want = createSliceJob().run(ctxFor('42'), 3, COAST, () => false)!;
     expect(sameBytes(r.msg.blocks, want.blocks)).toBe(true);
     expect(sameBytes(r.msg.fluid, want.fluid)).toBe(true);
+    expect(sameBytes(r.msg.cave, want.cave)).toBe(true);
   });
   test('a slice of the range [from, to) replies with that part only, indexed (319 − y)·(to − from) + (i − from) (SP3b spec §6)', () => {
     const h = createTaskHandler();
@@ -409,15 +419,17 @@ describe('slice messages and the slice job (SP3a spec §5.1)', () => {
       const r = h.handle(coast(8, 3, from, to));
       expect(r.msg).toMatchObject({ type: 'sliceResult', jobId: 8, epoch: 3, from, to });
       if (r.msg.type !== 'sliceResult') return;
-      expect(r.transfer).toEqual([r.msg.blocks, r.msg.fluid]);
+      expect(r.transfer).toEqual([r.msg.blocks, r.msg.fluid, r.msg.cave]);
       const w = to - from;
-      expect([r.msg.blocks.byteLength, r.msg.fluid.byteLength]).toEqual([2 * SLICE_ROWS * w, SLICE_ROWS * w]);
+      expect([r.msg.blocks.byteLength, r.msg.fluid.byteLength, r.msg.cave.byteLength]).toEqual([2 * SLICE_ROWS * w, SLICE_ROWS * w, SLICE_ROWS * w]);
       const blocks = new Uint16Array(r.msg.blocks);
       const fluid = new Uint8Array(r.msg.fluid);
+      const cave = new Uint8Array(r.msg.cave);
       for (const y of [319, 120, 63, 62, 0, -63, -64]) {
         for (let i = from; i < to; i++) {
           expect(blocks[slicePartIndex(i, y, from, to)]).toBe(full.blocks[sliceIndex(i, y)]);
           expect(fluid[slicePartIndex(i, y, from, to)]).toBe(full.fluid[sliceIndex(i, y)]);
+          expect(cave[slicePartIndex(i, y, from, to)]).toBe(full.cave[sliceIndex(i, y)]);
         }
       }
     }

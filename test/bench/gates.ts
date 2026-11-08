@@ -25,6 +25,11 @@ export const SLICE_V128_P50_MAX_MS = 300;
 export const SLICE_PART_P50_MAX_MS = 250;
 export const SESSION_COMMIT_P50_MAX_MS = 4;
 /**
+ * SP6a §7.4, §10.5 (D13): the horizontal 128² `caves` slice, 256 blocks across, on one thread (`slice.caves128`), p50 in
+ * ms; a miss makes the slice redraw on release instead of during a drag and goes to the user.
+ */
+export const SLICE_CAVES_P50_MAX_MS = 300;
+/**
  * SP4a §9.3 (master §7's L and Mesh rows): one column's light job (`light.column`: the region copy, the BFS and the
  * 24 output sections) and one non-trivial section's padded copy and mesh (`mesh.section`), p50 and p99 in ms (p99 as
  * the upper bound of p95, the `column.sample` precedent).
@@ -137,9 +142,10 @@ export function spiralCells(n: number): Array<readonly [number, number]> {
  * appends `relight.edit` (one edit's relight); SP5b §6.2 appends `persist.flush` (one flush's synchronous part); SP5c
  * §10.3 appends `paste.max` and `paste.maxLit` (one maximum paste, solid and relight-heavy); SP6a §10.5 appends
  * `terrain.caves.warm` (T over a spiral of neighbours, the carver path cache warm), `carver.paths` (one path per carver
- * kind, cold) and `mesh.xray` (the X-ray pass alone over `mesh.section`'s sections), and inserts `density.cornerInlined`
+ * kind, cold) and `mesh.xray` (the X-ray pass alone over `mesh.section`'s sections), inserts `density.cornerInlined`
  * (the kill criterion's hand-inlined default expression over `density.corner`'s corners, test/bench/inlined.ts) right
- * after `density.corner`, where it is measured.
+ * after `density.corner`, where it is measured, and appends `slice.caves128` (§7.4: the horizontal 128² `caves` slice,
+ * measured last).
  */
 export const BENCH_ROWS = [
   'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
@@ -148,7 +154,7 @@ export const BENCH_ROWS = [
   'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'surface.column',
   'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
   'light.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
-  'terrain.caves.warm', 'carver.paths', 'mesh.xray',
+  'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128',
 ] as const;
 
 export interface BenchKernel {
@@ -317,12 +323,14 @@ export interface AbsoluteLatencies {
   /** SP5c §10.3: `paste.max` and `paste.maxLit` p99, gated at PASTE_MAX_P99_MAX_MS and PASTE_LIT_P99_MAX_MS. */
   readonly pasteMaxP99: number;
   readonly pasteLitP99: number;
+  /** SP6a §7.4, §10.5: `slice.caves128` p50, gated at SLICE_CAVES_P50_MAX_MS (ruling P51). */
+  readonly sliceCaves128P50: number;
 }
 
 /**
  * The absolute gates (P1 column budget, SP2a; the real T budget, SP3b, its p50 and p99 with caves, SP6a; the slice and
  * session commit budgets, SP3d; the light and mesh budgets, SP4a; the relight budget, SP5a; the flush's synchronous part,
- * SP5b; the maximum pastes, SP5c): checked by
+ * SP5b; the maximum pastes, SP5c; the caves slice, SP6a): checked by
  * `npm run bench` and before `npm run bench:record` writes, so a record refuses to write when one fails.
  */
 export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
@@ -344,5 +352,6 @@ export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
   if (l.persistFlushP99 > PERSIST_FLUSH_P99_MAX_MS) out.push(`persist.flush p99 ${l.persistFlushP99.toFixed(3)} ms > ${PERSIST_FLUSH_P99_MAX_MS} ms`);
   if (l.pasteMaxP99 > PASTE_MAX_P99_MAX_MS) out.push(`paste.max p99 ${l.pasteMaxP99.toFixed(3)} ms > ${PASTE_MAX_P99_MAX_MS} ms`);
   if (l.pasteLitP99 > PASTE_LIT_P99_MAX_MS) out.push(`paste.maxLit p99 ${l.pasteLitP99.toFixed(3)} ms > ${PASTE_LIT_P99_MAX_MS} ms`);
+  if (l.sliceCaves128P50 > SLICE_CAVES_P50_MAX_MS) out.push(`slice.caves128 p50 ${l.sliceCaves128P50.toFixed(3)} ms > ${SLICE_CAVES_P50_MAX_MS} ms`);
   return out;
 }

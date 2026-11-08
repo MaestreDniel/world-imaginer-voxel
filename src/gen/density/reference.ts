@@ -22,6 +22,10 @@
  * read it (a def read at voxel placement is walked per read, as without a memo). The values are pure functions of the
  * column's lattice and the corner's world coordinates, so a memoised evaluation is bit-identical to a plain one; the
  * slice job keeps one memo per part (`gen/inspect/fieldSlice.ts`), and the DT2 oracle calls the reference without one.
+ * A memo's cell holds one slot per `interpolated` node reachable from the root and per def reachable at corner placement
+ * (the only values it keeps), and a memo holds at most `MEMO_BYTES_MAX` of cells (SP6a ruling R17: bounded per
+ * request, whatever the tree under tier 2's caps): a cell that would pass it first empties the memo, whose later reads
+ * recompute the same values (only slower).
  */
 import { latticeIndex, readField, type ColumnSample } from '../column/columnStage';
 import { EXPR_CHILD_KEYS, exprChildren, ExprValidationError, validateExpr, type DensityExpr, type DensityNoise, type DensityNoiseSource, type Expr, type InterpolatedExpr, type SlideExpr, type SlideKnot, type TapExpr } from './expr';
@@ -48,7 +52,13 @@ const TRILERP = trilerp;
  */
 export interface CornerMemo {
   clear(): void;
+  /** The bytes of the cells it holds (their slot values and flags plus a fixed overhead per cell); ≤ 8 MiB. */
+  readonly bytes: number;
 }
+
+/** The most bytes of cells one memo holds (ruling R17), and each cell's overhead beyond its 9 bytes per slot. */
+const MEMO_BYTES_MAX = 8388608;
+const CELL_OVERHEAD = 160;
 
 /** One corner's values, by slot (an interpolated node or a def of the owning reference). */
 interface CornerCell {
@@ -58,6 +68,8 @@ interface CornerCell {
 
 interface MemoState extends CornerMemo {
   owner: object | null;
+  /** The owner's bytes per cell (9 per slot plus CELL_OVERHEAD). */
+  cellBytes: number;
   readonly cells: Map<number, CornerCell>;
 }
 
@@ -65,8 +77,10 @@ interface MemoState extends CornerMemo {
 export function createCornerMemo(): CornerMemo {
   const m: MemoState = {
     owner: null,
+    cellBytes: 0,
     cells: new Map<number, CornerCell>(),
     clear() { m.cells.clear(); },
+    get bytes() { return m.cells.size * m.cellBytes; },
   };
   return m;
 }
@@ -121,22 +135,34 @@ export function createDensityReference(expr: DensityExpr, noises: DensityNoiseSo
     for (const c of CHILDREN(e)) stack.push(c);
   }
   const knots = (e: SlideExpr): readonly SlideKnot[] => thawed.get(e) ?? e.knots;
-  // The memo's slots: every interpolated node of the tree (by identity) and every def (by name).
+  // The memo's slots (the values it keeps): every interpolated node reachable from the root (by identity) and every def
+  // a ref reaches at corner placement (by name). Another node or def (an expression passed in) is evaluated unmemoised.
   const nodeSlots = new Map<Expr, number>();
-  for (const e of seen) if (e.op === 'interpolated') nodeSlots.set(e, nodeSlots.size);
+  const cornerDefs = new Set<string>();
+  walkReachable(expr, (e, inside) => {
+    if (e.op === 'interpolated' && !nodeSlots.has(e)) nodeSlots.set(e, nodeSlots.size);
+    else if (e.op === 'ref' && inside) cornerDefs.add(e.name);
+    return false;
+  });
   const defSlots = new Map<string, number>();
-  for (const name of Object.keys(defs)) defSlots.set(name, nodeSlots.size + defSlots.size);
+  for (const name of cornerDefs) defSlots.set(name, nodeSlots.size + defSlots.size);
   const slots = nodeSlots.size + defSlots.size;
+  const cellBytes = 9 * slots + CELL_OVERHEAD;
   const self = {};
-  /** The memo's cell of corner (i, k, j) of `s`'s column, created empty when missing. */
+  /**
+   * The memo's cell of corner (i, k, j) of `s`'s column, created empty when missing; a new cell that would take the
+   * memo past MEMO_BYTES_MAX empties it first (cells already handed out stay valid: their values are pure).
+   */
   const cellOf = (m: MemoState, s: ColumnSample, i: number, k: number, j: number): CornerCell => {
     if (m.owner !== self) {
       m.cells.clear();
       m.owner = self;
+      m.cellBytes = cellBytes;
     }
     const key = ((s.cx + CHUNK_OFFSET) * CHUNK_SPAN + (s.cz + CHUNK_OFFSET)) * CORNERS + (i * 5 + j) * 49 + k;
     let c = m.cells.get(key);
     if (c === undefined) {
+      if ((m.cells.size + 1) * cellBytes > MEMO_BYTES_MAX) m.cells.clear();
       c = { v: new Float64Array(slots), has: new Uint8Array(slots) };
       m.cells.set(key, c);
     }
@@ -162,12 +188,12 @@ export function createDensityReference(expr: DensityExpr, noises: DensityNoiseSo
           case 'noise': return noise(r.id).z3(cx, cy, cz);
           case 'noiseScaled': return noise(r.id).z3(cx / r.s, cy / r.s, cz / r.s);
           case 'ref': {
-            if (cell === null) return EVAL(defs[r.name]!, env);
-            const slot = defSlots.get(r.name)!;
-            if (cell.has[slot] === 1) return cell.v[slot]!;
+            const slot = cell === null ? undefined : defSlots.get(r.name);
+            if (slot === undefined) return EVAL(defs[r.name]!, env);
+            if (cell!.has[slot] === 1) return cell!.v[slot]!;
             const v = EVAL(defs[r.name]!, env);
-            cell.v[slot] = v;
-            cell.has[slot] = 1;
+            cell!.v[slot] = v;
+            cell!.has[slot] = 1;
             return v;
           }
           case 'interpolated': throw new Error('an interpolated cannot be evaluated at a corner (nested interpolated)');

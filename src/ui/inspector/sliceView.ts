@@ -1,17 +1,17 @@
 /**
  * The Density tab's slice viewer (SP3d spec §4, §3.6, §3.7, D16, D18): the DOM over `sliceModel.ts`.
  * - Controls: the plane (vertical along the cut line, or horizontal XZ), the field (`density`, `selected` naming the
- *   selected node, `blocks`; options that cannot slice on the plane are disabled with their note), the y control (shown
+ *   selected node, `blocks`, and SP6a's "Cave type", `caves`, §7.4; options that cannot slice on the plane are disabled with their note), the y control (shown
  *   on both planes: the plane's level when horizontal, a line across a vertical slice), the horizontal extent, and the
  *   colour scale (Auto, or a fixed number in (0, 1e100]). Under them the note that the 2D map is upstream of the terrain.
  * - The image: n × n canvas pixels scaled by CSS (`image-rendering: pixelated`) into a square box whose side is the
  *   smaller of its cell's width and height (at least 128 px), with an SVG overlay (the 0-contour, the sea level and the y
  *   level on vertical planes), the axes' end labels in blocks, a hover readout overlay and a "stale" label (dimmed).
  * - Beside it the histogram and its statistics for `density`/`node`, the Voxels legend for `blocks`, the share of 1s
- *   for `rule`; a status line and the request stream's notice (the field's note, a refusal, `failed: …`).
+ *   for `rule`, the kinds present in the X-ray's colours for `caves`; a status line and the request stream's notice (the field's note, a refusal, `failed: …`).
  * - Requests (§4.5): `createFieldSliceRequests` on the pool's resolved configure; the page calls `update()` on every
  *   session change, driver status change, line change and selection change; while a gesture drags a `caves.*` leaf,
- *   or any leaf over a tree with SP6a's cave terms, density and node slices (live and pinned) wait for its end and then
+ *   or any leaf over a tree with SP6a's cave terms, density, node and caves slices (live and pinned) wait for its end and then
  *   ask for the draft it ended on (SP6a D13, §7.4: `createCaveGestureHold`). The state starts at the first show
  *   (`initialSliceState`) and is reported to the page (`onState`: the map's square and the click routing); a map click on
  *   the horizontal plane sets the centre (`setCentre`). The slice hover reports its voxel (`onHover`) for the form's value.
@@ -30,7 +30,7 @@ import type { SlicePlane } from '../map/clickAction';
 import type { HoverVoxel } from './hoverModel';
 import type { Selection } from './model';
 import {
-  blocksLegend, contourPath, createCaveGestureHold, createFieldSliceRequests, createSlicePins, fieldOptionLabel, fieldOptions, fieldSliceView, histogram,
+  blocksLegend, cavesLegend, contourPath, createCaveGestureHold, createFieldSliceRequests, createSlicePins, fieldOptionLabel, fieldOptions, fieldSliceView, histogram,
   histogramLabels, initialSliceState, levelLine, parseScale, parseSliceY, PIN_FULL_TEXT, PIN_MAX, pointerPixel, ruleShare,
   ruleShareText, sliceAxisLabels, sliceBoxSide, sliceEmptyText, sliceHoverText, sliceImage, slicePointer, sliceStatusText,
   withCentre, withExtent, type ConfiguredDraft, type FieldChoice, type SlicePin, type SlicePointer, type SliceShown,
@@ -325,9 +325,9 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
         }
         break;
       }
-      case 'blocks':
+      case 'blocks': case 'caves':
         stats.textContent = '';
-        legend.append(...blocksLegend(r.values, r.fluid).map((k) => {
+        legend.append(...(r.field === 'blocks' ? blocksLegend(r.values, r.fluid) : cavesLegend(r.values)).map((k) => {
           const key = el('span', 'sv-key');
           const sw = el('span', 'sv-swatch');
           sw.style.background = rgbCss(k.rgb);

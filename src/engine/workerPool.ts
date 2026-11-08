@@ -74,12 +74,14 @@ export interface TileRequest { readonly layer: LayerId; readonly level: MapLevel
 export interface TileResult { readonly rgba: ArrayBuffer; readonly ids: ArrayBuffer | null }
 
 /**
- * The voxels of the vertical slice under a line (SP3a spec §5.1): SLICE_SAMPLES (512 × 384) block states and fluid
- * bytes, sample (i, y) at `sliceIndex(i, y)` of `workers/protocol.ts` (row 0 is y 319).
+ * The voxels of the vertical slice under a line (SP3a spec §5.1): SLICE_SAMPLES (512 × 384) block states, fluid bytes
+ * and cave bytes (the cave kind T wrote, SP6a spec §3.3, §7.4), sample (i, y) at `sliceIndex(i, y)` of
+ * `workers/protocol.ts` (row 0 is y 319).
  */
 export interface SliceResult {
   readonly blocks: Uint16Array<ArrayBuffer>;
   readonly fluid: Uint8Array<ArrayBuffer>;
+  readonly cave: Uint8Array<ArrayBuffer>;
 }
 
 /** A voxel's final state id and its surface-rule branch path (rule ids from `root` to the yielding leaf; [] for none). */
@@ -729,6 +731,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       const replies = await Promise.all(parts);
       const blocks = new Uint16Array(SLICE_SAMPLES);
       const fluid = new Uint8Array(SLICE_SAMPLES);
+      const cave = new Uint8Array(SLICE_SAMPLES);
       replies.forEach((r, k) => {
         if (r.type !== 'sliceResult') throw new Error(`unexpected reply ${r.type}`);
         const [from, to] = ranges[k]!;
@@ -736,13 +739,15 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
         const w = to - from;
         const b = new Uint16Array(r.blocks);
         const f = new Uint8Array(r.fluid);
+        const c = new Uint8Array(r.cave);
         // Part row (319 − y) goes to the same row of the full slice, at column `from`.
         for (let row = 0; row < SLICE_ROWS; row++) {
           blocks.set(b.subarray(row * w, row * w + w), row * SLICE_POINTS + from);
           fluid.set(f.subarray(row * w, row * w + w), row * SLICE_POINTS + from);
+          cave.set(c.subarray(row * w, row * w + w), row * SLICE_POINTS + from);
         }
       });
-      return { blocks, fluid };
+      return { blocks, fluid, cave };
     },
     async surfaceProbe(x, y, z, priority = -1) {
       const e = epoch;
@@ -768,7 +773,8 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
         cancel = () => fail(new JobCancelled());
         const out: FieldSliceResult = field === 'density' || field === 'node'
           ? { n, field, values: new Float64Array(n * n), fluid: null }
-          : field === 'blocks' ? { n, field, values: new Uint16Array(n * n), fluid: new Uint8Array(n * n) } : { n, field, values: new Uint8Array(n * n), fluid: null };
+          : field === 'blocks' ? { n, field, values: new Uint16Array(n * n), fluid: new Uint8Array(n * n) }
+            : { n, field, values: new Uint8Array(n * n), fluid: null };
         const base = req.plane === 'vertical'
           ? { plane: req.plane, ax: req.ax, az: req.az, bx: req.bx, bz: req.bz }
           : { plane: req.plane, cx: req.cx, cz: req.cz, extent: req.extent };
@@ -785,7 +791,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
             if (out.field === 'blocks') {
               out.values.set(new Uint16Array(r.values), from * n);
               out.fluid.set(new Uint8Array(r.fluid!), from * n);
-            } else if (out.field === 'rule') out.values.set(new Uint8Array(r.values), from * n);
+            } else if (out.field === 'rule' || out.field === 'caves') out.values.set(new Uint8Array(r.values), from * n);
             else out.values.set(new Float64Array(r.values), from * n);
             if (--left === 0) { done = true; resolve(out); }
           }).catch((err: unknown) => fail(err instanceof Error ? err : new Error(String(err))));

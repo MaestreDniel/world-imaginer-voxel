@@ -30,7 +30,10 @@ import {
   createFieldSliceRequests, fieldSliceSpec, fieldSliceView, sliceRequestKey, tooHeavyText, BLOCKS_HORIZONTAL_NOTE, RULE_HORIZONTAL_NOTE,
   SLICE_DRAFT_N, SLICE_DRAFT_PRIORITY, SLICE_FULL_N, SLICE_FULL_PRIORITY, type ConfiguredDraft, type SliceWant,
   contourPath, createSlicePins, pinWant, PIN_DUPLICATE_TEXT, PIN_FULL_TEXT, PIN_MAX, sliceImage, createCaveGestureHold,
+  CAVES_LABEL, CAVES_SOLID, CAVES_SOLID_RGB, cavesRgba, fieldOptionLabel,
 } from '../../src/ui/inspector/sliceModel';
+import { VOXEL_COLORS } from '../../src/ui/crossSection/voxels';
+import { XRAY_COLORS } from '../../src/render/xrayPalette';
 import { planFieldSlice, type FieldSliceSpec } from '../../src/workers/protocol';
 import { partWorstParams } from '../harness/sliceTrees';
 import { paramsWith } from '../harness/gen';
@@ -268,14 +271,14 @@ describe('blocks and rule fields', () => {
 });
 
 describe('field select', () => {
-  test('density, selected and blocks; blocks and a rule node have no horizontal slice', () => {
-    expect(FIELD_CHOICES).toEqual(['density', 'selected', 'blocks']);
+  test('density, selected, blocks and caves; blocks and a rule node have no horizontal slice', () => {
+    expect(FIELD_CHOICES).toEqual(['density', 'selected', 'blocks', 'caves']);
     const on = (o: ReturnType<typeof fieldOptions>) => o.map((x) => [x.value, x.disabled]);
-    expect(on(fieldOptions('vertical', DENSITY_SEL))).toEqual([['density', false], ['selected', false], ['blocks', false]]);
-    expect(on(fieldOptions('vertical', RULE_SEL))).toEqual([['density', false], ['selected', false], ['blocks', false]]);
-    expect(on(fieldOptions('horizontal', DENSITY_SEL))).toEqual([['density', false], ['selected', false], ['blocks', true]]);
+    expect(on(fieldOptions('vertical', DENSITY_SEL))).toEqual([['density', false], ['selected', false], ['blocks', false], ['caves', false]]);
+    expect(on(fieldOptions('vertical', RULE_SEL))).toEqual([['density', false], ['selected', false], ['blocks', false], ['caves', false]]);
+    expect(on(fieldOptions('horizontal', DENSITY_SEL))).toEqual([['density', false], ['selected', false], ['blocks', true], ['caves', false]]);
     const hr = fieldOptions('horizontal', RULE_SEL);
-    expect(on(hr)).toEqual([['density', false], ['selected', true], ['blocks', true]]);
+    expect(on(hr)).toEqual([['density', false], ['selected', true], ['blocks', true], ['caves', false]]);
     expect(hr[1]!.note).toBe('a rule node has a mask on vertical planes only');
     expect(hr[2]!.note).toBe('blocks have no horizontal slice');
     expect(fieldOptions('vertical', DENSITY_SEL).every((o) => o.note === null)).toBe(true);
@@ -291,6 +294,40 @@ describe('field select', () => {
     expect(resolveField('selected', 'horizontal', RULE_SEL)).toEqual({ ok: false, note: 'a rule node has a mask on vertical planes only' });
     expect(resolveField('blocks', 'vertical', DENSITY_SEL)).toEqual({ ok: true, field: 'blocks', path: '' });
     expect(resolveField('blocks', 'horizontal', DENSITY_SEL)).toEqual({ ok: false, note: 'blocks have no horizontal slice' });
+  });
+
+  test('"Cave type" (SP6a §7.4, D13): the caves field on both planes, whatever the selection, with the path \'\'', () => {
+    expect(CAVES_LABEL).toBe('Cave type');
+    const sels: Selection[] = [DENSITY_SEL, RULE_SEL, { leaf: 'surface.rules', path: 'root.rules[1].if.if' }, { leaf: 'density.defs', path: 'defs.base' }];
+    for (const plane of ['vertical', 'horizontal'] as const) {
+      for (const sel of sels) {
+        expect(resolveField('caves', plane, sel)).toEqual({ ok: true, field: 'caves', path: '' });
+        const o = fieldOptions(plane, sel).find((x) => x.value === 'caves')!;
+        expect(o).toEqual({ value: 'caves', label: 'Cave type', disabled: false, note: null });
+        expect(fieldOptionLabel('caves', sel)).toBe('Cave type');
+      }
+    }
+    // The node path is not part of a caves slice's key: selecting another node never re-requests it.
+    const st: SliceState = { plane: 'horizontal', field: 'caves', y: 30, extent: 256, cx: 0, cz: 0 };
+    expect(sliceRequestKey(st, null, 'caves', 'root.a')).toBe(sliceRequestKey(st, null, 'caves', ''));
+    expect(sliceRequestKey(st, null, 'caves', '')).toBe('horizontal|caves||0,0,256,30');
+  });
+
+  test('the caves image: each kind in the X-ray\'s colours, other solid pale grey, open air the sky; a vertical slice transposed', () => {
+    const hex = (h: string): number[] => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    expect(CAVES_SOLID).toBe(16);
+    expect(CAVES_SOLID_RGB).toEqual([0xd8, 0xd8, 0xd8]);
+    const v = Uint8Array.from([0, 1, CAVES_SOLID, 7]);
+    const h = cavesRgba(v, 2, 'horizontal');
+    expect([rgb(h, 0), rgb(h, 1), rgb(h, 2), rgb(h, 3)]).toEqual([[...VOXEL_COLORS.sky], hex(XRAY_COLORS[1]!), [216, 216, 216], hex(XRAY_COLORS[7]!)]);
+    expect(rgb(h, 1)).toEqual([0xff, 0xb0, 0x00]);
+    // Vertical: sample column c is the pixel column.
+    const vt = cavesRgba(v, 2, 'vertical');
+    expect([rgb(vt, 0), rgb(vt, 1), rgb(vt, 2), rgb(vt, 3)]).toEqual([rgb(h, 0), rgb(h, 2), rgb(h, 1), rgb(h, 3)]);
+    for (let k = 1; k <= 9; k++) expect(rgb(cavesRgba(Uint8Array.of(k), 1, 'horizontal'), 0)).toEqual(hex(XRAY_COLORS[k]!));
+    // sliceImage draws a caves result the same way, without a contour or statistics.
+    const img = sliceImage({ n: 2, field: 'caves', values: v, fluid: null }, 'horizontal', null);
+    expect([img.rgba, img.contour, img.stats]).toEqual([h, [], null]);
   });
 });
 
@@ -936,6 +973,67 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       h.cfg = { poolEpoch: 4, sessionEpoch: 9, params: detailDragged };
       r.request(want());
       expect([calls.length, calls[2]!.cancelled, calls[3]!.req.n, r.pending?.sessionEpoch]).toEqual([4, true, 32, 9]);
+    });
+  });
+
+  describe('the caves field\'s requests (SP6a §7.4, D13: refusable like density, held during a cave drag, ruling R16)', () => {
+    const CAVES_V: SliceState = { ...VERT, field: 'caves' };
+    const CAVES_H: SliceState = { ...HORI, field: 'caves', extent: 256 };
+    const caves = (n: number): FieldSliceResult => ({ n, field: 'caves', values: new Uint8Array(n * n).fill(1), fluid: null });
+
+    test('vertical: a 32² draft, then the 128² slice, with sliceCostOf\'s caves costs and the two budgets', async () => {
+      const { r, calls } = harness(DEFAULTS);
+      r.request(want(CAVES_V));
+      expect(calls.map((c) => [c.req.field, c.req.path, c.req.n, c.opts])).toEqual([
+        ['caves', '', 32, { priority: 2, columnCost: sliceCostOf(DEFAULTS, 'caves', '', 'vertical', 32), budget: DRAFT_BUDGET }],
+      ]);
+      calls[0]!.resolve(caves(32));
+      await flush();
+      expect(calls.slice(1).map((c) => [c.req.n, c.opts])).toEqual([[128, { priority: 500, columnCost: sliceCostOf(DEFAULTS, 'caves', '', 'vertical', 128), budget: REQUEST_BUDGET }]]);
+      calls[1]!.resolve(caves(128));
+      await flush();
+      expect([r.shown?.result.field, r.shown?.result.n, r.notice, r.pending]).toEqual(['caves', 128, null, null]);
+    });
+
+    test('horizontal at 256 blocks: the draft refused while the 128² slice fits (ruling R9), so the 128² is asked at once', () => {
+      const { r, calls } = harness(DEFAULTS);
+      r.request(want(CAVES_H));
+      expect(planFieldSlice(32, sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 32, 256), 3, DRAFT_BUDGET).refused).toBe(true);
+      expect(calls.map((c) => [c.req.n, c.opts])).toEqual([[128, { priority: 500, columnCost: sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 128, 256), budget: REQUEST_BUDGET }]]);
+      expect(calls[0]!.req).toEqual({ plane: 'horizontal', cx: 100, cz: -200, extent: 256, y: 63, n: 128, field: 'caves', path: '' });
+    });
+
+    test('horizontal at the default 2048 blocks: both sizes refused, "cave type too heavy to slice" (each sample its own chunk column)', () => {
+      const { r, calls } = harness(DEFAULTS);
+      r.request(want({ ...CAVES_H, extent: 2048 }));
+      expect([calls.length, r.pending, r.shown]).toEqual([0, null, null]);
+      const cost = sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 32, 2048);
+      const plan = planFieldSlice(32, cost, 3, DRAFT_BUDGET);
+      if (!plan.refused) throw new Error('expected a refusal');
+      expect(r.notice).toBe(tooHeavyText('draft', DEFAULTS, 'caves', '', 'horizontal', 32, cost, plan.limit));
+      // Per sample, its chunk column's acquisition included: ⌈3,871,328 / 32⌉ against ⌊DRAFT_BUDGET / 32 / 32⌋.
+      expect([cost, plan.limit]).toEqual([3871328, DRAFT_BUDGET / 32]);
+      expect(r.notice).toBe('cave type too heavy to slice (cost 120 979, limit 16 384)');
+    });
+
+    test('a cave-leaf drag requests no caves slice until the gesture ends; blocks still request per configure', async () => {
+      const s = { inGesture: false, state: { params: SLICED } };
+      const dragged = paramsWith({ density: { defs: caveFreeTree() }, caves: { cheese: { offset: 0.2 } } } as never);
+      const { r, calls, h } = harness(SLICED, createCaveGestureHold(s));
+      r.request(want(CAVES_V));
+      expect(calls.map((c) => [c.req.field, c.req.n])).toEqual([['caves', 32]]);
+      s.inGesture = true;
+      s.state.params = dragged;
+      h.session.state.epoch = 8;
+      h.cfg = { poolEpoch: 4, sessionEpoch: 8, params: dragged };
+      r.request(want(CAVES_V));
+      expect([calls.length, calls[0]!.cancelled, r.pending]).toEqual([1, true, null]);
+      r.request(want({ ...VERT, field: 'blocks' }));
+      expect(calls.slice(1).map((c) => [c.req.field, c.req.n])).toEqual([['blocks', 32]]);
+      s.inGesture = false;
+      r.request(want(CAVES_V));
+      expect(calls.slice(2).map((c) => [c.req.field, c.req.n, c.opts.columnCost])).toEqual([['caves', 32, sliceCostOf(dragged, 'caves', '', 'vertical', 32)]]);
+      expect(r.pending?.sessionEpoch).toBe(8);
     });
   });
 

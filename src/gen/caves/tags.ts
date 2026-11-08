@@ -17,6 +17,9 @@
  * before them is sky wherever the pre-cave tap's interval there is ≤ 0 (its voxels 0 without evaluation); otherwise (a
  * tree whose muted taps decide cells air before their corners) the tag evaluates the cell's corners first.
  * `caveTagAt` is the rule at one voxel (SP6a spec §3.4, D22), equal to T's stored tag voxel for voxel (DT2's `tagProbe`).
+ * `caveTagBatch` is the slice's `caves` field (SP6a spec §7.4, D13): per sample the tag, or `CAVE_SLICE_SOLID` for a
+ * solid voxel, evaluated chunk column by chunk column so that a column's ColumnSample, corners, carver window and path
+ * list are shared by all its samples.
  *
  * The cell tags (SP6a ruling R13, output-keeping). With the compile's bounds (`cellTags`), corners, and the taps
  * `precave`, the four families, `pillars` and `noodle` all outside `interpolated`, a cell to tag that holds density air
@@ -28,7 +31,7 @@
  * rule's are, so no voxel is a tie, and the kind is `tagVoxel`'s.
  * Follows the gen determinism rules.
  */
-import { CAVE_KIND } from '../../core/constants';
+import { CAVE_KIND, CAVE_SLICE_SOLID } from '../../core/constants';
 import type { DensityBounds } from '../density/bounds';
 import type { CompiledDensity } from '../density/compile';
 import type { DensityContext } from '../density/context';
@@ -43,6 +46,7 @@ const K_SPAG2D: number = KIND.spaghetti2d;
 const K_NOODLE: number = KIND.noodle;
 const K_ENTRANCE: number = KIND.entrance;
 const K_OTHER: number = KIND.other;
+const SOLID_CODE = CAVE_SLICE_SOLID;
 const FIND_TAP = findTap;
 const PROBE = probe;
 const CARVED_AT = carvedAt;
@@ -281,4 +285,40 @@ export function caveTagAt(dc: DensityContext, x: number, y: number, z: number): 
   if (v > 0) return CARVED_AT(dc, x, y, z);
   const c = dc.compiled;
   return tagVoxel(c, resolve(c).readers, dc.ctx.params.caves.pillars.threshold, x & 15, y, z & 15);
+}
+
+/**
+ * The `caves` slice field at the samples (xs[q], ys[q], zs[q]) (SP6a spec §7.4, D13), into `out[q]`: the cave tag where
+ * it is not 0 (`caveTagAt`: a noise kind 1-5, 9, or a carver kind 6-8), else `CAVE_SLICE_SOLID` where the voxel is solid
+ * (`solidAt`, and y −64, which T always makes bedrock), else 0 (open air: sky, surface air, water's air). The samples are
+ * visited grouped by chunk column (one sort of their indices by column), so that each column is made current once
+ * (`dc.column`: its ColumnSample, columnFn and positionFn), its cell corners are evaluated once, and the carvers' window,
+ * sources and path list (`carvedAt`) and the density-top memo are built once for all its samples; the values are those
+ * of `caveTagAt` and `solidAt` at each sample, whatever the order (pure). Integers only, y in −64 … 319, (x, z) in the
+ * world window (a RangeError otherwise, as `probe`); the four arrays of one length (a RangeError otherwise).
+ */
+export function caveTagBatch(dc: DensityContext, xs: Int32Array, ys: Int32Array, zs: Int32Array, out: Uint8Array): void {
+  const count = xs.length;
+  if (ys.length !== count || zs.length !== count || out.length !== count) throw new RangeError('caveTagBatch: xs, ys, zs and out need one length');
+  const keys = new Float64Array(count);
+  const order = new Int32Array(count);
+  for (let q = 0; q < count; q++) {
+    // (cx + 2^15)·2^16 + (cz + 2^15): chunk coordinates of the world window lie in [−2^15, 2^15).
+    keys[q] = ((xs[q]! >> 4) + 32768) * 65536 + ((zs[q]! >> 4) + 32768);
+    order[q] = q;
+  }
+  order.sort((a, b) => keys[a]! - keys[b]! || a - b);
+  const c = dc.compiled;
+  const readers = resolve(c).readers;
+  const th = dc.ctx.params.caves.pillars.threshold;
+  for (let t = 0; t < count; t++) {
+    const q = order[t]!;
+    const x = xs[q]!, y = ys[q]!, z = zs[q]!;
+    const v = PROBE(dc, x, y, z);
+    if (y === -64) out[q] = SOLID_CODE;
+    else if (v > 0) {
+      const k = CARVED_AT(dc, x, y, z);
+      out[q] = k !== 0 ? k : SOLID_CODE;
+    } else out[q] = tagVoxel(c, readers, th, x & 15, y, z & 15);
+  }
 }

@@ -177,7 +177,7 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
         if (i < 100 && y > 40 && y <= 63) fluid[sliceIndex(i, y)] = WATER_SOURCE;
       }
     }
-    const s = { blocks, fluid };
+    const s = { blocks, fluid, cave: new Uint8Array(SLICE_SAMPLES) };
     const line = { ax: -2030, az: 7, bx: 1950, bz: -1990 };
     for (const [i, y] of [[0, 63], [0, 64], [0, 40], [511, -64], [300, 319]] as const) {
       const text = voxelReadout(line, s, i, y);
@@ -186,7 +186,7 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(voxelReadoutOk('hover the voxels to read a block')).toBe(false);
     expect(voxelReadoutOk('12.0 blocks from A · x 1.0 z 2.0 · offset0 1.00')).toBe(false);
     expect(voxelSummaryOk(sliceSummary(s))).toBe(true);
-    expect(voxelSummaryOk(sliceSummary({ blocks: new Uint16Array(SLICE_SAMPLES), fluid: new Uint8Array(SLICE_SAMPLES) }))).toBe(false);
+    expect(voxelSummaryOk(sliceSummary({ blocks: new Uint16Array(SLICE_SAMPLES), fluid: new Uint8Array(SLICE_SAMPLES), cave: new Uint8Array(SLICE_SAMPLES) }))).toBe(false);
     expect(voxelSummaryOk('offset 1.0 to 2.0 blocks · water on 0.0 % of the line')).toBe(false);
   });
 
@@ -194,7 +194,7 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     const blocks = new Uint16Array(SLICE_SAMPLES);
     const fluid = new Uint8Array(SLICE_SAMPLES);
     blocks[sliceIndex(3, 70)] = GRASS_BLOCK;
-    const base = voxelReadout({ ax: -2030, az: 7, bx: 1950, bz: -1990 }, { blocks, fluid }, 3, 70);
+    const base = voxelReadout({ ax: -2030, az: 7, bx: 1950, bz: -1990 }, { blocks, fluid, cave: new Uint8Array(SLICE_SAMPLES) }, 3, 70);
     expect(base.includes(' · grass_block · ')).toBe(true);
     const grass = ruleSuffix(['root', 'root.rules[1]', 'root.rules[1].then', 'root.rules[1].then.rules[3]', 'root.rules[1].then.rules[3].then',
       'root.rules[1].then.rules[3].then.rules[6]', 'root.rules[1].then.rules[3].then.rules[6].then', 'root.rules[1].then.rules[3].then.rules[6].then.rules[7]']);
@@ -226,7 +226,7 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     for (let y = -64; y <= 140; y++) blocks[sliceIndex(10, y)] = y === -64 ? BEDROCK : y === 140 ? SNOW_BLOCK : STONE;
     blocks[sliceIndex(11, 319)] = GRASS_BLOCK;
     blocks[sliceIndex(12, -64)] = BEDROCK;
-    const rgba = sliceRgba({ blocks, fluid });
+    const rgba = sliceRgba({ blocks, fluid, cave: new Uint8Array(SLICE_SAMPLES) });
     // The page reads one sample column, getImageData(i, 0, 1, 384): its 384 pixels top down.
     const column = (i: number) => Array.from({ length: 4 * 384 }, (_, k) => rgba[4 * (Math.floor(k / 4) * 512 + i) + (k % 4)]!);
     expect(groundTopRow(column(10))).toBe(319 - 140);
@@ -286,7 +286,7 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
         if (i < 100 && y > 40 && y <= 63) fluid[sliceIndex(i, y)] = WATER_SOURCE;
       }
     }
-    const flat = sliceSummary({ blocks, fluid });
+    const flat = sliceSummary({ blocks, fluid, cave: new Uint8Array(SLICE_SAMPLES) });
     expect(voxelSummaryOk(flat)).toBe(true);
     expect(mountainSummaryOk(flat), flat).toBe(false);
   });
@@ -523,8 +523,8 @@ describe('UI smoke test: the Density tab steps\' pure parts (SP3d spec §6)', ()
   });
 });
 
-/** A slice with `fill(i, y)` → [state, water] per sample i and y (air and no fluid where it returns null). */
-function slice(fill: (i: number, y: number) => readonly [number, boolean] | null): { blocks: Uint16Array<ArrayBuffer>; fluid: Uint8Array<ArrayBuffer> } {
+/** A slice with `fill(i, y)` → [state, water] per sample i and y (air and no fluid where it returns null; no cave tag). */
+function slice(fill: (i: number, y: number) => readonly [number, boolean] | null): { blocks: Uint16Array<ArrayBuffer>; fluid: Uint8Array<ArrayBuffer>; cave: Uint8Array<ArrayBuffer> } {
   const blocks = new Uint16Array(SLICE_SAMPLES);
   const fluid = new Uint8Array(SLICE_SAMPLES);
   for (let i = 0; i < 512; i++) {
@@ -535,7 +535,7 @@ function slice(fill: (i: number, y: number) => readonly [number, boolean] | null
       if (v[1]) fluid[sliceIndex(i, y)] = WATER_SOURCE;
     }
   }
-  return { blocks, fluid };
+  return { blocks, fluid, cave: new Uint8Array(SLICE_SAMPLES) };
 }
 
 /** Ground (stone, bedrock at −64) up to `ground`, water above it to 63 when `ground` < 63, and an island run [lo, hi] (grass-topped). */

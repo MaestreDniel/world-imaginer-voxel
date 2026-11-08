@@ -131,6 +131,9 @@
  * ruling R21 sets them: C6 1.25 with the master's 1.1 pending, the guards of C7 and C8, `C8.largeShare` recorded, the
  * region-size parts on quick and full), S1's row keeps `grassNoSky` beside `grassSky0`, L2's notes the real caves, R2's
  * its re-baseline with caves, and SP12's "Received from SP6a" line carries R21's hand-off of the guards' definitions.
+ * The cave-type slice field's commit (Task 42) pins item 16's §5.5 (the slice fields deliver cave type, each cave term
+ * through the family taps, the carver mask as the tag's carver kinds) and §5.6 (the cave slice at y is the Density tab's
+ * horizontal cave-type field, its square on the map; a tile layer and carver tunnels go to SP10).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1992,6 +1995,22 @@ describe('master spec amendments (SP6a §13)', () => {
     const row = text.split('\n').find((l) => l.startsWith('| Terrain |'));
     expect(row, 'no Terrain row in §5.1').toBeDefined();
     expect(row!.split('|')[2]).toContain('caves (`caves.*`)');
+  });
+
+  test('§5.5\'s slice fields deliver cave type (SP6a), each cave term and the carver mask; §5.6\'s cave slice at y is the Density tab\'s horizontal field (SP6a spec §13 item 16)', () => {
+    const lines = text.split('\n');
+    const fields = lines.find((l) => l.startsWith('  - The SP3d slice fields are '));
+    expect(fields, 'no `- The SP3d slice fields are …` line in §5.5').toBeDefined();
+    expect(fields).toContain('SP6a\'s slice fields deliver cave type (SP6a) on both planes');
+    expect(fields).toContain('(amended by SP6a)');
+    const view = lines.find((l) => l.startsWith('- **Slice view (L):**'));
+    expect(view, 'no `- **Slice view (L):**` line in §5.5').toBeDefined();
+    expect(view).toContain('each cave term (through the family taps as density nodes, SP6a)');
+    expect(view).toContain('carver mask (the cave tag\'s carver kinds in the cave type field, SP6a)');
+    const layer = lines.find((l) => l.startsWith('  - the cave slice at y'));
+    expect(layer, 'no `- the cave slice at y …` layer in §5.6').toBeDefined();
+    expect(layer).toContain('the cave slice at y: the Density tab\'s horizontal cave-type field, its square on the map (SP6a); a tile layer and carver tunnels → SP10');
+    expect(text).not.toContain('cave slice at y (final < 0 plus aquifer fluid)');
   });
 
   test('§6.4\'s U2 row covers the schema\'s U2 leaves, the caves.* leaves decided on the cave class columns (SP6a spec §13 item 20)', () => {

@@ -91,21 +91,38 @@ describe('slice job: samples (SP3a spec §5.1)', () => {
     const job = createSliceJob();
     const r = runOk(job, s);
     expect([r.blocks.length, r.fluid.length, r.blocks.buffer.byteLength, r.fluid.buffer.byteLength]).toEqual([SLICE_SAMPLES, SLICE_SAMPLES, 2 * SLICE_SAMPLES, SLICE_SAMPLES]);
+    expect([r.cave.length, r.cave.buffer.byteLength]).toEqual([SLICE_SAMPLES, SLICE_SAMPLES]);
     const wantB = new Uint16Array(SLICE_SAMPLES);
     const wantF = new Uint8Array(SLICE_SAMPLES);
+    const wantC = new Uint8Array(SLICE_SAMPLES);
     for (let i = 0; i < SLICE_POINTS; i++) {
       const [x, z] = segmentPointAt(s, i);
       for (let y = -64; y <= 319; y++) {
         wantB[(319 - y) * 512 + i] = view.block(Math.floor(x), y, Math.floor(z));
         wantF[(319 - y) * 512 + i] = view.fluid(Math.floor(x), y, Math.floor(z));
+        wantC[(319 - y) * 512 + i] = view.tag(Math.floor(x), y, Math.floor(z));
       }
     }
     expect(sameBytes(r.blocks, wantB)).toBe(true);
     expect(sameBytes(r.fluid, wantF)).toBe(true);
+    // SP6a §7.4: the cave bytes are the store's cave channel (the tag T wrote) per sample.
+    expect(sameBytes(r.cave, wantC)).toBe(true);
     // Every column is generated once (the samples of a column are contiguous) and stays resident.
     expect(job.misses).toBe(cols.length);
     expect(job.resident()).toEqual(cols);
   }, 120_000); // up to about 7 s alone with SP6a's caps (Task 8), 33 s under test:goldens' parallel metrics-quick
+  test('the coast slice holds cave tags: kinds of CAVE_KIND only, on air (dry or flooded) only (SP6a §3.2, §7.4)', () => {
+    const r = runOk(createSliceJob(), COAST);
+    let tagged = 0;
+    for (let k = 0; k < SLICE_SAMPLES; k++) {
+      const t = r.cave[k]!;
+      if (t === 0) continue;
+      tagged++;
+      expect(t).toBeLessThanOrEqual(9);
+      expect(r.blocks[k]).toBe(AIR);
+    }
+    expect(tagged).toBeGreaterThan(0);
+  });
   test('the coast slice holds bedrock at row 383, air at row 0, stone, and water sources at and below y 63', () => {
     const r = runOk(createSliceJob(), COAST);
     for (let i = 0; i < SLICE_POINTS; i++) {
@@ -139,11 +156,13 @@ describe('slice job: a range of the samples (SP3b spec §6)', () => {
     if (r === null) throw new Error('slice stopped');
     const w = to - from;
     expect([r.blocks.length, r.fluid.length, r.blocks.buffer.byteLength, r.fluid.buffer.byteLength]).toEqual([w * SLICE_ROWS, w * SLICE_ROWS, 2 * w * SLICE_ROWS, w * SLICE_ROWS]);
+    expect([r.cave.length, r.cave.buffer.byteLength]).toEqual([w * SLICE_ROWS, w * SLICE_ROWS]);
     const f = fullCoast();
     for (let y = -64; y <= 319; y++) {
       const at = sliceIndex(from, y);
       expect(sameBytes(r.blocks.subarray(slicePartIndex(from, y, from, to), slicePartIndex(from, y, from, to) + w), f.blocks.subarray(at, at + w)), `blocks y ${y}`).toBe(true);
       expect(sameBytes(r.fluid.subarray(slicePartIndex(from, y, from, to), slicePartIndex(from, y, from, to) + w), f.fluid.subarray(at, at + w)), `fluid y ${y}`).toBe(true);
+      expect(sameBytes(r.cave.subarray(slicePartIndex(from, y, from, to), slicePartIndex(from, y, from, to) + w), f.cave.subarray(at, at + w)), `cave y ${y}`).toBe(true);
     }
     const cols = columnsOf(COAST, from, to);
     expect([job.misses, job.resident()]).toEqual([cols.length, cols]);

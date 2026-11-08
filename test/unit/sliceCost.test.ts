@@ -7,6 +7,7 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import type { Params } from '../../src/core/params/schema';
 import { densityColumnCost, memoWorkCost, ruleNodeCount, rulesColumnCost, tColumnCost, workCost } from '../../src/gen/inspect/cost';
 import { evaluatedExpression, sliceColumnCorners, sliceCostOf } from '../../src/gen/inspect/fieldSlice';
+import { isRefusableField, planFieldSlice } from '../../src/workers/protocol';
 import { paramsWith } from '../harness/gen';
 import { steepDefaultTree, steepTree, terrainMuted } from './fixtures/editedTrees';
 
@@ -262,6 +263,46 @@ describe('sliceCostOf (SP3d spec §5.2; SP6a §7.4\'s memo-aware bound, rulings 
     expect(sliceCostOf(DEFAULTS, 'blocks', '', 'vertical', 32)).toBe(t);
     expect(sliceCostOf(DEFAULTS, 'rule', 'root.rules[2]', 'vertical', 128)).toBe(t + 128 * 163);
     expect(sliceCostOf(DEFAULTS, 'rule', 'root', 'vertical', 32)).toBe(t + 32 * 163);
+  });
+
+  test('caves (SP6a §7.4): n × (voxel + 64) + the chunk columns visited; vertical with K × corner, horizontal with 50 corners per visit', () => {
+    // A visit: the ColumnSample (COLUMN_SAMPLE_COST) and the carver window (32,768); on a horizontal plane also the 50
+    // corners at one y of its chunk column (50 × 1,104 at the defaults).
+    const visitV = COLUMN_SAMPLE_COST + 32768;
+    const visitH = visitV + 50 * 1104;
+    for (const n of [32, 128]) {
+      expect(sliceCostOf(DEFAULTS, 'caves', '', 'vertical', n)).toBe(n * (179 + 64) + 196 * 1104 + visitV);
+      expect(sliceCostOf(DEFAULTS, 'caves', '', 'vertical', n, 8192)).toBe(sliceCostOf(DEFAULTS, 'caves', '', 'vertical', n));
+    }
+    expect(sliceCostOf(DEFAULTS, 'caves', '', 'vertical', 128)).toBe(313_024);
+    // Horizontal: ⌈(the row's chunk columns, over every alignment) × visit / r⌉, r = max(1, ⌊16n / E⌋) rows per chunk row.
+    const rows = (n: number, e: number) => Math.max(1, Math.floor((16 * n) / e));
+    const chunks128 = [17, 33, 65, 128, 128, 128];
+    const chunks32 = [17, 32, 32, 32, 32, 32];
+    SLICE_EXTENTS.forEach((e, i) => {
+      expect(sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 128, e), `128 at ${e}`).toBe(128 * 243 + Math.ceil((chunks128[i]! * visitH) / rows(128, e)));
+      expect(sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 32, e), `32 at ${e}`).toBe(32 * 243 + Math.ceil((chunks32[i]! * visitH) / rows(32, e)));
+    });
+    expect(sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 128, 256)).toBe(287_668);
+    // It follows the configured tree's work (the stage's compile of the resolved tree), not the selection.
+    const steep = withTree(steepTree());
+    const w = memoWorkCost(evaluatedExpression(steep, 'density', ''), steep);
+    expect(sliceCostOf(steep, 'caves', '', 'vertical', 128)).toBe(128 * (w.voxel + 64) + 196 * w.corner + visitV);
+    expect(sliceCostOf(DEFAULTS, 'caves', 'root', 'vertical', 128)).toBe(313_024);
+    expect(() => sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 128)).toThrow(/extent/);
+  });
+
+  test('caves is refusable like density: the vertical draft and 128², the horizontal 128² at 256 and 512 admitted; every horizontal draft and the 128² from 1024 refused', () => {
+    expect(isRefusableField('caves')).toBe(true);
+    const refused = (cost: number, n: number, budget: number) => planFieldSlice(n, cost, 4, budget).refused;
+    expect(refused(sliceCostOf(DEFAULTS, 'caves', '', 'vertical', 32), 32, DRAFT_BUDGET)).toBe(false);
+    expect(refused(sliceCostOf(DEFAULTS, 'caves', '', 'vertical', 128), 128, REQUEST_BUDGET)).toBe(false);
+    expect(SLICE_EXTENTS.map((e) => refused(sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 128, e), 128, REQUEST_BUDGET))).toEqual([false, false, true, true, true, true]);
+    // A horizontal draft visits a chunk column per sample (a 32² draft's samples share few): refused, so the 256 and 512
+    // planes ask for the 128² slice at once (ruling R9); from 1024 nothing is drawn but the notice.
+    expect(SLICE_EXTENTS.map((e) => refused(sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 32, e), 32, DRAFT_BUDGET))).toEqual([true, true, true, true, true, true]);
+    // The 512 plane's margin: 128 × 1,027,176 of REQUEST_BUDGET.
+    expect(REQUEST_BUDGET - 128 * sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 128, 512)).toBe(2_739_200);
   });
 
   test('the costs follow the configured params: a muted tap and the noise octaves', () => {

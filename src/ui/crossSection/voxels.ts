@@ -4,17 +4,19 @@
  *   stone grey, bedrock near black, one flat colour per SP3c terrain block (SP3c spec §6) and per SP5a type (SP5a spec
  *   §1.3), water blue darkening with depth below its surface, lava's colour; the legend's block keys (every registry
  *   state in state order);
- * - the slice image: one RGBA pixel per sample of a `pool.slice` result (512 × 384, row 0 at y 319);
+ * - the slice image: one RGBA pixel per sample of a `pool.slice` result (512 × 384, row 0 at y 319), dry air with a cave
+ *   tag ≠ 0 tinted by kind in the X-ray's colours (`caveRgb`, SP6a spec §7.4, D13);
  * - the plot: sample cells over the drawer, a distance axis whose point i sits at the centre of pixel column i,
  *   and the hover mapping from a pixel to the sample (i, y) under it;
  * - the hover readout (the integer (⌊xᵢ⌋, y, ⌊zᵢ⌋), the block's canonical key and the fluid) and the summary line;
  * - the hover rule id (SP3c spec §6): one `surfaceProbe` job at a time for the hovered voxel, the latest hovered voxel
  *   wins, and the readout's ` · rule …` suffix becomes ` · rule <leaf id>` or ` · rule none` when the probe answers.
  */
-import { MIN_Y, SEA_LEVEL } from '../../core/constants';
+import { CAVE_KIND, MIN_Y, SEA_LEVEL } from '../../core/constants';
 import { MAX_Y } from '../../core/coords';
 import { JobCancelled, type SliceResult, type SurfaceProbeResult } from '../../engine/workerPool';
 import { segmentLength, segmentPointAt, type Segment } from '../../metrics/crossSection';
+import { XRAY_COLORS } from '../../render/xrayPalette';
 import { FLAT_COLORS, LAVA_COLOR } from '../../textures/flatColors';
 import { FLUID_LAVA, FLUID_WATER, fluidFalling, fluidLevel, fluidType } from '../../world/blocks/fluid';
 import { AIR, REGISTRY } from '../../world/blocks/index';
@@ -135,11 +137,26 @@ export function voxelLegend(): readonly VoxelLegendKey[] {
 
 const isWater = (state: number, fluid: number): boolean => state === AIR && fluidType(fluid) === FLUID_WATER;
 
+/** `#rrggbb` as an Rgb. */
+const hexRgb = (hex: string): Rgb => Object.freeze([parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)] as const);
+/** The cave kinds' colours by kind (0-15), the X-ray's (`XRAY_COLORS`, `render/xrayPalette.ts`). */
+const CAVE_RGB: readonly Rgb[] = Object.freeze(XRAY_COLORS.map(hexRgb));
+const KIND_MAX = Math.max(...Object.values(CAVE_KIND));
+
+/**
+ * A cave kind's colour (SP6a spec §7.4, D13: the X-ray's palette, `XRAY_COLORS`): the kinds 1-9 of `CAVE_KIND` (cheese
+ * amber, …); `unknown` for any other value (0 and the reserved 10-15 name no kind).
+ */
+export function caveRgb(kind: number): Rgb {
+  return Number.isInteger(kind) && kind >= 1 && kind <= KIND_MAX ? CAVE_RGB[kind]! : VOXEL_COLORS.unknown;
+}
+
 /**
  * The slice as an RGBA image, 512 × 384, pixel (i, row) at `sliceIndex(i, y)` (row 0 is y 319). A water voxel's depth
  * counts from the top of its run of water in the sample column (the voxel under air or a block), which equals the
  * harness's `worldSurfaceWG − 1 − y` except under an overhang (SP3b's T fills air under stone near the water line) and in
- * a flooded cave under the water's floor (SP6a).
+ * a flooded cave under the water's floor (SP6a). Dry air (no fluid) whose cave byte is a kind (≠ 0) takes the kind's
+ * colour (`caveRgb`, SP6a spec §7.4: the cave air of the slice's proto set, as T tagged it); other air stays sky.
  */
 export function sliceRgba(s: SliceResult): Uint8ClampedArray<ArrayBuffer> {
   const out = new Uint8ClampedArray(4 * SLICE_SAMPLES);
@@ -154,7 +171,8 @@ export function sliceRgba(s: SliceResult): Uint8ClampedArray<ArrayBuffer> {
       const water = isWater(state, fluid);
       if (water && !wet) surface = y;
       wet = water;
-      const c = voxelRgb(state, fluid, water ? surface - y : 0);
+      const kind = s.cave[k]!;
+      const c = kind !== 0 && state === AIR && fluidType(fluid) === 0 ? caveRgb(kind) : voxelRgb(state, fluid, water ? surface - y : 0);
       out[4 * k] = c[0];
       out[4 * k + 1] = c[1];
       out[4 * k + 2] = c[2];

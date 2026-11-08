@@ -82,7 +82,7 @@ let sink = 0;
  * the handler's path (`runFieldSlice`: the BAD_ARGS checks and the part bound on `sliceCostOf`, recomputed from the
  * configured params, then `gen/inspect/fieldSlice.ts`'s evaluation), on a fresh GenContext per slice (cold caches: the
  * case right after an edit; the parts share it, as one worker's configured context). A refused part or an empty reply
- * throws, so a row can never time a BAD_ARGS. The density field reads no T column.
+ * throws, so a row can never time a BAD_ARGS. The density, node and caves fields read no T column.
  */
 const NO_T_COLUMNS = (): never => { throw new Error('a density slice reads no T column'); };
 const NEVER = (): boolean => false;
@@ -93,11 +93,11 @@ function slice(params: Params, spec: FieldSliceSpec, ranges: readonly (readonly 
     const msg: FieldSliceMsg = { ...spec, type: 'fieldSlice', jobId: 0, epoch: 0, scope: 0, from, to };
     const r = runFieldSlice(ctx, msg, NEVER, NO_T_COLUMNS);
     if (r === null || 'badArgs' in r) throw new Error(`slice part [${from}, ${to}) refused: ${r === null ? 'stopped' : r.badArgs}`);
-    s += new Float64Array(r.msg.values)[0]!;
+    s += r.msg.field === 'caves' ? new Uint8Array(r.msg.values)[0]! : new Float64Array(r.msg.values)[0]!;
   }
   return s;
 }
-/** The pool's split at pool size 1 of a whole n × n density slice (`planFieldSlice` with REQUEST_BUDGET): its ranges. */
+/** The pool's split at pool size 1 of a whole n × n density or caves slice (`planFieldSlice` with REQUEST_BUDGET): its ranges. */
 function poolOfOne(params: Params, spec: FieldSliceSpec): readonly (readonly [number, number])[] {
   const plan = planFieldSlice(spec.n, sliceCostOf(params, spec.field, spec.path, spec.plane, spec.n, spec.plane === 'horizontal' ? spec.extent : undefined), 1, REQUEST_BUDGET);
   if (plan.refused) throw new Error(`the ${spec.plane} ${spec.n}² slice is refused (limit ${plan.limit})`);
@@ -669,6 +669,14 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   expect(xc, 'mesh.xray: one probe, one warm-up and 1024 timed calls, each section timed once').toBe(1 + MESH_RUN.warmupIterations + MESH_RUN.iterations);
   expect(xrayQuads, 'mesh.xray meshes quads').toBeGreaterThan(0);
 
+  // SP6a §7.4, §10.5 (D13): slice.caves128 — the horizontal 128² `caves` slice, 256 blocks across (a step of 2 blocks:
+  // 8 rows share each chunk row's columns), at y 30 centred on (0, 0), measured last as the slice rows are (9 timed runs
+  // after one warm-up, a fresh GenContext per slice: its ColumnSamples, corners and carver paths cold), split as the
+  // pool of one worker splits it. Gated p50 ≤ SLICE_CAVES_P50_MAX_MS; a miss makes the slice redraw on release (D13).
+  const cSpec: FieldSliceSpec = { plane: 'horizontal', cx: 0, cz: 0, extent: 256, y: 30, n: 128, field: 'caves', path: '' };
+  const cRanges = poolOfOne(DEFAULTS, cSpec);
+  const cRun = await measure('slice.caves128', 1, () => { sink += slice(DEFAULTS, cSpec, cRanges); }, 9);
+
   // SP6a D25's prototype (Task 14; spec §1.6, §1.4, §3.3): figures printed beside the rows, measured after every row and
   // outside their timing. On terrain.real's first D25_COLUMNS candidate columns, each on a GenContext and a store of
   // their own (so no cache is warm from the rows): the column's T time (fillColumnT, as the row runs it) and the cave
@@ -878,6 +886,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   );
   console.log(`carver.paths ${ms(pathsRun)} (one worm, one ravine and one underground worm per call; each alone: ${perKind.join('; ')})`);
   console.log(`mesh.xray ${ms(xrayRun)} (meshXray alone on mesh.section's ${meshSections.length} sections; ${xc} calls, ${xrayQuads} pass-3 quads; mesh.section with pass 3: p50 ${meshRun.latency.p50.toFixed(3)} ms)`);
+  console.log(`slice.caves128 ${ms(cRun)} (${cRanges.length} parts at pool size 1: ${JSON.stringify(cRanges)}; slice.vertical128 ${ms(vRun)})`);
   const capLowered = pasteLit.run.latency.p50 > D31_LIT_P50_MAX_MS || pasteMax.run.latency.p99 > D31_MAX_P99_MAX_MS;
   console.log(
     `D31: paste.maxLit p50 ${pasteLit.run.latency.p50.toFixed(3)} ms (lowers above ${D31_LIT_P50_MAX_MS}), paste.max p99 ${pasteMax.run.latency.p99.toFixed(3)} ms `
@@ -890,7 +899,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
     islandsP50: islandsRun.latency.p50, islandsP99: islandsRun.latency.p99,
     lightP50: lightRun.latency.p50, lightP99: lightRun.latency.p99, meshP50: meshRun.latency.p50, meshP99: meshRun.latency.p99,
     relightP95: relightRun.latency.p99, persistFlushP99: persistRun.latency.p99,
-    pasteMaxP99: pasteMax.run.latency.p99, pasteLitP99: pasteLit.run.latency.p99,
+    pasteMaxP99: pasteMax.run.latency.p99, pasteLitP99: pasteLit.run.latency.p99, sliceCaves128P50: cRun.latency.p50,
   }), 'absolute gates').toEqual([]);
   expect(Number.isFinite(sink)).toBe(true);
   if (process.env.BENCH_RECORD === '1') {

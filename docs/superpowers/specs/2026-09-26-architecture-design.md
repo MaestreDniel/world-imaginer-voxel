@@ -1362,8 +1362,8 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from th
   - Slice preview: vertical along the cut line (XY@z and ZY@x are its axis-aligned cases) and XZ@y with extent 256-8192; a 32² draft, then 128²; diverging colormap with a 0-contour and a sea-level line.
   - Histogram: p1/p50/p99, sd and % < 0.
   - A mute toggle per tap (SP3d); up to 3 pinned slices side by side, each keeping its own plane, field and node and re-rendered on every edit (SP3d; its cut line, not taken, so nothing moved to SP10; amended by SP3d).
-  - The SP3d slice fields are the final density, any density node, and blocks and rule masks on vertical planes; the other fields arrive with their SPs. The hover value comes from the `fieldProbe` worker job.
-- **Slice view (L):** any 3D field (final density, each cave term, carver mask, aquifer level and status, biome3d, stone depth, blocks, cave-type tint, light for loaded columns). It re-renders on param edits.
+  - The SP3d slice fields are the final density, any density node, and blocks and rule masks on vertical planes; SP6a's slice fields deliver cave type (SP6a) on both planes: each voxel's cave kind in the X-ray's colours, other solid pale grey and open air the sky colour, with a legend; the other fields arrive with their SPs (amended by SP6a). The hover value comes from the `fieldProbe` worker job.
+- **Slice view (L):** any 3D field (final density, each cave term (through the family taps as density nodes, SP6a), carver mask (the cave tag's carver kinds in the cave type field, SP6a), aquifer level and status, biome3d, stone depth, blocks, cave-type tint, light for loaded columns). It re-renders on param edits.
 - **Probe:** at the crosshair, map hover or slice hover. It shows climate, shape, every tap, carver hit, aquifer cell / level / status, biome 2D and 3D, the **surface-rule branch path taken**, light and stage hashes. A button copies it as JSON. SP3c: `surfaceProbe(sc, x, y, z)` returns the voxel's state and the rule ids from `root` to the leaf that yielded it (`[]` for air, water and unmatched stone), walking the reference evaluator, never the fast path; the branch path reaches the `?map` cross-section's Voxels hover through the `surfaceProbe` worker job, which shows the leaf's id (amended by SP3c).
 - **JSON editors** (textarea plus validation) cover surface rules, placed features and structure sets/pools. A visual editor is out of scope.
 
@@ -1375,7 +1375,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from th
   - biome, shaded relief (surfaceEst), rivers, lakes;
   - raw T/H/C/E/W/PV/R;
   - offset, σ, jag; `islandMask`, the floating_islands cluster mask (shape stage; amended by SP3e);
-  - cave slice at y (final < 0 plus aquifer fluid), cave-biome slice;
+  - the cave slice at y: the Density tab's horizontal cave-type field, its square on the map (SP6a); a tile layer and carver tunnels → SP10 (amended by SP6a); the cave-biome slice;
   - structure starts and pieces, carver tunnels;
   - spawn, player with view cone, grid, column-status heatmap, saved places per saved world (SP5b: a section of each saved world's map, one map per saved world; coloured dots; a Places tab; B in the world and '+ Add at the pin' on the map).
 - **Hover** uses a sampler cached per epoch. **Click** teleports (3.7) (SP4c: in the world's map a plain click teleports, except while the cut tool is armed; Shift+click sets the pin or the slice centre; on `?map` a click sets the pin).

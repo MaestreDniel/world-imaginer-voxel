@@ -5,7 +5,7 @@ import {
   absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, CALIBRATION_SPREAD_MAX, calibrationSpread, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS,
   D31_LIT_P50_MAX_MS, D31_MAX_P99_MAX_MS, gateFailures, ISLANDS_COLUMNS, ISLANDS_P50_MAX_MS, ISLANDS_P99_MAX_MS, ISLANDS_RUN, KILL_RATIO_MAX,
   LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, LIGHT_RUN, MESH_P50_MAX_MS, MESH_P99_MAX_MS, MESH_RUN, measureBracketed, P1_MAX_REGRESSION, parseBenchExempt,
-  PASTE_LIT_P99_MAX_MS, PASTE_LIT_RUN, PASTE_MAX_P99_MAX_MS, PASTE_RUN, PERSIST_FLUSH_P99_MAX_MS, PERSIST_RUN, ratioOf, RELIGHT_P95_MAX_MS, RELIGHT_RUN, ROW_ATTEMPTS_MAX, SESSION_COMMIT_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS,
+  PASTE_LIT_P99_MAX_MS, PASTE_LIT_RUN, PASTE_MAX_P99_MAX_MS, PASTE_RUN, PERSIST_FLUSH_P99_MAX_MS, PERSIST_RUN, ratioOf, RELIGHT_P95_MAX_MS, RELIGHT_RUN, ROW_ATTEMPTS_MAX, SESSION_COMMIT_P50_MAX_MS, SLICE_CAVES_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS,
   CARVER_PATH_SOURCES, spiralCells, TERRAIN_WARM_RUN, WARM_SPIRAL, type Baselines,
 } from '../bench/gates';
 
@@ -21,6 +21,8 @@ test('constants', () => {
   expect([ISLANDS_P50_MAX_MS, ISLANDS_P99_MAX_MS]).toEqual([14.5, 26.5]);
   // SP3d §9 (master §7): the vertical 128² slice, a slice part at PART_BUDGET, a slider commit with two capped trees.
   expect([SLICE_V128_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SESSION_COMMIT_P50_MAX_MS]).toEqual([300, 250, 4]);
+  // SP6a §7.4, §10.5 (D13): the horizontal 128² caves slice, 256 blocks across, p50 ≤ 300 ms.
+  expect(SLICE_CAVES_P50_MAX_MS).toBe(300);
   // SP4a §9.3 (master §7's L and Mesh rows): one light job per column, one non-trivial section's copy and mesh.
   expect([LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P99_MAX_MS]).toEqual([4, 8, 1.0, 2.5]);
   // SP5a §6.2: one edit's relight, p95 ≤ 3 ms (gated through p99).
@@ -36,7 +38,7 @@ test('constants', () => {
 /** Latencies within every absolute gate, at their bounds. */
 const AT_GATES = {
   columnP50: 0.7, columnP95: 1.2, terrainP50: 13, terrainP99: 20, sliceV128P50: 300, slicePartP50: 250, sessionCommitP50: 4, islandsP50: 14.5, islandsP99: 26.5,
-  lightP50: 4, lightP99: 8, meshP50: 1.0, meshP99: 2.5, relightP95: 3, persistFlushP99: 2, pasteMaxP99: 800, pasteLitP99: 1600,
+  lightP50: 4, lightP99: 8, meshP50: 1.0, meshP99: 2.5, relightP95: 3, persistFlushP99: 2, pasteMaxP99: 800, pasteLitP99: 1600, sliceCaves128P50: 300,
 };
 
 test('absolute gates: column p50 / p95 (P1, SP2a) and the real T column p50 (SP3b §10; 10 ms since SP6a, 13 ms since R14), inclusive', () => {
@@ -75,6 +77,18 @@ test('absolute gates (SP3d §9): slice.vertical128 ≤ 300 ms, slice.partWorst �
   ]);
   expect(absoluteGateFailures({ ...AT_GATES, slicePartP50: 251 })).toEqual(['slice.partWorst p50 251.000 ms > 250 ms']);
   expect(absoluteGateFailures({ ...AT_GATES, sliceV128P50: 187, slicePartP50: 65, sessionCommitP50: 0.2 })).toEqual([]);
+});
+
+test('absolute gate (SP6a §7.4, §10.5): slice.caves128 p50 ≤ 300 ms (SLICE_CAVES_P50_MAX_MS), inclusive, after the earlier rows (ruling P51)', () => {
+  expect(absoluteGateFailures({ ...AT_GATES, sliceCaves128P50: 300 })).toEqual([]);
+  expect(absoluteGateFailures({ ...AT_GATES, sliceCaves128P50: 300.1 })).toEqual(['slice.caves128 p50 300.100 ms > 300 ms']);
+  expect(absoluteGateFailures({ ...AT_GATES, sliceCaves128P50: 120 })).toEqual([]);
+  // Its own line, after the maximum pastes'; slice.vertical128's gate does not cover it.
+  expect(absoluteGateFailures({ ...AT_GATES, sliceV128P50: 301, pasteLitP99: 1601, sliceCaves128P50: 301 })).toEqual([
+    'slice.vertical128 p50 301.000 ms > 300 ms',
+    'paste.maxLit p99 1601.000 ms > 1600 ms',
+    'slice.caves128 p50 301.000 ms > 300 ms',
+  ]);
 });
 
 test('absolute gate (SP3e §7): terrain.islands p50 ≤ ISLANDS_P50_MAX_MS (TERRAIN_P50_MAX_MS until R14: 10 ms since SP6a; 14.5 ms since R14) on cluster columns, inclusive, after the slice rows', () => {
@@ -267,7 +281,7 @@ test('parseBenchExempt: a comma-separated list of BENCH_ROWS names, empty when u
   expect(parseBenchExempt([...BENCH_ROWS].reverse().join(','))).toEqual([...BENCH_ROWS].reverse());
 });
 
-test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, SP5b\'s persist.flush, SP5c\'s paste.max and paste.maxLit, then SP6a\'s terrain.caves.warm, carver.paths and mesh.xray, with SP6a\'s density.cornerInlined right after density.corner', () => {
+test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, SP5b\'s persist.flush, SP5c\'s paste.max and paste.maxLit, then SP6a\'s terrain.caves.warm, carver.paths, mesh.xray and slice.caves128, with SP6a\'s density.cornerInlined right after density.corner', () => {
   expect(BENCH_ROWS).toEqual([
     'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
     'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
@@ -275,17 +289,18 @@ test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner a
     'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'surface.column',
     'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
     'light.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
-    'terrain.caves.warm', 'carver.paths', 'mesh.xray',
+    'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128',
   ]);
-  expect(BENCH_ROWS.slice(-9, -5)).toEqual(['light.column', 'mesh.section', 'relight.edit', 'persist.flush']);
+  expect(BENCH_ROWS.slice(-10, -6)).toEqual(['light.column', 'mesh.section', 'relight.edit', 'persist.flush']);
   expect(BENCH_ROWS.slice(BENCH_ROWS.indexOf('density.corner'), BENCH_ROWS.indexOf('density.corner') + 3)).toEqual(['density.corner', 'density.cornerInlined', 'terrain.real']);
   expect(BENCH_ROWS).not.toContain('terrain.provisional');
   expect(new Set(BENCH_ROWS).size).toBe(BENCH_ROWS.length);
 });
 
-test('`BENCH_ROWS` ends `\'relight.edit\', \'persist.flush\', \'paste.max\', \'paste.maxLit\'`, then SP6a §10.5\'s `\'terrain.caves.warm\', \'carver.paths\', \'mesh.xray\'` (SP5b §6.2 appends one flush\'s synchronous part, SP5c §10.3 the two maximum pastes, SP6a §10.5 the streaming T, the carver paths and the X-ray pass)', () => {
-  expect(BENCH_ROWS.slice(-7, -3)).toEqual(['relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit']);
-  expect(BENCH_ROWS.slice(-3)).toEqual(['terrain.caves.warm', 'carver.paths', 'mesh.xray']);
+test('`BENCH_ROWS` ends `\'relight.edit\', \'persist.flush\', \'paste.max\', \'paste.maxLit\'`, then SP6a §10.5\'s `\'terrain.caves.warm\', \'carver.paths\', \'mesh.xray\', \'slice.caves128\'` (SP5b §6.2 appends one flush\'s synchronous part, SP5c §10.3 the two maximum pastes, SP6a §10.5 the streaming T, the carver paths, the X-ray pass and, measured last, the caves slice)', () => {
+  expect(BENCH_ROWS.slice(-8, -4)).toEqual(['relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit']);
+  expect(BENCH_ROWS.slice(-4)).toEqual(['terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128']);
+  expect(BENCH_ROWS.at(-1)).toBe('slice.caves128');
 });
 
 test('test/baselines.json records every bench row, so none is silently ungated', () => {

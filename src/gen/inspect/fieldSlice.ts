@@ -25,9 +25,10 @@
  * ruling R14), and its corner cache keeps each corner of the current chunk column once; `blocks` (the T stage's state and fluid, read from
  * an injected T-column source, since gen cannot reach the worker's store) and `rule` (1 when the voxel's rule path
  * passes through the selected rule, or the selected condition holds there; 0 otherwise; `SLICE_RULE_NA` on voxels the
- * rules never evaluate) on vertical planes only. A part covers the sample columns [from, to) and holds each sample
- * column's n samples in row order (index (c − from)·n + k), so parts concatenate into the whole. `stop()` is polled
- * once per sample. `probeField` evaluates one voxel exactly as a slice sample (full ColumnSamples, which the corner
+ * rules never evaluate) on vertical planes only; `caves` (SP6a spec §7.4, D13: the cave type, both planes) through
+ * `caveTagBatch` on the stage's compile, one chunk column at a time. A part covers the sample columns [from, to) and
+ * holds each sample column's n samples in row order (index (c − from)·n + k), so parts concatenate into the whole.
+ * `stop()` is polled once per sample (once per chunk column the part visits for `caves`). `probeField` evaluates one voxel exactly as a slice sample (full ColumnSamples, which the corner
  * samples equal bit for bit), polling `stop()` before acquiring its column and before evaluating. The DensityReferences
  * are memoised per GenContext: one for `density`, and an LRU of 8 node paths for `node`.
  *
@@ -45,6 +46,7 @@ import type { Params } from '../../core/params/schema';
 import type { ColumnView } from '../../world/store/api';
 import { newPointRecord, samplePoint, type ColumnPoint, type PointRecord } from '../column/columnPoint';
 import { buildCornerSample, newColumnSample, type ColumnSample, type SampleField } from '../column/columnStage';
+import { caveTagBatch } from '../caves/tags';
 import type { GenContext } from '../context';
 import { EXPR_CHILD_KEYS, type DensityExpr, type Expr } from '../density/expr';
 import { createCornerMemo, createDensityReference, type DensityReference } from '../density/reference';
@@ -79,6 +81,7 @@ const PROBE_COLUMN = surfaceProbeColumn;
 const MEMO_WORK = memoWorkCost;
 const T_COLUMN_COST = tColumnCost;
 const RULE_NODES = ruleNodeCount;
+const CAVE_BATCH = caveTagBatch;
 
 /** A line point (xᵢ, zᵢ) in blocks. */
 export type SlicePoint = readonly [x: number, z: number];
@@ -264,11 +267,11 @@ export function createCornerSampler(ctx: GenContext, withSteep: boolean): Corner
 // Field evaluation (§4.1, §5.1, §5.3)
 
 /** A slice field (§4.1): `node` is the `selected` field on a density node, `rule` on a rule or condition. */
-export type SliceField = 'density' | 'node' | 'blocks' | 'rule';
+export type SliceField = 'density' | 'node' | 'blocks' | 'rule' | 'caves';
 /** The fields `probeField` answers (§5.3). */
 export type ProbeField = 'density' | 'node' | 'rule';
 
-/** One part of a slice: the plane, the field, the node path inside its leaf ('' for density and blocks), [from, to). */
+/** One part of a slice: the plane, the field, the node path inside its leaf ('' for density, blocks and caves), [from, to). */
 export interface FieldSliceRequest {
   readonly geometry: SliceGeometry;
   readonly field: SliceField;
@@ -285,12 +288,14 @@ export type TColumnSource = (cx: number, cz: number, stop: () => boolean) => Col
 
 /**
  * A part's values, each sample column's n samples in row order at (c − from)·n + k: Float64 values for `density` and
- * `node`; u16 block states plus u8 fluid for `blocks`; u8 for `rule` (0, 1 or `SLICE_RULE_NA`).
+ * `node`; u16 block states plus u8 fluid for `blocks`; u8 for `rule` (0, 1 or `SLICE_RULE_NA`); u8 for `caves` (0 open
+ * air, the cave kinds 1-9, `CAVE_SLICE_SOLID` other solid: `caveTagBatch`).
  */
 export type FieldSliceValues =
   | { readonly field: 'density' | 'node'; readonly values: Float64Array<ArrayBuffer>; readonly fluid: null }
   | { readonly field: 'blocks'; readonly values: Uint16Array<ArrayBuffer>; readonly fluid: Uint8Array<ArrayBuffer> }
-  | { readonly field: 'rule'; readonly values: Uint8Array<ArrayBuffer>; readonly fluid: null };
+  | { readonly field: 'rule'; readonly values: Uint8Array<ArrayBuffer>; readonly fluid: null }
+  | { readonly field: 'caves'; readonly values: Uint8Array<ArrayBuffer>; readonly fluid: null };
 
 /** A DensityReference with the way a horizontal plane samples its expression. */
 interface RefEntry {
@@ -353,13 +358,14 @@ export function nodeReferenceOf(ctx: GenContext, path: string): DensityReference
 
 /**
  * Why `field` at `path` has no slice or probe on `plane` in `ctx`, or null (the worker's BAD_ARGS, §5.1): `blocks` and
- * `rule` exist on vertical planes only; `density` and `blocks` take the path ''; `node` a path naming a node of the
- * source tree `density.defs` (own properties only); `rule` the id of a rule or condition of `surface.rules`.
+ * `rule` exist on vertical planes only; `density`, `blocks` and `caves` (SP6a spec §7.4, both planes) take the path '';
+ * `node` a path naming a node of the source tree `density.defs` (own properties only); `rule` the id of a rule or
+ * condition of `surface.rules`.
  */
 export function fieldSliceProblem(ctx: GenContext, field: SliceField, path: string, plane: SliceGeometry['plane']): string | null {
   if ((field === 'blocks' || field === 'rule') && plane !== 'vertical') return `field ${field} has no ${plane} slice`;
   switch (field) {
-    case 'density': case 'blocks':
+    case 'density': case 'blocks': case 'caves':
       return path === '' ? null : `field ${field} takes no node path (got ${JSON.stringify(path)})`;
     case 'node':
       try {
@@ -393,7 +399,8 @@ function ruleValue(sc: SurfaceContext, node: RuleNodeRef, id: string, c: Surface
  * 0 ≤ from < to ≤ n, a `fieldSliceProblem`, a vertical point outside the window, or `blocks` without `tColumns`.
  * Vertical `density`/`node` samples read the ColumnCache's ColumnSample of each chunk column; horizontal ones corner
  * samples memoised over this part (or full samples, `horizontalSampling`); `rule` the SurfaceContext's probe column, whose
- * build polls `stop()` too (`surfaceProbeColumn`'s density fill).
+ * build polls `stop()` too (`surfaceProbeColumn`'s density fill); `caves` visits its samples grouped by chunk column
+ * (`caveTagBatch`), polling `stop()` before each.
  */
 export function evaluateFieldSlice(ctx: GenContext, req: FieldSliceRequest, stop: () => boolean, tColumns?: TColumnSource): FieldSliceValues | null {
   const g = req.geometry;
@@ -461,6 +468,47 @@ export function evaluateFieldSlice(ctx: GenContext, req: FieldSliceRequest, stop
           values[base + k] = ref.voxel(s, x, y, z, undefined, memo);
         }
       }
+    }
+    return { field, values, fluid: null };
+  }
+
+  if (field === 'caves') {
+    // SP6a spec §7.4: the stage's own compile (`sc.density`, as T), through `caveTagBatch` one chunk column at a time:
+    // the part's samples in row order, then their indices sorted by chunk column, each column's run copied into the
+    // scratch, evaluated, and its codes written back; stop() is polled before each column.
+    const xv = new Int32Array(size), yv = new Int32Array(size), zv = new Int32Array(size);
+    const keys = new Float64Array(size);
+    const order = new Int32Array(size);
+    for (let c = from; c < to; c++) {
+      const base = (c - from) * n;
+      for (let k = 0; k < n; k++) {
+        const [x, y, z] = g.plane === 'vertical' ? sliceSampleVoxel(g, c, k) : [xs[k]!, g.y, horizontalCoord(g.cz, g.extent, c, n)];
+        const q = base + k;
+        xv[q] = x;
+        yv[q] = y;
+        zv[q] = z;
+        keys[q] = ((x >> 4) + 32768) * 65536 + ((z >> 4) + 32768);
+        order[q] = q;
+      }
+    }
+    order.sort((a, b) => keys[a]! - keys[b]! || a - b);
+    const values = new Uint8Array(size);
+    const bx = new Int32Array(size), by = new Int32Array(size), bz = new Int32Array(size);
+    const codes = new Uint8Array(size);
+    const dc = sc.density;
+    for (let t = 0; t < size;) {
+      if (stop()) return null;
+      const key = keys[order[t]!]!;
+      let m = 0;
+      for (let u = t; u < size && keys[order[u]!] === key; u++, m++) {
+        const q = order[u]!;
+        bx[m] = xv[q]!;
+        by[m] = yv[q]!;
+        bz[m] = zv[q]!;
+      }
+      CAVE_BATCH(dc, bx.subarray(0, m), by.subarray(0, m), bz.subarray(0, m), codes.subarray(0, m));
+      for (let u = 0; u < m; u++) values[order[t + u]!] = codes[u]!;
+      t += m;
     }
     return { field, values, fluid: null };
   }
@@ -593,16 +641,64 @@ export function sliceColumnCorners(plane: SliceGeometry['plane'], n: number, ext
 }
 
 /**
+ * The most distinct chunk columns a horizontal row of n samples on a square of side `extent` crosses, over every
+ * alignment of the square to the chunk grid (its west edge mod 16): n when each sample lies in a chunk column of its own.
+ */
+function rowChunks(extent: number, n: number): number {
+  let most = 0;
+  for (let o = 0; o < 16; o++) {
+    let count = 0;
+    let last = Number.NaN;
+    for (let i = 0; i < n; i++) {
+      const c = (o + Math.floor(((2 * i + 1) * extent) / (2 * n))) >> 4;
+      if (c !== last) { count++; last = c; }
+    }
+    if (count > most) most = count;
+  }
+  return most;
+}
+
+/**
+ * The `caves` field's calibration (SP6a spec §7.4, D13; measured in Task 42 on the reference machine, a 128² plane
+ * 256 blocks across at about 1 ms per chunk column, one thread): one sample's tag beyond the tree's voxel work (its tap
+ * reads, or the carver path list's scan of `carvedAt`); one chunk column's carver window (its 23 × 23 sources' rolls
+ * and the path list built, about 0.4 ms), beside its ColumnSample (`COLUMN_SAMPLE_COST`); the corners one chunk column
+ * of a horizontal plane at one y reads (its 5 × 5 corners at 2 layers).
+ */
+const CAVE_SAMPLE_COST = 64;
+const CARVER_WINDOW_COST = 32768;
+const PLANE_CORNERS = 50;
+
+/**
+ * The `caves` field's acquisition per sample column (SP6a spec §7.4): the chunk columns it visits, each made current
+ * once per part (`caveTagBatch`): its ColumnSample and the carver window, plus on a horizontal plane the corners the
+ * plane reads there. Vertical: one chunk column (a neighbouring sample column often shares it: counted in each).
+ * Horizontal: the row's chunk columns (`rowChunks`) shared by the r = max(1, ⌊16n / E⌋) rows of one chunk row, so
+ * ⌈rowChunks × visit / r⌉. The density-top scans of wet positions are not counted (an estimate, as §7.4's).
+ */
+function caveAcquisition(cornerWork: number, plane: SliceGeometry['plane'], n: number, extent?: number): number {
+  if (plane === 'vertical') return COLUMN_COST + CARVER_WINDOW_COST;
+  const e = extentProblem(extent ?? Number.NaN);
+  if (e !== null) throw new RangeError(`sliceCostOf: ${e}`);
+  const visit = satCost(COLUMN_COST + CARVER_WINDOW_COST + satCost(PLANE_CORNERS * cornerWork));
+  const rows = Math.max(1, Math.floor((16 * n) / extent!));
+  return satCost(Math.ceil(satCost(rowChunks(extent!, n) * visit) / rows));
+}
+
+/**
  * The work-bound cost of one sample column of a slice (§5.2): its evaluation plus its acquisition, saturating at 2^31.
  * `density` / `node`: the evaluated expression's `memoWorkCost` (SP6a spec §7.4, the reference's corner memo),
  * n × voxel + K × corner with K = `sliceColumnCorners(plane, n, extent)`, so each def and each interpolated child is
  * counted once per distinct corner the sample column reads; the acquisition, vertical `COLUMN_SAMPLE_COST` per column,
  * horizontal n × `CORNER_SAMPLE_COST`, `CORNER_STEEP_COST` when the expression reads `col steep`, or `COLUMN_SAMPLE_COST`
  * when it takes full samples (`sliceAcquisitionCost`). `blocks`: one T column (`tColumnCost`); `rule`: the same plus
- * n × the rule tree's node count. The UI passes it to the pool and the worker recomputes it from its configured params.
+ * n × the rule tree's node count. `caves` (SP6a spec §7.4, refusable like `density`): the stage's compile of the resolved
+ * tree, so with the `density` field's `memoWorkCost` w, n × (w.voxel + one sample's tag), plus on a vertical plane
+ * K × w.corner as `density`'s, plus `caveAcquisition` (the chunk columns visited: ColumnSample, carver window, and on a
+ * horizontal plane its corners). The UI passes it to the pool and the worker recomputes it from its configured params.
  * `extent` is the horizontal square's side (ignored on a vertical plane). Throws a RangeError for n ∉ SLICE_NS, a
- * horizontal density or node slice without an extent of SLICE_EXTENTS, `blocks` / `rule` on a horizontal plane, and as
- * `evaluatedExpression` for a bad node path.
+ * horizontal density, node or caves slice without an extent of SLICE_EXTENTS, `blocks` / `rule` on a horizontal plane,
+ * and as `evaluatedExpression` for a bad node path.
  */
 export function sliceCostOf(params: Params, field: SliceField, path: string, plane: SliceGeometry['plane'], n: number, extent?: number): number {
   checkN(n);
@@ -613,6 +709,12 @@ export function sliceCostOf(params: Params, field: SliceField, path: string, pla
       const w = MEMO_WORK(e, params);
       const k = sliceColumnCorners(plane, n, extent);
       return satCost(satCost(satCost(n * w.voxel) + satCost(k * w.corner)) + acquisitionOf(e, plane, n));
+    }
+    case 'caves': {
+      const w = MEMO_WORK(evaluatedExpression(params, 'density', ''), params);
+      const voxels = satCost(n * satCost(w.voxel + CAVE_SAMPLE_COST));
+      const corners = plane === 'vertical' ? satCost(sliceColumnCorners(plane, n) * w.corner) : 0;
+      return satCost(satCost(voxels + corners) + caveAcquisition(w.corner, plane, n, extent));
     }
     case 'blocks': case 'rule': {
       if (plane !== 'vertical') throw new RangeError(`sliceCostOf: field ${field} has no ${plane} slice`);

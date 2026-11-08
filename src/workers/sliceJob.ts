@@ -15,6 +15,9 @@
  * never holds two columns of one torus record and `claimColumn` never throws `SlotBusy`. A stopped column is freed
  * by `fillColumnT` and not inserted; the run returns null.
  *
+ * SP6a (spec §7.4): each sample also carries the proto set's cave byte (the store's cave channel, the cave kind T wrote,
+ * §3.3), which the Cross-section's Voxels mode tints air with.
+ *
  * SP3d (spec §5.1): `column` hands out one column's proto view from the same store and LRU, the T-column source of the
  * fieldSlice job's `blocks` field (gen's evaluation reads the view, `gen/inspect/fieldSlice.ts`).
  */
@@ -47,12 +50,13 @@ export const SLICE_MAX_BYTE_BYTES = 16 * MiB;
 export const SLICE_LRU_COLUMNS = 64;
 
 /**
- * The voxels of samples [from, to) of a slice: (to − from)·SLICE_ROWS block states and fluid bytes, sample (i, y) at
- * `slicePartIndex(i, y, from, to)` (`sliceIndex(i, y)` for the whole line).
+ * The voxels of samples [from, to) of a slice: (to − from)·SLICE_ROWS block states, fluid bytes and cave bytes (the cave
+ * kind, SP6a spec §3.3), sample (i, y) at `slicePartIndex(i, y, from, to)` (`sliceIndex(i, y)` for the whole line).
  */
 export interface SliceData {
   readonly blocks: Uint16Array<ArrayBuffer>;
   readonly fluid: Uint8Array<ArrayBuffer>;
+  readonly cave: Uint8Array<ArrayBuffer>;
 }
 
 export interface SliceJob {
@@ -94,9 +98,10 @@ export function createSliceJob(): SliceJob {
   let lruEpoch: number | null = null;
   let misses = 0;
   let hits = 0;
-  /** The current column's 24 proto block and fluid sections (a dense view or the uniform value). */
+  /** The current column's 24 proto block, fluid and cave sections (a dense view or the uniform value). */
   const secBlocks: Array<Uint16Array | number> = new Array<Uint16Array | number>(24).fill(0);
   const secFluid: Array<Uint8Array | number> = new Array<Uint8Array | number>(24).fill(0);
+  const secCave: Array<Uint8Array | number> = new Array<Uint8Array | number>(24).fill(0);
 
   const drop = (st: VoxelStore, key: number): void => {
     const c = lru.get(key)!;
@@ -142,6 +147,7 @@ export function createSliceJob(): SliceJob {
     for (let sy = 0; sy < 24; sy++) {
       secBlocks[sy] = v.sectionBlocks(sy);
       secFluid[sy] = v.sectionFluid(sy);
+      secCave[sy] = v.sectionCave(sy);
     }
     return true;
   };
@@ -168,6 +174,7 @@ export function createSliceJob(): SliceJob {
       const w = to - from;
       const blocks = new Uint16Array(w * ROWS);
       const fluid = new Uint8Array(w * ROWS);
+      const cave = new Uint8Array(w * ROWS);
       let curCx = 0;
       let curCz = 0;
       let loaded = false;
@@ -188,14 +195,16 @@ export function createSliceJob(): SliceJob {
         for (let sy = 0; sy < 24; sy++) {
           const b = secBlocks[sy]!;
           const f = secFluid[sy]!;
+          const cv = secCave[sy]!;
           let at = (383 - 16 * sy) * w + (i - from);
           for (let ly = 0; ly < 16; ly++, at -= w) {
             blocks[at] = typeof b === 'number' ? b : b[(ly << 8) | inSection]!;
             fluid[at] = typeof f === 'number' ? f : f[(ly << 8) | inSection]!;
+            cave[at] = typeof cv === 'number' ? cv : cv[(ly << 8) | inSection]!;
           }
         }
       }
-      return { blocks, fluid };
+      return { blocks, fluid, cave };
     },
     column(ctx, epoch, cx, cz, stop) {
       return ensure(storeFor(epoch), ctx, cx, cz, epoch, stop);
