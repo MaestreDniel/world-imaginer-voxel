@@ -1,5 +1,5 @@
 {
-  "sha256": "dd4118dd035b136a483144fdd09febed48633fab94170212b2d39bd034240c0b",
+  "sha256": "0e6581d07a3a26b4a50bef3bfe8461cd9bd3e123a4e4c4f01b2baa3a6ba77f6f",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -145,7 +145,108 @@
           "min": 0.2
         }
       },
+      "C1": {
+        "voidShareMax": {
+          "activeFrom": "SP6a",
+          "max": 0.15
+        },
+        "voidShareMin": {
+          "activeFrom": "SP6a",
+          "min": 0.05
+        }
+      },
+      "C2": {
+        "skyComponents": {
+          "activeFrom": "SP6a",
+          "min": 20
+        },
+        "skyShare": {
+          "activeFrom": "SP6a",
+          "min": 0.2
+        }
+      },
+      "C3": {
+        "carverShare": {
+          "activeFrom": "SP6a",
+          "min": 0.1
+        },
+        "cheeseShare": {
+          "activeFrom": "SP6a",
+          "min": 0.2
+        },
+        "entranceShare": {
+          "activeFrom": "SP6a",
+          "min": 0.02
+        },
+        "maxShare": {
+          "activeFrom": "SP6a",
+          "max": 0.7
+        },
+        "noodleShare": {
+          "activeFrom": "SP6a",
+          "min": 0.02
+        },
+        "pillars": {
+          "activeFrom": "SP6a",
+          "min": 0.9
+        },
+        "ravines": {
+          "activeFrom": "SP6a",
+          "min": 10
+        },
+        "ravinesSky": {
+          "activeFrom": "SP6a",
+          "min": 3
+        },
+        "spaghettiShare": {
+          "activeFrom": "SP6a",
+          "min": 0.1
+        }
+      },
+      "C4": {
+        "bands": {
+          "activeFrom": "SP6a",
+          "min": 0.02
+        },
+        "floorPeak": {
+          "activeFrom": "SP6a",
+          "max": 0.1
+        }
+      },
+      "C5": {
+        "landCarved": {
+          "activeFrom": "SP6a",
+          "min": 0.6
+        },
+        "largest": {
+          "activeFrom": "SP6a",
+          "max": 0.6,
+          "tiers": [
+            "quick",
+            "full"
+          ]
+        },
+        "thinnest": {
+          "activeFrom": "SP6a",
+          "min": 4
+        },
+        "thinnestByKind": {
+          "activeFrom": "SP6a",
+          "min": 1.5
+        }
+      },
+      "C6": {
+        "latticeBias": {
+          "activeFrom": "SP6a",
+          "max": 1.25
+        }
+      },
       "C7": {
+        "borderPlaneRatio": {
+          "activeFrom": "SP6a",
+          "max": 1.1,
+          "min": 0.9
+        },
         "carverReference": {
           "activeFrom": "SP6a",
           "max": 0
@@ -153,6 +254,10 @@
         "endTaper": {
           "activeFrom": "SP6a",
           "max": 0
+        },
+        "flatWallShare": {
+          "activeFrom": "SP6a",
+          "max": 0.037
         },
         "islandCapAir": {
           "activeFrom": "SP6a",
@@ -165,6 +270,62 @@
         "reachOverflow": {
           "activeFrom": "SP6a",
           "max": 0
+        },
+        "switchWall": {
+          "activeFrom": "SP6a",
+          "max": 2
+        },
+        "verticalStep": {
+          "activeFrom": "SP6a",
+          "max": 8.1
+        },
+        "waterWall": {
+          "activeFrom": "SP6a",
+          "max": 3.3
+        }
+      },
+      "C8": {
+        "aperiodicity": {
+          "activeFrom": "SP6a",
+          "min": 0.63,
+          "tiers": [
+            "quick",
+            "full"
+          ]
+        },
+        "sizeSpread": {
+          "activeFrom": "SP6a",
+          "min": 1.5,
+          "tiers": [
+            "quick",
+            "full"
+          ]
+        },
+        "typeMixVariation": {
+          "activeFrom": "SP6a",
+          "min": 0.021
+        }
+      },
+      "C9": {
+        "entrancesMax": {
+          "activeFrom": "SP6a",
+          "max": 150,
+          "tiers": [
+            "quick",
+            "full"
+          ]
+        },
+        "holedSurface": {
+          "activeFrom": "SP6a",
+          "max": 0.02
+        },
+        "nearestEntrance": {
+          "activeFrom": "SP6a",
+          "max": 192
+        },
+        "thinRoof": {
+          "activeFrom": "SP6a",
+          "max": 0.05
         }
       },
       "DT1": {

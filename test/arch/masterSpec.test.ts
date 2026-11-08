@@ -126,7 +126,11 @@
  * store's `cave` channel and adds the pillar bit; the references gain the 3D sky flood and components and a global
  * carver reference), item 8's test entry (`metrics/caves.metric.ts`, an `SP6A_MODULES` row) and item 18's C7 row with
  * its four construction parts, cross-checked against `THRESHOLDS`. The kill criterion's commit (Task 35) completes item
- * 8's test entry with `bench/inlined.ts` (its `SP6A_MODULES` row).
+ * 8's test entry with `bench/inlined.ts` (its `SP6A_MODULES` row). The tuning's rows (Task 38) complete item 18 but
+ * G1's: §6.4's C1-C9 rows name the tuning parts as built, with their bounds as THRESHOLDS holds them (§10.1's, but as
+ * ruling R21 sets them: C6 1.25 with the master's 1.1 pending, the guards of C7 and C8, `C8.largeShare` recorded, the
+ * region-size parts on quick and full), S1's row keeps `grassNoSky` beside `grassSky0`, L2's notes the real caves, R2's
+ * its re-baseline with caves, and SP12's "Received from SP6a" line carries R21's hand-off of the guards' definitions.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2208,15 +2212,81 @@ describe('master spec amendments (SP6a §13)', () => {
       expect(i, `§6.4's C7 row does not name \`${part}\` after the previous part`).toBeGreaterThan(-1);
       from = i;
     }
-    expect(c7!.endsWith(' | 0 / 0 / 0 / 0 |')).toBe(true);
+    expect(c7!.endsWith(' | 0 / 0 / 0 / 0 / 0.9-1.1 / ≤ 8.1 / ≤ 3.7% / ≤ 2 / ≤ 3.3 per km² |')).toBe(true);
     for (const part of parts) {
       const tiers = part === 'islandCapAir' ? { tiers: ['quick', 'full'] } : {};
       expect(THRESHOLDS.C7?.[part], `THRESHOLDS.C7.${part}`).toEqual({ max: 0, activeFrom: 'SP6a', ...tiers });
     }
-    expect(Object.keys(THRESHOLDS.C7 ?? {})).toEqual(parts);
+    expect(Object.keys(THRESHOLDS.C7 ?? {}).slice(0, 4)).toEqual(parts);
     // The row says where islandCapAir is gated, as THRESHOLDS does.
     expect(cells[1]).toContain('quick and full');
     const ids = readFileSync(fileURLToPath(new URL('../../src/core/ids.ts', import.meta.url)), 'utf8');
     expect(ids).toContain("| 'C1' | 'C2' | 'C3' | 'C4' | 'C5' | 'C6' | 'C7' | 'C8' | 'C9'");
+  });
+
+  /**
+   * Item 18 (Task 38): §6.4's C1-C9 rows name the tuning parts as built, in order, with their bounds, which THRESHOLDS
+   * holds activeFrom SP6a at §10.1's bounds but as ruling R21 sets them (the user's, the SP6a spec's Threshold log):
+   * C6 1.25 (the master's 1.1 pending), the guards of C7 and C8, C8.largeShare recorded, and the region-size parts on
+   * quick and full. The bounds below are the rows' threshold cells, part by part.
+   */
+  test('§6.4\'s C1-C9 rows name the tuning parts and their bounds, which THRESHOLDS holds activeFrom SP6a (SP6a spec §13 item 18, §10.1, R21)', () => {
+    const QF = ['quick', 'full'] as const;
+    type Bound = { min?: number; max?: number; tiers?: readonly string[] };
+    const rows: Array<[id: 'C1' | 'C2' | 'C3' | 'C4' | 'C5' | 'C6' | 'C7' | 'C8' | 'C9', parts: Array<[part: string, bound: Bound]>, cell: string]> = [
+      ['C1', [['voidShareMin', { min: 0.05 }], ['voidShareMax', { max: 0.15 }]], '5-15%; cave_heavy 10-22%'],
+      ['C2', [['skyComponents', { min: 20 }], ['skyShare', { min: 0.2 }]], '≥ 20 per km² / ≥ 20%'],
+      ['C3', [
+        ['cheeseShare', { min: 0.2 }], ['spaghettiShare', { min: 0.1 }], ['noodleShare', { min: 0.02 }], ['carverShare', { min: 0.1 }],
+        ['entranceShare', { min: 0.02 }], ['pillars', { min: 0.9 }], ['ravines', { min: 10 }], ['ravinesSky', { min: 3 }], ['maxShare', { max: 0.7 }],
+      ], 'cheese ≥ 20%, spaghetti ≥ 10%, noodle ≥ 2%, carvers ≥ 10%, entrances ≥ 2%; pillars in ≥ 90% of 8×8-chunk blocks; ravines ≥ 10/km² (sky-exposed ≥ 3/km²); the largest kind ≤ 70%'],
+      ['C4', [['bands', { min: 0.02 }], ['floorPeak', { max: 0.1 }]], '≥ 2% each / ≤ 10%'],
+      ['C5', [['largest', { max: 0.6, tiers: QF }], ['landCarved', { min: 0.6 }], ['thinnest', { min: 4 }], ['thinnestByKind', { min: 1.5 }]], '< 60% of void / ≥ 60% / ≥ 4 / ≥ 1.5'],
+      ['C6', [['latticeBias', { max: 1.25 }]], '≤ 1.1 (1.25 at SP6a (R21), 1.1 pending)'],
+      ['C7', [
+        ['borderPlaneRatio', { min: 0.9, max: 1.1 }], ['verticalStep', { max: 8.1 }], ['flatWallShare', { max: 0.037 }], ['switchWall', { max: 2 }],
+        ['waterWall', { max: 3.3 }],
+      ], '0 / 0 / 0 / 0 / 0.9-1.1 / ≤ 8.1 / ≤ 3.7% / ≤ 2 / ≤ 3.3 per km²'],
+      ['C8', [['aperiodicity', { min: 0.63, tiers: QF }], ['typeMixVariation', { min: 0.021 }], ['sizeSpread', { min: 1.5, tiers: QF }]], '≥ 0.63 / ≥ 0.021 / ≥ 1.5'],
+      ['C9', [['nearestEntrance', { max: 192 }], ['entrancesMax', { max: 150, tiers: QF }], ['holedSurface', { max: 0.02 }], ['thinRoof', { max: 0.05 }]],
+        '≤ 192 / ≤ 150 per km² / ≤ 2% / ≤ 5%'],
+    ];
+    const lines = text.split('\n');
+    for (const [id, parts, cell] of rows) {
+      const row = lines.find((l) => l.startsWith(`| ${id} |`));
+      expect(row, `no ${id} row in §6.4`).toBeDefined();
+      const cells = row!.split(' | ');
+      expect(cells.length, `${id}'s row has three cells`).toBe(3);
+      expect(cells[2], `${id}'s threshold cell`).toBe(`${cell} |`);
+      let from = 0;
+      for (const [part, bound] of parts) {
+        const i = cells[1]!.indexOf(`\`${part}\``, from);
+        expect(i, `§6.4's ${id} row does not name \`${part}\` after the previous part`).toBeGreaterThan(-1);
+        from = i;
+        expect(THRESHOLDS[id]?.[part], `THRESHOLDS.${id}.${part}`).toEqual({ ...bound, activeFrom: 'SP6a' });
+      }
+      // THRESHOLDS holds no other tuning part of the id (C7's construction parts come first, pinned above).
+      const tuning = Object.keys(THRESHOLDS[id] ?? {}).slice(id === 'C7' ? 4 : 0);
+      expect(tuning, `${id}'s tuning parts`).toEqual(parts.map(([p]) => p));
+      // Each row says where its parts gated on quick and full are gated, as THRESHOLDS does.
+      if (parts.some(([, b]) => b.tiers !== undefined)) expect(cells[1], `${id}'s row`).toContain('gated on quick and full');
+    }
+    const def = (id: string): string => lines.find((l) => l.startsWith(`| ${id} |`))!.split(' | ')[1]!;
+    // R21 (c): C8.largeShare is recorded, not gated, and the guards' definitions go to SP12.
+    expect(THRESHOLDS.C8?.largeShare, 'C8.largeShare is recorded, not gated').toBeUndefined();
+    expect(def('C8')).toContain('`largeShare`, the share of 32 × 32-chunk regions holding a component ≥ 50k voxels (proposed 10-40 %), is recorded, not gated');
+    for (const id of ['C7', 'C8']) expect(def(id), `${id}'s guards`).toContain('their definitions handed to SP12 (R21)');
+    // C6's definition as built (item 18) and D4's figures accepted by the user (R21 (a)).
+    expect(def('C6')).toContain('within each 16-block band, the carve rate per lattice residue (y mod 8, x and z mod 4) over the band\'s mean');
+    expect(def('C9')).toContain('the user accepted these bounds with the measurements at SP6a\'s tuning (the SP6a spec D4, R21)');
+    // Item 18's S1, L2 and R2 rows.
+    expect(lines.find((l) => l.startsWith('| S1 |'))).toContain('(SP6a: `grassSky0` gated from SP6a and `grassNoSky` stays beside it, the SP6a spec D33; amended by SP6a)');
+    expect(lines.find((l) => l.startsWith('| L2 |'))).toBe('| L2 | enclosed cave air ≥ 16 deep with sky > 0 (SP6a: re-asserted with real caves, most of the enclosed air it counts the caves\' and the carvers\'; amended by SP6a) | 0 |');
+    const r2 = lines.find((l) => l.startsWith('| R2 |'))!;
+    expect(r2).toMatch(/SP6a's re-baseline: re-measured with caves, 0\.\d+ \/ 0\.\d+ on quick, the bounds kept \(amended by SP6a\) \|$/);
+    expect([THRESHOLDS.R2?.quadsPerFaceAo?.max, THRESHOLDS.R2?.quadsPerFaceNoAo?.max]).toEqual([0.85, 0.55]);
+    // R21 (c): SP12's "Received from SP6a" line carries the guards' definitions (the SP6a spec §14's SP12 bullet).
+    const sp12Received = sp12Entry().split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
+    expect(sp12Received).toContain('the definitions of the cave parts SP6a gates as regression guards or records (ruling R21, the SP6a spec\'s Threshold log): `C7.verticalStep`');
   });
 });

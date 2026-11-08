@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, test } from 'vitest';
+import { expect } from 'vitest';
 import { CARVER_WINDOW_R } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
 import { resolveProfile, type ProfileId } from '../../src/core/params/profiles';
@@ -16,7 +16,7 @@ import {
   aperiodicRatios, bandDetail, borderPlaneRatio, C1_C6_PARTS, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, caveC7C9Counts,
   caveComponents, caveExamples, caveGridOf, caveRegionCounts, emptyBandCounts, emptyLayerCounts, emptyWallResidues, EXAMPLE_IDS,
   GRID_H, GRID_Y0, landMask, localThickness, preCaveTops, ravinePathsOf, riverMaskOf, verticalStepDetail, wetMask,
-  type CaveC7C9Counts, type CavePose, type CaveRegionCounts, type ExampleId,
+  type C1C6Part, type C7C9Part, type CaveC7C9Counts, type CavePose, type CaveRegionCounts, type ExampleId,
 } from '../harness/caveMetrics';
 import { CARVER_DEFAULTS, CARVER_MAXIMA } from '../harness/carverParams';
 import { metricTest } from '../harness/metric';
@@ -66,13 +66,15 @@ import { genRegion, type RegionView } from '../harness/region';
  * Recorded beside the parts: the regions measured, the carver-tagged voxels they hold, the paths and ends checked, and
  * the floating_islands region's island voxels (non-air at y ≥ 181, so the cap has islands to protect).
  *
- * C1-C6 (D26: tuning parts, recorded until Task 38 gates them): the plain test 'C1-C6 recorded (SP6a D26)' below, over
- * the default regions only (`defaultSites`), with the instruments of `test/harness/caveMetrics.ts`.
+ * C1-C6 (D26: tuning parts, gated from Task 38 at their bounds, `test/thresholds.ts`): the tests 'C1' … 'C6' below,
+ * over the default regions only (`defaultSites`), with the instruments of `test/harness/caveMetrics.ts`.
  *
- * C7's tuning parts, C8 and C9 (D26: recorded until Task 38 gates them): the plain test 'C7-C9 recorded (SP6a D26)',
- * over every region of the tier (the default group: default and large_biomes; and each preset's), with the definitions
- * as built in `caveMetrics.ts`; it also writes `.out/caves.examples.json`, the review poses at seed '42' (§10.1, §10.10,
- * D16). Each region is measured once for both tests (`measure`: one grid, one set of components).
+ * C7's tuning parts, C8 and C9 (D26: gated from Task 38): the second 'C7' test (its record `.out/C7.tuning.json`, beside
+ * the construction parts' `.out/C7.json`), 'C8' and 'C9', over every region of the tier (the default group: default
+ * and large_biomes; and each preset's), with the definitions as built in `caveMetrics.ts`; their measurement also
+ * writes `.out/caves.examples.json`, the review poses at seed '42' (§10.1, §10.10, D16). `C8.largeShare` is recorded,
+ * not gated (ruling R21). Each region is measured once for every test (`measure`: one grid, one set of components),
+ * and each group of parts once (`c1c6`, `c7c9`: the first test to ask takes it).
  */
 type Tier = 'fast' | 'quick' | 'full';
 const TIER = (process.env.METRICS_TIER ?? 'fast') as Tier;
@@ -431,7 +433,7 @@ metricTest('C7', ['carverReference', 'reachOverflow', 'endTaper', 'islandCapAir'
   };
 });
 
-// ---------------------------------------------------------------- C1-C9, recorded (D26)
+// ---------------------------------------------------------------- C1-C9, the tuning parts (D26)
 
 const OUT_DIR = fileURLToPath(new URL('./.out/', import.meta.url));
 
@@ -448,7 +450,7 @@ interface Measured {
   readonly ms: { shared: number; c16: number; c79: number; examples: number };
 }
 
-/** The measured regions by label: each region is measured once, by whichever of the two tests asks first. */
+/** The measured regions by label: each region is measured once, by whichever test asks first. */
 const MEASURED = new Map<string, Measured>();
 
 /** The group of C7-C9's "default and presets": 'default' for the default and large_biomes profiles, else the preset. */
@@ -501,13 +503,12 @@ const json = (v: unknown): string => `${JSON.stringify(v, (_, x: unknown) => (ty
 const NAN_ON_FAST: readonly string[] = [];
 
 /**
- * C1-C6 (SP6a spec §10.1, D26: tuning parts, no row before Task 38, which turns each into a `metricTest` part of the
- * same id): measured over the tier's default regions (default and large_biomes; C1 per profile) by
- * `test/harness/caveMetrics.ts`, whose header states each definition as built, and written to
- * `.out/caves.C1-C6.json`: the parts, the value per profile, C5.thinnest's components per value, and per region its
- * counts' summary.
+ * C1-C6 (SP6a spec §10.1, D26: tuning parts, gated from Task 38): measured over the tier's default regions (default and
+ * large_biomes; C1 per profile) by `test/harness/caveMetrics.ts`, whose header states each definition as built, and
+ * written to `.out/caves.C1-C6.json`: the parts, the value per profile, C5.thinnest's components per value, and per
+ * region its counts' summary. Every part is finite (fast: or listed in `NAN_ON_FAST`).
  */
-test('C1-C6 recorded (SP6a D26)', async () => {
+async function measureC1C6(): Promise<Record<C1C6Part, number>> {
   const measured: Array<{ site: Site; counts: CaveRegionCounts; ms: number }> = [];
   for (const s of defaultSites()) {
     const m = await measure(s);
@@ -551,7 +552,12 @@ test('C1-C6 recorded (SP6a D26)', async () => {
     if (TIER === 'fast' && Number.isNaN(v)) expect(NAN_ON_FAST, `${p} is NaN on fast`).toContain(p);
     else expect(Number.isFinite(v), `${p} = ${v} is not finite`).toBe(true);
   }
-}, 600_000);
+  return parts;
+}
+
+let c16Run: Promise<Record<C1C6Part, number>> | null = null;
+/** C1-C6's parts, measured once (the first test to ask). */
+const c1c6 = (): Promise<Record<C1C6Part, number>> => (c16Run ??= measureC1C6());
 
 /**
  * The C7-C9 parts allowed NaN on fast (ruling P32): C8.aperiodicity, C8.sizeSpread and C8.largeShare read only 32 × 32
@@ -561,13 +567,14 @@ test('C1-C6 recorded (SP6a D26)', async () => {
 const C79_NAN_ON_FAST: readonly string[] = ['C8.aperiodicity', 'C8.sizeSpread', 'C8.largeShare'];
 
 /**
- * C7's tuning parts, C8 and C9 (SP6a spec §10.1, D26: recorded, no row before Task 38): measured over every region of
- * the tier by `caveC7C9Counts` (definitions as built in `test/harness/caveMetrics.ts`) and written to
- * `.out/caves.C7-C9.json` (the parts, the per-group values of the "default and presets" parts, each part's detail, and
- * per region its counts' summary). The review poses at seed '42' (§10.1, §10.10, D16) go to `.out/caves.examples.json`:
- * per pose, the first of the tier's seed '42' default regions (in `defaultSites`' order) holding one.
+ * C7's tuning parts, C8 and C9 (SP6a spec §10.1, D26: gated from Task 38): measured over every region of the tier by
+ * `caveC7C9Counts` (definitions as built in `test/harness/caveMetrics.ts`) and written to `.out/caves.C7-C9.json` (the
+ * parts, the per-group values of the "default and presets" parts, each part's detail, and per region its counts'
+ * summary). The review poses at seed '42' (§10.1, §10.10, D16) go to `.out/caves.examples.json`: per pose, the first of
+ * the tier's seed '42' default regions (in `defaultSites`' order) holding one. Every part is finite (fast: or listed in
+ * `C79_NAN_ON_FAST`), and every pose found.
  */
-test('C7-C9 recorded (SP6a D26)', async () => {
+async function measureC7C9(): Promise<Record<C7C9Part, number>> {
   const measured: Measured[] = [];
   for (const s of sites()) measured.push(await measure(s));
   const regions = measured.map((m) => ({ group: groupOf(m.site), full: m.site.size === 32, counts: m.c79 }));
@@ -646,4 +653,33 @@ test('C7-C9 recorded (SP6a D26)', async () => {
     else expect(Number.isFinite(v), `${p} = ${v} is not finite`).toBe(true);
   }
   for (const id of EXAMPLE_IDS) expect(poses[id], `the ${id} pose`).not.toBeNull();
-}, 900_000);
+  return parts;
+}
+
+let c79Run: Promise<Record<C7C9Part, number>> | null = null;
+/** C7's tuning parts, C8 and C9, measured once (the first test to ask). */
+const c7c9 = (): Promise<Record<C7C9Part, number>> => (c79Run ??= measureC7C9());
+
+/** The parts of metric `id` among `parts` ('C3.pillars' → 'pillars'). */
+function partsOf(parts: Readonly<Record<string, number>>, id: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(parts)) if (k.startsWith(`${id}.`)) out[k.slice(id.length + 1)] = v;
+  return out;
+}
+
+// The rows (SP6a spec §10.1, Task 38, ruling R21): each id's parts at their bounds in `test/thresholds.ts`. The first
+// test of each group measures it (its timeout covers the regions); the others read the same values.
+metricTest('C1', ['voidShareMin', 'voidShareMax'], async () => partsOf(await c1c6(), 'C1'), 900_000);
+metricTest('C2', ['skyComponents', 'skyShare'], async () => partsOf(await c1c6(), 'C2'));
+metricTest('C3', ['cheeseShare', 'spaghettiShare', 'noodleShare', 'carverShare', 'entranceShare', 'pillars', 'ravines', 'ravinesSky', 'maxShare'],
+  async () => partsOf(await c1c6(), 'C3'));
+metricTest('C4', ['bands', 'floorPeak'], async () => partsOf(await c1c6(), 'C4'));
+// C5.largest is gated on quick and full (ruling R21 (e): fast's 16 × 16 regions read it high by their size).
+metricTest('C5', ['largest', 'landCarved', 'thinnest', 'thinnestByKind'], async () => partsOf(await c1c6(), 'C5'));
+metricTest('C6', ['latticeBias'], async () => partsOf(await c1c6(), 'C6'));
+metricTest('C7', ['borderPlaneRatio', 'verticalStep', 'flatWallShare', 'switchWall', 'waterWall'], async () => partsOf(await c7c9(), 'C7'), 900_000,
+  { outName: 'C7.tuning' });
+// C8.largeShare is returned and recorded in `.out/C8.json`, not gated (ruling R21 (c)); aperiodicity and sizeSpread
+// are gated on quick and full (NaN on fast, ruling P32).
+metricTest('C8', ['aperiodicity', 'typeMixVariation', 'sizeSpread'], async () => partsOf(await c7c9(), 'C8'));
+metricTest('C9', ['nearestEntrance', 'entrancesMax', 'holedSurface', 'thinRoof'], async () => partsOf(await c7c9(), 'C9'));

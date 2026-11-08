@@ -77,11 +77,41 @@ export const THRESHOLDS: ThresholdTable = {
     // SP6a spec §10.3, D22: the stored cave tag against `caveTagAt`, on the default tree and on edited trees.
     tagProbe: { max: 0, activeFrom: 'SP6a' },
   },
+  // SP6a spec §10.1 (D26): the caves' tuning parts (`caves.metric.ts`), gated from Task 38 at §10.1's bounds but as
+  // ruling R21 sets them (the user's, 2026-11-08; the SP6a spec's Threshold log): C6.latticeBias max 1.25 (the
+  // master's 1.1 pending); this spec's missed proposals as regression guards at the measured worst × 1.15 (max) or
+  // × 0.85 (min): C7.verticalStep, flatWallShare, waterWall, C8.aperiodicity, typeMixVariation (C8.largeShare is
+  // recorded, not gated). The parts that read 32 × 32 regions or depend on the region's size, on quick and full only
+  // (ruling P32, R21 (e)): C5.largest, C8.aperiodicity, C8.sizeSpread, C9.entrancesMax.
+  C1: { voidShareMin: { min: 0.05, activeFrom: 'SP6a' }, voidShareMax: { max: 0.15, activeFrom: 'SP6a' } },
+  C2: { skyComponents: { min: 20, activeFrom: 'SP6a' }, skyShare: { min: 0.2, activeFrom: 'SP6a' } },
+  C3: {
+    cheeseShare: { min: 0.2, activeFrom: 'SP6a' }, spaghettiShare: { min: 0.1, activeFrom: 'SP6a' }, noodleShare: { min: 0.02, activeFrom: 'SP6a' },
+    carverShare: { min: 0.1, activeFrom: 'SP6a' }, entranceShare: { min: 0.02, activeFrom: 'SP6a' }, pillars: { min: 0.9, activeFrom: 'SP6a' },
+    ravines: { min: 10, activeFrom: 'SP6a' }, ravinesSky: { min: 3, activeFrom: 'SP6a' }, maxShare: { max: 0.7, activeFrom: 'SP6a' },
+  },
+  C4: { bands: { min: 0.02, activeFrom: 'SP6a' }, floorPeak: { max: 0.1, activeFrom: 'SP6a' } },
+  C5: {
+    largest: { max: 0.6, activeFrom: 'SP6a', tiers: ['quick', 'full'] }, landCarved: { min: 0.6, activeFrom: 'SP6a' },
+    thinnest: { min: 4, activeFrom: 'SP6a' }, thinnestByKind: { min: 1.5, activeFrom: 'SP6a' },
+  },
+  C6: { latticeBias: { max: 1.25, activeFrom: 'SP6a' } },
   // SP6a spec §10.1 (D26): C7's construction parts (`caves.metric.ts`), which hold by construction, gated from SP6a's
-  // commit; `islandCapAir` on the quick and full tiers (fast has no floating_islands region and records NaN).
+  // commit; `islandCapAir` on the quick and full tiers (fast has no floating_islands region and records NaN). Its
+  // tuning parts (`.out/C7.tuning.json`) from Task 38, as above.
   C7: {
     carverReference: { max: 0, activeFrom: 'SP6a' }, reachOverflow: { max: 0, activeFrom: 'SP6a' }, endTaper: { max: 0, activeFrom: 'SP6a' },
     islandCapAir: { max: 0, activeFrom: 'SP6a', tiers: ['quick', 'full'] },
+    borderPlaneRatio: { min: 0.9, max: 1.1, activeFrom: 'SP6a' }, verticalStep: { max: 8.1, activeFrom: 'SP6a' },
+    flatWallShare: { max: 0.037, activeFrom: 'SP6a' }, switchWall: { max: 2, activeFrom: 'SP6a' }, waterWall: { max: 3.3, activeFrom: 'SP6a' },
+  },
+  C8: {
+    aperiodicity: { min: 0.63, activeFrom: 'SP6a', tiers: ['quick', 'full'] }, typeMixVariation: { min: 0.021, activeFrom: 'SP6a' },
+    sizeSpread: { min: 1.5, activeFrom: 'SP6a', tiers: ['quick', 'full'] },
+  },
+  C9: {
+    nearestEntrance: { max: 192, activeFrom: 'SP6a' }, entrancesMax: { max: 150, activeFrom: 'SP6a', tiers: ['quick', 'full'] },
+    holedSurface: { max: 0.02, activeFrom: 'SP6a' }, thinRoof: { max: 0.05, activeFrom: 'SP6a' },
   },
   // SP4a spec §9.1 (D26): `grassSky0`, the master's grass at sky 0, recorded from SP4a (`light.metric.ts`), gated by SP6a.
   S1: {
