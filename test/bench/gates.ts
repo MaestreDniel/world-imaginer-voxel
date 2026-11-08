@@ -92,6 +92,41 @@ export const PASTE_RUN = Object.freeze({ iterations: 16, time: 0, warmupIteratio
 export const PASTE_LIT_RUN = Object.freeze({ iterations: 8, time: 0, warmupIterations: 1, warmupTime: 0 });
 
 /**
+ * `terrain.caves.warm`'s run (SP6a §10.5, the streaming case): `fillColumnT` on the columns of a `WARM_SPIRAL` ×
+ * `WARM_SPIRAL` square spiral of neighbours (`spiralCells`) on one GenContext, so its carver path cache warms as a
+ * streamed world's does; the probe and the warm-up take the first two columns and the 254 timed calls the rest, so each
+ * of the 256 columns is filled once (a second fill would hit the context's column cache).
+ */
+export const WARM_SPIRAL = 16;
+export const TERRAIN_WARM_RUN = Object.freeze({ iterations: 254, time: 0, warmupIterations: 1, warmupTime: 0 });
+/**
+ * `carver.paths` (SP6a §10.5): each call computes one path per kind, cold (`carverPath`, no cache), cycling over this
+ * many sources per kind whose roll succeeds.
+ */
+export const CARVER_PATH_SOURCES = 64;
+
+/**
+ * The first n² cells of a square spiral from (0, 0) as [dx, dz]: east 1, south 1 (+z), west 2, north 2, east 3, …, each
+ * cell next to the one before; they fill an n × n square (x and z in −⌊(n − 1)/2⌋ … ⌊n/2⌋). n an integer ≥ 1.
+ */
+export function spiralCells(n: number): Array<readonly [number, number]> {
+  if (!Number.isInteger(n) || n < 1) throw new RangeError(`spiralCells: ${n} is not an integer ≥ 1`);
+  const out: Array<readonly [number, number]> = [[0, 0]];
+  const dirs = [[1, 0], [0, 1], [-1, 0], [0, -1]] as const;
+  let x = 0, z = 0;
+  for (let leg = 0; out.length < n * n; leg++) {
+    const [dx, dz] = dirs[leg & 3]!;
+    const len = (leg >> 1) + 1;
+    for (let k = 0; k < len && out.length < n * n; k++) {
+      x += dx;
+      z += dz;
+      out.push([x, z]);
+    }
+  }
+  return out;
+}
+
+/**
  * Every gated bench row, in measurement order: `noise.bench.ts` measures exactly these, and `test/baselines.json`
  * records every one (a unit test), so a row added without `npm run bench:record` cannot stay ungated.
  * SP3a §7 appends `store.alloc` and `terrain.provisional`; SP3b §10 appends `density.corner` and replaces
@@ -100,7 +135,9 @@ export const PASTE_LIT_RUN = Object.freeze({ iterations: 8, time: 0, warmupItera
  * SP3e §7 appends `terrain.islands` (fillColumnT on floating_islands at cluster columns); SP4a §9.3 appends
  * `light.column` (one column's light job) and `mesh.section` (one non-trivial section's padded copy and mesh); SP5a §6.2
  * appends `relight.edit` (one edit's relight); SP5b §6.2 appends `persist.flush` (one flush's synchronous part); SP5c
- * §10.3 appends `paste.max` and `paste.maxLit` (one maximum paste, solid and relight-heavy).
+ * §10.3 appends `paste.max` and `paste.maxLit` (one maximum paste, solid and relight-heavy); SP6a §10.5 appends
+ * `terrain.caves.warm` (T over a spiral of neighbours, the carver path cache warm), `carver.paths` (one path per carver
+ * kind, cold) and `mesh.xray` (the X-ray pass alone over `mesh.section`'s sections).
  */
 export const BENCH_ROWS = [
   'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
@@ -109,6 +146,7 @@ export const BENCH_ROWS = [
   'store.alloc', 'density.corner', 'terrain.real', 'surface.column',
   'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
   'light.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
+  'terrain.caves.warm', 'carver.paths', 'mesh.xray',
 ] as const;
 
 export interface BenchKernel {

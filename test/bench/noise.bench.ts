@@ -43,6 +43,9 @@ import type { NeighborhoodReader } from '../../src/world/store/api';
 import { copyLightRegion, copyPaddedSection } from '../../src/world/store/padded';
 import { CAVE_KIND, PART_BUDGET, REQUEST_BUDGET } from '../../src/core/constants';
 import { caveReadersOf, tagColumn } from '../../src/gen/caves/tags';
+import { carverParamsOf, carverPath, type CarverKind } from '../../src/gen/caves/carvers';
+import { carverCacheOf } from '../../src/gen/caves/carverCache';
+import { meshXray } from '../../src/mesh/xray';
 import { fillDensityColumn } from '../../src/gen/density/bounds';
 import type { Params } from '../../src/core/params/schema';
 import { sliceCostOf } from '../../src/gen/inspect/fieldSlice';
@@ -54,8 +57,9 @@ import { capDensityTree, capSurfaceRules } from '../harness/capTrees';
 import { persistFlushFixture } from '../harness/persistFixture';
 import { PART_WORST_LEAVES, partWorstParams } from '../harness/sliceTrees';
 import {
-  absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, D31_LIT_P50_MAX_MS, D31_MAX_P99_MAX_MS, gateFailures, ISLANDS_COLUMNS,
-  ISLANDS_RUN, LIGHT_RUN, MESH_RUN, measureBracketed, parseBenchExempt, PASTE_LIT_RUN, PASTE_RUN, PERSIST_RUN, RELIGHT_RUN, type Baselines,
+  absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, CARVER_PATH_SOURCES, D31_LIT_P50_MAX_MS, D31_MAX_P99_MAX_MS, gateFailures,
+  ISLANDS_COLUMNS, ISLANDS_RUN, LIGHT_RUN, MESH_RUN, measureBracketed, parseBenchExempt, PASTE_LIT_RUN, PASTE_RUN, PERSIST_RUN, RELIGHT_RUN,
+  spiralCells, TERRAIN_WARM_RUN, WARM_SPIRAL, type Baselines,
 } from './gates';
 import { buildPerm, perm3 } from './perm512';
 
@@ -66,6 +70,8 @@ const ERF = detErf;
 const EVAL = evalSpline;
 const HASHES = stageHashes;
 const GENKEY = genKey;
+const CARVER_PATH = carverPath;
+const MESH_XRAY = meshXray;
 const BASELINE_PATH = fileURLToPath(new URL('../baselines.json', import.meta.url));
 const N = 4096;
 let sink = 0;
@@ -104,7 +110,7 @@ const setEdit = (x: number, y: number, z: number, value: number, expectV: number
 /** Opaque (opacity 15) and dry. */
 const solidAt = (s: VoxelStore, x: number, y: number, z: number): boolean => OPACITY[s.blockAt(x, y, z)]! === 15 && s.fluidAt(x, y, z) === NO_FLUID;
 
-test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b and SP5c kernels', async ({ bench }) => {
+test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and SP6a kernels', async ({ bench }) => {
   // SP3c §7: BENCH_EXEMPT names rows whose ratio gate is skipped (an unknown name fails here, before measuring);
   // bench:record never reads it.
   const exempt = process.env.BENCH_RECORD === '1' ? [] : parseBenchExempt(process.env.BENCH_EXEMPT);
@@ -131,7 +137,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b and SP5c k
    * one warm-up iteration) or explicit options; `rerun`: resets the row's state before it runs again.
    */
   const measure = async (
-    name: string, evals: number, fn: () => unknown, run?: number | typeof ISLANDS_RUN | typeof LIGHT_RUN | typeof MESH_RUN | typeof PASTE_RUN | typeof PASTE_LIT_RUN,
+    name: string, evals: number, fn: () => unknown, run?: number | typeof ISLANDS_RUN | typeof LIGHT_RUN | typeof MESH_RUN | typeof PASTE_RUN | typeof PASTE_LIT_RUN | typeof TERRAIN_WARM_RUN,
     rerun?: () => void,
   ) => {
     const options = run === undefined ? undefined : typeof run === 'number' ? { iterations: run, time: 0, warmupIterations: 1 } : { ...run };
@@ -357,8 +363,9 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b and SP5c k
   expect(nonTrivial.length, 'mesh.section: the region has at least 1024 non-trivial sections').toBeGreaterThanOrEqual(MESH_RUN.iterations);
   const meshSections = Array.from({ length: MESH_RUN.iterations }, (_, i) => nonTrivial[Math.floor((i * nonTrivial.length) / MESH_RUN.iterations)]!);
   // mesh.section: one non-trivial section as the mesh job runs it (`meshColumnPayload`'s per-section work, without the
-  // column buffers' append): the padded copy, the solid passes, the water depths and still water, and the
-  // connectivity, with the Medium preset's AO and smooth light (the page's jobs); cyclic, each section timed once.
+  // column buffers' append): the padded copy, the solid passes, the water depths and still water, SP6a's X-ray pass
+  // (`meshXray`, pass 3, since Task 34: §10.5 keeps the row's gates with pass 3 inside it) and the connectivity, with the
+  // Medium preset's AO and smooth light (the page's jobs); cyclic, each section timed once.
   const meshScratch = createMeshScratch();
   const meshOptions: MeshOptions = { ao: MEDIUM.ao, smoothLight: MEDIUM.smoothLight };
   let mc = 0;
@@ -370,8 +377,9 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b and SP5c k
     meshSolid(meshScratch.padded, meshOptions, meshScratch.builder);
     fluidDepths(nb, sy, meshScratch.depth);
     meshFluid(meshScratch.padded, meshScratch.depth, meshScratch.builder);
+    MESH_XRAY(meshScratch.padded, meshScratch.builder);
     sink += connectivity15(meshScratch.padded);
-    for (let pass = 0 as 0 | 1 | 2; pass <= 2; pass++) quads += meshScratch.builder.view(pass).indices / 6;
+    for (let pass = 0 as 0 | 1 | 2 | 3; pass <= 3; pass++) quads += meshScratch.builder.view(pass).indices / 6;
   }, MESH_RUN, () => { mc = 0; quads = 0; });
   expect(mc, 'mesh.section: one probe, one warm-up and 1024 timed calls, each section timed once').toBe(1 + MESH_RUN.warmupIterations + MESH_RUN.iterations);
   expect(quads, 'mesh.section meshes quads').toBeGreaterThan(0);
@@ -408,7 +416,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b and SP5c k
   };
   const [tx, ty, tz, ti] = groundFrom(0);
   const [sx, sy, sz] = groundFrom(ti + 1);
-  /** The shaft: the cap at the surface, the room's top 12 below it, the room grown by one and the shaft opaque and dry. */
+  /** The shaft: the cap at the surface, the room's top 12 below it, the room grown by one, the shaft and its sides opaque and dry. */
   let shaftAt: readonly [number, number, number, number] | null = null;
   for (let i = 0; i < innerCols.length && shaftAt === null; i++) {
     for (let oz = 2; oz < 14 && shaftAt === null; oz++) {
@@ -419,7 +427,12 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b and SP5c k
         const roomTop = cap - 12;
         if (roomTop - 4 < -63) continue;
         let ok = solidAt(worldStore, x, cap, z);
-        for (let y = roomTop + 1; ok && y < cap; y++) ok = solidAt(worldStore, x, y, z);
+        // The shaft and its four side neighbours opaque (SP6a Task 34): since the carvers (Task 27) a worm can pass beside
+        // the shaft and light it from the side, so the closed room would not be dark.
+        for (let y = roomTop + 1; ok && y < cap; y++) {
+          ok = solidAt(worldStore, x, y, z) && solidAt(worldStore, x - 1, y, z) && solidAt(worldStore, x + 1, y, z)
+            && solidAt(worldStore, x, y, z - 1) && solidAt(worldStore, x, y, z + 1);
+        }
         for (let dz = -3; ok && dz <= 3; dz++) for (let dx = -3; ok && dx <= 3; dx++) for (let y = roomTop - 4; ok && y <= roomTop + 1; y++) ok = solidAt(worldStore, x + dx, y, z + dz);
         if (ok) shaftAt = [x, cap, z, roomTop];
       }
@@ -572,6 +585,76 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b and SP5c k
   const pasteLit = await pasteRun(litRow, PASTE_LIT_RUN);
   expect(pasteLit.stats.calls, 'paste.maxLit: one probe, one warm-up and 8 timed calls').toBe(1 + PASTE_LIT_RUN.warmupIterations + PASTE_LIT_RUN.iterations);
   expect(worldStore.limboCount(worldStore.thread), 'the paste rows leave the limbo empty').toBe(0);
+
+  // SP6a §10.5: terrain.caves.warm — the streaming case. fillColumnT (as terrain.real runs it) on a GenContext and a store
+  // of their own over the WARM_SPIRAL × WARM_SPIRAL square spiral of neighbours (`spiralCells`) from terrain.real's first
+  // candidate, so the context's carver path cache (`carverCacheOf`, an LRU of CARVER_CACHE_PATHS) warms as a streamed
+  // world's does: a column's window shares most of its paths with its neighbours'. terrain.real's columns are far apart,
+  // so each of them computes its paths cold. TERRAIN_WARM_RUN: the probe and the warm-up fill the first two columns, the
+  // 254 timed calls the rest, each column once (freed after). A re-run (its calibrations disagreed) takes a fresh context.
+  const warmCells = spiralCells(WARM_SPIRAL).map(([dx, dz]) => [rx0 + dx, rz0 + dz] as const);
+  const warmStore = createStore({ shared: true, maxBlockBytes: 32 << 20, maxByteBytes: 16 << 20 });
+  let warmGen = createGenContext(seedFromInput('42'), DEFAULTS);
+  let wc = 0;
+  const warmRun = await measure('terrain.caves.warm', 1, () => {
+    const [x, z] = warmCells[wc++]!;
+    sink += fillColumnT(warmStore, warmGen, x, z, never) ? 1 : 0;
+    warmStore.freeColumn(x, z);
+  }, TERRAIN_WARM_RUN, () => { warmGen = createGenContext(seedFromInput('42'), DEFAULTS); wc = 0; });
+  expect(wc, 'terrain.caves.warm: one probe, one warm-up and 254 timed calls, each spiral column filled once').toBe(WARM_SPIRAL * WARM_SPIRAL);
+  expect(warmStore.blockPool.slotCount() - warmStore.blockPool.freeCount(), 'terrain.caves.warm leaks no slot').toBe(0);
+  const warmCache = carverCacheOf(warmGen);
+
+  // SP6a §10.5: carver.paths — one source's path per kind (worm, ravine, underground worm), cold: `carverPath` itself, no
+  // cache, on the default carver leaves at seed 42. The sources are the first CARVER_PATH_SOURCES of terrain.real's
+  // candidate sequence (as chunk coordinates) whose roll succeeds for the kind; each call takes the next of each kind.
+  const carverP = carverParamsOf(DEFAULTS);
+  const kinds: readonly CarverKind[] = ['worm', 'ravine', 'undergroundWorm'];
+  const pathSources = kinds.map((kind) => {
+    const out: (readonly [number, number])[] = [];
+    let tried = 0;
+    for (let t = 1; out.length < CARVER_PATH_SOURCES; t++) {
+      tried++;
+      const sx = (t * 7919) % 60000 - 30000;
+      const sz = (t * 104729) % 60000 - 30000;
+      if (CARVER_PATH(gen.seed, kind, sx, sz, carverP) !== null) out.push([sx, sz]);
+    }
+    return { kind, out, tried };
+  });
+  let kc = 0;
+  const pathsRun = await measure('carver.paths', 1, () => {
+    const i = kc++ % CARVER_PATH_SOURCES;
+    for (let k = 0; k < 3; k++) {
+      const [sx, sz] = pathSources[k]!.out[i]!;
+      sink += CARVER_PATH(gen.seed, kinds[k]!, sx, sz, carverP)!.count;
+    }
+  });
+  // Each kind's own cost, outside the row's timing: every source of the kind 8 times over, its mean per path.
+  const perKind = pathSources.map(({ kind, out, tried }) => {
+    let ells = 0;
+    const t0 = performance.now();
+    for (let r = 0; r < 8; r++) for (const [sx, sz] of out) ells += CARVER_PATH(gen.seed, kind, sx, sz, carverP)!.count;
+    const us = ((performance.now() - t0) * 1000) / (8 * out.length);
+    return `${kind} ${us.toFixed(2)} µs, ${(ells / (8 * out.length)).toFixed(1)} ellipsoids (${out.length} of ${tried} sources roll)`;
+  });
+
+  // SP6a §10.5: mesh.xray — the X-ray pass alone (`meshXray`, pass 3) on mesh.section's 1024 sections (MESH_RUN: cyclic,
+  // each timed once); the padded copy and the builder's reset run in the call but only the pass is timed
+  // (`overriddenDuration`). The paste and relight rows left the region as it began, so the sections are mesh.section's.
+  let xc = 0;
+  let xrayQuads = 0;
+  const xrayRun = await measure('mesh.xray', 1, () => {
+    const { nb, sy } = meshSections[xc++ % meshSections.length]!;
+    copyPaddedSection(nb, sy, meshScratch.padded);
+    meshScratch.builder.reset();
+    const t0 = performance.now();
+    MESH_XRAY(meshScratch.padded, meshScratch.builder);
+    const ms = performance.now() - t0;
+    xrayQuads += meshScratch.builder.view(3).indices / 6;
+    return { overriddenDuration: ms };
+  }, MESH_RUN, () => { xc = 0; xrayQuads = 0; });
+  expect(xc, 'mesh.xray: one probe, one warm-up and 1024 timed calls, each section timed once').toBe(1 + MESH_RUN.warmupIterations + MESH_RUN.iterations);
+  expect(xrayQuads, 'mesh.xray meshes quads').toBeGreaterThan(0);
 
   // SP6a D25's prototype (Task 14; spec §1.6, §1.4, §3.3): figures printed beside the rows, measured after every row and
   // outside their timing. On terrain.real's first D25_COLUMNS candidate columns, each on a GenContext and a store of
@@ -728,6 +811,12 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b and SP5c k
   // (outside a single run's ±15 %) and its limboMax ≤ 4,096 on both; D31's rule (§10.3) sets the cap.
   const descWins = [pasteMax, pasteLit].every((p) => p.stats.desc!.editMs < 0.85 * p.run.latency.p50 && p.stats.desc!.limboMax <= 4096);
   console.log(`§2.3's order: ${descWins ? 'y descending is faster and within the limbo bound on both rows' : 'y ascending stays'}`);
+  console.log(
+    `terrain.caves.warm ${ms(warmRun)} (the ${WARM_SPIRAL} × ${WARM_SPIRAL} spiral from (${rx0}, ${rz0}); ${wc} columns used; the carver path cache holds ${warmCache.size} of ${warmCache.capacity} paths after it; `
+    + `terrain.real, cold paths: p50 ${terrainRun.latency.p50.toFixed(3)} ms)`,
+  );
+  console.log(`carver.paths ${ms(pathsRun)} (one worm, one ravine and one underground worm per call; each alone: ${perKind.join('; ')})`);
+  console.log(`mesh.xray ${ms(xrayRun)} (meshXray alone on mesh.section's ${meshSections.length} sections; ${xc} calls, ${xrayQuads} pass-3 quads; mesh.section with pass 3: p50 ${meshRun.latency.p50.toFixed(3)} ms)`);
   const capLowered = pasteLit.run.latency.p50 > D31_LIT_P50_MAX_MS || pasteMax.run.latency.p99 > D31_MAX_P99_MAX_MS;
   console.log(
     `D31: paste.maxLit p50 ${pasteLit.run.latency.p50.toFixed(3)} ms (lowers above ${D31_LIT_P50_MAX_MS}), paste.max p99 ${pasteMax.run.latency.p99.toFixed(3)} ms `

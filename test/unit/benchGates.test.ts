@@ -5,7 +5,8 @@ import {
   absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, CALIBRATION_SPREAD_MAX, calibrationSpread, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS,
   D31_LIT_P50_MAX_MS, D31_MAX_P99_MAX_MS, gateFailures, ISLANDS_COLUMNS, ISLANDS_P50_MAX_MS, ISLANDS_P99_MAX_MS, ISLANDS_RUN, KILL_RATIO_MAX,
   LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, LIGHT_RUN, MESH_P50_MAX_MS, MESH_P99_MAX_MS, MESH_RUN, measureBracketed, P1_MAX_REGRESSION, parseBenchExempt,
-  PASTE_LIT_P99_MAX_MS, PASTE_LIT_RUN, PASTE_MAX_P99_MAX_MS, PASTE_RUN, PERSIST_FLUSH_P99_MAX_MS, PERSIST_RUN, ratioOf, RELIGHT_P95_MAX_MS, RELIGHT_RUN, ROW_ATTEMPTS_MAX, SESSION_COMMIT_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS, type Baselines,
+  PASTE_LIT_P99_MAX_MS, PASTE_LIT_RUN, PASTE_MAX_P99_MAX_MS, PASTE_RUN, PERSIST_FLUSH_P99_MAX_MS, PERSIST_RUN, ratioOf, RELIGHT_P95_MAX_MS, RELIGHT_RUN, ROW_ATTEMPTS_MAX, SESSION_COMMIT_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS,
+  CARVER_PATH_SOURCES, spiralCells, TERRAIN_WARM_RUN, WARM_SPIRAL, type Baselines,
 } from '../bench/gates';
 
 const base: Baselines = { machine: 'm', node: 'v24', date: '2026-09-27', killRatio: 1.2, kernels: { a: { nsPerEval: 10, ratio: 2 }, b: { nsPerEval: 5, ratio: 1 } } };
@@ -266,7 +267,7 @@ test('parseBenchExempt: a comma-separated list of BENCH_ROWS names, empty when u
   expect(parseBenchExempt([...BENCH_ROWS].reverse().join(','))).toEqual([...BENCH_ROWS].reverse());
 });
 
-test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, SP5b\'s persist.flush, then SP5c\'s paste.max and paste.maxLit', () => {
+test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, SP5b\'s persist.flush, SP5c\'s paste.max and paste.maxLit, then SP6a\'s terrain.caves.warm, carver.paths and mesh.xray', () => {
   expect(BENCH_ROWS).toEqual([
     'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
     'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
@@ -274,14 +275,16 @@ test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner a
     'store.alloc', 'density.corner', 'terrain.real', 'surface.column',
     'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
     'light.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
+    'terrain.caves.warm', 'carver.paths', 'mesh.xray',
   ]);
-  expect(BENCH_ROWS.slice(-6, -2)).toEqual(['light.column', 'mesh.section', 'relight.edit', 'persist.flush']);
+  expect(BENCH_ROWS.slice(-9, -5)).toEqual(['light.column', 'mesh.section', 'relight.edit', 'persist.flush']);
   expect(BENCH_ROWS).not.toContain('terrain.provisional');
   expect(new Set(BENCH_ROWS).size).toBe(BENCH_ROWS.length);
 });
 
-test('`BENCH_ROWS` ends `\'relight.edit\', \'persist.flush\', \'paste.max\', \'paste.maxLit\'` (SP5b §6.2 appends one flush\'s synchronous part, SP5c §10.3 the two maximum pastes)', () => {
-  expect(BENCH_ROWS.slice(-4)).toEqual(['relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit']);
+test('`BENCH_ROWS` ends `\'relight.edit\', \'persist.flush\', \'paste.max\', \'paste.maxLit\'`, then SP6a §10.5\'s `\'terrain.caves.warm\', \'carver.paths\', \'mesh.xray\'` (SP5b §6.2 appends one flush\'s synchronous part, SP5c §10.3 the two maximum pastes, SP6a §10.5 the streaming T, the carver paths and the X-ray pass)', () => {
+  expect(BENCH_ROWS.slice(-7, -3)).toEqual(['relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit']);
+  expect(BENCH_ROWS.slice(-3)).toEqual(['terrain.caves.warm', 'carver.paths', 'mesh.xray']);
 });
 
 test('test/baselines.json records every bench row, so none is silently ungated', () => {
@@ -348,3 +351,27 @@ test('relight.edit run options (SP5a §6.2): one probe, one warm-up and 256 time
   // The cycle (torch place, torch break, stone place, stone break, shaft open, shaft close) ends where it began.
   expect(calls % 6).toBe(0);
 }, 30_000);
+
+test('terrain.caves.warm run options (SP6a §10.5): one probe, one warm-up and 254 timed calls, the 16 × 16 spiral\'s 256 columns each filled once', async () => {
+  expect(WARM_SPIRAL).toBe(16);
+  expect(TERRAIN_WARM_RUN).toEqual({ iterations: 254, time: 0, warmupIterations: 1, warmupTime: 0 });
+  expect(await benchCalls(TERRAIN_WARM_RUN)).toBe(WARM_SPIRAL * WARM_SPIRAL);
+}, 30_000);
+
+test('spiralCells (SP6a §10.5, terrain.caves.warm): the first n² cells of a square spiral from (0, 0), each next to the one before, filling an n × n square', () => {
+  expect(spiralCells(1)).toEqual([[0, 0]]);
+  expect(spiralCells(2)).toEqual([[0, 0], [1, 0], [1, 1], [0, 1]]);
+  expect(spiralCells(3)).toEqual([[0, 0], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]]);
+  const cells = spiralCells(WARM_SPIRAL);
+  expect(cells.length).toBe(256);
+  expect(new Set(cells.map(([x, z]) => `${x},${z}`)).size).toBe(256);
+  for (let i = 1; i < cells.length; i++) expect(Math.abs(cells[i]![0] - cells[i - 1]![0]) + Math.abs(cells[i]![1] - cells[i - 1]![1])).toBe(1);
+  const xs = cells.map(([x]) => x), zs = cells.map(([, z]) => z);
+  expect([Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)]).toEqual([-7, 8, -7, 8]);
+  expect(() => spiralCells(0)).toThrow(RangeError);
+  expect(() => spiralCells(1.5)).toThrow(RangeError);
+});
+
+test('carver.paths sources (SP6a §10.5): 64 sources per kind whose roll succeeds', () => {
+  expect(CARVER_PATH_SOURCES).toBe(64);
+});
