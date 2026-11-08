@@ -666,13 +666,13 @@ terrain   = tap('terrain', interpolated( ref body ))      body = col.offset + co
 detail    = noise('detail') λ 10, 1 oct × amp(E) 0.6-1.5            (VOXEL, only in straddling cells)
 detailG   = rangeChoice(interpolated(ref body), −1e9, 16, detail, 0)                   (skipped where T ≥ 16)
 T         = ref body at a slot's corner, interpolated(ref body) at voxel level        (the depth below the terrain's own surface)
-fl(v)     = max(v, −48)       sky(v) = rangeChoice(T, −1e9, −8, 32, v)       ramp = clamp((8 − T)·2, 0, 32)
+fl(v)     = max(v, −48)       sky(v) = rangeChoice(T, −1e9, −8, 32, v)       ramp = clamp((10 − T)·2, 0, 32)
 rough     = (−0.05 − 0.05·Nrm)·(−0.4 + |Nr|)                                            Nr λ 32, Nrm λ 128, 1 oct
-cheese    = 4·L² + clamp(Nch + 0.27 − 0.1·Nra, −1, 1) + clamp((12 − T)/24, 0, 0.5)     Nch λxz 96 λy 144, 3 oct, double; L λxz 96 λy 16, 1 oct; Nra 2D λ 1536, 2 oct
+cheese    = 4·L² + clamp(Nch + 0.5 − 0.1·Nra, −1, 1) + clamp((12 − T)/24, 0, 0.5)     Nch λxz 96 λy 144, 3 oct, double; L λxz 96 λy 96, 1 oct; Nra 2D λ 1536, 2 oct
 pillars   = (2·Np − 1 − rare)·(0.55 + 0.55·thk)³                                       Np λxz 30 λy 400; rare, thk λxz 60 λy 400
-spag3D    = rough + clamp(rm·max(|S1|, |S2|) − 0.0765 − 0.0115·thk − 0.05·Nrb, −1, 1)  S1, S2 λ 64 at p/rm, rm 0.75, 1, 1.5, 2 by rarity λ 128; thk λ 64; Nrb 2D λ 1024, 2 oct
+spag3D    = rough + clamp(rm·max(|S1|, |S2|) − 0.13 − 0.0115·thk − 0.05·Nrb, −1, 1)  S1, S2 λ 128 at p/rm, rm 0.75, 1, 1.5, 2 by rarity λ 128; thk λ 64; Nrb 2D λ 1024, 2 oct
 spag2D    = clamp(max(rm·|S| + 0.083·tm, (|8·Nel + yGrad(−64→8, 320→−40)| + tm)³), −1, 1), tm = −0.95 − 0.35·thk   S λ 128 at p/rm, rm 0.5, 0.75, 1, 2, 3 by rarity λ 128; Nel 2D λ 256, 2 oct; thk λ 64
-noodle    = −0.075 − 0.025·thk + 1.5·max(|Ra|, |Rb|) + 4·max(0, −(Nt − 0.1·Nrb))      Nt λ 64, thk λ 64, Ra/Rb λ 18; each noise its own interpolated slot, combined per voxel
+noodle    = −0.11 − 0.025·thk + 1.5·max(|Ra|, |Rb|) + 4·max(0, −(Nt − 0.1·Nrb))      Nt λ 64, thk λ 64, Ra/Rb λ 18; each noise its own interpolated slot, combined per voxel
 entr      = min(Ne·(1/6) + 0.37 + yGrad(−10→0.3, 30→0), rough + clamp(max(|E1|,|E2|) − 0.08, −1, 1))   Ne λ 64, amps [0.5,1.0]; E1, E2 λ 64
 E         = tap('entrances', interpolated( fl(16·entr) + cap_e ))                      (entrances NOT depth-ramped)
 C, S3, S2 = tap('cheese' | 'spag3d' | 'spag2d', interpolated( sky( fl(16·f) + ramp + cap_f ) ))

@@ -103,13 +103,14 @@ describe('the caves group (SP6a spec §4)', () => {
     const carver = /^caves\.(worms|undergroundWorms|ravines)\./;
     const leaves = SCHEMA.leaves.filter((l) => l.path.startsWith('caves.') && !l.path.startsWith('caves.noises.') && !carver.test(l.path));
     expect(leaves.map((l) => [l.path, l.leaf.def, l.leaf.min, l.leaf.max])).toEqual([
-      ['caves.cheese.offset', 0.27, -0.5, 1],
+      // Task 38's tuning (spec §1.2): offset 0.27 → 0.5, spaghetti 3D 0.0765 → 0.13, noodles 0.075 → 0.11, surfaceDepth 8 → 10.
+      ['caves.cheese.offset', 0.5, -0.5, 1],
       ['caves.cheese.regional', 0.1, 0, 0.4],
       ['caves.cheese.layerAmp', 4, 0, 8],
       ['caves.cheese.roofDepth', 12, 0, 48],
       ['caves.cheese.minY', -56, -64, 320],
       ['caves.cheese.maxY', 320, -64, 320],
-      ['caves.spaghetti3d.thickness', 0.0765, 0, 0.3],
+      ['caves.spaghetti3d.thickness', 0.13, 0, 0.3],
       ['caves.spaghetti3d.thicknessVar', 0.0115, 0, 0.1],
       ['caves.spaghetti3d.regional', 0.05, 0, 0.2],
       ['caves.spaghetti3d.scales.s0', 0.75, 1 / 16, 16],
@@ -128,7 +129,7 @@ describe('the caves group (SP6a spec §4)', () => {
       ['caves.spaghetti2d.minY', -64, -64, 320],
       // 215, not 320: the highest default from 208 to 244 (no generated output moves) whose U2 step has a witness (spec §4).
       ['caves.spaghetti2d.maxY', 215, -64, 320],
-      ['caves.noodles.thickness', 0.075, 0, 0.3],
+      ['caves.noodles.thickness', 0.11, 0, 0.3],
       ['caves.noodles.ridgeMul', 1.5, 0.5, 4],
       ['caves.noodles.regional', 0.1, 0, 0.4],
       ['caves.noodles.minY', -60, -64, 320],
@@ -138,7 +139,7 @@ describe('the caves group (SP6a spec §4)', () => {
       ['caves.entrances.threshold', 0.08, 0, 0.5],
       ['caves.entrances.minY', -64, -64, 320],
       ['caves.entrances.maxY', 320, -64, 320],
-      ['caves.limits.surfaceDepth', 8, 0, 32],
+      ['caves.limits.surfaceDepth', 10, 0, 32],
       // Task 9: the wet roof's depth d_w (closed within d_w + 4 of the bed, open from d_w + 8 + bandSpan).
       ['caves.limits.waterDepth', 16, 8, 48],
       ['caves.limits.bandSpan', 16, 1, 32],
@@ -162,7 +163,8 @@ describe('the caves group (SP6a spec §4)', () => {
     };
     expect(Object.keys(n).map((id) => row(id as keyof typeof n))).toEqual([
       ['cheese', 3, 96, 144, 3, true, null],
-      ['layer', 3, 96, 16, 1, false, null],
+      // Task 38: L isotropic (λy 16 → 96), S1 and S2 λ 64 → 128 (spec §1.2).
+      ['layer', 3, 96, 96, 1, false, null],
       ['cheeseRegional', 2, 1536, 1536, 2, false, null],
       ['pillar', 3, 30, 400, 1, false, null],
       ['pillarRare', 3, 60, 400, 1, false, null],
@@ -172,8 +174,8 @@ describe('the caves group (SP6a spec §4)', () => {
       ['entrance', 3, 64, 64, 2, false, [0.5, 1.0]],
       ['entranceA', 3, 64, 64, 1, false, null],
       ['entranceB', 3, 64, 64, 1, false, null],
-      ['spag3dA', 3, 64, 64, 1, false, null],
-      ['spag3dB', 3, 64, 64, 1, false, null],
+      ['spag3dA', 3, 128, 128, 1, false, null],
+      ['spag3dB', 3, 128, 128, 1, false, null],
       ['spag3dRarity', 3, 128, 128, 1, false, null],
       ['spag3dThickness', 3, 64, 64, 1, false, null],
       ['spagRegional', 2, 1024, 1024, 2, false, null],
@@ -313,16 +315,16 @@ describe('the cave terms of the default tree (SP6a spec §1.1-§1.2)', () => {
     }
   });
 
-  test('with caves.limits.surfaceDepth 8 the ramp is 0 at T ≥ 8, 16 at T = 0 and 32 at T ≤ −8', () => {
+  test('with caves.limits.surfaceDepth 10 the ramp is 0 at T ≥ 10, 20 at T = 0 and 32 at T ≤ −6', () => {
     const ramp = at(expr, `${P.cheese}.x.x.outside.a.b`) as Expr;
     expect(ramp).toMatchObject({ op: 'clamp', lo: 0, hi: 32 });
-    expect(DEFAULTS.caves.limits.surfaceDepth).toBe(8);
+    expect(DEFAULTS.caves.limits.surfaceDepth).toBe(10);
     const s = dc.column(0, 0);
     const rampAt = (t: number): number => {
       const e: DensityExpr = { root: ramp, defs: { body: { op: 'const', v: t } } };
       return createDensityReference(e, dc.noises).voxel(s, 0, 0, 0);
     };
-    expect([20, 8, 4, 0, -4, -8, -20].map(rampAt)).toEqual([0, 0, 8, 16, 24, 32, 32]);
+    expect([20, 10, 6, 0, -4, -6, -20].map(rampAt)).toEqual([0, 0, 8, 20, 28, 32, 32]);
   });
 });
 
@@ -587,28 +589,28 @@ describe('the noodle (SP6a spec §1.1, §1.3)', () => {
   const SIGMA = 3;
   const grid = [-SIGMA, -2, -1, -0.5, -0.1, 0, 0.1, 0.5, 1, 2, SIGMA];
 
-  test('with Nrb = 0 and Nn ≤ −0.04 the noodle is closed (> 0) for every Kn, An, Bn in ±clampSigma', () => {
-    // Closure needs 4·|Nn| ≥ thickness + 0.025·clampSigma = 0.15 at the defaults, so Nn ≤ −0.0375.
+  test('with Nrb = 0 and Nn ≤ −0.05 the noodle is closed (> 0) for every Kn, An, Bn in ±clampSigma', () => {
+    // Closure needs 4·|Nn| ≥ thickness + 0.025·clampSigma = 0.185 at the defaults, so Nn ≤ −0.04625.
     expect(DEFAULTS.caves.noises.noodleThickness.clampSigma).toBe(SIGMA);
-    for (const nn of [-0.04, -0.05, -0.1, -0.5, -1, -SIGMA]) {
+    for (const nn of [-0.05, -0.1, -0.5, -1, -SIGMA]) {
       for (const kn of grid) for (const an of grid) for (const bn of grid) {
         const v = noodleAt(nn, kn, an, bn);
         if (!(v > 0)) throw new Error(`noodle ${v} at Nn ${nn}, Kn ${kn}, An ${an}, Bn ${bn}`);
       }
     }
-    // The tightest case: Kn = clampSigma, An = Bn = 0 is open at Nn = −0.037 and closed at −0.038.
-    expect(noodleAt(-0.037, SIGMA, 0, 0)).toBeLessThan(0);
-    expect(noodleAt(-0.038, SIGMA, 0, 0)).toBeGreaterThan(0);
+    // The tightest case: Kn = clampSigma, An = Bn = 0 is open at Nn = −0.046 and closed at −0.047.
+    expect(noodleAt(-0.046, SIGMA, 0, 0)).toBeLessThan(0);
+    expect(noodleAt(-0.047, SIGMA, 0, 0)).toBeGreaterThan(0);
   });
 
-  test('at Kn = 0 and An = Bn = 0 it closes by Nn = −0.019 (−thickness / 4), and is open at the full toggle (Nn ≥ 0)', () => {
-    expect(DEFAULTS.caves.noodles.thickness).toBe(0.075);
-    expect(noodleAt(-0.018, 0, 0, 0)).toBeLessThan(0);
-    expect(noodleAt(-0.019, 0, 0, 0)).toBeGreaterThan(0);
-    for (const nn of [0, 0.5, SIGMA]) expect(noodleAt(nn, 0, 0, 0)).toBe(16 * -0.075);
-    // The ridges: open only where max(|An|, |Bn|) < thickness / ridgeMul = 0.05.
-    expect(noodleAt(0, 0, 0.049, -0.049)).toBeLessThan(0);
-    expect(noodleAt(0, 0, 0.051, 0)).toBeGreaterThan(0);
+  test('at Kn = 0 and An = Bn = 0 it closes by Nn = −0.0275 (−thickness / 4), and is open at the full toggle (Nn ≥ 0)', () => {
+    expect(DEFAULTS.caves.noodles.thickness).toBe(0.11);
+    expect(noodleAt(-0.027, 0, 0, 0)).toBeLessThan(0);
+    expect(noodleAt(-0.028, 0, 0, 0)).toBeGreaterThan(0);
+    for (const nn of [0, 0.5, SIGMA]) expect(noodleAt(nn, 0, 0, 0)).toBe(16 * -0.11);
+    // The ridges: open only where max(|An|, |Bn|) < thickness / ridgeMul ≈ 0.0733.
+    expect(noodleAt(0, 0, 0.073, -0.073)).toBeLessThan(0);
+    expect(noodleAt(0, 0, 0.074, 0)).toBeGreaterThan(0);
   });
 
   test('the noodle noises are not evaluated at corners more than 40 blocks outside y −60 … 64 (a counting stub)', () => {
@@ -644,7 +646,7 @@ describe('the noodle (SP6a spec §1.1, §1.3)', () => {
     walk(at(dc.expr, P.noodle));
     for (const e of slots) constants.push(ref.corner(s, e, 0, 48, 0));
     expect(constants).toEqual([0, 1, 1, -1]);
-    expect(noodleAt(-1, 0, 1, 1)).toBe(16 * (-0.075 + 1.5 + 4));
+    expect(noodleAt(-1, 0, 1, 1)).toBe(16 * (-0.11 + 1.5 + 4));
   });
 });
 

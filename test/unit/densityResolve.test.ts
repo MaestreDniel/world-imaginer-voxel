@@ -247,8 +247,9 @@ function checkCompiled(seedText: string, patch: ParamsPatch, what: string, voxel
   // (g_w CSE-shared in the four slots, the noodle cap's at voxel level, S_w once, the root's two adds; its `interpolated(ref
   // body)` shares the terrain's slot), a third position slot and a seventh column slot (wet′ = clamp(4·wetMask) at the
   // voxel's position and at the corner columns). Task 14's G_f rule: 492 (the caps' gentle rises 0.4, 5.8, 0.5, 0.3 and
-  // 0.4 are four distinct constants where 16 and 2.4 were two).
-  if (seedText === '42' && Object.keys(patch).length === 0) expect([shape(a), shape(b)]).toEqual([[492, 3, 7, 10], [51, 2, 2, 1]]);
+  // 0.4 are four distinct constants where 16 and 2.4 were two). Task 38's tuned defaults: 491 (the cheese offset 0.5
+  // folds to the constant 0.5 that spaghetti 3D's gentle rise already holds).
+  if (seedText === '42' && Object.keys(patch).length === 0) expect([shape(a), shape(b)]).toEqual([[491, 3, 7, 10], [51, 2, 2, 1]]);
   const terrainSlot = a.compiled.interpolatedSlot((a.expr.root as unknown as { a: { a: { a: { x: { a: { x: InterpolatedExpr } } } } } }).a.a.a.x.a.x);
   expect(terrainSlot, what).toBeGreaterThanOrEqual(0);
   for (const [cx, cz] of COLUMNS) {

@@ -29,15 +29,19 @@ const TAP: Readonly<Record<Family, string>> = { entrances: 'entrances', cheese: 
 /** G_f, the tree's literals (SP6a §1.4). */
 const GENTLE: Readonly<Record<Family, number>> = { entrances: 0.4, cheese: 5.8, spaghetti3d: 0.5, spaghetti2d: 0.3, noodles: 0.4 };
 const S = DEFAULTS.caves.limits.bandSpan;
-/** The cave class columns of seed 42 (pinned in test/unit/liveness.test.ts): caverns, then tunnels. */
-const CAVERNS: readonly [number, number] = [546, 25857];
-const TUNNELS: readonly [number, number] = [4705, -24478];
+/**
+ * The cave class columns of seed 42 (pinned in test/unit/liveness.test.ts): caverns, then tunnels. Task 38's tuned
+ * defaults moved both; spaghetti 2D keeps its region at (4705, −24478), the tunnels' column before Task 38 and the
+ * caverns' after it, whose layer lies in the slab below (the new tunnels' column holds little spaghetti 2D air there).
+ */
+const CAVERNS: readonly [number, number] = [4705, -24478];
+const TUNNELS: readonly [number, number] = [-24763, -17996];
 /** Where each family's air lies around its class column (the region, the y slab), and where its band is placed. */
 const HOME: Readonly<Record<Family, { readonly region: readonly [number, number]; readonly band: readonly [number, number] }>> = {
   entrances: { region: CAVERNS, band: [56, 72] },
   cheese: { region: CAVERNS, band: [40, 64] },
   spaghetti3d: { region: TUNNELS, band: [-16, 16] },
-  spaghetti2d: { region: TUNNELS, band: [-40, -36] },
+  spaghetti2d: { region: CAVERNS, band: [-40, -36] },
   noodles: { region: CAVERNS, band: [40, 64] },
 };
 
@@ -189,13 +193,14 @@ describe('continuity across the spaghetti rarity edges (SP6a spec §1.3)', () =>
 });
 
 describe('continuity across the surface ramp\'s ends (SP6a spec §1.3, §1.4)', () => {
-  test('every jump in the cells where T crosses 8 or −8 stays within 2·L (the ends moved by surfaceDepth 32) + 2·|ΔT| per block', () => {
-    expect(DEFAULTS.caves.limits.surfaceDepth).toBe(8);
+  test('every jump in the cells where T crosses 10 or −6 stays within 2·L (the ends moved by surfaceDepth 32) + 2·|ΔT| per block', () => {
+    // The ramp clamp((surfaceDepth − T)·2, 0, 32) ends at T = surfaceDepth and T = surfaceDepth − 16.
+    expect(DEFAULTS.caves.limits.surfaceDepth).toBe(10);
     for (const f of ['cheese', 'spaghetti3d', 'spaghetti2d'] as const) {
       const tap = TAP[f];
       const dc = dcOf({});
       const own = dcOf({ caves: { limits: { surfaceDepth: 32 } } });
-      for (const end of [8, -8]) {
+      for (const end of [10, -6]) {
         const ex = newExcess();
         for (const [cx, cz] of chunksOf(HOME[f].region)) {
           dc.column(cx, cz);

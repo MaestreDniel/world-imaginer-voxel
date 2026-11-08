@@ -6615,7 +6615,7 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     expect(SRC()).toMatch(/active: \(\) => mapRef === null \|\| mapRef\.owner === 'world',/);
   });
 
-  test('Review Focus 1: X on, an Apply of `caves.cheese.offset` 0.27 → 0.20 settling over 30 fake frames with PageDown at frame 5 and X twice at frames 10 and 11: the strip reads the moved band, `xrayOn` is 1 at the end, every column\'s shown seq is the Apply\'s, the stale count reaches 0', async () => {
+  test('Review Focus 1: X on, an Apply of `caves.cheese.offset` 0.5 → 0.20 settling over 30 fake frames with PageDown at frame 5 and X twice at frames 10 and 11: the strip reads the moved band, `xrayOn` is 1 at the end, every column\'s shown seq is the Apply\'s, the stale count reaches 0', async () => {
     const flush = (): Promise<void> => new Promise((r) => { setImmediate(r); });
     // The renderer's X-ray over a real material system, the sky dome and a clear colour (no GL context in Node).
     const materials = createMaterialSystem({ variant: 'batch', ao: true, smoothLight: true }, createFlatColorArray());
@@ -6663,7 +6663,7 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     // next generation, as the apply control does it.
     const session = openMapSession(DEFAULT_MAP_STATE, () => [1, 2]);
     const s0 = session.state;
-    expect((s0.params as unknown as { caves: { cheese: { offset: number } } }).caves.cheese.offset).toBe(0.27);
+    expect((s0.params as unknown as { caves: { cheese: { offset: number } } }).caves.cheese.offset).toBe(0.5);
     const next = structuredClone(s0.params) as unknown as { caves: { cheese: { offset: number } } };
     next.caves.cheese.offset = 0.2;
     const draft = (params: unknown) => {

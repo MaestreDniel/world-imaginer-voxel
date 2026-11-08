@@ -418,21 +418,23 @@ describe('islands.enabled on trees that do not match it (amplified\'s window, se
     // Unticking the flag removes the islands (the mask is 0, so the term's gate gives −1e6) and their water rule, not
     // the preset's rules: 47 of the 64 columns keep the islands palette on their peaks (mostly stone → dirt or grass).
     // SP6a's caves hollow the peaks, so more runs are topped above y 180 (D31, accepted until SP12); the island cap closes
-    // them from y 176 up: 49 columns, 35,260 voxels with the carvers (Task 27; 48 and 32,940 before them, with D25's
+    // them from y 176 up: 49 columns, 30,449 voxels with Task 38's tuned defaults (35,260 with the carvers, Task 27; 48
+    // and 32,940 before them, with D25's
     // lever 5, Task 15b; 31,717 with the caps' gentle rises from
     // D25, Task 14; 31,584 before them,
     // 49 and 37,136 with the depth bands' caps, 37,417 with spaghetti and the noodle, 37,106 with entrances, cheese and
     // pillars; 23,585 before SP6a).
-    expect({ solidity, fluid, outside, changed, columns }).toEqual({ solidity: 0, fluid: 0, outside: 0, changed: 35260, columns: 49 });
+    expect({ solidity, fluid, outside, changed, columns }).toEqual({ solidity: 0, fluid: 0, outside: 0, changed: 30449, columns: 49 });
   }, 120_000);
 
   // SP6a's caves detach more runs above y 180 under peaks (default 5,953 voxels, 1,373 positions, 34 columns; amplified
   // 9,705, 2,073, 41 and 1,613 snow → stone before them; with entrances, cheese and pillars default 7,536, 1,948, 37 and
   // amplified 15,860, 4,903, 45, 4,224; before D25's lever 5, default 7,538, 1,949, 37 and amplified 15,994, 4,970, 45,
-  // 4,291; before the carvers, Task 27, default 7,577, 1,955, 37 and amplified 17,529, 5,056, 45, 4,252). With the
+  // 4,291; before the carvers, Task 27, default 7,577, 1,955, 37 and amplified 17,529, 5,056, 45, 4,252; before Task
+  // 38's tuned defaults, default 7,654, 1,962, 37 and amplified 17,544, 5,056, 45, 4,252). With the
   // carvers 15 of amplified's carved voxels differ (wet positions under a run above y 180, where the flag's island rule
   // moves the density top that the carvers' wet shrink reads, §2.4); the default window has none.
-  test.each([['default', 7654, 1962, 37, 0, 0], ['amplified', 17544, 5056, 45, 4252, 15]] as const)('%s with the flag on: the same solidity and water (but carved voxels at wet positions under a run above y 180, SP6a §2.4); states change only where a run lies above y 180, stage == reference == compiled.state there', (id, wantVoxels, wantPositions, wantColumns, wantSnowToStone, wantCarved) => {
+  test.each([['default', 6546, 1638, 36, 0, 0], ['amplified', 13651, 3623, 42, 2964, 15]] as const)('%s with the flag on: the same solidity and water (but carved voxels at wet positions under a run above y 180, SP6a §2.4); states change only where a run lies above y 180, stage == reference == compiled.state there', (id, wantVoxels, wantPositions, wantColumns, wantSnowToStone, wantCarved) => {
     const params = resolveProfile(id);
     const on = withFlag(params, true), off = withFlag(params, false);
     const probeSc = createSurfaceContext(on);

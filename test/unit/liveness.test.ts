@@ -30,11 +30,18 @@ import { ctxFor } from '../harness/gen';
 /** SP3e's island class column at seed 42 (spec §5.6) and its index among the U2.islands draws. */
 const ISLAND_PIN: LivenessColumn = { cx: 975, cz: -735, cls: 'island' };
 const ISLAND_DRAW = 33;
-/** SP6a's cave class columns at seed 42 (its spec §4), one per scan slot, and their indices among the sp6a.liveness.caves draws. */
+/**
+ * SP6a's cave class columns at seed 42 (its spec §4), one per scan slot, and their indices among the sp6a.liveness.caves
+ * draws. Task 38's tuned defaults moved both: the caverns' (546, 25857) at draw 7 and the tunnels' (4705, −24478) at
+ * draw 224 before it.
+ */
 const CAVE_PINS: Readonly<Record<CaveSlot, readonly [LivenessColumn, number]>> = {
-  caverns: [{ cx: 546, cz: 25857, cls: 'cave' }, 7],
-  tunnels: [{ cx: 4705, cz: -24478, cls: 'cave' }, 224],
+  caverns: [{ cx: 4705, cz: -24478, cls: 'cave' }, 224],
+  tunnels: [{ cx: -24763, cz: -17996, cls: 'cave' }, 314],
 };
+/** The two cave class columns' verdict strings. */
+const CAVERNS_VIA = 'cave column (4705, -24478)';
+const TUNNELS_VIA = 'cave column (-24763, -17996)';
 /**
  * The leaves of SP6a Tasks 6, 7, 8, 9 and 27 (the caves group): U2 covers 73 + 19 + 30 + 11 + 1 + 1 + 36 = 171 leaves
  * (Task 9: the island cap's capTop, then the wet roof's waterDepth; Task 27: the 36 carver leaves).
@@ -61,14 +68,14 @@ const BAND_LEAVES = [
  * none), spaghetti 2D's maxY 215 on its witness (R5).
  */
 const BAND_PINS: Readonly<Record<(typeof BAND_LEAVES)[number], string>> = {
-  'caves.cheese.minY': 'cave column (546, 25857)',
-  'caves.cheese.maxY': 'amplified witness column (-20297, -13632)',
-  'caves.spaghetti3d.minY': 'cave column (546, 25857)',
-  'caves.spaghetti3d.maxY': 'amplified witness column (-1430, 31644)',
-  'caves.spaghetti2d.minY': 'cave column (4705, -24478)',
+  'caves.cheese.minY': TUNNELS_VIA,
+  'caves.cheese.maxY': 'amplified witness column (15998, 4660)',
+  'caves.spaghetti3d.minY': TUNNELS_VIA,
+  'caves.spaghetti3d.maxY': 'amplified witness column (15676, 27143)',
+  'caves.spaghetti2d.minY': CAVERNS_VIA,
   'caves.spaghetti2d.maxY': 'witness column (-8539, 19151)',
-  'caves.noodles.minY': 'land column (-15542, -30245)',
-  'caves.noodles.maxY': 'cave column (546, 25857)',
+  'caves.noodles.minY': CAVERNS_VIA,
+  'caves.noodles.maxY': CAVERNS_VIA,
   'caves.entrances.minY': 'badlands column (-26426, -31088)',
   'caves.entrances.maxY': 'amplified witness column (17330, 32119)',
 };
@@ -82,29 +89,32 @@ const ONE_STEP = [
   'caves.worms.floorMin', 'caves.worms.roomYScaleMin', 'caves.worms.roomYScaleMax', 'caves.limits.capTop',
 ];
 /**
- * Each carver leaf's U2 verdict at seed 42 (Task 27, ruling P18): most worm leaves on the caverns' cave column, the
- * underground worms' start range on the tunnels', the rest on their carver witness (the spiral's first source whose
- * path a step changes; for `undergroundWorms.maxY` the first reaching its shrink's band).
+ * Each carver leaf's U2 verdict at seed 42 (Task 27, ruling P18; re-pinned at Task 38's tuned defaults): most worm
+ * leaves and the underground worms' start range on the caverns' cave column, the worms' chance on the snowline class
+ * column, their floorMin and roomChance on a land class column, the ravine leaves but vRotation on the tunnels' cave
+ * column, the rest on their carver witness (the spiral's first source whose path a step changes; for
+ * `undergroundWorms.maxY` the first reaching its shrink's band).
  */
 const CARVER_PINS: Readonly<Record<string, string>> = {
+  'caves.worms.chance': 'snowline column (-25681, 32120)',
+  'caves.worms.floorMin': 'land column (-25833, 16792)',
+  'caves.worms.roomChance': 'land column (-25833, 16792)',
   'caves.worms.branchChance': 'carver witness column (-3, -5)',
   'caves.worms.roomYScaleMin': 'carver witness column (5, 5)',
   'caves.worms.roomYScaleMax': 'carver witness column (-3, -5)',
   'caves.undergroundWorms.chance': 'carver witness column (3, -6)',
-  'caves.undergroundWorms.startYMin': 'cave column (4705, -24478)',
-  'caves.undergroundWorms.startYMax': 'cave column (4705, -24478)',
   'caves.undergroundWorms.maxY': 'carver witness column (-2, -2)',
-  'caves.ravines.chance': 'carver witness column (0, -3)',
+  'caves.ravines.vRotation': 'carver witness column (5, 1)',
 };
-/** The ravine leaves other than the chance: decided on the first ravine's column of the spiral that a step changes. */
-const RAVINE_WITNESS = 'carver witness column (5, 1)';
+/** The ravine leaves but vRotation: decided on the tunnels' cave column. */
+const RAVINE_VIA = TUNNELS_VIA;
 
 /** The island cap's top (SP6a Task 9), decided on a floating_islands base at its own witness. */
 const CAP_TOP = 'caves.limits.capTop';
 /** The wet roof's depth (SP6a Task 9), meant for the coast class column (it acts under water only). */
 const WATER_DEPTH = 'caves.limits.waterDepth';
 /** capTop's witness at seed 42: its column and the scan's figures (draws of sp6a.liveness.capTop, examined, hashed). */
-const CAP_TOP_PIN = { via: 'floating_islands witness column (28062, -9459)', draws: 350, examined: 17, checks: 1 } as const;
+const CAP_TOP_PIN = { via: 'floating_islands witness column (-4875, 15131)', draws: 59, examined: 3, checks: 1 } as const;
 
 const leaf = (path: string) => {
   const info = SCHEMA.leaves.find((l) => l.path === path);
@@ -692,7 +702,7 @@ describe('the cave class columns (SP6a spec §4)', () => {
       const r = leafLiveness(CTX, p, all);
       expect([p, r.live]).toEqual([p, true]);
       via[p] = r.via!;
-      const pin = CARVER_PINS[p] ?? (p.startsWith('caves.ravines.') ? RAVINE_WITNESS : 'cave column (546, 25857)');
+      const pin = CARVER_PINS[p] ?? (p.startsWith('caves.ravines.') ? RAVINE_VIA : CAVERNS_VIA);
       expect([p, r.via]).toEqual([p, pin]);
       if (r.cls === null) {
         // Decided on its witness: the scan's figures stay within its bounds, and the column changes its T output.
@@ -756,7 +766,7 @@ describe('the depth-band leaves (SP6a Task 8; rulings P3, P4, R5)', () => {
 
   test('P3: the maxY 320 of cheese, spaghetti 3D and the entrances has no witness on the default base; each has one on the amplified base, holding its air above y 272', () => {
     const amplified = createGenContext(seedFromInput('42'), resolveProfile('amplified'));
-    const draws: Record<string, number> = { 'caves.cheese.maxY': 42, 'caves.spaghetti3d.maxY': 1351, 'caves.entrances.maxY': 677 };
+    const draws: Record<string, number> = { 'caves.cheese.maxY': 123, 'caves.spaghetti3d.maxY': 412, 'caves.entrances.maxY': 677 };
     const taps: Record<string, string> = { 'caves.cheese.maxY': 'cheese', 'caves.spaghetti3d.maxY': 'spag3d', 'caves.entrances.maxY': 'entrances' };
     for (const p of Object.keys(draws)) {
       expect(getPath(DEFAULTS, p)).toBe(320);
@@ -790,9 +800,9 @@ describe('the depth-band leaves (SP6a Task 8; rulings P3, P4, R5)', () => {
   test('P4: each minY leaf (and the noodle\'s maxY) also has its own band witness off the class columns, near the bottom', () => {
     const pins: Array<[string, string, number]> = [
       ['caves.cheese.minY', 'witness column (-26773, -930)', 2],
-      ['caves.spaghetti3d.minY', 'witness column (-13387, -13851)', 23],
+      ['caves.spaghetti3d.minY', 'witness column (12710, -20366)', 5],
       ['caves.spaghetti2d.minY', 'witness column (-17888, 14467)', 8],
-      ['caves.noodles.minY', 'witness column (-26773, -930)', 2],
+      ['caves.noodles.minY', 'witness column (-1578, -11634)', 3],
       ['caves.entrances.minY', 'witness column (10701, -27440)', 13],
       ['caves.noodles.maxY', 'witness column (-22165, -25285)', 3],
     ];
