@@ -746,6 +746,19 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       s.dispose();
     });
 
+    test('setXray (SP6a, Task 48) changes no count, byte, drawn index or reveal, on or off', () => {
+      const r = make();
+      r.stage(fakePayload(1, 1, [opaque(3), { sy: 3, pass: 3, quads: 2 }, water(4)]), 1);
+      pumpAll(r);
+      const before = { counts: { ...counts(r) }, bytes: r.gpuBytes(), drawn: visibleIndices(r.root) };
+      for (const on of [true, false, true]) {
+        r.setXray(on);
+        expect({ counts: { ...counts(r) }, bytes: r.gpuBytes(), drawn: visibleIndices(r.root) }).toEqual(before);
+        expect(r.isRevealed(1, 1)).toBe(true);
+      }
+      r.dispose();
+    });
+
     test('on a swap that needs no growth, gpuBytes() returns to the old level after the swap\'s releases; a swap that grew its region is compared with the post-growth size', () => {
       const old = fakePayload(2, 2, rowsOf(10, 3, 3));
       const r = showing(old);

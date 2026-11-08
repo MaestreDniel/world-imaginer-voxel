@@ -141,6 +141,13 @@ export interface SectionRenderer {
   /** Sets the floating origin (blocks): moves each region's object, O(regions). */
   setOrigin(x: number, y: number, z: number): void;
   /**
+   * The X-ray's state (SP6a spec §5.3; Task 48 lever 4c), off until called: while it is off RegionBatch's X-ray batches
+   * draw nothing (no per-instance cull or list, a zero multi-draw count) but stay in the scene, so three keeps uploading
+   * their rows and the first toggle uploads nothing; RegionMesh's X-ray objects draw as before (their vertex shader
+   * collapses them). Changes no count, byte or reveal; allocates nothing.
+   */
+  setXray(on: boolean): void;
+  /**
    * Orders translucent geometry back to front from the camera at (camX, camY, camZ), given in the frame of
    * `camera.position`, that is relative to the current floating origin (ruling P17). A no-op on RegionBatch, where
    * `BatchedMesh` sorts its instances itself; RegionMesh orders its regions by centre.

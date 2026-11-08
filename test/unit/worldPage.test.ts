@@ -6711,7 +6711,8 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
       getClearAlpha: () => clearAlpha,
       setClearColor: (c: Color, a = 1) => { clearColor.copy(c); clearAlpha = a; },
     };
-    const control = createXrayControl(materials, sky, clear as never);
+    // The world's sink is a fake here: no section renderer to tell (its X-ray batches' draw, Task 48 lever 4c).
+    const control = createXrayControl(materials, sky, clear as never, { setXray() {} });
     const fly = { y: 80.5 };
     const shownNotices: string[] = [];
     const strip = createXrayStrip(dom.body as unknown as HTMLElement);

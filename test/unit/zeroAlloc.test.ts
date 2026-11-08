@@ -479,7 +479,7 @@ async function buildAtRest(): Promise<AtRest> {
       clearAlpha = a;
     },
   };
-  const xrayControl = createXrayControl(materials, sky, clear as never);
+  const xrayControl = createXrayControl(materials, sky, clear as never, sections);
   const world: FrameStepDeps['world'] = {
     origin,
     camera,

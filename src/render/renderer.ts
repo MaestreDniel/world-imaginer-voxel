@@ -621,12 +621,14 @@ export interface XrayControl {
 
 /**
  * The X-ray's control (SP6a spec §5.3) over `materials`' X-ray uniforms (the radius from their shared `fogEnd`), the
- * sky dome `sky` and the renderer's clear colour `clear`: off, every depth (−64 … 319), until `setXray`.
+ * sky dome `sky`, the renderer's clear colour `clear` and the section renderer `sections` (its X-ray batches draw nothing
+ * while off, Task 48 lever 4c): off, every depth (−64 … 319), until `setXray`.
  */
 export function createXrayControl(
   materials: Pick<MaterialSystem, 'setXray' | 'xray'>,
   sky: Pick<Object3D, 'visible'>,
   clear: Pick<WebGLRenderer, 'getClearColor' | 'getClearAlpha' | 'setClearColor'>,
+  sections: Pick<SectionRenderer, 'setXray'>,
 ): XrayControl {
   const fogEnd = materials.xray.uniforms['fogEnd']!;
   const xrayClear = new Color().setHex(XRAY_CLEAR, SRGBColorSpace);
@@ -644,6 +646,7 @@ export function createXrayControl(
       if (next !== on) clear.setClearColor(next ? xrayClear : saved, state[3]!);
       on = next;
       sky.visible = !next;
+      sections.setXray(next);
       state[2] = fogEnd.value as number;
       write();
     },
@@ -696,7 +699,7 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   canvas.style.width = '100%';
   canvas.style.height = '100%';
   host.appendChild(canvas);
-  const xray = createXrayControl(materials, sky, renderer);
+  const xray = createXrayControl(materials, sky, renderer, sections);
   // The X-ray objects each frame draws (`xrayDrawCalls`, `xrayVertexBytes`; L14, SP6a spec §10.6).
   const xrayDraws = createXrayDrawCounter(materials.xray);
 

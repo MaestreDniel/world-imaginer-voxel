@@ -32,7 +32,10 @@ import { XRAY_ORDER } from './selection';
  *
  * SP6a (spec §5.1, §5.2): a fourth batch per region, the X-ray's pass 3 over `materials.xray`, at `renderOrder`
  * `XRAY_ORDER` with `sortObjects` off (additive, no depth test: its order does not matter), staged, uploaded, revealed
- * and swapped with the column's other passes.
+ * and swapped with the column's other passes. While the X-ray is off (`setXray`, Task 48 lever 4c) these batches draw
+ * nothing: their `onBeforeRender` leaves three's multi-draw count at 0 instead of culling and listing every instance
+ * (0.19-0.26 ms of main thread a frame at RD 12, 48i), and they stay in the scene, so three keeps uploading their rows
+ * and the first toggle uploads nothing.
  */
 
 /** Instances a batch starts with: a mountain region holds up to 64 columns × 24 opaque rows. */
@@ -157,6 +160,17 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
   // The pumps so far (`settle` counts them) and the batch the last `shrinkDue` chose.
   let pumpNo = 0;
   let shrinkNext: BatchPass | null = null;
+  // The X-ray's state (`setXray`): off, the X-ray batches draw nothing.
+  let xrayShown = false;
+  /** An X-ray batch's `onBeforeRender`: three's own (cull, list) while the X-ray is on, else a zero multi-draw count. */
+  const xrayBeforeRender: BatchedMesh['onBeforeRender'] = function (this: BatchedMesh, renderer, scene, camera, geometry, material, group) {
+    if (!xrayShown) {
+      // three's `renderBufferDirect` draws `_multiDrawCount` ranges, and none at 0 (`renderMultiDraw` returns at once).
+      (this as unknown as { _multiDrawCount: number })._multiDrawCount = 0;
+      return;
+    }
+    BatchedMesh.prototype.onBeforeRender.call(this, renderer, scene, camera, geometry, material, group);
+  };
 
   const place = (bp: BatchPass): void => {
     bp.mesh.position.set(bp.rx * REGION_XZ - origin[0]!, -64 - origin[1]!, bp.rz * REGION_XZ - origin[2]!);
@@ -251,7 +265,10 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
           mesh.perObjectFrustumCulled = true;
           // The X-ray's additive, depth-test-free blend needs no order (SP6a spec §5.2); every other batch sorts.
           mesh.sortObjects = pass !== MESH_PASS_XRAY;
-          if (pass === MESH_PASS_XRAY) mesh.renderOrder = XRAY_ORDER;
+          if (pass === MESH_PASS_XRAY) {
+            mesh.renderOrder = XRAY_ORDER;
+            mesh.onBeforeRender = xrayBeforeRender;
+          }
           mesh.boundingSphere = new Sphere(new Vector3(REGION_XZ / 2, REGION_Y / 2, REGION_XZ / 2), Math.hypot(REGION_XZ / 2, REGION_Y / 2, REGION_XZ / 2));
           mesh.boundingBox = new Box3(new Vector3(0, 0, 0), new Vector3(REGION_XZ, REGION_Y, REGION_XZ));
           bp = { mesh, rx: region.rx, rz: region.rz, liveVertices: 0, liveIndices: 0, unculled: false, lastWrite: pumpNo };
@@ -402,6 +419,9 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
       origin[1] = y;
       origin[2] = z;
       for (const bp of objects) place(bp);
+    },
+    setXray(on) {
+      xrayShown = on;
     },
     sortTranslucent() {
       // BatchedMesh sorts its translucent instances itself (sortObjects).

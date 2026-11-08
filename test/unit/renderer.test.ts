@@ -826,11 +826,24 @@ describe('the X-ray toggle and band (SP6a spec §5.3)', () => {
     materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0 });
     const sky = createSky(materials);
     const clear = fakeClear(0x123456, 0.5);
-    const x = createXrayControl(materials, sky, clear as never);
+    const shown: boolean[] = [];
+    const x = createXrayControl(materials, sky, clear as never, { setXray: (on) => { shown.push(on); } });
     const u = materials.xray.uniforms;
     const values = () => [u['xrayOn']!.value, u['xrayYMin']!.value, u['xrayYMax']!.value, u['xrayRadius']!.value];
-    return { materials, sky, clear, x, values };
+    return { materials, sky, clear, x, values, shown };
   };
+
+  test('setXray tells the section renderer on every call (its X-ray batches draw nothing while off, SP6a Task 48 lever 4c); the band and the radius do not', () => {
+    const { materials, x, shown } = setup();
+    expect(shown).toEqual([]);
+    x.setXray(true);
+    x.setXray(true);
+    x.setXrayBand(-40, -9);
+    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 8, fogBand: 64, nightVision: 0 });
+    x.syncRadius();
+    x.setXray(false);
+    expect(shown).toEqual([true, true, false]);
+  });
 
   test('setXray(true) hides the sky dome and sets the clear colour #0b0e14; setXray(false) restores both', () => {
     const { sky, clear, x, values } = setup();

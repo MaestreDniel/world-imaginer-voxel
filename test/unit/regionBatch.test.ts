@@ -1,5 +1,6 @@
 import {
-  BatchedMesh, Matrix4, Quaternion, Vector3, type Box3, type BufferAttribute, type BufferGeometry, type Object3D, type Sphere,
+  BatchedMesh, Matrix4, PerspectiveCamera, Quaternion, Vector3, type Box3, type BufferAttribute, type BufferGeometry, type Material,
+  type Object3D, type Sphere,
 } from 'three';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { MESH_PASS_XRAY, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
@@ -455,6 +456,64 @@ describe('RegionBatch (SP4b spec §4.2, D14)', () => {
     expect(counts(r)).toMatchObject({ rows: 5, columnsRevealed: 2 });
     r.sortTranslucent(0, 0, 0);
     expect(x.renderOrder).toBe(XRAY_ORDER);
+    r.dispose();
+  });
+
+  test('while the X-ray is off its batches draw nothing (a zero multi-draw count, no per-instance cull or sort) but stay in the scene, and their rows keep uploading; on, three\'s own `onBeforeRender` lists them (SP6a, Task 48 lever 4c)', () => {
+    const r = make();
+    r.stage(fakePayload(0, 0, [opaque(4), { sy: 4, pass: 3, quads: 2 }, { sy: 5, pass: 3, quads: 1 }]), 1);
+    pumpAll(r);
+    const x = batchOf(r, MESH_PASS_XRAY)!;
+    const o = batchOf(r, 0)!;
+    const camera = new PerspectiveCamera(90, 1, 0.1, 10_000);
+    camera.position.set(64, 600, 64);
+    camera.lookAt(64, 0, 64);
+    camera.updateMatrixWorld();
+    r.root.updateMatrixWorld(true);
+    const drawCount = (b: BatchedMesh): number => (b as unknown as { _multiDrawCount: number })._multiDrawCount;
+    /** What three's `renderObject` calls before drawing the batch. */
+    const beforeRender = (b: BatchedMesh): void => {
+      b.onBeforeRender(null as never, null as never, camera, b.geometry, b.material as Material, null as never);
+    };
+    const cull = vi.spyOn(BatchedMesh.prototype, 'onBeforeRender');
+    // Off (the page's start): the X-ray batch lists nothing and three's per-instance pass never runs for it.
+    beforeRender(x);
+    expect(drawCount(x)).toBe(0);
+    expect(cull).not.toHaveBeenCalled();
+    // The terrain's batch is three's as before.
+    beforeRender(o);
+    expect(cull).toHaveBeenCalledTimes(1);
+    expect(drawCount(o)).toBe(1);
+    // Still in the scene, visible, culled per region as the others: three keeps uploading its rows.
+    expect(x.parent).toBe(r.root);
+    expect(x.visible).toBe(true);
+    expect(visibleIndices(x)).toBe(18);
+    r.stage(fakePayload(1, 0, [{ sy: 6, pass: 3, quads: 4 }]), 1);
+    pumpAll(r);
+    expect(visibleIndices(x)).toBe(18 + 24);
+    // On: three's onBeforeRender lists the three visible X-ray instances.
+    r.setXray(true);
+    cull.mockClear();
+    beforeRender(x);
+    expect(cull).toHaveBeenCalledTimes(1);
+    expect(drawCount(x)).toBe(3);
+    // Off again: nothing.
+    r.setXray(false);
+    cull.mockClear();
+    beforeRender(x);
+    expect(drawCount(x)).toBe(0);
+    expect(cull).not.toHaveBeenCalled();
+    // A region's X-ray batch created while the X-ray is on lists its rows at once.
+    r.setXray(true);
+    r.stage(fakePayload(9, 0, [{ sy: 2, pass: 3, quads: 1 }]), 1);
+    pumpAll(r);
+    const x1 = batchOf(r, MESH_PASS_XRAY, 1, 0)!;
+    x1.updateMatrixWorld(true);
+    camera.position.set(192, 600, 64);
+    camera.lookAt(192, 0, 64);
+    camera.updateMatrixWorld();
+    beforeRender(x1);
+    expect(drawCount(x1)).toBe(1);
     r.dispose();
   });
 

@@ -211,6 +211,8 @@ export interface RegionBackend<R> {
   /** A hidden one-triangle object of the backend's own kind over `pass`'s material, and how to free it (rulings R11). */
   standIn(pass: number): { readonly object: Mesh; dispose(): void };
   setOrigin(x: number, y: number, z: number): void;
+  /** The X-ray's state (`SectionRenderer.setXray`); a backend without it draws its X-ray objects as before. */
+  setXray?(on: boolean): void;
   sortTranslucent(camX: number, camY: number, camZ: number): void;
   gpuBytes(): number;
 }
@@ -601,6 +603,9 @@ export function createStreamingRenderer<R>(
     },
     setOrigin(x, y, z) {
       b.setOrigin(x, y, z);
+    },
+    setXray(on) {
+      b.setXray?.(on);
     },
     sortTranslucent(camX, camY, camZ) {
       b.sortTranslucent(camX, camY, camZ);
