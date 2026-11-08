@@ -1,0 +1,422 @@
+{
+ "what": "SP6a D25 second checkpoint (Task 36): per pass, each region's vertex and index use over the RD 12 disc",
+ "commit": "d28bc674608d245b193d692efb94f402a1269b65",
+ "seed": "42",
+ "profile": "default",
+ "rd": 12,
+ "centre": {
+  "spawn": [
+   0,
+   0
+  ],
+  "column": [
+   0,
+   0
+  ]
+ },
+ "stages": {
+  "T": 825,
+  "D": 705,
+  "L": 593,
+  "MESH": 489
+ },
+ "meshOptions": {
+  "ao": true,
+  "smoothLight": true
+ },
+ "passes": [
+  "opaque",
+  "cutout",
+  "translucent",
+  "xray"
+ ],
+ "growth": 1.5,
+ "summary": {
+  "opaque": {
+   "reservation": {
+    "vertices": 131072,
+    "indices": 196608
+   },
+   "all": {
+    "regions": 15,
+    "p50": 197740,
+    "p99": 518388,
+    "max": 518388,
+    "maxRegion": [
+     0,
+     0
+    ],
+    "maxRegionColumns": 64,
+    "growthEvents": 27,
+    "regionsOverReservation": 12
+   },
+   "full": {
+    "regions": 4,
+    "p50": 517584,
+    "p99": 518388,
+    "max": 518388,
+    "maxRegion": [
+     0,
+     0
+    ],
+    "maxRegionColumns": 64,
+    "growthEvents": 14,
+    "regionsOverReservation": 4
+   }
+  },
+  "cutout": {
+   "reservation": {
+    "vertices": 8192,
+    "indices": 12288
+   },
+   "all": {
+    "regions": 15,
+    "p50": 0,
+    "p99": 0,
+    "max": 0,
+    "maxRegion": [
+     -1,
+     -2
+    ],
+    "maxRegionColumns": 23,
+    "growthEvents": 0,
+    "regionsOverReservation": 0
+   },
+   "full": {
+    "regions": 4,
+    "p50": 0,
+    "p99": 0,
+    "max": 0,
+    "maxRegion": [
+     -1,
+     -1
+    ],
+    "maxRegionColumns": 64,
+    "growthEvents": 0,
+    "regionsOverReservation": 0
+   }
+  },
+  "translucent": {
+   "reservation": {
+    "vertices": 16384,
+    "indices": 24576
+   },
+   "all": {
+    "regions": 15,
+    "p50": 0,
+    "p99": 0,
+    "max": 0,
+    "maxRegion": [
+     -1,
+     -2
+    ],
+    "maxRegionColumns": 23,
+    "growthEvents": 0,
+    "regionsOverReservation": 0
+   },
+   "full": {
+    "regions": 4,
+    "p50": 0,
+    "p99": 0,
+    "max": 0,
+    "maxRegion": [
+     -1,
+     -1
+    ],
+    "maxRegionColumns": 64,
+    "growthEvents": 0,
+    "regionsOverReservation": 0
+   }
+  },
+  "xray": {
+   "reservation": {
+    "vertices": 16384,
+    "indices": 24576
+   },
+   "all": {
+    "regions": 15,
+    "p50": 105068,
+    "p99": 253220,
+    "max": 253220,
+    "maxRegion": [
+     -1,
+     0
+    ],
+    "maxRegionColumns": 64,
+    "growthEvents": 69,
+    "regionsOverReservation": 12
+   },
+   "full": {
+    "regions": 4,
+    "p50": 249888,
+    "p99": 253220,
+    "max": 253220,
+    "maxRegion": [
+     -1,
+     0
+    ],
+    "maxRegionColumns": 64,
+    "growthEvents": 28,
+    "regionsOverReservation": 4
+   }
+  }
+ },
+ "growthEventsTotal": 96,
+ "regions": [
+  {
+   "rx": -1,
+   "rz": -2,
+   "columns": 23,
+   "vertices": [
+    175880,
+    0,
+    0,
+    83736
+   ],
+   "indices": [
+    263820,
+    0,
+    0,
+    125604
+   ]
+  },
+  {
+   "rx": 0,
+   "rz": -2,
+   "columns": 26,
+   "vertices": [
+    197740,
+    0,
+    0,
+    105068
+   ],
+   "indices": [
+    296610,
+    0,
+    0,
+    157602
+   ]
+  },
+  {
+   "rx": 1,
+   "rz": -2,
+   "columns": 1,
+   "vertices": [
+    13020,
+    0,
+    0,
+    6628
+   ],
+   "indices": [
+    19530,
+    0,
+    0,
+    9942
+   ]
+  },
+  {
+   "rx": -2,
+   "rz": -1,
+   "columns": 23,
+   "vertices": [
+    167556,
+    0,
+    0,
+    78452
+   ],
+   "indices": [
+    251334,
+    0,
+    0,
+    117678
+   ]
+  },
+  {
+   "rx": -1,
+   "rz": -1,
+   "columns": 64,
+   "vertices": [
+    432440,
+    0,
+    0,
+    211800
+   ],
+   "indices": [
+    648660,
+    0,
+    0,
+    317700
+   ]
+  },
+  {
+   "rx": 0,
+   "rz": -1,
+   "columns": 64,
+   "vertices": [
+    411608,
+    0,
+    0,
+    196536
+   ],
+   "indices": [
+    617412,
+    0,
+    0,
+    294804
+   ]
+  },
+  {
+   "rx": 1,
+   "rz": -1,
+   "columns": 31,
+   "vertices": [
+    256996,
+    0,
+    0,
+    125052
+   ],
+   "indices": [
+    385494,
+    0,
+    0,
+    187578
+   ]
+  },
+  {
+   "rx": -2,
+   "rz": 0,
+   "columns": 26,
+   "vertices": [
+    196288,
+    0,
+    0,
+    95684
+   ],
+   "indices": [
+    294432,
+    0,
+    0,
+    143526
+   ]
+  },
+  {
+   "rx": -1,
+   "rz": 0,
+   "columns": 64,
+   "vertices": [
+    517584,
+    0,
+    0,
+    253220
+   ],
+   "indices": [
+    776376,
+    0,
+    0,
+    379830
+   ]
+  },
+  {
+   "rx": 0,
+   "rz": 0,
+   "columns": 64,
+   "vertices": [
+    518388,
+    0,
+    0,
+    249888
+   ],
+   "indices": [
+    777582,
+    0,
+    0,
+    374832
+   ]
+  },
+  {
+   "rx": 1,
+   "rz": 0,
+   "columns": 34,
+   "vertices": [
+    280620,
+    0,
+    0,
+    140624
+   ],
+   "indices": [
+    420930,
+    0,
+    0,
+    210936
+   ]
+  },
+  {
+   "rx": -2,
+   "rz": 1,
+   "columns": 1,
+   "vertices": [
+    5976,
+    0,
+    0,
+    2504
+   ],
+   "indices": [
+    8964,
+    0,
+    0,
+    3756
+   ]
+  },
+  {
+   "rx": -1,
+   "rz": 1,
+   "columns": 31,
+   "vertices": [
+    165488,
+    0,
+    0,
+    75124
+   ],
+   "indices": [
+    248232,
+    0,
+    0,
+    112686
+   ]
+  },
+  {
+   "rx": 0,
+   "rz": 1,
+   "columns": 34,
+   "vertices": [
+    314904,
+    0,
+    0,
+    153128
+   ],
+   "indices": [
+    472356,
+    0,
+    0,
+    229692
+   ]
+  },
+  {
+   "rx": 1,
+   "rz": 1,
+   "columns": 3,
+   "vertices": [
+    16828,
+    0,
+    0,
+    7824
+   ],
+   "indices": [
+    25242,
+    0,
+    0,
+    11736
+   ]
+  }
+ ]
+}

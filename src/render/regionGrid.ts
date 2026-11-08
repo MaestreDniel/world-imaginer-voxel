@@ -34,8 +34,11 @@ export const SECTION_UNITS = 16 * UNITS;
 /**
  * Per pass: the vertex and index reservation of a region's object, RegionBatch's batch and RegionMesh's arena alike
  * (SP4b spec §4.2, §4.3; Medium; the opaque one ≈ 1.8 MB on RegionBatch, 2.4 MB on RegionMesh). The X-ray's (SP6a spec
- * §5.1) is an estimate, the translucent pass's size, until D25's second checkpoint measures every pass's use with the
- * carvers and the X-ray pass and the reservations are resized right after push B.
+ * §5.1) is the translucent pass's size. D25's second checkpoint measured every pass's use with the carvers and the X-ray
+ * pass (`test/fixtures/sp6a-region-use.json`): the largest region holds 518,388 opaque and 253,220 X-ray vertices.
+ * The reservations are kept and grow on demand (SP6a ruling R22): sized to that maximum × 1.25, every partial region
+ * would pay for a full region's buffers (`mediumGpuMB` ≥ 242 against its gate of 150), while growth × 1.5 holds a full
+ * region within 1.5 × its use (96 growth events over the RD 12 disc: opaque 27, X-ray 69).
  */
 export const RESERVATION: Readonly<Record<number, readonly [vertices: number, indices: number]>> = {
   [MESH_PASS_OPAQUE]: [131_072, 196_608],
