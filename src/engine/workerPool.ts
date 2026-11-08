@@ -40,6 +40,10 @@
  * SP4c §3.2 (D12): `landing(x, z)`, the teleport's surface and water at a block, is one aux job at −2.
  * SP5a §2.6 (D22): `meshColumn(cx, cz, {edit: true})`, an edit's remesh, is a world job on the aux lane at
  * EDIT_MESH_PRIORITY, so a free worker takes it first and `auxCap` never counts it; `cancelWorld` searches both lanes.
+ * SP6a §7.3 (D12, D16): `findCave(req)`, the Caves tab's finder, is one aux job at −1 whose handle's `cancel()` rejects
+ * its promise at once (JobCancelled): a queued job is dropped, and a running one's late reply is ignored (a worker runs
+ * one message to completion, so no cancel message could reach a running search; it ends by its 2 s budget, or when its
+ * epoch cell moves).
  */
 import type { MapLevel } from '../core/constants';
 import type { ColumnPoint } from '../gen/column/columnPoint';
@@ -49,8 +53,8 @@ import type { LayerId } from '../gen/map/layers';
 import type { Segment } from '../metrics/crossSection';
 import type { ColumnMeshPayload } from '../mesh/column';
 import {
-  cellOf, isRefusableField, parseFromWorker, payloadOfMeshResult, planFieldSlice, SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES, STATS_KINDS,
-  type FieldProbeSpec, type FieldSliceMsg, type FieldSliceSpec, type FromWorker, type ReadyMsg, type StatsArgs, type StatsKind, type StatsMsg, type ToWorker,
+  cellOf, FIND_BUDGET_MS, FIND_RADIUS, isRefusableField, parseFromWorker, payloadOfMeshResult, planFieldSlice, SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES,
+  STATS_KINDS, type CaveFoundReason, type FieldProbeSpec, type FieldSliceMsg, type FieldSliceSpec, type FromWorker, type ReadyMsg, type StatsArgs, type StatsKind, type StatsMsg, type ToWorker,
   type WorldJobType,
 } from '../workers/protocol';
 import type { ColumnDiff } from '../world/store/api';
@@ -120,6 +124,29 @@ export type FieldSliceResult = FieldSliceValues & { readonly n: number };
 /** A running field slice: its result, and `cancel()`, which rejects it with JobCancelled (a no-op once it settled). */
 export interface FieldSliceHandle {
   readonly promise: Promise<FieldSliceResult>;
+  cancel(): void;
+}
+
+/**
+ * A cave search (SP6a spec §7.3): the nearest cave of kind `kind` (1-9) from voxel (x, y, z) (integers, (x, z) in the
+ * world window), within `radius` blocks (default `FIND_RADIUS`, 512) and `budgetMs` ms (default `FIND_BUDGET_MS`, 2,000).
+ */
+export interface FindCaveRequest {
+  readonly kind: number;
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  readonly radius?: number;
+  readonly budgetMs?: number;
+}
+/** A cave search's outcome: the air voxel and its yaw (null unless `reason` is `found`), and why the search ended. */
+export interface FindCaveResult {
+  readonly hit: { readonly x: number; readonly y: number; readonly z: number; readonly yaw: number } | null;
+  readonly reason: CaveFoundReason;
+}
+/** A running cave search: its result, and `cancel()`, which rejects it with JobCancelled (a no-op once it settled). */
+export interface FindCaveHandle {
+  readonly promise: Promise<FindCaveResult>;
   cancel(): void;
 }
 
@@ -331,6 +358,13 @@ export interface WorkerPool {
   fieldProbe(req: FieldProbeSpec, priority?: number): Promise<number>;
   /** Recomputes one golden in a worker (no configure needed). */
   selftest(key: string): Promise<{ actual: string | null; error: string | null }>;
+  /**
+   * The Caves tab's finder (SP6a spec §7.3, D12): one aux job at priority −1 (interactive: first, uncapped), resolving
+   * with the hit and the reason (`found`, `radius`, `budget` or `stopped`); rejects with the worker's BAD_ARGS (the
+   * kind, the voxel, the radius or the budget), JobCancelled when a configure supersedes it or on `cancel()`. `cancel()`
+   * drops the job while queued; once it runs, the worker finishes it and its reply is ignored.
+   */
+  findCave(req: FindCaveRequest): FindCaveHandle;
   /** Rejects queued tile jobs matching `pred` with JobCancelled (they are in the aux lane, rebuilt in O(n)). */
   cancelTiles(pred: (req: TileRequest) => boolean): void;
   /**
@@ -805,6 +839,31 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       const r = await enqueue(priority, 'fieldProbe', (jobId, scope) => ({ type: 'fieldProbe', jobId, epoch: e, scope, field, path, x, y, z }), null);
       if (r.type !== 'fieldProbeResult') throw new Error(`unexpected reply ${r.type}`);
       return r.value;
+    },
+    findCave(req) {
+      const e = epoch;
+      const group = nextGroup++;
+      const { kind, x, y, z } = req;
+      const radius = req.radius ?? FIND_RADIUS;
+      const budgetMs = req.budgetMs ?? FIND_BUDGET_MS;
+      let cancel = (): void => undefined;
+      const promise = new Promise<FindCaveResult>((resolve, reject) => {
+        let done = false;
+        const settle = (f: () => void): void => {
+          if (done) return;
+          done = true;
+          f();
+        };
+        cancel = () => settle(() => {
+          dropGroup(group);
+          reject(new JobCancelled());
+        });
+        enqueue(-1, 'findCave', (jobId, scope) => ({ type: 'findCave', jobId, epoch: e, scope, kind, x, y, z, radius, budgetMs }), null, group).then((r) => {
+          if (r.type !== 'caveFound') throw new Error(`unexpected reply ${r.type}`);
+          settle(() => resolve({ hit: r.hit, reason: r.reason }));
+        }).catch((err: unknown) => settle(() => reject(err instanceof Error ? err : new Error(String(err)))));
+      });
+      return { promise, cancel: () => cancel() };
     },
     async selftest(key) {
       const r = await enqueue(0, 'selftest', (jobId) => ({ type: 'selftest', jobId, key }), null);

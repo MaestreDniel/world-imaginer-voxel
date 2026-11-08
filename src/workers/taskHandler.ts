@@ -29,6 +29,13 @@
  * outside the world window; it runs to the end, as a point (a few milliseconds: the 2D estimate and about 10 probes).
  * SP5a (spec §2.5, D21): a `decorate` carrying `diff` (checked by `parseToWorker`) passes it to `decorateReply`, which
  * overlays the column's edit entries on its final set.
+ * SP6a (spec §7.3, D12, D16): a `findCave` job runs `nearestCave` on the configured context's DensityContext (memoised
+ * per GenContext, `densityContextOf`), BAD_ARGS for `findCaveProblem`; its loaded columns are the attached store's (a
+ * column's final set, else its proto set; none without a store), each read inside its own read section, which ends at
+ * the search's next poll of `stop` (every column and candidate) or its next column, so no slot stays held while it
+ * evaluates density or for its whole 2 s; its clock is `now` (the
+ * worker's `performance.now`, a test seam), its deadline `budgetMs` after its start, and it stops (`stopped`) once its
+ * epoch cell moves (`stopFor`). It answers `caveFound`, whatever the reason.
  */
 import { hex64 } from '../core/hash';
 import { MEDIUM } from '../core/params/graphicsPresets';
@@ -36,8 +43,10 @@ import { checkParams } from '../core/params/kit';
 import { SCHEMA, type Params } from '../core/params/schema';
 import { seedFromInput } from '../core/seed';
 import { genKey, stageHashes } from '../core/stage/hash';
+import { nearestCave } from '../gen/caves/tags';
 import { createGenContext, type GenContext } from '../gen/context';
 import { columnPoint } from '../gen/column/columnPoint';
+import { createDensityContext, type DensityContext } from '../gen/density/context';
 import { findSpawnAbortable, landingSurface } from '../gen/column/spawn';
 import { paintTileAbortable } from '../gen/map/tile';
 import { surfaceContextOf } from '../gen/surface/context';
@@ -54,7 +63,7 @@ import type { MeshOptions } from '../mesh/greedy';
 import { R_STORE_ID } from '../world/store/reclaim';
 import { attachStore, StoreCorrupt, StoreFull, type VoxelStore } from '../world/store/store';
 import { runFieldProbe, runFieldSlice, sliceJobColumns, type FieldJobReply } from './fieldSliceJob';
-import { cellOf, landingProblem, parseToWorker, sliceRangeProblem, surfaceProbeProblem, type ErrorCode, type FromWorker, type ScopedJobType, type StatsMsg } from './protocol';
+import { cellOf, findCaveProblem, landingProblem, parseToWorker, sliceRangeProblem, surfaceProbeProblem, type ErrorCode, type FromWorker, type ScopedJobType, type StatsMsg } from './protocol';
 import { createSliceJob, type SliceJob } from './sliceJob';
 import { decorateReply, lightReply, meshColumnReply, terrainReply, type WorldJobReply } from './worldJobs';
 
@@ -71,6 +80,9 @@ const PAINT = paintTileAbortable;
 const SPAWN = findSpawnAbortable;
 const LANDING = landingSurface;
 const LANDING_PROBLEM = landingProblem;
+const FIND_PROBLEM = findCaveProblem;
+const NEAREST_CAVE = nearestCave;
+const CREATE_DC = createDensityContext;
 const GOLDEN = computeAnyGolden;
 const PARSE = parseToWorker;
 const CELL_OF = cellOf;
@@ -145,6 +157,17 @@ const intField = (raw: unknown, key: 'jobId' | 'epoch'): number | null => {
   return typeof v === 'number' && Number.isInteger(v) ? v : null;
 };
 
+/** The finder's DensityContext of each GenContext (SP6a spec §7.3), built on first use. */
+const DENSITY = new WeakMap<GenContext, DensityContext>();
+const densityContextOf = (ctx: GenContext): DensityContext => {
+  let dc = DENSITY.get(ctx);
+  if (dc === undefined) {
+    dc = CREATE_DC(ctx);
+    DENSITY.set(ctx, dc);
+  }
+  return dc;
+};
+
 /** The stats kinds' fixed point streams, built on first use and shared by every handler of the thread. */
 let splinePoints: Points | null = null;
 let sharePoints: Points | null = null;
@@ -183,8 +206,11 @@ function runStats(ctx: GenContext, m: StatsMsg, stop: () => boolean): Float64Arr
   return SHARES_INTO(ctx, pts, m.from, m.to, out, stop) ? out : null;
 }
 
-/** `slices` is the worker's slice job (a test seam; one per handler by default). */
-export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHandler {
+/**
+ * `slices` is the worker's slice job (a test seam; one per handler by default); `now` the findCave job's clock in ms (a
+ * test seam; `performance.now` by default).
+ */
+export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB(), now: () => number = () => performance.now()): TaskHandler {
   let epoch = -1;
   let ctx: GenContext | null = null;
   /** The four per-scope epoch cells of the last configure (SP4b spec §2.7), or null: jobs never stop. */
@@ -311,6 +337,35 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB()): TaskHa
             return fieldReply(FIELD_SLICE(ctx, m, stopFor(m.type, m.scope), SLICE_COLUMNS(slices, ctx, m.epoch)));
           case 'fieldProbe':
             return fieldReply(FIELD_PROBE(ctx, m, stopFor(m.type, m.scope)));
+          case 'findCave': {
+            const problem = FIND_PROBLEM(m);
+            if (problem !== null) return err(m.jobId, m.epoch, 'BAD_ARGS', problem);
+            const s = store;
+            // Each loaded column is read inside its own read section, left at the next poll, the next column and the end.
+            let reading = false;
+            const leave = (): void => {
+              if (reading) { reading = false; s!.exitRead(); }
+            };
+            const loaded = s === null ? () => null : (cx: number, cz: number) => {
+              leave();
+              s.enterRead();
+              reading = true;
+              return s.final(cx, cz) ?? s.proto(cx, cz);
+            };
+            const stopped = stopFor(m.type, m.scope);
+            const stop = (): boolean => {
+              leave();
+              return stopped();
+            };
+            try {
+              const r = NEAREST_CAVE(densityContextOf(ctx), m.kind, m.x, m.y, m.z, {
+                radius: m.radius, deadline: now() + m.budgetMs, now, stop, loaded,
+              });
+              return { msg: { type: 'caveFound', jobId: m.jobId, epoch, hit: r.hit, reason: r.reason }, transfer: [] };
+            } finally {
+              leave();
+            }
+          }
           case 'terrain': {
             const c = ctx;
             return worldReply((s) => TERRAIN_REPLY(s, c, m, stopFor(m.type, m.scope)));

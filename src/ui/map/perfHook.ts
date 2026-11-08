@@ -229,6 +229,7 @@ export function instrumentPool(pool: WorkerPool, log: LatencyLog, now: () => num
     surfaceProbe: (x, y, z, priority) => pool.surfaceProbe(x, y, z, priority),
     fieldSlice: (req, opts) => pool.fieldSlice(req, opts),
     fieldProbe: (req, priority) => pool.fieldProbe(req, priority),
+    findCave: (req) => pool.findCave(req),
     selftest: (key) => pool.selftest(key),
     attachStore: (h) => pool.attachStore(h),
     terrain: (cx, cz, protoOnly) => pool.terrain(cx, cz, protoOnly),

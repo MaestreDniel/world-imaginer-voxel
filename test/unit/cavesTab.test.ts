@@ -2,13 +2,16 @@
  * The world map's Caves tab (SP6a spec §7.3, D12; Review Focus 3; ruling P24), on the DOM shim: the X-ray checkbox that
  * mirrors X both ways, the Lowest y and Highest y sliders (lowest ≤ highest kept by moving the other), All depths, the
  * legend, the radius readout, "Cave slice" (at the band's middle y, the camera's y at all) and "Cave parameters" (the
- * Caves section's first leaf, `caves.cheese.offset`, since `reveal` takes a leaf path).
+ * Caves section's first leaf, `caves.cheese.offset`, since `reveal` takes a leaf path); the Find row (SP6a Task 44, D12,
+ * D16): a button per kind 1-8, the result lines, the cancel on a second press and on closing, "Save as place" only in a
+ * saved world.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
 import { XRAY_COLORS, XRAY_LABELS } from '../../src/render/xrayPalette';
 import {
-  CAVE_PARAMETERS_LEAF, CAVE_SLICE_EXTENT, caveSliceY, createCavesTab, radiusText, sliderBand, type CavesTabDeps,
+  CAVE_PARAMETERS_LEAF, CAVE_SLICE_EXTENT, caveSliceY, createCavesTab, FIND_KINDS, findButtonText, findText, radiusText, sliderBand,
+  type CavesTabDeps, type FindHit, type FindOutcome,
 } from '../../src/ui/map/cavesTab';
 import { panelTree, type SectionSpec } from '../../src/ui/paramPanel/model';
 import { createPageXray, pageKeyName } from '../../src/ui/world/worldPage';
@@ -19,26 +22,49 @@ let dom: ReturnType<typeof installDom>;
 beforeEach(() => { dom = installDom(); });
 afterEach(() => { vi.unstubAllGlobals(); });
 
-/** The tab over recording deps, the camera at `camera`; `$` finds a control by id. */
-function mount(camera = { x: 100.5, y: 80.9, z: -40.5 }) {
+/** A search the test settles: `find`'s promise and its two ends. */
+interface Search {
+  readonly kind: number;
+  resolve(r: FindOutcome): void;
+  reject(e: Error): void;
+}
+
+/**
+ * The tab over recording deps, the camera at `camera`; `$` finds a control by id. Each `find` is a search the test
+ * settles (`searches`); `saved` gives the tab a `savePlace` (a saved world), which records its hits.
+ */
+function mount(camera = { x: 100.5, y: 80.9, z: -40.5 }, saved = false) {
   const calls: string[] = [];
   const bands: XrayBand[] = [];
   const slices: number[] = [];
+  const searches: Search[] = [];
+  const savedHits: FindHit[] = [];
   const deps: CavesTabDeps = {
     onXray: (on) => { calls.push(`xray ${on}`); },
     onBand: (b) => { bands.push(b); },
     openSlice: (y) => { slices.push(y); },
     revealParameters: () => { calls.push('reveal'); },
-    find: (kind) => { calls.push(`find ${kind}`); },
-    cancelFind: () => { calls.push('cancel'); },
+    find: (kind) => {
+      calls.push(`find ${kind}`);
+      return new Promise<FindOutcome>((resolve, reject) => { searches.push({ kind, resolve, reject }); });
+    },
+    cancelFind: () => {
+      calls.push('cancel');
+      // The page's cancel rejects the search's promise.
+      searches.at(-1)?.reject(new Error('job cancelled'));
+    },
+    savePlace: saved ? (hit) => { savedHits.push(hit); } : null,
     camera: () => camera,
   };
   const host = dom.document.createElement('div');
   dom.body.append(host);
   const tab = createCavesTab(host as unknown as HTMLElement, deps);
   const $ = (id: string): FakeElement => dom.el(id);
-  return { tab, deps, calls, bands, slices, camera, host, $ };
+  return { tab, deps, calls, bands, slices, camera, host, searches, savedHits, $ };
 }
+
+/** Lets the tab's promise handlers run. */
+const settle = (): Promise<void> => new Promise((r) => { setTimeout(r, 0); });
 
 /** Moves a slider to `v` as the browser does on a drag: its value, then 'input'. */
 const slide = (e: FakeElement, v: number): void => {
@@ -220,8 +246,9 @@ describe('the Caves tab over the page\'s X-ray (SP6a spec §7.3; worldPage.ts wi
       },
       openSlice: () => {},
       revealParameters: () => {},
-      find: () => {},
+      find: () => new Promise<FindOutcome>(() => {}),
       cancelFind: () => {},
+      savePlace: null,
       camera: () => ({ x: 0, y: cameraY, z: 0 }),
     });
     push();
@@ -279,5 +306,125 @@ describe('the Caves tab over the page\'s X-ray (SP6a spec §7.3; worldPage.ts wi
     // Home: every depth, the sliders at the ends.
     w.key('xrayAll');
     expect([low.value, high.value]).toEqual(['-64', '319']);
+  });
+});
+
+describe('the Find row (SP6a spec §7.3, D12, D16; Task 44)', () => {
+  const HIT: FindHit = { x: 120, y: 30, z: -52, yaw: 90 };
+
+  test('one button per kind 1-8, "Nearest <kind>", in kind order; kind 9 has none (the default tree yields none)', () => {
+    const t = mount();
+    expect(FIND_KINDS).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(FIND_KINDS.map((k) => t.$(`map-caves-find-${k}`).textContent)).toEqual([
+      'Nearest cheese', 'Nearest spaghetti 3D', 'Nearest spaghetti 2D', 'Nearest noodle', 'Nearest entrance', 'Nearest worm',
+      'Nearest ravine', 'Nearest underground worm',
+    ]);
+    expect(FIND_KINDS.map(findButtonText)).toEqual(FIND_KINDS.map((k) => t.$(`map-caves-find-${k}`).textContent));
+    expect(() => t.$(`map-caves-find-${CAVE_KIND.other}`)).toThrow();
+    expect(t.$('map-caves-find-result').textContent).toBe('');
+  });
+
+  test('the three result lines: "<kind> at x, y, z · d blocks away", "No <kind> found within 512 blocks", "No <kind> found in 2 s"', () => {
+    const from = { x: 100.5, y: 80.9, z: -40.5 };
+    // d = |(120.5, 30.5, −51.5) − (100.5, 80.9, −40.5)| = √(400 + 2,540.16 + 121) = 55.33…
+    expect(findText(CAVE_KIND.cheese, { hit: HIT, reason: 'found' }, from)).toBe('Cheese at 120, 30, -52 · 55 blocks away');
+    expect(findText(CAVE_KIND.ravine, { hit: null, reason: 'radius' }, from)).toBe('No ravine found within 512 blocks');
+    expect(findText(CAVE_KIND.spaghetti3d, { hit: null, reason: 'budget' }, from)).toBe('No spaghetti 3D found in 2 s');
+    expect(findText(CAVE_KIND.undergroundWorm, { hit: null, reason: 'stopped' }, from)).toBe('Underground worm search stopped');
+  });
+
+  test('a press searches that kind from the camera; the outcome writes the result line', async () => {
+    const t = mount();
+    t.$('map-caves-find-1').click();
+    expect(t.calls).toEqual(['find 1']);
+    expect(t.$('map-caves-find-result').textContent).toBe('Searching for cheese…');
+    t.searches[0]!.resolve({ hit: HIT, reason: 'found' });
+    await settle();
+    expect(t.$('map-caves-find-result').textContent).toBe('Cheese at 120, 30, -52 · 55 blocks away');
+    t.$('map-caves-find-7').click();
+    t.searches[1]!.resolve({ hit: null, reason: 'radius' });
+    await settle();
+    expect(t.$('map-caves-find-result').textContent).toBe('No ravine found within 512 blocks');
+    t.$('map-caves-find-4').click();
+    t.searches[2]!.resolve({ hit: null, reason: 'budget' });
+    await settle();
+    expect(t.$('map-caves-find-result').textContent).toBe('No noodle found in 2 s');
+    expect(t.calls).toEqual(['find 1', 'find 7', 'find 4']);
+  });
+
+  test('a second press of the searching button cancels it; its late outcome is dropped', async () => {
+    const t = mount();
+    t.$('map-caves-find-2').click();
+    t.$('map-caves-find-2').click();
+    expect(t.calls).toEqual(['find 2', 'cancel']);
+    expect(t.$('map-caves-find-result').textContent).toBe('Spaghetti 3D search cancelled');
+    await settle();
+    t.searches[0]!.resolve({ hit: HIT, reason: 'found' });
+    await settle();
+    expect(t.$('map-caves-find-result').textContent).toBe('Spaghetti 3D search cancelled');
+    // Pressed again, it searches again.
+    t.$('map-caves-find-2').click();
+    expect(t.calls).toEqual(['find 2', 'cancel', 'find 2']);
+  });
+
+  test('another kind\'s button while searching cancels the search and starts that kind\'s', async () => {
+    const t = mount();
+    t.$('map-caves-find-1').click();
+    t.$('map-caves-find-6').click();
+    expect(t.calls).toEqual(['find 1', 'cancel', 'find 6']);
+    expect(t.$('map-caves-find-result').textContent).toBe('Searching for worm…');
+    t.searches[1]!.resolve({ hit: { x: 1, y: 2, z: 3, yaw: 0 }, reason: 'found' });
+    await settle();
+    expect(t.$('map-caves-find-result').textContent).toMatch(/^Worm at 1, 2, 3 · \d+ blocks away$/);
+  });
+
+  test('closing the tab (`cancel`, the tool\'s) and `dispose` cancel a search in flight; neither calls the dep with none', async () => {
+    const t = mount();
+    t.tab.cancel();
+    expect(t.calls).toEqual([]);
+    t.$('map-caves-find-5').click();
+    t.tab.cancel();
+    expect(t.calls).toEqual(['find 5', 'cancel']);
+    expect(t.$('map-caves-find-result').textContent).toBe('Entrance search cancelled');
+    t.tab.cancel();
+    expect(t.calls).toEqual(['find 5', 'cancel']);
+    t.$('map-caves-find-8').click();
+    t.tab.dispose();
+    expect(t.calls).toEqual(['find 5', 'cancel', 'find 8', 'cancel']);
+    await settle();
+  });
+
+  test('a search that fails otherwise says so', async () => {
+    const t = mount();
+    t.$('map-caves-find-3').click();
+    t.searches[0]!.reject(new Error('BAD_ARGS: kind'));
+    await settle();
+    expect(t.$('map-caves-find-result').textContent).toBe('Spaghetti 2D search failed');
+  });
+
+  test('"Save as place" only in a saved world, after a hit: it saves that hit; a miss hides it again', async () => {
+    const unsaved = mount();
+    expect(unsaved.$('map-caves-save-place').hidden).toBe(true);
+    unsaved.$('map-caves-find-1').click();
+    unsaved.searches[0]!.resolve({ hit: HIT, reason: 'found' });
+    await settle();
+    expect(unsaved.$('map-caves-save-place').hidden).toBe(true);
+    unsaved.tab.dispose();
+
+    const saved = mount(undefined, true);
+    const save = saved.$('map-caves-save-place');
+    expect(save.textContent).toBe('Save as place');
+    expect(save.hidden).toBe(true);
+    saved.$('map-caves-find-1').click();
+    saved.searches[0]!.resolve({ hit: HIT, reason: 'found' });
+    await settle();
+    expect(save.hidden).toBe(false);
+    save.click();
+    expect(saved.savedHits).toEqual([HIT]);
+    saved.$('map-caves-find-7').click();
+    expect(save.hidden).toBe(true);
+    saved.searches[1]!.resolve({ hit: null, reason: 'radius' });
+    await settle();
+    expect(save.hidden).toBe(true);
   });
 });

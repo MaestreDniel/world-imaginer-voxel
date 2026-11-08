@@ -20,8 +20,12 @@ function setup(camera = { x: 100.5, y: 80.9, z: -40.5 }) {
   const caves: MapCaves = {
     onXray: (on) => { log.push(`xray ${on}`); },
     onBand: (b) => { log.push(`band ${b.yMin} ${b.yMax}`); },
-    find: (kind) => { log.push(`find ${kind}`); },
+    find: (kind) => {
+      log.push(`find ${kind}`);
+      return Promise.resolve({ hit: null, reason: 'radius' as const });
+    },
     cancelFind: () => { log.push('cancel'); },
+    savePlace: (hit) => { log.push(`save ${hit.x}`); },
     camera: () => camera,
   };
   const opened: SliceState[] = [];
@@ -58,9 +62,10 @@ describe('the Caves tab\'s links in the world\'s map (SP6a spec §7.3)', () => {
     const s = setup();
     s.deps.onXray(true);
     s.deps.onBand(XRAY_ALL);
-    s.deps.find(3);
+    void s.deps.find(3);
     s.deps.cancelFind();
-    expect(s.log).toEqual(['xray true', 'band -64 319', 'find 3', 'cancel']);
+    s.deps.savePlace!({ x: 4, y: 5, z: 6, yaw: 0 });
+    expect(s.log).toEqual(['xray true', 'band -64 319', 'find 3', 'cancel', 'save 4']);
     expect(s.deps.camera()).toBe(s.camera);
   });
 });
@@ -78,10 +83,21 @@ describe('the tool mounts the Caves tab in the world\'s map only (SP6a spec §7.
     expect(block).toContain('openDrawer: (t) => layout.openDrawer(t),');
     expect(block).toContain("showTab: (t) => layout.showTab(t),");
     expect(block).toContain('reveal: (path) => panel.reveal(path),');
-    expect(src).toContain('if (cavesTab !== null) disposers.add(() => cavesTab.dispose());');
+    expect(src).toContain('    disposers.add(() => cavesTab.dispose());');
     // The tab is mounted after the panel and the slice view it links to.
     expect(src.indexOf('const cavesTab = ')).toBeGreaterThan(src.indexOf('const panel = createParamPanel('));
     expect(src.indexOf('const cavesTab = ')).toBeGreaterThan(src.indexOf('const slices = createSliceView('));
+  });
+
+  test('closing the tab cancels its search (SP6a spec §7.3, Task 44): another tab shown or the panel hidden, and the tool hidden', () => {
+    const src = SRC();
+    expect(src).toContain([
+      '    disposers.add(layout.onPanelChange(() => {',
+      "      if (layout.tab !== 'caves' || !layout.panelVisible) cavesTab.cancel();",
+      '    }));',
+    ].join('\n'));
+    const hide = src.slice(src.indexOf('    hide() {'));
+    expect(hide.slice(0, hide.indexOf('\n    },'))).toContain('      cavesTab?.cancel();');
   });
 
   test('`setXray` hands the page\'s X-ray state to the tab, and does nothing without one', () => {

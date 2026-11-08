@@ -32,6 +32,11 @@
  * SP5c (spec §3.3, D22): `copy` asks the sim for a box's values (1 … `MAX_COPY_SIDE` a side; a corner outside the world
  * is not malformed, the sim answers it `outside`), answered `copied`; an `edits` batch holds at most `MAX_STEP_EDITS`, and a
  * bulk one comes packed in four transferred typed arrays (`PackedEditsMsg`, D28's lever 1).
+ * SP6a (spec §7.3, D12, D16): a `findCave` job searches for the nearest cave of one kind from a voxel (`nearestCave` on
+ * the attached store's loaded columns, within `radius` blocks and `budgetMs` ms) and answers `caveFound`, its hit (null
+ * unless the reason is `found`) and the reason it ended; there is no cancel message (the pool cancels its promise, and a
+ * running search stops when its epoch cell moves). Only the shape is checked here; the ranges are the handler's
+ * BAD_ARGS (`findCaveProblem`).
  */
 import { MAP_LEVELS, MAP_TILE_PX, PART_BUDGET, SLICE_NS, type MapLevel } from '../core/constants';
 import type { StageId } from '../core/ids';
@@ -147,8 +152,21 @@ export interface WorldJobMsg extends Scoped {
  * caller asks at the clicked block ⌊x⌋, ⌊z⌋); a position outside the half-open world window is the handler's BAD_ARGS.
  */
 export type LandingMsg = Scoped & { readonly type: 'landing'; readonly x: number; readonly z: number };
+/** The finder's radius in blocks (SP6a spec §7.3): the largest a `findCave` may ask, and the Caves tab's. */
+export const FIND_RADIUS = 512;
+/** The finder's time budget in ms (SP6a spec §7.3): the Caves tab's, and the largest a `findCave` may ask. */
+export const FIND_BUDGET_MS = 2000;
+/**
+ * The nearest cave of kind `kind` from voxel (x, y, z) (SP6a spec §7.3, D12): numbers here; `findCaveProblem`'s ranges
+ * (kind 1-9, integers with (x, z) in the world window, radius 1 … `FIND_RADIUS`, budgetMs in (0, `FIND_BUDGET_MS`]) are
+ * the handler's BAD_ARGS.
+ */
+export interface FindCaveMsg extends Scoped {
+  readonly type: 'findCave'; readonly kind: number; readonly x: number; readonly y: number; readonly z: number;
+  readonly radius: number; readonly budgetMs: number;
+}
 export type ToWorker = ConfigureMsg | MapTileMsg | PointMsg | SpawnMsg | StatsMsg | SliceMsg | SurfaceProbeMsg | SelftestMsg | FieldSliceMsg | FieldProbeMsg
-  | AttachMsg | WorldJobMsg | LandingMsg;
+  | AttachMsg | WorldJobMsg | LandingMsg | FindCaveMsg;
 /** Every job type that carries an `epoch` and a `scope` (SP4b spec §2.7): all but configure, attach and selftest. */
 export type ScopedJobType = Exclude<ToWorker['type'], 'configure' | 'attach' | 'selftest'>;
 /** Each scoped job type's epoch cell (a record, so a new job type cannot be left out). */
@@ -156,10 +174,11 @@ const CELL_OF: Readonly<Record<ScopedJobType, 0 | 1 | 2 | 3>> = Object.freeze({
   mapTile: EPOCH_CELL.terrain, point: EPOCH_CELL.terrain, spawn: EPOCH_CELL.terrain, stats: EPOCH_CELL.terrain, slice: EPOCH_CELL.terrain,
   surfaceProbe: EPOCH_CELL.terrain, fieldSlice: EPOCH_CELL.terrain, fieldProbe: EPOCH_CELL.terrain, terrain: EPOCH_CELL.terrain,
   decorate: EPOCH_CELL.decorate, light: EPOCH_CELL.light, meshColumn: EPOCH_CELL.mesh, landing: EPOCH_CELL.terrain,
+  findCave: EPOCH_CELL.terrain,
 });
 /**
  * The epoch cell a job of `type` reads (SP4b spec §2.7): decorate 1, light 2, meshColumn 3, every other scoped type 0
- * (terrain, spawn, map tiles, stats, slices, field slices, probes, points and landing).
+ * (terrain, spawn, map tiles, stats, slices, field slices, probes, points, landing and findCave).
  */
 export const cellOf = (type: ScopedJobType): 0 | 1 | 2 | 3 => CELL_OF[type];
 
@@ -240,8 +259,19 @@ export interface MeshColumnResultMsg {
  * `surfaceWaterLevel` (63 over ocean and river, the lake's level, −∞ elsewhere).
  */
 export interface LandingResultMsg { readonly type: 'landingResult'; readonly jobId: number; readonly epoch: number; readonly surface: number; readonly water: number }
+/** Why a cave search ended (SP6a spec §7.3; `nearestCave`'s `FindReason`). */
+export type CaveFoundReason = 'found' | 'radius' | 'budget' | 'stopped';
+/**
+ * A `findCave`'s answer (SP6a spec §7.3): `hit`, the air voxel (integers, (x, z) in the world window, y in −63 … 319) and
+ * its yaw (0, 90, 180 or 270), present exactly when `reason` is `found`.
+ */
+export interface CaveFoundMsg {
+  readonly type: 'caveFound'; readonly jobId: number; readonly epoch: number;
+  readonly hit: { readonly x: number; readonly y: number; readonly z: number; readonly yaw: number } | null;
+  readonly reason: CaveFoundReason;
+}
 export type FromWorker = ReadyMsg | TileMsg | PointResultMsg | SpawnResultMsg | StatsResultMsg | SliceResultMsg | SurfaceProbeResultMsg | SelftestResultMsg | FieldSliceResultMsg | FieldProbeResultMsg | ErrorMsg
-  | AttachedMsg | ColumnDoneMsg | MeshColumnResultMsg | LandingResultMsg;
+  | AttachedMsg | ColumnDoneMsg | MeshColumnResultMsg | LandingResultMsg | CaveFoundMsg;
 /** A job's reply whose envelope (type, jobId) reads but whose body fails its guard (SP3d spec §5.1): the pool rejects job `jobId` with BAD_MESSAGE. */
 export interface BadReply { readonly bad: true; readonly jobId: number; readonly reason: string }
 
@@ -280,6 +310,8 @@ const isStatsKind = (v: unknown): v is StatsKind => typeof v === 'string' && Obj
 const SEGMENT_KEYS = ['ax', 'az', 'bx', 'bz'] as const;
 const SLICE_KEYS = [...SEGMENT_KEYS, 'from', 'to'] as const;
 const VOXEL_KEYS = ['x', 'y', 'z'] as const;
+/** The numbers a `findCave` carries. */
+const FIND_KEYS = ['kind', 'x', 'y', 'z', 'radius', 'budgetMs'] as const;
 /** The longest node path a fieldSlice or fieldProbe message may carry. */
 export const FIELD_PATH_MAX = 512;
 const SLICE_FIELDS: readonly string[] = ['density', 'node', 'blocks', 'rule', 'caves'];
@@ -383,6 +415,17 @@ export const pointInWindow = (x: number, z: number): boolean => x >= -WINDOW && 
 /** Why (x, z) is not a position a landing can read (integers in the half-open world window), or null when it is. */
 export const landingProblem = (x: number, z: number): string | null =>
   Number.isInteger(x) && Number.isInteger(z) && pointInWindow(x, z) ? null : `(x, z) = (${x}, ${z}) is not an integer position in the world window`;
+/**
+ * Why a `findCave` is not a search the handler runs (SP6a spec §7.3), or null: `kind` an integer 1-9, (x, y, z) integers
+ * with (x, z) in the half-open world window, `radius` an integer in 1 … `FIND_RADIUS`, `budgetMs` a number in
+ * (0, `FIND_BUDGET_MS`].
+ */
+export const findCaveProblem = (m: Pick<FindCaveMsg, 'kind' | 'x' | 'y' | 'z' | 'radius' | 'budgetMs'>): string | null =>
+  !(Number.isInteger(m.kind) && m.kind >= 1 && m.kind <= 9) ? `kind ${m.kind} is not a cave kind 1-9`
+    : !(Number.isInteger(m.x) && Number.isInteger(m.y) && Number.isInteger(m.z) && pointInWindow(m.x, m.z)) ? `(x, y, z) = (${m.x}, ${m.y}, ${m.z}) is not an integer voxel in the world window`
+      : !(Number.isInteger(m.radius) && m.radius >= 1 && m.radius <= FIND_RADIUS) ? `radius ${m.radius} is not an integer in 1 … ${FIND_RADIUS}`
+        : !(m.budgetMs > 0 && m.budgetMs <= FIND_BUDGET_MS) ? `budgetMs ${m.budgetMs} is not in (0, ${FIND_BUDGET_MS}]`
+          : null;
 /**
  * Why (x, y, z) is not a voxel a surfaceProbe can read (integers, (x, z) in the half-open world window, y in −64 … 319),
  * or null when it is.
@@ -490,10 +533,15 @@ export function parseToWorker(m: unknown): ToWorker | null {
       return scopedOk(m) && isColumn(m['cx'], m['cz']) && protoOnlyOk(m) && diffOk(m) ? (m as unknown as WorldJobMsg) : null;
     case 'landing':
       return scopedOk(m) && isInt(m['x']) && isInt(m['z']) ? (m as unknown as LandingMsg) : null;
+    case 'findCave':
+      return scopedOk(m) && FIND_KEYS.every((k) => typeof m[k] === 'number') ? (m as unknown as FindCaveMsg) : null;
     default:
       return null;
   }
 }
+
+const CAVE_FOUND_REASONS: readonly string[] = ['found', 'radius', 'budget', 'stopped'];
+const YAWS: readonly number[] = [0, 90, 180, 270];
 
 /** Why a job reply's body (jobId aside) fails its guard, or null. */
 type ReplyCheck = (m: Record<string, unknown>) => string | null;
@@ -593,6 +641,17 @@ const REPLY_CHECKS: Readonly<Record<string, ReplyCheck>> = Object.freeze({
     const water = m['water'];
     return all(epochProblem(m), isInt(m['surface']) ? null : 'surface is not an integer',
       water === -Infinity || isFiniteNum(water) ? null : 'water is not a finite number or −∞');
+  },
+  caveFound: (m) => {
+    const reason = m['reason'];
+    const hit = m['hit'];
+    if (typeof reason !== 'string' || !CAVE_FOUND_REASONS.includes(reason)) return `reason ${String(reason)} is not found, radius, budget or stopped`;
+    if (reason !== 'found') return all(epochProblem(m), hit === null ? null : `hit is not null with reason ${reason}`);
+    if (!isObj(hit)) return all(epochProblem(m), 'hit is not an object with reason found');
+    const { x, y, z, yaw } = hit;
+    return all(epochProblem(m),
+      isInt(x) && isInt(z) && pointInWindow(x, z) && isInt(y) && y > -64 && y <= 319 ? null : 'hit is not an integer voxel of the world above y −64',
+      typeof yaw === 'number' && YAWS.includes(yaw) ? null : 'hit.yaw is not 0, 90, 180 or 270');
   },
   error: (m) => (m['epoch'] === null || isInt(m['epoch'])) && typeof m['code'] === 'string' && Object.hasOwn(ERROR_CODES, m['code']) && typeof m['message'] === 'string'
     ? null : 'epoch, code or message is malformed',

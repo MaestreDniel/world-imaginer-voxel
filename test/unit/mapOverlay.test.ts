@@ -1082,8 +1082,12 @@ describe('the world\'s Caves tab (SP6a spec §7.3, D12)', () => {
     const tab: MapCaves = {
       onXray: (on) => { log.push(`xray ${on}`); },
       onBand: (b) => { log.push(`band ${b.yMin} ${b.yMax}`); },
-      find: (kind) => { log.push(`find ${kind}`); },
+      find: (kind) => {
+        log.push(`find ${kind}`);
+        return Promise.resolve({ hit: null, reason: 'radius' as const });
+      },
       cancelFind: () => { log.push('cancel'); },
+      savePlace: (hit) => { log.push(`save ${hit.x} ${hit.y} ${hit.z}`); },
       camera: () => ({ x: 0, y: 80, z: 0 }),
     };
     const state = { on: true, band: bandSet(10, 41), radius: 176 };
@@ -1097,7 +1101,9 @@ describe('the world\'s Caves tab (SP6a spec §7.3, D12)', () => {
     overlay.setXray(false, XRAY_ALL, 160);
     expect(tools()).toHaveLength(0);
     const t = await openMounted(overlay);
-    expect(t.deps.caves).toBe(c.tab);
+    // The page's deps, "Save as place" wrapped (below).
+    const given = t.deps.caves!;
+    expect([given.onXray, given.onBand, given.find, given.cancelFind, given.camera]).toEqual([c.tab.onXray, c.tab.onBand, c.tab.find, c.tab.cancelFind, c.tab.camera]);
     expect(t.calls.xray).toEqual([[true, bandSet(10, 41), 176]]);
     // Every later change of the page's X-ray reaches the tab, shown or hidden.
     overlay.setXray(false, XRAY_ALL, 176);
@@ -1111,6 +1117,27 @@ describe('the world\'s Caves tab (SP6a spec §7.3, D12)', () => {
     overlay.setXray(false, XRAY_ALL, 176);
     expect(t.calls.xray).toHaveLength(3);
     expect(c.log).toEqual([]);
+  });
+
+  test('"Save as place" saves through the page\'s, then closes a full-screen map (the place dialog would be under it), as "+ Add at the pin"; split keeps it (Task 44)', async () => {
+    for (const mode of ['full', 'split'] as const) {
+      const c = caves();
+      const s = setup({ mode, caves: c.option });
+      const t = await openMounted(s.overlay);
+      expect(s.overlay.mode).toBe(mode);
+      t.deps.caves!.savePlace!({ x: 1, y: 2, z: 3, yaw: 90 });
+      expect(c.log, mode).toEqual(['save 1 2 3']);
+      expect(s.overlay.shown, mode).toBe(mode === 'split');
+      s.overlay.dispose();
+    }
+  });
+
+  test('an unsaved world\'s tab has no "Save as place": the overlay passes null on', async () => {
+    const c = caves();
+    const { overlay } = setup({ caves: { ...c.option, tab: { ...c.tab, savePlace: null } } });
+    const t = await openMounted(overlay);
+    expect(t.deps.caves!.savePlace).toBeNull();
+    overlay.dispose();
   });
 
   test('without caves the tool gets none and the mount pushes nothing; a later change still reaches the tool, which has no tab to set', async () => {

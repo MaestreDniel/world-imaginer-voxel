@@ -100,7 +100,7 @@ describe('parseToWorker', () => {
 });
 
 describe('the per-scope epoch cells and every job\'s scope (SP4b spec §2.7)', () => {
-  /** One valid message of each of the thirteen scoped job types, at epoch 3 and scope 5, and the cell it reads. */
+  /** One valid message of each of the fourteen scoped job types, at epoch 3 and scope 5, and the cell it reads. */
   const SCOPED: ReadonlyArray<[ScopedJobType, Record<string, unknown>, number]> = [
     ['mapTile', { ...tileMsg, scope: 5 }, 0],
     ['point', { type: 'point', jobId: 2, epoch: 3, scope: 5, x: 1.5, z: -7 }, 0],
@@ -115,6 +115,7 @@ describe('the per-scope epoch cells and every job\'s scope (SP4b spec §2.7)', (
     ['light', { type: 'light', jobId: 15, epoch: 3, scope: 5, cx: 2, cz: -1 }, 2],
     ['meshColumn', { type: 'meshColumn', jobId: 16, epoch: 3, scope: 5, cx: 2, cz: -1 }, 3],
     ['landing', { type: 'landing', jobId: 17, epoch: 3, scope: 5, x: -320, z: 128 }, 0],
+    ['findCave', { type: 'findCave', jobId: 18, epoch: 3, scope: 5, kind: 5, x: 20400, y: 222, z: -4800, radius: 512, budgetMs: 2000 }, 0],
   ];
 
   test('configure accepts epochs null or a 16-byte SharedArrayBuffer and refuses 4 bytes or an ArrayBuffer', () => {
@@ -135,9 +136,9 @@ describe('the per-scope epoch cells and every job\'s scope (SP4b spec §2.7)', (
   test('selftest carries neither epoch nor scope', () => {
     expect(parseToWorker({ type: 'selftest', jobId: 5, key: 'sp1.params' })).not.toBeNull();
   });
-  test('cellOf: decorate 1, light 2, meshColumn 3, every other scoped type 0 (terrain, spawn, tiles, stats, slices, field slices, probes, points, landing)', () => {
+  test('cellOf: decorate 1, light 2, meshColumn 3, every other scoped type 0 (terrain, spawn, tiles, stats, slices, field slices, probes, points, landing, findCave)', () => {
     expect(SCOPED.map(([type]) => [type, cellOf(type)])).toEqual(SCOPED.map(([type, , cell]) => [type, cell]));
-    expect(SCOPED).toHaveLength(13);
+    expect(SCOPED).toHaveLength(14);
   });
 });
 

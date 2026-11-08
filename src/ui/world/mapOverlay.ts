@@ -9,7 +9,8 @@
  *   page's: true in full closes the map, split keeps it, false keeps it as it is; in a saved world its `places`, whose
  *   ↗ moves the camera to the place and closes a full-screen map the same way, as does "+ Add at the pin" once B's
  *   dialog opened for the pin, which the map would cover, SP5b spec §3.7, D13; and the page's `caves`, whose X-ray state
- *   it pushes into the tool's Caves tab right after the mount, SP6a spec §7.3, D12), centred on the camera at
+ *   it pushes into the tool's Caves tab right after the mount, SP6a spec §7.3, D12, and whose "Save as place" closes a
+ *   full-screen map after it opened the place dialog, as "+ Add at the pin"), centred on the camera at
  *   `WORLD_MAP_BPP` blocks/px; the tool attaches its canvas to the driver's replaying sink, so it draws at once. Every
  *   `open` then calls `show` on the camera (keeping the zoom and layer) and `setPlayer` once, so the arrow is at the
  *   camera on opening; `close` calls `hide`, and the host is `display: none` while hidden. Every view change the tool
@@ -475,7 +476,14 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
           }, (e: unknown) => console.error('The place could not be added:', e));
         },
       },
-      caves: caves === null ? null : caves.tab,
+      // "Save as place" opens the place dialog, which a full-screen map would cover: it closes the map as "+ Add at the pin".
+      caves: caves === null ? null : {
+        ...caves.tab,
+        savePlace: caves.tab.savePlace === null ? null : (hit) => {
+          caves.tab.savePlace!(hit);
+          closeIfFull();
+        },
+      },
     });
     // The Caves tab shows the page's X-ray as it is now; the page's `setXray` keeps it in step from here (SP6a spec §7.3).
     if (caves !== null) {

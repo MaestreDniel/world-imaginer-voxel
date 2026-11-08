@@ -13,7 +13,8 @@ import { createMaterialSystem, fogRange } from '../../src/render/materials/index
 import { createXrayControl } from '../../src/render/renderer';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { createEpochs } from '../../src/ui/world/applyControl';
-import { createPageXray, NIGHT_VISION_NOTICE_MS, nightVisionNotice, toggleNightVision, XRAY_NOTICE_MS, xrayNotice, xrayRadiusOf } from '../../src/ui/world/worldPage';
+import { cavePlace, createCaveFind, createPageXray, NIGHT_VISION_NOTICE_MS, nightVisionNotice, toggleNightVision, XRAY_NOTICE_MS, xrayNotice, xrayRadiusOf } from '../../src/ui/world/worldPage';
+import type { FindCaveRequest, FindCaveResult } from '../../src/engine/workerPool';
 import { easeNightVision } from '../../src/ui/world/frameStep';
 import { bandSet, createXrayStrip, XRAY_ALL } from '../../src/ui/world/xrayStrip';
 import { createCavesTab } from '../../src/ui/map/cavesTab';
@@ -6619,8 +6620,8 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
   test('with the map split and a band slider focused (the map owns, `ownerOf`), PageDown is neither acted on nor prevented, so only the slider moves (SP6a spec §7.1, §7.3)', () => {
     const p = page();
     const tab = createCavesTab(dom.body as unknown as HTMLElement, {
-      onXray: () => {}, onBand: (b) => p.xray.setBand(b), openSlice: () => {}, revealParameters: () => {}, find: () => {}, cancelFind: () => {},
-      camera: () => ({ x: 0, y: 80, z: 0 }),
+      onXray: () => {}, onBand: (b) => p.xray.setBand(b), openSlice: () => {}, revealParameters: () => {},
+      find: () => new Promise(() => {}), cancelFind: () => {}, savePlace: null, camera: () => ({ x: 0, y: 80, z: 0 }),
     });
     const target = Object.assign(new EventTarget(), { requestPointerLock: () => Promise.resolve() });
     const actions: string[] = [];
@@ -6914,4 +6915,96 @@ describe('night vision in the page: L, the notice, the setting and the Settings 
     expect(view.litHash()).toBe(lit0);
     expect(p.shown.map(([t]) => t)).toEqual(['Night vision on', 'Night vision off']);
   }, 120_000);
+});
+
+describe('the Caves tab\'s Find on the page (SP6a spec §7.3, D12, D16; Task 44)', () => {
+  const SRC = (): string => readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+  /** A pool whose `findCave` records its requests and lets the test settle each; `cancel()` rejects as the pool's. */
+  function finder() {
+    const reqs: FindCaveRequest[] = [];
+    const ends: Array<{ resolve(r: FindCaveResult): void; reject(e: Error): void; cancelled: boolean }> = [];
+    const pool = {
+      findCave(req: FindCaveRequest) {
+        reqs.push(req);
+        const end = { resolve: (_r: FindCaveResult): void => undefined, reject: (_e: Error): void => undefined, cancelled: false };
+        const promise = new Promise<FindCaveResult>((res, rej) => { end.resolve = res; end.reject = rej; });
+        ends.push(end);
+        return { promise, cancel: () => { end.cancelled = true; end.reject(new JobCancelled()); } };
+      },
+    };
+    const camera = { x: 20400.5, y: 222.9, z: -4799.5 };
+    const arrived: unknown[] = [];
+    const f = createCaveFind({ pool, camera, arrive: (p) => { arrived.push(p); } });
+    return { f, reqs, ends, camera, arrived };
+  }
+  const HIT = { x: 20398, y: 196, z: -4798, yaw: 270 };
+
+  test('`cavePlace`: the eye at the hit voxel\'s centre, the cave\'s yaw, pitch 0', () => {
+    expect(cavePlace(HIT)).toEqual({ id: '', name: '', colour: 0, x: 20398.5, y: 196.5, z: -4797.5, yaw: 270, pitch: 0 });
+  });
+
+  test('a search asks from the camera\'s voxel; a hit moves the camera there (arrive) and resolves with the outcome; a miss moves nothing', async () => {
+    const t = finder();
+    const p = t.f.find(1);
+    expect(t.reqs).toEqual([{ kind: 1, x: 20400, y: 222, z: -4800 }]);
+    t.ends[0]!.resolve({ hit: HIT, reason: 'found' });
+    await expect(p).resolves.toEqual({ hit: HIT, reason: 'found' });
+    expect(t.arrived).toEqual([cavePlace(HIT)]);
+    const q = t.f.find(7);
+    t.ends[1]!.resolve({ hit: null, reason: 'radius' });
+    await expect(q).resolves.toEqual({ hit: null, reason: 'radius' });
+    expect(t.arrived).toHaveLength(1);
+  });
+
+  test('`cancelFind` rejects the search and moves nothing, also when the pool had answered before the outcome was handled', async () => {
+    const t = finder();
+    const p = t.f.find(2);
+    t.f.cancelFind();
+    expect(t.ends[0]!.cancelled).toBe(true);
+    await expect(p).rejects.toBeInstanceOf(JobCancelled);
+    const q = t.f.find(3);
+    t.ends[1]!.resolve({ hit: HIT, reason: 'found' });
+    t.f.cancelFind();
+    await expect(q).rejects.toBeInstanceOf(JobCancelled);
+    expect(t.arrived).toEqual([]);
+    // Nothing in flight: a cancel does nothing.
+    t.f.cancelFind();
+  });
+
+  test('a search the pool cancelled on its own (a configure) resolves `stopped`; another failure rejects', async () => {
+    const t = finder();
+    const p = t.f.find(6);
+    t.ends[0]!.reject(new JobCancelled());
+    await expect(p).resolves.toEqual({ hit: null, reason: 'stopped' });
+    const q = t.f.find(6);
+    t.ends[1]!.reject(new Error('BAD_ARGS: kind'));
+    await expect(q).rejects.toThrow('BAD_ARGS');
+    expect(t.arrived).toEqual([]);
+  });
+
+  test('a new search cancels the one in flight', async () => {
+    const t = finder();
+    const p = t.f.find(4);
+    const q = t.f.find(5);
+    expect(t.ends[0]!.cancelled).toBe(true);
+    await expect(p).rejects.toBeInstanceOf(JobCancelled);
+    t.ends[1]!.resolve({ hit: HIT, reason: 'found' });
+    await expect(q).resolves.toMatchObject({ reason: 'found' });
+    expect(t.arrived).toEqual([cavePlace(HIT)]);
+  });
+
+  test('the page wires Find, its cancel and "Save as place" (saved worlds only), and arrives in flight', () => {
+    const src = SRC();
+    expect(src).toContain('          find: (kind) => caveFind.find(kind),');
+    expect(src).toContain('          cancelFind: () => caveFind.cancelFind(),');
+    expect(src).toContain('          savePlace: places === null ? null : (hit) => savePlaceKey({');
+    expect(src).toContain('            palette, help, settings: settingsPanel, dialog: placeDialog, places, camera: cavePlace(hit),');
+    expect(src).toContain([
+      '      arrive: (p) => {',
+      "        if (fly.mode === 'walk') switchMode({ fly, walk, world, repeat: holdRepeat });",
+      '        teleporter.toPlace(p);',
+      '      },',
+    ].join('\n'));
+    expect(src).toContain('    teardown.push(() => caveFind.cancelFind());');
+  });
 });

@@ -8,11 +8,19 @@
  * the camera's y with the band at all), `CAVE_SLICE_EXTENT` blocks across, centred on the camera (the tool's
  * `openSlice`); and "Cave parameters", which opens Parameters at `CAVE_PARAMETERS_LEAF`, the Caves section's first leaf
  * (the panel's `reveal` takes a leaf path and does nothing for a group's, so it opens the section through its first
- * leaf). The Find row is SP6a Task 44's. `set` writes only what changed and calls no dep. Text only through
- * `textContent`; no browser dialog.
+ * leaf). Then the Find row (SP6a spec §7.3, D12, D16; the cut line, §15): one button per kind 1-8, "Nearest <kind>"
+ * (`FIND_KINDS`; kind 9 has none, the default tree yields none), whose press asks `find(kind)` from the camera; the
+ * result line reads "Searching for <kind>…", then `findText`'s "<kind> at x, y, z · d blocks away" (d from the camera
+ * at the press, rounded), "No <kind> found within 512 blocks", "No <kind> found in 2 s" or "<kind> search stopped" (the
+ * world changed under it); a second press of the button searching, a press of another kind's (which then searches),
+ * `cancel()` (the tool's: the tab closed, another tab shown or the map hidden) and `dispose` cancel it (`cancelFind`),
+ * "<kind> search cancelled". "Save as place" shows after a hit in a saved world only (`savePlace` non-null) and saves
+ * that hit's pose. `set` writes only what changed and calls no dep. Text only through `textContent`; no browser
+ * dialog.
  */
-import { HEIGHT, MIN_Y } from '../../core/constants';
+import { CAVE_KIND, HEIGHT, MIN_Y } from '../../core/constants';
 import { XRAY_COLORS, XRAY_LABELS } from '../../render/xrayPalette';
+import { FIND_BUDGET_MS, FIND_RADIUS } from '../../workers/protocol';
 import { el } from '../common/dom';
 import { bandSet, stripText, XRAY_ALL, type XrayBand } from '../world/xrayStrip';
 
@@ -25,19 +33,71 @@ export interface CavesTabDeps {
   openSlice(y: number): void;
   /** "Cave parameters": the Parameters tab at `CAVE_PARAMETERS_LEAF`. */
   revealParameters(): void;
-  /** "Nearest <kind>" (SP6a Task 44's Find row). */
-  find(kind: number): void;
-  /** Cancels a search in flight (SP6a Task 44's Find row). */
+  /**
+   * "Nearest <kind>" (SP6a spec §7.3): the search from the camera, which moves the camera into the hit in flight; its
+   * hit (null unless `reason` is `found`) and why it ended. Rejected when cancelled (`cancelFind`).
+   */
+  find(kind: number): Promise<FindOutcome>;
+  /** Cancels the search in flight: its `find` promise rejects. */
   cancelFind(): void;
+  /** "Save as place": saves a hit's pose as a place (the place dialog); null in an unsaved world, which has no places. */
+  readonly savePlace: ((hit: FindHit) => void) | null;
   /** The camera (the page's flight state): its y is the cave slice's with the band at all. */
   camera(): { readonly x: number; readonly y: number; readonly z: number };
+}
+
+/** A cave the finder found: its air voxel and a yaw along it (degrees; 0 faces −z). */
+export interface FindHit {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  readonly yaw: number;
+}
+/** A search's outcome (the pool's `findCave`). */
+export interface FindOutcome {
+  readonly hit: FindHit | null;
+  readonly reason: 'found' | 'radius' | 'budget' | 'stopped';
 }
 
 export interface CavesTab {
   /** The page's X-ray state: on or off, its band and its radius in blocks; writes only what changed. */
   set(on: boolean, band: XrayBand, radius: number): void;
-  /** Removes the tab's DOM. */
+  /** Cancels the search in flight, if any (the tab closed, another tab shown or the map hidden). */
+  cancel(): void;
+  /** Cancels the search in flight and removes the tab's DOM. */
   dispose(): void;
+}
+
+/** The kinds with a Find button, in kind order: the noise kinds 1-5 and the carver kinds 6-8. */
+export const FIND_KINDS: readonly number[] = [
+  CAVE_KIND.cheese, CAVE_KIND.spaghetti3d, CAVE_KIND.spaghetti2d, CAVE_KIND.noodle, CAVE_KIND.entrance,
+  CAVE_KIND.worm, CAVE_KIND.ravine, CAVE_KIND.undergroundWorm,
+];
+
+/** A kind's name inside a sentence: its label with a lower-case first letter ("spaghetti 3D", "underground worm"). */
+export const kindWord = (kind: number): string => {
+  const label = XRAY_LABELS[kind] ?? '';
+  return label.charAt(0).toLowerCase() + label.slice(1);
+};
+
+/** A Find button's text: "Nearest <kind>". */
+export const findButtonText = (kind: number): string => `Nearest ${kindWord(kind)}`;
+
+/**
+ * The result line of a search of `kind` from the camera at `from`: "<Kind> at x, y, z · d blocks away" (d the distance
+ * from `from` to the hit voxel's centre, rounded), "No <kind> found within 512 blocks", "No <kind> found in 2 s", or
+ * "<Kind> search stopped".
+ */
+export function findText(kind: number, r: FindOutcome, from: { readonly x: number; readonly y: number; readonly z: number }): string {
+  const label = XRAY_LABELS[kind] ?? '';
+  if (r.hit !== null) {
+    const h = r.hit;
+    const d = Math.round(Math.hypot(h.x + 0.5 - from.x, h.y + 0.5 - from.y, h.z + 0.5 - from.z));
+    return `${label} at ${h.x}, ${h.y}, ${h.z} · ${d} blocks away`;
+  }
+  if (r.reason === 'radius') return `No ${kindWord(kind)} found within ${FIND_RADIUS} blocks`;
+  if (r.reason === 'budget') return `No ${kindWord(kind)} found in ${FIND_BUDGET_MS / 1000} s`;
+  return `${label} search stopped`;
 }
 
 /** The cave slice's width in blocks (SP6a spec §7.3): a 128² `caves` slice 256 blocks across (`slice.caves128`). */
@@ -108,7 +168,22 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
   sliceButton.title = `The Density tab's horizontal cave slice at the band's middle y, ${CAVE_SLICE_EXTENT} blocks across, centred on you`;
   const paramsButton = button('map-caves-params', 'Cave parameters');
   paramsButton.title = 'Parameters › Caves';
-  root.append(xrayLabel, bandLine, low.row, high.row, allButton, legend, radiusOut, sliceButton, paramsButton);
+  // The Find row (SP6a spec §7.3): a button per kind, the result line and "Save as place".
+  const findRow = el('div', 'caves-find');
+  findRow.id = 'map-caves-find';
+  findRow.append(el('div', 'caves-find-title', 'Find'));
+  const findButtons = new Map<number, HTMLButtonElement>();
+  for (const kind of FIND_KINDS) {
+    const b = button(`map-caves-find-${kind}`, findButtonText(kind));
+    findButtons.set(kind, b);
+    findRow.append(b);
+  }
+  const resultLine = el('div', 'caves-find-result');
+  resultLine.id = 'map-caves-find-result';
+  const saveButton = button('map-caves-save-place', 'Save as place');
+  saveButton.hidden = true;
+  findRow.append(resultLine, saveButton);
+  root.append(xrayLabel, bandLine, low.row, high.row, allButton, legend, radiusOut, sliceButton, paramsButton, findRow);
   host.append(root);
 
   // The state as shown: the checkbox, the band (the sliders and the line) and the radius (NaN: none written yet).
@@ -142,6 +217,52 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
   sliceButton.addEventListener('click', () => deps.openSlice(caveSliceY(band, deps.camera().y)));
   paramsButton.addEventListener('click', () => deps.revealParameters());
 
+  // The search in flight: its kind (null: none) and its number, so a cancelled search's late outcome is dropped.
+  let searching: number | null = null;
+  let search = 0;
+  let lastHit: FindHit | null = null;
+  const showHit = (hit: FindHit | null): void => {
+    lastHit = hit;
+    saveButton.hidden = hit === null || deps.savePlace === null;
+  };
+  /** Cancels the search in flight: the dep, then "<Kind> search cancelled". */
+  const cancel = (): void => {
+    if (searching === null) return;
+    const kind = searching;
+    searching = null;
+    search++;
+    deps.cancelFind();
+    resultLine.textContent = `${XRAY_LABELS[kind] ?? ''} search cancelled`;
+  };
+  const start = (kind: number): void => {
+    const c = deps.camera();
+    const from = { x: c.x, y: c.y, z: c.z };
+    const mine = ++search;
+    searching = kind;
+    showHit(null);
+    resultLine.textContent = `Searching for ${kindWord(kind)}…`;
+    deps.find(kind).then((r) => {
+      if (mine !== search) return;
+      searching = null;
+      resultLine.textContent = findText(kind, r, from);
+      showHit(r.hit);
+    }, () => {
+      if (mine !== search) return;
+      searching = null;
+      resultLine.textContent = `${XRAY_LABELS[kind] ?? ''} search failed`;
+    });
+  };
+  for (const [kind, b] of findButtons) {
+    b.addEventListener('click', () => {
+      const again = searching === kind;
+      cancel();
+      if (!again) start(kind);
+    });
+  }
+  saveButton.addEventListener('click', () => {
+    if (lastHit !== null && deps.savePlace !== null) deps.savePlace(lastHit);
+  });
+
   return {
     set(nextOn, b, r) {
       if (nextOn !== on) {
@@ -154,7 +275,9 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
         radiusOut.textContent = radiusText(r);
       }
     },
+    cancel,
     dispose() {
+      cancel();
       root.remove();
     },
   };

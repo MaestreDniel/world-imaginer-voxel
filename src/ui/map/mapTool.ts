@@ -20,7 +20,8 @@
  * is mounted with its `caves` (SP6a spec §7.3, D12; `?map` has none, it has no 3D): a Caves tab after Presets
  * (`cavesTab.ts`) with the page's X-ray controls, which the page keeps in step through `setXray`, and the tool's two
  * links (`caveTabDeps`): "Cave slice" opens the Density tab's horizontal `caves` slice, "Cave parameters" the Caves
- * section of Parameters.
+ * section of Parameters; its search in flight (the Find row) is cancelled when the tab closes: another tab shown, the
+ * panel hidden (`onPanelChange`) or the tool hidden (`hide`).
  */
 import './map.css';
 import type { WorldSession } from '../../engine/session';
@@ -482,7 +483,13 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
     showTab: (t) => layout.showTab(t),
     reveal: (path) => panel.reveal(path),
   }));
-  if (cavesTab !== null) disposers.add(() => cavesTab.dispose());
+  if (cavesTab !== null) {
+    disposers.add(() => cavesTab.dispose());
+    // Closing the tab cancels its search (SP6a spec §7.3): another tab shown or the panel hidden.
+    disposers.add(layout.onPanelChange(() => {
+      if (layout.tab !== 'caves' || !layout.panelVisible) cavesTab.cancel();
+    }));
+  }
 
   // A saved world's places (SP5b spec §3.7, D13): the dots on the canvas, redrawn at every change of the places, and the
   // Places tab, whose "+ Add at the pin" follows the pin.
@@ -546,6 +553,8 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
       // is already display: none, so it is not hidden through `densityChanged`.
       shown = false;
       slices.setShown(false);
+      // The Caves tab's search ends with the map (SP6a spec §7.3).
+      cavesTab?.cancel();
       hoverAt(null);
       canvas.setHidden(true);
       driver.setPreviewWanted(false);

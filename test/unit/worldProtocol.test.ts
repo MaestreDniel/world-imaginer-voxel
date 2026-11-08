@@ -7,13 +7,21 @@
  * thread; `terrain` may carry `protoOnly`; the ABORTED table over the four world jobs, each on its own epoch cell; every
  * world job inside a read section, its releases in the worker's limbo until a drain; STORE_CORRUPT; L's and D's retries
  * after a partial write; `T(protoOnly)`; `drainAfterReply`.
+ * SP6a (spec §7.3; ruling P45; Task 44): the finder's `findCave` and `caveFound` guards (`findCaveProblem` the handler's
+ * BAD_ARGS), and the handler's findCave branch: on the store's loaded columns, each read inside a read section left by
+ * the end, its clock seam's budget, its stop on its epoch cell, and with no store.
  */
 import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { createLightScratch } from '../../src/light/initial';
 import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { ROW_INTS } from '../../src/mesh/column';
-import { cellOf, parseFromWorker, parseToWorker, payloadOfMeshResult, type FromWorker, type MeshColumnResultMsg } from '../../src/workers/protocol';
+import { CAVE_KIND } from '../../src/core/constants';
+import { caveTagAt } from '../../src/gen/caves/tags';
+import { createDensityContext } from '../../src/gen/density/context';
+import {
+  cellOf, FIND_BUDGET_MS, FIND_RADIUS, findCaveProblem, parseFromWorker, parseToWorker, payloadOfMeshResult, type FromWorker, type MeshColumnResultMsg,
+} from '../../src/workers/protocol';
 import { createTaskHandler, drainAfterReply, LIMBO_RETRY_MS, type TaskHandler } from '../../src/workers/taskHandler';
 import { fillColumnD, fillColumnL, fillProtoOnly } from '../../src/workers/worldJobs';
 import { STATUS_DECORATED, STATUS_PROTO, STATUS_PUBLISHED } from '../../src/world/store/columnTable';
@@ -495,5 +503,105 @@ describe('drainAfterReply (SP4b spec §2.5: a worker drains after each reply and
     expect([drains, timers.length]).toEqual([6, 1]);
     fire();
     expect([drains, timers.length]).toEqual([7, 0]);
+  });
+});
+
+describe('the finder\'s messages (SP6a spec §7.3; ruling P45; Task 44)', () => {
+  const reasonText = reason;
+  const find = (o: Record<string, unknown> = {}) => ({ type: 'findCave', jobId: 7, epoch: 0, scope: 0, kind: CAVE_KIND.cheese, x: 20400, y: 222, z: -4800, radius: FIND_RADIUS, budgetMs: FIND_BUDGET_MS, ...o });
+  const found = (o: Record<string, unknown> = {}) => ({ type: 'caveFound', jobId: 7, epoch: 0, hit: { x: 20398, y: 196, z: -4798, yaw: 270 }, reason: 'found', ...o });
+
+  test('findCave is scoped (terrain cell) and carries numbers only; the ranges are the handler\'s', () => {
+    expect(cellOf('findCave')).toBe(0);
+    expect([FIND_RADIUS, FIND_BUDGET_MS]).toEqual([512, 2000]);
+    expect(parseToWorker(find())).toEqual(find());
+    // Numbers outside the ranges still parse: the handler answers BAD_ARGS.
+    expect(parseToWorker(find({ kind: 0, x: 0.5, radius: 9999 }))).not.toBeNull();
+    for (const k of ['kind', 'x', 'y', 'z', 'radius', 'budgetMs']) {
+      expect(parseToWorker(find({ [k]: '1' })), k).toBeNull();
+      const missing: Record<string, unknown> = find();
+      delete missing[k];
+      expect(parseToWorker(missing), `${k} missing`).toBeNull();
+    }
+    expect(parseToWorker(find({ scope: undefined }))).toBeNull();
+    expect(parseToWorker(find({ jobId: 1.5 }))).toBeNull();
+    expect(parseToWorker(find({ epoch: '0' }))).toBeNull();
+  });
+
+  test('findCaveProblem: kind 1-9, integers in the world window, radius 1 … 512, budgetMs in (0, 2,000]', () => {
+    const ok = { kind: 1, x: 0, y: 400, z: -524288, radius: 512, budgetMs: 2000 };
+    expect(findCaveProblem(ok)).toBeNull();
+    expect(findCaveProblem({ ...ok, kind: 9, y: -9999, radius: 1, budgetMs: 0.5 })).toBeNull();
+    for (const bad of [{ kind: 0 }, { kind: 10 }, { kind: 1.5 }, { x: 0.5 }, { y: Number.NaN }, { z: 524288 }, { x: -524289 },
+      { radius: 0 }, { radius: 513 }, { radius: 1.5 }, { budgetMs: 0 }, { budgetMs: 2001 }, { budgetMs: Number.NaN }]) {
+      expect(findCaveProblem({ ...ok, ...bad }), JSON.stringify(bad)).not.toBeNull();
+    }
+  });
+
+  test('caveFound: a hit exactly with reason found (an integer voxel above y −64, yaw 0, 90, 180 or 270); null with radius, budget, stopped', () => {
+    expect(valid(found())).toBe(true);
+    for (const yaw of [0, 90, 180, 270]) expect(valid(found({ hit: { x: 1, y: -63, z: 2, yaw } }))).toBe(true);
+    expect(valid(found({ hit: { x: 1, y: 319, z: 2, yaw: 0 } }))).toBe(true);
+    for (const reason of ['radius', 'budget', 'stopped']) {
+      expect(valid(found({ hit: null, reason })), reason).toBe(true);
+      expect(reasonText(found({ reason })), reason).toBe(`caveFound: hit is not null with reason ${reason}`);
+    }
+    expect(reason(found({ hit: null }))).toBe('caveFound: hit is not an object with reason found');
+    expect(reason(found({ reason: 'done' }))).toBe('caveFound: reason done is not found, radius, budget or stopped');
+    for (const hit of [{ x: 1, y: -64, z: 2, yaw: 0 }, { x: 1, y: 320, z: 2, yaw: 0 }, { x: 1.5, y: 3, z: 2, yaw: 0 }, { x: 524288, y: 3, z: 2, yaw: 0 }, { y: 3, z: 2, yaw: 0 }]) {
+      expect(reason(found({ hit })), JSON.stringify(hit)).toBe('caveFound: hit is not an integer voxel of the world above y −64');
+    }
+    for (const yaw of [45, '90', undefined]) expect(reason(found({ hit: { x: 1, y: 3, z: 2, yaw } }))).toBe('caveFound: hit.yaw is not 0, 90, 180 or 270');
+    expect(reason(found({ epoch: 0.5 }))).toBe('caveFound: epoch is not an integer');
+    expect(parseFromWorker({ ...found(), jobId: undefined })).toBeNull();
+  });
+
+  test('the handler: NOT_CONFIGURED before configure, BAD_ARGS outside the ranges, and a search without a store (no loaded columns)', () => {
+    const h = createTaskHandler();
+    expect(pick(h.handle(find()))).toEqual(['NOT_CONFIGURED', 7, 0]);
+    expect(h.handle(configure).msg.type).toBe('ready');
+    expect(pick(h.handle(find({ kind: 10 })))).toEqual(['BAD_ARGS', 7, 0]);
+    expect(pick(h.handle(find({ radius: 513 })))).toEqual(['BAD_ARGS', 7, 0]);
+    // A worm from L10's hover point: its paths' centres, each confirmed by density.
+    const r = h.handle(find({ kind: CAVE_KIND.worm })).msg;
+    expect(r).toMatchObject({ type: 'caveFound', jobId: 7, epoch: 0, reason: 'found' });
+    if (r.type !== 'caveFound' || r.hit === null) throw new Error('no hit');
+    expect(caveTagAt(createDensityContext(CTX), r.hit.x, r.hit.y, r.hit.z)).toBe(CAVE_KIND.worm);
+    expect(valid(r)).toBe(true);
+  });
+
+  test('the handler on the store: the loaded column\'s stored tags, read inside read sections it leaves by the end', () => {
+    const s = big();
+    fill(s, [[1274, -300]]);
+    const view = s.proto(1274, -300)!;
+    // A kind the stored column holds, and its first voxel (section order), where the search starts: at distance 0, the
+    // stored tag is the hit, and no density is needed.
+    let kind = 0, at = -1;
+    for (let sy = 0; sy < 24 && kind === 0; sy++) {
+      const c = view.sectionCave(sy);
+      for (let i = 0; i < 4096 && kind === 0; i++) {
+        kind = typeof c === 'number' ? c : c[i]!;
+        at = 4096 * sy + i;
+      }
+    }
+    expect(kind).toBeGreaterThan(0);
+    const [x, y, z] = [16 * 1274 + (at & 15), -64 + (at >> 8), 16 * -300 + ((at >> 4) & 15)];
+    const h = handlerOn(s);
+    const r = h.handle(find({ kind, x, y, z })).msg;
+    expect(r).toMatchObject({ type: 'caveFound', reason: 'found', hit: { x, y, z } });
+    // Thread 1 left its read sections: the main thread's free is not held in its limbo.
+    s.freeColumn(1274, -300);
+    expect(s.limboCount(0)).toBe(0);
+  });
+
+  test('the handler\'s clock seam: past the deadline the search ends `budget`; a moved terrain cell ends it `stopped`', () => {
+    let t = 0;
+    const h = createTaskHandler(undefined, () => (t += 500));
+    const cells = new Int32Array(new SharedArrayBuffer(16));
+    expect(h.handle({ ...configure, epochs: cells.buffer }).msg.type).toBe('ready');
+    // Kind 9 (other density air): the default tree yields none, so only the deadline ends it.
+    expect(h.handle(find({ kind: CAVE_KIND.other })).msg).toEqual({ type: 'caveFound', jobId: 7, epoch: 0, hit: null, reason: 'budget' });
+    Atomics.store(cells, 0, 1);
+    expect(h.handle(find({ kind: CAVE_KIND.other })).msg).toEqual({ type: 'caveFound', jobId: 7, epoch: 0, hit: null, reason: 'stopped' });
   });
 });

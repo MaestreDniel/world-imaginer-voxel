@@ -1093,6 +1093,85 @@ describe('worker pool: landing jobs (SP4c spec §3.2, §6.2; D12)', () => {
   });
 });
 
+describe('worker pool: the finder\'s findCave job (SP6a spec §7.3, D12; Task 44)', () => {
+  const findsOf = (log: readonly ToWorker[]) => log.flatMap((m) => (m.type === 'findCave' ? [m] : []));
+  /** L10's hover point at seed 42 (Task 45's L13 start). */
+  const AT = { x: 20400, y: 222, z: -4800 } as const;
+  /** A late caveFound reply to `m` (the worker's answer to a job the pool cancelled). */
+  const lateReply = (m: ToWorker) => {
+    const j = m as unknown as { jobId: number; epoch: number };
+    return { type: 'caveFound', jobId: j.jobId, epoch: j.epoch, hit: { x: 1, y: 2, z: 3, yaw: 0 }, reason: 'found' };
+  };
+
+  test('one aux job at −1 with the radius 512 and the budget 2,000 ms by default, resolving with the worker\'s hit and reason', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(2, () => fakeWorker(log));
+    await pool.configure('42', DEFAULTS);
+    const r = await pool.findCave({ kind: 7, ...AT }).promise;
+    expect(r.reason).toBe('found');
+    expect(r.hit).toMatchObject({ yaw: expect.any(Number) });
+    expect(findsOf(log)).toMatchObject([{ type: 'findCave', epoch: 0, kind: 7, ...AT, radius: 512, budgetMs: 2000 }]);
+    expect(await pool.findCave({ kind: 9, ...AT, radius: 1, budgetMs: 5 }).promise).toEqual({ hit: null, reason: 'radius' });
+    await expect(pool.findCave({ kind: 0, ...AT }).promise).rejects.toThrow(/^BAD_ARGS: /);
+    pool.terminate();
+  });
+
+  test('`cancel` on a running search rejects its promise at once (JobCancelled) and drops its late reply; the worker then takes the next job', async () => {
+    const log: ToWorker[] = [];
+    const w = silentWorker(log);
+    const pool = createWorkerPool(1, () => w);
+    const h = pool.findCave({ kind: 1, ...AT });
+    const settled = settle(h.promise);
+    expect(log.at(-1)).toMatchObject({ type: 'findCave', kind: 1 });
+    expect(pool.probe().jobs).toEqual([{ worker: 0, type: 'findCave', epoch: -1, level: null }]);
+    const point = settle(pool.point(1, 2));
+    h.cancel();
+    expect(await settled).toBeInstanceOf(JobCancelled);
+    // No cancel message reaches the worker: the search runs to its end, and the pool waits for its reply.
+    expect(log.map((m) => m.type)).toEqual(['findCave']);
+    w.onmessage?.({ data: lateReply(log[0]!) });
+    expect(await settled).toBeInstanceOf(JobCancelled);
+    expect(log.at(-1)).toMatchObject({ type: 'point' });
+    h.cancel();
+    pool.terminate();
+    await point;
+  });
+
+  test('`cancel` on a queued search drops it: it is never posted', async () => {
+    const log: ToWorker[] = [];
+    const w = silentWorker(log);
+    const pool = createWorkerPool(1, () => w);
+    const first = settle(pool.tile(tile(0), 0));
+    const h = pool.findCave({ kind: 6, ...AT });
+    expect(pool.queued).toBe(1);
+    h.cancel();
+    expect(await settle(h.promise)).toBeInstanceOf(JobCancelled);
+    expect(pool.queued).toBe(0);
+    const m = log.at(-1) as unknown as { jobId: number; epoch: number };
+    w.onmessage?.({ data: { type: 'error', jobId: m.jobId, epoch: m.epoch, code: 'INTERNAL', message: 'x' } });
+    expect(findsOf(log)).toEqual([]);
+    pool.terminate();
+    await first;
+  });
+
+  test('`cancel` after the search settled does nothing; a configure rejects a queued search with JobCancelled', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(2, () => fakeWorker(log));
+    await pool.configure('42', DEFAULTS);
+    const h = pool.findCave({ kind: 9, ...AT, radius: 1 });
+    const r = await h.promise;
+    h.cancel();
+    expect(r).toEqual({ hit: null, reason: 'radius' });
+    const queued = pool.configure('42', DEFAULTS);
+    const q = pool.findCave({ kind: 9, ...AT, radius: 1 });
+    const next = pool.configure('42', DEFAULTS);
+    expect(await settle(queued)).toBeInstanceOf(JobCancelled);
+    expect(await settle(q.promise)).toBeInstanceOf(JobCancelled);
+    await next;
+    pool.terminate();
+  });
+});
+
 describe('worker pool: the world and aux lanes and the aux policy (SP4c spec §6.1, §6.2; D11)', () => {
   /** A 32-bit LCG in [0, 1), so every run draws the same queues. */
   const lcg = (seed: number) => {

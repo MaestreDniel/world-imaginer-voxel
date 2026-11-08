@@ -42,7 +42,7 @@ import { meshSolid, type MeshOptions } from '../../src/mesh/greedy';
 import type { NeighborhoodReader } from '../../src/world/store/api';
 import { copyLightRegion, copyPaddedSection } from '../../src/world/store/padded';
 import { CAVE_KIND, PART_BUDGET, REQUEST_BUDGET } from '../../src/core/constants';
-import { caveReadersOf, tagColumn } from '../../src/gen/caves/tags';
+import { caveReadersOf, nearestCave, tagColumn } from '../../src/gen/caves/tags';
 import { carverParamsOf, carverPath, type CarverKind } from '../../src/gen/caves/carvers';
 import { carverCacheOf } from '../../src/gen/caves/carverCache';
 import { meshXray } from '../../src/mesh/xray';
@@ -887,6 +887,33 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   console.log(`carver.paths ${ms(pathsRun)} (one worm, one ravine and one underground worm per call; each alone: ${perKind.join('; ')})`);
   console.log(`mesh.xray ${ms(xrayRun)} (meshXray alone on mesh.section's ${meshSections.length} sections; ${xc} calls, ${xrayQuads} pass-3 quads; mesh.section with pass 3: p50 ${meshRun.latency.p50.toFixed(3)} ms)`);
   console.log(`slice.caves128 ${ms(cRun)} (${cRanges.length} parts at pool size 1: ${JSON.stringify(cRanges)}; slice.vertical128 ${ms(vRun)})`);
+  // finder.nearest (SP6a spec §7.3, §10.5; Task 44): recorded, no gate, not in BENCH_ROWS. The Caves tab's search of each
+  // kind with a button from L10's hover point at seed 42 (L13's start), cold (a fresh context per search, as a worker's
+  // search from a new place), with the job's 2 s budget and nothing loaded; the worst kind's median of FINDER_RUNS, over
+  // the searches that found their hit before the deadline.
+  const FINDER_RUNS = 3;
+  const finderAt = [20400, 222, -4800] as const;
+  const finderMs: Array<[kind: number, ms: number]> = [];
+  const finderMissed: string[] = [];
+  for (let kind = CAVE_KIND.cheese; kind <= CAVE_KIND.undergroundWorm; kind++) {
+    const runs: number[] = [];
+    for (let run = 0; run < FINDER_RUNS; run++) {
+      const fdc = createDensityContext(createGenContext(seedFromInput('42'), DEFAULTS));
+      const t0 = performance.now();
+      const r = nearestCave(fdc, kind, finderAt[0], finderAt[1], finderAt[2], {
+        radius: 512, deadline: t0 + 2000, now: () => performance.now(), stop: () => false, loaded: () => null,
+      });
+      const took = performance.now() - t0;
+      if (r.reason === 'found') runs.push(took);
+      else finderMissed.push(`kind ${kind} ${r.reason}`);
+    }
+    if (runs.length > 0) finderMs.push([kind, sortedOf(runs)[Math.floor(runs.length / 2)]!]);
+  }
+  const finderWorst = finderMs.reduce((a, b) => (b[1] > a[1] ? b : a), [0, 0]);
+  console.log(
+    `finder.nearest worst kind ${finderWorst[0]}: median ${finderWorst[1].toFixed(1)} ms of ${FINDER_RUNS} cold searches from (${finderAt.join(', ')}) at seed 42 `
+    + `(recorded, no gate; per kind: ${finderMs.map(([k, v]) => `${k} ${v.toFixed(1)}`).join(', ')}; past the budget: ${finderMissed.length === 0 ? 'none' : finderMissed.join(', ')})`,
+  );
   const capLowered = pasteLit.run.latency.p50 > D31_LIT_P50_MAX_MS || pasteMax.run.latency.p99 > D31_MAX_P99_MAX_MS;
   console.log(
     `D31: paste.maxLit p50 ${pasteLit.run.latency.p50.toFixed(3)} ms (lowers above ${D31_LIT_P50_MAX_MS}), paste.max p99 ${pasteMax.run.latency.p99.toFixed(3)} ms `

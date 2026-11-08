@@ -167,7 +167,7 @@ import type { SessionState, WorldSession } from '../../engine/session';
 import { SimFailed, createBrowserSim, type SimClient } from '../../engine/simClient';
 import { createThrottle } from '../../engine/throttle';
 import { createUploadBudget } from '../../engine/uploadBudget';
-import { StoreFullError, WorkerFailed, createBrowserPool, poolSize, type WorkerPool } from '../../engine/workerPool';
+import { JobCancelled, StoreFullError, WorkerFailed, createBrowserPool, poolSize, type FindCaveHandle, type WorkerPool } from '../../engine/workerPool';
 import { deleteIdb, idbAvailable, openIdbKV } from '../../persist/idb';
 import type { KV } from '../../persist/kv';
 import {
@@ -203,6 +203,7 @@ import { mountPalette, type Palette } from '../palette';
 import { mountWorldHud } from '../hud';
 import { mountLoadingScreen } from '../loading/loadingScreen';
 import { tips } from '../loading/tips';
+import type { FindHit, FindOutcome } from '../map/cavesTab';
 import { decodeMapState, openMapSession, openSavedSession, type MapState } from '../map/mapState';
 import { createPreviewDriver, createReplayingCanvas, draftOf, isSpawnError, type DriverStatus, type PreviewDriver } from '../map/previewDriver';
 import { cryptoSeed } from '../seedBox';
@@ -1674,6 +1675,56 @@ export function savePlaceKey(o: {
       if (places.add({ name, colour, x, y, z, yaw, pitch }) !== 'full') o.notices.show(PLACE_SAVED_NOTICE, PLACE_SAVED_MS);
     });
   });
+}
+
+/**
+ * The pose of a cave the finder found (SP6a spec §7.3, D16): the eye at the centre of the hit's air voxel, looking along
+ * the cave (its yaw) level (pitch 0), as a place (no id, no name; `teleport.toPlace` and the place dialog read the pose).
+ */
+export function cavePlace(hit: FindHit): Place {
+  return { id: '', name: '', colour: 0, x: hit.x + 0.5, y: hit.y + 0.5, z: hit.z + 0.5, yaw: hit.yaw, pitch: 0 };
+}
+
+/**
+ * The Caves tab's Find on the page (SP6a spec §7.3, D12, D16): `find(kind)` asks the pool's `findCave` from the camera's
+ * voxel (⌊x⌋, ⌊y⌋, ⌊z⌋), cancelling a search still in flight; a hit calls `arrive` with its pose (`cavePlace`: the page
+ * moves the camera there in flight) and resolves with the outcome; a cancelled search rejects (JobCancelled), also when
+ * `cancelFind` comes after the pool answered but before the outcome was handled, and then nothing moves. A search the
+ * pool cancelled on its own (a configure or an Apply moved its epoch cells) resolves `stopped`; any other failure rejects.
+ */
+export function createCaveFind(o: {
+  readonly pool: Pick<WorkerPool, 'findCave'>;
+  readonly camera: Pick<FlyState, 'x' | 'y' | 'z'>;
+  arrive(p: Place): void;
+}): { find(kind: number): Promise<FindOutcome>; cancelFind(): void } {
+  let current: FindCaveHandle | null = null;
+  const cancelFind = (): void => {
+    const h = current;
+    current = null;
+    h?.cancel();
+  };
+  return {
+    find(kind) {
+      cancelFind();
+      const c = o.camera;
+      const h = o.pool.findCave({ kind, x: Math.floor(c.x), y: Math.floor(c.y), z: Math.floor(c.z) });
+      current = h;
+      return h.promise.then((r) => {
+        if (current !== h) throw new JobCancelled();
+        current = null;
+        if (r.hit !== null) o.arrive(cavePlace(r.hit));
+        return r;
+      }, (e: unknown): FindOutcome => {
+        // A cancel the page did not ask for (a configure or an Apply moved the pool's cells): the world changed under it.
+        if (current === h) {
+          current = null;
+          if (e instanceof JobCancelled) return { hit: null, reason: 'stopped' };
+        }
+        throw e;
+      });
+    },
+    cancelFind,
+  };
 }
 
 /**
@@ -5346,6 +5397,16 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // A landing still pending at teardown settles silently: no write to the disposed page's camera, no notice.
     teleport = teleporter;
     teardown.push(() => teleporter.dispose());
+    // The Caves tab's Find (SP6a spec §7.3, D16): a hit's pose by `toPlace`, in flight (F's switch first when walking).
+    const caveFind = createCaveFind({
+      pool: workers,
+      camera: fly,
+      arrive: (p) => {
+        if (fly.mode === 'walk') switchMode({ fly, walk, world, repeat: holdRepeat });
+        teleporter.toPlace(p);
+      },
+    });
+    teardown.push(() => caveFind.cancelFind());
     // The world-modification mode (SP5b spec §3.6, D10, D25): a saved world's map changes its terrain only while "Modify
     // terrain" is on, off at every open; an unsaved world has no switch and edits live. The mode reaches the tool once
     // the overlay mounts it (`tool` is read only after the overlay exists).
@@ -5415,14 +5476,19 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         }, x, z),
       },
       // The world's Caves tab (SP6a spec §7.3, D12): its checkbox toggles the page's X-ray as X does, its sliders and All
-      // depths set the band, the camera places the cave slice; the mount shows the page's X-ray state as it is. The Find
-      // row lands with the finder (§7.3).
+      // depths set the band, the camera places the cave slice; the mount shows the page's X-ray state as it is. Find
+      // searches from the camera and moves it into the hit in flight; "Save as place" (a saved world) opens B's dialog
+      // with the hit's pose.
       caves: {
         tab: {
           onXray: (on) => { if (on !== pageXray.on) pageXray.action('xray'); },
           onBand: (b) => pageXray.setBand(b),
-          find: () => {},
-          cancelFind: () => {},
+          find: (kind) => caveFind.find(kind),
+          cancelFind: () => caveFind.cancelFind(),
+          savePlace: places === null ? null : (hit) => savePlaceKey({
+            palette, help, settings: settingsPanel, dialog: placeDialog, places, camera: cavePlace(hit),
+            notices: { show: (text, ms) => notices.show(text, { timeoutMs: ms }) },
+          }),
           camera: () => fly,
         },
         xray: () => ({ on: pageXray.on, band: pageXray.band, radius: xrayRadiusOf(liveRd) }),
