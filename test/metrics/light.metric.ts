@@ -1,7 +1,6 @@
 import { expect } from 'vitest';
 import { resolveProfile, type ProfileId } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
-import { ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
 import { findSpawn } from '../../src/gen/column/spawn';
 import { createGenContext } from '../../src/gen/context';
 import { sp3eWindow, type Sp3ePreset } from '../../src/metrics/sp3eGoldens';
@@ -11,6 +10,7 @@ import { DEFAULT_LIGHT_TABLES, effOpacity } from '../../src/world/blocks/light';
 import { metricTest } from '../harness/metric';
 import { referenceLight } from '../harness/refs';
 import { genRegion, type GenRegionOptions, type RegionView } from '../harness/region';
+import { grassUnderIslands, islandWindowAt, MIN_DEEP_GRASS } from '../harness/windowScans';
 
 /**
  * The light's metrics L1, L2, DT1's light part and S1's grass at sky 0 (SP4a spec §9.1, D25, D26; ruling P33), over
@@ -25,13 +25,15 @@ import { genRegion, type GenRegionOptions, type RegionView } from '../harness/re
  * interior is the 8 × 8 chunks at (8a, 8b), taken in the rings of `ringCandidates` (`sp3eGoldens.ts`; r = 0, 1, …),
  * skipping a candidate whose 16 × 16 lattice (block (16·8a + 8i + 4, 16·8b + 8j + 4)) holds fewer than 32 points with
  * `columnPoint` islandMask ≥ 0.9. The first whose interior, generated at seed '42' on floating_islands, holds ≥ 64 deep
- * grass positions is the window, found once and fixed here (`ISLAND_GRASS_WINDOW`): a grass position under an island
+ * grass positions is the window (`test/harness/windowScans.ts`' `scanIslandWindow`, with the predicate
+ * `grassUnderIslands`), found once and fixed here (`ISLAND_GRASS_WINDOW`): a grass position under an island
  * is a position with an island run (a solid run whose bottom is ≥ `ISLAND_RUN_MIN_BOTTOM`) above its ground run (the
  * highest run with bottom < 181), the ground run's top a grass_block; it is deep when every interior position within
  * Manhattan distance 15 holds an island run (and none of them lies outside the interior), so sky light (15, one less per
- * block sideways) cannot reach its top from beside the island. The scan found W(−2, 1) at ring 1 (W(−2, 0) had 0 deep
- * positions): 7,044 grass positions under islands, 2,893 deep. The metric re-checks the predicate on the region it
- * measures (`.out/S1.light.json`: `grassUnderIsland.<i>`, `grassUnderIslandDeep.<i>`) and fails if it no longer holds.
+ * block sideways) cannot reach its top from beside the island. The scan found W(−2, 1) at ring 2 (W(−2, 0) had 0 deep
+ * positions): 7,044 grass positions under islands, 2,893 deep (the same after Task 38's tuning). The metric re-checks
+ * the predicate on the region it measures (`.out/S1.light.json`: `grassUnderIsland.<i>`, `grassUnderIslandDeep.<i>`)
+ * and fails if it no longer holds.
  * Its grass is recorded, not pooled into S1's `grassSky0` (SP6a spec §10.4, ruling R19, the user's): grass kept under
  * the islands (SP3e D21 (b)) lies at sky 0 under an island wider than about 30 blocks, which SP12 owns with the summit
  * caps.
@@ -85,9 +87,6 @@ const PRESETS: readonly Sp3ePreset[] = pick([], ['amplified', 'floating_islands'
 /** The large island over grass (header): W(a, b), found by the scan at seed '42'; quick and full. */
 const ISLAND_GRASS_WINDOW: readonly [a: number, b: number] = [-2, 1];
 const ISLAND_GRASS_TIERS = pick(false, true, true);
-/** The scan's predicate: deep grass positions under islands (header). */
-const MIN_DEEP_GRASS = 64;
-const DEEP_SHADE = 15;
 
 function sites(): Site[] {
   const out: Site[] = [];
@@ -102,64 +101,16 @@ function sites(): Site[] {
   }
   if (ISLAND_GRASS_TIERS) {
     const [a, b] = ISLAND_GRASS_WINDOW;
-    out.push({ label: `floating_islands island over grass W(${a}, ${b})`, seed: '42', profile: 'floating_islands', cx0: 8 * a - 1, cz0: 8 * b - 1, size: 10 });
+    out.push({ label: `floating_islands island over grass W(${a}, ${b})`, seed: '42', profile: 'floating_islands', ...islandWindowAt(a, b) });
   }
   return out;
 }
 
 /** Whether the site is the large island over grass (header), whose predicate the metric re-checks. */
-const isIslandGrassSite = (s: Site): boolean =>
-  ISLAND_GRASS_TIERS && s.profile === 'floating_islands' && s.cx0 === 8 * ISLAND_GRASS_WINDOW[0] - 1 && s.cz0 === 8 * ISLAND_GRASS_WINDOW[1] - 1;
-
-/**
- * The scan's predicate over a site's interior (header): the grass positions under an island and the deep ones among
- * them. A position's runs are read top-down from the box's blocks.
- */
-function grassUnderIslands(box: Box, s: Site): { under: number; deep: number } {
-  const n = 16 * (s.size - 2);
-  const foot = new Uint8Array(n * n);
-  const grass = new Uint8Array(n * n);
-  const x0 = 16 * (s.cx0 + 1);
-  const z0 = 16 * (s.cz0 + 1);
-  for (let j = 0; j < n; j++) {
-    for (let i = 0; i < n; i++) {
-      const at = (y: number): number => ((y + 64) * box.side + (z0 + j - box.z0)) * box.side + (x0 + i - box.x0);
-      let island = false;
-      let groundTop: number | null = null;
-      let runTop: number | null = null;
-      for (let y = 319; y >= -65; y--) {
-        const solid = y >= -64 && box.blocks[at(y)] !== AIR;
-        if (solid && runTop === null) runTop = y;
-        else if (!solid && runTop !== null) {
-          if (y + 1 >= ISLAND_RUN_MIN_BOTTOM) { island = true; runTop = null; continue; }
-          groundTop = runTop;
-          break;
-        }
-      }
-      foot[j * n + i] = island ? 1 : 0;
-      grass[j * n + i] = island && groundTop !== null && box.blocks[at(groundTop)] === GRASS_BLOCK ? 1 : 0;
-    }
-  }
-  let under = 0;
-  let deep = 0;
-  for (let j = 0; j < n; j++) {
-    for (let i = 0; i < n; i++) {
-      if (grass[j * n + i] !== 1) continue;
-      under++;
-      let shaded = true;
-      for (let dj = -DEEP_SHADE; dj <= DEEP_SHADE && shaded; dj++) {
-        const r = DEEP_SHADE - Math.abs(dj);
-        for (let di = -r; di <= r && shaded; di++) {
-          const ii = i + di;
-          const jj = j + dj;
-          if (ii < 0 || jj < 0 || ii >= n || jj >= n || foot[jj * n + ii] === 0) shaded = false;
-        }
-      }
-      if (shaded) deep++;
-    }
-  }
-  return { under, deep };
-}
+const isIslandGrassSite = (s: Site): boolean => {
+  const r = islandWindowAt(...ISLAND_GRASS_WINDOW);
+  return ISLAND_GRASS_TIERS && s.profile === 'floating_islands' && s.cx0 === r.cx0 && s.cz0 === r.cz0;
+};
 
 /** DT1's light runs (ruling P33); the first is the reference and the one measured. */
 interface Run {
@@ -384,7 +335,7 @@ async function measure(): Promise<Measurement> {
         grassSky0 += siteSky0;
       } else {
         // Recorded apart, not pooled into S1's grassSky0 (ruling R19).
-        const g = grassUnderIslands(box, s);
+        const g = grassUnderIslands((x, y, z) => box.blocks[((y + 64) * box.side + (z - box.z0)) * box.side + (x - box.x0)]!, s);
         islandWindow.tops = siteTops;
         islandWindow.sky0 = siteSky0;
         islandWindow.under = g.under;

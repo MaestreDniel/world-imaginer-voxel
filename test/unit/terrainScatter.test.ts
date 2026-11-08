@@ -298,10 +298,17 @@ describe('T2 reads pre-cave solidity: solid or tagged (SP6a spec §10.4)', () =>
     const plain = solidity(muted, new Uint8Array(98304));
     const truth = solidity(carved, new Uint8Array(98304));
     let differ = 0;
+    // Counted and asserted once, with the first differing voxel in the message (not one assertion per voxel).
+    let mismatches = 0;
+    let first = -1;
     for (let i = 0; i < 98304; i++) {
-      expect.soft(pre[i], `voxel ${i}`).toBe(plain[i]);
+      if (pre[i] !== plain[i]) {
+        mismatches++;
+        if (first < 0) first = i;
+      }
       if (truth[i] !== plain[i]) differ++;
     }
+    expect(mismatches, first < 0 ? '' : `${mismatches} voxels differ, the first ${first}: pre-cave ${pre[first]}, muted ${plain[first]}`).toBe(0);
     // Not vacuous: the caves carve thousands of the column's voxels, and change the true solidity's transition count
     // within 30 blocks of some land top.
     expect(differ).toBeGreaterThan(1000);
