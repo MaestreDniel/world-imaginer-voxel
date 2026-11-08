@@ -24,6 +24,10 @@
  *    own selection tool (`BenchPasteHooks`): a 10 s baseline (L12a), a 32 × 12 × 32 house pasted, undone, redone, moved
  *    and cut (L12b), the two maximum blocks pasted and undone (L12c), two ghosts swept and cancelled (L12d); the world
  *    ends as it began, and the `paste` block holds each operation's, each part's and the leg's figures;
+ * 2f. then the cave leg L13 (SP6a spec §10.6, D29; `BENCH_CAVES`) from L10's hover point, whose RD 12 disc is loaded: the
+ *    finder's job (`BenchCaveHooks.find`) for the nearest entrance from the camera, a route through the loaded store's
+ *    cave tags from it (`caveRoute`), a flight to the route's start at 64 blocks per second and the route walked at
+ *    4.3 blocks per second for 60 s, no physics, while the world streams; the `caves` block holds the walk's figures;
  * 3. hands the driver the run's fixed figures (`done`); the driver publishes `summarizeBench`'s JSON as
  *    `window.__wiBench.result` (read by `measureChrome.ts --route bench`) and a "Download JSON" button (the Firefox
  *    cells, by hand).
@@ -53,7 +57,7 @@ import type { GpuEstimate, WorldRenderer } from '../../render/renderer';
 import type { RevealProbe, SectionRenderer, SectionRendererCounts, SectionRendererKind, StructuralKind } from '../../render/sectionRenderer';
 import { el } from '../common/dom';
 import { downloadText } from '../common/files';
-import { MIN_Y } from '../../core/constants';
+import { CAVE_KIND, MIN_Y } from '../../core/constants';
 import { chunkCoord, colKey, MAX_Y, SECTION_VOXELS, SECTIONS } from '../../core/coords';
 import { parseHex64 } from '../../core/hash';
 import { splitmix32 } from '../../core/rng';
@@ -61,6 +65,7 @@ import { encodeColumnDiff } from '../../persist/diffCodec';
 import { deleteIdb, openIdbKV } from '../../persist/idb';
 import { createSaves, DEFAULT_SPEED, newState, type WorldDump, type WorldRecord } from '../../persist/saves';
 import { lookVector } from '../../player/fly';
+import { EYE } from '../../player/walk';
 import type { ColumnDiff } from '../../world/store/api';
 import type { Edit, EditedMsg } from '../../workers/protocol';
 import {
@@ -96,12 +101,13 @@ export const BENCH_IDLE_FRAMES = 120;
  * L11's four 30 s parts, 120 s at 240 Hz: 87,168 holds 363 s (its hover back at L10's place, short when the disc there
  * stays filled, uses the slack L10's 60 s hover cap leaves; a full record takes no more frames). SP5c spec §10.4 adds
  * L12's 150 s at its caps (`BENCH_PASTE_LEG`), 36,000 frames: 123,168 holds 513 s, the script's 511 (its fill, as L11's
- * hover, uses that slack).
+ * hover, uses that slack). SP6a spec §10.6 adds L13's 90 s at its caps (`BENCH_CAVES_LEG`), 21,600 frames: 144,768 holds
+ * 603 s, the script's 601.
  */
-export const BENCH_FRAME_CAPACITY = 123_168;
+export const BENCH_FRAME_CAPACITY = 144_768;
 
 export interface BenchLeg {
-  readonly name: 'L0' | 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6' | 'L7' | 'L8' | 'L9' | 'L10' | 'L11' | 'L12';
+  readonly name: 'L0' | 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6' | 'L7' | 'L8' | 'L9' | 'L10' | 'L11' | 'L12' | 'L13';
   readonly seconds: number;
   /** Blocks per second; 0 hovers. */
   readonly speed: number;
@@ -244,10 +250,39 @@ export const BENCH_PASTE_LEG: BenchLeg = {
 };
 
 /**
- * Every leg, index = the record's `leg` (L0-L6 the timed script, L7-L9 the live legs, L10 the edit leg, L11 the save
- * leg, L12 the paste leg).
+ * The cave leg L13 (SP6a spec §10.6, D29), after L12 at L10's hover point, whose RD 12 disc is loaded (the finder
+ * searches from the camera at L13's start, not from the script's start, about 20,000 blocks west, where nothing is
+ * loaded): the finder's job for the nearest entrance within `FIND_RADIUS` (512) blocks of the camera, its answer awaited
+ * at most `findMaxS` s; the route from its hit (`caveRoute`, `BENCH_CAVE_ROUTE.blocks` blocks) computed from the loaded
+ * store's tags as soon as the answer comes; a flight to the route's start at `BENCH_CAVE_ROUTE.flySpeed` blocks per
+ * second, at most `flyMaxS` s; then the route walked at `BENCH_CAVE_ROUTE.walkSpeed` blocks per second for `walkS` s,
+ * the eye `EYE` above the floor, no physics, while the world streams. A find or a flight still running at its cap is
+ * named in the `caves` block's `timedOut` (`'find'`, `'fly'`) and ends the script, as L12's time-outs do; a find with no
+ * hit, or a hit with no route, ends it with `stoppedBy`.
  */
-const ALL_LEGS: readonly BenchLeg[] = [...BENCH_LEGS, ...BENCH_LIVE_LEGS, BENCH_EDIT_LEG, BENCH_SAVE_LEG, BENCH_PASTE_LEG];
+export const BENCH_CAVES = { findMaxS: 20, flyMaxS: 10, walkS: 60 } as const;
+
+/**
+ * L13's route (SP6a spec §10.6): the flight's speed, blocks per second (plan); the steady walking speed that
+ * `walk.ts`' friction and acceleration give, 4.3 blocks per second; the route's length, the walk's 60 s at that speed,
+ * 4.3 × 60 = 258 blocks.
+ */
+export const BENCH_CAVE_ROUTE = { flySpeed: 64, walkSpeed: 4.3, blocks: 258 } as const;
+
+/** L13 as a leg (`seconds` its caps: the find's, the flight's and the walk's); it ends on its own, not on a timeline. */
+export const BENCH_CAVES_LEG: BenchLeg = {
+  name: 'L13',
+  seconds: BENCH_CAVES.findMaxS + BENCH_CAVES.flyMaxS + BENCH_CAVES.walkS,
+  speed: 0,
+  headings: [],
+  rdSteps: [],
+};
+
+/**
+ * Every leg, index = the record's `leg` (L0-L6 the timed script, L7-L9 the live legs, L10 the edit leg, L11 the save
+ * leg, L12 the paste leg, L13 the cave leg).
+ */
+const ALL_LEGS: readonly BenchLeg[] = [...BENCH_LEGS, ...BENCH_LIVE_LEGS, BENCH_EDIT_LEG, BENCH_SAVE_LEG, BENCH_PASTE_LEG, BENCH_CAVES_LEG];
 /** The first live leg's index. */
 const FIRST_LIVE = BENCH_LEGS.length;
 /** L10's index. */
@@ -256,6 +291,8 @@ const EDIT_LEG = FIRST_LIVE + BENCH_LIVE_LEGS.length;
 const SAVE_LEG = EDIT_LEG + 1;
 /** L12's index. */
 const PASTE_LEG = SAVE_LEG + 1;
+/** L13's index. */
+const CAVES_LEG = PASTE_LEG + 1;
 
 /** Each leg's start, s, and the timed script's length (95 s; the live legs follow it). */
 const LEG_STARTS: readonly number[] = BENCH_LEGS.map((_, i) => BENCH_LEGS.slice(0, i).reduce((s, l) => s + l.seconds, 0));
@@ -346,6 +383,103 @@ export function benchPose(tS: number, start: { readonly x: number; readonly z: n
  */
 export function benchInterval(idle: ArrayLike<number>): number {
   return displayInterval(medianInterval(idle));
+}
+
+// ---------------------------------------------------------------- L13's route
+
+/** The six moves in the route's tie-break order: −x, +x, −z, +z, down, up (SP6a spec §10.6; plan). */
+const ROUTE_MOVES: readonly (readonly [number, number, number])[] = [[-1, 0, 0], [1, 0, 0], [0, 0, -1], [0, 0, 1], [0, -1, 0], [0, 1, 0]];
+/** A horizontal move's index is below this in `ROUTE_MOVES`. */
+const ROUTE_HORIZONTAL = 4;
+const ROUTE_UP = 5;
+/** A voxel's key in the route's visited set: exact for |x|, |z| < 2^20 and y in −64 … 319. */
+const routeKey = (x: number, y: number, z: number): number => ((x + 1_048_576) * 2_097_152 + (z + 1_048_576)) * 512 + (y - MIN_Y);
+/** The route's preference of a cave kind, lower first: cheese, then spaghetti 3D, then spaghetti 2D, then any kind. */
+const routeRank = (kind: number): number =>
+  kind === CAVE_KIND.cheese ? 0 : kind === CAVE_KIND.spaghetti3d ? 1 : kind === CAVE_KIND.spaghetti2d ? 2 : 3;
+
+/**
+ * L13's route (SP6a spec §10.6, D29; plan): a walk of at most `blocks` moves through cave air from `start` (the
+ * finder's hit), as the voxels the feet stand in, x y z per point. Pure: the same reads give the same route, so it is
+ * the same for the same seed and generator and needs no update after a retune.
+ * - The first point is `start` lowered onto its floor (the first voxel at or below it whose voxel below is solid); a
+ *   solid `start` gives no point.
+ * - A point after it is cave air (`tagAt` ≠ 0, not `solidAt`) one block above a floor: its voxel below solid (on the
+ *   floor), or, for a step, its voxel below air and the one under that solid. Two steps never follow each other: a
+ *   step is entered up from the floor below it only when one of its horizontal neighbours is an unvisited voxel on a
+ *   floor (a ledge to climb onto), or sideways off a ledge, and it is left down or onto a ledge.
+ * - Each move goes to the unvisited neighbour of the current point with the best kind (cheese, then spaghetti 3D, then
+ *   spaghetti 2D, then any kind), ties in the order −x, +x, −z, +z, down, up; the search never expands a voxel twice.
+ * - At a dead end the route walks back along its own path to the last point with an unvisited neighbour, emitting
+ *   each voxel it passes again, so consecutive points are always 6-adjacent (exactly one block apart); a walk back to
+ *   the start with nothing left ends the route early.
+ */
+export function caveRoute(
+  tagAt: (x: number, y: number, z: number) => number,
+  solidAt: (x: number, y: number, z: number) => boolean,
+  start: readonly [number, number, number],
+  blocks: number,
+): Float64Array {
+  const [sx, sy0, sz] = start;
+  if (solidAt(sx, sy0, sz)) return new Float64Array(0);
+  let sy = sy0;
+  while (sy - 1 > MIN_Y && !solidAt(sx, sy - 1, sz)) sy--;
+  const onFloor = (x: number, y: number, z: number): boolean => y - 1 >= MIN_Y && solidAt(x, y - 1, z);
+  const caveAir = (x: number, y: number, z: number): boolean => y > MIN_Y && y <= MAX_Y && tagAt(x, y, z) !== 0 && !solidAt(x, y, z);
+  const visited = new Set<number>([routeKey(sx, sy, sz)]);
+  const out: number[] = [sx, sy, sz];
+  // The path from the start to the current point (x y z per voxel): a dead end pops it.
+  const path: number[] = [sx, sy, sz];
+  /** Whether the step voxel (x, y, z) has a horizontal neighbour, unvisited, cave air on a floor. */
+  const ledge = (x: number, y: number, z: number): boolean => {
+    for (let m = 0; m < ROUTE_HORIZONTAL; m++) {
+      const [dx, , dz] = ROUTE_MOVES[m]!;
+      const nx = x + dx;
+      const nz = z + dz;
+      if (!visited.has(routeKey(nx, y, nz)) && onFloor(nx, y, nz) && caveAir(nx, y, nz)) return true;
+    }
+    return false;
+  };
+  let moves = 0;
+  while (moves < blocks) {
+    const n = path.length;
+    const x = path[n - 3]!;
+    const y = path[n - 2]!;
+    const z = path[n - 1]!;
+    const fromStep = !onFloor(x, y, z);
+    let best = -1;
+    let bestRank = 4;
+    for (let m = 0; m < ROUTE_MOVES.length; m++) {
+      const [dx, dy, dz] = ROUTE_MOVES[m]!;
+      const nx = x + dx;
+      const ny = y + dy;
+      const nz = z + dz;
+      if (visited.has(routeKey(nx, ny, nz)) || !caveAir(nx, ny, nz)) continue;
+      if (!onFloor(nx, ny, nz)) {
+        // A step: never after a step; up only to a ledge; down is always onto the floor (the voxel left is air).
+        if (fromStep || !(ny - 2 >= MIN_Y && solidAt(nx, ny - 2, nz))) continue;
+        if (m === ROUTE_UP && !ledge(nx, ny, nz)) continue;
+      }
+      const rank = routeRank(tagAt(nx, ny, nz));
+      if (rank < bestRank) {
+        best = m;
+        bestRank = rank;
+      }
+    }
+    if (best >= 0) {
+      const [dx, dy, dz] = ROUTE_MOVES[best]!;
+      visited.add(routeKey(x + dx, y + dy, z + dz));
+      path.push(x + dx, y + dy, z + dz);
+      out.push(x + dx, y + dy, z + dz);
+    } else {
+      // A dead end: back to the voxel before it, which the route passes again.
+      path.length = n - 3;
+      if (path.length === 0) break;
+      out.push(path[n - 6]!, path[n - 5]!, path[n - 4]!);
+    }
+    moves++;
+  }
+  return Float64Array.from(out);
 }
 
 // ---------------------------------------------------------------- the record
@@ -831,6 +965,28 @@ export type PasteFigures = { readonly [K in PastePartName]: PastePartFigures } &
 };
 
 /** What the driver knows of L10 (SP5a spec §6.2) and hands `summarizeBench`. */
+/**
+ * L13's block (SP6a spec §10.6, D29): the route's moves (`routeBlocks`) and its points per kind (`routeKinds`); over
+ * the walk's frames (its script window) the snapped frames' nearest-rank p50, p95, p99, max and the count over 33 ms
+ * (`caveP95`, `caveOver33`) and the main thread's p95 (`caveMainP95`); `growthEvents`, the frames of L13 (find, flight
+ * and walk) whose structural operation grew a region's buffers (`'grow'`); the finder's answer; `timedOut` (`'find'`,
+ * `'fly'`) and `stoppedBy`. A figure with no sample is null.
+ */
+export interface CaveFigures {
+  readonly routeBlocks: number;
+  readonly routeKinds: Readonly<Record<string, number>>;
+  readonly p50: number | null;
+  readonly p95: number | null;
+  readonly p99: number | null;
+  readonly max: number | null;
+  readonly over33: number;
+  readonly mainP95: number | null;
+  readonly growthEvents: number;
+  readonly find: BenchCaveRun['find'];
+  readonly timedOut: readonly string[];
+  readonly stoppedBy: string | null;
+}
+
 export interface BenchEditRun {
   /**
    * The hover's edits the sim accepted: each opened one latency sample, all before the flight's (its last post is
@@ -1167,6 +1323,41 @@ const NO_PASTE_LOG: BenchPasteLog = { ghosts: [], overlays: [], clipboardReads: 
 /** No L12 (a run that ended before it, or a driver bound without the paste hooks). */
 const NO_PASTE_RUN: BenchPasteRun = { parts: [], ops: [], log: NO_PASTE_LOG, poolsBefore: null, poolsAfter: null, timedOut: [], stoppedBy: null };
 
+/**
+ * L13's hooks (SP6a spec §10.6): the finder's job for the nearest entrance from voxel (x, y, z) (the pool's `findCave`
+ * with `CAVE_KIND.entrance`, its default radius and budget: its hit, an air voxel, null unless `reason` is `found`), and
+ * the loaded store's reads for `caveRoute`: the cave byte at a voxel (0 where its column is not Published) and whether
+ * the voxel collides (`physics.ts`' `solidAt`; false where not Published).
+ */
+export interface BenchCaveHooks {
+  find(x: number, y: number, z: number): Promise<{
+    readonly hit: { readonly x: number; readonly y: number; readonly z: number; readonly yaw: number } | null;
+    readonly reason: string;
+  }>;
+  tagAt(x: number, y: number, z: number): number;
+  solidAt(x: number, y: number, z: number): boolean;
+}
+
+/** What the driver knows of L13 (SP6a spec §10.6) and hands `summarizeBench`. */
+export interface BenchCaveRun {
+  /** The finder's answer: its reason (or the failure as `name: message`), the script time it took, ms, and its hit. */
+  readonly find: { readonly reason: string | null; readonly ms: number | null; readonly hit: { readonly x: number; readonly y: number; readonly z: number } | null };
+  /** The route's moves and its points per kind (`CAVE_KIND`'s names, the walk-backs included). */
+  readonly routeBlocks: number;
+  readonly routeKinds: Readonly<Record<string, number>>;
+  /** The walk's script window [tS0, tS1), s; null when the walk never started. */
+  readonly walk: { readonly tS0: number; readonly tS1: number } | null;
+  /** `'find'` and `'fly'` for a part still running at its cap. */
+  readonly timedOut: readonly string[];
+  /** Why L13 ended before its walk (no hit, no route); null when it did not. */
+  readonly stoppedBy: string | null;
+}
+
+/** No L13 (a run that ended before it, or a driver bound without the cave hooks). */
+const NO_CAVE_RUN: BenchCaveRun = {
+  find: { reason: null, ms: null, hit: null }, routeBlocks: 0, routeKinds: {}, walk: null, timedOut: [], stoppedBy: null,
+};
+
 /** The bench's JSON (spec §8.3; SP4c spec §8.4's `live`; SP5a spec §6.2's `edit`). */
 export interface BenchResult {
   readonly route: 'bench=medium';
@@ -1199,6 +1390,8 @@ export interface BenchResult {
   readonly persist: PersistFigures;
   /** L12: the paste leg (SP5c spec §10.4). */
   readonly paste: PasteFigures;
+  /** L13: the cave leg (SP6a spec §10.6). */
+  readonly caves: CaveFigures;
   /** Every frame whose snapped time is over 33 ms: its raw delta and its own and the previous frame's main ms. */
   readonly longFrames: ReadonlyArray<{
     readonly frame: number; readonly leg: string; readonly rawMs: number; readonly snappedMs: number; readonly mainMs: number;
@@ -1511,12 +1704,36 @@ function pasteFiguresOf(rec: BenchRecord, idx: readonly number[], run: BenchPast
   };
 }
 
+/** `structuralKind`'s code of a region buffer's growth (`'grow'`). */
+const GROW_CODE = STRUCTURAL_KINDS.indexOf('grow');
+
+/** L13's block (SP6a spec §10.6) over its rows `idx`: the walk's frames are its script window's. */
+function caveFiguresOf(rec: BenchRecord, idx: readonly number[], run: BenchCaveRun): CaveFigures {
+  const w = run.walk;
+  const rows = w === null ? [] : idx.filter((i) => rec.tMs[i]! >= w.tS0 * 1000 && rec.tMs[i]! < w.tS1 * 1000);
+  const snapped = pick(rec.snappedMs, rows);
+  return {
+    routeBlocks: run.routeBlocks,
+    routeKinds: { ...run.routeKinds },
+    p50: percentileOrNull(snapped, 50),
+    p95: percentileOrNull(snapped, 95),
+    p99: percentileOrNull(snapped, 99),
+    max: snapped.length === 0 ? null : maxOf(snapped),
+    over33: countIf(snapped, (v) => v > LONG_FRAME_MS),
+    mainP95: percentileOrNull(pick(rec.mainMs, rows), 95),
+    growthEvents: countIf(pick(rec.structuralKind, idx), (v) => v === GROW_CODE),
+    find: { reason: run.find.reason, ms: run.find.ms, hit: run.find.hit === null ? null : { ...run.find.hit } },
+    timedOut: [...run.timedOut],
+    stoppedBy: run.stoppedBy,
+  };
+}
+
 /**
  * The bench's JSON from its record and the fixed figures (spec §8.3): `stream` over L1-L6 (the streaming legs; L0's
  * hover only settles the first frames), the same frame figures per leg, L5's refill and L6's frames, `live` over L7-L9
  * (SP4c spec §8.4), `edit` over L10 with the driver's `editRun` (SP5a spec §6.2), `persist` over L11 with the driver's
  * `saveRun` (SP5b spec §6.2), `paste` over L12 with the driver's `pasteRun` and `saveRun`'s flushes (SP5c spec §10.4),
- * every long frame and every structural frame. `gpuMB` is the largest per-frame sum of the
+ * `caves` over L13 with the driver's `caveRun` (SP6a spec §10.6), every long frame and every structural frame. `gpuMB` is the largest per-frame sum of the
  * breakdown, which is reported at that frame. The live legs' MESH set is the RD they ran at: 12, or the reservation's
  * cap below it. It throws on a full record (`n` at `capacity`), whose last frames were dropped (final review GOV-7).
  */
@@ -1527,6 +1744,7 @@ export function summarizeBench(
   editRun: BenchEditRun = NO_EDIT_RUN,
   saveRun: BenchSaveRun = NO_SAVE_RUN,
   pasteRun: BenchPasteRun = NO_PASTE_RUN,
+  caveRun: BenchCaveRun = NO_CAVE_RUN,
 ): BenchResult {
   // A full record dropped the frames after it, so the last legs' figures (L11's parts) would read a cut part (final
   // review GOV-7): an error, not a JSON.
@@ -1613,6 +1831,7 @@ export function summarizeBench(
     edit: editFiguresOf(rec, byLeg[EDIT_LEG]!, fixed, editRun, saveRun.samplesFrom),
     persist: persistFiguresOf(rec, byLeg[SAVE_LEG]!, fixed, saveRun),
     paste: pasteFiguresOf(rec, byLeg[PASTE_LEG]!, pasteRun, saveRun.flushes),
+    caves: caveFiguresOf(rec, byLeg[CAVES_LEG]!, caveRun),
     longFrames,
     structuralFrames,
   };
@@ -1874,6 +2093,8 @@ export interface BenchWorld {
    * hooks). Absent, or with no `save`, the script ends after L11.
    */
   readonly paste?: BenchPasteHooks;
+  /** L13's hooks (SP6a spec §10.6): the finder's job and the store's reads. Absent, the script ends after L12. */
+  readonly caves?: BenchCaveHooks;
   /** The review scenes' clock (SP5a spec §6.5): fixed at `hours` (0 … 24) and paused. */
   setTime(hours: number): void;
   /** The review scenes' mode (SP5a spec §6.5): F's path (`toggleMode`, the near plane) when the mode differs. */
@@ -1896,7 +2117,9 @@ export interface BenchWorld {
  * pitch −15 and y 150 (after L9's arrival, the teleport's y); L10's flight sets x and the yaw 90. With `save` bound,
  * L11 follows L10's flight (`BENCH_SAVE`): x back at the flight's start, and the page logs every autosave flush through
  * `flushed`. With `paste` bound too, L12 follows L11 there (`BENCH_PASTE`, SP5c spec §10.4): its script runs through
- * the hooks between frames, each step awaited and resumed at a later `pose`. The page writes each rendered frame into
+ * the hooks between frames, each step awaited and resumed at a later `pose`. With `caves` bound, L13 follows L12 there
+ * (`BENCH_CAVES`, SP6a spec §10.6; never after an L12 time-out): `caves.find` from the camera's voxel at its first
+ * frame, the route from the hit, the flight and the walk. The page writes each rendered frame into
  * `record` (`createBenchRecorder`). `fail` ends the script with an error (a failure after the reveal), once.
  */
 export interface BenchDriver {
@@ -1973,7 +2196,22 @@ const L11_PARTS = 2;
 /** L12's parts' caps, s, in `BENCH_PASTE_PARTS`' order. */
 const PASTE_CAPS: readonly number[] = [BENCH_PASTE.hoverS, BENCH_PASTE.houseMaxS, BENCH_PASTE.maxMaxS, BENCH_PASTE.sweepS];
 /** The leg index after the last leg: the script has ended. */
-const DONE_LEG = PASTE_LEG + 1;
+const DONE_LEG = CAVES_LEG + 1;
+/** L13's phases: the finder's answer awaited, the flight to the route's start, the walk. */
+const L13_FIND = 0;
+const L13_FLY = 1;
+const L13_WALK = 2;
+/** The yaw of a horizontal move (dx, dz), degrees (yaw 0 faces −z, 90 faces +x; ruling P42). */
+const yawOf = (dx: number, dz: number): number => {
+  const deg = (Math.atan2(dx, -dz) * 180) / Math.PI;
+  return deg < 0 ? deg + 360 : deg;
+};
+/** The kinds' names by id (`CAVE_KIND`), for the `caves` block's `routeKinds`. */
+const CAVE_KIND_NAMES: readonly string[] = (() => {
+  const names = Array.from({ length: 16 }, (_, k) => `kind${k}`);
+  for (const [name, id] of Object.entries(CAVE_KIND)) names[id] = name;
+  return names;
+})();
 /** L12d's sweep: the anchor's x offset at frame k, one block a frame back and forth over `sweepSpan` blocks. */
 const sweepOffset = (k: number): number => {
   const span = BENCH_PASTE_SCRIPT.sweepSpan;
@@ -2074,6 +2312,23 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let poolsBefore: readonly [number, number] | null = null;
   let poolsAfter: readonly [number, number] | null = null;
   let lastOpS = Number.NEGATIVE_INFINITY;
+  // L13 (SP6a spec §10.6): its hooks (null until `bind`, and without them no L13), its phase, whether the find was
+  // posted, its answer (null until it comes) and the script times of the find's post, the flight's and the walk's
+  // starts and the walk's end; the flight's ends (x y z from, x y z to); the route (x y z per point), each point's eye y
+  // and the walk's yaw; what `summarizeBench` reads (BenchCaveRun).
+  let caves: BenchCaveHooks | null = null;
+  let cavePhase = L13_FIND;
+  let caveAsked = false;
+  let caveAnswer: { readonly hit: { readonly x: number; readonly y: number; readonly z: number } | null; readonly reason: string } | null = null;
+  const caveTimes = Float64Array.of(Number.NaN, Number.NaN, Number.NaN, Number.NaN);
+  const flyEnds = new Float64Array(6);
+  let route: Float64Array = new Float64Array(0);
+  let routeEye = new Float64Array(0);
+  let walkYaw = 0;
+  let caveFind: BenchCaveRun['find'] = NO_CAVE_RUN.find;
+  let routeKinds: Record<string, number> = {};
+  const caveTimedOut: string[] = [];
+  let caveStopped: string | null = null;
   const capped = (rd: number): number => Math.min(rd, rdMax);
 
   /** The live legs' pose (SP4c spec §8.4): x, z and the yaw kept; pitch −15; y 150 until L9's arrival, then kept. */
@@ -2618,6 +2873,119 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     return false;
   };
   /**
+   * L13's route from the finder's hit (SP6a spec §10.6), computed from the loaded store's tags as soon as the answer
+   * comes: the points, each point's eye y (`EYE` above its floor: the voxel's bottom, or one lower for a step) and the
+   * points per kind; false (with `stoppedBy`) when it has no move.
+   */
+  const planRoute = (hit: { readonly x: number; readonly y: number; readonly z: number }): boolean => {
+    const hooks = caves!;
+    route = caveRoute((x, y, z) => hooks.tagAt(x, y, z), (x, y, z) => hooks.solidAt(x, y, z), [hit.x, hit.y, hit.z], BENCH_CAVE_ROUTE.blocks);
+    const n = route.length / 3;
+    routeEye = new Float64Array(n);
+    const counts: Record<string, number> = {};
+    const byKind = new Float64Array(16);
+    for (let k = 0; k < n; k++) {
+      const x = route[3 * k]!;
+      const y = route[3 * k + 1]!;
+      const z = route[3 * k + 2]!;
+      routeEye[k] = (hooks.solidAt(x, y - 1, z) ? y : y - 1) + EYE;
+      byKind[hooks.tagAt(x, y, z) & 15]!++;
+    }
+    for (let id = 0; id < 16; id++) if (byKind[id]! > 0) counts[CAVE_KIND_NAMES[id]!] = byKind[id]!;
+    routeKinds = counts;
+    if (n >= 2) return true;
+    caveStopped = `the route from the entrance at (${hit.x}, ${hit.y}, ${hit.z}) has no move`;
+    return false;
+  };
+  /** The camera at `s` blocks along the route (clamped to its end), the eye `EYE` above the floor, looking along it. */
+  const routePose = (s: number, out: BenchPose): void => {
+    const last = route.length / 3 - 1;
+    const c = Math.min(Math.max(s, 0), last);
+    const k = Math.min(Math.floor(c), last - 1);
+    const f = c - k;
+    const a = 3 * k;
+    const dx = route[a + 3]! - route[a]!;
+    const dz = route[a + 5]! - route[a + 2]!;
+    if (dx !== 0 || dz !== 0) walkYaw = yawOf(dx, dz);
+    out.x = route[a]! + 0.5 + f * dx;
+    out.y = routeEye[k]! + f * (routeEye[k + 1]! - routeEye[k]!);
+    out.z = route[a + 2]! + 0.5 + f * dz;
+    out.yaw = walkYaw;
+    out.pitch = 0;
+  };
+  /**
+   * One frame of L13 at `tS` (SP6a spec §10.6), after `livePose`: the find posted at its first frame from the camera's
+   * voxel, the camera kept at L10's hover point until the answer (at most `findMaxS`); the route planned from the hit;
+   * the flight to the route's start, straight, at `flySpeed` (at most `flyMaxS`); the walk for `walkS`. False once the
+   * leg has ended (a part at its cap is named in `timedOut`).
+   */
+  const caveStep = (tS: number, out: BenchPose): boolean => {
+    const hooks = caves!;
+    if (cavePhase === L13_FIND) {
+      out.x = savePoint[0]!;
+      out.z = savePoint[1]!;
+      if (!caveAsked) {
+        caveAsked = true;
+        caveTimes[0] = tS;
+        hooks.find(Math.floor(out.x), Math.floor(out.y), Math.floor(out.z)).then((r) => {
+          caveAnswer = { hit: r.hit === null ? null : { x: r.hit.x, y: r.hit.y, z: r.hit.z }, reason: r.reason };
+        }, (e: unknown) => {
+          caveAnswer = { hit: null, reason: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
+        });
+        return true;
+      }
+      const answer = caveAnswer;
+      if (answer === null) {
+        if (tS - caveTimes[0]! < BENCH_CAVES.findMaxS) return true;
+        caveTimedOut.push('find');
+        return false;
+      }
+      caveFind = { reason: answer.reason, ms: (tS - caveTimes[0]!) * 1000, hit: answer.hit };
+      if (answer.hit === null) {
+        caveStopped = `no entrance found (${answer.reason})`;
+        return false;
+      }
+      if (!planRoute(answer.hit)) return false;
+      cavePhase = L13_FLY;
+      caveTimes[1] = tS;
+      flyEnds[0] = out.x;
+      flyEnds[1] = out.y;
+      flyEnds[2] = out.z;
+      flyEnds[3] = route[0]! + 0.5;
+      flyEnds[4] = routeEye[0]!;
+      flyEnds[5] = route[2]! + 0.5;
+    }
+    if (cavePhase === L13_FLY) {
+      const dx = flyEnds[3]! - flyEnds[0]!;
+      const dy = flyEnds[4]! - flyEnds[1]!;
+      const dz = flyEnds[5]! - flyEnds[2]!;
+      const need = Math.sqrt(dx * dx + dy * dy + dz * dz) / BENCH_CAVE_ROUTE.flySpeed;
+      const into = tS - caveTimes[1]!;
+      if (into < need) {
+        if (into >= BENCH_CAVES.flyMaxS) {
+          caveTimedOut.push('fly');
+          return false;
+        }
+        const f = into / need;
+        out.x = flyEnds[0]! + f * dx;
+        out.y = flyEnds[1]! + f * dy;
+        out.z = flyEnds[2]! + f * dz;
+        if (dx !== 0 || dz !== 0) out.yaw = yawOf(dx, dz);
+        return true;
+      }
+      cavePhase = L13_WALK;
+      caveTimes[2] = tS;
+      walkYaw = out.yaw;
+    }
+    const into = tS - caveTimes[2]!;
+    if (into >= BENCH_CAVES.walkS) {
+      caveTimes[3] = tS;
+      return false;
+    }
+    routePose(into * BENCH_CAVE_ROUTE.walkSpeed, out);
+    return true;
+  };
+  /**
    * One frame of the live legs at `tS`: whether a leg ends (settled or at its cap) and the next starts, or the script
    * ends (false); a live shot freezes on its event (`frozenLive`).
    */
@@ -2639,7 +3007,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
         if (leg === 9) toEdit = true;
         else next = (leg + 1) as LiveLeg;
       }
-    } else if (liveLeg !== EDIT_LEG && liveLeg !== SAVE_LEG && liveLeg !== PASTE_LEG) return false;
+    } else if (liveLeg !== EDIT_LEG && liveLeg !== SAVE_LEG && liveLeg !== PASTE_LEG && liveLeg !== CAVES_LEG) return false;
     if (o.shot === 'apply-mid' && !Number.isNaN(l7StartS) && tS - l7StartS >= APPLY_MID_AFTER_S) frozenLive = true;
     if (o.shot === 'teleport' && !Number.isNaN(arrivedS) && tS - arrivedS >= TELEPORT_SHOT_AFTER_S) frozenLive = true;
     if (frozenLive) return true;
@@ -2670,6 +3038,15 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       legStartS = tS;
     }
     if (liveLeg === PASTE_LEG && !pasteStep(tS, out)) {
+      // L12 ended: L13 follows when its hooks are bound (never after an L12 time-out).
+      if (caves === null || pasteTimedOut.length > 0) {
+        liveLeg = DONE_LEG;
+        return false;
+      }
+      liveLeg = CAVES_LEG;
+      legStartS = tS;
+    }
+    if (liveLeg === CAVES_LEG && !caveStep(tS, out)) {
       liveLeg = DONE_LEG;
       return false;
     }
@@ -2690,6 +3067,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       edit = world.edit;
       save = world.save ?? null;
       paste = world.paste ?? null;
+      caves = world.caves ?? null;
       sceneHooks = { setTime: (h) => world.setTime(h), walk: (on) => world.walk(on) };
     },
     pose(tS, out, fogRd) {
@@ -2762,6 +3140,11 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
           {
             parts: [...pasteParts], ops: [...pasteOps], log: paste?.log() ?? NO_PASTE_LOG, poolsBefore, poolsAfter,
             timedOut: [...pasteTimedOut], stoppedBy: pasteStopped,
+          },
+          {
+            find: caveFind, routeBlocks: Math.max(0, route.length / 3 - 1), routeKinds: { ...routeKinds },
+            walk: Number.isNaN(caveTimes[2]!) ? null : { tS0: caveTimes[2]!, tS1: Number.isNaN(caveTimes[3]!) ? Number.POSITIVE_INFINITY : caveTimes[3]! },
+            timedOut: [...caveTimedOut], stoppedBy: caveStopped,
           },
         );
       } catch (e) {
@@ -2872,10 +3255,11 @@ export async function mountBenchRoute(app: HTMLElement, query: URLSearchParams):
   }
   const driver = createBenchDriver({ shot, publish });
   const { mountWorldPage } = await import('./worldPage');
-  // The legs after the timed script at their caps: the live legs, L10, L11 (its hover included) and L12 (its fill included).
+  // The legs after the timed script at their caps: the live legs, L10, L11 (its hover included), L12 (its fill included)
+  // and L13.
   const liveS = BENCH_LIVE_LEGS.reduce((t, l) => t + l.seconds, 0) + BENCH_EDIT_LEG.seconds + BENCH_SAVE_LEG.seconds
-    + BENCH_PASTE.fillMaxS + BENCH_PASTE_LEG.seconds;
-  panel?.say(`running the ${BENCH_SECONDS} s script, then the live, edit, save and paste legs (up to ${liveS} s more) after the reveal (keep this tab in front)…`);
+    + BENCH_PASTE.fillMaxS + BENCH_PASTE_LEG.seconds + BENCH_CAVES_LEG.seconds;
+  panel?.say(`running the ${BENCH_SECONDS} s script, then the live, edit, save, paste and cave legs (up to ${liveS} s more) after the reveal (keep this tab in front)…`);
   const page = await mountWorldPage(app, benchQuery(query), benchHash(), { hud: false, overlay: false, bench: driver });
   if (page.state !== 'revealed' && !published) publish.result({ route: 'bench=medium', error: `the world did not load (page ${page.state})` });
 }

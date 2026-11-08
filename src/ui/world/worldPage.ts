@@ -59,6 +59,8 @@
  * edit path go through its sim-client wrapper (`createBenchSimLog`, logging from L12 each batch's reply and visibility
  * and each diff wait), and a selection tool of its own (`createBenchPaste`: the page's `createSelectActions` over the
  * bench's sim, L11's block history and a clipboard in `BENCH_DB`) runs its frame step in the bench's aim from L12.
+ * For its cave leg L13 (SP6a spec §10.6) the driver gets the finder's job over the bench's pool and the store's cave
+ * tags and collisions for its route (`benchCaves`); the camera follows the route through the driver's pose.
  *
  * Errors after the reveal (SP4b spec §3.6, §7.4, D12) degrade: a skipped column shows a dismissible notice with "Copy
  * details", StoreFull a notice offering "Lower to RD n" (applied live on a click, never on its own); a fatal event (no
@@ -147,8 +149,8 @@
  * or B's dialog is open, a focused control in it (a select, a slider, a checkbox, a button) keeps its own keys and the
  * world handles none of them (`worldIgnoresKeys`); otherwise H, G, M, B and E go through `paletteFirst`.
  */
-import { GENERATOR_VERSION } from '../../core/constants';
-import { colKey } from '../../core/coords';
+import { CAVE_KIND, GENERATOR_VERSION, MIN_Y } from '../../core/constants';
+import { chunkCoord, colKey, MAX_Y } from '../../core/coords';
 import { createFnv64, hex64, type Seed64 } from '../../core/hash';
 import { MEDIUM } from '../../core/params/graphicsPresets';
 import { SCHEMA_VERSION, type JsonObject } from '../../core/params/migrate';
@@ -182,6 +184,7 @@ import { bodyOf, breakAt, emptyBucketAt, pickAt, placeAt, type BodyBox } from '.
 import { DEFAULT_KEYMAP, bindingLabel, type Action } from '../../player/keymap';
 import { REACH_FLY, REACH_WALK, castRay, castRayFrom, createRayHit, type RayHit } from '../../player/raycast';
 import { EYE, arriveFeet, createWalkState, setFeet, type WalkState } from '../../player/walk';
+import { solidAt as collidesAt } from '../../player/physics';
 import { createFpsLimiter, type FpsLimiter } from '../../render/fpsLimiter';
 import type { FloatingOrigin } from '../../render/floatingOrigin';
 import type { FrameState } from '../../render/frameState';
@@ -211,7 +214,7 @@ import { SETTINGS_DEFAULTS, loadSettings, saveSettings, type WorldSettings } fro
 import { mountSettingsPanel, type SettingsPanel } from '../settingsPanel';
 import {
   BENCH_DB, BENCH_IDLE_FRAMES, BENCH_REFILL, BENCH_TIME_SPEED, benchInterval, createBenchRecorder, createBenchSimLog, createLiveReveals, jsHeapMB,
-  type BenchDriver, type BenchFlush, type BenchGhostBuild, type BenchPasteHooks, type BenchPose, type BenchSimLog, type BenchTimed, type BenchWorld,
+  type BenchCaveHooks, type BenchDriver, type BenchFlush, type BenchGhostBuild, type BenchPasteHooks, type BenchPose, type BenchSimLog, type BenchTimed, type BenchWorld,
   type EnterResult,
 } from './bench';
 import { firstView } from './firstView';
@@ -439,6 +442,42 @@ function voxelValue(store: VoxelStore, x: number, y: number, z: number): number 
   } finally {
     store.exitRead();
   }
+}
+
+/**
+ * L13's hooks as the bench route composes them (SP6a spec §10.6, D29): the finder's job for the nearest entrance (the
+ * pool's `findCave` with `CAVE_KIND.entrance`, its default radius and budget), and the main thread's reads of the
+ * loaded store that `caveRoute` walks: the cave byte's kind at a voxel of a Published column's final set (0 where the
+ * column is not Published or y is outside the world) and whether the voxel collides (`physics.ts`' `solidAt`: false
+ * where not Published), each inside a read section.
+ */
+export function benchCaves(o: {
+  readonly store: Pick<VoxelStore, 'enterRead' | 'exitRead' | 'final' | 'publishedAt' | 'blockAt' | 'fluidAt'>;
+  readonly pool: Pick<WorkerPool, 'findCave'>;
+}): BenchCaveHooks {
+  const { store, pool } = o;
+  return {
+    find: (x, y, z) => pool.findCave({ kind: CAVE_KIND.entrance, x, y, z }).promise,
+    tagAt(x, y, z) {
+      if (y < MIN_Y || y > MAX_Y) return 0;
+      store.enterRead();
+      try {
+        if (!store.publishedAt(x, z)) return 0;
+        const v = store.final(chunkCoord(x), chunkCoord(z));
+        return v === null ? 0 : v.cave(x & 15, y, z & 15) & 15;
+      } finally {
+        store.exitRead();
+      }
+    },
+    solidAt(x, y, z) {
+      store.enterRead();
+      try {
+        return collidesAt(store, x, y, z);
+      } finally {
+        store.exitRead();
+      }
+    },
+  };
 }
 
 /** The state at block (x, y, z) read inside a read section (`VoxelStore.blockAt`). */
@@ -4620,6 +4659,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           },
           save: benchSaving.hooks,
           paste: benchPaste.hooks,
+          // L13 (SP6a spec §10.6): the finder's job over the bench's pool and the store's cave tags for its route.
+          caves: benchCaves({ store, pool: workers }),
           setTime: (hours) => benchSetTime(frame, benchClock, hours),
           walk: (on) => benchWalk({ fly, walk, world, repeat: NO_REPEAT }, on),
         });

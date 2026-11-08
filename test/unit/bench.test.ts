@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { GENERATOR_VERSION } from '../../src/core/constants';
+import { CAVE_KIND, GENERATOR_VERSION } from '../../src/core/constants';
 import { colKey, colKeyCx, colKeyCz } from '../../src/core/coords';
 import { hex64, parseHex64 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
@@ -16,13 +16,14 @@ import type { CopiedMsg, Edit, EditedMsg, FlushedMsg } from '../../src/workers/p
 import type { ColumnDiff } from '../../src/world/store/api';
 import { CLIPBOARD_KEY, decodeClipboard, encodeClipboard } from '../../src/persist/clipboard';
 import type { RayHit } from '../../src/player/raycast';
+import { EYE } from '../../src/player/walk';
 import { MAX_STEP_EDITS } from '../../src/sim/edits';
 import {
-  BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
+  BENCH_CAVE_ROUTE, BENCH_CAVES, BENCH_CAVES_LEG, BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
   BENCH_PASTE, BENCH_PASTE_LEG, BENCH_PASTE_PARTS, BENCH_PASTE_SCRIPT, BENCH_PROFILE, BENCH_SAVE, BENCH_SAVE_LEG, BENCH_SAVE_PARTS, BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
   createBenchRecord, createBenchRecorder, createLiveReveals, ENTER_AUTO_KEY, ENTER_AUTO_SETUP_PATH, ENTER_DENSE_COLUMNS, ENTER_DISC_RD, ENTER_PAIRS, ENTER_POSE, ENTER_SPARSE,
   enterAutoEnded, enterAutoJson, enterAutoRecorded, enterAutoStart, enterOrder as benchEnterOrder, enterPaths as benchEnterPaths, enterSaveDump, gpuOfRenderer, summarizeEnter, REVIEW_HOUSE, REVIEW_POOL, REVIEW_SCENE_BATCH, REVIEW_SCENES, REVIEW_SETTLE_S, REVIEW_SITE,
-  REVIEW_SHOTS, benchHouse, createBenchSimLog, reviewSceneEdits, summarizeBench, type BenchEditsRecord, type BenchError, type BenchFixed, type BenchFlush,
+  REVIEW_SHOTS, benchHouse, caveRoute, createBenchSimLog, reviewSceneEdits, summarizeBench, type BenchCaveHooks, type BenchCaveRun, type BenchEditsRecord, type BenchError, type BenchFixed, type BenchFlush,
   type BenchPasteHooks, type BenchPasteRun, type BenchPose, type BenchRecord, type BenchResult, type BenchSaveRun, type BenchSources, type BenchWorld,
   type ReviewShot, type SceneVoxel,
 } from '../../src/ui/world/bench';
@@ -34,7 +35,7 @@ import { pasteLitBlock, pasteMaxBlock } from '../../src/ui/world/pasteBlocks';
 import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
 import { parseWorldQuery } from '../../src/ui/world/query';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
-import { BENCH_DB, closeBenchSave, createBenchPaste, createBenchSave, enterResult, newWorldRecord, openBenchSave, type GhostHost } from '../../src/ui/world/worldPage';
+import { BENCH_DB, benchCaves, closeBenchSave, createBenchPaste, createBenchSave, enterResult, newWorldRecord, openBenchSave, type GhostHost } from '../../src/ui/world/worldPage';
 import { ENTER_PAIRS as TOOL_ENTER_PAIRS, enterOrder as toolEnterOrder, enterPaths as toolEnterPaths, enterSummary, type EnterPair } from '../tools/measureChrome';
 
 const START = { x: 1000, z: -2000 };
@@ -57,12 +58,13 @@ describe('the bench script (SP4b spec §8.3, D22)', () => {
     expect(BENCH_FRAME_CAPACITY).toBeGreaterThan(95 * 240);
   });
 
-  test('`BENCH_FRAME_CAPACITY` is 123,168 (SP5c spec §10.4: SP5b\'s 87,168 and L12\'s 150 s at 240 Hz)', () => {
-    expect(BENCH_FRAME_CAPACITY).toBe(123_168);
+  test('`BENCH_FRAME_CAPACITY` is 144,768 (SP6a spec §10.6: SP5c\'s 123,168 and L13\'s 90 s at 240 Hz)', () => {
+    expect(BENCH_FRAME_CAPACITY).toBe(144_768);
     expect(87_168 + 150 * 240).toBe(123_168);
+    expect(123_168 + 90 * 240).toBe(144_768);
   });
 
-  test('the capacity holds the script\'s 511 s at 240 Hz (SP4c\'s 150 s, L10\'s 91 s at its caps, L11\'s four 30 s parts, L12\'s 150 s): 513 s', () => {
+  test('the capacity holds the script\'s 601 s at 240 Hz (SP4c\'s 150 s, L10\'s 91 s at its caps, L11\'s four 30 s parts, L12\'s 150 s, L13\'s 90 s): 603 s', () => {
     expect(BENCH_EDIT).toEqual({ count: 100, everyMs: 250, radius: 8, hoverMaxS: 60, streamingCount: 20, streamingFlightS: 6, streamingSpeed: 20 });
     const liveS = BENCH_LIVE_LEGS.reduce((s, l) => s + l.seconds, 0);
     const l10S = BENCH_EDIT.hoverMaxS + (BENCH_EDIT.count * BENCH_EDIT.everyMs) / 1000 + BENCH_EDIT.streamingFlightS;
@@ -72,11 +74,14 @@ describe('the bench script (SP4b spec §8.3, D22)', () => {
     expect(BENCH_PASTE).toEqual({ fillMaxS: 60, hoverS: 10, houseMaxS: 80, maxMaxS: 50, sweepS: 10 });
     expect(l12S).toBe(150);
     expect(BENCH_PASTE_LEG).toEqual({ name: 'L12', seconds: l12S, speed: 0, headings: [], rdSteps: [] });
-    expect([95 + liveS, l10S, l11S, l12S]).toEqual([150, 91, 120, 150]);
-    expect(95 + liveS + l10S + l11S + l12S).toBe(511);
-    expect(BENCH_FRAME_CAPACITY).toBeGreaterThanOrEqual(511 * 240);
-    // 513 s at 240 Hz.
-    expect(Math.floor(BENCH_FRAME_CAPACITY / 240)).toBe(513);
+    // L13's caps: the find's 20 s, the flight's 10 s and the walk's 60 s.
+    const l13S = BENCH_CAVES.findMaxS + BENCH_CAVES.flyMaxS + BENCH_CAVES.walkS;
+    expect(BENCH_CAVES_LEG).toEqual({ name: 'L13', seconds: l13S, speed: 0, headings: [], rdSteps: [] });
+    expect([95 + liveS, l10S, l11S, l12S, l13S]).toEqual([150, 91, 120, 150, 90]);
+    expect(95 + liveS + l10S + l11S + l12S + l13S).toBe(601);
+    expect(BENCH_FRAME_CAPACITY).toBeGreaterThanOrEqual(601 * 240);
+    // 603 s at 240 Hz.
+    expect(Math.floor(BENCH_FRAME_CAPACITY / 240)).toBe(603);
   });
 
   test('the capacity holds 150 s at 240 Hz (36,000 frames): the 95 s script and the live legs at their caps (SP4c spec §8.4)', () => {
@@ -245,7 +250,7 @@ describe('summarizeBench (SP4b spec §8.3)', () => {
     const r = summarizeBench(recordOf([{ leg: 0 }, { leg: 1 }, { leg: 5 }, { leg: 6 }]), FIXED);
     expect(Object.keys(r)).toEqual([
       'route', 'seed', 'profile', 'rd', 'rdClampedTo', 'workers', 'sectionRenderer', 'userAgent', 'renderer', 'vendor', 'multiDraw', 'timerQuery', 'screen', 'dpr',
-      'pixelRatio', 'displayIntervalMs', 'load', 'stream', 'legs', 'L5', 'L6', 'live', 'edit', 'persist', 'paste', 'longFrames', 'structuralFrames',
+      'pixelRatio', 'displayIntervalMs', 'load', 'stream', 'legs', 'L5', 'L6', 'live', 'edit', 'persist', 'paste', 'caves', 'longFrames', 'structuralFrames',
     ]);
     expect(r.route).toBe('bench=medium');
     expect(r.rdClampedTo).toBeNull();
@@ -262,7 +267,7 @@ describe('summarizeBench (SP4b spec §8.3)', () => {
     expect(Object.keys(r.stream.coordinatorMs)).toEqual(['p95', 'max']);
     expect(Object.keys(r.stream.uploadMs)).toEqual(['p95', 'max']);
     expect(Object.keys(r.stream.drawCalls)).toEqual(['max', 'mean']);
-    expect(Object.keys(r.legs)).toEqual(['L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'L9', 'L10', 'L11', 'L12']);
+    expect(Object.keys(r.legs)).toEqual(['L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'L9', 'L10', 'L11', 'L12', 'L13']);
     expect(Object.keys(r.legs.L1.frames)).toEqual(['count', 'p50', 'p95', 'p99', 'max', 'over33']);
     expect(r.L5).toEqual({ refillMs: 1234 });
     expect(Object.keys(r.L6)).toEqual(['frames']);
@@ -1328,13 +1333,13 @@ function fakeSave(o: { filled?: () => boolean } = {}) {
  * Runs the live legs (each settling at once) and L10 (its 100 edits, its 6 s flight east from L9's arrival at
  * (20,000.5, 90, 0.5)) with `save` bound, to L11's first frame at 129 s.
  */
-async function toL11(save: NonNullable<BenchWorld['save']>, paste?: BenchPasteHooks) {
+async function toL11(save: NonNullable<BenchWorld['save']>, paste?: BenchPasteHooks, caves?: BenchCaveHooks) {
   const run = driverOf(null);
   const f = fakeLive();
   f.settle[7] = true;
   f.settle[8] = true;
   f.settle[9] = true;
-  run.driver.bind({ rdMax: 16, heightAt: () => 70, live: f.live, edit: fakeEdit().edit, save, paste, ...NO_SCENE });
+  run.driver.bind({ rdMax: 16, heightAt: () => 70, live: f.live, edit: fakeEdit().edit, save, paste, caves, ...NO_SCENE });
   const p: BenchPose = { x: 0.5, y: 80, z: 0.5, yaw: 0, pitch: 0 };
   run.driver.pose(0, p, 12);
   run.driver.pose(95, p, 12);
@@ -2802,6 +2807,316 @@ describe('createBenchDriver: the paste leg L12 (SP5c spec §10.4, D30; plan)', (
     expect(histories).toHaveLength(1);
     const done = histories[0]!.done;
     expect(histories[0]!.steps.find((s) => s.id === done[done.length - 1])!.edits).toHaveLength(3296);
+  });
+});
+
+// ---------------------------------------------------------------- L13 (SP6a spec §10.6, D29)
+
+/** A fixture world: solid everywhere but the air voxels set, each with its cave kind. */
+function caveWorld() {
+  const air = new Map<number, number>();
+  const fill = (x0: number, x1: number, y0: number, y1: number, z0: number, z1: number, kind: number): void => {
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) air.set(vkey(x, y, z), kind);
+  };
+  const solid = (x: number, y: number, z: number): void => { air.delete(vkey(x, y, z)); };
+  let reads = 0;
+  const tagAt = (x: number, y: number, z: number): number => {
+    reads++;
+    return air.get(vkey(x, y, z)) ?? 0;
+  };
+  const solidAt = (x: number, y: number, z: number): boolean => {
+    reads++;
+    return !air.has(vkey(x, y, z));
+  };
+  return { fill, solid, tagAt, solidAt, reads: () => reads };
+}
+
+/**
+ * The fixture cave: a cheese room (x 0 … 3, y 10 … 12, z 0 … 3; its floor at y 9, a one-block ledge at (3, 10, 3))
+ * joined on its west side to a spaghetti 3D tunnel (x −1 … −5 at z 1, y 10 … 11) that forks at x −5: a spaghetti 3D
+ * branch south (z 2 … 4) and a spaghetti 2D tunnel on west (x −6 … −9); every branch ends blind.
+ */
+function fixtureCave() {
+  const w = caveWorld();
+  w.fill(0, 3, 10, 12, 0, 3, CAVE_KIND.cheese);
+  w.solid(3, 10, 3);
+  w.fill(-5, -1, 10, 11, 1, 1, CAVE_KIND.spaghetti3d);
+  w.fill(-5, -5, 10, 11, 2, 4, CAVE_KIND.spaghetti3d);
+  w.fill(-9, -6, 10, 11, 1, 1, CAVE_KIND.spaghetti2d);
+  return w;
+}
+
+const pointsOf = (r: Float64Array): Array<[number, number, number]> =>
+  Array.from({ length: r.length / 3 }, (_, k) => [r[3 * k]!, r[3 * k + 1]!, r[3 * k + 2]!]);
+
+describe('caveRoute: L13\'s walk through cave air (SP6a spec §10.6, D29; plan)', () => {
+  test('the constants: 258 blocks, 4.3 × 60, at 4.3 blocks per second; the flight at 64; the caps 20, 10 and 60 s', () => {
+    expect(BENCH_CAVES).toEqual({ findMaxS: 20, flyMaxS: 10, walkS: 60 });
+    expect(BENCH_CAVE_ROUTE).toEqual({ flySpeed: 64, walkSpeed: 4.3, blocks: 258 });
+    expect(Math.round(BENCH_CAVE_ROUTE.walkSpeed * BENCH_CAVES.walkS)).toBe(BENCH_CAVE_ROUTE.blocks);
+    expect(BENCH_CAVES_LEG.seconds).toBe(90);
+  });
+
+  test('on the fixture cave the route is the same twice, starts on the floor under the hit, and prefers cheese, then spaghetti 3D, then 2D', () => {
+    const w = fixtureCave();
+    const a = caveRoute(w.tagAt, w.solidAt, [0, 12, 1], 258);
+    const b = caveRoute(w.tagAt, w.solidAt, [0, 12, 1], 258);
+    expect(Array.from(b)).toEqual(Array.from(a));
+    const pts = pointsOf(a);
+    // Lowered from (0, 12, 1) onto the room's floor.
+    expect(pts[0]).toEqual([0, 10, 1]);
+    // −x (the tunnel, spaghetti 3D) comes first in the tie-break, but the cheese room is preferred.
+    expect(pts[1]).toEqual([1, 10, 1]);
+    const kinds = pts.map(([x, y, z]) => w.tagAt(x, y, z));
+    const firstTunnel = kinds.findIndex((k) => k !== CAVE_KIND.cheese);
+    expect(firstTunnel).toBeGreaterThan(1);
+    // Every floor voxel of the room is walked before the tunnel (each cheese neighbour taken first).
+    const room = new Set(pts.slice(0, firstTunnel).map((p) => p.join()));
+    for (let x = 0; x <= 3; x++) for (let z = 0; z <= 3; z++) if (!(x === 3 && z === 3)) expect(room.has([x, 10, z].join()), `${x}, ${z}`).toBe(true);
+    // The ledge (3, 11, 3) is climbed through the step above its neighbour.
+    expect(room.has([3, 11, 3].join())).toBe(true);
+    // At the fork the spaghetti 3D branch (+z) is taken before the 2D tunnel (−x, first in the tie-break).
+    const at = (p: readonly number[]): number => pts.findIndex((q) => q.join() === p.join());
+    expect(at([-5, 10, 2])).toBeGreaterThan(0);
+    expect(at([-5, 10, 2])).toBeLessThan(at([-6, 10, 1]));
+    expect(kinds[firstTunnel]).toBe(CAVE_KIND.spaghetti3d);
+  });
+
+  test('every point is cave air one block above a floor, never solid; consecutive points are exactly 1 block apart, the dead ends walked back', () => {
+    const w = fixtureCave();
+    const pts = pointsOf(caveRoute(w.tagAt, w.solidAt, [0, 12, 1], 258));
+    const step = ([x, y, z]: readonly number[]): boolean => !w.solidAt(x!, y! - 1, z!);
+    for (const [x, y, z] of pts) {
+      expect(w.solidAt(x, y, z), `${x}, ${y}, ${z}`).toBe(false);
+      expect(w.tagAt(x, y, z), `${x}, ${y}, ${z}`).not.toBe(0);
+      // On the floor, or a step: air below, the floor under it.
+      expect(w.solidAt(x, y - 1, z) || w.solidAt(x, y - 2, z), `${x}, ${y}, ${z}`).toBe(true);
+    }
+    let walkedBack = 0;
+    const seen = new Set<string>();
+    for (let k = 1; k < pts.length; k++) {
+      const [a, b] = [pts[k - 1]!, pts[k]!];
+      expect(Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]), `${k}`).toBe(1);
+      // Never two steps in a row.
+      expect(step(a) && step(b), `${k}`).toBe(false);
+      if (seen.has(b.join())) walkedBack++;
+      seen.add(a.join());
+    }
+    // The blind ends (the 3D branch, the 2D tunnel, the room's corners) are walked back through voxels already passed.
+    expect(walkedBack).toBeGreaterThan(10);
+    // The 2D tunnel's blind end (−9, 10, 1) is followed by the voxel before it.
+    const end = pts.findIndex((p) => p.join() === [-9, 10, 1].join());
+    expect(pts[end + 1]).toEqual([-8, 10, 1]);
+    // The whole cave walked and walked back: the route ends at its start, short of 258 blocks.
+    expect(pts.length - 1).toBeLessThan(258);
+    expect(pts[pts.length - 1]).toEqual([0, 10, 1]);
+    expect(new Set(pts.map((p) => p.join())).size).toBe(pts.length / 2 + 0.5);
+  });
+
+  test('the route stops at `blocks` moves; a solid start gives no point; the search never expands a voxel twice', () => {
+    const w = fixtureCave();
+    expect(pointsOf(caveRoute(w.tagAt, w.solidAt, [0, 12, 1], 5))).toHaveLength(6);
+    expect(caveRoute(w.tagAt, w.solidAt, [0, 9, 1], 258)).toHaveLength(0);
+    // An endless slab of cheese: 258 moves west (−x first), each voxel new.
+    const slab = {
+      tagAt: (_x: number, y: number): number => (y === 40 || y === 41 ? CAVE_KIND.cheese : 0),
+      solidAt: (_x: number, y: number): boolean => y < 40 || y > 41,
+    };
+    const pts = pointsOf(caveRoute(slab.tagAt, slab.solidAt, [7, 41, 3], 258));
+    expect(pts).toHaveLength(259);
+    expect(pts[0]).toEqual([7, 40, 3]);
+    expect(pts[258]).toEqual([7 - 258, 40, 3]);
+  });
+});
+
+/**
+ * L13's hooks on a fake page: `find` answers with `answer` (or never), each call's voxel logged; the store's reads a slab
+ * of cheese air at y 40 … 41 around (x, z), rock under and over it.
+ */
+function fakeCaves(answer: (() => Promise<Awaited<ReturnType<BenchCaveHooks['find']>>>) | null) {
+  const finds: Array<[number, number, number]> = [];
+  const hooks: BenchCaveHooks = {
+    find(x, y, z) {
+      finds.push([x, y, z]);
+      return answer === null ? new Promise(() => {}) : answer();
+    },
+    tagAt: (_x, y) => (y === 40 || y === 41 ? CAVE_KIND.cheese : 0),
+    solidAt: (_x, y) => y < 40 || y > 41,
+  };
+  return { hooks, finds };
+}
+const found = (x: number, y: number, z: number) => () => Promise.resolve({ hit: { x, y, z, yaw: 90 }, reason: 'found' });
+
+/**
+ * Runs L1-L12 with `caves` bound (L12's hooks answering at once), then L12 and L13 at 0.1 s steps until the script
+ * ends. Returns the published JSON, L13's frames (script time, pose) and the script's end.
+ */
+async function runL13(caves: BenchCaveHooks) {
+  let t = 0;
+  const s = fakeSave();
+  const stub = stubPaste({ at: () => t });
+  const { driver, p, published } = await toL11(s.save, stub.hooks, caves);
+  driver.pose(129.05, p, 12);
+  await flush();
+  const t0 = 129.1;
+  for (let i = 0; i < 2400; i++) {
+    t = t0 + i * 0.05;
+    driver.pose(t, p, 12);
+    if (i % 100 === 99) await flush();
+  }
+  await flush();
+  const l13: Array<{ readonly t: number; readonly x: number; readonly y: number; readonly z: number; readonly yaw: number; readonly pitch: number }> = [];
+  let lastL12: BenchPose | null = null;
+  let end = Number.NaN;
+  for (let i = 0; i < 6000; i++) {
+    t = t0 + 120 + i * 0.1;
+    if (driver.pose(t, p, 12) === null) {
+      end = t;
+      break;
+    }
+    // The row the driver wrote for this frame (the fake record is never advanced).
+    if (driver.record.leg[0] === 13) l13.push({ t, x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch });
+    else lastL12 = { ...p };
+    await microtasks();
+  }
+  driver.done(FIXED);
+  return { result: published[0] as BenchResult, l13, end, lastL12: lastL12! };
+}
+
+describe('createBenchDriver: the cave leg L13 (SP6a spec §10.6, D29; plan)', () => {
+  test('L13 follows L12: the find from the camera\'s voxel at L13\'s start (L10\'s hover point), the flight to the route at 64 blocks/s, the walk at 4.3 for 60 s', async () => {
+    const f = fakeCaves(found(20010, 41, 0));
+    const run = await runL13(f.hooks);
+    expect(run.result.paste.timedOut).toEqual([]);
+    // The search starts where the camera is when L13 starts, not at the script's start (0.5, 80, 0.5).
+    expect(f.finds).toEqual([[20000, 90, 0]]);
+    expect([run.lastL12.x, run.lastL12.y, run.lastL12.z]).toEqual([20000.5, 90, 0.5]);
+    expect(run.l13.length).toBeGreaterThan(0);
+    const t13 = run.l13[0]!.t;
+    // The route from the hit: lowered onto the slab's floor (y 40), then 258 blocks west.
+    const c = run.result.caves;
+    expect([c.routeBlocks, c.routeKinds, c.timedOut, c.stoppedBy]).toEqual([258, { cheese: 259 }, [], null]);
+    expect(c.find.reason).toBe('found');
+    expect(c.find.hit).toEqual({ x: 20010, y: 41, z: 0 });
+    // The answer is read at the next frame (the find's time, one frame), where the flight starts: (20000.5, 90, 0.5) to
+    // the route's start's eye (20010.5, 40 + EYE, 0.5), straight, at 64 blocks/s, facing east.
+    const tf = run.l13[1]!.t;
+    expect(c.find.ms).toBeCloseTo((tf - t13) * 1000, 6);
+    const walk = run.l13.filter((q) => q.pitch === 0);
+    const fly = run.l13.filter((q) => q.t >= tf && q.pitch !== 0);
+    const dist = Math.hypot(10, 90 - (40 + EYE));
+    expect(fly.length).toBeGreaterThan(1);
+    for (const q of fly) {
+      const d = Math.hypot(q.x - 20000.5, q.y - 90, q.z - 0.5);
+      expect(d).toBeCloseTo((q.t - tf) * BENCH_CAVE_ROUTE.flySpeed, 6);
+      expect(q.yaw).toBe(90);
+    }
+    expect(walk[0]!.t - tf).toBeGreaterThanOrEqual(dist / BENCH_CAVE_ROUTE.flySpeed - 1e-9);
+    expect(walk[0]!.t - tf).toBeLessThan(dist / BENCH_CAVE_ROUTE.flySpeed + 0.1 + 1e-9);
+    // The walk: 4.3 blocks/s west along the route, the eye EYE above the floor, level, for 60 s.
+    const w0 = walk[0]!.t;
+    for (const q of walk) {
+      expect(q.x).toBeCloseTo(20010.5 - (q.t - w0) * BENCH_CAVE_ROUTE.walkSpeed, 6);
+      expect([q.y, q.z, q.yaw]).toEqual([40 + EYE, 0.5, 270]);
+    }
+    expect(run.end - w0).toBeGreaterThanOrEqual(BENCH_CAVES.walkS - 1e-9);
+    expect(run.end - w0).toBeLessThan(BENCH_CAVES.walkS + 0.1 + 1e-9);
+  });
+
+  test('L13 ends at its caps, `timedOut` naming the part: a find with no answer after 20 s; a flight still short of the route after 10 s', async () => {
+    const hang = await runL13(fakeCaves(null).hooks);
+    const t13 = hang.l13[0]!.t;
+    expect(hang.result.caves.timedOut).toEqual(['find']);
+    expect(hang.end - t13).toBeGreaterThanOrEqual(BENCH_CAVES.findMaxS - 1e-9);
+    expect(hang.end - t13).toBeLessThan(BENCH_CAVES.findMaxS + 0.1 + 1e-9);
+    expect([hang.result.caves.find.reason, hang.result.caves.routeBlocks]).toEqual([null, 0]);
+    // The camera stayed at L10's hover point while it waited.
+    expect(hang.l13.every((q) => q.x === 20000.5 && q.z === 0.5)).toBe(true);
+    // 700 blocks east: 11 s at 64 blocks/s.
+    const far = await runL13(fakeCaves(found(20700, 41, 0)).hooks);
+    // The flight starts where the answer is read, the frame after L13's first.
+    const f13 = far.l13[1]!.t;
+    expect(far.result.caves.timedOut).toEqual(['fly']);
+    expect(far.result.caves.routeBlocks).toBe(258);
+    expect(far.end - f13).toBeGreaterThanOrEqual(BENCH_CAVES.flyMaxS - 1e-9);
+    expect(far.end - f13).toBeLessThan(BENCH_CAVES.flyMaxS + 0.1 + 1e-9);
+    expect(far.l13.some((q) => q.pitch === 0)).toBe(false);
+  });
+
+  test('a find with no hit, or a failed one, ends L13 at once with `stoppedBy`; without the cave hooks the script ends after L12', async () => {
+    const none = await runL13(fakeCaves(() => Promise.resolve({ hit: null, reason: 'radius' })).hooks);
+    expect([none.result.caves.stoppedBy, none.result.caves.timedOut, none.result.caves.find.reason]).toEqual(['no entrance found (radius)', [], 'radius']);
+    expect(none.l13.length).toBeLessThanOrEqual(2);
+    const failed = await runL13(fakeCaves(() => Promise.reject(new Error('BAD_ARGS'))).hooks);
+    expect(failed.result.caves.stoppedBy).toBe('no entrance found (Error: BAD_ARGS)');
+    // A hit inside rock (the store's reads say solid): no route.
+    const rock = await runL13(fakeCaves(found(20010, 30, 0)).hooks);
+    expect(rock.result.caves.stoppedBy).toBe('the route from the entrance at (20010, 30, 0) has no move');
+  });
+
+  test('the `caves` block\'s fields and shapes: the walk\'s frames, its main thread, the leg\'s growth events', () => {
+    const long = 8 * HZ240;
+    const frames: Frame[] = [];
+    // L13: 10 frames of the find and flight (one grow, one long frame), 40 of the walk at [10, 50) s (2 grows, 2 long).
+    for (let i = 0; i < 10; i++) frames.push({ leg: 13, tMs: 1000 * i, structuralKind: i === 4 ? 2 : 0, snappedMs: i === 5 ? 20 * HZ240 : HZ240 });
+    for (let i = 0; i < 40; i++) {
+      frames.push({ leg: 13, tMs: 10_000 + 1000 * i, structuralKind: i === 7 || i === 30 ? 2 : i === 8 ? 1 : 0, snappedMs: i < 2 ? long : HZ240, mainMs: i === 39 ? 9 : 1 });
+    }
+    const run: BenchCaveRun = {
+      find: { reason: 'found', ms: 412, hit: { x: 5, y: 40, z: -7 } },
+      routeBlocks: 258,
+      routeKinds: { cheese: 200, spaghetti3d: 59 },
+      walk: { tS0: 10, tS1: 50 },
+      timedOut: [],
+      stoppedBy: null,
+    };
+    const r = summarizeBench(recordOf(frames), FIXED, null, undefined, undefined, undefined, run).caves;
+    expect(Object.keys(r)).toEqual(['routeBlocks', 'routeKinds', 'p50', 'p95', 'p99', 'max', 'over33', 'mainP95', 'growthEvents', 'find', 'timedOut', 'stoppedBy']);
+    expect([r.routeBlocks, r.routeKinds]).toEqual([258, { cheese: 200, spaghetti3d: 59 }]);
+    // The walk's 40 frames (nearest rank: p95 the 38th smallest, p99 the 40th): 2 long; the find's 20-interval frame not.
+    expect([r.p50, r.p95, r.p99, r.max, r.over33]).toEqual([HZ240, HZ240, long, long, 2]);
+    expect(r.mainP95).toBe(1);
+    // Every frame of L13 counts its buffer growths (3), not the other structural operations.
+    expect(r.growthEvents).toBe(3);
+    expect(r.find).toEqual({ reason: 'found', ms: 412, hit: { x: 5, y: 40, z: -7 } });
+    expect([r.timedOut, r.stoppedBy]).toEqual([[], null]);
+    expect(summarizeBench(recordOf(frames), FIXED).legs.L13.frames.count).toBe(50);
+    const json = JSON.stringify(r);
+    expect(json).not.toContain('NaN');
+    expect(Object.keys(JSON.parse(json) as object)).toEqual(Object.keys(r));
+    // No L13: nothing recorded.
+    const none = summarizeBench(recordOf([{ leg: 1 }]), FIXED).caves;
+    expect([none.routeBlocks, none.routeKinds, none.p95, none.over33, none.mainP95, none.growthEvents, none.find, none.timedOut, none.stoppedBy])
+      .toEqual([0, {}, null, 0, null, 0, { reason: null, ms: null, hit: null }, [], null]);
+  });
+
+  test('the page\'s cave hooks (`benchCaves`): the finder\'s job for the nearest entrance; the cave kind and the collision of a Published voxel, each in a read section', async () => {
+    const asked: unknown[] = [];
+    let sections = 0;
+    const published = (x: number): boolean => x >= 0;
+    const hooks = benchCaves({
+      store: {
+        enterRead() { sections++; },
+        exitRead() { sections--; },
+        publishedAt: (x) => published(x),
+        final: (cx, cz) => (cx < 0 ? null : { cave: (lx: number, y: number, lz: number) => (y === 40 ? 0x30 | CAVE_KIND.noodle : lx + lz === 3 && cz === -1 ? CAVE_KIND.ravine : 0) } as never),
+        blockAt: (x, y) => (!published(x) ? -1 : y < 40 ? STONE : AIR),
+        fluidAt: () => 0,
+      },
+      pool: {
+        findCave(req) {
+          asked.push(req);
+          return { promise: Promise.resolve({ hit: { x: 1, y: 2, z: 3, yaw: 0 }, reason: 'found' as const }), cancel() {} };
+        },
+      },
+    });
+    await expect(hooks.find(10, 90, -4)).resolves.toEqual({ hit: { x: 1, y: 2, z: 3, yaw: 0 }, reason: 'found' });
+    expect(asked).toEqual([{ kind: CAVE_KIND.entrance, x: 10, y: 90, z: -4 }]);
+    // The kind's 4 bits; (1, 2) in the chunk (0, −1) at z −14; 0 off the world's height and where not Published.
+    expect([hooks.tagAt(5, 40, 5), hooks.tagAt(1, 41, -14), hooks.tagAt(5, 41, 5), hooks.tagAt(5, 320, 5), hooks.tagAt(5, -65, 5), hooks.tagAt(-1, 40, 5)])
+      .toEqual([CAVE_KIND.noodle, CAVE_KIND.ravine, 0, 0, 0, 0]);
+    expect([hooks.solidAt(5, 39, 5), hooks.solidAt(5, 40, 5), hooks.solidAt(-1, 39, 5)]).toEqual([true, false, false]);
+    expect(sections).toBe(0);
   });
 });
 
