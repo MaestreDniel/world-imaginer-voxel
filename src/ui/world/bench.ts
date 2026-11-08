@@ -255,8 +255,9 @@ export const BENCH_PASTE_LEG: BenchLeg = {
  * loaded): the finder's job for the nearest entrance within `FIND_RADIUS` (512) blocks of the camera, its answer awaited
  * at most `findMaxS` s; the route from its hit (`caveRoute`, `BENCH_CAVE_ROUTE.blocks` blocks) computed from the loaded
  * store's tags as soon as the answer comes; a flight to the route's start at `BENCH_CAVE_ROUTE.flySpeed` blocks per
- * second, at most `flyMaxS` s; then the route walked at `BENCH_CAVE_ROUTE.walkSpeed` blocks per second for `walkS` s,
- * the eye `EYE` above the floor, no physics, while the world streams. A find or a flight still running at its cap is
+ * second, at most `flyMaxS` s; then the route walked at `BENCH_CAVE_ROUTE.walkSpeed` blocks per second for `walkS` s
+ * (a route shorter than its blocks, the cave air run out, lap after lap from its first point, where it ends), the eye
+ * `EYE` above the floor, no physics, while the world streams. A find or a flight still running at its cap is
  * named in the `caves` block's `timedOut` (`'find'`, `'fly'`) and ends the script, as L12's time-outs do; a find with no
  * hit, or a hit with no route, ends it with `stoppedBy`.
  */
@@ -391,6 +392,7 @@ export function benchInterval(idle: ArrayLike<number>): number {
 const ROUTE_MOVES: readonly (readonly [number, number, number])[] = [[-1, 0, 0], [1, 0, 0], [0, 0, -1], [0, 0, 1], [0, -1, 0], [0, 1, 0]];
 /** A horizontal move's index is below this in `ROUTE_MOVES`. */
 const ROUTE_HORIZONTAL = 4;
+const ROUTE_DOWN = 4;
 const ROUTE_UP = 5;
 /** A voxel's key in the route's visited set: exact for |x|, |z| < 2^20 and y in −64 … 319. */
 const routeKey = (x: number, y: number, z: number): number => ((x + 1_048_576) * 2_097_152 + (z + 1_048_576)) * 512 + (y - MIN_Y);
@@ -408,11 +410,19 @@ const routeRank = (kind: number): number =>
  *   floor), or, for a step, its voxel below air and the one under that solid. Two steps never follow each other: a
  *   step is entered up from the floor below it only when one of its horizontal neighbours is an unvisited voxel on a
  *   floor (a ledge to climb onto), or sideways off a ledge, and it is left down or onto a ledge.
+ * - A drop: off a floor's edge, sideways into cave air deeper than a step, the route falls straight down, one voxel per
+ *   point, onto the floor below; it is taken only when every voxel of the fall down to that floor is unvisited cave
+ *   air, and a fall moves only down (entrances descend more steeply than a step allows).
  * - Each move goes to the unvisited neighbour of the current point with the best kind (cheese, then spaghetti 3D, then
  *   spaghetti 2D, then any kind), ties in the order −x, +x, −z, +z, down, up; the search never expands a voxel twice.
  * - At a dead end the route walks back along its own path to the last point with an unvisited neighbour, emitting
- *   each voxel it passes again, so consecutive points are always 6-adjacent (exactly one block apart); a walk back to
- *   the start with nothing left ends the route early.
+ *   each voxel it passes again (up a shaft it fell down), so consecutive points are always 6-adjacent (exactly one
+ *   block apart).
+ * - A walk back to where the walk began (nothing left from there) goes on by a link: the shortest path through cave
+ *   air (visited or not, ties in the moves' order) to the nearest unvisited voxel on a floor, from which the walk
+ *   begins again; one block per point, like any move. With no such voxel left the route links back to its first point
+ *   and ends there, short of `blocks`, so the driver walks it again in laps; a first point the cave air cannot reach
+ *   ends the route where it is.
  */
 export function caveRoute(
   tagAt: (x: number, y: number, z: number) => number,
@@ -426,9 +436,10 @@ export function caveRoute(
   while (sy - 1 > MIN_Y && !solidAt(sx, sy - 1, sz)) sy--;
   const onFloor = (x: number, y: number, z: number): boolean => y - 1 >= MIN_Y && solidAt(x, y - 1, z);
   const caveAir = (x: number, y: number, z: number): boolean => y > MIN_Y && y <= MAX_Y && tagAt(x, y, z) !== 0 && !solidAt(x, y, z);
+  const stepAt = (x: number, y: number, z: number): boolean => y - 2 >= MIN_Y && solidAt(x, y - 2, z);
   const visited = new Set<number>([routeKey(sx, sy, sz)]);
   const out: number[] = [sx, sy, sz];
-  // The path from the start to the current point (x y z per voxel): a dead end pops it.
+  // The path from where the walk began to the current point (x y z per voxel): a dead end pops it.
   const path: number[] = [sx, sy, sz];
   /** Whether the step voxel (x, y, z) has a horizontal neighbour, unvisited, cave air on a floor. */
   const ledge = (x: number, y: number, z: number): boolean => {
@@ -440,25 +451,78 @@ export function caveRoute(
     }
     return false;
   };
+  /** Whether a drop entered at (x, y, z) falls straight down through unvisited cave air onto a floor. */
+  const lands = (x: number, y: number, z: number): boolean => {
+    for (let f = y; !onFloor(x, f, z); ) {
+      f--;
+      if (visited.has(routeKey(x, f, z)) || !caveAir(x, f, z)) return false;
+    }
+    return true;
+  };
+  /**
+   * The link from (x, y, z): a breadth-first search through cave air, the moves in their order, to the nearest voxel
+   * that `goal` accepts; its points after (x, y, z), x y z each, or null when the cave air holds none.
+   */
+  const link = (x: number, y: number, z: number, goal: (x: number, y: number, z: number) => boolean): number[] | null => {
+    const qx: number[] = [x];
+    const qy: number[] = [y];
+    const qz: number[] = [z];
+    const from: number[] = [-1];
+    const seen = new Set<number>([routeKey(x, y, z)]);
+    for (let h = 0; h < qx.length; h++) {
+      for (let m = 0; m < ROUTE_MOVES.length; m++) {
+        const [dx, dy, dz] = ROUTE_MOVES[m]!;
+        const nx = qx[h]! + dx;
+        const ny = qy[h]! + dy;
+        const nz = qz[h]! + dz;
+        const key = routeKey(nx, ny, nz);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (!caveAir(nx, ny, nz) && !(nx === sx && ny === sy && nz === sz)) continue;
+        qx.push(nx);
+        qy.push(ny);
+        qz.push(nz);
+        from.push(h);
+        if (goal(nx, ny, nz)) {
+          const pts: number[] = [];
+          for (let k = qx.length - 1; k > 0; k = from[k]!) pts.push(qz[k]!, qy[k]!, qx[k]!);
+          return pts.reverse();
+        }
+      }
+    }
+    return null;
+  };
+  const fresh = (x: number, y: number, z: number): boolean => !visited.has(routeKey(x, y, z)) && onFloor(x, y, z) && caveAir(x, y, z);
+  const first = (x: number, y: number, z: number): boolean => x === sx && y === sy && z === sz;
   let moves = 0;
   while (moves < blocks) {
     const n = path.length;
     const x = path[n - 3]!;
     const y = path[n - 2]!;
     const z = path[n - 1]!;
-    const fromStep = !onFloor(x, y, z);
+    const inAir = !onFloor(x, y, z);
+    // In a fall: in the air deeper than a step (a drop's first voxel), or entered from the voxel above it (a step is
+    // entered sideways or up).
+    const falling = inAir && (!stepAt(x, y, z) || (n >= 6 && path[n - 6] === x && path[n - 5] === y + 1 && path[n - 4] === z));
     let best = -1;
     let bestRank = 4;
     for (let m = 0; m < ROUTE_MOVES.length; m++) {
+      if (falling && m !== ROUTE_DOWN) continue;
       const [dx, dy, dz] = ROUTE_MOVES[m]!;
       const nx = x + dx;
       const ny = y + dy;
       const nz = z + dz;
       if (visited.has(routeKey(nx, ny, nz)) || !caveAir(nx, ny, nz)) continue;
-      if (!onFloor(nx, ny, nz)) {
-        // A step: never after a step; up only to a ledge; down is always onto the floor (the voxel left is air).
-        if (fromStep || !(ny - 2 >= MIN_Y && solidAt(nx, ny - 2, nz))) continue;
-        if (m === ROUTE_UP && !ledge(nx, ny, nz)) continue;
+      if (!falling && !onFloor(nx, ny, nz)) {
+        // Never off a step into the air; down from a step is always onto the floor (the voxel left is air).
+        if (inAir) continue;
+        if (stepAt(nx, ny, nz)) {
+          // A step: up only to a ledge.
+          if (m === ROUTE_UP && !ledge(nx, ny, nz)) continue;
+        } else if (!lands(nx, ny, nz)) {
+          // A drop off the floor's edge (only sideways: up from a floor is a step, down is the floor), landing nowhere.
+          continue;
+        }
       }
       const rank = routeRank(tagAt(nx, ny, nz));
       if (rank < bestRank) {
@@ -471,13 +535,24 @@ export function caveRoute(
       visited.add(routeKey(x + dx, y + dy, z + dz));
       path.push(x + dx, y + dy, z + dz);
       out.push(x + dx, y + dy, z + dz);
-    } else {
+      moves++;
+    } else if (n > 3) {
       // A dead end: back to the voxel before it, which the route passes again.
       path.length = n - 3;
-      if (path.length === 0) break;
       out.push(path[n - 6]!, path[n - 5]!, path[n - 4]!);
+      moves++;
+    } else {
+      // Back where the walk began: a link to the nearest unvisited floor, else back to the first point, and the end.
+      const onward = link(x, y, z, fresh);
+      const pts = onward ?? (first(x, y, z) ? [] : link(x, y, z, first));
+      if (pts === null) break;
+      for (let k = 0; k < pts.length && moves < blocks; k += 3, moves++) out.push(pts[k]!, pts[k + 1]!, pts[k + 2]!);
+      if (onward === null || moves >= blocks) break;
+      const e = pts.length - 3;
+      visited.add(routeKey(pts[e]!, pts[e + 1]!, pts[e + 2]!));
+      path.length = 0;
+      path.push(pts[e]!, pts[e + 1]!, pts[e + 2]!);
     }
-    moves++;
   }
   return Float64Array.from(out);
 }
@@ -966,11 +1041,12 @@ export type PasteFigures = { readonly [K in PastePartName]: PastePartFigures } &
 
 /** What the driver knows of L10 (SP5a spec §6.2) and hands `summarizeBench`. */
 /**
- * L13's block (SP6a spec §10.6, D29): the route's moves (`routeBlocks`) and its points per kind (`routeKinds`); over
- * the walk's frames (its script window) the snapped frames' nearest-rank p50, p95, p99, max and the count over 33 ms
- * (`caveP95`, `caveOver33`) and the main thread's p95 (`caveMainP95`); `growthEvents`, the frames of L13 (find, flight
- * and walk) whose structural operation grew a region's buffers (`'grow'`); the finder's answer; `timedOut` (`'find'`,
- * `'fly'`) and `stoppedBy`. A figure with no sample is null.
+ * L13's block (SP6a spec §10.6, D29): the route's moves (`routeBlocks`, below `BENCH_CAVE_ROUTE.blocks` when the cave
+ * air ran out and the walk went round it in laps) and its points per kind (`routeKinds`); over the walk's frames (its
+ * script window) the snapped frames' nearest-rank p50, p95, p99, max and the count over 33 ms (`caveP95`,
+ * `caveOver33`) and the main thread's p95 (`caveMainP95`); `growthEvents`, the frames of L13 (find, flight and walk)
+ * whose structural operation grew a region's buffers (`'grow'`); the finder's answer; `timedOut` (`'find'`, `'fly'`)
+ * and `stoppedBy`. A figure with no sample is null.
  */
 export interface CaveFigures {
   readonly routeBlocks: number;
@@ -2314,8 +2390,9 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let lastOpS = Number.NEGATIVE_INFINITY;
   // L13 (SP6a spec §10.6): its hooks (null until `bind`, and without them no L13), its phase, whether the find was
   // posted, its answer (null until it comes) and the script times of the find's post, the flight's and the walk's
-  // starts and the walk's end; the flight's ends (x y z from, x y z to); the route (x y z per point), each point's eye y
-  // and the walk's yaw; what `summarizeBench` reads (BenchCaveRun).
+  // starts and the walk's end; the flight's ends (x y z from, x y z to); the route (x y z per point), each point's
+  // eye y, whether it is walked in laps (shorter than its blocks) and the walk's yaw; what `summarizeBench` reads
+  // (BenchCaveRun).
   let caves: BenchCaveHooks | null = null;
   let cavePhase = L13_FIND;
   let caveAsked = false;
@@ -2324,6 +2401,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   const flyEnds = new Float64Array(6);
   let route: Float64Array = new Float64Array(0);
   let routeEye = new Float64Array(0);
+  let routeLaps = false;
   let walkYaw = 0;
   let caveFind: BenchCaveRun['find'] = NO_CAVE_RUN.find;
   let routeKinds: Record<string, number> = {};
@@ -2874,8 +2952,9 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   };
   /**
    * L13's route from the finder's hit (SP6a spec §10.6), computed from the loaded store's tags as soon as the answer
-   * comes: the points, each point's eye y (`EYE` above its floor: the voxel's bottom, or one lower for a step) and the
-   * points per kind; false (with `stoppedBy`) when it has no move.
+   * comes: the points, each point's eye y (`EYE` above its floor: the voxel's bottom, or one lower in the air, a step,
+   * a drop or a link, so a drop lowers the eye a block per point) and the points per kind; false (with `stoppedBy`)
+   * when it has no move. A route shorter than its blocks ends at its first point and is walked in laps.
    */
   const planRoute = (hit: { readonly x: number; readonly y: number; readonly z: number }): boolean => {
     const hooks = caves!;
@@ -2893,14 +2972,21 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     }
     for (let id = 0; id < 16; id++) if (byKind[id]! > 0) counts[CAVE_KIND_NAMES[id]!] = byKind[id]!;
     routeKinds = counts;
+    // Laps only from the point it ends at, its first (a first point the cave air cannot reach ends it elsewhere: held).
+    const e = 3 * n - 3;
+    const ring = n >= 2 && route[0] === route[e] && route[1] === route[e + 1] && route[2] === route[e + 2];
+    routeLaps = ring && n - 1 < BENCH_CAVE_ROUTE.blocks;
     if (n >= 2) return true;
     caveStopped = `the route from the entrance at (${hit.x}, ${hit.y}, ${hit.z}) has no move`;
     return false;
   };
-  /** The camera at `s` blocks along the route (clamped to its end), the eye `EYE` above the floor, looking along it. */
+  /**
+   * The camera at `s` blocks along the route (a short route lap after lap from its start, where it ends; else clamped
+   * to its end), the eye `EYE` above the floor, looking along it.
+   */
   const routePose = (s: number, out: BenchPose): void => {
     const last = route.length / 3 - 1;
-    const c = Math.min(Math.max(s, 0), last);
+    const c = routeLaps ? Math.max(s, 0) % last : Math.min(Math.max(s, 0), last);
     const k = Math.min(Math.floor(c), last - 1);
     const f = c - k;
     const a = 3 * k;

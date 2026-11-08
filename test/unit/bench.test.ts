@@ -2927,7 +2927,69 @@ describe('caveRoute: L13\'s walk through cave air (SP6a spec §10.6, D29; plan)'
     expect(pts[0]).toEqual([7, 40, 3]);
     expect(pts[258]).toEqual([7 - 258, 40, 3]);
   });
+
+  test('off a floor\'s edge the route drops down a shaft deeper than 1 block, one voxel per point, onto the floor below; never sideways mid-fall; never a drop that lands nowhere; links on to an unvisited floor, then back to its first point', () => {
+    const w = shaftCave(0);
+    const pts = pointsOf(caveRoute(w.tagAt, w.solidAt, [1, 31, 0], 258));
+    const at = (p: readonly number[]): number => pts.findIndex((q) => q.join() === p.join());
+    expect(pts[0]).toEqual([1, 30, 0]);
+    // The fall: off the corridor's edge at (3, 30, 0), straight down 15 voxels to the room's floor, one point each.
+    const top = at([3, 30, 0]);
+    expect(top).toBeGreaterThan(0);
+    expect(pts[top - 1]).toEqual([2, 30, 0]);
+    for (let k = 1; k <= 15; k++) expect(pts[top + k], `${k}`).toEqual([3, 30 - k, 0]);
+    // Then the cheese room at the bottom is walked.
+    expect(pts.slice(top + 16).some(([x, y, z]) => w.tagAt(x, y, z) === CAVE_KIND.cheese)).toBe(true);
+    // The −x drop falls onto plain (untagged) air, not cave air: never taken, though −x comes first in the tie-break.
+    expect(pts.some(([x]) => x === -1)).toBe(false);
+    // The passage off the shaft's side at y 22 has a floor, but a fall goes straight down: not entered before the walk
+    // is back at its start, where the link to the nearest unvisited floor takes it there through the shaft's air.
+    const home = pts.findIndex((p, k) => k > top && p.join() === [1, 30, 0].join());
+    expect(pts.slice(0, home).some(([x, y]) => x >= 4 && y === 22)).toBe(false);
+    // (Ties in the moves' order: at (3, 23, 0) +x comes before down.)
+    expect(pts.slice(home + 1, home + 12)).toEqual([[2, 30, 0], [3, 30, 0], ...Array.from({ length: 7 }, (_, k) => [3, 29 - k, 0]), [4, 23, 0], [4, 22, 0]]);
+    expect(pts.slice(home + 12, home + 16)).toEqual([[5, 22, 0], [6, 22, 0], [5, 22, 0], [4, 22, 0]]);
+    // Nothing unvisited is left: the route links back to its first point through the shaft and ends there.
+    expect(pts.slice(home + 16)).toEqual([...Array.from({ length: 9 }, (_, k) => [3, 22 + k, 0]), [2, 30, 0], [1, 30, 0]]);
+    for (let k = 0; k < pts.length; k++) {
+      const [x, y, z] = pts[k]!;
+      expect(w.solidAt(x, y, z), `${k}`).toBe(false);
+      expect(w.tagAt(x, y, z), `${k}`).not.toBe(0);
+      // On a floor, a step, or in a fall: every voxel down to the floor is cave air.
+      let f = y;
+      while (!w.solidAt(x, f - 1, z)) {
+        f--;
+        expect(w.tagAt(x, f, z), `${k} at ${f}`).not.toBe(0);
+      }
+      if (k > 0) {
+        const [a, b, c] = pts[k - 1]!;
+        expect(Math.abs(a - x) + Math.abs(b - y) + Math.abs(c - z), `${k}`).toBe(1);
+      }
+    }
+    // The walk back climbs the shaft to the start.
+    expect(pts.length - 1).toBeLessThan(258);
+    const back = pts.findIndex((p, k) => k > top && p.join() === [3, 30, 0].join());
+    expect(back).toBeGreaterThan(top + 16);
+    for (let k = 1; k <= 15; k++) expect(pts[back - k], `${k}`).toEqual([3, 30 - k, 0]);
+  });
 });
+
+/**
+ * A fixture with a shaft, at x offset `ox`: an entrance corridor (x 0 … 2, y 30 … 31, z 0; its floor at y 29) whose
+ * east end opens over a shaft (x 3, y 15 … 31) that drops 15 blocks into a cheese room (x 3 … 6, y 15 … 17, z 0 … 2);
+ * a passage on a floor off the shaft's side at y 22 (x 4 … 6); at the corridor's west end a drop (x −1) whose bottom
+ * voxel is plain air (kind 0), so it lands on no cave floor.
+ */
+function shaftCave(ox: number) {
+  const w = caveWorld();
+  w.fill(ox, ox + 2, 30, 31, 0, 0, CAVE_KIND.entrance);
+  w.fill(ox + 3, ox + 3, 15, 31, 0, 0, CAVE_KIND.entrance);
+  w.fill(ox + 3, ox + 6, 15, 17, 0, 2, CAVE_KIND.cheese);
+  w.fill(ox + 4, ox + 6, 22, 23, 0, 0, CAVE_KIND.spaghetti2d);
+  w.fill(ox - 1, ox - 1, 26, 31, 0, 0, CAVE_KIND.entrance);
+  w.fill(ox - 1, ox - 1, 25, 25, 0, 0, CAVE_KIND.none);
+  return w;
+}
 
 /**
  * L13's hooks on a fake page: `find` answers with `answer` (or never), each call's voxel logged; the store's reads a slab
@@ -3021,6 +3083,46 @@ describe('createBenchDriver: the cave leg L13 (SP6a spec §10.6, D29; plan)', ()
     }
     expect(run.end - w0).toBeGreaterThanOrEqual(BENCH_CAVES.walkS - 1e-9);
     expect(run.end - w0).toBeLessThan(BENCH_CAVES.walkS + 0.1 + 1e-9);
+  });
+
+  test('a route shorter than 258 blocks (its search exhausted, walked back to its start) is walked again from its start until the 60 s end; a fall moves the eye at walking speed', async () => {
+    const w = shaftCave(20010);
+    const route = pointsOf(caveRoute(w.tagAt, w.solidAt, [20011, 31, 0], 258));
+    const moves = route.length - 1;
+    expect(moves).toBeLessThan(258);
+    expect(route[moves]).toEqual(route[0]);
+    const run = await runL13({ find: found(20011, 31, 0), tagAt: w.tagAt, solidAt: w.solidAt });
+    const c = run.result.caves;
+    expect([c.routeBlocks, c.timedOut, c.stoppedBy]).toEqual([moves, [], null]);
+    const walk = run.l13.filter((q) => q.pitch === 0);
+    const w0 = walk[0]!.t;
+    expect(run.end - w0).toBeGreaterThanOrEqual(BENCH_CAVES.walkS - 1e-9);
+    expect(moves / BENCH_CAVE_ROUTE.walkSpeed).toBeLessThan(BENCH_CAVES.walkS / 2);
+    // Each point's eye: EYE above its voxel's bottom on a floor, one lower in the air (a step or a fall).
+    const eye = route.map(([x, y, z]) => (w.solidAt(x, y - 1, z) ? y : y - 1) + EYE);
+    for (const q of walk) {
+      // `s` blocks along the route, lap after lap.
+      const s = ((q.t - w0) * BENCH_CAVE_ROUTE.walkSpeed) % moves;
+      const k = Math.min(Math.floor(s), moves - 1);
+      const f = s - k;
+      const [a, b] = [route[k]!, route[k + 1]!];
+      expect(q.x, `${q.t}`).toBeCloseTo(a[0] + 0.5 + f * (b[0] - a[0]), 6);
+      expect(q.z, `${q.t}`).toBeCloseTo(a[2] + 0.5 + f * (b[2] - a[2]), 6);
+      expect(q.y, `${q.t}`).toBeCloseTo(eye[k]! + f * (eye[k + 1]! - eye[k]!), 6);
+    }
+    // The camera moves at most at walking speed on each axis, and never stands still for 0.5 s, laps included (a move
+    // up into a step or down out of one keeps the eye: at most one such move in a row).
+    for (let k = 1; k < walk.length; k++) {
+      const [a, b] = [walk[k - 1]!, walk[k]!];
+      for (const v of [b.x - a.x, b.y - a.y, b.z - a.z]) expect(Math.abs(v), `${b.t}`).toBeLessThanOrEqual(BENCH_CAVE_ROUTE.walkSpeed * 0.1 + 1e-6);
+      if (k >= 5) {
+        const c = walk[k - 5]!;
+        expect(Math.abs(b.x - c.x) + Math.abs(b.z - c.z) + Math.abs(b.y - c.y), `${b.t}`).toBeGreaterThan(0);
+      }
+    }
+    // The eye spans the corridor (30 + EYE) and the room's floor at the shaft's foot (15 + EYE).
+    expect(Math.max(...walk.map((q) => q.y))).toBeCloseTo(30 + EYE, 6);
+    expect(Math.min(...walk.map((q) => q.y))).toBeCloseTo(15 + EYE, 6);
   });
 
   test('L13 ends at its caps, `timedOut` naming the part: a find with no answer after 20 s; a flight still short of the route after 10 s', async () => {
