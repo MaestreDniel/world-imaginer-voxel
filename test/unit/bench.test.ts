@@ -20,7 +20,7 @@ import type { RayHit } from '../../src/player/raycast';
 import { EYE } from '../../src/player/walk';
 import { MAX_STEP_EDITS } from '../../src/sim/edits';
 import {
-  BENCH_CAVE_ROUTE, BENCH_CAVES, BENCH_CAVES_LEG, BENCH_XRAY, BENCH_XRAY_LEG, BENCH_XRAY_SCRIPT, BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
+  BENCH_CAVE_ROUTE, BENCH_CAVES, BENCH_CAVES_LEG, BENCH_TOGGLE_FRAMES, BENCH_XRAY, BENCH_XRAY_LEG, BENCH_XRAY_SCRIPT, BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
   BENCH_PASTE, BENCH_PASTE_LEG, BENCH_PASTE_PARTS, BENCH_PASTE_SCRIPT, BENCH_PROFILE, BENCH_SAVE, BENCH_SAVE_LEG, BENCH_SAVE_PARTS, BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
   createBenchRecord, createBenchRecorder, createLiveReveals, ENTER_AUTO_KEY, ENTER_AUTO_SETUP_PATH, ENTER_DENSE_COLUMNS, ENTER_DISC_RD, ENTER_PAIRS, ENTER_POSE, ENTER_SPARSE,
   enterAutoEnded, enterAutoJson, enterAutoRecorded, enterAutoStart, enterOrder as benchEnterOrder, enterPaths as benchEnterPaths, enterSaveDump, gpuOfRenderer, summarizeEnter, REVIEW_HOUSE, REVIEW_POOL, REVIEW_SCENE_BATCH, REVIEW_SCENES, REVIEW_SETTLE_S, REVIEW_SITE,
@@ -765,10 +765,10 @@ describe('createBenchRecorder: one frame\'s fields, nothing allocated per frame 
 
 // ---------------------------------------------------------------- the driver
 
-function driverOf(shot: (typeof BENCH_SHOTS)[number] | null) {
+function driverOf(shot: (typeof BENCH_SHOTS)[number] | null, capacity = 64) {
   const published: Array<BenchResult | BenchError> = [];
   let ready = 0;
-  const driver = createBenchDriver({ shot, capacity: 64, publish: { result: (r) => published.push(r), shotReady: () => { ready++; } } });
+  const driver = createBenchDriver({ shot, capacity, publish: { result: (r) => published.push(r), shotReady: () => { ready++; } } });
   return { driver, published, ready: () => ready };
 }
 
@@ -1339,8 +1339,8 @@ function fakeSave(o: { filled?: () => boolean } = {}) {
  * Runs the live legs (each settling at once) and L10 (its 100 edits, its 6 s flight east from L9's arrival at
  * (20,000.5, 90, 0.5)) with `save` bound, to L11's first frame at 129 s.
  */
-async function toL11(save: NonNullable<BenchWorld['save']>, paste?: BenchPasteHooks, caves?: BenchCaveHooks, xray?: BenchXrayHooks) {
-  const run = driverOf(null);
+async function toL11(save: NonNullable<BenchWorld['save']>, paste?: BenchPasteHooks, caves?: BenchCaveHooks, xray?: BenchXrayHooks, capacity?: number) {
+  const run = driverOf(null, capacity);
   const f = fakeLive();
   f.settle[7] = true;
   f.settle[8] = true;
@@ -3016,15 +3016,22 @@ function fakeCaves(answer: (() => Promise<Awaited<ReturnType<BenchCaveHooks['fin
 const found = (x: number, y: number, z: number) => () => Promise.resolve({ hit: { x, y, z, yaw: 90 }, reason: 'found' });
 
 /**
- * Runs L1-L12 with `caves` (and `xray`) bound (L12's hooks answering at once), then L12, L13 (and L14) at 0.1 s steps
- * until the script ends. Returns the published JSON, L13's and L14's frames (script time, pose, the RD asked for) and
- * the script's end. `clock` follows the script time, for the hooks' logs.
+ * Runs L1-L12 with `caves` (and `xray`) bound (L12's hooks answering at once), then L12, L13 (and L14) at `o.stepS`
+ * (0.1 s) steps until the script ends. Returns the published JSON, L13's and L14's frames (script time, pose, the RD
+ * asked for) and the script's end. `clock` follows the script time, for the hooks' logs. With `o.l14Row`, each L14
+ * frame's row is kept in the record (the fake record is otherwise never advanced), `o.l14Row` filling its timings.
  */
-async function runL13(caves: BenchCaveHooks, xray?: (at: () => number) => BenchXrayHooks) {
+async function runL13(
+  caves: BenchCaveHooks,
+  xray?: (at: () => number) => BenchXrayHooks,
+  o: { stepS?: number; l14Row?: (rec: BenchRecord, i: number, t: number) => void } = {},
+) {
+  const stepS = o.stepS ?? 0.1;
   let t = 0;
   const s = fakeSave();
   const stub = stubPaste({ at: () => t });
-  const { driver, p, published } = await toL11(s.save, stub.hooks, caves, xray?.(() => t));
+  // Room for every L14 row `o.l14Row` keeps (82 s at the smallest step).
+  const { driver, p, published } = await toL11(s.save, stub.hooks, caves, xray?.(() => t), o.l14Row === undefined ? undefined : 4096);
   driver.pose(129.05, p, 12);
   await flush();
   const t0 = 129.1;
@@ -3040,17 +3047,24 @@ async function runL13(caves: BenchCaveHooks, xray?: (at: () => number) => BenchX
   let lastL12: BenchPose | null = null;
   let end = Number.NaN;
   for (let i = 0; i < 8000; i++) {
-    t = t0 + 120 + i * 0.1;
+    t = t0 + 120 + i * stepS;
     const rd = driver.pose(t, p, 12);
     if (rd === null) {
       end = t;
       break;
     }
-    // The row the driver wrote for this frame (the fake record is never advanced).
+    // The row the driver wrote for this frame (the fake record is never advanced, but for `o.l14Row`'s L14 rows).
+    const rec = driver.record;
+    const leg = rec.leg[rec.n];
     const frame = { t, x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch, rd };
-    if (driver.record.leg[0] === 13) l13.push(frame);
-    else if (driver.record.leg[0] === 14) l14.push(frame);
-    else lastL12 = { ...p };
+    if (leg === 13) l13.push(frame);
+    else if (leg === 14) {
+      l14.push(frame);
+      if (o.l14Row !== undefined) {
+        o.l14Row(rec, rec.n, t);
+        rec.n++;
+      }
+    } else lastL12 = { ...p };
     await microtasks();
   }
   driver.done(FIXED);
@@ -3289,6 +3303,11 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     // RD 16's part: the X-ray off at RD 12 for 2 s, the RD 16 disc awaited at most 20 s, the hold and the sweep again.
     expect([BENCH_XRAY_SCRIPT.bandSteps, BENCH_XRAY_SCRIPT.offS, BENCH_XRAY_SCRIPT.rd16FillMaxS]).toEqual([4, 2, 20]);
     expect(BENCH_XRAY_SCRIPT.offS + BENCH_XRAY_SCRIPT.rd16FillMaxS + BENCH_XRAY.holdS + BENCH_XRAY.sweepS).toBe(BENCH_XRAY.rd16MaxS);
+    // The map closes 0.5 s after X off and never within the toggle's frames (`toggleMaxMs` reads 3), inside the 2 s off.
+    expect(BENCH_TOGGLE_FRAMES).toBe(3);
+    expect([BENCH_XRAY_SCRIPT.closeS, BENCH_XRAY_SCRIPT.closeFrames]).toEqual([0.5, 4]);
+    expect(BENCH_XRAY_SCRIPT.closeFrames).toBeGreaterThan(BENCH_TOGGLE_FRAMES);
+    expect(BENCH_XRAY_SCRIPT.closeS).toBeLessThan(BENCH_XRAY_SCRIPT.offS);
     // The from-value is the default at HEAD, read from DEFAULTS, and the applied value differs from it.
     const e = BENCH_XRAY_SCRIPT.edit;
     expect(e.path).toBe('caves.cheese.offset');
@@ -3308,7 +3327,7 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     const last13 = run.l13[run.l13.length - 1]!;
     const base = { x: last13.x, y: last13.y, z: last13.z, yaw: last13.yaw, pitch: BENCH_PITCH };
     expect(f.events.map((e) => e.what)).toEqual([
-      'X on', 'PageDown', 'PageDown', 'PageDown', 'PageDown', 'map open', `set caves.cheese.offset ${BENCH_XRAY_SCRIPT.edit.to}`, 'map close', 'X off', 'X on',
+      'X on', 'PageDown', 'PageDown', 'PageDown', 'PageDown', 'map open', `set caves.cheese.offset ${BENCH_XRAY_SCRIPT.edit.to}`, 'X off', 'map close', 'X on',
     ]);
     const at = (k: number): number => f.events[k]!.t;
     expect(at(0)).toBe(t14);
@@ -3328,15 +3347,17 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     const b0 = firstAt(run.l14, s0 + BENCH_XRAY.sweepS).t;
     for (let k = 0; k < 4; k++) expect(at(1 + k)).toBe(firstAt(run.l14, b0 + k).t);
     expect(at(5)).toBe(firstAt(run.l14, b0 + BENCH_XRAY.bandS).t);
-    // The edit once the map's tool is mounted (0.5 s), the map closed and the X-ray off once the refill settled (3 s).
+    // The edit once the map's tool is mounted (0.5 s), the X-ray off once the refill settled (3 s); the map closed 0.5 s
+    // later, more than the toggle's frames after it (its resize and extra frame outside `toggleMaxMs`).
     expect(at(6)).toBe(firstAt(run.l14, at(5) + 0.5).t);
     expect(at(7)).toBe(firstAt(run.l14, at(6) + 3).t);
-    expect(at(8)).toBe(at(7));
+    expect(at(8)).toBe(firstAt(run.l14, at(7) + BENCH_XRAY_SCRIPT.closeS).t);
+    expect(run.l14.filter((q) => q.t >= at(7) && q.t < at(8)).length).toBeGreaterThan(BENCH_TOGGLE_FRAMES);
     // From the release to the frame that swapped the last column (the frame before the first that finds it settled).
     expect(run.result.xray.xrayApplyRefillMs).toBeCloseTo(2900, 6);
     // RD 16 asked for after 2 s with the X-ray off; its disc's fill awaited (1 s), then the X-ray on.
     const r16 = run.l14.find((q) => q.rd === 16)!;
-    expect(r16.t).toBe(firstAt(run.l14, at(8) + BENCH_XRAY_SCRIPT.offS).t);
+    expect(r16.t).toBe(firstAt(run.l14, at(7) + BENCH_XRAY_SCRIPT.offS).t);
     expect(run.l14.filter((q) => q.t < r16.t).every((q) => q.rd === 12)).toBe(true);
     expect(run.l14.filter((q) => q.t >= r16.t).every((q) => q.rd === 16)).toBe(true);
     expect(new Set(f.filledAsked)).toEqual(new Set([16]));
@@ -3368,7 +3389,7 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     expect(noMap.f.events.some((e) => e.what.startsWith('set '))).toBe(false);
     expect(noMap.result.xray.xrayApplyRefillMs).toBeNull();
     expect(t(noMap, 'X off')).toBe(firstAt(noMap.l14, t(noMap, 'map open') + BENCH_XRAY.refillMaxS).t);
-    expect(t(noMap, 'map close')).toBe(t(noMap, 'X off'));
+    expect(t(noMap, 'map close')).toBe(firstAt(noMap.l14, t(noMap, 'X off') + BENCH_XRAY_SCRIPT.closeS).t);
     // RD 16's fill at its cap, 20 s after it was asked for: the X-ray on and RD 16's segment recorded anyway.
     const r16 = noMap.l14.find((q) => q.rd === 16)!.t;
     expect(t(noMap, 'X on', 1)).toBe(firstAt(noMap.l14, r16 + BENCH_XRAY_SCRIPT.rd16FillMaxS).t);
@@ -3378,6 +3399,34 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     expect(noRefill.result.xray.timedOut).toEqual(['refill']);
     expect(noRefill.result.xray.xrayApplyRefillMs).toBeNull();
     expect(t(noRefill, 'X off')).toBe(firstAt(noRefill.l14, t(noRefill, 'map open') + BENCH_XRAY.refillMaxS).t);
+  });
+
+  test('L14 closes the map outside the X-off toggle\'s frames: neither the toggle\'s longest frame nor the GPU ms with the X-ray off read the close; at a slow frame rate the close waits `closeFrames` frames', async () => {
+    // Each L14 row: the map's close costs its own frame and the next (100 ms, GPU 50 ms; mode B's resize and extra
+    // frame), the GPU 20 ms with the map open (half the canvas, its tiles), 2 ms otherwise.
+    let x: ReturnType<typeof fakeXray> | null = null;
+    const l14Row = (rec: BenchRecord, i: number, t: number): void => {
+      const ev = x!.events;
+      const close = ev.find((e) => e.what === 'map close');
+      const closing = close !== undefined && t - close.t < 0.15;
+      const mapOpen = close === undefined && ev.some((e) => e.what === 'map open');
+      rec.snappedMs[i] = closing ? 100 : HZ240;
+      rec.gpuMs[i] = closing ? 50 : mapOpen ? 20 : 2;
+    };
+    const run = await runL13(fakeCaves(found(20010, 41, 0)).hooks, (at) => (x = fakeXray(at)).hooks, { l14Row });
+    const r = run.result.xray;
+    expect(r.timedOut).toEqual([]);
+    // Both RD 12 toggles' frames at the display interval: the close's frames are not among them.
+    expect(r.rd12.toggleMaxMs).toBe(HZ240);
+    // The GPU ms with the X-ray off at RD 12: from the second frame after the close (the map closed, the full canvas).
+    expect(r.rd12.gpuMs.off).toEqual({ p50: 2, p95: 2 });
+    // At 4 frames a second the 0.5 s are 2 frames: the close waits for the fourth frame after X off.
+    let y: ReturnType<typeof fakeXray> | null = null;
+    const slow = await runL13(fakeCaves(found(20010, 41, 0)).hooks, (at) => (y = fakeXray(at)).hooks, { stepS: 0.25 });
+    const ev = (what: string): number => y!.events.find((e) => e.what === what)!.t;
+    expect(slow.l14.filter((q) => q.t > ev('X off') && q.t <= ev('map close')).length).toBe(BENCH_XRAY_SCRIPT.closeFrames);
+    expect(slow.l14.find((q) => q.rd === 16)!.t).toBe(firstAt(slow.l14, ev('X off') + BENCH_XRAY_SCRIPT.offS).t);
+    expect(slow.result.xray.timedOut).toEqual([]);
   });
 
   test('L14 runs only after L13, never after its time-out; after an L13 that found no entrance it holds at L10\'s hover point', async () => {

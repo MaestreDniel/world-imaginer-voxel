@@ -30,7 +30,8 @@
  *    4.3 blocks per second for 60 s, no physics, while the world streams; the `caves` block holds the walk's figures;
  * 2g. then the X-ray leg L14 (SP6a spec §10.6, D10, D29; `BENCH_XRAY`) where L13 left the camera, at RD 12: the page's X
  *    (`BenchXrayHooks`), a hold, a 360° sweep, PageDown four times, the map opened side by side and a cave parameter
- *    changed through the apply control (`BENCH_XRAY_SCRIPT.edit`), the refill awaited, X off; then RD 16 (`RD_MAX`)
+ *    changed through the apply control (`BENCH_XRAY_SCRIPT.edit`), the refill awaited, X off, the map closed after
+ *    the toggle's frames; then RD 16 (`RD_MAX`)
  *    filled, X on, the hold and the sweep again; the `xray` block holds each segment's figures and the refill's time;
  * 3. hands the driver the run's fixed figures (`done`); the driver publishes `summarizeBench`'s JSON as
  *    `window.__wiBench.result` (read by `measureChrome.ts --route bench`) and a "Download JSON" button (the Firefox
@@ -291,9 +292,11 @@ export const BENCH_CAVES_LEG: BenchLeg = {
  * pitch −15), at RD 12: X on (the page's X, `BenchXrayHooks.toggle`); a hold of `holdS` s; a 360° sweep of the yaw over
  * `sweepS` s; PageDown `BENCH_XRAY_SCRIPT.bandSteps` times, one a second, over `bandS` s; the map opened side by side
  * (mode B) and, once its tool is mounted, `BENCH_XRAY_SCRIPT.edit` set through the session and the apply control (the
- * release); the refill awaited (every column of the RD 12 disc swapped since the Apply); the map closed and X off, at
- * most `refillMaxS` s after the map opened; then, at most `rd16MaxS` s: the X-ray off at RD 12 for
- * `BENCH_XRAY_SCRIPT.offS` s, RD 16 (`RD_MAX`, under the reservation's cap) asked for and its disc's fill awaited at most
+ * release); the refill awaited (every column of the RD 12 disc swapped since the Apply); X off, at most `refillMaxS` s
+ * after the map opened; then, at most `rd16MaxS` s: the X-ray off at RD 12 for `BENCH_XRAY_SCRIPT.offS` s, the map
+ * closed in it `BENCH_XRAY_SCRIPT.closeS` s and at least `closeFrames` frames after X off (mode B's close resizes the
+ * canvas and draws a frame: outside the toggle's `BENCH_TOGGLE_FRAMES`, so `toggleMaxMs` reads the X-ray alone), RD 16
+ * (`RD_MAX`, under the reservation's cap) asked for and its disc's fill awaited at most
  * `BENCH_XRAY_SCRIPT.rd16FillMaxS` s, X on, the hold and the sweep again (recorded, not gated). A map whose tool never
  * mounts (`'map'`, the edit not made), a refill that never settles (`'refill'`) and an RD 16 disc that never fills
  * (`'rd16'`) are named in the `xray` block's `timedOut` at their caps, and the leg goes on: its later parts are
@@ -304,15 +307,22 @@ export const BENCH_XRAY = { holdS: 10, sweepS: 8, bandS: 4, refillMaxS: 20, rd16
 /** L14's edit (ruling P44): `caves.cheese.offset` from its default to cave_heavy's 0.20 (DEFAULTS − 0.07 were it 0.20). */
 const XRAY_EDIT_FROM = DEFAULTS.caves.cheese.offset;
 
+/** The rows from a toggle on: the toggle's own frame and the two after it (`toggleMaxMs`). */
+export const BENCH_TOGGLE_FRAMES = 3;
+
 /**
  * L14's script (plan; see `BENCH_XRAY`): PageDown's presses; the cave parameter changed with the map side by side; the
- * X-ray off at RD 12 before RD 16, s (the GPU ms with the X-ray off); RD 16's fill cap, s. `offS + rd16FillMaxS + holdS
+ * X-ray off at RD 12 before RD 16, s (the GPU ms with the X-ray off, read from the second frame after the map's close);
+ * the map's close after X off, at least `closeS` s and `closeFrames` frames (more than `BENCH_TOGGLE_FRAMES`: the
+ * close's resize and extra frame stay out of the toggle's window); RD 16's fill cap, s. `offS + rd16FillMaxS + holdS
  * + sweepS` is `rd16MaxS`.
  */
 export const BENCH_XRAY_SCRIPT = {
   bandSteps: 4,
   edit: { path: 'caves.cheese.offset', from: XRAY_EDIT_FROM, to: XRAY_EDIT_FROM === 0.2 ? XRAY_EDIT_FROM - 0.07 : 0.2 },
   offS: 2,
+  closeS: 0.5,
+  closeFrames: BENCH_TOGGLE_FRAMES + 1,
   rd16FillMaxS: 20,
 } as const;
 
@@ -1951,9 +1961,6 @@ function caveFiguresOf(rec: BenchRecord, idx: readonly number[], run: BenchCaveR
   };
 }
 
-/** The three rows from a toggle on: the toggle's own frame and the two after it (`toggleMaxMs`). */
-const TOGGLE_FRAMES = 3;
-
 /** An L14 segment's figures (SP6a spec §10.6) over L14's rows `idx`; every figure null without the segment. */
 function xraySegmentOf(rec: BenchRecord, idx: readonly number[], seg: BenchXraySegment | null): XraySegmentFigures {
   const within = (w: { readonly tS0: number; readonly tS1: number } | null): number[] =>
@@ -1973,7 +1980,7 @@ function xraySegmentOf(rec: BenchRecord, idx: readonly number[], seg: BenchXrayS
   for (const t of seg?.toggles ?? []) {
     const k = idx.findIndex((i) => rec.tMs[i]! >= t * 1000);
     if (k < 0) continue;
-    for (let j = k; j < Math.min(k + TOGGLE_FRAMES, idx.length); j++) toggleMax = Math.max(toggleMax, rec.snappedMs[idx[j]!]!);
+    for (let j = k; j < Math.min(k + BENCH_TOGGLE_FRAMES, idx.length); j++) toggleMax = Math.max(toggleMax, rec.snappedMs[idx[j]!]!);
   }
   return {
     rd: seg?.rd ?? null,
@@ -2643,13 +2650,16 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let caveStopped: string | null = null;
   // L14 (SP6a spec §10.6): its hooks (null until `bind`, and without them no L14), whether it started, its phase and
   // the phase's start (s), the X-ray's state, the band steps pressed, the camera's pose at its start (x y z yaw pitch),
-  // the edit's release (s, NaN before), the last pose's time (s), the refill's time (ms, NaN without one), the RD the
-  // script wants (12, then RD 16's), each segment's slots (`SEG_*`, NaN where not reached) and the time-outs.
+  // the edit's release (s, NaN before), the last pose's time (s), the refill's time (ms, NaN without one), the frames
+  // posed since X off and the one the map closed in (−1 before), the RD the script wants (12, then RD 16's), each
+  // segment's slots (`SEG_*`, NaN where not reached) and the time-outs.
   let xray: BenchXrayHooks | null = null;
   let xrayStarted = false;
   let xrayPhase = L14_HOLD;
   let xrayOn = false;
   let bandPressed = 0;
+  let offFrames = 0;
+  let closedFrame = -1;
   const xrayBase = new Float64Array(5);
   // [the phase's start, the release, the last pose's time, the refill ms]
   const xrayTimes = Float64Array.of(0, Number.NaN, Number.NaN, Number.NaN);
@@ -3352,8 +3362,9 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   };
   /**
    * One frame of L14 at `tS` (SP6a spec §10.6), after `livePose`: X on at its first frame, where the camera is; the hold,
-   * the sweep, the band steps, the map and the edit, the refill (at most `refillMaxS` from the map's open), the map
-   * closed and X off; the X-ray off at RD 12, RD 16 asked for and its fill awaited, X on, the hold and the sweep. False
+   * the sweep, the band steps, the map and the edit, the refill (at most `refillMaxS` from the map's open), X off; the
+   * X-ray off at RD 12 and the map closed past the toggle's frames, RD 16 asked for and its fill awaited, X on, the
+   * hold and the sweep. False
    * once the leg has ended (a part at its cap is named in `timedOut`, and the leg goes on to its next part).
    */
   const xrayStep = (tS: number, out: BenchPose): boolean => {
@@ -3425,15 +3436,26 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
         if (into < BENCH_XRAY.refillMaxS - XRAY_EPS_S) return true;
         xrayTimedOut.push(Number.isNaN(xrayTimes[1]!) ? 'map' : 'refill');
       }
-      h.closeMap();
       xrayToggle(0, SEG_TOGGLE1, tS);
       segSet(0, SEG_ON1, tS);
-      segSet(0, SEG_OFF0, tS);
+      offFrames = 0;
+      closedFrame = -1;
       xrayNext(L14_OFF, tS);
       return true;
     }
     if (xrayPhase === L14_OFF) {
-      if (into < BENCH_XRAY_SCRIPT.offS - XRAY_EPS_S) return true;
+      offFrames++;
+      if (closedFrame < 0) {
+        // Mode B's close resizes the canvas and draws a frame: never within the toggle's frames (`toggleMaxMs`).
+        if (offFrames >= BENCH_XRAY_SCRIPT.closeFrames && into >= BENCH_XRAY_SCRIPT.closeS - XRAY_EPS_S) {
+          h.closeMap();
+          closedFrame = offFrames;
+        }
+        return true;
+      }
+      // The GPU ms with the X-ray off from the second frame after the close (the close's frame and the next read it).
+      if (offFrames === closedFrame + 2) segSet(0, SEG_OFF0, tS);
+      if (offFrames < closedFrame + 2 || into < BENCH_XRAY_SCRIPT.offS - XRAY_EPS_S) return true;
       // RD 16 from this frame: the page applies it after this pose; its fill is asked from the next frame.
       scriptRd = RD_MAX;
       segSet(0, SEG_OFF1, tS);
