@@ -38,7 +38,9 @@ export const SECTION_UNITS = 16 * UNITS;
  * pass (`test/fixtures/sp6a-region-use.json`): the largest region holds 518,388 opaque and 253,220 X-ray vertices.
  * The reservations are kept and grow on demand (SP6a ruling R22): sized to that maximum × 1.25, every partial region
  * would pay for a full region's buffers (`mediumGpuMB` ≥ 242 against its gate of 150), while growth × 1.5 holds a full
- * region within 1.5 × its use (96 growth events over the RD 12 disc: opaque 27, X-ray 69).
+ * region within 1.5 × its use (96 growth events over the RD 12 disc: opaque 27, X-ray 69). RegionBatch grows × 1.25
+ * since SP6a Task 48 (`BATCH_GROWTH`; 169 events over the same disc: opaque 48, X-ray 121), compacts first and shrinks
+ * an idle batch to its use.
  */
 export const RESERVATION: Readonly<Record<number, readonly [vertices: number, indices: number]>> = {
   [MESH_PASS_OPAQUE]: [131_072, 196_608],
@@ -46,7 +48,10 @@ export const RESERVATION: Readonly<Record<number, readonly [vertices: number, in
   [MESH_PASS_TRANSLUCENT]: [16_384, 24_576],
   [MESH_PASS_XRAY]: [16_384, 24_576],
 };
-/** Every growth of a region's object is × 1.5 (SP4b spec §4.2, §4.3). */
+/**
+ * RegionMesh's arena grows × 1.5 (SP4b spec §4.3), and so does RegionBatch's instance table (§4.2); RegionBatch's vertex
+ * and index buffers grow × `BATCH_GROWTH` (1.25, SP6a spec §5.1, Task 48).
+ */
 export const GROWTH = 1.5;
 
 /** One row of a column payload: the payload, the row's offset in `p.rows` and its number (its sphere is at `4·r`). */
@@ -189,6 +194,14 @@ export interface RegionBackend<R> {
   /** The pump's first step: culling restored on the objects whose attributes hold no pending update range. */
   settle(): void;
   /**
+   * Whether an idle object would give back its slack (RegionBatch's shrink, SP6a spec §5.1, Task 48), remembered for
+   * `shrink`; asked in step (2) only when the nearest staged column needs no structural operation or nothing is staged.
+   * A backend without it never shrinks (RegionMesh).
+   */
+  shrinkDue?(): boolean;
+  /** Shrinks the object the last true `shrinkDue` named: the frame's structural operation ('shrink'); its bytes after. */
+  shrink?(): number;
+  /**
    * Frees the region's objects (no live column). Rows of removed or swapped-out records may still be held in them: they
    * go with the objects, never released one by one (SP4c spec §5.4).
    */
@@ -219,8 +232,9 @@ export const RELEASE_SHARE = 16;
  * dropped from the counts, never released one by one), outside the row cap and the structural slot; (2) when the
  * nearest staged column needs a structural operation, ask `gate.structural()` before any release and perform it on a
  * grant (the gate grants only while no row was spent, so asked after the releases it would starve region creation
- * behind a removal backlog); (3) release removed and swapped-out rows, each counted against the row cap, at most
- * `RELEASE_SHARE` while any staged column waits for an upload; (4) upload staged rows nearest-first with the rest, a
+ * behind a removal backlog); when it needs none (or nothing is staged) and the backend has an idle object to shrink,
+ * the same grant shrinks it (SP6a, Task 48); (3) release removed and swapped-out rows, each counted against the row
+ * cap, at most `RELEASE_SHARE` while any staged column waits for an upload; (4) upload staged rows nearest-first with the rest, a
  * row that needs a refused (or second) structural operation waiting while farther columns go on; (5) reveal each
  * column whose last row was uploaded, all its rows in one call, or swap it with its `prev` in one call
  * (`onColumnRevealed` either way). With nothing staged or removed a pump allocates nothing (D25).
@@ -349,6 +363,13 @@ export function createStreamingRenderer<R>(
     structuralOps++;
     lastStructural = k;
   };
+  const performShrink = (): void => {
+    const t0 = performance.now();
+    lastStructuralBytes = b.shrink!();
+    structuralMs += performance.now() - t0;
+    structuralOps++;
+    lastStructural = 'shrink';
+  };
 
   const countRow = (c: StagedColumn<R>, r: number, sign: 1 | -1): void => {
     const o = r * ROW_INTS;
@@ -467,11 +488,13 @@ export function createStreamingRenderer<R>(
         c.score = streamScore(c.cx - cx, c.cz - cz, fx, fz, STAGE_BONUS.MESH);
       }
       let spent = 0;
-      // (2) The nearest column's structural operation, before any row is spent.
+      // (2) The nearest column's structural operation, before any row is spent; with none, an idle object's shrink.
       const first = nearest();
-      if (first !== null) {
-        const k = b.columnNeed(first);
-        if (k !== null && gate.structural()) perform(first, k);
+      const k = first === null ? null : b.columnNeed(first);
+      if (k !== null) {
+        if (gate.structural()) perform(first!, k);
+      } else if (b.shrinkDue !== undefined && b.shrinkDue() && gate.structural()) {
+        performShrink();
       }
       // (3) Releases, oldest removal first, each row against the cap; half of it while an upload waits.
       const share = pending.length > 0 ? RELEASE_SHARE : Number.POSITIVE_INFINITY;

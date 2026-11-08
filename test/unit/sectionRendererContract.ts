@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import { createUploadBudget } from '../../src/engine/uploadBudget';
 import { ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { createMaterialSystem } from '../../src/render/materials/index';
+import { BATCH_GROWTH } from '../../src/render/regionBatch';
 import {
   createRevealProbe, createSectionRenderer, createSectionRendererCounts, regionOf, type RevealProbe, type SectionRenderer,
   type SectionRendererCounts, type SectionRendererKind, type UploadGate,
@@ -757,8 +758,9 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       expect(r.gpuBytes()).toBe(level);
       r.dispose();
 
-      // 20 rows of 4,096 vertices shown, 20 more as the replacement: 160,000-odd vertices do not fit the 131,072 of the
-      // reservation, so the region grows (× 1.5, never undone).
+      // 20 rows of 4,096 vertices shown, 20 more as the replacement: 163,840 vertices do not fit the 131,072 of the
+      // reservation, so the region grows (RegionBatch × 1.25 to 163,840 vertices, RegionMesh × 1.5), not undone by the
+      // swap's releases (RegionBatch shrinks only a batch idle for SHRINK_IDLE_PUMPS pumps, SP6a Task 48).
       const big = (n: number): FakeRow[] => Array.from({ length: n }, (_, k) => ({ sy: k % 24, pass: 0, quads: 1024 }));
       const g = showing(fakePayload(2, 2, big(20)));
       const reserved = g.gpuBytes();
@@ -767,7 +769,9 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       g.pump(UNBOUNDED, 2, 2, 0);
       expect(counts(g).lastStructural).toBe('grow');
       const grown = g.gpuBytes();
-      expect(grown).toBe(kind === 'batch' ? 2_752_512 : 3_538_944);
+      const batchGrown = 8 * Math.ceil(131_072 * BATCH_GROWTH) + 4 * Math.ceil(196_608 * BATCH_GROWTH);
+      expect(batchGrown).toBe(2_293_760);
+      expect(grown).toBe(kind === 'batch' ? batchGrown : 3_538_944);
       expect(g.isRevealed(2, 2)).toBe(true);
       pumpAll(g, 2, 2);
       expect(counts(g)).toMatchObject({ columnsRemoving: 0, rows: 20 });

@@ -3,6 +3,7 @@ import { Box3, Group, Sphere, type BatchedMesh, type Material, type Mesh, type O
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { createMaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
+import { BATCH_GROWTH } from '../../src/render/regionBatch';
 import {
   createStreamingRenderer, EMPTIED_PER_PUMP, GROWTH, RELEASE_SHARE, RESERVATION, rowBounds, rowsOfPass, type PayloadRow,
   type RegionBackend, type StagedColumn,
@@ -468,36 +469,41 @@ const PASS_NAMES = ['opaque', 'cutout', 'translucent', 'xray'] as const;
 const ALL_PASSES = [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY] as const;
 
 /**
- * The × 1.5 steps a region's object of `pass` takes from its reservation to hold `vertices` and `indices` (vertices and
- * indices grow together, `Math.ceil` as both backends), with no deleted or free space to reclaim: Task 36's growth event.
+ * The × `growth` steps a region's object of `pass` takes from its reservation to hold `vertices` and `indices` (vertices
+ * and indices grow together, `Math.ceil` as both backends), with no deleted or free space to reclaim: Task 36's growth
+ * event. RegionMesh grows × `GROWTH` (1.5), RegionBatch × `BATCH_GROWTH` (1.25, SP6a Task 48).
  */
-function growthSteps(pass: number, vertices: number, indices: number): number {
+function growthSteps(pass: number, vertices: number, indices: number, growth: number): number {
   let [v, i] = RESERVATION[pass]!;
   let steps = 0;
   while (vertices > v || indices > i) {
-    v = Math.ceil(v * GROWTH);
-    i = Math.ceil(i * GROWTH);
+    v = Math.ceil(v * growth);
+    i = Math.ceil(i * growth);
     steps++;
   }
   return steps;
 }
+const growthOf = (kind: 'batch' | 'mesh'): number => (kind === 'batch' ? BATCH_GROWTH : GROWTH);
 
 describe('regionGrid: the staging reservations kept, growth on demand over the caves disc (SP6a spec §5.1, R22)', () => {
-  test('the four reservations keep their values (opaque 131,072 / 196,608, cutout 8,192 / 12,288, translucent and X-ray 16,384 / 24,576), each growth × 1.5', () => {
+  test('the four reservations keep their values (opaque 131,072 / 196,608, cutout 8,192 / 12,288, translucent and X-ray 16,384 / 24,576); RegionMesh grows × 1.5, RegionBatch × 1.25 (SP6a Task 48)', () => {
     expect(ALL_PASSES.map((p) => RESERVATION[p])).toEqual([
       [131_072, 196_608], [8192, 12_288], [16_384, 24_576], [16_384, 24_576],
     ]);
     for (const p of ALL_PASSES) expect(RESERVATION[p]![1]).toBe(1.5 * RESERVATION[p]![0]!);
     expect(GROWTH).toBe(1.5);
+    expect(BATCH_GROWTH).toBe(1.25);
   });
 
-  test('over Task 36\'s region use (test/fixtures/sp6a-region-use.json), the growth events per pass are opaque 27, cutout 0, translucent 0, X-ray 69: 96 in all, recorded (R22: growth on demand, not 0)', () => {
+  test('over Task 36\'s region use (test/fixtures/sp6a-region-use.json), the growth events per pass are, × 1.5 (RegionMesh and the fixture\'s own count), opaque 27, cutout 0, translucent 0, X-ray 69: 96 in all; × 1.25 (RegionBatch, SP6a Task 48) 48, 0, 0, 121: 169; recorded (R22: growth on demand, not 0)', () => {
     const use = JSON.parse(readFileSync(REGION_USE, 'utf8')) as RegionUse;
     expect(use.growth).toBe(GROWTH);
     expect(use.regions).toHaveLength(15);
     expect(use.regions.filter((r) => r.columns === 64)).toHaveLength(4);
-    const events = ALL_PASSES.map((p) => use.regions.reduce((n, r) => n + growthSteps(p, r.vertices[p]!, r.indices[p]!), 0));
-    const over = ALL_PASSES.map((p) => use.regions.filter((r) => growthSteps(p, r.vertices[p]!, r.indices[p]!) > 0).length);
+    const eventsAt = (growth: number): number[] =>
+      ALL_PASSES.map((p) => use.regions.reduce((n, r) => n + growthSteps(p, r.vertices[p]!, r.indices[p]!, growth), 0));
+    const events = eventsAt(GROWTH);
+    const over = ALL_PASSES.map((p) => use.regions.filter((r) => growthSteps(p, r.vertices[p]!, r.indices[p]!, GROWTH) > 0).length);
     const max = ALL_PASSES.map((p) => Math.max(...use.regions.map((r) => r.vertices[p]!)));
     expect(events).toEqual([27, 0, 0, 69]);
     expect(events.reduce((a, b) => a + b, 0)).toBe(96);
@@ -508,18 +514,26 @@ describe('regionGrid: the staging reservations kept, growth on demand over the c
     expect(PASS_NAMES.map((n) => use.summary[n]!.all.regionsOverReservation)).toEqual(over);
     expect(PASS_NAMES.map((n) => use.summary[n]!.all.max)).toEqual(max);
     expect(use.growthEventsTotal).toBe(96);
-    // The largest region of each pass (518,388 opaque and 253,220 X-ray vertices) takes 4 and 7 growths.
-    expect(growthSteps(MESH_PASS_OPAQUE, 518_388, 777_582)).toBe(4);
-    expect(growthSteps(MESH_PASS_XRAY, 253_220, 379_830)).toBe(7);
+    // The largest region of each pass (518,388 opaque and 253,220 X-ray vertices) takes 4 and 7 growths × 1.5.
+    expect(growthSteps(MESH_PASS_OPAQUE, 518_388, 777_582, GROWTH)).toBe(4);
+    expect(growthSteps(MESH_PASS_XRAY, 253_220, 379_830, GROWTH)).toBe(7);
+    // RegionBatch's smaller steps: more of them, in the same regions.
+    const batchEvents = eventsAt(BATCH_GROWTH);
+    expect(batchEvents).toEqual([48, 0, 0, 121]);
+    expect(batchEvents.reduce((a, b) => a + b, 0)).toBe(169);
+    expect(ALL_PASSES.map((p) => use.regions.filter((r) => growthSteps(p, r.vertices[p]!, r.indices[p]!, BATCH_GROWTH) > 0).length)).toEqual(over);
+    expect(growthSteps(MESH_PASS_OPAQUE, 518_388, 777_582, BATCH_GROWTH)).toBe(7);
+    expect(growthSteps(MESH_PASS_XRAY, 253_220, 379_830, BATCH_GROWTH)).toBe(13);
   });
 
   for (const kind of ['batch', 'mesh'] as const) {
-    test(`${kind}: the growth count above is the backend's: the disc's smallest growing X-ray region (−1, 1), 75,124 vertices in one column, grows its pass-3 object 4 times from 16,384 vertices`, () => {
+    test(`${kind}: the growth count above is the backend's: the disc's smallest growing X-ray region (−1, 1), 75,124 vertices in one column, grows its pass-3 object ${kind === 'batch' ? '7 times (× 1.25)' : '4 times (× 1.5)'} from 16,384 vertices`, () => {
       const use = JSON.parse(readFileSync(REGION_USE, 'utf8')) as RegionUse;
       const region = use.regions.find((r) => r.rx === -1 && r.rz === 1)!;
       const vertices = region.vertices[MESH_PASS_XRAY]!;
       expect(vertices).toBe(75_124);
-      expect(growthSteps(MESH_PASS_XRAY, vertices, region.indices[MESH_PASS_XRAY]!)).toBe(4);
+      const steps = growthSteps(MESH_PASS_XRAY, vertices, region.indices[MESH_PASS_XRAY]!, growthOf(kind));
+      expect(steps).toBe(kind === 'batch' ? 7 : 4);
       const quads = vertices / 4;
       const rows = Array.from({ length: Math.ceil(quads / 1024) }, (_, k) => ({
         sy: k % 24, pass: MESH_PASS_XRAY as 3, quads: Math.min(1024, quads - 1024 * k),
@@ -532,7 +546,7 @@ describe('regionGrid: the staging reservations kept, growth on demand over the c
         const last = r.counts(createSectionRendererCounts()).lastStructural;
         if (last !== null) ops.push(last);
       }
-      expect(ops).toEqual(['create', 'grow', 'grow', 'grow', 'grow']);
+      expect(ops).toEqual(['create', ...Array<string>(steps).fill('grow')]);
       r.dispose();
     });
   }

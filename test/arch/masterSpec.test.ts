@@ -152,6 +152,8 @@ import { BENCH_ROWS, LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P
 import { THRESHOLDS } from '../thresholds';
 import { SP_DEPS } from '../harness/sp';
 import { DET_FILES } from './rules/banned';
+import { BATCH_GROWTH, OPTIMIZE_AT, SHRINK_HEADROOM, SHRINK_IDLE_PUMPS, SHRINK_MIN_SLACK } from '../../src/render/regionBatch';
+import { GROWTH } from '../../src/render/regionGrid';
 
 // Resolved from this file, not the cwd (SP3b spec §7), so the test also runs from another directory.
 const MASTER = fileURLToPath(new URL('../../docs/superpowers/specs/2026-09-26-architecture-design.md', import.meta.url));
@@ -872,7 +874,8 @@ describe('master spec amendments (SP4b §13)', () => {
     const s45 = text.slice(at, text.indexOf('**Fallback.**', at));
     expect(s45).toContain('the instance matrix places the section inside its region, and the region\'s mesh carries the region origin relative to the floating origin (SP4b)');
     expect(s45).not.toContain('the instance matrix translates to the section origin relative to the floating origin');
-    expect(s45).toContain('Vertex and index capacity are reserved per preset (SP4b; SP4a sizes each region exactly at load) (Medium: opaque 131,072 vertices / 196,608 indices, translucent 16,384 / 24,576, cutout 8,192 / 12,288 on demand, 1,536 instances; when full, `optimize()` above 40 % deleted space, else ×1.5)');
+    // The reservation sentence's policy half is SP6a's since Task 48 (pinned in the SP6a describe).
+    expect(s45).toContain('Vertex and index capacity are reserved per preset (SP4b; SP4a sizes each region exactly at load) (Medium: opaque 131,072 vertices / 196,608 indices, translucent 16,384 / 24,576, cutout 8,192 / 12,288 on demand, 1,536 instances; when full,');
   });
 
   test('§4.5\'s Fallback paragraph names RegionMesh\'s arena (SP4b spec §4.3, §13)', () => {
@@ -2169,6 +2172,19 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(order.split('\n')).toContain('7. Selection box, and with the selection tool (SP5c) its volume box and the ghost, drawn after the translucent pass.');
     const calls = s45.split('\n').find((l) => l.startsWith('**Draw calls:**'));
     expect(calls).toContain('+1 per region with X-ray rows (SP6a)');
+  });
+
+  test('§4.5\'s RegionBatch buffer policy: optimise at 10 % or when it makes the rows fit, else ×1.25, the idle shrink, as `regionBatch.ts` holds it (SP6a spec §5.1, Task 48)', () => {
+    const at = text.indexOf('### 4.5 Render structure');
+    const s45 = text.slice(at, text.indexOf('**Fallback.**', at));
+    expect(s45).toContain('Vertex and index capacity are reserved per preset (SP4b; SP4a sizes each region exactly at load) (Medium: opaque 131,072 vertices / 196,608 indices, translucent 16,384 / 24,576, cutout 8,192 / 12,288 on demand, 1,536 instances; when full, `optimize()` at 10 % deleted space or when it would make the waiting rows fit, else ×1.25, the instance table ×1.5; a batch above its reservation, idle for 240 pumps with ≥ 20 % slack, is compacted and shrunk to its use ×1.1 in the frame\'s structural slot; amended by SP6a: SP4b\'s `optimize()` above 40 % deleted space, else ×1.5, let a batch reach about 2.5 × its use); opaque starts at a reservation sized so the sum over regions matches §7 (≈ 100k vertices for a typical region) and grows via `setGeometrySize`.');
+    expect(s45).toContain('- `optimize()` runs when fragmentation reaches 10% (SP6a; 40% before) or would make the waiting rows fit.');
+    expect(s45).not.toContain('`optimize()` runs when fragmentation exceeds 40%');
+    expect(s45).not.toContain('and grows ×1.5 via `setGeometrySize`');
+    // The values are the code's.
+    expect([OPTIMIZE_AT, BATCH_GROWTH, GROWTH, SHRINK_IDLE_PUMPS, SHRINK_MIN_SLACK, SHRINK_HEADROOM]).toEqual([0.1, 1.25, 1.5, 240, 0.2, 1.1]);
+    // RegionMesh's arena keeps SP4b's rule (the Fallback paragraph, pinned in the SP4b describe).
+    expect(text).toContain('compaction above 40 % free space, else ×1.5), and culling per region');
   });
 
   test('§6.4\'s T5 row compares surfaceEst3 with the pre-cave top, its thresholds unchanged (SP6a spec §13 item 21)', () => {

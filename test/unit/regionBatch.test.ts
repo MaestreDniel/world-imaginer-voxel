@@ -4,6 +4,7 @@ import {
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { MESH_PASS_XRAY, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { createMaterialSystem, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
+import { BATCH_GROWTH, OPTIMIZE_AT, SHRINK_HEADROOM, SHRINK_IDLE_PUMPS, SHRINK_MIN_SLACK } from '../../src/render/regionBatch';
 import {
   createSectionRenderer, createSectionRendererCounts, regionOf, selectSectionRenderer, type SectionRenderer,
   type SectionRendererCounts,
@@ -116,8 +117,8 @@ describe('RegionBatch (SP4b spec §4.2, D14)', () => {
     r.dispose();
   });
 
-  test('a row that does not fit grows the batch to 196,608 / 294,912 when deleted space is under 40 % and optimizes at or above it, one per pump', () => {
-    // Grow: the reservation is full (32 rows of 4,096 vertices = 131,072) and nothing was deleted.
+  test('a row that does not fit, with no deleted space, grows the batch × 1.25 to 163,840 / 245,760 (the old geometry disposed), one per pump', () => {
+    // The reservation is full (32 rows of 4,096 vertices = 131,072) and nothing was deleted.
     const g = make();
     g.stage(fakePayload(0, 0, big(32)), 1);
     pumpAll(g);
@@ -129,47 +130,75 @@ describe('RegionBatch (SP4b spec §4.2, D14)', () => {
     old.addEventListener('dispose', () => { oldDisposed = true; });
     g.stage(fakePayload(1, 0, big(1)), 1);
     expect(g.pump(fakeGate(32), 0, 0, 0)).toBe(1);
-    expect(counts(g)).toMatchObject({ lastStructural: 'grow', lastStructuralBytes: 2_752_512, structuralOps: 2 });
+    const vertices = Math.ceil(131_072 * BATCH_GROWTH);
+    const indices = Math.ceil(196_608 * BATCH_GROWTH);
+    expect([vertices, indices]).toEqual([163_840, 245_760]);
+    // 8 bytes per vertex (position and data) and a Uint32 index (over 65,535 vertices).
+    const bytes = 8 * vertices + 4 * indices;
+    expect(bytes).toBe(2_293_760);
+    expect(counts(g)).toMatchObject({ lastStructural: 'grow', lastStructuralBytes: bytes, structuralOps: 2 });
     expect(b.geometry).not.toBe(old);
     expect(oldDisposed).toBe(true);
-    expect(b.geometry.getAttribute('position').count).toBe(196_608);
-    expect(b.geometry.getIndex()!.array.length).toBe(294_912);
+    expect(b.geometry.getAttribute('position').count).toBe(vertices);
+    expect(b.geometry.getIndex()!.array.length).toBe(indices);
     expect(g.isRevealed(1, 0)).toBe(true);
-    expect(g.gpuBytes()).toBe(2_752_512);
+    expect(g.gpuBytes()).toBe(bytes);
     g.dispose();
+  });
 
-    // Just under 40 %: 12 of 32 rows deleted (49,152 vertices, 37.5 %) → grow.
-    const u = make();
-    u.stage(fakePayload(0, 0, big(12)), 1);
-    u.stage(fakePayload(1, 0, big(20)), 1);
-    pumpAll(u);
-    u.remove(0, 0);
-    expect(u.pump(fakeGate(32), 0, 0, 0)).toBe(12);
-    u.stage(fakePayload(2, 0, big(1)), 1);
+  test('a row that does not fit optimizes first when the deleted space is ≥ 10 % of the batch or would make the waiting rows fit, else grows (SP6a spec §5.1, Task 48)', () => {
+    expect(OPTIMIZE_AT).toBe(0.1);
+    /** A full reservation with the first column's `deleted` rows released (the second column keeps the rest). */
+    const holed = (deleted: number): SectionRenderer => {
+      const r = make();
+      r.stage(fakePayload(0, 0, big(deleted)), 1);
+      r.stage(fakePayload(1, 0, big(32 - deleted)), 1);
+      pumpAll(r);
+      expect(batchOf(r, 0)!.unusedVertexCount).toBe(0);
+      r.remove(0, 0);
+      expect(r.pump(fakeGate(32), 0, 0, 0)).toBe(deleted);
+      return r;
+    };
+    // Compact first: 3 of 32 rows deleted (12,288 vertices, 9.4 %, under the 10 % share), and a column of 3 rows that fits
+    // once compacted → optimize, in place, at the same size; the column shows in the same pump.
+    expect(3 * 4096).toBeLessThan(OPTIMIZE_AT * 131_072);
+    const c = holed(3);
+    const cb = batchOf(c, 0)!;
+    const geometry = cb.geometry;
+    const ops = counts(c).structuralOps;
+    c.stage(fakePayload(2, 0, big(3)), 1);
+    expect(c.pump(fakeGate(32), 0, 0, 0)).toBe(3);
+    expect(counts(c)).toMatchObject({ lastStructural: 'optimize', lastStructuralBytes: 1_835_008, structuralOps: ops + 1 });
+    expect(cb.geometry).toBe(geometry);
+    expect(cb.geometry.getAttribute('position').count).toBe(131_072);
+    expect(c.isRevealed(2, 0)).toBe(true);
+    expect(visibleIndices(c.root)).toBe(32 * 6144);
+    c.dispose();
+
+    // Under 10 % and too large to fit once compacted: the same 3 deleted rows and a column of 4 → grow (× 1.25), and the
+    // column shows in the same pump.
+    const u = holed(3);
+    u.stage(fakePayload(2, 0, big(4)), 1);
     u.pump(fakeGate(32), 0, 0, 0);
     expect(counts(u).lastStructural).toBe('grow');
-    expect(batchOf(u, 0)!.geometry.getAttribute('position').count).toBe(196_608);
+    expect(batchOf(u, 0)!.geometry.getAttribute('position').count).toBe(Math.ceil(131_072 * BATCH_GROWTH));
+    expect(u.isRevealed(2, 0)).toBe(true);
     u.dispose();
 
-    // At or above 40 %: 13 of 32 rows deleted (53,248 vertices, 40.6 %) → optimize, in place, at the same size. A
-    // column of 14 rows (57,344 vertices) still overflows after it: the growth waits for the next pump.
-    const o = make();
-    o.stage(fakePayload(0, 0, big(13)), 1);
-    o.stage(fakePayload(1, 0, big(19)), 1);
-    pumpAll(o);
-    o.remove(0, 0);
-    expect(o.pump(fakeGate(32), 0, 0, 0)).toBe(13);
+    // At or above 10 %: 4 of 32 rows deleted (16,384 vertices, 12.5 %), a column of 5 rows (20,480 vertices) that does not
+    // fit even compacted → optimize, in place; the growth waits for the next pump.
+    expect(4 * 4096).toBeGreaterThanOrEqual(OPTIMIZE_AT * 131_072);
+    const o = holed(4);
     const ob = batchOf(o, 0)!;
     const before = ob.geometry;
-    const ops = counts(o).structuralOps;
-    o.stage(fakePayload(2, 0, big(14)), 1);
-    expect(o.pump(fakeGate(32), 0, 0, 0)).toBe(13);
-    expect(counts(o)).toMatchObject({ lastStructural: 'optimize', lastStructuralBytes: 1_835_008, structuralOps: ops + 1 });
+    const ops0 = counts(o).structuralOps;
+    o.stage(fakePayload(2, 0, big(5)), 1);
+    expect(o.pump(fakeGate(32), 0, 0, 0)).toBe(4);
+    expect(counts(o)).toMatchObject({ lastStructural: 'optimize', lastStructuralBytes: 1_835_008, structuralOps: ops0 + 1 });
     expect(ob.geometry).toBe(before);
-    expect(ob.geometry.getAttribute('position').count).toBe(131_072);
     expect(o.isRevealed(2, 0)).toBe(false);
     expect(o.pump(fakeGate(32), 0, 0, 0)).toBe(1);
-    expect(counts(o)).toMatchObject({ lastStructural: 'grow', structuralOps: ops + 2 });
+    expect(counts(o)).toMatchObject({ lastStructural: 'grow', structuralOps: ops0 + 2 });
     expect(o.isRevealed(2, 0)).toBe(true);
     expect(visibleIndices(o.root)).toBe(33 * 6144);
     o.dispose();
@@ -440,7 +469,8 @@ describe('RegionBatch (SP4b spec §4.2, D14)', () => {
     r.pump(gate, 0, 0, 0);
     expect(gate.granted).toBe(1);
     expect(['grow', 'optimize']).toContain(counts(r).lastStructural);
-    expect(batchOf(r, MESH_PASS_XRAY)!.geometry.getAttribute('position').count).toBe(24_576);
+    // One growth × 1.25 holds the column: 20,480 vertices.
+    expect(batchOf(r, MESH_PASS_XRAY)!.geometry.getAttribute('position').count).toBe(Math.ceil(16_384 * BATCH_GROWTH));
     pumpAll(r);
     expect(r.isRevealed(0, 0)).toBe(true);
     r.dispose();
@@ -462,8 +492,9 @@ describe('RegionBatch\'s swap (SP4c spec §5.2, D9)', () => {
   };
 
   test('an optimize() during a swap keeps prev\'s rows visible and their ids valid', () => {
-    // 13 of 32 rows deleted (40.6 %): the replacement's 14 rows of 4,096 vertices do not fit, so the batch is optimised
-    // (13 rows then fit) and grown in the next pump for the last one, both while the shown 19 rows are prev.
+    // 13 of 32 rows deleted (40.6 %, over the 10 % share): the replacement's 14 rows of 4,096 vertices do not fit, so the
+    // batch is optimised (13 rows then fit) and grown in the next pump for the last one, both while the shown 19 rows are
+    // prev.
     const r = make();
     r.stage(fakePayload(0, 0, big(13)), 1);
     r.stage(fakePayload(1, 0, big(19)), 1);
@@ -531,6 +562,138 @@ describe('RegionBatch\'s swap (SP4c spec §5.2, D9)', () => {
     const tail = swapCalls.slice(4);
     expect(tail.filter(([, on]) => !on)).toHaveLength(11);
     expect(tail.filter(([, on]) => on)).toHaveLength(12);
+    r.dispose();
+  });
+});
+
+describe('RegionBatch\'s idle shrink (SP6a spec §5.1, Task 48)', () => {
+  /** Three's render for every batch: it uploads the pending ranges (`WebGLAttributes` clears them, then calls the hook). */
+  const uploadAll = (r: SectionRenderer): void => {
+    for (const b of batches(r.root)) {
+      for (const a of [b.geometry.getAttribute('position'), b.geometry.getAttribute('data'), b.geometry.getIndex()!] as BufferAttribute[]) {
+        a.clearUpdateRanges();
+        a.onUploadCallback();
+      }
+    }
+  };
+  /** `n` rendered frames, each an upload then a pump under `gate()`; the structural operation each pump reports. */
+  const idle = (r: SectionRenderer, n: number, gate = () => fakeGate(32)): Array<string | null> => {
+    const kinds: Array<string | null> = [];
+    for (let i = 0; i < n; i++) {
+      uploadAll(r);
+      r.pump(gate(), 0, 0, 0);
+      kinds.push(counts(r).lastStructural);
+    }
+    return kinds;
+  };
+  const none = (kinds: ReadonlyArray<string | null>): boolean => kinds.every((k) => k === null);
+  /**
+   * Region (0, 0): 10 rows, then 30 rows of 4,096 vertices, which grow the batch once to 163,840 vertices; the 10 rows
+   * released, leaving 122,880 vertices (25 % of the batch is slack, the released rows a hole at its start). The release's
+   * pump is the batch's last write.
+   */
+  const grownThenHoled = (): SectionRenderer => {
+    const r = make();
+    r.stage(fakePayload(0, 0, big(10)), 1);
+    r.stage(fakePayload(1, 0, big(30)), 1);
+    pumpAll(r);
+    expect(batchOf(r, 0)!.geometry.getAttribute('position').count).toBe(Math.ceil(131_072 * BATCH_GROWTH));
+    uploadAll(r);
+    r.remove(0, 0);
+    expect(r.pump(fakeGate(32), 0, 0, 0)).toBe(10);
+    return r;
+  };
+  const shownInstances = (b: BatchedMesh): Array<[instance: number, geometry: number]> => {
+    const info = (b as unknown as { _instanceInfo: Array<{ active: boolean }> })._instanceInfo;
+    const out: Array<[number, number]> = [];
+    for (let i = 0; i < info.length; i++) if (info[i]!.active && b.getVisibleAt(i)) out.push([i, b.getGeometryIdAt(i)]);
+    return out;
+  };
+
+  test('a batch above its reservation with ≥ 20 % slack, idle for 240 pumps, is compacted and shrunk to its use × 1.1 as the pump\'s one structural operation; its rows keep showing over the same ids, and it shrinks once', () => {
+    expect([SHRINK_IDLE_PUMPS, SHRINK_MIN_SLACK, SHRINK_HEADROOM]).toEqual([240, 0.2, 1.1]);
+    const r = grownThenHoled();
+    const b = batchOf(r, 0)!;
+    const shown = shownInstances(b);
+    expect(shown).toHaveLength(30);
+    const ops = counts(r).structuralOps;
+    expect(none(idle(r, SHRINK_IDLE_PUMPS - 1))).toBe(true);
+    expect(idle(r, 1)).toEqual(['shrink']);
+    const vertices = Math.ceil(30 * 4096 * SHRINK_HEADROOM);
+    const indices = Math.ceil(30 * 6144 * SHRINK_HEADROOM);
+    // 184,320 × 1.1 is 202,752.00000000003 in doubles: the ceiling is one index above.
+    expect([vertices, indices]).toEqual([135_168, 202_753]);
+    expect(counts(r)).toMatchObject({ structuralOps: ops + 1, lastStructuralBytes: 8 * vertices + 4 * indices });
+    expect(r.gpuBytes()).toBe(8 * vertices + 4 * indices);
+    expect(b.geometry.getAttribute('position').count).toBe(vertices);
+    expect(b.geometry.getIndex()!.array.length).toBe(indices);
+    // Compacted first: the hole is gone, the rows start at 0.
+    expect(b.unusedVertexCount).toBe(vertices - 30 * 4096);
+    expect(b.unusedIndexCount).toBe(indices - 30 * 6144);
+    expect(shownInstances(b)).toEqual(shown);
+    expect(visibleIndices(r.root)).toBe(30 * 6144);
+    expect(r.isRevealed(1, 0)).toBe(true);
+    const index = b.geometry.getIndex()!.array;
+    for (const [, id] of shown) {
+      const range = b.getGeometryRangeAt(id)!;
+      let inside = 0;
+      for (let k = range.indexStart; k < range.indexStart + range.indexCount; k++) {
+        if (index[k]! >= range.vertexStart && index[k]! < range.vertexStart + range.vertexCount) inside++;
+      }
+      expect(inside).toBe(6144);
+    }
+    // The new buffers are uploaded whole: the batch is drawn unculled until three has uploaded them.
+    expect(b.frustumCulled).toBe(false);
+    // 9 % slack now: no second shrink.
+    expect(none(idle(r, 3 * SHRINK_IDLE_PUMPS))).toBe(true);
+    expect(b.frustumCulled).toBe(true);
+    r.dispose();
+  });
+
+  test('no shrink at or under the reservation or under 20 % slack; a write restarts the idle count', () => {
+    // At the reservation (10 + 10 rows, 10 released: half the batch is slack, but 131,072 is the floor).
+    const a = make();
+    a.stage(fakePayload(0, 0, big(10)), 1);
+    a.stage(fakePayload(1, 0, big(10)), 1);
+    pumpAll(a);
+    a.remove(0, 0);
+    a.pump(fakeGate(32), 0, 0, 0);
+    expect(none(idle(a, 2 * SHRINK_IDLE_PUMPS))).toBe(true);
+    expect(batchOf(a, 0)!.geometry.getAttribute('position').count).toBe(131_072);
+    a.dispose();
+
+    // Grown, with 17.5 % slack (33 rows, 135,168 vertices, in 163,840).
+    const s = make();
+    s.stage(fakePayload(0, 0, big(32)), 1);
+    pumpAll(s);
+    s.stage(fakePayload(1, 0, big(1)), 1);
+    pumpAll(s);
+    expect(1 - (33 * 4096) / Math.ceil(131_072 * BATCH_GROWTH)).toBeLessThan(SHRINK_MIN_SLACK);
+    expect(none(idle(s, 2 * SHRINK_IDLE_PUMPS))).toBe(true);
+    expect(batchOf(s, 0)!.geometry.getAttribute('position').count).toBe(163_840);
+    s.dispose();
+
+    // A row uploaded into the idle batch 200 pumps on: the shrink comes 240 pumps after that write.
+    const w = grownThenHoled();
+    expect(none(idle(w, 200))).toBe(true);
+    w.stage(fakePayload(2, 0, [opaque(0)]), 1);
+    uploadAll(w);
+    expect(w.pump(fakeGate(32), 0, 0, 0)).toBe(1);
+    expect(none(idle(w, SHRINK_IDLE_PUMPS - 1))).toBe(true);
+    expect(idle(w, 1)).toEqual(['shrink']);
+    w.dispose();
+  });
+
+  test('a staged column\'s structural operation takes the slot first, and a pump with no structural grant shrinks nothing', () => {
+    const r = grownThenHoled();
+    expect(none(idle(r, SHRINK_IDLE_PUMPS - 1))).toBe(true);
+    expect(idle(r, 1, () => fakeGate(32, 0))).toEqual([null]);
+    // A new region's column needs 'create': it takes the frame's operation; the shrink follows in the next pump.
+    r.stage(fakePayload(16, 0, [opaque(0)]), 1);
+    expect(idle(r, 1)).toEqual(['create']);
+    expect(r.isRevealed(16, 0)).toBe(true);
+    expect(idle(r, 1)).toEqual(['shrink']);
+    expect(batchOf(r, 0)!.geometry.getAttribute('position').count).toBe(Math.ceil(30 * 4096 * SHRINK_HEADROOM));
     r.dispose();
   });
 });

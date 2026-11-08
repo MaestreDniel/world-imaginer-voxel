@@ -33,9 +33,10 @@ export interface UploadGate {
 
 /**
  * A structural operation (SP4b spec §3.9, D13): a region's object created or grown in vertices and indices, its
- * instance table grown or its buffers optimised (RegionBatch), its arena compacted (RegionMesh).
+ * instance table grown or its buffers optimised (RegionBatch), its arena compacted (RegionMesh); an idle batch's
+ * buffers compacted and shrunk to its use (RegionBatch, SP6a spec §5.1, Task 48).
  */
-export type StructuralKind = 'create' | 'grow' | 'instances' | 'optimize' | 'compact';
+export type StructuralKind = 'create' | 'grow' | 'instances' | 'optimize' | 'compact' | 'shrink';
 
 /**
  * R7's probe (SP4b spec §8.1; SP4c spec §5.1), read from three's objects: `columns` the column records the staging

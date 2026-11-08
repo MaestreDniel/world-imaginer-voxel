@@ -636,8 +636,8 @@ export type BenchField = (typeof BENCH_FIELDS)[number];
 
 /**
  * The bench's frames: one `Float64Array` column per field and the count `n`, so that recording a frame allocates
- * nothing. `leg` is the leg's index; `structuralKind` 0 for none, 1-5 for create / grow / instances / optimize /
- * compact; `gpuMs` the frame's own draw's GPU time, written when its query finishes (1-3 frames later), NaN without a
+ * nothing. `leg` is the leg's index; `structuralKind` 0 for none, 1-6 for create / grow / instances / optimize /
+ * compact / shrink (RegionBatch's idle shrink, SP6a Task 48); `gpuMs` the frame's own draw's GPU time, written when its query finishes (1-3 frames later), NaN without a
  * sample; `heapMB` NaN where the browser does not expose it.
  */
 export type BenchRecord = { n: number; readonly capacity: number } & { readonly [K in BenchField]: Float64Array };
@@ -649,7 +649,7 @@ export function createBenchRecord(capacity: number): BenchRecord {
 }
 
 /** `structuralKind`'s codes, index = code (0: none). */
-const STRUCTURAL_KINDS: readonly (StructuralKind | null)[] = [null, 'create', 'grow', 'instances', 'optimize', 'compact'];
+const STRUCTURAL_KINDS: readonly (StructuralKind | null)[] = [null, 'create', 'grow', 'instances', 'optimize', 'compact', 'shrink'];
 
 const MIB = 1 << 20;
 /** How often the JS heap and the store's SharedArrayBuffers are read, in recorded frames; the last value is carried. */
