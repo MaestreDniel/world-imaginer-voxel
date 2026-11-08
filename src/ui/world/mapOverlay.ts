@@ -240,6 +240,12 @@ export interface MapOverlay {
   applied(from: WorldStage | null): void;
   /** The page's X-ray state changed (SP6a spec §7.3): handed to the mounted tool's Caves tab; nothing before the mount. */
   setXray(on: boolean, band: XrayBand, radius: number): void;
+  /**
+   * Loads the chunk and mounts the tool hidden (SP6a, Task 48: the mount is 75-80 ms of main thread, which L14's first
+   * open measured), so a later `open` only shows it; the tool hidden requests nothing (`MapTool.hide`). Nothing once
+   * mounted or after `dispose`; opened while the chunk loads, the tool mounts shown, once.
+   */
+  premount(): void;
   /** The mounted tool, or null before the first `open` mounted it and after `dispose`. */
   readonly tool: MapTool | null;
   /** Ends an open gesture while the tool still feeds the driver, disposes the tool and removes the host; once. */
@@ -443,9 +449,10 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
   const places = o.places;
   const caves = o.caves;
 
-  const mount = (m: ToolModule): void => {
+  /** Mounts the tool shown (an open), or hidden for `premount` (`hidden`) unless the map was opened meanwhile. */
+  const mount = (m: ToolModule, hidden = false): void => {
     // Closed or disposed while the chunk loaded: the next open mounts.
-    if (disposed || tool !== null || !shown) return;
+    if (disposed || tool !== null || (!shown && !hidden)) return;
     tool = m.createMapTool(host, {
       session: o.session,
       pool: o.pool,
@@ -492,6 +499,11 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     }
     // A saved world's tool shows the modification mode in force from its mount (D10); the mode tells it of later switches.
     if (o.modify !== null) tool.setEditable(o.modify.on());
+    if (!shown) {
+      // Premounted: hidden until the first open shows it (no tile, preview or tab request meanwhile).
+      tool.hide();
+      return;
+    }
     showOnCamera(tool);
     syncRoute();
   };
@@ -548,6 +560,11 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     },
     open,
     close,
+    premount() {
+      if (disposed || tool !== null) return;
+      if (mod !== null) mount(mod, true);
+      else load().then((m) => mount(m, true), () => {});
+    },
     tick(counts) {
       if (shown && tool !== null) tool.setPlayer(o.fly.x, o.fly.z, o.fly.yaw);
       // Stale while the world regenerates: a stale count with no T, D, L or MESH job in flight or queued is a column

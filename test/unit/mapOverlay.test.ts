@@ -322,6 +322,65 @@ describe('the overlay host and the tool (SP4c spec §1.3, §1.5)', () => {
     expect(tools()).toHaveLength(1);
   });
 
+  test('premount (SP6a, Task 48): the chunk loads and the tool mounts hidden (never shown, nothing routed, the host still hidden, the world owning); the first open only shows it, on the camera', async () => {
+    const { overlay, driver, host, notices, fly, worldHost, world } = setup({ fly: flyAt(100, -40, 30) });
+    overlay.premount();
+    expect(tools()).toHaveLength(0);
+    await settle();
+    expect(tools()).toHaveLength(1);
+    const t = tools()[0]!;
+    expect(overlay.tool).toBe(t.tool);
+    expect(overlay.shown).toBe(false);
+    expect(overlay.owner).toBe('world');
+    expect(t.calls.show).toEqual([]);
+    expect(t.calls.hide).toBe(1);
+    expect(driver.setPreviewWanted.mock.calls).toEqual([[false]]);
+    expect(host().style['display']).toBe('none');
+    expect(notices.route).not.toHaveBeenCalled();
+    expect(worldHost.classList.contains('split')).toBe(false);
+    expect(world.log).toEqual([]);
+    // The first M mounts nothing: the tool shows on the camera, in this call.
+    fly.x = 900;
+    overlay.open();
+    expect(tools()).toHaveLength(1);
+    expect(t.calls.show).toEqual([{ x: 900, z: -40 }]);
+    expect(driver.setPreviewWanted.mock.calls).toEqual([[false], [true]]);
+    expect(host().style['display']).toBe('');
+    expect(notices.route).toHaveBeenLastCalledWith(t.tool.notices);
+    // A second premount does nothing.
+    overlay.close();
+    overlay.premount();
+    await settle();
+    expect(tools()).toHaveLength(1);
+  });
+
+  test('premount while shown, after the first mount, or with the overlay disposed while the chunk loads mounts nothing more; opened while the premount\'s chunk loads, the tool mounts shown once', async () => {
+    const a = setup();
+    const t = await openMounted(a.overlay);
+    a.overlay.premount();
+    await settle();
+    expect(tools()).toHaveLength(1);
+    expect(t.calls.hide).toBe(0);
+    a.overlay.dispose();
+
+    const b = setup();
+    b.overlay.premount();
+    b.overlay.dispose();
+    await settle();
+    expect(tools()).toHaveLength(1);
+    expect(b.overlay.tool).toBeNull();
+
+    const c = setup();
+    c.overlay.premount();
+    c.overlay.open();
+    await settle();
+    expect(tools()).toHaveLength(2);
+    const u = tools()[1]!;
+    expect(u.calls.show).toHaveLength(1);
+    expect(u.calls.hide).toBe(0);
+    expect(c.overlay.shown).toBe(true);
+  });
+
   test('closed before the chunk arrived: nothing mounts until the next open', async () => {
     const { overlay } = setup();
     overlay.open();
