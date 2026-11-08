@@ -140,11 +140,17 @@ describe('a slide fan-out at the knot cap stays within the part budget (SP3d fin
     const plan = planFieldSlice(128, sliceCostOf(p, 'density', '', 'vertical', 128), 6, REQUEST_BUDGET);
     if (plan.refused) throw new Error(`refused, limit ${plan.limit}`);
     const widest = plan.ranges.reduce((a, r) => (r[1] - r[0] > a[1] - a[0] ? r : a));
-    const ctx = fresh(p);
-    const t = now();
-    evaluateFieldSlice(ctx, { geometry, field: FIELD, path: PATH, from: widest[0], to: widest[1] }, NEVER);
-    const ms = now() - t;
-    console.log(`MEASUREMENT: slide fan-out (2,000 refs, 64 knots): part [${widest[0]}, ${widest[1]}) of ${plan.ranges.length}, ${ms.toFixed(1)} ms`);
+    // The median of three runs, each on a fresh GenContext (cold caches): one shot on a shared CI runner read 250.5 ms
+    // at push B against 234.6 at push A, with the same ~138 ms locally at both heads (SP6a Task 39 CI).
+    const times: number[] = [];
+    for (let run = 0; run < 3; run++) {
+      const ctx = fresh(p);
+      const t = now();
+      evaluateFieldSlice(ctx, { geometry, field: FIELD, path: PATH, from: widest[0], to: widest[1] }, NEVER);
+      times.push(now() - t);
+    }
+    const ms = [...times].sort((a, b) => a - b)[1]!;
+    console.log(`MEASUREMENT: slide fan-out (2,000 refs, 64 knots): part [${widest[0]}, ${widest[1]}) of ${plan.ranges.length}, median ${ms.toFixed(1)} ms of ${times.map((v) => v.toFixed(1)).join(', ')}`);
     expect(ms).toBeLessThanOrEqual(PART_P50_MAX_MS);
   });
 });
