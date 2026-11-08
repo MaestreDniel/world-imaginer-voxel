@@ -114,25 +114,42 @@ describe('layout state (SP2b spec §3.1)', () => {
 describe('the Places tab, only in a saved world\'s map (SP5b spec §3.7, D13)', () => {
   test('`TAB_IDS` keeps the four (`?map`); a world layout with places shows five; `parseLayout` of a stored `\'places\'` on `?map` gives the World tab', () => {
     expect(TAB_IDS).toEqual(['world', 'parameters', 'biomes', 'presets']);
-    expect(layoutTabs(false)).toEqual(TAB_IDS);
-    // A saved world's map: Places is the fifth tab, after Presets.
-    expect(layoutTabs(true)).toEqual(['world', 'parameters', 'biomes', 'presets', 'places']);
-    expect(layoutTabs(true).map((id) => TAB_LABELS[id])).toEqual(['World', 'Parameters', 'Biomes', 'Presets', 'Places']);
-    expect(Object.isFrozen(layoutTabs(true))).toBe(true);
+    expect(layoutTabs(false, false)).toEqual(TAB_IDS);
+    // A saved world's map without the Caves tab: Places is the fifth tab, after Presets.
+    expect(layoutTabs(true, false)).toEqual(['world', 'parameters', 'biomes', 'presets', 'places']);
+    expect(layoutTabs(true, false).map((id) => TAB_LABELS[id])).toEqual(['World', 'Parameters', 'Biomes', 'Presets', 'Places']);
+    expect(Object.isFrozen(layoutTabs(true, false))).toBe(true);
     // The layout key is shared by `?map` and every world's map: a stored Places opens the World tab where it is not shown
     // (`?map`, an unsaved world), and Places where it is.
     const stored = JSON.stringify({ panelWidth: 400, tab: 'places' });
-    expect(parseLayout(stored, layoutTabs(false))).toEqual({ ...DEFAULT_LAYOUT, panelWidth: 400, tab: 'world' });
+    expect(parseLayout(stored, layoutTabs(false, false))).toEqual({ ...DEFAULT_LAYOUT, panelWidth: 400, tab: 'world' });
     expect(parseLayout(stored)).toEqual({ ...DEFAULT_LAYOUT, panelWidth: 400, tab: 'world' });
-    expect(parseLayout(stored, layoutTabs(true))).toEqual({ ...DEFAULT_LAYOUT, panelWidth: 400, tab: 'places' });
-    expect(parseLayout(JSON.stringify({ tab: 'presets' }), layoutTabs(true)).tab).toBe('presets');
+    expect(parseLayout(stored, layoutTabs(true, false))).toEqual({ ...DEFAULT_LAYOUT, panelWidth: 400, tab: 'places' });
+    expect(parseLayout(JSON.stringify({ tab: 'presets' }), layoutTabs(true, false)).tab).toBe('presets');
     const s = new FakeStorage();
     s.items.set(LAYOUT_KEY, stored);
     expect(loadLayout(s).tab).toBe('world');
-    expect(loadLayout(s, layoutTabs(true)).tab).toBe('places');
-    // The tool builds its layout with the tabs its map shows.
+    expect(loadLayout(s, layoutTabs(true, false)).tab).toBe('places');
+  });
+
+  test('the world\'s map adds Caves after Presets and before Places (SP6a spec §7.3, D12); `?map` keeps its four; a stored Caves opens World where it is not shown', () => {
+    expect(TAB_LABELS.caves).toBe('Caves');
+    // An unsaved world's map: World, Parameters, Biomes, Presets, Caves.
+    expect(layoutTabs(false, true)).toEqual(['world', 'parameters', 'biomes', 'presets', 'caves']);
+    // A saved world's map: Caves, then Places.
+    expect(layoutTabs(true, true)).toEqual(['world', 'parameters', 'biomes', 'presets', 'caves', 'places']);
+    expect(layoutTabs(true, true).map((id) => TAB_LABELS[id])).toEqual(['World', 'Parameters', 'Biomes', 'Presets', 'Caves', 'Places']);
+    for (const p of [false, true]) for (const c of [false, true]) expect(Object.isFrozen(layoutTabs(p, c)), `${p} ${c}`).toBe(true);
+    // `?map` (no places, no caves) is unchanged.
+    expect(layoutTabs(false, false)).toEqual(TAB_IDS);
+    const stored = JSON.stringify({ tab: 'caves' });
+    expect(parseLayout(stored, layoutTabs(false, false)).tab).toBe('world');
+    expect(parseLayout(stored, layoutTabs(true, false)).tab).toBe('world');
+    expect(parseLayout(stored, layoutTabs(false, true)).tab).toBe('caves');
+    // The tool builds its layout with the tabs its map shows (`mapTool.ts`, the only caller).
     const src = readFileSync(new URL('../../src/ui/map/mapTool.ts', import.meta.url), 'utf8');
-    expect(src).toContain('const mapPlaces = deps.places ?? null;\n  const layout = createLayout(host, deps.storage, { tabs: layoutTabs(mapPlaces !== null) });');
+    expect(src).toContain('const mapPlaces = deps.places ?? null;\n  const mapCaves = deps.caves ?? null;\n  const layout = createLayout(host, deps.storage, { tabs: layoutTabs(mapPlaces !== null, mapCaves !== null) });');
+    expect(src.match(/layoutTabs\(/g)).toHaveLength(1);
   });
 });
 

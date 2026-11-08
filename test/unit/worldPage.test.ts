@@ -9,13 +9,14 @@ import { appliedDraftOf, regenFrom } from '../../src/engine/invalidation';
 import type { Stage } from '../../src/engine/rings';
 import { createThrottle } from '../../src/engine/throttle';
 import type { ColumnMeshPayload } from '../../src/mesh/column';
-import { createMaterialSystem } from '../../src/render/materials/index';
+import { createMaterialSystem, fogRange } from '../../src/render/materials/index';
 import { createXrayControl } from '../../src/render/renderer';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { createEpochs } from '../../src/ui/world/applyControl';
-import { createPageXray, NIGHT_VISION_NOTICE_MS, nightVisionNotice, toggleNightVision, XRAY_NOTICE_MS, xrayNotice } from '../../src/ui/world/worldPage';
+import { createPageXray, NIGHT_VISION_NOTICE_MS, nightVisionNotice, toggleNightVision, XRAY_NOTICE_MS, xrayNotice, xrayRadiusOf } from '../../src/ui/world/worldPage';
 import { easeNightVision } from '../../src/ui/world/frameStep';
-import { createXrayStrip, XRAY_ALL } from '../../src/ui/world/xrayStrip';
+import { bandSet, createXrayStrip, XRAY_ALL } from '../../src/ui/world/xrayStrip';
+import { createCavesTab } from '../../src/ui/map/cavesTab';
 import { evaluateWorldCapabilities, type CapabilityReport } from '../../src/engine/capabilityRules';
 import type { StreamEvent } from '../../src/engine/coordinator';
 import { defaultRenderDistance, lowerRd } from '../../src/engine/renderDistance';
@@ -35,7 +36,7 @@ import { createFogEase } from '../../src/ui/world/fogEase';
 import { createNotices } from '../../src/ui/common/notice';
 import { URL_HASH_MAX, URL_OVERSIZE_NOTICE, createUrlWriter, oversizeNotice } from '../../src/ui/common/urlWriter';
 import { DEFAULT_MAP_STATE, decodeMapState, openMapSession, type MapView } from '../../src/ui/map/mapState';
-import { WORLD_MAP_BPP, worldMapView } from '../../src/ui/world/mapOverlay';
+import { ownerOf, WORLD_MAP_BPP, worldMapView } from '../../src/ui/world/mapOverlay';
 import { AIR, DIRT, GLASS, LADDER, REGISTRY, STONE } from '../../src/world/blocks/index';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { createHotbar } from '../../src/player/hotbar';
@@ -6613,6 +6614,83 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     input.dispose();
     // The page's `active` is the map overlay's owner (SP4c spec §2.3).
     expect(SRC()).toMatch(/active: \(\) => mapRef === null \|\| mapRef\.owner === 'world',/);
+  });
+
+  test('with the map split and a band slider focused (the map owns, `ownerOf`), PageDown is neither acted on nor prevented, so only the slider moves (SP6a spec §7.1, §7.3)', () => {
+    const p = page();
+    const tab = createCavesTab(dom.body as unknown as HTMLElement, {
+      onXray: () => {}, onBand: (b) => p.xray.setBand(b), openSlice: () => {}, revealParameters: () => {}, find: () => {}, cancelFind: () => {},
+      camera: () => ({ x: 0, y: 80, z: 0 }),
+    });
+    const target = Object.assign(new EventTarget(), { requestPointerLock: () => Promise.resolve() });
+    const actions: string[] = [];
+    const input = attachInput(target as unknown as HTMLElement, {
+      onAction: (a) => {
+        actions.push(a);
+        if (a === 'xray' || a === 'xrayDown' || a === 'xrayUp' || a === 'xrayAll') p.xray.action(a);
+      },
+      onLook() {},
+      onButton() {},
+      wheelCtrlAsSlot: () => false,
+      placing: () => false,
+      // As the page: the map is no panel of `keyPanels`, so a focused map slider is not text entry (the owner guards it).
+      isTextFocus: () => worldIgnoresKeys(dom.document.activeElement, []),
+      // Mode B shown and not locked: the map owns (SP4c spec §2.3), so the world's keys do not act.
+      active: () => ownerOf('split', true, false) === 'world',
+      doc: dom.document as unknown as Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>,
+      win: new EventTarget() as unknown as Pick<Window, 'addEventListener' | 'removeEventListener'>,
+    });
+    const low = dom.el('map-caves-low');
+    low.focus();
+    expect(dom.document.activeElement).toBe(low);
+    expect(worldIgnoresKeys(dom.document.activeElement, [])).toBe(false);
+    for (const [code, key] of [['PageDown', 'PageDown'], ['PageUp', 'PageUp'], ['Home', 'Home']] as const) {
+      const e = Object.assign(new Event('keydown', { cancelable: true }), { code, key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, repeat: false });
+      dom.document.dispatchEvent(e);
+      dom.document.dispatchEvent(Object.assign(new Event('keyup'), { code, key }));
+      expect(e.defaultPrevented, code).toBe(false);
+    }
+    expect([actions, p.calls, p.xray.band]).toEqual([[], [], XRAY_ALL]);
+    // The browser moves the focused slider (its default action): only the slider's band reaches the page.
+    low.value = '-56';
+    low.dispatchEvent(new Event('input'));
+    expect(p.calls).toEqual(['band -56 319']);
+    expect(p.xray.band).toEqual(bandSet(-56, 319));
+    input.dispose();
+    tab.dispose();
+    // The page's `active` is the overlay's owner, and its `isTextFocus` the panels of `keyPanels` only.
+    const s = SRC();
+    expect(s).toMatch(/active: \(\) => mapRef === null \|\| mapRef\.owner === 'world',/);
+    expect(s).toMatch(/isTextFocus: \(\) => worldIgnoresKeys\(document\.activeElement as HTMLElement \| null, keyPanels\),/);
+  });
+
+  test('the Caves tab in step with the page\'s X-ray (SP6a spec §7.3): `changed` after every toggle and band change; the overlay gets the tab\'s deps and the state; the radius is the fog end', () => {
+    let changes = 0;
+    const strip = createXrayStrip(dom.body as unknown as HTMLElement);
+    const xray = createPageXray({
+      renderer: { setXray: () => {}, setXrayBand: () => {} }, strip, notices: { show: () => {} }, cameraY: () => 80, keyName: pageKeyName,
+      changed: () => { changes++; },
+    });
+    xray.action('xray');
+    xray.action('xrayDown');
+    xray.action('xrayUp');
+    xray.action('xrayAll');
+    xray.setBand(bandSet(0, 31));
+    xray.action('xray');
+    expect(changes).toBe(6);
+    // The radius readout: the fog end at the render distance, (rd − 1)·16.
+    for (const rd of [2, 8, 12, 16]) expect(xrayRadiusOf(rd), `rd ${rd}`).toBe(fogRange(rd, 64, { start: 0, end: 0 }).end);
+    expect(xrayRadiusOf(12)).toBe(176);
+    const s = SRC();
+    expect(s).toMatch(/const pushXray = \(\): void => mapRef\?\.setXray\(pageXray\.on, pageXray\.band, xrayRadiusOf\(liveRd\)\);/);
+    expect(s).toMatch(/keyName: pageKeyName,\n\s+changed: pushXray,\n\s+\}\);/);
+    // A render distance moves the readout.
+    expect(s).toMatch(/fogStep\.rescan\(\);\n(\s+\/\/.*\n)*\s+pushXray\(\);/);
+    const overlay = s.slice(s.indexOf('    const mapOverlay = createMapOverlay({'));
+    const args = overlay.slice(0, overlay.indexOf('\n    });'));
+    expect(args).toMatch(/caves: \{\n\s+tab: \{\n\s+onXray: \(on\) => \{ if \(on !== pageXray\.on\) pageXray\.action\('xray'\); \},\n\s+onBand: \(b\) => pageXray\.setBand\(b\),/);
+    expect(args).toMatch(/camera: \(\) => fly,/);
+    expect(args).toMatch(/xray: \(\) => \(\{ on: pageXray\.on, band: pageXray\.band, radius: xrayRadiusOf\(liveRd\) \}\),/);
   });
 
   test('Review Focus 1: X on, an Apply of `caves.cheese.offset` 0.5 → 0.20 settling over 30 fake frames with PageDown at frame 5 and X twice at frames 10 and 11: the strip reads the moved band, `xrayOn` is 1 at the end, every column\'s shown seq is the Apply\'s, the stale count reaches 0', async () => {

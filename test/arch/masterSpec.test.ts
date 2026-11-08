@@ -2132,6 +2132,7 @@ describe('master spec amendments (SP6a §13)', () => {
     [/^\s+mesh\/greedy\.ts /, 'xray.ts (SP6a)', 'src/mesh/xray.ts'],
     [/^\s+materials\/index\.ts /, '(SP6a: the X-ray material, glsl/xray.glsl.ts)', 'src/render/materials/glsl/xray.glsl.ts'],
     [/^\s+ui\/world\/\* /, 'xrayStrip.ts (SP6a)', 'src/ui/world/xrayStrip.ts'],
+    [/^\s+ui\/map\/\* /, 'cavesTab.ts (SP6a)', 'src/ui/map/cavesTab.ts'],
     [/^\s+test\/ unit\/ metrics\//, '(SP6a: metrics/caves.metric.ts', 'test/metrics/caves.metric.ts'],
     [/^\s+test\/ unit\/ metrics\//, '(SP6a: metrics/caves.metric.ts, bench/inlined.ts)', 'test/bench/inlined.ts'],
   ];

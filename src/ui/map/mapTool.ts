@@ -16,7 +16,11 @@
  * mode (SP5b spec §3.6, D10) calls `setEditable`, which disables every editor's terrain controls; the session's own gate
  * (`setWritable`, D25) refuses what slips past them. A saved world's tool is mounted with its `places` (SP5b spec §3.7,
  * D13): the canvas draws them as dots (`setPlaces`, redrawn at every change of the places) and a fifth side-panel tab,
- * Places, lists them (`placesTab.ts`); the pin is exposed (`pin`, `onPin`) for its "+ Add at the pin".
+ * Places, lists them (`placesTab.ts`); the pin is exposed (`pin`, `onPin`) for its "+ Add at the pin". The world's tool
+ * is mounted with its `caves` (SP6a spec §7.3, D12; `?map` has none, it has no 3D): a Caves tab after Presets
+ * (`cavesTab.ts`) with the page's X-ray controls, which the page keeps in step through `setXray`, and the tool's two
+ * links (`caveTabDeps`): "Cave slice" opens the Density tab's horizontal `caves` slice, "Cave parameters" the Caves
+ * section of Parameters.
  */
 import './map.css';
 import type { WorldSession } from '../../engine/session';
@@ -37,12 +41,13 @@ import { createRuleReadout } from '../crossSection/voxels';
 import { createDensityTab } from '../inspector/densityTab';
 import { TREE_LEAVES } from '../inspector/editorModel';
 import { createHoverModel, hoverTarget, type HoverVoxel } from '../inspector/hoverModel';
-import { createDraftLog, hoverLineText, mapHoverVoxel, sliceSquare } from '../inspector/sliceModel';
+import { createDraftLog, hoverLineText, mapHoverVoxel, sliceSquare, type SliceState } from '../inspector/sliceModel';
 import { createSliceView } from '../inspector/sliceView';
 import { createParamPanel } from '../paramPanel/panel';
 import { createPresetsTab } from '../presets/presetsTab';
 import { createSplineDrawer } from '../splineEditor/drawer';
 import { isSplineLeaf } from '../splineEditor/model';
+import { CAVE_PARAMETERS_LEAF, CAVE_SLICE_EXTENT, createCavesTab, type CavesTabDeps } from './cavesTab';
 import { mapClickAction } from './clickAction';
 import { createHoverReadout } from './hoverPanel';
 import { createLayout, drawerTabOnScreen, layoutTabs, tabOnScreen, type LayoutStorage } from './layout';
@@ -53,6 +58,7 @@ import { draftOf, type DriverCanvas, type PreviewDriver } from './previewDriver'
 import { createToolbar, open3dHref } from './toolbar';
 import { centredView } from './viewMath';
 import type { Places } from '../world/places';
+import type { XrayBand } from '../world/xrayStrip';
 
 /** The pool the tool's views run on (tiles, points, stats, slices, probes, spawn): every editor takes the pool's type. */
 export type MapPool = WorkerPool;
@@ -66,6 +72,35 @@ export interface MapPlaces {
   teleport(p: Place): void;
   /** The Places tab's "+ Add at the pin", at the pin's x and z. */
   addAt(x: number, z: number): void;
+}
+
+/** What the page gives the world's map for its Caves tab (SP6a spec §7.3): the tab's deps but the two links the tool makes. */
+export type MapCaves = Omit<CavesTabDeps, 'openSlice' | 'revealParameters'>;
+
+/**
+ * The Caves tab's deps in the world's map (SP6a spec §7.3): the page's `caves`, with the tool's two links. "Cave slice" at
+ * y opens the Density tab's horizontal `caves` slice at y, `CAVE_SLICE_EXTENT` blocks across, centred on the camera as
+ * it is at the press, then shows the drawer on Density (which requests it); "Cave parameters" shows Parameters and
+ * reveals `CAVE_PARAMETERS_LEAF`.
+ */
+export function caveTabDeps(caves: MapCaves, tool: {
+  openSlice(s: SliceState): void;
+  openDrawer(tab: 'density'): void;
+  showTab(tab: 'parameters'): void;
+  reveal(path: string): void;
+}): CavesTabDeps {
+  return {
+    ...caves,
+    openSlice(y) {
+      const c = caves.camera();
+      tool.openSlice({ plane: 'horizontal', field: 'caves', y, cx: c.x, cz: c.z, extent: CAVE_SLICE_EXTENT });
+      tool.openDrawer('density');
+    },
+    revealParameters() {
+      tool.showTab('parameters');
+      tool.reveal(CAVE_PARAMETERS_LEAF);
+    },
+  };
 }
 
 export interface MapToolDeps {
@@ -93,6 +128,8 @@ export interface MapToolDeps {
   readonly shortcutsEnabled: (a: ShortcutAction) => boolean;
   /** A saved world's places: the dots and the Places tab (SP5b spec §3.7, D13); absent or null on `?map` and unsaved. */
   readonly places?: MapPlaces | null;
+  /** The world's Caves tab (SP6a spec §7.3, D12): the page's X-ray controls and the camera; absent or null on `?map`. */
+  readonly caves?: MapCaves | null;
   /** Called once, at the end of the mount, with the parts the standalone page's `?perf=edit` hook reads. */
   readonly onMounted?: (parts: { canvas: MapCanvas; host: HTMLElement; view(): MapView; editAt<T>(at: number, fn: () => T): T }) => void;
 }
@@ -123,6 +160,11 @@ export interface MapTool {
   pin(): readonly [number, number] | null;
   /** `f` after every new pin; returns the unsubscribe. */
   onPin(f: (p: readonly [number, number] | null) => void): () => void;
+  /**
+   * The page's X-ray state for the Caves tab (SP6a spec §7.3): on or off, its band and its radius in blocks, at the mount
+   * and at every change; nothing without the tab (`?map`).
+   */
+  setXray(on: boolean, band: XrayBand, radius: number): void;
   /** Runs every disposer once, in reverse order of creation; later calls do nothing. */
   dispose(): void;
 }
@@ -139,7 +181,8 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   let view: MapView = deps.initialView;
 
   const mapPlaces = deps.places ?? null;
-  const layout = createLayout(host, deps.storage, { tabs: layoutTabs(mapPlaces !== null) });
+  const mapCaves = deps.caves ?? null;
+  const layout = createLayout(host, deps.storage, { tabs: layoutTabs(mapPlaces !== null, mapCaves !== null) });
   disposers.add(() => layout.dispose());
   const notices = createNotices(layout.notices);
   disposers.add(() => notices.dispose());
@@ -431,6 +474,16 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   const presets = createPresetsTab(layout.tabs.presets, { session, notices, edit });
   disposers.add(() => presets.dispose());
 
+  // The world's Caves tab (SP6a spec §7.3, D12): the page's X-ray controls, and the links to the Density tab's cave slice
+  // and to the Caves section of Parameters.
+  const cavesTab = mapCaves === null ? null : createCavesTab(layout.tabs.caves, caveTabDeps(mapCaves, {
+    openSlice: (s) => slices.open(s),
+    openDrawer: (t) => layout.openDrawer(t),
+    showTab: (t) => layout.showTab(t),
+    reveal: (path) => panel.reveal(path),
+  }));
+  if (cavesTab !== null) disposers.add(() => cavesTab.dispose());
+
   // A saved world's places (SP5b spec §3.7, D13): the dots on the canvas, redrawn at every change of the places, and the
   // Places tab, whose "+ Add at the pin" follows the pin.
   if (mapPlaces !== null) {
@@ -511,6 +564,7 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
     },
     pin: () => pin,
     onPin,
+    setXray: (on, band, radius) => cavesTab?.set(on, band, radius),
     dispose: () => disposers.dispose(),
   };
 }

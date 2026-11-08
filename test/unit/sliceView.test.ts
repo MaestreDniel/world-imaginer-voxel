@@ -6,14 +6,17 @@
  * extent changes (clamped into the window) and the y control, the map's square overlay, the field select's label of
  * `selected`, the status line, the form's hover line, and the params of the draft the pool's resolved configure holds.
  */
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { WINDOW_HALF } from '../../src/core/coords';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import type { Params } from '../../src/core/params/schema';
-import type { FieldSliceResult } from '../../src/engine/workerPool';
+import type { FieldSliceResult, WorkerPool } from '../../src/engine/workerPool';
 import { sliceSampleVoxel, type SliceGeometry } from '../../src/gen/inspect/fieldSlice';
 import type { Segment } from '../../src/metrics/crossSection';
 import type { Selection } from '../../src/ui/inspector/model';
+import { createSliceView } from '../../src/ui/inspector/sliceView';
+import type { FieldSliceSpec } from '../../src/workers/protocol';
+import { installDom } from './fixtures/domShim';
 import { XRAY_COLORS, XRAY_LABELS } from '../../src/render/xrayPalette';
 import { VOXEL_COLORS } from '../../src/ui/crossSection/voxels';
 import {
@@ -287,5 +290,64 @@ describe('the draft the pool\'s resolved configure holds (§4.5: requests run on
     fresh.remember(3, p, 2);
     expect(fresh.size).toBe(2);
     expect(fresh.configured({ poolEpoch: 1, sessionEpoch: 2 })!.params).toBe(p);
+  });
+});
+
+describe('SliceView.open (SP6a spec §7.3: the Caves tab\'s "Cave slice")', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  /** The view on the DOM shim over a recording pool whose slices never settle, at DEFAULTS on the resolved configure. */
+  function mountView() {
+    const dom = installDom();
+    vi.stubGlobal('ResizeObserver', class { observe(): void {} disconnect(): void {} });
+    const specs: FieldSliceSpec[] = [];
+    const pool = {
+      size: 4,
+      epoch: 3,
+      fieldSlice: (spec: FieldSliceSpec) => {
+        specs.push(spec);
+        return { promise: new Promise<never>(() => {}), cancel: () => {} };
+      },
+    } as unknown as Pick<WorkerPool, 'fieldSlice' | 'size' | 'epoch'>;
+    const states: SliceState[] = [];
+    const host = dom.document.createElement('div');
+    const view = createSliceView(host as unknown as HTMLElement, {
+      session: { state: { epoch: 1, params: DEFAULTS }, inGesture: false },
+      pool,
+      configured: () => ({ poolEpoch: 3, sessionEpoch: 1, params: DEFAULTS }),
+      line: () => null,
+      selection: () => DENSITY_SEL,
+      start: () => ({ line: null, viewCentre: [0, 0], pin: null }),
+      onState: (s) => { states.push(s); },
+      onHover: () => {},
+    });
+    return { view, specs, states };
+  }
+  const CAVE: SliceState = { plane: 'horizontal', field: 'caves', y: 207, cx: 100.5, cz: -40.5, extent: 256 };
+
+  test('opened while hidden, it sets the plane, the field, y and the centre (clamped, as setCentre) and the next show requests one slice', () => {
+    const { view, specs, states } = mountView();
+    view.open(CAVE);
+    const want: SliceState = { plane: 'horizontal', field: 'caves', y: 207, extent: 256, cx: 100, cz: -41 };
+    expect(view.state).toEqual(want);
+    expect(states).toEqual([want]);
+    expect(specs).toEqual([]);
+    // The drawer shown on Density: one request, the 128² caves slice (its 32² draft is refused at 256 blocks, §7.4).
+    view.setShown(true);
+    expect(view.state).toEqual(want);
+    expect(specs).toEqual([{ plane: 'horizontal', cx: 100, cz: -41, extent: 256, y: 207, n: 128, field: 'caves', path: '' }]);
+    view.dispose();
+  });
+
+  test('opened while shown, it replaces the state and requests one slice; a centre outside the window is clamped; a wrong extent is a RangeError', () => {
+    const { view, specs } = mountView();
+    view.setShown(true);
+    const before = specs.length;
+    view.open(CAVE);
+    expect(specs.slice(before)).toEqual([{ plane: 'horizontal', cx: 100, cz: -41, extent: 256, y: 207, n: 128, field: 'caves', path: '' }]);
+    view.open({ ...CAVE, cx: 2 * W });
+    expect(view.state?.cx).toBe(W - 128);
+    expect(() => view.open({ ...CAVE, extent: 100 })).toThrow(RangeError);
+    view.dispose();
   });
 });

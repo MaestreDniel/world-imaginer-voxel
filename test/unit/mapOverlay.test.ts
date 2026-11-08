@@ -24,6 +24,8 @@ import {
 import { createPlaces, PLACE_COLOURS } from '../../src/ui/world/places';
 import type { Place } from '../../src/persist/saves';
 import { createModifySwitch } from '../../src/ui/world/modifyMode';
+import { bandSet, XRAY_ALL, type XrayBand } from '../../src/ui/world/xrayStrip';
+import type { MapCaves } from '../../src/ui/map/mapTool';
 import { installDom, type FakeDocument, type FakeElement } from './fixtures/domShim';
 
 interface FakeTool {
@@ -32,7 +34,7 @@ interface FakeTool {
   readonly host: HTMLElement;
   readonly calls: {
     show: Array<{ x: number; z: number } | undefined>; hide: number; setPlayer: Array<[number, number, number]>; panel: number; drawer: number; disposed: number;
-    editable: boolean[];
+    editable: boolean[]; xray: Array<[boolean, XrayBand, number]>;
   };
 }
 
@@ -42,7 +44,7 @@ vi.mock('../../src/ui/map/mapTool', async () => {
   const { draftOf } = await import('../../src/ui/map/previewDriver');
   return {
     createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
-      const calls: FakeTool['calls'] = { show: [], hide: 0, setPlayer: [], panel: 0, drawer: 0, disposed: 0, editable: [] };
+      const calls: FakeTool['calls'] = { show: [], hide: 0, setPlayer: [], panel: 0, drawer: 0, disposed: 0, editable: [], xray: [] };
       let view: MapView = deps.initialView;
       const unsubscribe = deps.session.subscribe((s, c) => deps.driver.change(draftOf(s), c, 0));
       const removeKeys = installShortcuts((a) => {
@@ -64,6 +66,7 @@ vi.mock('../../src/ui/map/mapTool', async () => {
         notices: {} as MapTool['notices'],
         setView(v) { view = v; },
         setEditable(on) { calls.editable.push(on); },
+        setXray(on, band, radius) { calls.xray.push([on, band, radius]); },
         pin: () => null,
         onPin: () => () => {},
         dispose() {
@@ -175,6 +178,8 @@ function setup(o: {
   modify?: { readonly element: HTMLElement; on(): boolean };
   /** A saved world's places (SP5b spec §3.7); none: an unsaved world. */
   places?: MapOverlayOptions['places'];
+  /** The world's Caves tab (SP6a spec §7.3); none: no Caves tab. */
+  caves?: MapOverlayOptions['caves'];
 } = {}) {
   const doc: FakeDocument = dom.document;
   const app = doc.createElement('div');
@@ -225,6 +230,7 @@ function setup(o: {
     notices,
     modify: o.modify ?? null,
     places: o.places ?? null,
+    caves: o.caves ?? null,
   });
   return {
     doc, app, worldHost, canvas, session, driver, fly, input, timers, overlay, world, limiter, save, viewChanged, notices,
@@ -1066,5 +1072,54 @@ describe('a saved world\'s places on its map (SP5b spec §3.7, D13)', () => {
       expect([s.overlay.shown, s.overlay.owner], `${mode} true`).toEqual(mode === 'full' ? [false, 'world'] : [true, 'map']);
       s.overlay.dispose();
     }
+  });
+});
+
+describe('the world\'s Caves tab (SP6a spec §7.3, D12)', () => {
+  /** The page's Caves deps (recording) and its X-ray state, which the test moves. */
+  function caves() {
+    const log: string[] = [];
+    const tab: MapCaves = {
+      onXray: (on) => { log.push(`xray ${on}`); },
+      onBand: (b) => { log.push(`band ${b.yMin} ${b.yMax}`); },
+      find: (kind) => { log.push(`find ${kind}`); },
+      cancelFind: () => { log.push('cancel'); },
+      camera: () => ({ x: 0, y: 80, z: 0 }),
+    };
+    const state = { on: true, band: bandSet(10, 41), radius: 176 };
+    return { log, tab, state, option: { tab, xray: () => state } satisfies NonNullable<MapOverlayOptions['caves']> };
+  }
+
+  test('the world\'s map mounts the tool with the page\'s cave deps and pushes the page\'s X-ray state into it at the mount', async () => {
+    const c = caves();
+    const { overlay } = setup({ caves: c.option });
+    // Before the mount there is no tool: the change is not kept (the mount reads the page's state).
+    overlay.setXray(false, XRAY_ALL, 160);
+    expect(tools()).toHaveLength(0);
+    const t = await openMounted(overlay);
+    expect(t.deps.caves).toBe(c.tab);
+    expect(t.calls.xray).toEqual([[true, bandSet(10, 41), 176]]);
+    // Every later change of the page's X-ray reaches the tab, shown or hidden.
+    overlay.setXray(false, XRAY_ALL, 176);
+    overlay.close();
+    overlay.setXray(true, bandSet(-64, -33), 240);
+    expect(t.calls.xray).toEqual([[true, bandSet(10, 41), 176], [false, XRAY_ALL, 176], [true, bandSet(-64, -33), 240]]);
+    // Reopening does not push again (the tab already holds the page's state).
+    overlay.open();
+    expect(t.calls.xray).toHaveLength(3);
+    overlay.dispose();
+    overlay.setXray(false, XRAY_ALL, 176);
+    expect(t.calls.xray).toHaveLength(3);
+    expect(c.log).toEqual([]);
+  });
+
+  test('without caves the tool gets none and the mount pushes nothing; a later change still reaches the tool, which has no tab to set', async () => {
+    const { overlay } = setup();
+    const t = await openMounted(overlay);
+    expect(t.deps.caves).toBeNull();
+    expect(t.calls.xray).toEqual([]);
+    overlay.setXray(true, XRAY_ALL, 176);
+    expect(t.calls.xray).toEqual([[true, XRAY_ALL, 176]]);
+    overlay.dispose();
   });
 });

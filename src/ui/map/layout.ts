@@ -1,7 +1,7 @@
 /**
  * The editor page layout (SP2b spec §3.1): a CSS grid with the toolbar row, a notice strip, the main row
- * (the map, a splitter and the side panel with the tabs World, Parameters, Biomes and Presets, and in a saved world's
- * map a fifth, Places, SP5b spec §3.7) and the drawer row under both, with its own splitter and the tabs Spline
+ * (the map, a splitter and the side panel with the tabs World, Parameters, Biomes and Presets, then in the world's map
+ * Caves, SP6a spec §7.3, and in a saved world's map Places, SP5b spec §3.7) and the drawer row under both, with its own splitter and the tabs Spline
  * (§4.2), Cross-section (§4.5) and Density (SP3d spec §3.1). The drawer is closed until an editor opens it on its tab.
  * Panel width, drawer height, active tab and open sections persist in localStorage under `wi10.layout.v1`: the
  * parsing and clamping are pure, and every storage access is behind try/catch, so a missing, invalid or unreachable
@@ -13,15 +13,22 @@
  */
 import { el } from '../common/dom';
 
-export type TabId = 'world' | 'parameters' | 'biomes' | 'presets' | 'places';
-/** The side panel's tabs on `?map` and in an unsaved world's map. */
+export type TabId = 'world' | 'parameters' | 'biomes' | 'presets' | 'caves' | 'places';
+/** The side panel's tabs on `?map`. */
 export const TAB_IDS: readonly TabId[] = Object.freeze(['world', 'parameters', 'biomes', 'presets']);
 export const TAB_LABELS: Readonly<Record<TabId, string>> = Object.freeze({
-  world: 'World', parameters: 'Parameters', biomes: 'Biomes', presets: 'Presets', places: 'Places',
+  world: 'World', parameters: 'Parameters', biomes: 'Biomes', presets: 'Presets', caves: 'Caves', places: 'Places',
 });
+/** Every tab, in the order a map shows them. */
+const ALL_TABS: readonly TabId[] = Object.freeze([...TAB_IDS, 'caves', 'places']);
 const TABS_WITH_PLACES: readonly TabId[] = Object.freeze([...TAB_IDS, 'places']);
-/** The tabs a map shows: `TAB_IDS`, and Places after Presets in a saved world's map (SP5b spec §3.7, D13). */
-export const layoutTabs = (places: boolean): readonly TabId[] => (places ? TABS_WITH_PLACES : TAB_IDS);
+const TABS_WITH_CAVES: readonly TabId[] = Object.freeze([...TAB_IDS, 'caves']);
+/**
+ * The tabs a map shows: `TAB_IDS`, then Caves in the world's map (`caves`, SP6a spec §7.3, D12: `?map` has no 3D) and
+ * Places in a saved world's map (`places`, SP5b spec §3.7, D13).
+ */
+export const layoutTabs = (places: boolean, caves: boolean): readonly TabId[] =>
+  (caves ? (places ? ALL_TABS : TABS_WITH_CAVES) : (places ? TABS_WITH_PLACES : TAB_IDS));
 /** The drawer tabs in key order; Density (SP3d spec §3.1) is appended last, so the tab keys keep their order. */
 export type DrawerTabId = 'spline' | 'section' | 'density';
 export const DRAWER_TAB_IDS: readonly DrawerTabId[] = Object.freeze(['spline', 'section', 'density']);
@@ -87,8 +94,8 @@ export function tabKeyTarget(e: TabKey, index: number, count: number): number | 
 
 /**
  * The stored text, field by field: a missing or invalid field gives its default; text that is not a JSON object gives the
- * defaults. The key is shared by every map, so a stored tab the layout does not show (Places on `?map`) gives the default
- * tab.
+ * defaults. The key is shared by every map, so a stored tab the layout does not show (Caves or Places on `?map`) gives
+ * the default tab.
  */
 export function parseLayout(text: string | null, shown: readonly TabId[] = TAB_IDS): Layout {
   if (text === null) return DEFAULT_LAYOUT;
@@ -233,7 +240,7 @@ export function createLayout(host: HTMLElement, storage: LayoutStorage | null, o
 
   const buttons = {} as Record<TabId, HTMLButtonElement>;
   const tabs = {} as Record<TabId, HTMLElement>;
-  for (const id of TABS_WITH_PLACES) {
+  for (const id of ALL_TABS) {
     const b = el('button', '', TAB_LABELS[id]);
     b.type = 'button';
     b.id = `map-tab-${id}`;

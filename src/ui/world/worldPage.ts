@@ -2062,6 +2062,12 @@ export function pageKeyName(a: Action): string {
 /** How long the first X's notice shows, ms (SP6a spec §7.2). */
 export const XRAY_NOTICE_MS = 6_000;
 
+/**
+ * The X-ray's radius in blocks at render distance `rd` (SP6a spec §5.3): the fog end (rd − 1)·16 (the materials'
+ * `fogRange`, which the page may not import), which the renderer's X-ray follows; the Caves tab's radius readout.
+ */
+export const xrayRadiusOf = (rd: number): number => (rd - 1) * 16;
+
 /** The first X's notice (SP6a spec §7.2), its key names from the key map's labels (`pageKeyName`). */
 export const xrayNotice = (keyName: (a: Action) => string): string =>
   `X-ray: ${keyName('xrayDown')} and ${keyName('xrayUp')} move the depth band, ${keyName('xrayAll')} shows every depth`;
@@ -2088,7 +2094,8 @@ export interface PageXray {
  * The page's X-ray over the renderer (`setXray`, `setXrayBand`: uniforms, the sky dome and the clear colour only), the
  * strip and the notices, with the camera's y for a first band step. Off at every depth at a page's start. A band key
  * acts with the X-ray off too: the band shows at the next X. A toggle allocates nothing (spec §5.3): the strip writes
- * only what changed; a band step returns a new band and the strip's new text (a user action, not a frame).
+ * only what changed; a band step returns a new band and the strip's new text (a user action, not a frame). `changed`,
+ * when given, is called after every toggle and band change (the page keeps the map's Caves tab in step, SP6a spec §7.3).
  */
 export function createPageXray(o: {
   readonly renderer: Pick<WorldRenderer, 'setXray' | 'setXrayBand'>;
@@ -2096,6 +2103,7 @@ export function createPageXray(o: {
   readonly notices: Pick<WorldNotices, 'show'>;
   cameraY(): number;
   keyName(a: Action): string;
+  changed?(): void;
 }): PageXray {
   let on = false;
   let band = XRAY_ALL;
@@ -2104,6 +2112,7 @@ export function createPageXray(o: {
     band = b;
     o.renderer.setXrayBand(b.yMin, b.yMax);
     o.strip.set(on, b);
+    o.changed?.();
   };
   return {
     get on() { return on; },
@@ -2118,6 +2127,7 @@ export function createPageXray(o: {
             noticed = true;
             o.notices.show(xrayNotice(o.keyName), { timeoutMs: XRAY_NOTICE_MS });
           }
+          o.changed?.();
           break;
         case 'xrayDown': setBand(bandStep(band, -1, o.cameraY())); break;
         case 'xrayUp': setBand(bandStep(band, 1, o.cameraY())); break;
@@ -4985,15 +4995,19 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const limiter: FpsLimiter = createFpsLimiter(settings.fpsCap);
     const frames = createFrameStats();
     // The X-ray (SP6a spec §5.3, §7.2): its strip beside the build HUD and its state, which X, PageDown, PageUp and Home
-    // change through `onAction`; the HUD shows its line while it is on.
+    // change through `onAction`, and the map's Caves tab through its checkbox and sliders (§7.3); the HUD shows its line
+    // while it is on. Every change, and every render distance (the radius), is pushed into the Caves tab once the map's
+    // tool is mounted (the mount reads the state itself).
     const xrayStrip = createXrayStrip(host);
     teardown.push(() => xrayStrip.dispose());
+    const pushXray = (): void => mapRef?.setXray(pageXray.on, pageXray.band, xrayRadiusOf(liveRd));
     const pageXray = createPageXray({
       renderer: world,
       strip: xrayStrip,
       notices,
       cameraY: () => fly.y,
       keyName: pageKeyName,
+      changed: pushXray,
     });
     // The HUD reads every count from its owner (SP4b spec §7.3), on its own timer outside the frame (§3.10).
     const gpu: GpuEstimate = { sectionsBytes: 0, skyBytes: 0, textureBytes: 0, lightmapBytes: 0, drawingBufferBytes: 0 };
@@ -5121,6 +5135,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           fog.setTarget(r);
           // A raise scans the filled radius on the next rendered frame.
           fogStep.rescan();
+          // The Caves tab's radius readout follows the fog end.
+          pushXray();
         },
       },
       panel: {
@@ -5397,6 +5413,19 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         addAt: (x, z) => addPlaceAt({
           pool: workers, palette, help, settings: settingsPanel, dialog: placeDialog, places, camera: fly, notices,
         }, x, z),
+      },
+      // The world's Caves tab (SP6a spec §7.3, D12): its checkbox toggles the page's X-ray as X does, its sliders and All
+      // depths set the band, the camera places the cave slice; the mount shows the page's X-ray state as it is. The Find
+      // row lands with the finder (§7.3).
+      caves: {
+        tab: {
+          onXray: (on) => { if (on !== pageXray.on) pageXray.action('xray'); },
+          onBand: (b) => pageXray.setBand(b),
+          find: () => {},
+          cancelFind: () => {},
+          camera: () => fly,
+        },
+        xray: () => ({ on: pageXray.on, band: pageXray.band, radius: xrayRadiusOf(liveRd) }),
       },
     });
     mapRef = mapOverlay;

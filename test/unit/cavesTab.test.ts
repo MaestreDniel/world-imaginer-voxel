@@ -1,0 +1,283 @@
+/**
+ * The world map's Caves tab (SP6a spec §7.3, D12; Review Focus 3; ruling P24), on the DOM shim: the X-ray checkbox that
+ * mirrors X both ways, the Lowest y and Highest y sliders (lowest ≤ highest kept by moving the other), All depths, the
+ * legend, the radius readout, "Cave slice" (at the band's middle y, the camera's y at all) and "Cave parameters" (the
+ * Caves section's first leaf, `caves.cheese.offset`, since `reveal` takes a leaf path).
+ */
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
+import { XRAY_COLORS, XRAY_LABELS } from '../../src/render/xrayPalette';
+import {
+  CAVE_PARAMETERS_LEAF, CAVE_SLICE_EXTENT, caveSliceY, createCavesTab, radiusText, sliderBand, type CavesTabDeps,
+} from '../../src/ui/map/cavesTab';
+import { panelTree, type SectionSpec } from '../../src/ui/paramPanel/model';
+import { createPageXray, pageKeyName } from '../../src/ui/world/worldPage';
+import { bandSet, createXrayStrip, stripText, XRAY_ALL, type XrayBand } from '../../src/ui/world/xrayStrip';
+import { installDom, type FakeElement } from './fixtures/domShim';
+
+let dom: ReturnType<typeof installDom>;
+beforeEach(() => { dom = installDom(); });
+afterEach(() => { vi.unstubAllGlobals(); });
+
+/** The tab over recording deps, the camera at `camera`; `$` finds a control by id. */
+function mount(camera = { x: 100.5, y: 80.9, z: -40.5 }) {
+  const calls: string[] = [];
+  const bands: XrayBand[] = [];
+  const slices: number[] = [];
+  const deps: CavesTabDeps = {
+    onXray: (on) => { calls.push(`xray ${on}`); },
+    onBand: (b) => { bands.push(b); },
+    openSlice: (y) => { slices.push(y); },
+    revealParameters: () => { calls.push('reveal'); },
+    find: (kind) => { calls.push(`find ${kind}`); },
+    cancelFind: () => { calls.push('cancel'); },
+    camera: () => camera,
+  };
+  const host = dom.document.createElement('div');
+  dom.body.append(host);
+  const tab = createCavesTab(host as unknown as HTMLElement, deps);
+  const $ = (id: string): FakeElement => dom.el(id);
+  return { tab, deps, calls, bands, slices, camera, host, $ };
+}
+
+/** Moves a slider to `v` as the browser does on a drag: its value, then 'input'. */
+const slide = (e: FakeElement, v: number): void => {
+  e.value = String(v);
+  e.dispatchEvent(new Event('input'));
+};
+const tick = (e: FakeElement, on: boolean): void => {
+  (e as unknown as { checked: boolean }).checked = on;
+  e.dispatchEvent(new Event('change'));
+};
+const checked = (e: FakeElement): boolean => (e as unknown as { checked: boolean }).checked;
+
+describe('the band rules (SP6a spec §7.3; Review Focus 3)', () => {
+  test('sliderBand keeps lowest ≤ highest by moving the other slider; every band is whole blocks inside −64 … 319', () => {
+    expect(sliderBand('low', 200, 100)).toEqual(bandSet(200, 200));
+    expect(sliderBand('high', 200, 100)).toEqual(bandSet(100, 100));
+    expect(sliderBand('low', 10, 40)).toEqual(bandSet(10, 40));
+    expect(sliderBand('high', -64, 319)).toEqual(bandSet(-64, 319));
+    expect(sliderBand('low', 319, -64)).toEqual(bandSet(319, 319));
+    expect(sliderBand('high', 319, -64)).toEqual(bandSet(-64, -64));
+  });
+
+  test('the cave slice\'s y: ⌊(yMin + yMax) / 2⌋ of a band; the camera\'s ⌊y⌋ at all, kept inside −64 … 319', () => {
+    expect(caveSliceY(bandSet(100, 315), 0)).toBe(207);
+    expect(caveSliceY(bandSet(-64, -33), 0)).toBe(-49);
+    expect(caveSliceY(bandSet(7, 7), 0)).toBe(7);
+    expect(caveSliceY(XRAY_ALL, 80.9)).toBe(80);
+    expect(caveSliceY(XRAY_ALL, -20.5)).toBe(-21);
+    expect(caveSliceY(XRAY_ALL, 400)).toBe(319);
+    expect(caveSliceY(XRAY_ALL, -100)).toBe(-64);
+    expect(CAVE_SLICE_EXTENT).toBe(256);
+  });
+
+  test('"Cave parameters" reveals `caves.cheese.offset`, the Caves section\'s first leaf in the Parameters panel (reveal takes a leaf path)', () => {
+    expect(CAVE_PARAMETERS_LEAF).toBe('caves.cheese.offset');
+    const caves = panelTree().sections.find((s) => s.path === 'caves');
+    expect(caves).toBeDefined();
+    // The panel lists a section's own controls, then its sub-sections: the first leaf it shows.
+    const first = (s: SectionSpec): string | null => s.controls[0]?.path ?? s.sections.map(first).find((p) => p !== null) ?? null;
+    expect(first(caves!)).toBe(CAVE_PARAMETERS_LEAF);
+  });
+});
+
+describe('the Caves tab (SP6a spec §7.3, D12)', () => {
+  test('its controls, in order: the X-ray (X) checkbox, the band line, Lowest y and Highest y (−64 … 319, step 1), All depths, the legend, the radius, Cave slice, Cave parameters', () => {
+    const m = mount();
+    const box = m.$('map-caves-xray');
+    expect(box.type).toBe('checkbox');
+    expect(box.parentElement!.textContent).toBe('X-ray (X)');
+    for (const [id, label, v] of [['map-caves-low', 'Lowest y', '-64'], ['map-caves-high', 'Highest y', '319']] as const) {
+      const s = m.$(id) as FakeElement & { min: string; max: string; step: string };
+      expect([s.type, s.min, s.max, s.step, s.value], id).toEqual(['range', '-64', '319', '1', v]);
+      expect(s.parentElement!.textContent, id).toBe(label);
+    }
+    expect(m.$('map-caves-band').textContent).toBe(stripText(XRAY_ALL));
+    expect(m.$('map-caves-all').textContent).toBe('All depths');
+    expect(m.$('map-caves-slice').textContent).toBe('Cave slice');
+    expect(m.$('map-caves-params').textContent).toBe('Cave parameters');
+    // The legend: the nine cave kinds and the surface film, in the X-ray's colours.
+    const legend = m.$('map-caves-legend');
+    const kinds = [...Object.values(CAVE_KIND).filter((k) => k !== CAVE_KIND.none).sort((a, b) => a - b), CAVE_FILM_KIND];
+    expect(kinds).toHaveLength(10);
+    expect(legend.children.map((k) => k.textContent)).toEqual(kinds.map((k) => XRAY_LABELS[k]));
+    expect(legend.children.map((k) => k.children[0]!.style['background'])).toEqual(kinds.map((k) => XRAY_COLORS[k]));
+    // The ids are in the tab's order.
+    const order = ['map-caves-xray', 'map-caves-band', 'map-caves-low', 'map-caves-high', 'map-caves-all', 'map-caves-legend', 'map-caves-radius', 'map-caves-slice', 'map-caves-params'];
+    const ids: string[] = [];
+    const walk = (e: FakeElement): void => {
+      for (const c of e.children) {
+        if (order.includes(c.id)) ids.push(c.id);
+        walk(c);
+      }
+    };
+    walk(m.host);
+    const all = ids;
+    expect(all).toEqual(order);
+    m.tab.dispose();
+    expect(m.host.children).toHaveLength(0);
+  });
+
+  test('setting Lowest y to 200 with Highest y 100 sets Highest y to 200; Highest y below Lowest y moves Lowest y; each change calls `onBand` once', () => {
+    const m = mount();
+    const low = m.$('map-caves-low');
+    const high = m.$('map-caves-high');
+    slide(high, 100);
+    expect(m.bands).toEqual([bandSet(-64, 100)]);
+    slide(low, 200);
+    expect([low.value, high.value]).toEqual(['200', '200']);
+    expect(m.bands.at(-1)).toEqual(bandSet(200, 200));
+    slide(high, 150);
+    expect([low.value, high.value]).toEqual(['150', '150']);
+    expect(m.bands.at(-1)).toEqual(bandSet(150, 150));
+    slide(low, -10);
+    expect([low.value, high.value]).toEqual(['-10', '150']);
+    expect(m.bands).toEqual([bandSet(-64, 100), bandSet(200, 200), bandSet(150, 150), bandSet(-10, 150)]);
+    expect(m.$('map-caves-band').textContent).toBe('X-ray · y −10 … 150 · by cave type');
+  });
+
+  test('All depths gives `XRAY_ALL`; `set` with every depth puts the sliders at −64 and 319', () => {
+    const m = mount();
+    slide(m.$('map-caves-low'), 12);
+    m.$('map-caves-all').click();
+    expect(m.bands.at(-1)).toBe(XRAY_ALL);
+    m.tab.set(false, XRAY_ALL, 176);
+    expect([m.$('map-caves-low').value, m.$('map-caves-high').value]).toEqual(['-64', '319']);
+    expect(m.$('map-caves-band').textContent).toBe(stripText(XRAY_ALL));
+  });
+
+  test('the radius readout follows `set`', () => {
+    const m = mount();
+    m.tab.set(false, XRAY_ALL, 176);
+    expect(m.$('map-caves-radius').textContent).toBe(radiusText(176));
+    expect(radiusText(176)).toBe('Radius 176 blocks');
+    m.tab.set(false, XRAY_ALL, 240);
+    expect(m.$('map-caves-radius').textContent).toBe('Radius 240 blocks');
+  });
+
+  test('Cave slice opens the Density tab at y = ⌊(yMin + yMax) / 2⌋, at the camera\'s y with the band at all', () => {
+    const m = mount({ x: 0, y: 80.9, z: 0 });
+    m.$('map-caves-slice').click();
+    expect(m.slices).toEqual([80]);
+    slide(m.$('map-caves-high'), -33);
+    m.$('map-caves-slice').click();
+    expect(m.slices).toEqual([80, -49]);
+    // A band the page set (PageUp, PageDown) is the tab's too.
+    m.tab.set(true, bandSet(100, 315), 176);
+    m.$('map-caves-slice').click();
+    expect(m.slices).toEqual([80, -49, 207]);
+    m.tab.set(true, XRAY_ALL, 176);
+    m.camera.y = -20.5;
+    m.$('map-caves-slice').click();
+    expect(m.slices).toEqual([80, -49, 207, -21]);
+  });
+
+  test('Cave parameters calls `revealParameters`', () => {
+    const m = mount();
+    m.$('map-caves-params').click();
+    expect(m.calls).toEqual(['reveal']);
+  });
+
+  test('`set` writes only what changed and calls no dep (the page pushes its state; the tab never echoes it back)', () => {
+    const m = mount();
+    const box = m.$('map-caves-xray');
+    const band = m.$('map-caves-band');
+    m.tab.set(true, bandSet(10, 41), 176);
+    expect([checked(box), m.$('map-caves-low').value, m.$('map-caves-high').value, band.textContent]).toEqual([true, '10', '41', 'X-ray · y 10 … 41 · by cave type']);
+    const line = band.childNodes[0];
+    m.tab.set(true, bandSet(10, 41), 176);
+    expect(band.childNodes[0]).toBe(line);
+    expect([m.calls, m.bands, m.slices]).toEqual([[], [], []]);
+  });
+});
+
+describe('the Caves tab over the page\'s X-ray (SP6a spec §7.3; worldPage.ts wires the same)', () => {
+  /** The page's X-ray, its strip and the tab, wired as the page wires them: the tab's changes to the page, the page's state back. */
+  function wired(cameraY = 80.5) {
+    const calls: string[] = [];
+    const strip = createXrayStrip(dom.body as unknown as HTMLElement);
+    const host = dom.document.createElement('div');
+    dom.body.append(host);
+    let tab: ReturnType<typeof createCavesTab> | null = null;
+    const radius = 176;
+    const push = (): void => tab?.set(xray.on, xray.band, radius);
+    const xray = createPageXray({
+      renderer: { setXray: (on) => { calls.push(`setXray ${on}`); }, setXrayBand: (a, b) => { calls.push(`band ${a} ${b}`); } },
+      strip,
+      notices: { show: () => {} },
+      cameraY: () => cameraY,
+      keyName: pageKeyName,
+    });
+    tab = createCavesTab(host as unknown as HTMLElement, {
+      onXray: (on) => {
+        if (on !== xray.on) xray.action('xray');
+        push();
+      },
+      onBand: (b) => {
+        xray.setBand(b);
+        push();
+      },
+      openSlice: () => {},
+      revealParameters: () => {},
+      find: () => {},
+      cancelFind: () => {},
+      camera: () => ({ x: 0, y: cameraY, z: 0 }),
+    });
+    push();
+    const key = (a: 'xray' | 'xrayDown' | 'xrayUp' | 'xrayAll'): void => {
+      xray.action(a);
+      push();
+    };
+    return { xray, calls, key, $: (id: string) => dom.el(id), stripLine: () => dom.el('world-xray-strip').children[0]!.textContent };
+  }
+
+  test('a slider change calls `onBand` and the page\'s strip follows; All depths returns the strip to every depth', () => {
+    const w = wired();
+    w.key('xray');
+    slide(w.$('map-caves-high'), 100);
+    expect(w.calls.at(-1)).toBe('band -64 100');
+    expect(w.stripLine()).toBe('X-ray · y −64 … 100 · by cave type');
+    slide(w.$('map-caves-low'), 200);
+    expect(w.xray.band).toEqual(bandSet(200, 200));
+    expect(w.stripLine()).toBe('X-ray · y 200 … 200 · by cave type');
+    w.$('map-caves-all').click();
+    expect(w.xray.band).toBe(XRAY_ALL);
+    expect(w.stripLine()).toBe(stripText(XRAY_ALL));
+  });
+
+  test('the checkbox mirrors X both ways', () => {
+    const w = wired();
+    const box = w.$('map-caves-xray');
+    expect(checked(box)).toBe(false);
+    w.key('xray');
+    expect([w.xray.on, checked(box)]).toEqual([true, true]);
+    tick(box, false);
+    expect([w.xray.on, checked(box)]).toEqual([false, false]);
+    expect(w.calls).toEqual(['setXray true', 'setXray false']);
+    tick(box, true);
+    expect([w.xray.on, checked(box)]).toEqual([true, true]);
+    w.key('xray');
+    expect([w.xray.on, checked(box)]).toEqual([false, false]);
+  });
+
+  test('ruling P24: the slider band [100, 315] with PageUp gives [104, 319], with PageDown [92, 307]; the sliders follow the keys', () => {
+    const w = wired();
+    const low = w.$('map-caves-low');
+    const high = w.$('map-caves-high');
+    slide(low, 100);
+    slide(high, 315);
+    expect(w.xray.band).toEqual(bandSet(100, 315));
+    w.key('xrayUp');
+    expect([w.xray.band.yMin, w.xray.band.yMax]).toEqual([104, 319]);
+    expect([low.value, high.value]).toEqual(['104', '319']);
+    slide(low, 100);
+    slide(high, 315);
+    w.key('xrayDown');
+    expect([w.xray.band.yMin, w.xray.band.yMax]).toEqual([92, 307]);
+    expect([low.value, high.value]).toEqual(['92', '307']);
+    // Home: every depth, the sliders at the ends.
+    w.key('xrayAll');
+    expect([low.value, high.value]).toEqual(['-64', '319']);
+  });
+});

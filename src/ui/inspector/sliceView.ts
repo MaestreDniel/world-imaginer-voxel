@@ -14,7 +14,8 @@
  *   or any leaf over a tree with SP6a's cave terms, density, node and caves slices (live and pinned) wait for its end and then
  *   ask for the draft it ended on (SP6a D13, §7.4: `createCaveGestureHold`). The state starts at the first show
  *   (`initialSliceState`) and is reported to the page (`onState`: the map's square and the click routing); a map click on
- *   the horizontal plane sets the centre (`setCentre`). The slice hover reports its voxel (`onHover`) for the form's value.
+ *   the horizontal plane sets the centre (`setCentre`); the world map's Caves tab opens a whole state (`open`, SP6a
+ *   §7.3). The slice hover reports its voxel (`onHover`) for the form's value.
  * - Pinned slices (§11's cut line; master §5.5): "Pin" copies the live slice's plane, field and node into a pin (up to
  *   3, side by side under the live slice); each pin has its own request stream (`createSlicePins`), asked on every
  *   `update()` like the live one, and shows its label, image (the live scale setting, the 0-contour and the sea level),
@@ -69,6 +70,13 @@ export interface SliceView {
   setShown(shown: boolean): void;
   /** A map click on the horizontal plane: the centre moves there (clamped into the window). */
   setCentre(x: number, z: number): void;
+  /**
+   * Opens the slice `s` (the Caves tab's "Cave slice", SP6a spec §7.3: `{ plane: 'horizontal', field: 'caves', y, cx, cz,
+   * extent: 256 }`): its plane, field, y and extent, the centre clamped into the window as `setCentre`'s; one request when
+   * shown, else at the next show (the drawer shown on Density after it). A RangeError for an extent that is not a slice
+   * extent or a centre that is not finite.
+   */
+  open(s: SliceState): void;
   /** Something a slice depends on changed: requests (when needed) and redraws. */
   update(): void;
   dispose(): void;
@@ -542,6 +550,9 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
     },
     setCentre(x, z) {
       if (state !== null) setState(withCentre(state, x, z));
+    },
+    open(s) {
+      setState(withCentre(s, s.cx, s.cz));
     },
     update,
     dispose() {

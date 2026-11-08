@@ -8,7 +8,8 @@
  * - **The first `open`** mounts the tool (`host: 'world'`, no URL sink, the toolbar slot, its `onTeleport` wrapping the
  *   page's: true in full closes the map, split keeps it, false keeps it as it is; in a saved world its `places`, whose
  *   ↗ moves the camera to the place and closes a full-screen map the same way, as does "+ Add at the pin" once B's
- *   dialog opened for the pin, which the map would cover, SP5b spec §3.7, D13), centred on the camera at
+ *   dialog opened for the pin, which the map would cover, SP5b spec §3.7, D13; and the page's `caves`, whose X-ray state
+ *   it pushes into the tool's Caves tab right after the mount, SP6a spec §7.3, D12), centred on the camera at
  *   `WORLD_MAP_BPP` blocks/px; the tool attaches its canvas to the driver's replaying sink, so it draws at once. Every
  *   `open` then calls `show` on the camera (keeping the zoom and layer) and `setPlayer` once, so the arrow is at the
  *   camera on opening; `close` calls `hide`, and the host is `display: none` while hidden. Every view change the tool
@@ -33,6 +34,9 @@
  *   saved world the world-modification switch "Modify terrain" (`modify`, SP5b spec §3.6, D10) stands before "Watch
  *   live", and the tool is told the mode (`setEditable`) right after it is mounted; an unsaved world has no switch and its
  *   tool is never told.
+ * - **The Caves tab** (SP6a spec §7.3): `setXray`, called by the page at every change of its X-ray (X, the band keys,
+ *   the tab's own controls, a render distance), hands the state to the mounted tool; before the mount nothing is kept,
+ *   the mount reads `caves.xray()`.
  * - **Watch live** (§2.1, D18): `applied(from)`, called when a draft that changes the world is applied, closes the map
  *   in A with Watch live on, so the 3D shows the regeneration; a drag never reaches it mid-gesture (the Apply waits for
  *   the gesture's end). From then until `counts.stale` falls to 0 (or no job is left, above), or M brings the map
@@ -68,12 +72,13 @@ import { escapeAllowed, type ShortcutAction } from '../common/keys';
 import type { Notices } from '../common/notice';
 import type { LayoutStorage } from '../map/layout';
 import { DEFAULT_MAP_STATE, type MapView } from '../map/mapState';
-import type { createMapTool, MapTool } from '../map/mapTool';
+import type { createMapTool, MapCaves, MapTool } from '../map/mapTool';
 import { draftOf, type createReplayingCanvas, type PreviewDriver } from '../map/previewDriver';
 import type { WorldSettings } from '../settings';
 import { AT_LIMIT } from './query';
 import type { Places } from './places';
 import type { WorldNotices } from './worldPage';
+import type { XrayBand } from './xrayStrip';
 
 /** The overlay's mode (SP4c spec §2.1, §2.2): A full screen, B side by side. */
 export type MapMode = WorldSettings['mapMode'];
@@ -200,6 +205,15 @@ export interface MapOverlayOptions {
     toPlace(p: Place): void;
     addAt(x: number, z: number): Promise<boolean>;
   } | null;
+  /**
+   * The world's Caves tab (SP6a spec §7.3, D12), handed to the tool: the page's X-ray controls and the camera (`tab`), and
+   * the page's X-ray state (`xray`: on or off, the band, the radius in blocks), pushed into the tab at the mount. Null: no
+   * Caves tab.
+   */
+  readonly caves: {
+    readonly tab: MapCaves;
+    xray(): { readonly on: boolean; readonly band: XrayBand; readonly radius: number };
+  } | null;
 }
 
 export interface MapOverlay {
@@ -223,6 +237,8 @@ export interface MapOverlay {
    * (SP4c spec §2.1, D18, D26); otherwise nothing.
    */
   applied(from: WorldStage | null): void;
+  /** The page's X-ray state changed (SP6a spec §7.3): handed to the mounted tool's Caves tab; nothing before the mount. */
+  setXray(on: boolean, band: XrayBand, radius: number): void;
   /** The mounted tool, or null before the first `open` mounted it and after `dispose`. */
   readonly tool: MapTool | null;
   /** Ends an open gesture while the tool still feeds the driver, disposes the tool and removes the host; once. */
@@ -424,6 +440,7 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     if (!disposed && mode === 'full') close();
   };
   const places = o.places;
+  const caves = o.caves;
 
   const mount = (m: ToolModule): void => {
     // Closed or disposed while the chunk loaded: the next open mounts.
@@ -458,7 +475,13 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
           }, (e: unknown) => console.error('The place could not be added:', e));
         },
       },
+      caves: caves === null ? null : caves.tab,
     });
+    // The Caves tab shows the page's X-ray as it is now; the page's `setXray` keeps it in step from here (SP6a spec §7.3).
+    if (caves !== null) {
+      const x = caves.xray();
+      tool.setXray(x.on, x.band, x.radius);
+    }
     // A saved world's tool shows the modification mode in force from its mount (D10); the mode tells it of later switches.
     if (o.modify !== null) tool.setEditable(o.modify.on());
     showOnCamera(tool);
@@ -539,6 +562,9 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
           o.notices.show(WATCH_LIVE_NOTICE);
         }
       }
+    },
+    setXray(on, band, radius) {
+      if (!disposed) tool?.setXray(on, band, radius);
     },
     applied(from) {
       if (disposed || from === null || !shown || mode !== 'full' || !watchLive) return;

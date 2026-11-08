@@ -149,6 +149,8 @@ vi.mock('../../src/ui/map/mapTool', async () => {
         setEditable() {},
         pin: () => null,
         onPin: () => () => {},
+        // The Caves tab's state (SP6a spec §7.3): pushed on a change only, never per frame.
+        setXray() {},
         dispose() {},
       };
     },
@@ -599,6 +601,8 @@ async function buildAtRest(): Promise<AtRest> {
       toPlace() {},
       addAt: () => Promise.resolve(false),
     },
+    // No Caves tab: its state is pushed on a change of the X-ray only, never per frame (SP6a spec §7.3).
+    caves: null,
   });
 
   // SP4c's per-tick hooks, as the page's: the owner check (§2.3), the apply control before the update (§4.3), the aux
