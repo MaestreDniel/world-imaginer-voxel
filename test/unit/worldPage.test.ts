@@ -325,11 +325,14 @@ describe('the map overlay draws with the frame step\'s live state (SP4c spec §2
   // overlay would rewind the day/night clock at every mode-B layout change and bypass D13's eye light.
   test('createMapOverlay gets `frameState: () => frame`, not the pre-reveal helper', () => {
     const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
-    const start = src.indexOf('createMapOverlay({');
-    expect(start).toBeGreaterThan(-1);
-    const args = src.slice(start, src.indexOf('\n    });', start));
-    expect(args).toMatch(/^\s*frameState: \(\) => frame,$/m);
-    expect(args).not.toMatch(/^\s*frameState,$/m);
+    // The streaming route's overlay and the bench's (L14, SP6a spec §10.6), each up to its closing `});`.
+    const starts = [...src.matchAll(/createMapOverlay\(\{/g)].map((m) => m.index);
+    expect(starts).toHaveLength(2);
+    for (const start of starts) {
+      const args = src.slice(start, src.indexOf('});', start));
+      expect(args).toMatch(/^\s*frameState: \(\) => frame,$/m);
+      expect(args).not.toMatch(/^\s*frameState,$/m);
+    }
   });
 });
 
@@ -1506,7 +1509,9 @@ describe('the world\'s notices over the map (SP4c spec §2.1, D27)', () => {
     expect(src).toMatch(/onFail: \(\) => notices\.show\(TELEPORT_FAILED_NOTICE, \{ kind: 'warn', timeoutMs: TELEPORT_FAILED_MS \}\)/);
     // "Could not teleport" for 4 s, shared with "+ Add at the pin"'s failed landing (SP5b spec §3.7).
     expect([TELEPORT_FAILED_NOTICE, TELEPORT_FAILED_MS]).toEqual(['Could not teleport', 4000]);
-    const start = src.indexOf('createMapOverlay({');
+    // The streaming route's overlay (the bench's L14 creates one of its own with no notices, SP6a spec §10.6).
+    const start = src.indexOf('const mapOverlay = createMapOverlay({');
+    expect(start).toBeGreaterThan(0);
     expect(src.slice(start, src.indexOf('\n    });', start))).toMatch(/^\s*notices,$/m);
     expect(src).toMatch(/undoNotice\.applied\(from\)/);
     expect(src).toMatch(/stale: c\.stale,/);

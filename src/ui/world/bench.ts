@@ -28,6 +28,10 @@
  *    finder's job (`BenchCaveHooks.find`) for the nearest entrance from the camera, a route through the loaded store's
  *    cave tags from it (`caveRoute`), a flight to the route's start at 64 blocks per second and the route walked at
  *    4.3 blocks per second for 60 s, no physics, while the world streams; the `caves` block holds the walk's figures;
+ * 2g. then the X-ray leg L14 (SP6a spec §10.6, D10, D29; `BENCH_XRAY`) where L13 left the camera, at RD 12: the page's X
+ *    (`BenchXrayHooks`), a hold, a 360° sweep, PageDown four times, the map opened side by side and a cave parameter
+ *    changed through the apply control (`BENCH_XRAY_SCRIPT.edit`), the refill awaited, X off; then RD 16 (`RD_MAX`)
+ *    filled, X on, the hold and the sweep again; the `xray` block holds each segment's figures and the refill's time;
  * 3. hands the driver the run's fixed figures (`done`); the driver publishes `summarizeBench`'s JSON as
  *    `window.__wiBench.result` (read by `measureChrome.ts --route bench`) and a "Download JSON" button (the Firefox
  *    cells, by hand).
@@ -51,6 +55,7 @@
  * The world page imports this module's values; this module loads the page with a dynamic `import()`, so the two do not
  * import each other statically.
  */
+import { RD_MAX } from '../../engine/renderDistance';
 import { discOffsets, type Stage } from '../../engine/rings';
 import { medianInterval, percentile, snapFrameTime } from '../../render/frameTiming';
 import type { GpuEstimate, WorldRenderer } from '../../render/renderer';
@@ -58,6 +63,7 @@ import type { RevealProbe, SectionRenderer, SectionRendererCounts, SectionRender
 import { el } from '../common/dom';
 import { downloadText } from '../common/files';
 import { CAVE_KIND, MIN_Y } from '../../core/constants';
+import { DEFAULTS } from '../../core/params/defaults';
 import { chunkCoord, colKey, MAX_Y, SECTION_VOXELS, SECTIONS } from '../../core/coords';
 import { parseHex64 } from '../../core/hash';
 import { splitmix32 } from '../../core/rng';
@@ -102,12 +108,13 @@ export const BENCH_IDLE_FRAMES = 120;
  * stays filled, uses the slack L10's 60 s hover cap leaves; a full record takes no more frames). SP5c spec §10.4 adds
  * L12's 150 s at its caps (`BENCH_PASTE_LEG`), 36,000 frames: 123,168 holds 513 s, the script's 511 (its fill, as L11's
  * hover, uses that slack). SP6a spec §10.6 adds L13's 90 s at its caps (`BENCH_CAVES_LEG`), 21,600 frames: 144,768 holds
- * 603 s, the script's 601.
+ * 603 s, the script's 601; and L14's 82 s at its caps (`BENCH_XRAY_LEG`), 19,680 frames: 164,448 holds 685 s, the
+ * script's 683.
  */
-export const BENCH_FRAME_CAPACITY = 144_768;
+export const BENCH_FRAME_CAPACITY = 164_448;
 
 export interface BenchLeg {
-  readonly name: 'L0' | 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6' | 'L7' | 'L8' | 'L9' | 'L10' | 'L11' | 'L12' | 'L13';
+  readonly name: 'L0' | 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6' | 'L7' | 'L8' | 'L9' | 'L10' | 'L11' | 'L12' | 'L13' | 'L14';
   readonly seconds: number;
   /** Blocks per second; 0 hovers. */
   readonly speed: number;
@@ -280,10 +287,51 @@ export const BENCH_CAVES_LEG: BenchLeg = {
 };
 
 /**
- * Every leg, index = the record's `leg` (L0-L6 the timed script, L7-L9 the live legs, L10 the edit leg, L11 the save
- * leg, L12 the paste leg, L13 the cave leg).
+ * The X-ray leg L14 (SP6a spec §10.6, D10, D29), after L13 where it left the camera (its x, y, z and yaw; the live legs'
+ * pitch −15), at RD 12: X on (the page's X, `BenchXrayHooks.toggle`); a hold of `holdS` s; a 360° sweep of the yaw over
+ * `sweepS` s; PageDown `BENCH_XRAY_SCRIPT.bandSteps` times, one a second, over `bandS` s; the map opened side by side
+ * (mode B) and, once its tool is mounted, `BENCH_XRAY_SCRIPT.edit` set through the session and the apply control (the
+ * release); the refill awaited (every column of the RD 12 disc swapped since the Apply); the map closed and X off, at
+ * most `refillMaxS` s after the map opened; then, at most `rd16MaxS` s: the X-ray off at RD 12 for
+ * `BENCH_XRAY_SCRIPT.offS` s, RD 16 (`RD_MAX`, under the reservation's cap) asked for and its disc's fill awaited at most
+ * `BENCH_XRAY_SCRIPT.rd16FillMaxS` s, X on, the hold and the sweep again (recorded, not gated). A map whose tool never
+ * mounts (`'map'`, the edit not made), a refill that never settles (`'refill'`) and an RD 16 disc that never fills
+ * (`'rd16'`) are named in the `xray` block's `timedOut` at their caps, and the leg goes on: its later parts are
+ * recorded.
  */
-const ALL_LEGS: readonly BenchLeg[] = [...BENCH_LEGS, ...BENCH_LIVE_LEGS, BENCH_EDIT_LEG, BENCH_SAVE_LEG, BENCH_PASTE_LEG, BENCH_CAVES_LEG];
+export const BENCH_XRAY = { holdS: 10, sweepS: 8, bandS: 4, refillMaxS: 20, rd16MaxS: 40 } as const;
+
+/** L14's edit (ruling P44): `caves.cheese.offset` from its default to cave_heavy's 0.20 (DEFAULTS − 0.07 were it 0.20). */
+const XRAY_EDIT_FROM = DEFAULTS.caves.cheese.offset;
+
+/**
+ * L14's script (plan; see `BENCH_XRAY`): PageDown's presses; the cave parameter changed with the map side by side; the
+ * X-ray off at RD 12 before RD 16, s (the GPU ms with the X-ray off); RD 16's fill cap, s. `offS + rd16FillMaxS + holdS
+ * + sweepS` is `rd16MaxS`.
+ */
+export const BENCH_XRAY_SCRIPT = {
+  bandSteps: 4,
+  edit: { path: 'caves.cheese.offset', from: XRAY_EDIT_FROM, to: XRAY_EDIT_FROM === 0.2 ? XRAY_EDIT_FROM - 0.07 : 0.2 },
+  offS: 2,
+  rd16FillMaxS: 20,
+} as const;
+
+/** L14 as a leg (`seconds` its caps); it ends on its own, not on a timeline. */
+export const BENCH_XRAY_LEG: BenchLeg = {
+  name: 'L14',
+  seconds: BENCH_XRAY.holdS + BENCH_XRAY.sweepS + BENCH_XRAY.bandS + BENCH_XRAY.refillMaxS + BENCH_XRAY.rd16MaxS,
+  speed: 0,
+  headings: [],
+  rdSteps: [],
+};
+
+/**
+ * Every leg, index = the record's `leg` (L0-L6 the timed script, L7-L9 the live legs, L10 the edit leg, L11 the save
+ * leg, L12 the paste leg, L13 the cave leg, L14 the X-ray leg).
+ */
+const ALL_LEGS: readonly BenchLeg[] = [
+  ...BENCH_LEGS, ...BENCH_LIVE_LEGS, BENCH_EDIT_LEG, BENCH_SAVE_LEG, BENCH_PASTE_LEG, BENCH_CAVES_LEG, BENCH_XRAY_LEG,
+];
 /** The first live leg's index. */
 const FIRST_LIVE = BENCH_LEGS.length;
 /** L10's index. */
@@ -294,6 +342,8 @@ const SAVE_LEG = EDIT_LEG + 1;
 const PASTE_LEG = SAVE_LEG + 1;
 /** L13's index. */
 const CAVES_LEG = PASTE_LEG + 1;
+/** L14's index. */
+const XRAY_LEG = CAVES_LEG + 1;
 
 /** Each leg's start, s, and the timed script's length (95 s; the live legs follow it). */
 const LEG_STARTS: readonly number[] = BENCH_LEGS.map((_, i) => BENCH_LEGS.slice(0, i).reduce((s, l) => s + l.seconds, 0));
@@ -1039,7 +1089,6 @@ export type PasteFigures = { readonly [K in PastePartName]: PastePartFigures } &
   readonly stoppedBy: string | null;
 };
 
-/** What the driver knows of L10 (SP5a spec §6.2) and hands `summarizeBench`. */
 /**
  * L13's block (SP6a spec §10.6, D29): the route's moves (`routeBlocks`, below `BENCH_CAVE_ROUTE.blocks` when the cave
  * air ran out and the walk went round it in laps) and its points per kind (`routeKinds`); over the walk's frames (its
@@ -1063,6 +1112,52 @@ export interface CaveFigures {
   readonly stoppedBy: string | null;
 }
 
+/**
+ * One L14 segment's figures (SP6a spec §10.6): `rd` the RD it ran at; over its frames with the X-ray on, the snapped
+ * frames' nearest-rank p50, p95, p99, max and the count over 33 ms (G1's `xrayP95`, `xrayOver33`), the main thread's
+ * p95 (`xrayMainP95`), the GPU estimate's peak (`gpuMB`, the X-ray's buffers included: `xrayGpuMB`) and the whole
+ * frame's draw calls' max (`drawCallsMax`, the record's `calls`: `xrayDrawCalls`); `gpuMs` p50 and p95 over the timer's
+ * samples with the X-ray on and over its frames with the X-ray off at the same RD (null without a sample);
+ * `toggleMaxMs`, the longest snapped frame of the three from each toggle (`xrayToggleMaxMs`); the renderer's X-ray
+ * objects drawn in a frame and their vertex bytes, at most (`xrayDrawCallsMax`, `xrayVertexBytes`), and the X-ray's
+ * radius in force (blocks); `growthEvents`, the segment's frames (on and off) whose structural operation grew a
+ * region's buffers. A figure with no sample is null.
+ */
+export interface XraySegmentFigures {
+  readonly rd: number | null;
+  readonly p50: number | null;
+  readonly p95: number | null;
+  readonly p99: number | null;
+  readonly max: number | null;
+  readonly over33: number;
+  readonly mainP95: number | null;
+  readonly gpuMs: {
+    readonly on: { readonly p50: number; readonly p95: number } | null;
+    readonly off: { readonly p50: number; readonly p95: number } | null;
+  };
+  readonly gpuMB: number | null;
+  readonly drawCallsMax: number | null;
+  readonly xrayDrawCallsMax: number | null;
+  readonly toggleMaxMs: number | null;
+  readonly xrayVertexBytes: number | null;
+  readonly radius: number | null;
+  readonly growthEvents: number;
+}
+
+/**
+ * L14's block (SP6a spec §10.6, D10, D29): the RD 12 segment (`rd12`, gated by G1.xray) and the RD 16 one (`rd16`,
+ * recorded); `xrayApplyRefillMs`, from the edit's release to the frame that swapped the last column of the RD 12 disc
+ * (null when it never did); the edit made; `timedOut` (`'map'`, `'refill'`, `'rd16'`).
+ */
+export interface XrayFigures {
+  readonly rd12: XraySegmentFigures;
+  readonly rd16: XraySegmentFigures;
+  readonly xrayApplyRefillMs: number | null;
+  readonly edit: BenchXrayRun['edit'];
+  readonly timedOut: readonly string[];
+}
+
+/** What the driver knows of L10 (SP5a spec §6.2) and hands `summarizeBench`. */
 export interface BenchEditRun {
   /**
    * The hover's edits the sim accepted: each opened one latency sample, all before the flight's (its last post is
@@ -1434,6 +1529,56 @@ const NO_CAVE_RUN: BenchCaveRun = {
   find: { reason: null, ms: null, hit: null }, routeBlocks: 0, routeKinds: {}, walk: null, timedOut: [], stoppedBy: null,
 };
 
+/**
+ * L14's hooks (SP6a spec §10.6): the page's X and PageDown (its `PageXray`: the renderer's X-ray, the strip); the map
+ * overlay opened side by side (mode B, its tool mounted on the first open), whether its tool is mounted and shown, and
+ * its close; the edit through the session (the apply control applies it) and whether every column of the RD 12 disc was
+ * swapped since its Apply (the live legs' reveals); whether the disc of `rd` around the camera's column is revealed;
+ * the renderer's X-ray objects drawn in the last frame and their vertex bytes; the X-ray's radius in force, blocks.
+ */
+export interface BenchXrayHooks {
+  toggle(): void;
+  bandDown(): void;
+  openMap(): void;
+  mapReady(): boolean;
+  closeMap(): void;
+  set(path: string, v: number): void;
+  settled(): boolean;
+  filled(rd: number): boolean;
+  drawCalls(): number;
+  vertexBytes(): number;
+  radius(): number;
+}
+
+/**
+ * One L14 segment as it ran (SP6a spec §10.6): its RD; its script windows (s) with the X-ray on and with it off at the
+ * same RD (null when there were none); its toggles' script times; the renderer's X-ray figures read with the X-ray on,
+ * at most (`drawCallsMax`, `vertexBytesMax`, `radius`; the last frame's, read at each pose).
+ */
+export interface BenchXraySegment {
+  readonly rd: number;
+  readonly on: { readonly tS0: number; readonly tS1: number };
+  readonly off: { readonly tS0: number; readonly tS1: number } | null;
+  readonly toggles: readonly number[];
+  readonly drawCallsMax: number;
+  readonly vertexBytesMax: number;
+  readonly radius: number;
+}
+
+/** What the driver knows of L14 (SP6a spec §10.6) and hands `summarizeBench`. */
+export interface BenchXrayRun {
+  readonly edit: { readonly path: string; readonly from: number; readonly to: number };
+  /** The segments that ran (null for one that did not start). */
+  readonly rd12: BenchXraySegment | null;
+  readonly rd16: BenchXraySegment | null;
+  /** From the edit's release to the frame that swapped the last column, ms; null without one. */
+  readonly applyRefillMs: number | null;
+  readonly timedOut: readonly string[];
+}
+
+/** No L14 (a run that ended before it, or a driver bound without the X-ray hooks). */
+const NO_XRAY_RUN: BenchXrayRun = { edit: BENCH_XRAY_SCRIPT.edit, rd12: null, rd16: null, applyRefillMs: null, timedOut: [] };
+
 /** The bench's JSON (spec §8.3; SP4c spec §8.4's `live`; SP5a spec §6.2's `edit`). */
 export interface BenchResult {
   readonly route: 'bench=medium';
@@ -1468,6 +1613,8 @@ export interface BenchResult {
   readonly paste: PasteFigures;
   /** L13: the cave leg (SP6a spec §10.6). */
   readonly caves: CaveFigures;
+  /** L14: the X-ray leg (SP6a spec §10.6). */
+  readonly xray: XrayFigures;
   /** Every frame whose snapped time is over 33 ms: its raw delta and its own and the previous frame's main ms. */
   readonly longFrames: ReadonlyArray<{
     readonly frame: number; readonly leg: string; readonly rawMs: number; readonly snappedMs: number; readonly mainMs: number;
@@ -1804,13 +1951,68 @@ function caveFiguresOf(rec: BenchRecord, idx: readonly number[], run: BenchCaveR
   };
 }
 
+/** The three rows from a toggle on: the toggle's own frame and the two after it (`toggleMaxMs`). */
+const TOGGLE_FRAMES = 3;
+
+/** An L14 segment's figures (SP6a spec §10.6) over L14's rows `idx`; every figure null without the segment. */
+function xraySegmentOf(rec: BenchRecord, idx: readonly number[], seg: BenchXraySegment | null): XraySegmentFigures {
+  const within = (w: { readonly tS0: number; readonly tS1: number } | null): number[] =>
+    w === null ? [] : idx.filter((i) => rec.tMs[i]! >= w.tS0 * 1000 && rec.tMs[i]! < w.tS1 * 1000);
+  const on = seg === null ? [] : within(seg.on);
+  const off = seg === null ? [] : within(seg.off);
+  const snapped = pick(rec.snappedMs, on);
+  const gpuOf = (rows: readonly number[]): { readonly p50: number; readonly p95: number } | null => {
+    const g = finite(pick(rec.gpuMs, rows));
+    return g.length === 0 ? null : { p50: percentile(g, 50), p95: percentile(g, 95) };
+  };
+  // −∞ until a row is read (reported as null).
+  let peakMB = Number.NEGATIVE_INFINITY;
+  for (const i of on) peakMB = Math.max(peakMB, rec.geometryMB[i]! + rec.texturesMB[i]! + rec.drawingBufferMB[i]!);
+  // Each toggle's own row (the first at or after it) and the two after it, among L14's rows.
+  let toggleMax = Number.NEGATIVE_INFINITY;
+  for (const t of seg?.toggles ?? []) {
+    const k = idx.findIndex((i) => rec.tMs[i]! >= t * 1000);
+    if (k < 0) continue;
+    for (let j = k; j < Math.min(k + TOGGLE_FRAMES, idx.length); j++) toggleMax = Math.max(toggleMax, rec.snappedMs[idx[j]!]!);
+  }
+  return {
+    rd: seg?.rd ?? null,
+    p50: percentileOrNull(snapped, 50),
+    p95: percentileOrNull(snapped, 95),
+    p99: percentileOrNull(snapped, 99),
+    max: snapped.length === 0 ? null : maxOf(snapped),
+    over33: countIf(snapped, (v) => v > LONG_FRAME_MS),
+    mainP95: percentileOrNull(pick(rec.mainMs, on), 95),
+    gpuMs: { on: gpuOf(on), off: gpuOf(off) },
+    gpuMB: finiteOrNull(peakMB),
+    drawCallsMax: on.length === 0 ? null : maxOf(pick(rec.calls, on)),
+    xrayDrawCallsMax: seg?.drawCallsMax ?? null,
+    toggleMaxMs: finiteOrNull(toggleMax),
+    xrayVertexBytes: seg?.vertexBytesMax ?? null,
+    radius: seg?.radius ?? null,
+    growthEvents: countIf(pick(rec.structuralKind, [...on, ...off]), (v) => v === GROW_CODE),
+  };
+}
+
+/** L14's block (SP6a spec §10.6) over its rows `idx`. */
+function xrayFiguresOf(rec: BenchRecord, idx: readonly number[], run: BenchXrayRun): XrayFigures {
+  return {
+    rd12: xraySegmentOf(rec, idx, run.rd12),
+    rd16: xraySegmentOf(rec, idx, run.rd16),
+    xrayApplyRefillMs: run.applyRefillMs,
+    edit: { ...run.edit },
+    timedOut: [...run.timedOut],
+  };
+}
+
 /**
  * The bench's JSON from its record and the fixed figures (spec §8.3): `stream` over L1-L6 (the streaming legs; L0's
  * hover only settles the first frames), the same frame figures per leg, L5's refill and L6's frames, `live` over L7-L9
  * (SP4c spec §8.4), `edit` over L10 with the driver's `editRun` (SP5a spec §6.2), `persist` over L11 with the driver's
  * `saveRun` (SP5b spec §6.2), `paste` over L12 with the driver's `pasteRun` and `saveRun`'s flushes (SP5c spec §10.4),
- * `caves` over L13 with the driver's `caveRun` (SP6a spec §10.6), every long frame and every structural frame. `gpuMB` is the largest per-frame sum of the
- * breakdown, which is reported at that frame. The live legs' MESH set is the RD they ran at: 12, or the reservation's
+ * `caves` over L13 with the driver's `caveRun` and `xray` over L14 with its `xrayRun` (SP6a spec §10.6), every long
+ * frame and every structural frame. `gpuMB` is the largest per-frame sum of the breakdown, which is reported at that
+ * frame. The live legs' MESH set is the RD they ran at: 12, or the reservation's
  * cap below it. It throws on a full record (`n` at `capacity`), whose last frames were dropped (final review GOV-7).
  */
 export function summarizeBench(
@@ -1821,6 +2023,7 @@ export function summarizeBench(
   saveRun: BenchSaveRun = NO_SAVE_RUN,
   pasteRun: BenchPasteRun = NO_PASTE_RUN,
   caveRun: BenchCaveRun = NO_CAVE_RUN,
+  xrayRun: BenchXrayRun = NO_XRAY_RUN,
 ): BenchResult {
   // A full record dropped the frames after it, so the last legs' figures (L11's parts) would read a cut part (final
   // review GOV-7): an error, not a JSON.
@@ -1908,6 +2111,7 @@ export function summarizeBench(
     persist: persistFiguresOf(rec, byLeg[SAVE_LEG]!, fixed, saveRun),
     paste: pasteFiguresOf(rec, byLeg[PASTE_LEG]!, pasteRun, saveRun.flushes),
     caves: caveFiguresOf(rec, byLeg[CAVES_LEG]!, caveRun),
+    xray: xrayFiguresOf(rec, byLeg[XRAY_LEG]!, xrayRun),
     longFrames,
     structuralFrames,
   };
@@ -2171,6 +2375,8 @@ export interface BenchWorld {
   readonly paste?: BenchPasteHooks;
   /** L13's hooks (SP6a spec §10.6): the finder's job and the store's reads. Absent, the script ends after L12. */
   readonly caves?: BenchCaveHooks;
+  /** L14's hooks (SP6a spec §10.6): the page's X-ray, its map and its edit. Absent, the script ends after L13. */
+  readonly xray?: BenchXrayHooks;
   /** The review scenes' clock (SP5a spec §6.5): fixed at `hours` (0 … 24) and paused. */
   setTime(hours: number): void;
   /** The review scenes' mode (SP5a spec §6.5): F's path (`toggleMode`, the near plane) when the mode differs. */
@@ -2195,7 +2401,9 @@ export interface BenchWorld {
  * `flushed`. With `paste` bound too, L12 follows L11 there (`BENCH_PASTE`, SP5c spec §10.4): its script runs through
  * the hooks between frames, each step awaited and resumed at a later `pose`. With `caves` bound, L13 follows L12 there
  * (`BENCH_CAVES`, SP6a spec §10.6; never after an L12 time-out): `caves.find` from the camera's voxel at its first
- * frame, the route from the hit, the flight and the walk. The page writes each rendered frame into
+ * frame, the route from the hit, the flight and the walk. With `xray` bound too, L14 follows L13 (`BENCH_XRAY`, never
+ * after an L13 time-out) where L13 left the camera; its RD 16 part returns RD 16 (under `rdMax`). The page writes each
+ * rendered frame into
  * `record` (`createBenchRecorder`). `fail` ends the script with an error (a failure after the reveal), once.
  */
 export interface BenchDriver {
@@ -2272,11 +2480,37 @@ const L11_PARTS = 2;
 /** L12's parts' caps, s, in `BENCH_PASTE_PARTS`' order. */
 const PASTE_CAPS: readonly number[] = [BENCH_PASTE.hoverS, BENCH_PASTE.houseMaxS, BENCH_PASTE.maxMaxS, BENCH_PASTE.sweepS];
 /** The leg index after the last leg: the script has ended. */
-const DONE_LEG = CAVES_LEG + 1;
+const DONE_LEG = XRAY_LEG + 1;
 /** L13's phases: the finder's answer awaited, the flight to the route's start, the walk. */
 const L13_FIND = 0;
 const L13_FLY = 1;
 const L13_WALK = 2;
+/**
+ * L14's phases: at RD 12 the hold, the sweep, the band steps, the map and the edit's refill, the X-ray off; RD 16's
+ * fill, its hold and its sweep.
+ */
+const L14_HOLD = 0;
+const L14_SWEEP = 1;
+const L14_BAND = 2;
+const L14_MAP = 3;
+const L14_OFF = 4;
+const L14_FILL = 5;
+const L14_HOLD16 = 6;
+const L14_SWEEP16 = 7;
+/** The tolerance L14's schedule allows the script's float times, s (as L11's). */
+const XRAY_EPS_S = 1e-6;
+/** One L14 segment's slots in the driver's `xraySeg` (two segments): see `BenchXraySegment`. */
+const SEG_RD = 0;
+const SEG_ON0 = 1;
+const SEG_ON1 = 2;
+const SEG_OFF0 = 3;
+const SEG_OFF1 = 4;
+const SEG_TOGGLE0 = 5;
+const SEG_TOGGLE1 = 6;
+const SEG_DRAWS = 7;
+const SEG_BYTES = 8;
+const SEG_RADIUS = 9;
+const SEG_SLOTS = 10;
 /** The yaw of a horizontal move (dx, dz), degrees (yaw 0 faces −z, 90 faces +x; ruling P42). */
 const yawOf = (dx: number, dz: number): number => {
   const deg = (Math.atan2(dx, -dz) * 180) / Math.PI;
@@ -2407,6 +2641,21 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let routeKinds: Record<string, number> = {};
   const caveTimedOut: string[] = [];
   let caveStopped: string | null = null;
+  // L14 (SP6a spec §10.6): its hooks (null until `bind`, and without them no L14), whether it started, its phase and
+  // the phase's start (s), the X-ray's state, the band steps pressed, the camera's pose at its start (x y z yaw pitch),
+  // the edit's release (s, NaN before), the last pose's time (s), the refill's time (ms, NaN without one), the RD the
+  // script wants (12, then RD 16's), each segment's slots (`SEG_*`, NaN where not reached) and the time-outs.
+  let xray: BenchXrayHooks | null = null;
+  let xrayStarted = false;
+  let xrayPhase = L14_HOLD;
+  let xrayOn = false;
+  let bandPressed = 0;
+  const xrayBase = new Float64Array(5);
+  // [the phase's start, the release, the last pose's time, the refill ms]
+  const xrayTimes = Float64Array.of(0, Number.NaN, Number.NaN, Number.NaN);
+  let scriptRd = BENCH_RD;
+  const xraySeg = new Float64Array(2 * SEG_SLOTS).fill(Number.NaN);
+  const xrayTimedOut: string[] = [];
   const capped = (rd: number): number => Math.min(rd, rdMax);
 
   /** The live legs' pose (SP4c spec §8.4): x, z and the yaw kept; pitch −15; y 150 until L9's arrival, then kept. */
@@ -3071,6 +3320,159 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     routePose(into * BENCH_CAVE_ROUTE.walkSpeed, out);
     return true;
   };
+  /** Segment `g`'s slot `k` (`SEG_*`). */
+  const segAt = (g: number, k: number): number => xraySeg[g * SEG_SLOTS + k]!;
+  const segSet = (g: number, k: number, v: number): void => { xraySeg[g * SEG_SLOTS + k] = v; };
+  /** X (the page's), its time kept as segment `g`'s toggle slot `k`. */
+  const xrayToggle = (g: number, k: number, tS: number): void => {
+    xray!.toggle();
+    xrayOn = !xrayOn;
+    segSet(g, k, tS);
+  };
+  /** With the X-ray on, the renderer's X-ray figures of the last frame into segment `g`'s maxima. */
+  const xraySample = (g: number): void => {
+    const h = xray!;
+    const keepMax = (k: number, v: number): void => segSet(g, k, Number.isNaN(segAt(g, k)) ? v : Math.max(segAt(g, k), v));
+    keepMax(SEG_DRAWS, h.drawCalls());
+    keepMax(SEG_BYTES, h.vertexBytes());
+    keepMax(SEG_RADIUS, h.radius());
+  };
+  /** L14's pose: its start's, the yaw turned 360° over `sweepS` while it sweeps (`into` s into the sweep). */
+  const xrayPose = (out: BenchPose, into: number): void => {
+    out.x = xrayBase[0]!;
+    out.y = xrayBase[1]!;
+    out.z = xrayBase[2]!;
+    out.yaw = (xrayBase[3]! + (360 * into) / BENCH_XRAY.sweepS) % 360;
+    out.pitch = xrayBase[4]!;
+  };
+  /** The phase `next` starts at `tS`. */
+  const xrayNext = (next: number, tS: number): void => {
+    xrayPhase = next;
+    xrayTimes[0] = tS;
+  };
+  /**
+   * One frame of L14 at `tS` (SP6a spec §10.6), after `livePose`: X on at its first frame, where the camera is; the hold,
+   * the sweep, the band steps, the map and the edit, the refill (at most `refillMaxS` from the map's open), the map
+   * closed and X off; the X-ray off at RD 12, RD 16 asked for and its fill awaited, X on, the hold and the sweep. False
+   * once the leg has ended (a part at its cap is named in `timedOut`, and the leg goes on to its next part).
+   */
+  const xrayStep = (tS: number, out: BenchPose): boolean => {
+    const h = xray!;
+    if (!xrayStarted) {
+      xrayStarted = true;
+      xrayBase[0] = out.x;
+      xrayBase[1] = out.y;
+      xrayBase[2] = out.z;
+      xrayBase[3] = out.yaw;
+      xrayBase[4] = BENCH_PITCH;
+      scriptRd = BENCH_RD;
+      segSet(0, SEG_RD, capped(BENCH_RD));
+      segSet(0, SEG_ON0, tS);
+      xrayToggle(0, SEG_TOGGLE0, tS);
+      xrayNext(L14_HOLD, tS);
+    }
+    const prevS = xrayTimes[2]!;
+    xrayTimes[2] = tS;
+    if (xrayOn) xraySample(xrayPhase < L14_OFF ? 0 : 1);
+    let into = tS - xrayTimes[0]!;
+    if (xrayPhase === L14_HOLD || xrayPhase === L14_HOLD16) {
+      if (into < BENCH_XRAY.holdS - XRAY_EPS_S) {
+        xrayPose(out, 0);
+        return true;
+      }
+      xrayNext(xrayPhase + 1, tS);
+      into = 0;
+    }
+    if (xrayPhase === L14_SWEEP || xrayPhase === L14_SWEEP16) {
+      if (into < BENCH_XRAY.sweepS - XRAY_EPS_S) {
+        xrayPose(out, into);
+        return true;
+      }
+      xrayPose(out, 0);
+      if (xrayPhase === L14_SWEEP16) {
+        segSet(1, SEG_ON1, tS);
+        return false;
+      }
+      xrayNext(L14_BAND, tS);
+      bandPressed = 0;
+      into = 0;
+    }
+    xrayPose(out, 0);
+    if (xrayPhase === L14_BAND) {
+      const every = BENCH_XRAY.bandS / BENCH_XRAY_SCRIPT.bandSteps;
+      if (bandPressed < BENCH_XRAY_SCRIPT.bandSteps && into >= bandPressed * every - XRAY_EPS_S) {
+        h.bandDown();
+        bandPressed++;
+      }
+      if (into < BENCH_XRAY.bandS - XRAY_EPS_S) return true;
+      xrayNext(L14_MAP, tS);
+      h.openMap();
+      return true;
+    }
+    if (xrayPhase === L14_MAP) {
+      let done = false;
+      if (Number.isNaN(xrayTimes[1]!)) {
+        if (h.mapReady()) {
+          xrayTimes[1] = tS;
+          h.set(BENCH_XRAY_SCRIPT.edit.path, BENCH_XRAY_SCRIPT.edit.to);
+        }
+      } else if (h.settled()) {
+        // The last column swapped in the frame posed before this one.
+        xrayTimes[3] = (prevS - xrayTimes[1]!) * 1000;
+        done = true;
+      }
+      if (!done) {
+        if (into < BENCH_XRAY.refillMaxS - XRAY_EPS_S) return true;
+        xrayTimedOut.push(Number.isNaN(xrayTimes[1]!) ? 'map' : 'refill');
+      }
+      h.closeMap();
+      xrayToggle(0, SEG_TOGGLE1, tS);
+      segSet(0, SEG_ON1, tS);
+      segSet(0, SEG_OFF0, tS);
+      xrayNext(L14_OFF, tS);
+      return true;
+    }
+    if (xrayPhase === L14_OFF) {
+      if (into < BENCH_XRAY_SCRIPT.offS - XRAY_EPS_S) return true;
+      // RD 16 from this frame: the page applies it after this pose; its fill is asked from the next frame.
+      scriptRd = RD_MAX;
+      segSet(0, SEG_OFF1, tS);
+      segSet(1, SEG_RD, capped(RD_MAX));
+      segSet(1, SEG_OFF0, tS);
+      xrayNext(L14_FILL, tS);
+      return true;
+    }
+    // L14_FILL.
+    if (!h.filled(capped(RD_MAX))) {
+      if (into < BENCH_XRAY_SCRIPT.rd16FillMaxS - XRAY_EPS_S) return true;
+      xrayTimedOut.push('rd16');
+    }
+    segSet(1, SEG_OFF1, tS);
+    segSet(1, SEG_ON0, tS);
+    xrayToggle(1, SEG_TOGGLE0, tS);
+    xrayNext(L14_HOLD16, tS);
+    return true;
+  };
+  /** Segment `g` as it ran (`end` closes a window still open: the script ended inside it), or null before it started. */
+  const xraySegment = (g: number, end: number): BenchXraySegment | null => {
+    if (Number.isNaN(segAt(g, SEG_ON0)) && Number.isNaN(segAt(g, SEG_OFF0))) return null;
+    const span = (k0: number, k1: number): { tS0: number; tS1: number } | null => {
+      if (Number.isNaN(segAt(g, k0))) return null;
+      return { tS0: segAt(g, k0), tS1: Number.isNaN(segAt(g, k1)) ? end : segAt(g, k1) };
+    };
+    const toggles = [segAt(g, SEG_TOGGLE0), segAt(g, SEG_TOGGLE1)].filter((t) => !Number.isNaN(t));
+    const nanToZero = (v: number): number => (Number.isNaN(v) ? 0 : v);
+    return {
+      rd: segAt(g, SEG_RD),
+      // A segment ended before its X-ray came on (the script ended in RD 16's fill) has no frame with it on.
+      on: span(SEG_ON0, SEG_ON1) ?? { tS0: end, tS1: end },
+      off: span(SEG_OFF0, SEG_OFF1),
+      toggles,
+      drawCallsMax: nanToZero(segAt(g, SEG_DRAWS)),
+      vertexBytesMax: nanToZero(segAt(g, SEG_BYTES)),
+      radius: nanToZero(segAt(g, SEG_RADIUS)),
+    };
+  };
   /**
    * One frame of the live legs at `tS`: whether a leg ends (settled or at its cap) and the next starts, or the script
    * ends (false); a live shot freezes on its event (`frozenLive`).
@@ -3093,7 +3495,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
         if (leg === 9) toEdit = true;
         else next = (leg + 1) as LiveLeg;
       }
-    } else if (liveLeg !== EDIT_LEG && liveLeg !== SAVE_LEG && liveLeg !== PASTE_LEG && liveLeg !== CAVES_LEG) return false;
+    } else if (liveLeg !== EDIT_LEG && liveLeg !== SAVE_LEG && liveLeg !== PASTE_LEG && liveLeg !== CAVES_LEG && liveLeg !== XRAY_LEG) return false;
     if (o.shot === 'apply-mid' && !Number.isNaN(l7StartS) && tS - l7StartS >= APPLY_MID_AFTER_S) frozenLive = true;
     if (o.shot === 'teleport' && !Number.isNaN(arrivedS) && tS - arrivedS >= TELEPORT_SHOT_AFTER_S) frozenLive = true;
     if (frozenLive) return true;
@@ -3133,6 +3535,15 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       legStartS = tS;
     }
     if (liveLeg === CAVES_LEG && !caveStep(tS, out)) {
+      // L13 ended: L14 follows when its hooks are bound (never after an L13 time-out), where L13 left the camera.
+      if (xray === null || caveTimedOut.length > 0) {
+        liveLeg = DONE_LEG;
+        return false;
+      }
+      liveLeg = XRAY_LEG;
+      legStartS = tS;
+    }
+    if (liveLeg === XRAY_LEG && !xrayStep(tS, out)) {
       liveLeg = DONE_LEG;
       return false;
     }
@@ -3154,6 +3565,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       save = world.save ?? null;
       paste = world.paste ?? null;
       caves = world.caves ?? null;
+      xray = world.xray ?? null;
       sceneHooks = { setTime: (h) => world.setTime(h), walk: (on) => world.walk(on) };
     },
     pose(tS, out, fogRd) {
@@ -3170,7 +3582,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
           writeRow(r.leg, tS);
           return capped(r.rd);
         }
-        if (liveStep(tS, out) && !frozenLive) return capped(BENCH_RD);
+        if (liveStep(tS, out) && !frozenLive) return capped(scriptRd);
         // The script ended: a live shot whose moment never came freezes here (the teleport failed, say); a review
         // scene that was not built publishes why instead of a shot of something else.
         if (!frozenLive) {
@@ -3231,6 +3643,10 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
             find: caveFind, routeBlocks: Math.max(0, route.length / 3 - 1), routeKinds: { ...routeKinds },
             walk: Number.isNaN(caveTimes[2]!) ? null : { tS0: caveTimes[2]!, tS1: Number.isNaN(caveTimes[3]!) ? Number.POSITIVE_INFINITY : caveTimes[3]! },
             timedOut: [...caveTimedOut], stoppedBy: caveStopped,
+          },
+          {
+            edit: BENCH_XRAY_SCRIPT.edit, rd12: xraySegment(0, Number.POSITIVE_INFINITY), rd16: xraySegment(1, Number.POSITIVE_INFINITY),
+            applyRefillMs: Number.isNaN(xrayTimes[3]!) ? null : xrayTimes[3]!, timedOut: [...xrayTimedOut],
           },
         );
       } catch (e) {
@@ -3341,11 +3757,11 @@ export async function mountBenchRoute(app: HTMLElement, query: URLSearchParams):
   }
   const driver = createBenchDriver({ shot, publish });
   const { mountWorldPage } = await import('./worldPage');
-  // The legs after the timed script at their caps: the live legs, L10, L11 (its hover included), L12 (its fill included)
-  // and L13.
+  // The legs after the timed script at their caps: the live legs, L10, L11 (its hover included), L12 (its fill included),
+  // L13 and L14.
   const liveS = BENCH_LIVE_LEGS.reduce((t, l) => t + l.seconds, 0) + BENCH_EDIT_LEG.seconds + BENCH_SAVE_LEG.seconds
-    + BENCH_PASTE.fillMaxS + BENCH_PASTE_LEG.seconds + BENCH_CAVES_LEG.seconds;
-  panel?.say(`running the ${BENCH_SECONDS} s script, then the live, edit, save, paste and cave legs (up to ${liveS} s more) after the reveal (keep this tab in front)…`);
+    + BENCH_PASTE.fillMaxS + BENCH_PASTE_LEG.seconds + BENCH_CAVES_LEG.seconds + BENCH_XRAY_LEG.seconds;
+  panel?.say(`running the ${BENCH_SECONDS} s script, then the live, edit, save, paste, cave and X-ray legs (up to ${liveS} s more) after the reveal (keep this tab in front)…`);
   const page = await mountWorldPage(app, benchQuery(query), benchHash(), { hud: false, overlay: false, bench: driver });
   if (page.state !== 'revealed' && !published) publish.result({ route: 'bench=medium', error: `the world did not load (page ${page.state})` });
 }

@@ -4,12 +4,12 @@ import {
 } from 'three';
 import { WebGLRenderList } from 'three/src/renderers/webgl/WebGLRenderLists.js';
 import { describe, expect, test } from 'vitest';
-import { MESH_PASS_TRANSLUCENT } from '../../src/mesh/column';
+import { MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY } from '../../src/mesh/column';
 import type { Ghost } from '../../src/render/ghost';
 import { createMaterialSystem } from '../../src/render/materials/index';
 import {
   NEAR_FLY, NEAR_WALK, XRAY_CLEAR, applyNear, applyRenderDistance, compileScene, compileWorldScene, createGpuTimer,
-  createWorldScene, createXrayControl, gpuEstimateOf, opaquePassSort, toolDrawCallsOf, withRegionsUnculled,
+  createWorldScene, createXrayControl, createXrayDrawCounter, gpuEstimateOf, opaquePassSort, toolDrawCallsOf, withRegionsUnculled,
   withSectionsShown, type GpuEstimate,
 } from '../../src/render/renderer';
 import {
@@ -657,6 +657,58 @@ describe('the tool\'s draw calls (SP5c spec §6.4, §10.4: L12\'s `toolDrawCalls
     w.dispose();
     sections.dispose();
   });
+});
+
+describe('the X-ray pass\'s draws in the last frame (SP6a spec §10.6: L14\'s `xrayDrawCallsMax`, `xrayVertexBytes`)', () => {
+  /** The section renderer's region objects of `pass` (one per region and pass). */
+  const objectsOf = (root: Object3D, pass: number): Mesh[] => {
+    const out: Mesh[] = [];
+    root.traverse((o) => { if ((o as Mesh).isMesh === true && o.userData['pass'] === pass) out.push(o as Mesh); });
+    return out;
+  };
+  /** three's `renderObject` (WebGLRenderer.js) calls the material's `onBeforeRender` once per object it draws. */
+  const draw = (o: Mesh): void => {
+    (o.material as Material).onBeforeRender(undefined as never, undefined as never, undefined as never, o.geometry, o, null as never);
+  };
+  const vertexBytes = (o: Mesh): number =>
+    o.geometry.getAttribute('position').array.byteLength + o.geometry.getAttribute('data').array.byteLength;
+
+  for (const kind of ['batch', 'mesh'] as const) {
+    test(`${kind}: \`xrayDrawCalls()\` counts the pass-3 objects drawn since the frame's reset and \`xrayVertexBytes()\` their vertex arrays' bytes`, () => {
+      const materials = createMaterialSystem({ variant: kind, ao: true, smoothLight: true }, createFlatColorArray());
+      const sections = createSectionRenderer(kind, materials);
+      // Three regions with X-ray rows (one with opaque rows too), one region with opaque rows only.
+      sections.stage(fakePayload(1, 1, [{ sy: 4, pass: 0, quads: 3 }, { sy: 4, pass: 3, quads: 2 }]), 1);
+      sections.stage(fakePayload(9, 1, [{ sy: 5, pass: 3, quads: 5 }]), 1);
+      sections.stage(fakePayload(1, 9, [{ sy: 6, pass: 3, quads: 1 }]), 1);
+      sections.stage(fakePayload(9, 9, [{ sy: 3, pass: 0, quads: 4 }]), 1);
+      pumpAll(sections);
+      sections.revealAll();
+      const counter = createXrayDrawCounter(materials.xray);
+      const xray = objectsOf(sections.root, MESH_PASS_XRAY);
+      const opaque = objectsOf(sections.root, 0);
+      expect([xray.length, opaque.length]).toEqual([3, 2]);
+      // Nothing drawn yet.
+      expect([counter.calls(), counter.vertexBytes()]).toEqual([0, 0]);
+      // A frame drawing everything: the three X-ray objects count, the opaque ones never.
+      counter.reset();
+      for (const o of [...opaque, ...xray]) draw(o);
+      const all = xray.reduce((n, o) => n + vertexBytes(o), 0);
+      expect(all).toBeGreaterThan(0);
+      expect([counter.calls(), counter.vertexBytes()]).toEqual([3, all]);
+      // The next frame culls two of them: the counts are that frame's, not a running total.
+      counter.reset();
+      draw(xray[1]!);
+      draw(opaque[0]!);
+      expect([counter.calls(), counter.vertexBytes()]).toEqual([1, vertexBytes(xray[1]!)]);
+      // A frame with the X-ray pass not drawn at all.
+      counter.reset();
+      for (const o of opaque) draw(o);
+      expect([counter.calls(), counter.vertexBytes()]).toEqual([0, 0]);
+      sections.dispose();
+      materials.dispose();
+    });
+  }
 });
 
 describe('withRegionsUnculled (SP4b spec §3.9, §4.5)', () => {

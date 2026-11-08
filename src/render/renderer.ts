@@ -1,6 +1,6 @@
 import {
-  Color, LinearFilter, NearestFilter, PerspectiveCamera, Scene, SRGBColorSpace, WebGLRenderer, type Camera, type Mesh,
-  type Object3D, type RenderItem,
+  Color, LinearFilter, NearestFilter, PerspectiveCamera, Scene, SRGBColorSpace, WebGLRenderer, type BufferGeometry, type Camera,
+  type Material, type Mesh, type Object3D, type RenderItem,
 } from 'three';
 import { HEIGHT, MIN_Y } from '../core/constants';
 import { MEDIUM } from '../core/params/graphicsPresets';
@@ -180,6 +180,17 @@ export interface WorldRenderer {
    * the ghost and the replaced-cell overlay, at most 6 (SP5c spec §6.4; L12's `toolDrawCallsMax`, §10.4).
    */
   toolDrawCalls(): number;
+  /**
+   * The X-ray pass's objects drawn in the last `frame` (`createXrayDrawCounter`): its region objects that three drew
+   * (culled ones not), the X-ray on or off (its rows are always drawn, collapsed while off). L14's `xrayDrawCallsMax`
+   * (SP6a spec §10.6), read per frame as `toolDrawCalls` is.
+   */
+  xrayDrawCalls(): number;
+  /**
+   * The vertex bytes of the X-ray objects drawn in the last `frame`: each one's position and data arrays, the
+   * reservation and its growths included (SP6a spec §5.1, §10.6: L14's `xrayVertexBytes`).
+   */
+  xrayVertexBytes(): number;
   /**
    * Shows the blocks a paste would replace (SP5c spec §6.3, D11): the first `count` (at most `REPLACED_MAX`) cells of
    * `cells`, x, y, z offset triples from (x0, y0, z0), relative to the floating origin (scene coordinates, as
@@ -552,6 +563,42 @@ export async function compileWorldScene(
   }
 }
 
+/** The X-ray pass's draws since the last `reset` (`createXrayDrawCounter`). */
+export interface XrayDrawCounter {
+  /** A frame starts: nothing drawn yet. */
+  reset(): void;
+  /** The X-ray objects drawn since `reset`. */
+  calls(): number;
+  /** Their vertex arrays' bytes (position and data). */
+  vertexBytes(): number;
+}
+
+/** A geometry's vertex arrays in bytes: the section renderers' position and data attributes. */
+const vertexBytesOf = (g: BufferGeometry): number =>
+  (g.getAttribute('position')?.array.byteLength ?? 0) + (g.getAttribute('data')?.array.byteLength ?? 0);
+
+/**
+ * Counts the X-ray pass's draws (SP6a spec §10.6, L14) through `material`'s `onBeforeRender`, which three's
+ * `renderObject` calls once for each object it draws with it (after culling: a region object outside the frustum is
+ * not counted): each draw adds one call and its geometry's vertex bytes. Allocates nothing per draw.
+ */
+export function createXrayDrawCounter(material: Material): XrayDrawCounter {
+  // [calls, vertex bytes] in a typed array: a double kept in a closure would be boxed on a write.
+  const state = new Float64Array(2);
+  material.onBeforeRender = (_renderer, _scene, _camera, geometry) => {
+    state[0]!++;
+    state[1]! += vertexBytesOf(geometry);
+  };
+  return {
+    reset() {
+      state[0] = 0;
+      state[1] = 0;
+    },
+    calls: () => state[0]!,
+    vertexBytes: () => state[1]!,
+  };
+}
+
 /** The X-ray's clear colour, sRGB (SP6a spec §5.3: a dark background behind the additive walls). */
 export const XRAY_CLEAR = 0x0b0e14;
 
@@ -650,6 +697,8 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   canvas.style.height = '100%';
   host.appendChild(canvas);
   const xray = createXrayControl(materials, sky, renderer);
+  // The X-ray objects each frame draws (`xrayDrawCalls`, `xrayVertexBytes`; L14, SP6a spec §10.6).
+  const xrayDraws = createXrayDrawCounter(materials.xray);
 
   const camera = new PerspectiveCamera(o.fov, 1, NEAR_FLY, cameraFar(o.rd));
   const timer = createGpuTimer(renderer.getContext() as WebGL2RenderingContext);
@@ -681,6 +730,7 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     materials.setFrameUniforms(state);
     xray.syncRadius();
     toolCalls = toolDrawCallsOf(world);
+    xrayDraws.reset();
     timer?.begin();
     renderer.render(scene, camera);
     timer?.end();
@@ -750,6 +800,12 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     },
     toolDrawCalls() {
       return toolCalls;
+    },
+    xrayDrawCalls() {
+      return xrayDraws.calls();
+    },
+    xrayVertexBytes() {
+      return xrayDraws.vertexBytes();
     },
     setReplaced(x0, y0, z0, cells, count) {
       replaced.set(x0, y0, z0, cells, count);

@@ -60,7 +60,11 @@
  * and each diff wait), and a selection tool of its own (`createBenchPaste`: the page's `createSelectActions` over the
  * bench's sim, L11's block history and a clipboard in `BENCH_DB`) runs its frame step in the bench's aim from L12.
  * For its cave leg L13 (SP6a spec §10.6) the driver gets the finder's job over the bench's pool and the store's cave
- * tags and collisions for its route (`benchCaves`); the camera follows the route through the driver's pose.
+ * tags and collisions for its route (`benchCaves`); the camera follows the route through the driver's pose. For its
+ * X-ray leg L14 (`benchXray`) the page's X-ray (`createPageXray` over the renderer and a strip, with no notice), the map
+ * overlay in mode B over the live legs' preview driver (created at L14's first open, so the earlier legs run as
+ * before; no Caves tab, no places), the edit through the live legs' session and reveals, and the renderer's X-ray
+ * draws.
  *
  * Errors after the reveal (SP4b spec §3.6, §7.4, D12) degrade: a skipped column shows a dismissible notice with "Copy
  * details", StoreFull a notice offering "Lower to RD n" (applied live on a click, never on its own); a fatal event (no
@@ -215,7 +219,7 @@ import { mountSettingsPanel, type SettingsPanel } from '../settingsPanel';
 import {
   BENCH_DB, BENCH_IDLE_FRAMES, BENCH_REFILL, BENCH_TIME_SPEED, benchInterval, createBenchRecorder, createBenchSimLog, createLiveReveals, jsHeapMB,
   type BenchCaveHooks, type BenchDriver, type BenchFlush, type BenchGhostBuild, type BenchPasteHooks, type BenchPose, type BenchSimLog, type BenchTimed, type BenchWorld,
-  type EnterResult,
+  type BenchXrayHooks, type EnterResult,
 } from './bench';
 import { firstView } from './firstView';
 import type { FlightContext } from './flight';
@@ -477,6 +481,35 @@ export function benchCaves(o: {
         store.exitRead();
       }
     },
+  };
+}
+
+/**
+ * L14's hooks as the bench route composes them (SP6a spec §10.6, D10, D29): X and PageDown through the page's X-ray
+ * (`PageXray.action`), the map side by side (`map`: the overlay opened in mode B, whether its tool is mounted, its
+ * close), the edit and its refill through the live legs' `set` and `settled`, the RD disc's fill around the camera, the
+ * renderer's X-ray draws and vertex bytes of the last frame and the X-ray's radius in force.
+ */
+export function benchXray(o: {
+  readonly xray: Pick<PageXray, 'action'>;
+  readonly renderer: Pick<WorldRenderer, 'xrayDrawCalls' | 'xrayVertexBytes'>;
+  readonly map: { open(): void; close(): void; ready(): boolean };
+  readonly live: { set(path: string, v: number): void; settled(): boolean };
+  filled(rd: number): boolean;
+  radius(): number;
+}): BenchXrayHooks {
+  return {
+    toggle: () => o.xray.action('xray'),
+    bandDown: () => o.xray.action('xrayDown'),
+    openMap: () => o.map.open(),
+    mapReady: () => o.map.ready(),
+    closeMap: () => o.map.close(),
+    set: (path, v) => o.live.set(path, v),
+    settled: () => o.live.settled(),
+    filled: (rd) => o.filled(rd),
+    drawCalls: () => o.renderer.xrayDrawCalls(),
+    vertexBytes: () => o.renderer.xrayVertexBytes(),
+    radius: () => o.radius(),
   };
 }
 
@@ -4459,6 +4492,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       let benchTeleport: Teleport | null = null;
       let benchDriver: PreviewDriver | null = null;
       let benchAutosave: Autosave | null = null;
+      // L14's map overlay (SP6a spec §10.6), created at its first open.
+      let benchMap: MapOverlay | null = null;
       // The bench's saved world (opened above): at the end, or at a failure, every connection is closed and
       // `BENCH_DB` deleted (`closeBenchSave`: the sim's dispose, the page's close, the deletion).
       const benchKv = benchSave!.kv;
@@ -4476,6 +4511,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           stop,
           show: () => bench.fail(`${cause}\n${shown}`),
           release: [
+            () => benchMap?.dispose(),
             () => benchTeleport?.dispose(),
             () => benchDriver?.dispose(),
             () => coordinator.dispose(),
@@ -4525,7 +4561,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           simLog.revealed(cx, cz, t);
         };
         teardown.push(() => { sections.onColumnRevealed = null; });
-        const liveDriver = createPreviewDriver(workers, createReplayingCanvas(), {
+        // The driver's replaying sink, which L14's map tool attaches its canvas to at its mount.
+        const benchRelay = createReplayingCanvas();
+        const liveDriver = createPreviewDriver(workers, benchRelay, {
           now: () => performance.now(),
           setTimeout: (fn, ms) => window.setTimeout(fn, ms),
           clearTimeout: (id) => window.clearTimeout(id),
@@ -4535,8 +4573,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         liveDriver.setPreviewWanted(false);
         liveDriver.adopt({ poolEpoch: workers.epoch, sessionEpoch: session.state.epoch, seedKey: draftOf(session.state).seedKey, ready: firstReady });
         teardown.push(liveDriver.onStatus((s) => onDriverStatus(s, (cause, e) => fail(cause, e))));
-        teardown.push(followSession({ session, driver: liveDriver, toolMounted: () => false, now: () => performance.now() }));
-        // The apply control (§4.3): its `onApplied` marks the Apply frame, from which L7's and L8's times run.
+        // Ruling R1 (SP4c): the page feeds the driver every session change until L14's map mounts its tool.
+        teardown.push(followSession({ session, driver: liveDriver, toolMounted: () => benchMap !== null && benchMap.tool !== null, now: () => performance.now() }));
+        // The apply control (§4.3): its `onApplied` marks the Apply frame, from which L7's and L8's times run (and L14's
+        // refill is counted); the map overlay, once L14 created it, hears of it as on the streaming route.
         const applyControl = createApplyControl({
           coordinator,
           driver: liveDriver,
@@ -4547,7 +4587,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           initial: appliedDraftOf(draftOf(session.state).seedKey, firstReady),
           initialGeneration: workers.epoch,
           beforeApply: () => true,
-          onApplied: () => reveals.mark(),
+          onApplied: (a) => {
+            reveals.mark();
+            benchMap?.applied(a.from);
+          },
         });
         teardown.push(() => applyControl.dispose());
         // The teleport (§3) over the bench's pool; until it arrives the camera is still at the old place, so no reveal
@@ -4624,6 +4667,62 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         teardown.push(() => benchPaste.dispose());
         // The bench's day speed, which a review scene sets to 0 with its fixed hour (SP5a spec §6.5).
         const benchClock = { speed: BENCH_TIME_SPEED };
+        // The live legs' edit (L7, and L14's): the reveals reset, then the urgent change through the session.
+        const liveSet = (path: string, v: number): void => {
+          reveals.reset();
+          const r = session.set(path, v);
+          if (!r.ok) throw new Error(`the bench's edit ${path} = ${v} was refused: ${r.issues.map((i) => i.message).join('; ')}`);
+        };
+        // The frame clock's limiter, which L14's map overlay caps while mode A would cover the 3D (SP4c spec §2.6).
+        const benchLimiter = createFpsLimiter(settings.fpsCap);
+        // L14's X-ray (SP6a spec §5.3, §7.1): the page's, over the renderer and its strip, with no notice (the bench shows
+        // none); X and PageDown reach it through the bench's hooks.
+        const benchStrip = createXrayStrip(host);
+        teardown.push(() => benchStrip.dispose());
+        const benchPageXray = createPageXray({
+          renderer: world,
+          strip: benchStrip,
+          notices: { show() {} },
+          cameraY: () => fly.y,
+          keyName: pageKeyName,
+        });
+        // L14's map side by side (SP4c spec §2.2, mode B): the streaming route's overlay over the live legs' driver and
+        // session, created at its first open (its chunk then loads, as a first M would), Watch live off, no Caves tab,
+        // no places, no teleport; it never saves the layout or the mode.
+        const benchMapOpen = (): void => {
+          if (benchMap === null) {
+            const overlay = createMapOverlay({
+              app: root,
+              worldHost: host,
+              canvas: world.renderer.domElement,
+              session,
+              pool: workers,
+              driver: liveDriver,
+              relay: benchRelay,
+              storage: null,
+              settings: { mapMode: 'split', watchLive: false },
+              save: () => {},
+              world,
+              frameState: () => frame,
+              limiter: benchLimiter,
+              userCap: () => settings.fpsCap,
+              fly,
+              input: { clear() {} },
+              doc: document,
+              win: window,
+              now: () => performance.now(),
+              onTeleport: () => Promise.resolve(false),
+              viewChanged: () => {},
+              notices: { route() {}, show() {}, hide() {} },
+              modify: null,
+              places: null,
+              caves: null,
+            });
+            benchMap = overlay;
+            teardown.push(() => overlay.dispose());
+          }
+          benchMap.open();
+        };
         // The script's RD steps never exceed the reservation's cap (Task 26b); the review shots' camera reads the ground's
         // height under the frozen pose (rulings R9); the live legs edit, undo and teleport through the pieces above; the
         // review scenes build through the edit path, fix the clock and walk through F's path (no hold repeat here).
@@ -4631,11 +4730,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           rdMax,
           heightAt: (x, z) => store.heightAt('motionBlocking', x, z),
           live: {
-            set(path, v) {
-              reveals.reset();
-              const r = session.set(path, v);
-              if (!r.ok) throw new Error(`the bench's edit ${path} = ${v} was refused: ${r.issues.map((i) => i.message).join('; ')}`);
-            },
+            set: liveSet,
             undo() {
               reveals.reset();
               if (!session.undo()) throw new Error('the bench\'s undo found nothing to undo');
@@ -4661,6 +4756,19 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           paste: benchPaste.hooks,
           // L13 (SP6a spec §10.6): the finder's job over the bench's pool and the store's cave tags for its route.
           caves: benchCaves({ store, pool: workers }),
+          // L14 (SP6a spec §10.6): the page's X-ray, the map side by side, the edit through the live legs' session, RD 16.
+          xray: benchXray({
+            xray: benchPageXray,
+            renderer: world,
+            map: {
+              open: benchMapOpen,
+              close: () => benchMap?.close(),
+              ready: () => benchMap !== null && benchMap.shown && benchMap.tool !== null,
+            },
+            live: { set: liveSet, settled: () => reveals.filled },
+            filled: (r) => filledRadius(Math.floor(fly.x) >> 4, Math.floor(fly.z) >> 4, r, isRevealed) === r,
+            radius: () => xrayRadiusOf(liveRd),
+          }),
           setTime: (hours) => benchSetTime(frame, benchClock, hours),
           walk: (on) => benchWalk({ fly, walk, world, repeat: NO_REPEAT }, on),
         });
@@ -4729,7 +4837,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         let firstMax = 0;
         let refillMs: number | null = null;
         fly.vx = fly.vy = fly.vz = 0;
-        const clock = createFrameClock(createFpsLimiter(settings.fpsCap), { push() {} }, prev);
+        const clock = createFrameClock(benchLimiter, { push() {} }, prev);
         // The bench's aim runs the DDA and the outline update (the box around the hit, relative to the floating origin)
         // from the scripted pose although its step is always paused, so L10's main-thread time (`mainP95Ms`) includes
         // them (SP5a spec §6.2). The bench mounts without the HUD, so the outline is computed but never drawn: the review
@@ -4756,10 +4864,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           timeSpeed: () => benchClock.speed,
           fogStep: (dtMs) => fogStep.step(dtMs),
           nightVision: () => settings.nightVision,
-          // The apply control before the coordinator's update; the aux policy from its counts, no map covering the 3D
-          // (SP4c spec §4.3, §6.2, §8.4).
+          // The apply control before the coordinator's update; the aux policy from its counts, the map covering the 3D
+          // only were L14's ever in mode A (SP4c spec §4.3, §6.2, §8.4).
           beforeUpdate: () => applyControl.tick(),
-          afterCounts: (c) => updateAuxPolicy(workers, applyControl.generation, false, c),
+          afterCounts: (c) => updateAuxPolicy(workers, applyControl.generation, coversWorld(benchMap), c),
           // The frame's input, walk step and aim on the bench's clock, into the row the recorder takes next (`playerMs`:
           // L10's `mainP95Ms`, SP5a spec §6.2).
           timing: {
@@ -4772,6 +4880,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             // The live legs' reveals since their mark around the camera's column, before the recorder takes the row.
             if (landing) reveals.clear();
             else reveals.count(Math.floor(fly.x) >> 4, Math.floor(fly.z) >> 4, refillRd);
+            // L14's map: its arrow follows the camera while shown (SP4c spec §1.5).
+            benchMap?.tick(counts);
             recorder.frame(timing[T_RAW]!, performance.now() - timing[T_START]!, timing[T_COORD]!, timing[T_UPLOAD]!, timing[T_ROWS]!, counts.genCap);
             timing[T_COORD] = 0;
             timing[T_UPLOAD] = 0;
