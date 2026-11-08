@@ -124,8 +124,9 @@
  * underground worm's shrink, the carving rules), whose values state the schema defaults of the carver leaves, and moves
  * item 20's U2 count to the carver leaves. The caves metric's commit (Task 30) pins item 17 (§6.1: `debugTags` reads the
  * store's `cave` channel and adds the pillar bit; the references gain the 3D sky flood and components and a global
- * carver reference), item 8's test entry (`metrics/caves.metric.ts`, an `SP6A_MODULES` row; Task 35 adds
- * `bench/inlined.ts`) and item 18's C7 row with its four construction parts, cross-checked against `THRESHOLDS`.
+ * carver reference), item 8's test entry (`metrics/caves.metric.ts`, an `SP6A_MODULES` row) and item 18's C7 row with
+ * its four construction parts, cross-checked against `THRESHOLDS`. The kill criterion's commit (Task 35) completes item
+ * 8's test entry with `bench/inlined.ts` (its `SP6A_MODULES` row).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2109,6 +2110,7 @@ describe('master spec amendments (SP6a §13)', () => {
     [/^\s+materials\/index\.ts /, '(SP6a: the X-ray material, glsl/xray.glsl.ts)', 'src/render/materials/glsl/xray.glsl.ts'],
     [/^\s+ui\/world\/\* /, 'xrayStrip.ts (SP6a)', 'src/ui/world/xrayStrip.ts'],
     [/^\s+test\/ unit\/ metrics\//, '(SP6a: metrics/caves.metric.ts', 'test/metrics/caves.metric.ts'],
+    [/^\s+test\/ unit\/ metrics\//, '(SP6a: metrics/caves.metric.ts, bench/inlined.ts)', 'test/bench/inlined.ts'],
   ];
 
   test('§1 names each SP6a module in its entry, which exists; the line under gen/ names carve.ts and tags.ts (SP6a spec §13 item 8)', () => {

@@ -219,7 +219,7 @@ world-imaginer-voxel/          (repository root)
         (SP5a: metrics/edit.metric.ts, integration/edit.test.ts)
         (SP5b: metrics/persist.metric.ts)
         (SP5c: metrics/clipboard.metric.ts)
-        (SP6a: metrics/caves.metric.ts)
+        (SP6a: metrics/caves.metric.ts, bench/inlined.ts)
         schema-shape.lock.json (SP1) stateIds.lock.json (SP3a)
         thresholds.ts thresholds.lock.json goldens.json baselines.json
 ```

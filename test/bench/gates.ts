@@ -137,13 +137,15 @@ export function spiralCells(n: number): Array<readonly [number, number]> {
  * appends `relight.edit` (one edit's relight); SP5b §6.2 appends `persist.flush` (one flush's synchronous part); SP5c
  * §10.3 appends `paste.max` and `paste.maxLit` (one maximum paste, solid and relight-heavy); SP6a §10.5 appends
  * `terrain.caves.warm` (T over a spiral of neighbours, the carver path cache warm), `carver.paths` (one path per carver
- * kind, cold) and `mesh.xray` (the X-ray pass alone over `mesh.section`'s sections).
+ * kind, cold) and `mesh.xray` (the X-ray pass alone over `mesh.section`'s sections), and inserts `density.cornerInlined`
+ * (the kill criterion's hand-inlined default expression over `density.corner`'s corners, test/bench/inlined.ts) right
+ * after `density.corner`, where it is measured.
  */
 export const BENCH_ROWS = [
   'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
   'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
   'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
-  'store.alloc', 'density.corner', 'terrain.real', 'surface.column',
+  'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'surface.column',
   'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
   'light.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
   'terrain.caves.warm', 'carver.paths', 'mesh.xray',

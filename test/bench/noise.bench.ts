@@ -62,6 +62,7 @@ import {
   spiralCells, TERRAIN_WARM_RUN, WARM_SPIRAL, type Baselines,
 } from './gates';
 import { buildPerm, perm3 } from './perm512';
+import { INLINED_SLOTS, inlinedColumn, inlinedCorner, inlinedLeavesOf, inlinedNoisesOf, inlinedVoxel } from './inlined';
 
 const FMIX = fmix32;
 const LAT = lattice3;
@@ -228,6 +229,18 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
     compiled.cornerReady.fill(0);
     for (let k = 0; k < 49; k++) for (let j = 0; j < 5; j++) for (let i = 0; i < 5; i++) compiled.cornerFn(i, k, j);
     sink += compiled.cornerValues[612]!;
+  });
+  // SP6a §10.5, the kill criterion (master :1640): the same 1,225 corners of column (0, 0) by the hand-inlined default
+  // expression (`inlinedCorner`, test/bench/inlined.ts, bit-exact against the compiled tree, test/unit/inlined.test.ts),
+  // its column and position slots filled beforehand (`inlinedColumn`), as columnFn and positionFn filled the compiled's.
+  const inlinedP = inlinedLeavesOf(DEFAULTS);
+  const inlinedS = buildColumnSample(gen, 0, 0, newColumnSample());
+  const inlinedN = inlinedNoisesOf(gen);
+  inlinedColumn(inlinedS, inlinedP, inlinedN);
+  const inlinedOut = new Float64Array(INLINED_SLOTS.length * 1225);
+  await measure('density.cornerInlined', 1225, () => {
+    for (let k = 0; k < 49; k++) for (let j = 0; j < 5; j++) for (let i = 0; i < 5; i++) inlinedCorner(inlinedS, inlinedP, inlinedN, i, k, j, inlinedOut);
+    sink += inlinedOut[612]!;
   });
   const never = (): boolean => false;
   let tc = 0;
@@ -667,7 +680,12 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   // (§1.4: G_f is about the family's typical air depth). Then 64 amplified mountain columns (`offset` ≥ 150 at the
   // centre block, liveness' CAP_OFFSET; terrain.real's candidate sequence on the amplified profile), each timed once
   // after 4 warm-up columns, for their p99.
+  // SP6a §10.5, the kill criterion's voxel phase: on the same columns, with the column's corners and min skips as T left
+  // them, `voxelFn` at every evaluated voxel, then `inlinedVoxel` (test/bench/inlined.ts) at the same voxels from the
+  // inlined corner values of the same corners (computed outside the timing), the two loops in alternate order per column;
+  // their sums must agree, and the first VOXEL_PAIR_WARM columns warm both up and are not counted.
   const D25_COLUMNS = 256;
+  const VOXEL_PAIR_WARM = 16;
   const AMPLIFIED_COLUMNS = 64;
   const MOUNTAIN_OFFSET = 150;
   const q = (sorted: ArrayLike<number>, p: number): number => sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)]!;
@@ -681,6 +699,9 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   const pMask = new Uint8Array(98304);
   const pCells = new Uint8Array(768);
   const pTag = new Uint8Array(98304);
+  const pInlinedN = inlinedNoisesOf(pGen);
+  const pInlinedOut = new Float64Array(INLINED_SLOTS.length * 1225);
+  const pair = { compiledMs: 0, inlinedMs: 0, voxels: 0 };
   const families = [
     ['entrances', CAVE_KIND.entrance], ['cheese', CAVE_KIND.cheese], ['spaghetti3d', CAVE_KIND.spaghetti3d],
     ['spaghetti2d', CAVE_KIND.spaghetti2d], ['noodles', CAVE_KIND.noodle],
@@ -713,6 +734,31 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
     tagColumn(c, readers, DEFAULTS.caves.pillars.threshold, pSolid, pCells, pTag, pBounds);
     d25.voxelMs.push(performance.now() - v0);
     d25.voxels.push(voxels);
+    inlinedColumn(pSample, inlinedP, pInlinedN);
+    for (let q = 0; q < 1225; q++) if (c.cornerReady[q] === 1) inlinedCorner(pSample, inlinedP, pInlinedN, q % 5, Math.floor(q / 25), Math.floor(q / 5) % 5, pInlinedOut);
+    let sumC = 0, sumI = 0, msC = 0, msI = 0;
+    for (let r = 0; r < 2; r++) {
+      const tp = performance.now();
+      if ((r ^ (t & 1)) === 0) {
+        for (let i = 256; i < 98304; i++) if (pMask[i] !== 0) sumC += c.voxelFn(i & 15, (i >> 8) - 64, (i >> 4) & 15);
+        msC = performance.now() - tp;
+      } else {
+        for (let i = 256; i < 98304; i++) {
+          if (pMask[i] === 0) continue;
+          const lx = i & 15, lz = (i >> 4) & 15, y = (i >> 8) - 64;
+          const cell = (((y + 64) >> 3) * 4 + (lz >> 2)) * 4 + (lx >> 2);
+          sumI += inlinedVoxel(pInlinedOut, pSample, inlinedP, pInlinedN, lx, y, lz, c.minSkips, c.minSkipReady[cell] === 1 ? cell * c.minSlotCount : -1);
+        }
+        msI = performance.now() - tp;
+      }
+    }
+    if (sumI !== sumC && !(Number.isNaN(sumI) && Number.isNaN(sumC))) throw new Error(`the kill criterion's voxel pair: inlinedVoxel's sum ${sumI} ≠ voxelFn's ${sumC} at (${pcx}, ${pcz})`);
+    sink += sumC;
+    if (t > VOXEL_PAIR_WARM) {
+      pair.compiledMs += msC;
+      pair.inlinedMs += msI;
+      pair.voxels += voxels;
+    }
     const readerOf: Readonly<Record<number, (() => number) | null>> = {
       [CAVE_KIND.entrance]: readers.entrances, [CAVE_KIND.cheese]: readers.cheese, [CAVE_KIND.spaghetti3d]: readers.spaghetti3d,
       [CAVE_KIND.spaghetti2d]: readers.spaghetti2d, [CAVE_KIND.noodle]: readers.noodle,
@@ -781,6 +827,21 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
       `D25 cave channel: dense cave sections per column median ${q(ds, 0.5)}, mean ${(sum(d25.denseCave) / D25_COLUMNS).toFixed(2)}, p90 ${q(ds, 0.9)}, max ${q(ds, 1)}; `
       + `bytes per column median ${4096 * q(ds, 0.5)}, mean ${Math.round((4096 * sum(d25.denseCave)) / D25_COLUMNS)}`,
     );
+    {
+      // The kill criterion (SP6a §10.5, master :1640): the closures' overhead per column over terrain.real's p50.
+      const cornerC = ns['density.corner']!, cornerI = ns['density.cornerInlined']!;
+      const cornersMedian = q(cs, 0.5), voxelsMedian = q(vs, 0.5);
+      const voxC = (1e6 * pair.compiledMs) / pair.voxels, voxI = (1e6 * pair.inlinedMs) / pair.voxels;
+      const cornerMs = ((cornerC - cornerI) * cornersMedian) / 1e6, voxelMs = ((voxC - voxI) * voxelsMedian) / 1e6;
+      const share = (cornerMs + voxelMs) / terrainRun.latency.p50;
+      console.log(
+        `kill criterion (SP6a §10.5): corners density.corner ${cornerC.toFixed(1)} ns, density.cornerInlined ${cornerI.toFixed(1)} ns per corner `
+        + `(${(cornerC - cornerI).toFixed(1)} ns × median ${cornersMedian} corners per column = ${f3(cornerMs)} ms); voxel phase voxelFn ${voxC.toFixed(1)} ns, `
+        + `inlinedVoxel ${voxI.toFixed(1)} ns per voxel (${pair.voxels} voxels of ${D25_COLUMNS - VOXEL_PAIR_WARM} columns; ${(voxC - voxI).toFixed(1)} ns × median ${voxelsMedian} `
+        + `voxels per column = ${f3(voxelMs)} ms); overhead ${f3(cornerMs + voxelMs)} ms = ${(100 * share).toFixed(1)} % of terrain.real's p50 `
+        + `${f3(terrainRun.latency.p50)} ms (${share > 0.25 ? 'above 25 %: the codegen amendment is the user\'s to approve' : 'within 25 %: no codegen'})`,
+      );
+    }
     console.log(`D25 each family's slot value at the median voxel it tags (${D25_COLUMNS} columns): ${families.map(([name, k]) => {
       const v = sortedOf(tagged.get(k)!);
       return `${name} ${v.length === 0 ? 'none' : `${f3(q(v, 0.5))} (${v.length} voxels; p10 ${f3(q(v, 0.1))}, p90 ${f3(q(v, 0.9))})`}`;
