@@ -1922,6 +1922,9 @@ describe('master spec amendments (SP6a §13)', () => {
     // Item 3: SP7's line carries §14's text to its last item before the abyss lava (left to SP6b).
     const sp7Received = spEntry('SP7', 'SP8a').split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
     expect(sp7Received, 'SP7\'s "Received from SP6a" line ends with the bench\'s flood scenario').toMatch(/`dryPitsBelowSea` \(SP3c\); the bench's flood scenario after L13\.$/);
+    // Item 3: SP12's line carries ruling R19's hand-off (the SP6a spec §14's SP12 bullet, §10.4), after the summit caps it goes with.
+    const sp12Received = sp12Entry().split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
+    expect(sp12Received, 'SP12\'s "Received from SP6a" line carries R19\'s large-island grass').toContain('`islandBranchOnGround` before and after caves; with them, the grass kept under floating_islands\' islands that lies at sky 0 under islands wider than about 30 blocks (ruling R19, the SP6a spec §10.4: S1\'s large-island window, recorded, not pooled); the y mod 16 residue');
     // Item 4 (the critical path moved from the SP5a describe) and item 5.
     const critical = text.split('\n').find((l) => l.startsWith('Critical path: '));
     expect(critical).toContain('SP5c → SP6a → SP6b → SP7');
