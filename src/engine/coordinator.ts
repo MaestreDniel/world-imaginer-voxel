@@ -24,7 +24,13 @@
  *   whose 3 × 3 are ≥ Proto with live protos; L for a Decorated column of the L set whose 3 × 3 are ≥ Decorated; MESH
  *   for a Published, unmeshed column of the MESH set whose 3 × 3 are Published; never busy or failed.
  * - **Caps** (§3.8, D29): N = `jobs.liveWorkers()`; T + D + L in flight ≤ `throttle.cap()`; T ≤ max(1, N − 1);
- *   MESH ≤ N; at most N in total, so the pool's queue never holds more than N world jobs.
+ *   MESH ≤ N; at most N in total, so the pool's queue never holds more than N world jobs. While `regenerating` (SP6a,
+ *   Task 48e lever b: from an `apply` until a counts pass finds no stale MESH-set column, or no T, D, L or MESH job and
+ *   no free left) and while no MESH job waits in its heap, T, D and L may take the idle MESH slot: T + D + L ≤
+ *   min(N, `throttle.cap()` + 1) and T ≤ N. The bound: the pump that follows a settle sees a waiting MESH and drops
+ *   back to the caps above, so a MESH that waits finds at most the one boosted job running and takes the slot the next
+ *   settle frees (after every settle with a MESH waiting, T + D + L ≤ `throttle.cap()`). Outside a regeneration the
+ *   caps are unchanged.
  * - **Pins** (§3.5, D3): at issue a D job adds 1 to `protoReaders` of its nine columns, an L or MESH job to
  *   `finalReaders`; every settle (a reply, a rejection, a failure) subtracts them. They are main-thread counters, not
  *   locks (master §4.1). A column is freed, or its proto dropped, only at zero pins and when it is not busy.
@@ -324,6 +330,13 @@ export interface Coordinator {
    */
   markEdited(keys: ArrayLike<number>): void;
   counts(out: CoordinatorCounts): CoordinatorCounts;
+  /**
+   * Whether the world regenerates inside RD (SP6a, Task 48e lever b): set by `apply`; cleared by the first `counts`
+   * pass that finds no stale MESH-set column, or one with no T, D, L or MESH job in flight or queued and no free queued
+   * (a skipped column's neighbours, which nothing regenerates under this draft). The page reads the counts every frame.
+   * While it holds and no MESH job waits, T, D and L may take the idle MESH slot (the caps above).
+   */
+  readonly regenerating: boolean;
   dispose(): void;
 }
 
@@ -481,6 +494,8 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
   /** The applied epoch (SP4c spec §4.4) and the pool generation the world applied (§4.2's gate). */
   let wEpoch = o.epoch;
   let appliedGeneration = o.generation;
+  /** From an `apply` until the counts find the refill done (SP6a, Task 48e lever b; `Coordinator.regenerating`). */
+  let regenerating = false;
 
   // The slot table (spec §3.1).
   const tcx = new Int32Array(SLOTS).fill(NO_COLUMN);
@@ -1124,12 +1139,16 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       if (stopped) return;
       const N = live;
       if (total >= N) return;
-      const genFull = inFlight[0]! + inFlight[1]! + inFlight[2]! >= throttle.cap();
+      // The refill (SP6a, Task 48e lever b): while regenerating and no MESH waits, T, D and L may take the idle MESH slot.
+      const boost = regenerating && heapLen[3] === 0;
+      const genCap = boost ? Math.min(N, throttle.cap() + 1) : throttle.cap();
+      const genFull = inFlight[0]! + inFlight[1]! + inFlight[2]! >= genCap;
+      const tCap = boost ? N : Math.max(1, N - 1);
       let best = -1;
       for (let h = 0; h < 4; h++) {
         if (heapLen[h] === 0) continue;
         if (h < 3 && genFull) continue;
-        if (h === 0 && inFlight[0]! >= Math.max(1, N - 1)) continue;
+        if (h === 0 && inFlight[0]! >= tCap) continue;
         if (h === 3 && inFlight[3]! >= N) continue;
         if (best < 0) {
           best = h;
@@ -1541,6 +1560,7 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       // The unloads re-collected (the stale frees, the stale meshes outside the MESH set), then the stage heaps.
       collectUnloads();
       rebuild();
+      regenerating = true;
     },
 
     isSkipped(cx, cz) {
@@ -1610,6 +1630,8 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       return m === stageOffsets(rd).MESH.length;
     },
 
+    get regenerating() { return regenerating; },
+
     counts(out) {
       const offs = stageOffsets(rd);
       out.T.needed = offs.T.length;
@@ -1625,6 +1647,9 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
       out.D.queued = heapLen[1]!;
       out.L.queued = heapLen[2]!;
       out.MESH.queued = heapLen[3]!;
+      // The regeneration ends with its last stale column, or when nothing is left to regenerate it (Task 48e).
+      if (regenerating && (out.stale === 0 || inFlight[0]! + inFlight[1]! + inFlight[2]! + inFlight[3]! + heapLen[0]! + heapLen[1]!
+        + heapLen[2]! + heapLen[3]! + heapLen[H_FREE]! === 0)) regenerating = false;
       out.dropped = dropped;
       out.editDropped = editDropped;
       out.storeFull = storeFull;

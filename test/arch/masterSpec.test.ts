@@ -2195,6 +2195,12 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(caps).toContain('(SP6a: while the 3D is visible and the world regenerates inside RD after an Apply, the non-interactive aux jobs wait until the refill is done; the map\'s tiles resume after it)');
   });
 
+  test('§4.3\'s caps: T, D and L may take the idle MESH slot while the world regenerates and no MESH waits (SP6a spec §13 item 22, §4; Task 48e lever b)', () => {
+    const at = text.indexOf('### 4.3 Scheduling');
+    const s43 = text.slice(at, text.indexOf('### 4.4 ', at));
+    expect(s43).toContain('- In flight per type: T ≤ N−1, MESH ≤ N (SP6a: while the world regenerates after an Apply and no MESH job waits, T, D and L may take the idle MESH slot: T ≤ N and T + D + L ≤ min(N, the throttle\'s cap + 1); a waiting MESH takes the next slot that frees).');
+  });
+
   test('§6.4\'s T5 row compares surfaceEst3 with the pre-cave top, its thresholds unchanged (SP6a spec §13 item 21)', () => {
     const t5 = text.split('\n').find((l) => l.startsWith('| T5 |'));
     expect(t5, 'no T5 row in §6.4').toBeDefined();

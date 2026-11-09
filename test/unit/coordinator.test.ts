@@ -107,6 +107,8 @@ function fakeWorld(fo: FakeOptions = {}) {
     unstageReturns: (_cx: number, _cz: number): boolean => false,
     /** Reads the coordinator's epoch at a stage (`make` sets it once the coordinator exists). */
     epochNow: (): number => 1,
+    /** Reads the coordinator's `regenerating` at an issue (`make` sets it once the coordinator exists). */
+    regeneratingNow: (): boolean => false,
     /** The pool's generation (`jobs.generation()`), moved by the test (SP4c spec §4.2). */
     generation: 0,
     /** The generation each job of `issued` was issued under (same indices). */
@@ -218,8 +220,11 @@ function fakeWorld(fo: FakeOptions = {}) {
     if (edit) return;
     // Each cap is checked when a job it bounds is issued (a cap that drops, as N does, binds the next such issue).
     const N = fake.live;
-    if (stage !== 'MESH' && inFlight.T + inFlight.D + inFlight.L > throttle.cap()) violations(`${inFlight.T + inFlight.D + inFlight.L} T + D + L in flight above genCap ${throttle.cap()}`);
-    if (stage === 'T' && inFlight.T > Math.max(1, N - 1)) violations(`${inFlight.T} T in flight`);
+    // While the world regenerates (SP6a, Task 48e lever b), T, D and L may take the idle MESH slot: one more, at most N.
+    const boost = fake.regeneratingNow();
+    const genCap = boost ? Math.min(N, throttle.cap() + 1) : throttle.cap();
+    if (stage !== 'MESH' && inFlight.T + inFlight.D + inFlight.L > genCap) violations(`${inFlight.T + inFlight.D + inFlight.L} T + D + L in flight above genCap ${genCap}`);
+    if (stage === 'T' && inFlight.T > (boost ? N : Math.max(1, N - 1))) violations(`${inFlight.T} T in flight`);
     if (stage === 'MESH' && inFlight.MESH > N) violations(`${inFlight.MESH} MESH in flight`);
     if (total > N) violations(`${total} jobs in flight`);
   };
@@ -367,8 +372,10 @@ function make(mo: MakeOptions = {}): { w: World; c: Coordinator } {
   const counts = createCoordinatorCounts();
   let epoch = inner.counts(counts).epoch;
   w.fake.epochNow = () => epoch;
+  w.fake.regeneratingNow = () => inner.regenerating;
   const c: Coordinator = {
     ...inner,
+    get regenerating() { return inner.regenerating; },
     apply(a) {
       inner.apply(a);
       epoch = inner.counts(counts).epoch;
@@ -574,6 +581,75 @@ describe('createCoordinator: the fill (SP4b spec §3.1-§3.3, §3.6, §3.11)', (
     expect(w.fake.violations).toEqual([]);
     expect(maxGen).toBe(2);
     expect(read(c).genCap).toBe(2);
+  });
+
+  test('the refill (SP6a, Task 48e lever b): while the world regenerates and no MESH job waits, T, D and L take the idle MESH slot (N in flight, not N − 1); a waiting MESH finds T + D + L at the unboosted cap after every settle, so it takes the next slot that frees; outside a regeneration the caps are SP4b\'s', async () => {
+    let allWaits = 0;
+    for (const [workers, order] of [[2, 7], [4, 'fifo'], [4, 13], [6, 29]] as const) {
+      const { w, c } = make({ rd: 6, workers });
+      await fill(w, c, cam(0, 0), order === 'fifo' ? 'fifo' : order);
+      const at = `N ${workers}, order ${order}`;
+      expect(c.regenerating, at).toBe(false);
+      // The first fill never went past N − 1 T + D + L (the fake checks every issue against the unboosted caps).
+      expect(w.fake.violations, at).toEqual([]);
+      applyTo(w, c, 2);
+      expect(c.regenerating, at).toBe(true);
+      const k = createCoordinatorCounts();
+      const pick = order === 'fifo' ? () => 0 : lcg(order);
+      let maxGen = 0;
+      let maxT = 0;
+      let waits = 0;
+      for (let u = 0; u < 400 && c.regenerating; u++) {
+        c.update(cam(0, 0));
+        await flush();
+        while (w.fake.pending.length > 0) {
+          const gen = w.fake.pending.filter((p) => p.stage !== 'MESH').length;
+          maxGen = Math.max(maxGen, gen);
+          maxT = Math.max(maxT, w.fake.pending.filter((p) => p.stage === 'T').length);
+          w.settle(pick(w.fake.pending.length));
+          await flush();
+          // The bound: after a settle (and its pump) a waiting MESH never finds the boosted slot held.
+          c.counts(k);
+          if (k.MESH.queued > 0) {
+            waits++;
+            expect(k.T.inFlight + k.D.inFlight + k.L.inFlight, `${at}: T + D + L with a MESH waiting`).toBeLessThanOrEqual(w.throttle.cap());
+          }
+        }
+        c.counts(k);
+      }
+      expect(w.fake.violations, at).toEqual([]);
+      expect([k.stale, c.regenerating], `${at}: the refill done`).toEqual([0, false]);
+      expect(maxGen, `${at}: T + D + L took the MESH slot`).toBe(workers);
+      expect(maxT, `${at}: T took the MESH slot`).toBe(workers);
+      allWaits += waits;
+      // Streaming again after the refill: a crossing's new columns under SP4b's caps.
+      const mark = w.fake.issued.length;
+      await fill(w, c, cam(2, 0), order === 'fifo' ? 'fifo' : order);
+      expect(w.fake.issued.length, `${at}: the crossing issued jobs`).toBeGreaterThan(mark);
+      expect(w.fake.violations, at).toEqual([]);
+    }
+    // The bound was exercised: a MESH waited after some settles (all N slots busy).
+    expect(allWaits).toBeGreaterThan(0);
+  });
+
+  test('regenerating (SP6a, Task 48e): set by `apply`, kept while a stale MESH-set column has a job left, cleared by the counts pass that finds none; never set by `adopt` or a crossing', async () => {
+    const { w, c } = make({ rd: 4, workers: 4 });
+    await fill(w, c, cam(0, 0));
+    c.adopt(w.fake.generation);
+    expect(c.regenerating).toBe(false);
+    await fill(w, c, cam(1, 0));
+    expect(c.regenerating).toBe(false);
+    applyTo(w, c, 2);
+    expect(c.regenerating).toBe(true);
+    // A counts pass with the refill pending keeps it.
+    const k = read(c);
+    expect(k.stale).toBeGreaterThan(0);
+    expect(c.regenerating).toBe(true);
+    await settleDown(w, c, cam(1, 0), () => 0);
+    expect(c.regenerating).toBe(true);
+    expect(read(c).stale).toBe(0);
+    expect(c.regenerating).toBe(false);
+    expect(w.fake.violations).toEqual([]);
   });
 
   test('re-centring on a crossing: after moving one column east the sets follow and no job outside its set is issued', async () => {

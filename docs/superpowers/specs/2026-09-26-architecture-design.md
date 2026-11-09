@@ -1009,7 +1009,7 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 - Four heaps, one per stage, rebuilt in O(n) (n ≤ 5k) on a crossing, an RD change or a turn > 30° (SP4b).
 
 **Caps:**
-- In flight per type: T ≤ N−1, MESH ≤ N.
+- In flight per type: T ≤ N−1, MESH ≤ N (SP6a: while the world regenerates after an Apply and no MESH job waits, T, D and L may take the idle MESH slot: T ≤ N and T + D + L ≤ min(N, the throttle's cap + 1); a waiting MESH takes the next slot that frees).
 - LOD, MAP, SLICE, METRIC and AUDIO_SYNTH ≤ 1 while any T is pending within RD (SP4c: while the 3D is visible; while the map covers the 3D, map jobs go first and the world streams on the workers left; points, landing and probes go first and are not capped; the pool keeps world jobs in a FIFO lane and the rest in a heap) (SP6a: while the 3D is visible and the world regenerates inside RD after an Apply, the non-interactive aux jobs wait until the refill is done; the map's tiles resume after it).
 
 **Adaptive throttle (`engine/throttle.ts`).** If frame p95 over 60 frames exceeds max(16.7 ms, the display interval + 0.5 ms) while generation is in flight, the generation cap (on the T, D and L jobs in flight, in [1, max(1, N − 1)] (SP4b)) drops by 1 (minimum 1). After 120 frames under max(13 ms, the display interval + 0.5 ms) it rises by 1. The thresholds follow the display, so a display below 60 Hz does not read as permanently slow and a 60 Hz display can raise the cap again after a drop; at 144-240 Hz they are 16.7 and 13 ms (the user's decision of 2026-10-24, SP4b).
