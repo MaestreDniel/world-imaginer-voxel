@@ -180,12 +180,14 @@ export const THRESHOLDS: ThresholdTable = {
     perWorldStateWrong: { max: 0, activeFrom: 'SP5b' }, remapMismatches: { max: 0, activeFrom: 'SP5b' },
   },
   // SP4a spec §9.1, §9.5 (D24): G1's three Medium cells on the static world, from the Chrome flight on the Iris Xe
-  // (`g1.metric.ts`, `flight-iris-chrome.json`, re-measured on SP5c's code into `assets/sp5c/`, SP5c spec D30). SP4b
-  // spec §8.2, §8.4 (D23): the six Medium streaming cells, from the committed Iris Xe Chrome bench files
-  // (`G1.streaming`, re-read from `assets/sp5c/`). SP4c spec §8.2, §8.4 (D22): the three Medium live cells over the
-  // bench's Apply, undo and teleport legs, from `assets/sp5c/bench-iris-chrome.json`'s `live` block (`G1.live`). SP5b
+  // (`g1.metric.ts`, `flight-iris-chrome.json`, re-measured on SP6a's code with caves into `assets/sp6a/`, SP6a spec
+  // D29). SP4b spec §8.2, §8.4 (D23): the six Medium streaming cells, from the committed Iris Xe Chrome bench files
+  // (`G1.streaming`, re-read from `assets/sp6a/`). SP4c spec §8.2, §8.4 (D22): the three Medium live cells over the
+  // bench's Apply, undo and teleport legs, from `assets/sp6a/bench-iris-chrome.json`'s `live` block (`G1.live`). SP5b
   // spec §6.2 (D28): entering a saved world against the same world opened unsaved, the median of the kept pairs'
-  // ratios, from `assets/sp5c/enter-iris-chrome.json` (`G1.enter`).
+  // ratios, from `assets/sp6a/enter-iris-chrome.json` (`G1.enter`). SP6a spec §10.6 (D29): walking through caves, the
+  // bench's cave leg L13, from the same bench file's `caves` block (`G1.caves`), and the X-ray at RD 12, its X-ray leg
+  // L14, from its `xray` block's RD 12 segment (`G1.xray`; the RD 16 segment recorded).
   G1: {
     mediumStaticP95: { max: 16.7, activeFrom: 'SP4a' }, mediumStaticDrawCalls: { max: 100, activeFrom: 'SP4a' }, mediumStaticMainP95: { max: 6, activeFrom: 'SP4a' },
     mediumStreamP95: { max: 16.7, activeFrom: 'SP4b' },
@@ -198,9 +200,18 @@ export const THRESHOLDS: ThresholdTable = {
     mediumLiveOver33: { max: 0, activeFrom: 'SP4c' },
     mediumLiveGpuMB: { max: 150, activeFrom: 'SP4c' },
     enterRatio: { max: 1.10, activeFrom: 'SP5b' },
+    caveP95: { max: 16.7, activeFrom: 'SP6a' },
+    caveOver33: { max: 0, activeFrom: 'SP6a' },
+    caveMainP95: { max: 6, activeFrom: 'SP6a' },
+    xrayP95: { max: 16.7, activeFrom: 'SP6a' },
+    xrayOver33: { max: 0, activeFrom: 'SP6a' },
+    xrayMainP95: { max: 6, activeFrom: 'SP6a' },
+    xrayGpuMB: { max: 150, activeFrom: 'SP6a' },
+    xrayDrawCalls: { max: 100, activeFrom: 'SP6a' },
+    xrayToggleMaxMs: { max: 33, activeFrom: 'SP6a' },
   },
   // SP5a spec §6.2 (D26): G2's edit part, the post → the frame the edited column's new mesh is shown, over the bench's
-  // edit leg L10, from `assets/sp5c/bench-iris-chrome.json`'s `edit` block (`g1.metric.ts`, `G2.edit`). SP5b spec §6.2
+  // edit leg L10, from `assets/sp6a/bench-iris-chrome.json`'s `edit` block (`g1.metric.ts`, `G2.edit`). SP5b spec §6.2
   // (D28): the flush parts, what autosave adds over the bench's save leg L11, from the same file's `persist` block
   // (`G2.flush`); the spec's `flushMainP95Ms` max 0.3 is recorded, not gated (the user's check decided it under D28).
   // SP5c spec §10.4 (D28): the paste parts over the bench's paste leg L12, pasting, moving and cutting a large build,

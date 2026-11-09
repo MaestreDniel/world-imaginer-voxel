@@ -1,5 +1,5 @@
 {
-  "sha256": "0e6581d07a3a26b4a50bef3bfe8461cd9bd3e123a4e4c4f01b2baa3a6ba77f6f",
+  "sha256": "a36fd8243e04c2e31e864c326f9722a6347bd27c5c1285be024b2c397697094a",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -523,6 +523,18 @@
         }
       },
       "G1": {
+        "caveMainP95": {
+          "activeFrom": "SP6a",
+          "max": 6
+        },
+        "caveOver33": {
+          "activeFrom": "SP6a",
+          "max": 0
+        },
+        "caveP95": {
+          "activeFrom": "SP6a",
+          "max": 16.7
+        },
         "enterRatio": {
           "activeFrom": "SP5b",
           "max": 1.1
@@ -574,6 +586,30 @@
         "mediumStreamP95": {
           "activeFrom": "SP4b",
           "max": 16.7
+        },
+        "xrayDrawCalls": {
+          "activeFrom": "SP6a",
+          "max": 100
+        },
+        "xrayGpuMB": {
+          "activeFrom": "SP6a",
+          "max": 150
+        },
+        "xrayMainP95": {
+          "activeFrom": "SP6a",
+          "max": 6
+        },
+        "xrayOver33": {
+          "activeFrom": "SP6a",
+          "max": 0
+        },
+        "xrayP95": {
+          "activeFrom": "SP6a",
+          "max": 16.7
+        },
+        "xrayToggleMaxMs": {
+          "activeFrom": "SP6a",
+          "max": 33
         }
       },
       "G2": {

@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { enterFileFailures, pasteFailures, pasteGateOf, persistFailures, screenFailures, type EnterFileOf, type PasteOf, type PersistOf } from '../harness/benchFiles';
 
-const ASSETS_SP5C = new URL('../../docs/superpowers/specs/assets/sp5c/', import.meta.url);
-const read = <T>(file: string): T => JSON.parse(readFileSync(new URL(file, ASSETS_SP5C), 'utf8')) as T;
+const ASSETS_SP6A = new URL('../../docs/superpowers/specs/assets/sp6a/', import.meta.url);
+const read = <T>(file: string): T => JSON.parse(readFileSync(new URL(file, ASSETS_SP6A), 'utf8')) as T;
 
 const FULL = { window: { width: 1920, height: 1080, windowState: 'fullscreen' }, viewport: { innerWidth: 1920, innerHeight: 1080, devicePixelRatio: 1 } };
 

@@ -1,0 +1,225 @@
+{
+  "route": "bench=enter",
+  "pairs": [
+    {
+      "unsaved": {
+        "revealMs": 3443.5999999996275,
+        "idbOpenMs": null,
+        "loadMs": null,
+        "decodeMs": null
+      },
+      "saved": {
+        "revealMs": 3575.7249999996275,
+        "idbOpenMs": 16.78999999910593,
+        "loadMs": 58.81000000052154,
+        "decodeMs": 9.705000000074506
+      }
+    },
+    {
+      "unsaved": {
+        "revealMs": 3536.929999999702,
+        "idbOpenMs": null,
+        "loadMs": null,
+        "decodeMs": null
+      },
+      "saved": {
+        "revealMs": 3493.945000000298,
+        "idbOpenMs": 0.7149999998509884,
+        "loadMs": 58.09500000067055,
+        "decodeMs": 9.399999998509884
+      }
+    },
+    {
+      "unsaved": {
+        "revealMs": 3438.890000000596,
+        "idbOpenMs": null,
+        "loadMs": null,
+        "decodeMs": null
+      },
+      "saved": {
+        "revealMs": 3603.1549999993294,
+        "idbOpenMs": 0.6049999985843897,
+        "loadMs": 61.7350000012666,
+        "decodeMs": 10.140000000596046
+      }
+    },
+    {
+      "unsaved": {
+        "revealMs": 4340.769999999553,
+        "idbOpenMs": null,
+        "loadMs": null,
+        "decodeMs": null
+      },
+      "saved": {
+        "revealMs": 3653.344999998808,
+        "idbOpenMs": 0.43500000052154064,
+        "loadMs": 57.94999999925494,
+        "decodeMs": 9.629999998956919
+      }
+    },
+    {
+      "unsaved": {
+        "revealMs": 4301.75,
+        "idbOpenMs": null,
+        "loadMs": null,
+        "decodeMs": null
+      },
+      "saved": {
+        "revealMs": 4530.4749999996275,
+        "idbOpenMs": 0.3650000002235174,
+        "loadMs": 61.59999999962747,
+        "decodeMs": 9.860000001266599
+      }
+    },
+    {
+      "unsaved": {
+        "revealMs": 4285.695000000298,
+        "idbOpenMs": null,
+        "loadMs": null,
+        "decodeMs": null
+      },
+      "saved": {
+        "revealMs": 4327.8149999994785,
+        "idbOpenMs": 0.48000000044703484,
+        "loadMs": 58.78500000014901,
+        "decodeMs": 10.865000000223517
+      }
+    }
+  ],
+  "kept": 5,
+  "pairRatios": [
+    1.038368277384137,
+    0.9878468049977219,
+    1.0477668666339153,
+    0.8416352398305333,
+    1.0531702214214278,
+    1.009828044226007
+  ],
+  "enterRatio": 1.009828044226007,
+  "medianUnsavedMs": 4285.695000000298,
+  "medianSavedMs": 3653.344999998808,
+  "idbOpenMs": 0.48000000044703484,
+  "loadMs": 58.78500000014901,
+  "decodeMs": 9.860000001266599,
+  "newWorldRevealMs": 3728.254999998957,
+  "shaderCache": "cold",
+  "gpu": "rtx",
+  "renderer": "ANGLE (NVIDIA, Vulkan 1.4.329 (NVIDIA NVIDIA GeForce RTX 3060 Laptop GPU (0x00002520)), NVIDIA)",
+  "loads": [
+    {
+      "pair": 0,
+      "leg": "unsaved",
+      "at": 1794258772253,
+      "cpuMHz": 2063.5095,
+      "pkgTempC": 54
+    },
+    {
+      "pair": 0,
+      "leg": "saved",
+      "at": 1794258776275,
+      "cpuMHz": 1978.6798999999999,
+      "pkgTempC": 66
+    },
+    {
+      "pair": 1,
+      "leg": "saved",
+      "at": 1794258780293,
+      "cpuMHz": 1479.48895,
+      "pkgTempC": 56
+    },
+    {
+      "pair": 1,
+      "leg": "unsaved",
+      "at": 1794258784317,
+      "cpuMHz": 1864.1581999999999,
+      "pkgTempC": 57
+    },
+    {
+      "pair": 2,
+      "leg": "unsaved",
+      "at": 1794258788334,
+      "cpuMHz": 2348.016,
+      "pkgTempC": 59
+    },
+    {
+      "pair": 2,
+      "leg": "saved",
+      "at": 1794258792357,
+      "cpuMHz": 2099.1525,
+      "pkgTempC": 59
+    },
+    {
+      "pair": 3,
+      "leg": "saved",
+      "at": 1794258796376,
+      "cpuMHz": 2052.5195,
+      "pkgTempC": 58
+    },
+    {
+      "pair": 3,
+      "leg": "unsaved",
+      "at": 1794258801401,
+      "cpuMHz": 1748.8683500000002,
+      "pkgTempC": 56
+    },
+    {
+      "pair": 4,
+      "leg": "unsaved",
+      "at": 1794258806422,
+      "cpuMHz": 1579.00965,
+      "pkgTempC": 57
+    },
+    {
+      "pair": 4,
+      "leg": "saved",
+      "at": 1794258811443,
+      "cpuMHz": 1956.78415,
+      "pkgTempC": 56
+    },
+    {
+      "pair": 5,
+      "leg": "saved",
+      "at": 1794258816465,
+      "cpuMHz": 2202.6619,
+      "pkgTempC": 56
+    },
+    {
+      "pair": 5,
+      "leg": "unsaved",
+      "at": 1794258821492,
+      "cpuMHz": 1734.3681000000001,
+      "pkgTempC": 58
+    }
+  ],
+  "measuredBy": "measureChrome",
+  "loadAvg1Before": 0.94,
+  "loadAvg1After": 4.04,
+  "chromeVersion": "Chrome/155.0.8059.39",
+  "window": {
+    "left": 0,
+    "top": 0,
+    "width": 1920,
+    "height": 1080,
+    "windowState": "fullscreen"
+  },
+  "viewport": {
+    "innerWidth": 1920,
+    "innerHeight": 1080,
+    "devicePixelRatio": 1
+  },
+  "consoleErrors": [
+    "log: Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808 (http://127.0.0.1:46827/?at=0,0&y=120&yaw=45&pitch=-20&rd=12&enterBench=1)",
+    "log: Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808 (http://127.0.0.1:46827/?world=f250fe7f-7b1c-4a39-88ce-9a1aaa217600&rd=12&enterBench=1&db=wi10-bench)",
+    "log: Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808 (http://127.0.0.1:46827/?world=f250fe7f-7b1c-4a39-88ce-9a1aaa217600&rd=12&enterBench=1&db=wi10-bench)",
+    "log: Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808 (http://127.0.0.1:46827/?at=0,0&y=120&yaw=45&pitch=-20&rd=12&enterBench=1)",
+    "log: Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808 (http://127.0.0.1:46827/?at=0,0&y=120&yaw=45&pitch=-20&rd=12&enterBench=1)",
+    "log: Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808 (http://127.0.0.1:46827/?world=f250fe7f-7b1c-4a39-88ce-9a1aaa217600&rd=12&enterBench=1&db=wi10-bench)",
+    "log: Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808 (http://127.0.0.1:46827/?world=f250fe7f-7b1c-4a39-88ce-9a1aaa217600&rd=12&enterBench=1&db=wi10-bench)",
+    "log: Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808 (http://127.0.0.1:46827/?at=0,0&y=120&yaw=45&pitch=-20&rd=12&enterBench=1)",
+    "log: Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808 (http://127.0.0.1:46827/?at=0,0&y=120&yaw=45&pitch=-20&rd=12&enterBench=1)",
+    "log: Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808 (http://127.0.0.1:46827/?world=f250fe7f-7b1c-4a39-88ce-9a1aaa217600&rd=12&enterBench=1&db=wi10-bench)",
+    "log: Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808 (http://127.0.0.1:46827/?world=f250fe7f-7b1c-4a39-88ce-9a1aaa217600&rd=12&enterBench=1&db=wi10-bench)",
+    "log: Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808 (http://127.0.0.1:46827/?at=0,0&y=120&yaw=45&pitch=-20&rd=12&enterBench=1)",
+    "log: Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808 (http://127.0.0.1:46827/?world=d8ecc694-6326-4634-9d65-232cf3b7ec87&enterBench=1&db=wi10-bench)"
+  ]
+}

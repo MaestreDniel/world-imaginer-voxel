@@ -133,7 +133,8 @@
  * its re-baseline with caves, and SP12's "Received from SP6a" line carries R21's hand-off of the guards' definitions.
  * The cave-type slice field's commit (Task 42) pins item 16's §5.5 (the slice fields deliver cave type, each cave term
  * through the family taps, the carver mask as the tag's carver kinds) and §5.6 (the cave slice at y is the Density tab's
- * horizontal cave-type field, its square on the map; a tile layer and carver tunnels go to SP10).
+ * horizontal cave-type field, its square on the map; a tile layer and carver tunnels go to SP10). The Chrome cells'
+ * commit (Task 47) completes item 18 with G1's row: L13's and L14's parts, with their bounds as THRESHOLDS holds them.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2338,5 +2339,30 @@ describe('master spec amendments (SP6a §13)', () => {
     // R21 (c): SP12's "Received from SP6a" line carries the guards' definitions (the SP6a spec §14's SP12 bullet).
     const sp12Received = sp12Entry().split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
     expect(sp12Received).toContain('the definitions of the cave parts SP6a gates as regression guards or records (ruling R21, the SP6a spec\'s Threshold log): `C7.verticalStep`');
+  });
+
+  test('§6.4\'s G1 row names L13\'s and L14\'s parts and their bounds, which THRESHOLDS holds activeFrom SP6a (SP6a spec §13 item 18, §10.6, D29)', () => {
+    const g1 = text.split('\n').find((l) => l.startsWith('| G1 |'));
+    expect(g1, 'no G1 row in §6.4').toBeDefined();
+    const cells = g1!.split(' | ');
+    expect(cells.length, 'G1\'s row has three cells').toBe(3);
+    // The parts in the definition cell, in order, each in THRESHOLDS with the bound the target cell states.
+    const parts: Array<[part: string, max: number]> = [
+      ['caveP95', 16.7], ['caveOver33', 0], ['caveMainP95', 6],
+      ['xrayP95', 16.7], ['xrayOver33', 0], ['xrayMainP95', 6], ['xrayGpuMB', 150], ['xrayDrawCalls', 100], ['xrayToggleMaxMs', 33],
+    ];
+    let from = 0;
+    for (const [part, max] of parts) {
+      const i = cells[1]!.indexOf(`\`${part}\``, from);
+      expect(i, `§6.4's G1 row does not name \`${part}\` after the previous part`).toBeGreaterThan(-1);
+      from = i;
+      expect(THRESHOLDS.G1?.[part], `THRESHOLDS.G1.${part}`).toEqual({ max, activeFrom: 'SP6a' });
+    }
+    expect(Object.keys(THRESHOLDS.G1 ?? {}).filter((p) => THRESHOLDS.G1?.[p]?.activeFrom === 'SP6a')).toEqual(parts.map(([p]) => p));
+    expect(cells[1]).toContain('SP6a re-measures every Chrome cell with caves into `assets/sp6a/` and gates the bench\'s cave leg L13');
+    expect(cells[1]).toContain('`G1.caves`');
+    expect(cells[1]).toContain('`G1.xray`; the RD 16 segment recorded) (the SP6a spec §10.6, D29; amended by SP6a)');
+    // The target cell: L13's and L14's bounds as the plan words them.
+    expect(cells[2]).toContain('caves: frame p95 ≤ 16.7 ms, no frame > 33 ms, main thread p95 ≤ 6 ms; the X-ray at RD 12: the same, GPU ≤ 150 MB, draw calls ≤ 100, a toggle\'s frame ≤ 33 ms (SP6a, from L13 and L14)');
   });
 });
