@@ -292,8 +292,8 @@ export const BENCH_CAVES_LEG: BenchLeg = {
  * The X-ray leg L14 (SP6a spec §10.6, D10, D29), after L13 where it left the camera (its x, y, z and yaw; the live legs'
  * pitch −15), at RD 12: X on (the page's X, `BenchXrayHooks.toggle`); a hold of `holdS` s; a 360° sweep of the yaw over
  * `sweepS` s; PageDown `BENCH_XRAY_SCRIPT.bandSteps` times, one a second, over `bandS` s; the map opened side by side
- * (mode B) and, once its tool is mounted, `BENCH_XRAY_SCRIPT.edit` set through the session and the apply control (the
- * release); the refill awaited (every column of the RD 12 disc swapped since the Apply); X off, at most `refillMaxS` s
+ * (mode B) and, once its tool is mounted and the open's `BENCH_MAP_OPEN_FRAMES` frames are past (ruling R27; they leave
+ * the frame figures), `BENCH_XRAY_SCRIPT.edit` set through the session and the apply control (the release); the refill awaited (every column of the RD 12 disc swapped since the Apply); X off, at most `refillMaxS` s
  * after the map opened; then, at most `rd16MaxS` s: the X-ray off at RD 12 for `BENCH_XRAY_SCRIPT.offS` s, the map
  * closed in it `BENCH_XRAY_SCRIPT.closeS` s and at least `closeFrames` frames after X off (mode B's close resizes the
  * canvas and draws a frame: outside the toggle's `BENCH_TOGGLE_FRAMES`, so `toggleMaxMs` reads the X-ray alone), RD 16
@@ -315,10 +315,12 @@ export const BENCH_TOGGLE_FRAMES = 3;
  * The rows of L14's map open (mode B; ruling R27), left out of the X-ray's frame figures and recorded as
  * `xrayMapOpenMaxMs`: the open's own row, the first at or after the open's script time (the page poses the frame, the
  * driver calls `openMap`, and the overlay's `syncLayout` resizes the canvas and draws an extra frame in that frame's
- * JS: its `mainMs`), and the row after it, whose interval holds the GPU work the resize stalls (its `rawMs`). As the
- * close stays out of `toggleMaxMs` (`BENCH_XRAY_SCRIPT.closeFrames`).
+ * JS: its `mainMs`), and the four after it, whose intervals hold the GPU work the resize and the shown tool's first
+ * paint stall (their `rawMs`; Task 47's Iris Xe diagnostic, the edit kept apart: 12.5, 12.5, 25.0 and 16.7 ms, then the
+ * display interval). The edit waits past them (`L14_MAP`), so its frame and the frame after it stay in the figures; as
+ * the close stays out of `toggleMaxMs` (`BENCH_XRAY_SCRIPT.closeFrames`).
  */
-export const BENCH_MAP_OPEN_FRAMES = 2;
+export const BENCH_MAP_OPEN_FRAMES = 5;
 
 /**
  * L14's script (plan; see `BENCH_XRAY`): PageDown's presses; the cave parameter changed with the map side by side; the
@@ -2677,8 +2679,9 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   // L14 (SP6a spec §10.6): its hooks (null until `bind`, and without them no L14), whether it started, its phase and
   // the phase's start (s), the X-ray's state, the band steps pressed, the camera's pose at its start (x y z yaw pitch),
   // the edit's release (s, NaN before), the last pose's time (s), the refill's time (ms, NaN without one), the map's
-  // open (s, NaN before), the frames posed since X off and the one the map closed in (−1 before), the RD the script
-  // wants (12, then RD 16's), each segment's slots (`SEG_*`, NaN where not reached) and the time-outs.
+  // open (s, NaN before), the frames posed since the open, the frames posed since X off and the one the map closed in
+  // (−1 before), the RD the script wants (12, then RD 16's), each segment's slots (`SEG_*`, NaN where not reached)
+  // and the time-outs.
   let xray: BenchXrayHooks | null = null;
   let xrayStarted = false;
   let xrayPhase = L14_HOLD;
@@ -2686,6 +2689,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let bandPressed = 0;
   let offFrames = 0;
   let closedFrame = -1;
+  let mapFrames = 0;
   const xrayBase = new Float64Array(5);
   // [the phase's start, the release, the last pose's time, the refill ms, the map's open (s)]
   const xrayTimes = Float64Array.of(0, Number.NaN, Number.NaN, Number.NaN, Number.NaN);
@@ -3444,13 +3448,17 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       if (into < BENCH_XRAY.bandS - XRAY_EPS_S) return true;
       xrayNext(L14_MAP, tS);
       xrayTimes[4] = tS;
+      mapFrames = 0;
       h.openMap();
       return true;
     }
     if (xrayPhase === L14_MAP) {
+      mapFrames++;
       let done = false;
       if (Number.isNaN(xrayTimes[1]!)) {
-        if (h.mapReady()) {
+        // The edit once the tool is mounted and the open's frames are past (`BENCH_MAP_OPEN_FRAMES`, ruling R27): its
+        // frame and the stall after it are the X-ray's figures, never the open's.
+        if (mapFrames >= BENCH_MAP_OPEN_FRAMES && h.mapReady()) {
           xrayTimes[1] = tS;
           h.set(BENCH_XRAY_SCRIPT.edit.path, BENCH_XRAY_SCRIPT.edit.to);
         }

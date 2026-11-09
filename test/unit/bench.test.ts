@@ -3429,22 +3429,27 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     expect(slow.result.xray.timedOut).toEqual([]);
   });
 
-  test('L14 hands the map\'s open to its figures: the open\'s frame and the next (mode B\'s resize) leave the X-ray\'s frame figures and are `xrayMapOpenMaxMs`; the frame after them counts (ruling R27)', async () => {
-    // Each L14 row: the open's own row 37.5 ms (its JS: main 10 ms), the next 41.7 ms (the resize's stall), the one after
-    // 50 ms (a long frame of the X-ray's own), every other at the display interval.
+  test('L14 hands the map\'s open to its figures: the open\'s frame and the four after it leave the X-ray\'s frame figures and are `xrayMapOpenMaxMs`; the edit waits past them, so its frames count (ruling R27)', async () => {
+    // The map's tool mounted at once (premounted): the edit still waits for the fifth frame after the open's, outside
+    // the open's frames. Each L14 row: the open's own row 37.5 ms (its JS: main 10 ms), the four after it 41.7 ms (the
+    // resize's and the first paint's stall), the edit's frame 50 ms (a long frame of the edit's own), every other at the
+    // display interval.
     let x: ReturnType<typeof fakeXray> | null = null;
     let openRow = -1;
+    let setRow = -1;
     const l14Row = (rec: BenchRecord, i: number): void => {
       if (openRow < 0 && x!.events.some((e) => e.what === 'map open')) openRow = i;
+      if (setRow < 0 && x!.events.some((e) => e.what.startsWith('set '))) setRow = i;
       const k = openRow < 0 ? -1 : i - openRow;
-      rec.snappedMs[i] = k === 0 ? 9 * HZ240 : k === 1 ? 10 * HZ240 : k === 2 ? 12 * HZ240 : HZ240;
+      rec.snappedMs[i] = k === 0 ? 9 * HZ240 : k > 0 && k < BENCH_MAP_OPEN_FRAMES ? 10 * HZ240 : i === setRow ? 12 * HZ240 : HZ240;
       rec.mainMs[i] = k === 0 ? 10 : 1;
       rec.gpuMs[i] = 2;
     };
-    const run = await runL13(fakeCaves(found(20010, 41, 0)).hooks, (at) => (x = fakeXray(at)).hooks, { l14Row });
+    const run = await runL13(fakeCaves(found(20010, 41, 0)).hooks, (at) => (x = fakeXray(at, { readyAfterS: 0 })).hooks, { l14Row });
     const r = run.result.xray;
     expect(r.timedOut).toEqual([]);
     expect(openRow).toBeGreaterThan(0);
+    expect(setRow - openRow).toBe(BENCH_MAP_OPEN_FRAMES);
     expect(r.xrayMapOpenMaxMs).toBe(10 * HZ240);
     expect([r.rd12.max, r.rd12.over33]).toEqual([12 * HZ240, 1]);
     expect(r.rd12.toggleMaxMs).toBe(HZ240);
@@ -3532,17 +3537,13 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     expect(none.edit).toEqual(BENCH_XRAY_SCRIPT.edit);
   });
 
-  test('the map\'s first open (mode B) leaves L14\'s frame figures: its own frame and the next (the resize\'s stall) are `xrayMapOpenMaxMs`, recorded; every other frame counts (ruling R27)', () => {
+  test('the map\'s first open (mode B) leaves L14\'s frame figures: its own frame and the four after it (the resize\'s and the first paint\'s stall) are `xrayMapOpenMaxMs`, recorded; every other frame counts (ruling R27)', () => {
     const frames: Frame[] = [];
     // L14 at 1 s a frame: RD 12 on [0, 20), off [20, 22); RD 16 off [22, 25), on [25, 35). The map opens at 10.5 s: its
-    // own row is the first at or after it (11, the open's JS: main 10 ms), the next (12) the frame its resize stalls.
-    for (let i = 0; i < 35; i++) {
-      frames.push({
-        leg: 14, tMs: 1000 * i,
-        snappedMs: i === 10 ? 12 * HZ240 : i === 11 ? 9 * HZ240 : i === 12 ? 10 * HZ240 : i === 13 ? 8 * HZ240 : HZ240,
-        mainMs: i === 11 ? 10 : 1,
-      });
-    }
+    // own row is the first at or after it (11, the open's JS: main 10 ms), the four after it (12-15) the frames its
+    // resize and the shown tool's first paint stall.
+    const snapped = new Map([[10, 12 * HZ240], [11, 9 * HZ240], [12, 10 * HZ240], [13, 6 * HZ240], [14, 9 * HZ240], [15, 6 * HZ240], [16, 8 * HZ240]]);
+    for (let i = 0; i < 35; i++) frames.push({ leg: 14, tMs: 1000 * i, snappedMs: snapped.get(i) ?? HZ240, mainMs: i === 11 ? 10 : 1 });
     const seg = (rd: number, on: [number, number], off: [number, number], toggles: number[]): BenchXrayRun['rd12'] => ({
       rd, on: { tS0: on[0], tS1: on[1] }, off: { tS0: off[0], tS1: off[1] }, toggles, drawCallsMax: 9, vertexBytesMax: 1, radius: 176,
     });
@@ -3554,12 +3555,12 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
       mapOpenS: 10.5,
       timedOut: [],
     };
-    expect(BENCH_MAP_OPEN_FRAMES).toBe(2);
+    expect(BENCH_MAP_OPEN_FRAMES).toBe(5);
     const r = summarizeBench(recordOf(frames), FIXED, null, undefined, undefined, undefined, undefined, run).xray;
-    // The open's two frames, the longest of them: recorded, not in the segment's frames.
+    // The open's five frames, the longest of them: recorded, not in the segment's frames.
     expect(r.xrayMapOpenMaxMs).toBe(10 * HZ240);
-    // RD 12's 18 other frames with the X-ray on: the frame before the open (50 ms) and the one after the two (33.3 ms)
-    // count (nearest rank: p95 the 18th, p99 the 18th).
+    // RD 12's 15 other frames with the X-ray on: the frame before the open (50 ms) and the one after its five (33.3 ms)
+    // count (nearest rank: p95 the 15th, p99 the 15th).
     expect([r.rd12.p50, r.rd12.p95, r.rd12.p99, r.rd12.max, r.rd12.over33]).toEqual([HZ240, 12 * HZ240, 12 * HZ240, 12 * HZ240, 2]);
     // The main thread's p95 still reads every frame with the X-ray on (the open's JS is one frame of 20).
     expect(r.rd12.mainP95).toBe(1);
@@ -3568,10 +3569,10 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     expect([r.rd16.max, r.rd16.over33]).toEqual([HZ240, 0]);
     // The same frames without the open: every frame counts and nothing is recorded as the open's.
     const without = summarizeBench(recordOf(frames), FIXED, null, undefined, undefined, undefined, undefined, { ...run, mapOpenS: null }).xray;
-    expect([without.rd12.max, without.rd12.over33, without.xrayMapOpenMaxMs]).toEqual([12 * HZ240, 4, null]);
+    expect([without.rd12.max, without.rd12.over33, without.xrayMapOpenMaxMs]).toEqual([12 * HZ240, 5, null]);
     // An open after L14's last row (none at or after it): nothing left out, nothing recorded.
     const late = summarizeBench(recordOf(frames), FIXED, null, undefined, undefined, undefined, undefined, { ...run, mapOpenS: 99 }).xray;
-    expect([late.rd12.over33, late.xrayMapOpenMaxMs]).toEqual([4, null]);
+    expect([late.rd12.over33, late.xrayMapOpenMaxMs]).toEqual([5, null]);
   });
 
   test('the page\'s X-ray hooks (`benchXray`): X and PageDown through the page\'s X-ray, the renderer\'s X-ray draws, the rest as given', () => {
