@@ -53,7 +53,7 @@ import { CDP_SEND_MS, CDP_WAIT_MARGIN_MS, guardedCdp, READY_EVAL_MS, untilBoundM
 import {
   CAVE_AT, CAVE_EDIT, CAVE_LINE, CAVE_LINKS, CAVE_POSES, caveLink, cavePageQuery, reviewPose, CAVES_STEP_PITCH, ENTRANCE_SHOT_UP, entranceShotPose, cavesStepQuery, clearColour, firstStepBandOk, parseStripBand, SEED_42_HASH,
   SLIDER_LOW_START, SP6A_SHOTS, XRAY_ALL_TEXT, XRAY_CLEAR_RGB, XRAY_CLEAR_TOL, XRAY_SKY_PIXEL, xrayStripText,
-  caveShotQuery, nightSurfaceQuery, SHOT_RD, STREAM_SETTLED,
+  caveShotQuery, nightSurfaceQuery, SHOT_RD, STREAM_SETTLED, OVERLAY_CLOSED, OVERLAY_SHOWN,
 } from '../tools/uiSmoke';
 import { EXAMPLE_IDS } from '../harness/caveMetrics';
 import { createDensityContext } from '../../src/gen/density/context';
@@ -1885,6 +1885,26 @@ describe('UI smoke test: the caves step, SP6a\'s review links and its review scr
       const png = readFileSync(new URL(`../../docs/superpowers/specs/assets/sp6a/${name}`, import.meta.url));
       expect(png.subarray(1, 4).toString('latin1'), name).toBe('PNG');
       expect([png.readUInt32BE(16), png.readUInt32BE(20)], name).toEqual([VIEWPORT.width, VIEWPORT.height]);
+    }
+  });
+});
+
+describe('the overlay probes (SP6a, Task 48f)', () => {
+  /** `expr` evaluated against a document holding `#map-overlay` with `style` (null: no overlay) and a map canvas. */
+  const probe = (expr: string, style: { display?: string; visibility?: string } | null): boolean => {
+    const host = style === null ? null : { style: { display: '', visibility: '', ...style }, querySelector: () => ({}) };
+    const document = { getElementById: (id: string) => (id === 'map-overlay' ? host : null) };
+    return new Function('document', `return ${expr};`)(document) as boolean;
+  };
+  test('a premounted overlay (rendered with visibility: hidden) reads closed, not shown; an open one shown; display: none or none closed', () => {
+    const cases: Array<[{ display?: string; visibility?: string } | null, boolean, boolean]> = [
+      [null, false, true],
+      [{ display: 'none' }, false, true],
+      [{ visibility: 'hidden' }, false, true],
+      [{}, true, false],
+    ];
+    for (const [style, shown, closed] of cases) {
+      expect([probe(OVERLAY_SHOWN, style), probe(OVERLAY_CLOSED, style)], JSON.stringify(style)).toEqual([shown, closed]);
     }
   });
 });

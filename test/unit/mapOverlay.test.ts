@@ -320,11 +320,34 @@ describe('the overlay host and the tool (SP4c spec §1.3, §1.5)', () => {
     await settle();
     expect(tools()).toHaveLength(1);
     const t = tools()[0]!;
-    expect([overlay.shown, overlay.owner, t.calls.show.length, t.calls.hide, host().style['display']]).toEqual([false, 'world', 0, 1, 'none']);
+    // Rendered but not visible (Task 48f): its first style and layout are the premount's, not the first M's.
+    expect([overlay.shown, overlay.owner, t.calls.show.length, t.calls.hide, host().style['display'], host().style['visibility']])
+      .toEqual([false, 'world', 0, 1, '', 'hidden']);
     // The first M only shows the mounted tool, on the M's own frame.
     overlay.open();
     expect(tools()).toHaveLength(1);
-    expect([overlay.shown, t.calls.show.length]).toEqual([true, 1]);
+    expect([overlay.shown, t.calls.show.length, host().style['display'], host().style['visibility']]).toEqual([true, 1, '', '']);
+  });
+
+  test('the premounted tool is rendered hidden (SP6a, Task 48f): visibility hidden in the layout of the mode it will open in, so the first M restyles nothing (the L14 183 ms frame: the first style and layout of the tool\'s subtree, forced by the renderer\'s resize in the open\'s syncLayout); a close hides it with display: none as before', async () => {
+    const { overlay, host, worldHost, world } = setup({ mode: 'split' });
+    overlay.premount();
+    await settle();
+    expect(tools()).toHaveLength(1);
+    // The host takes its split layout, hidden; the 3D keeps the whole window and is neither resized nor drawn.
+    expect([host().style['display'], host().style['visibility'], host().classList.contains('split')]).toEqual(['', 'hidden', true]);
+    expect(worldHost.classList.contains('split')).toBe(false);
+    expect(world.log).toEqual([]);
+    expect(overlay.owner).toBe('world');
+    overlay.open();
+    expect([host().style['display'], host().style['visibility'], worldHost.classList.contains('split')]).toEqual(['', '', true]);
+    overlay.close();
+    expect([host().style['display'], host().style['visibility']]).toEqual(['none', '']);
+    // An M before any premount mounts shown: nothing is left hidden.
+    const b = setup({ mode: 'split' });
+    b.overlay.open();
+    await settle();
+    expect([b.host().style['display'], b.host().style['visibility'] ?? '']).toEqual(['', '']);
   });
 
   test('an M before the premount\'s timer mounts the tool shown; the timer then mounts nothing more', async () => {
@@ -351,7 +374,7 @@ describe('the overlay host and the tool (SP4c spec §1.3, §1.5)', () => {
     expect(t.calls.show).toEqual([]);
     expect(t.calls.hide).toBe(1);
     expect(driver.setPreviewWanted.mock.calls).toEqual([[false]]);
-    expect(host().style['display']).toBe('none');
+    expect([host().style['display'], host().style['visibility']]).toEqual(['', 'hidden']);
     expect(notices.route).not.toHaveBeenCalled();
     expect(worldHost.classList.contains('split')).toBe(false);
     expect(world.log).toEqual([]);
@@ -361,7 +384,7 @@ describe('the overlay host and the tool (SP4c spec §1.3, §1.5)', () => {
     expect(tools()).toHaveLength(1);
     expect(t.calls.show).toEqual([{ x: 900, z: -40 }]);
     expect(driver.setPreviewWanted.mock.calls).toEqual([[false], [true]]);
-    expect(host().style['display']).toBe('');
+    expect([host().style['display'], host().style['visibility']]).toEqual(['', '']);
     expect(notices.route).toHaveBeenLastCalledWith(t.tool.notices);
     // A second premount does nothing.
     overlay.close();

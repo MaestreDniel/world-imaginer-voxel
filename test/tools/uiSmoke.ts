@@ -2990,10 +2990,13 @@ async function runWorld(t: Smoke): Promise<void> {
 
 // ---------------------------------------------------------------- the overlay steps (SP4c spec §8.6)
 
-/** The page expression "the map overlay is shown" (its host in `#app`, not `display: none`, with the tool's canvas). */
-const OVERLAY_SHOWN = `(() => { const o = document.getElementById('map-overlay'); return o !== null && o.style.display !== 'none' && o.querySelector('.map-canvas') !== null; })()`;
-/** The page expression "the map overlay is closed" (hidden, or removed by a dispose). */
-const OVERLAY_CLOSED = `(() => { const o = document.getElementById('map-overlay'); return o === null || o.style.display === 'none'; })()`;
+/**
+ * The page expression "the map overlay is shown" (its host in `#app`, neither `display: none` nor premounted with
+ * `visibility: hidden` (SP6a, Task 48f), with the tool's canvas).
+ */
+export const OVERLAY_SHOWN = `(() => { const o = document.getElementById('map-overlay'); return o !== null && o.style.display !== 'none' && o.style.visibility !== 'hidden' && o.querySelector('.map-canvas') !== null; })()`;
+/** The page expression "the map overlay is closed" (hidden, premounted with `visibility: hidden`, or removed by a dispose). */
+export const OVERLAY_CLOSED = `(() => { const o = document.getElementById('map-overlay'); return o === null || o.style.display === 'none' || o.style.visibility === 'hidden'; })()`;
 /** The page expression "mode B is shown" (`#world-host` on the right half). */
 const WORLD_SPLIT = `document.getElementById('world-host').classList.contains('split')`;
 /** The map canvas's page box (CSS px). */

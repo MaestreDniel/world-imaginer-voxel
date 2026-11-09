@@ -6,6 +6,9 @@
  * - **Premount:** `MAP_PRELOAD_MS` after the reveal, `import('../map/mapTool')` loads the chunk and its CSS and the
  *   tool mounts hidden (`premount`; SP6a, Task 48e: the mount is 75-80 ms of main thread, which the first M paid
  *   before), so the first M only shows it; an M before it mounts the tool shown, and the timer then mounts nothing.
+ *   The premounted host is rendered with `visibility: hidden` (not `display: none`) and laid out at the premount, so
+ *   the first M restyles nothing (Task 48f: the first style and layout of the tool's subtree, 25-180 ms, forced in
+ *   the open's frame); a close hides it with `display: none`.
  * - **The first `open`** mounts the tool (`host: 'world'`, no URL sink, the toolbar slot, its `onTeleport` wrapping the
  *   page's: true in full closes the map, split keeps it, false keeps it as it is; in a saved world its `places`, whose
  *   ↗ moves the camera to the place and closes a full-screen map the same way, as does "+ Add at the pin" once B's
@@ -14,7 +17,7 @@
  *   full-screen map after it opened the place dialog, as "+ Add at the pin"), centred on the camera at
  *   `WORLD_MAP_BPP` blocks/px; the tool attaches its canvas to the driver's replaying sink, so it draws at once. Every
  *   `open` then calls `show` on the camera (keeping the zoom and layer) and `setPlayer` once, so the arrow is at the
- *   camera on opening; `close` calls `hide`, and the host is `display: none` while hidden. Every view change the tool
+ *   camera on opening; `close` calls `hide`, and the host is `display: none` while closed (premounted: `visibility: hidden`). Every view change the tool
  *   reports (its `onView`: a pan, a zoom, a layer, a re-centring) calls the page's `viewChanged`, which writes the
  *   world's URL (§1.6, D20); `worldMapView` is the view that URL carries.
  * - **`tick(counts)`**, called by the page on every rendered frame: while shown, the arrow follows the camera (scalars,
@@ -502,8 +505,16 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     // A saved world's tool shows the modification mode in force from its mount (D10); the mode tells it of later switches.
     if (o.modify !== null) tool.setEditable(o.modify.on());
     if (!shown) {
-      // Premounted: hidden until the first open shows it (no tile, preview or tab request meanwhile).
+      // Premounted: hidden until the first open shows it (no tile, preview or tab request meanwhile). The host is rendered
+      // but not visible, in the layout of the mode it will open in, and laid out now (SP6a, Task 48f): under display: none
+      // its subtree had no style, so the first open paid the first style and layout of the whole tool (6,713 elements) in
+      // the frame, forced by the renderer's resize in `syncLayout` (L14's 177-183 ms frame). Visibility hidden paints
+      // nothing, takes no pointer event and no focus; `open` makes it visible, `close` hides it with display: none.
       tool.hide();
+      host.classList.toggle('split', mode === 'split');
+      host.style.visibility = 'hidden';
+      host.style.display = '';
+      void host.offsetWidth;
       return;
     }
     showOnCamera(tool);
@@ -525,6 +536,7 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     // A stored B opens as A while the window is narrower than SPLIT_MIN_WIDTH (SP4c spec §2.2).
     mode = modeFor();
     host.style.display = '';
+    host.style.visibility = '';
     syncLayout();
     if (o.doc.pointerLockElement !== null) o.doc.exitPointerLock();
     syncOwner();
