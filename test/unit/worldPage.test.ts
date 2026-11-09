@@ -1213,6 +1213,8 @@ describe('the smoke\'s test hook, window.__wiTest under ?wiTest=1 (SP4c spec §8
       forceFatal: vi.fn(),
       owner: () => 'map',
       stale: () => 17,
+      rd: () => 12,
+      filled: () => 11,
       edit: vi.fn(async (x: number, y: number, z: number, state: number, fluid: number) => `${x} ${y} ${z} ${state} ${fluid}`),
       blockAt: (x, y, z) => x + y + z,
       mode: () => 'walk',
@@ -1241,6 +1243,10 @@ describe('the smoke\'s test hook, window.__wiTest under ?wiTest=1 (SP4c spec §8
     expect(() => hook.selection()).toThrow(/not attached/);
     install.attach(page);
     expect([hook.listenerCount(), hook.owner(), hook.stale()]).toEqual([2, 'map', 17]);
+    // The review shots' stream wait (SP6a, Task 48e): the live RD and the revealed radius around the camera.
+    expect([hook.rd(), hook.filled()]).toEqual([12, 11]);
+    const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(src).toContain('      rd: () => liveRd,\n      filled: () => filledRadius(Math.floor(fly.x) >> 4, Math.floor(fly.z) >> 4, liveRd, isRevealed),\n');
     // The SP5a parts (spec §6.4): the edit and the read-back pass through to the page.
     expect(await hook.edit(1, 70, -3, 25, 0)).toBe('1 70 -3 25 0');
     expect(hook.blockAt(1, 2, 3)).toBe(6);

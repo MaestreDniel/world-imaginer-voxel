@@ -53,6 +53,7 @@ import { CDP_SEND_MS, CDP_WAIT_MARGIN_MS, guardedCdp, READY_EVAL_MS, untilBoundM
 import {
   CAVE_AT, CAVE_EDIT, CAVE_LINE, CAVE_LINKS, CAVE_POSES, caveLink, cavePageQuery, reviewPose, CAVES_STEP_PITCH, ENTRANCE_SHOT_UP, entranceShotPose, cavesStepQuery, clearColour, firstStepBandOk, parseStripBand, SEED_42_HASH,
   SLIDER_LOW_START, SP6A_SHOTS, XRAY_ALL_TEXT, XRAY_CLEAR_RGB, XRAY_CLEAR_TOL, XRAY_SKY_PIXEL, xrayStripText,
+  caveShotQuery, nightSurfaceQuery, SHOT_RD, STREAM_SETTLED,
 } from '../tools/uiSmoke';
 import { EXAMPLE_IDS } from '../harness/caveMetrics';
 import { createDensityContext } from '../../src/gen/density/context';
@@ -1715,14 +1716,15 @@ describe('UI smoke test: the caves step, SP6a\'s review links and its review scr
       const q = parseWorldQuery(url.searchParams);
       expect(q.at, id).toEqual({ x: CAVE_AT[id][0], z: CAVE_AT[id][1] });
       expect([q.y, q.yaw, q.pitch], id).toEqual([pose.y, pose.yaw, pose.pitch]);
-      expect([q.rd, q.renderer, q.world, q.shot], id).toEqual([null, null, null, false]);
+      // At the shots' RD (Task 48e: the user's check found RD 4's fog closing in within about 64 blocks).
+      expect([q.rd, q.renderer, q.world, q.shot], id).toEqual([SHOT_RD, null, null, false]);
       // The search's yaw and pitch are hereUrl's own (one decimal); its at and y are not (hereUrl rounds y, §10.10 gives it exactly).
       const here = new URL(hereUrl(pose, null, SEED_42_HASH), 'http://127.0.0.1').searchParams;
       expect([url.searchParams.get('yaw'), url.searchParams.get('pitch')], id).toEqual([here.get('yaw'), here.get('pitch')]);
     }
-    expect(caveLink(reviewPose('cheese'))).toBe(`/?at=97,-52&y=-15.5&yaw=90.0&pitch=0.0${SEED_42_HASH}`);
+    expect(caveLink(reviewPose('cheese'))).toBe(`/?at=97,-52&y=-15.5&yaw=90.0&pitch=0.0&rd=12${SEED_42_HASH}`);
     // A pose without its corner (the entrance shot's, computed) opens at its column, ⌊x⌋, ⌊z⌋.
-    expect(caveLink(CAVE_POSES.cheese)).toBe(`/?at=96,-52&y=-15.5&yaw=90.0&pitch=0.0${SEED_42_HASH}`);
+    expect(caveLink(CAVE_POSES.cheese)).toBe(`/?at=96,-52&y=-15.5&yaw=90.0&pitch=0.0&rd=12${SEED_42_HASH}`);
   });
 
   test('the SP6a spec\'s Exit evidence lists every review link: D16\'s nine, then the underground worm, each row from the committed poses', () => {
@@ -1766,6 +1768,40 @@ describe('UI smoke test: the caves step, SP6a\'s review links and its review scr
     expect(VIEWPORT.height / 2 - XRAY_SKY_PIXEL.y).toBeGreaterThan(400);
     expect(XRAY_SKY_PIXEL.x).toBeGreaterThan(VIEWPORT.width / 2 + 200);
     expect(XRAY_SKY_PIXEL.x).toBeLessThan(VIEWPORT.width);
+  });
+
+  test('the review shots at a real render distance (Task 48e, the user\'s check): SHOT_RD ≥ 12 (the bench\'s medium RD), every 3D shot page and the night surface at it, the rest of the smoke at WORLD_RD 4', () => {
+    expect(SHOT_RD).toBeGreaterThanOrEqual(12);
+    expect(SHOT_RD).toBeLessThanOrEqual(16);
+    expect(WORLD_RD).toBe(4);
+    for (const id of CAVE_LINKS) {
+      const q = parseWorldQuery(new URL(`/${caveShotQuery(reviewPose(id))}`, 'http://127.0.0.1').searchParams);
+      expect([q.rd, q.renderer, q.at], id).toEqual([SHOT_RD, 'batch', { x: CAVE_AT[id][0], z: CAVE_AT[id][1] }]);
+    }
+    const night = new URL(`/${nightSurfaceQuery()}`, 'http://127.0.0.1');
+    const nq = parseWorldQuery(night.searchParams);
+    expect([nq.rd, nq.renderer, nq.at, night.searchParams.get('time'), night.searchParams.get('shot'), night.searchParams.get('wiTest')])
+      .toEqual([SHOT_RD, 'batch', PARITY_VIEW.at, '0', '1', '1']);
+    // The step's own page stays at WORLD_RD.
+    expect(parseWorldQuery(new URL(`/${cavesStepQuery()}`, 'http://127.0.0.1').searchParams).rd).toBe(WORLD_RD);
+    // caveShots opens every page through caveShotQuery or nightSurfaceQuery, none through cavePageQuery or WORLD_RD.
+    const tool = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+    const body = tool.slice(tool.indexOf('async function caveShots('), tool.indexOf('\n}\n', tool.indexOf('async function caveShots(')));
+    expect(body).not.toContain('cavePageQuery(');
+    expect(body).not.toContain('worldMeshQuery(');
+    expect(body.match(/openCavePage\(t, caveShotQuery\(/g)?.length).toBe(4);
+    expect(body).toContain('nightSurfaceQuery()');
+    // Each review link carries the shots' RD.
+    for (const id of CAVE_LINKS) expect(caveLink(reviewPose(id)), id).toContain(`&rd=${SHOT_RD}#`);
+  });
+
+  test('each 3D shot waits for the stream to settle at its RD (no column within RD unrevealed), not a fixed sleep (Task 48e; closes Task 49\'s caveShot minor)', () => {
+    expect(STREAM_SETTLED).toBe(`__wiTest.rd() >= ${SHOT_RD} && __wiTest.filled() === __wiTest.rd()`);
+    const tool = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+    const shot = tool.slice(tool.indexOf('async function caveShot('), tool.indexOf('\n}\n', tool.indexOf('async function caveShot(')));
+    const wait = shot.indexOf('STREAM_SETTLED');
+    expect(wait).toBeGreaterThan(-1);
+    expect(wait).toBeLessThan(shot.indexOf('t.save('));
   });
 
   test('the entrance shot looks down at the entrance voxel from 12 blocks above its eye, along the pose\'s yaw and pitch', () => {

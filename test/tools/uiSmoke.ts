@@ -89,8 +89,9 @@
  *     `climate.C`'s wavelength, the desert T bound; then Ctrl+Z and Ctrl+Y from the 3D with their notices), each with
  *     the stale count above 0 then 0 within 30 s; the pointer lock on the 3D half (W moves the camera with the map open,
  *     Esc gives the map the controls with the drawer open; skipped with the reason when refused); the leak check (the
- *     overlay closed and the tool disposed through the hook: listeners, session listeners and timers equal the
- *     baseline, no tile request over 1 s); a reload keeping side by side and the edits; a forced fatal with the map
+ *     overlay closed through the hook: listeners, session listeners and timers equal the baseline, which holds the
+ *     tool premounted hidden (SP6a, Task 48e); no tile request over 1 s; then the tool disposed: no tile request over
+ *     1 s and fewer session listeners); a reload keeping side by side and the edits; a forced fatal with the map
  *     open (the overlay closed, the failure panel with "Copy details", no page error);
  *   - overlay-mesh, `…&renderer=mesh&wiTest=1`: the map in full screen, the teleport and the terrain Apply, side by side;
  *     both overlay steps print the in-world preview's `lastLatencyMs` from the toolbar (information only, §6.4);
@@ -1220,15 +1221,44 @@ export function caveQuery(pose: CaveExamplePose, extra = ''): string {
   return `?at=${ax},${az}&y=${pose.y}&yaw=${degText(pose.yaw)}&pitch=${degText(pose.pitch)}${extra}${SEED_42_HASH}`;
 }
 
-/** A review link as the Exit evidence writes it: `/` and `caveQuery(pose)`. */
+/** A review link as the Exit evidence writes it: `/` and `caveQuery(pose)` at the shots' RD (`SHOT_RD`, Task 48e). */
 export function caveLink(pose: CaveExamplePose): string {
-  return `/${caveQuery(pose)}`;
+  return `/${caveQuery(pose, `&rd=${SHOT_RD}`)}`;
 }
 
 /** The query of a `caves` page at `pose`: RD 4, the batch renderer and the test hook. */
 export function cavePageQuery(pose: CaveExamplePose): string {
   return caveQuery(pose, `&rd=${WORLD_RD}&renderer=batch&wiTest=1`);
 }
+
+/**
+ * The render distance of SP6a's review shots and links (Task 48e, the user's check: at WORLD_RD 4 the fog closed in
+ * within about 64 blocks, so the night-vision and light-floor shots were mostly fog colour): the bench's medium RD 12
+ * (this machine's product default is not higher). The rest of the smoke stays at WORLD_RD.
+ */
+export const SHOT_RD = 12;
+
+/** The query of a review shot's page at `pose`: SHOT_RD, the batch renderer and the test hook. */
+export function caveShotQuery(pose: CaveExamplePose): string {
+  return caveQuery(pose, `&rd=${SHOT_RD}&renderer=batch&wiTest=1`);
+}
+
+/**
+ * The night surface shot's page: `worldMeshQuery`'s spawn view (`PARITY_VIEW`, capture mode) at SHOT_RD on batch, at
+ * midnight (`time=0`), with the test hook for the stream wait.
+ */
+export function nightSurfaceQuery(): string {
+  const v = PARITY_VIEW;
+  return `?rd=${SHOT_RD}&renderer=batch&at=${v.at.x},${v.at.z}&y=${v.y}&yaw=${v.yaw}&pitch=${v.pitch}&shot=1&time=0&wiTest=1`;
+}
+
+/**
+ * A review shot's stream wait (Task 48e; Task 49's caveShot minor): the live RD at least SHOT_RD and every column within
+ * it revealed around the camera (`__wiTest.filled`), so no fog of an unloaded edge and no unloaded terrain is in view.
+ */
+export const STREAM_SETTLED = `__wiTest.rd() >= ${SHOT_RD} && __wiTest.filled() === __wiTest.rd()`;
+/** How long a review shot waits for its stream to settle (ms). */
+export const STREAM_SETTLED_MS = 60_000;
 
 /**
  * The `caves` step's page (spec §10.9): `cavePageQuery` at the entrance's review pose pitched `CAVES_STEP_PITCH` up
@@ -3231,7 +3261,8 @@ async function overlayBatch(t: Smoke, what: string): Promise<void> {
   const p = t.page;
   const hud = async (): Promise<HudRead | null> => parseHud(await p.eval<string>(HUD_TEXT));
 
-  // 1. The leak baseline, after the reveal and before the first M (the map chunk's 2 s preload fired).
+  // 1. The leak baseline, after the reveal and before the first M (the 2 s premount fired: the tool mounted hidden, SP6a
+  // Task 48e).
   await sleep(2500);
   const baseline: LeakBaseline = {
     timers: await steadyTimers(p),
@@ -3334,18 +3365,14 @@ async function overlayBatch(t: Smoke, what: string): Promise<void> {
     t.check(await p.eval<boolean>(OVERLAY_SHOWN) && await p.eval<boolean>(DENSITY_SHOWN), `${what}: after ${how} the map is open with the drawer still open`);
   }
 
-  // 7. The leak check, on the baseline's document: the overlay closed, then the tool disposed through the hook.
+  // 7. The leak check, on the baseline's document: the overlay closed (the tool hidden, as the premount left it at the
+  // baseline, SP6a Task 48e), compared with the baseline; then the tool disposed through the hook.
   await p.eval('(__wiTest.closeOverlay(), true)');
   await p.until(OVERLAY_CLOSED, `${what}: the overlay closed through the hook`, 5000);
   const tilesHidden = await p.eval<number>('__wiTest.tileRequests()');
   await sleep(1000);
   const tilesHidden1 = await p.eval<number>('__wiTest.tileRequests()');
   t.check(tilesHidden1 === tilesHidden, `${what}: no tile request over 1 s after hide (${tilesHidden} → ${tilesHidden1})`);
-  await p.eval('(__wiTest.disposeTool(), true)');
-  const tilesGone = await p.eval<number>('__wiTest.tileRequests()');
-  await sleep(1000);
-  const tilesGone1 = await p.eval<number>('__wiTest.tileRequests()');
-  t.check(tilesGone1 === tilesGone, `${what}: no tile request over 1 s after dispose (${tilesGone} → ${tilesGone1})`);
   // Transient timers (a notice's timeout, the URL writer's debounce) end within a few seconds; a leaked one does not.
   let listeners = await pageListeners(p);
   let sessionListeners = await p.eval<number>('__wiTest.listenerCount()');
@@ -3360,6 +3387,14 @@ async function overlayBatch(t: Smoke, what: string): Promise<void> {
   t.check(listenersLeakFree(diff, granted && hint), `${what}: the listeners on window and document equal the baseline (${listeners.length} vs ${baseline.listeners.length}${diff.gone.length > 0 ? `; the click hint's own pointerlockchange removed at the lock` : ''})`, diff);
   t.check(sessionListeners === baseline.sessionListeners, `${what}: session.listenerCount() equals the baseline (${sessionListeners} vs ${baseline.sessionListeners})`);
   t.check(timers === baseline.timers, `${what}: the pending timers equal the baseline (${timers} vs ${baseline.timers})`);
+  await p.eval('(__wiTest.disposeTool(), true)');
+  const tilesGone = await p.eval<number>('__wiTest.tileRequests()');
+  await sleep(1000);
+  const tilesGone1 = await p.eval<number>('__wiTest.tileRequests()');
+  t.check(tilesGone1 === tilesGone, `${what}: no tile request over 1 s after dispose (${tilesGone} → ${tilesGone1})`);
+  // The disposed tool leaves no session listener of its own (the baseline's hidden tool held its subscriptions).
+  const sessionAfter = await p.eval<number>('__wiTest.listenerCount()');
+  t.check(sessionAfter < baseline.sessionListeners, `${what}: the tool disposed drops its session listeners (${baseline.sessionListeners} → ${sessionAfter})`);
 
   // 8. The reload keeps side by side and the edited values (the URL follows the session).
   const kept = await p.state();
@@ -5228,13 +5263,19 @@ async function cavesChecks(t: Smoke): Promise<void> {
 }
 
 /**
- * With --shots, the viewport saved as `name` after `settleMs` (the night-vision ease is 0.3 s) and, on a world page,
- * three more frames.
+ * With --shots, the viewport saved as `name`: on a world page once the stream settled at the shot's RD
+ * (`STREAM_SETTLED`, a failed check when it does not within `STREAM_SETTLED_MS`), then after `settleMs` (the
+ * night-vision ease is 0.3 s) and three more frames.
  */
 async function caveShot(t: Smoke, name: string, settleMs = 500): Promise<void> {
   if (t.shots === null) return;
+  const world = await t.page.eval<boolean>('window.__wiWorld !== undefined');
+  if (world) {
+    await holds(t, STREAM_SETTLED, `caves shots: the stream settled at RD ${SHOT_RD} before ${name} (every column within it revealed)`,
+      STREAM_SETTLED_MS, () => t.page.eval(`[__wiTest.rd(), __wiTest.filled()]`));
+  }
   await sleep(settleMs);
-  if (await t.page.eval<boolean>('window.__wiWorld !== undefined')) {
+  if (world) {
     await clearShotView(t.page);
     await frames(t.page, 3, `caves shots: three frames before ${name}`);
   }
@@ -5277,10 +5318,10 @@ async function nightVisionTo(t: Smoke, on: boolean): Promise<void> {
  */
 async function caveShots(t: Smoke): Promise<void> {
   const p = t.page;
-  if (!(await openCavePage(t, cavePageQuery(entranceShotPose()), 'caves shots: the entrance'))) return;
+  if (!(await openCavePage(t, caveShotQuery(entranceShotPose()), 'caves shots: the entrance'))) return;
   await caveShot(t, SP6A_SHOTS.entrance);
 
-  if (!(await openCavePage(t, cavePageQuery(reviewPose('cheese')), 'caves shots: the X-ray in the cheese cavern'))) return;
+  if (!(await openCavePage(t, caveShotQuery(reviewPose('cheese')), 'caves shots: the X-ray in the cheese cavern'))) return;
   await worldKey(p, 'x', SMOKE_KEYS.xray, 88);
   await p.until(stripIs(true, XRAY_ALL_TEXT), 'caves shots: the X-ray on', 5000);
   await sleep(6500); // X's first notice (6 s) gone
@@ -5291,7 +5332,7 @@ async function caveShots(t: Smoke): Promise<void> {
   await worldKey(p, 'Home', SMOKE_KEYS.xrayAll, 36);
   await worldKey(p, 'x', SMOKE_KEYS.xray, 88);
 
-  if (!(await openCavePage(t, cavePageQuery(reviewPose('interior')), 'caves shots: the interior'))) return;
+  if (!(await openCavePage(t, caveShotQuery(reviewPose('interior')), 'caves shots: the interior'))) return;
   await caveShot(t, SP6A_SHOTS.lightFloor);
   await nightVisionTo(t, true);
   await caveShot(t, SP6A_SHOTS.nightVision, 1600);
@@ -5301,7 +5342,7 @@ async function caveShots(t: Smoke): Promise<void> {
     ['spaghetti2d', SP6A_SHOTS.spaghetti2d], ['noodle', SP6A_SHOTS.noodle], ['worm', SP6A_SHOTS.worm],
   ];
   for (const [id, name] of kinds) {
-    if (!(await openCavePage(t, cavePageQuery(reviewPose(id)), `caves shots: ${id}`))) continue;
+    if (!(await openCavePage(t, caveShotQuery(reviewPose(id)), `caves shots: ${id}`))) continue;
     await caveShot(t, name);
   }
   // The horizontal caves slice from the worm's pose (its y, the band at all), the map in full screen.
@@ -5320,7 +5361,7 @@ async function caveShots(t: Smoke): Promise<void> {
   await p.until(OVERLAY_CLOSED, 'caves shots: M closes the map', 10_000);
   await nightVisionTo(t, false);
 
-  await p.goto(`${p.base}${worldMeshQuery('batch')}&time=0`, 'window.__wiWorld !== undefined');
+  await p.goto(`${p.base}${nightSurfaceQuery()}`, 'window.__wiWorld !== undefined');
   if (await worldRevealed(t, 'caves shots: the night surface')) {
     await p.until('window.__wiWorld.frames >= 3', 'three frames after the night surface reveal', 30_000);
     await caveShot(t, SP6A_SHOTS.nightSurface);

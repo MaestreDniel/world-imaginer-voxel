@@ -1231,6 +1231,13 @@ export interface WiTest {
   owner(): string;
   /** The coordinator's stale count (`CoordinatorCounts.stale`, SP4c spec §4.5). */
   stale(): number;
+  /** The live render distance (SP6a, Task 48e: the review shots' stream wait). */
+  rd(): number;
+  /**
+   * The revealed radius around the camera's column at the live RD (`filledRadius` over the section renderer's reveals):
+   * the RD once every column within it is revealed (SP6a, Task 48e: a review shot waits for it, not for a fixed sleep).
+   */
+  filled(): number;
   /**
    * The last teleport's landing as `onArrive` received it, `water` null for −∞ (which CDP's `returnByValue` cannot
    * carry); null before one.
@@ -1317,7 +1324,7 @@ export interface WiTest {
 
 /** The parts of the hook the world page supplies once its streaming route runs. */
 export type WiTestPage = Pick<WiTest,
-  'listenerCount' | 'closeOverlay' | 'disposeTool' | 'forceFatal' | 'owner' | 'stale' | 'edit' | 'blockAt' | 'mode' | 'aim' | 'hotbar' | 'blockHistory'
+  'listenerCount' | 'closeOverlay' | 'disposeTool' | 'forceFatal' | 'owner' | 'stale' | 'rd' | 'filled' | 'edit' | 'blockAt' | 'mode' | 'aim' | 'hotbar' | 'blockHistory'
   | 'lightAt' | 'feet' | 'heightAt' | 'worldId' | 'flushNow' | 'places' | 'modify' | 'worldHash' | 'pose' | 'clock' | 'fov' | 'markOlderGenerator'
   | SelectionHook>;
 
@@ -1493,6 +1500,8 @@ export function installWiTest(win: TimerHost & { __wiTest?: WiTest }): WiTestIns
     forceFatal: () => attached().forceFatal(),
     owner: () => attached().owner(),
     stale: () => attached().stale(),
+    rd: () => attached().rd(),
+    filled: () => attached().filled(),
     lastLanding: () => landing,
     edit: (x, y, z, state, fluid) => attached().edit(x, y, z, state, fluid),
     blockAt: (x, y, z) => attached().blockAt(x, y, z),
@@ -5660,6 +5669,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       forceFatal: () => fail('A failure forced by the test hook.', new Error('forced by the smoke (?wiTest=1)')),
       owner: () => mapOverlay.owner,
       stale: () => coordinator.counts(counts).stale,
+      rd: () => liveRd,
+      filled: () => filledRadius(Math.floor(fly.x) >> 4, Math.floor(fly.z) >> 4, liveRd, isRevealed),
       edit: createHookEdit(actionPost, (x, y, z) => voxelValue(store, x, y, z)),
       blockAt: (x, y, z) => blockRead(store, x, y, z),
       // The build and walk steps' reads (SP5a spec §6.4); the aim is created below, before the first frame.
