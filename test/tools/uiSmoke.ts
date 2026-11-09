@@ -1156,7 +1156,7 @@ export interface CaveExamplePose {
  */
 export const CAVE_POSES = {
   cheese: { x: 96.5, y: -15.5, z: -51.5, yaw: 90, pitch: 0 },
-  pillars: { x: -3.5, y: 82.5, z: 4.5, yaw: 0, pitch: 0 },
+  pillars: { x: -17.5, y: 83.5, z: 41.5, yaw: 0, pitch: 0 },
   spaghetti3d: { x: 25.5, y: -24.5, z: -50.5, yaw: 0, pitch: 0 },
   spaghetti2d: { x: -94.5, y: 40.5, z: -79.5, yaw: 0, pitch: 0 },
   noodle: { x: -27.5, y: -46.5, z: -46.5, yaw: 225, pitch: 0 },
@@ -1178,7 +1178,7 @@ export type CavePoseId = keyof typeof CAVE_POSES;
  */
 export const CAVE_AT = {
   cheese: [97, -52],
-  pillars: [-4, 5],
+  pillars: [-18, 41],
   spaghetti3d: [25, -51],
   spaghetti2d: [-95, -80],
   noodle: [-28, -47],

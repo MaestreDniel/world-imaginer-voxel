@@ -19,15 +19,15 @@
       "region": "seed '42' default (-16, -16)"
     },
     "pillars": {
-      "x": -3.5,
-      "y": 82.5,
-      "z": 4.5,
+      "x": -17.5,
+      "y": 83.5,
+      "z": 41.5,
       "yaw": 0,
       "pitch": 0,
       "voxel": [
-        -4,
-        82,
-        4
+        -18,
+        83,
+        41
       ],
       "component": 43356,
       "region": "seed '42' default (-16, -16)"

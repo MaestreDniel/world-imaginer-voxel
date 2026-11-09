@@ -1892,6 +1892,14 @@ export interface CavePose {
 export const ENTRANCE_PITCH = -60;
 /** How far a pose's yaw looks for open voxels. */
 const LOOK_STEPS = 64;
+/** A free-standing pillar's rock in its row: at most this many voxels, 4-connected (a wall's rock runs on). */
+export const PILLAR_AREA_MAX = 512;
+/** A pillar's rock runs at least this far above and below the pillar voxel, in its column. */
+export const PILLAR_RISE = 2;
+/** The pillars pose stands at least this many open voxels out from its pillar's surface (along one of the eight yaws)… */
+export const PILLAR_BACK = 8;
+/** …and at most this many, so that the pillar and the cavern on both sides of it fill the view. */
+export const PILLAR_VIEW = 20;
 
 /**
  * The poses of one region (§10.1: per kind, its largest component's air voxel nearest the region's centre; D16):
@@ -1901,10 +1909,16 @@ const LOOK_STEPS = 64;
  * - `entrance`: of the entrance voxels at their position's pre-cave top in a sky-connected component, the nearest;
  * - `interior`: the largest component (ties to the lower label), its voxel of the largest local thickness (`thick`;
  *   all alike when null), the nearest of those;
- * - `pillars`: of the rock voxels with a cheese air voxel of a cavern beside them (a component ≥ `cavern` voxels, C4's
- *   10,000 by default; any cheese air when no such voxel is a pillar; −x, +x, −z, +z, the first such), the nearest for
- *   which `pillarAt` holds (asked nearest first), the pose in that cheese voxel looking at it (D16's "a cheese cavern
- *   with pillars": the nearest pillar voxel may stand in a pocket of a few dozen voxels).
+ * - `pillars` (D16's "a cheese cavern with pillars", §10.10): of the rock voxels with a cheese air voxel of a cavern
+ *   beside them (a component ≥ `cavern` voxels, C4's 10,000 by default; any cheese air when no such voxel gives a
+ *   pose), asked nearest first, the first that stands free: `pillarAt` holds, its column's rock runs `PILLAR_RISE`
+ *   above and below it, and the 4-connected rock of its row holds at most `PILLAR_AREA_MAX` voxels, none at the grid's
+ *   edge (the pillar rock of a cavern's wall runs on into the wall). From the pillar's middle (its row's rock's mean
+ *   column, rounded; the voxel itself when that is not its rock), along each of the eight yaws out of the rock and on
+ *   through the open voxels: the farthest open voxel up to `PILLAR_VIEW` out, and at least `PILLAR_BACK`, that is that
+ *   cheese air (the farthest of the yaws; ties to the smaller yaw) is the eye, looking back at the middle, so the view
+ *   holds the pillar and the cavern on both sides of it (Task 49's review: the pillar rock nearest the centre was the
+ *   cavern's wall, and a pose beside it showed one block of rock).
  * A pose's eye is the voxel's centre; its yaw (0°, 45° … 315°, 0° facing −z, 90° +x) looks along the longest straight
  * run of non-solid voxels from it (up to 64; ties to the smaller yaw), the pillars' at the pillar; pitch 0, the
  * entrance's −60 (into the opening). Null where the region holds no such voxel.
@@ -2027,11 +2041,53 @@ export function caveExamples(
   // The pillars: candidate rock voxels beside cheese air, nearest first (key dist2·cells + cell index, exact in a double:
   // dist2 < 2^21 and cells < 2^28); beside a cavern's cheese air first, then beside any.
   const CHEESE = CAVE_KIND.cheese;
-  const cheeseAir = (i: number): boolean => (cells[i]! & TAG_MASK) === CHEESE && (cells[i]! & SOLID_BIT) === 0;
+  const solidCell = (i: number): boolean => (cells[i]! & SOLID_BIT) !== 0;
+  const cheeseAir = (i: number): boolean => (cells[i]! & TAG_MASK) === CHEESE && !solidCell(i);
   const sizeAt = (i: number): number => {
     const y = GRID_Y0 + Math.floor(i / plane);
     const l = y >= c.yMin && y <= c.yMax ? label[i - off]! : 0;
     return l === 0 ? 0 : c.size.get(l)!;
+  };
+  /** Rock voxels known to belong to a row's rock that does not stand free (more than PILLAR_AREA_MAX, or the edge). */
+  const walled = new Set<number>();
+  /**
+   * Rock voxel j's 4-connected rock in its row when it holds at most PILLAR_AREA_MAX voxels, none at the grid's edge;
+   * else null.
+   */
+  const standsFree = (j: number): Set<number> | null => {
+    const seen = new Set<number>([j]);
+    const stack = [j];
+    let free = true;
+    while (stack.length > 0 && free) {
+      const i = stack.pop()!;
+      const p = i % plane;
+      const x = p % w;
+      const z = (p - x) / w;
+      if (walled.has(i) || x === 0 || x === w - 1 || z === 0 || z === d - 1) {
+        free = false;
+        break;
+      }
+      for (const n of [i - 1, i + 1, i - w, i + w]) {
+        if (seen.has(n) || !solidCell(n)) continue;
+        if (seen.size >= PILLAR_AREA_MAX) {
+          free = false;
+          break;
+        }
+        seen.add(n);
+        stack.push(n);
+      }
+    }
+    if (!free) for (const i of seen) walled.add(i);
+    return free ? seen : null;
+  };
+  /** Whether rock voxel j's column holds rock PILLAR_RISE above and below it. */
+  const rises = (j: number): boolean => {
+    for (let dy = 1; dy <= PILLAR_RISE; dy++) {
+      const lo = j - dy * plane;
+      const hi = j + dy * plane;
+      if (lo < 0 || hi >= cells.length || !solidCell(lo) || !solidCell(hi)) return false;
+    }
+    return true;
   };
   for (const min of [cavern, 0]) {
     const keyList: number[] = [];
@@ -2041,7 +2097,7 @@ export function caveExamples(
       const x = p % w;
       const z = (p - x) / w;
       for (const [ok, j] of [[x > 0, i - 1], [x < w - 1, i + 1], [z > 0, i - w], [z < d - 1, i + w]] as const) {
-        if (ok && (cells[j]! & SOLID_BIT) !== 0) keyList.push(dist2(j % plane) * cells.length + j);
+        if (ok && solidCell(j)) keyList.push(dist2(j % plane) * cells.length + j);
       }
     }
     const sorted = Float64Array.from(keyList).sort();
@@ -2052,16 +2108,59 @@ export function caveExamples(
       const x = p % w;
       const z = (p - x) / w;
       const y = GRID_Y0 + (j - p) / plane;
-      if (!pillarAt(x0 + x, y, z0 + z)) continue;
-      // The first cheese air beside it (of the cavern on the first pass), and the yaw from that voxel to the pillar.
-      for (const [ok, i, yaw] of [[x > 0, j - 1, 90], [x < w - 1, j + 1, 270], [z > 0, j - w, 180], [z < d - 1, j + w, 0]] as const) {
-        if (!ok || !cheeseAir(i) || sizeAt(i) < min) continue;
+      if (!rises(j) || !pillarAt(x0 + x, y, z0 + z)) continue;
+      const rockOf = standsFree(j);
+      if (rockOf === null) continue;
+      // The pillar's middle: its row's rock's mean column, rounded (j when that is not the pillar's rock).
+      let sx = 0;
+      let sz = 0;
+      for (const i of rockOf) {
         const q = i % plane;
-        const cx = q % w;
-        const cz = (q - cx) / w;
-        out.pillars = { x: x0 + cx + 0.5, y: y + 0.5, z: z0 + cz + 0.5, yaw, pitch: 0, voxel: [x0 + cx, y, z0 + cz], component: sizeAt(i) };
-        break;
+        sx += q % w;
+        sz += Math.floor(q / w);
       }
+      let mx = Math.round(sx / rockOf.size);
+      let mz = Math.round(sz / rockOf.size);
+      if (!rockOf.has(j - p + mz * w + mx)) {
+        mx = x;
+        mz = z;
+      }
+      // Along each of the eight yaws from the middle: out of the rock, then the open run; the eye the farthest open voxel
+      // up to PILLAR_VIEW out (at least PILLAR_BACK) that is the cheese air, the yaw the farthest such (ties to the
+      // smaller), the pose looking back at the middle.
+      let far = PILLAR_BACK - 1;
+      let eye = -1;
+      let dir = -1;
+      for (let r = 0; r < 8; r++) {
+        const dx = Math.round(Math.sin((r * Math.PI) / 4));
+        const dz = Math.round(-Math.cos((r * Math.PI) / 4));
+        const cell = (k: number): number => {
+          const xx = mx + dx * k;
+          const zz = mz + dz * k;
+          return xx < 0 || xx >= w || zz < 0 || zz >= d ? -1 : j - p + zz * w + xx;
+        };
+        let t = 1;
+        while (cell(t) >= 0 && solidCell(cell(t))) t++;
+        let s = 0;
+        while (s < PILLAR_VIEW && cell(t + s) >= 0 && !solidCell(cell(t + s))) s++;
+        for (let e = s; e > far; e--) {
+          const i = cell(t + e - 1);
+          if (cheeseAir(i) && sizeAt(i) >= min) {
+            far = e;
+            eye = i;
+            dir = r;
+            break;
+          }
+        }
+      }
+      if (eye < 0) continue;
+      const q = eye % plane;
+      const ex = q % w;
+      const ez = (q - ex) / w;
+      out.pillars = {
+        x: x0 + ex + 0.5, y: y + 0.5, z: z0 + ez + 0.5, yaw: 45 * ((dir + 4) % 8), pitch: 0,
+        voxel: [x0 + ex, y, z0 + ez], component: sizeAt(eye),
+      };
     }
     if (out.pillars !== null) break;
   }

@@ -5,7 +5,7 @@ import {
   aperiodicCounts, aperiodicity, aperiodicLags, bandCounts, bandsMin, borderPlaneRatio, c1c6Parts, C1_C6_PARTS, c7c9Parts,
   C7_C9_PARTS, caveC7C9Counts, caveComponents, caveExamples, caveRegionCounts, COMP_Y_MIN, emptyCaveGrid, flatWallCounts, flatWallDetail,
   floorCounts, floorPeak, GRID_H, GRID_Y0, jensenShannon, kindCounts, landCounts, largestCounts, latticeBias, layerCounts,
-  localThickness, logSd, median, nearestEntranceDistances, openingMask, percentile, pillarTiles, preCaveTops, ravineCounts,
+  localThickness, logSd, median, nearestEntranceDistances, openingMask, percentile, PILLAR_AREA_MAX, PILLAR_BACK, pillarTiles, PILLAR_VIEW, preCaveTops, ravineCounts,
   setCell, skyCounts, surfaceCounts, switchWall, switchWallCounts, thinnestAxes, typeMixDivergences, verticalStep, verticalStepDetail,
   voidCounts,
   wallResidues, waterWallCount, type CaveGrid,
@@ -675,18 +675,13 @@ describe('the caves instruments on fixtures (SP6a §10.1, C7-C9)', () => {
     const tops = preCaveTops(g);
     const c = caveComponents(g, tops);
     const thick = localThickness(c, 32, 32);
-    // The pillar: the rock voxel (12, 15, 7) beside the big cavern.
+    // Pillar rock in the big cavern's wall (12, 15, 7): the wall's rock runs on, so it is no free-standing pillar.
     const ex = caveExamples(g, tops, c, thick, (x, y, z) => x === 12 && y === 15 && z === 7);
     // The cheese: the 10³ cavern (not the 2³ one), its voxel nearest the centre (16, 16): (11, ·, 11), lowest y first.
     expect(ex.cheese).toMatchObject({ voxel: [11, 10, 11] });
     expect(ex.spaghetti3d).toMatchObject({ voxel: [15, 30, 16] });
     expect(ex.entrance).toMatchObject({ voxel: [25, 60, 5], pitch: -60 });
-    expect(ex.pillars).toMatchObject({ voxel: [11, 15, 7], yaw: 90, pitch: 0, component: 1000 });
-    // A pillar beside the small pocket, nearer the centre, is passed over for the cavern's (a cavern ≥ 500 voxels here);
-    // with no cavern holding a pillar the pocket's is taken.
-    const two = (x: number, y: number, z: number): boolean => (x === 12 && y === 15 && z === 7) || (x === 22 && y === 10 && z === 20);
-    expect(caveExamples(g, tops, c, thick, two, 500).pillars).toMatchObject({ voxel: [11, 15, 7], yaw: 90 });
-    expect(caveExamples(g, tops, c, thick, two, 2000).pillars).toMatchObject({ voxel: [21, 10, 20], yaw: 90, component: 8 });
+    expect(ex.pillars).toBeNull();
     expect(ex.noodle).toBeNull();
     expect(ex.worm).toBeNull();
     // The largest interior: the cavern (1,000 voxels; the tube is 128), at a voxel of its thickest ball (10).
@@ -696,6 +691,50 @@ describe('the caves instruments on fixtures (SP6a §10.1, C7-C9)', () => {
     // A pose stands at the voxel's centre and looks along its longest run of open voxels (yaw in degrees, 0 = −z).
     expect(ex.spaghetti3d).toMatchObject({ x: 15.5, y: 30.5, z: 16.5 });
     expect([90, 270]).toContain(ex.spaghetti3d!.yaw);
+  });
+
+  test('the cave examples\' pillars: a free-standing pillar of a cavern, the pose PILLAR_BACK … PILLAR_VIEW out looking back at it (D16)', () => {
+    // A 20 × 10 × 20 cheese cavern holding a 2 × 2 rock column from its floor (y 10) to its ceiling (y 19).
+    const g = rock(32, 32, 60);
+    carve(g, K.cheese, 2, 21, 10, 19, 2, 21);
+    for (let y = 10; y <= 19; y++) for (const [x, z] of [[6, 6], [7, 6], [6, 7], [7, 7]] as const) setCell(g, x, y, z, 0, true);
+    const tops = preCaveTops(g);
+    const c = caveComponents(g, tops);
+    const thick = localThickness(c, 32, 32);
+    const column = (x: number, y: number, z: number): boolean => x >= 6 && x <= 7 && z >= 6 && z <= 7 && y >= 10 && y <= 19;
+    // Pillar rock in the wall at (22, 15, 15), nearer the centre, is passed over: the wall's rock in its row runs on.
+    const wallToo = (x: number, y: number, z: number): boolean => column(x, y, z) || (x === 22 && y === 15 && z === 15);
+    // The column's voxel nearest the centre, (7, ·, 7), lowest y first (its rock runs PILLAR_RISE above and below: the
+    // floor's rock under it); the column's middle (6.5, 6.5) rounds to (7, 7); out of the rock, +x, +x+z and +z run 14
+    // open voxels to the wall (−z, −x and the other diagonals 4 or 5, under PILLAR_BACK); the farthest, ties to the
+    // smaller yaw: +x, the eye at the 14th, (21, 10, 7), looking back at the column (yaw 270, −x).
+    const pose = { x: 21.5, y: 10.5, z: 7.5, yaw: 270, pitch: 0, voxel: [21, 10, 7], component: 4000 - 40 };
+    expect([PILLAR_BACK, PILLAR_VIEW]).toEqual([8, 20]);
+    expect(caveExamples(g, tops, c, thick, wallToo, 3000).pillars).toEqual(pose);
+    // With no cavern that large (C4's 10,000 voxels by default), the second pass takes any cheese air: the same pose.
+    expect(caveExamples(g, tops, c, thick, wallToo).pillars).toEqual(pose);
+    // Not pillar rock (pillarAt false): no pose.
+    expect(caveExamples(g, tops, c, thick, () => false).pillars).toBeNull();
+    // A pillar whose row's rock holds more than PILLAR_AREA_MAX voxels is part of a wall: a 32 × 16 slab and one voxel.
+    const big = rock(64, 64, 60);
+    carve(big, K.cheese, 2, 61, 10, 19, 2, 61);
+    for (let y = 10; y <= 19; y++) {
+      for (let z = 20; z < 20 + 16; z++) for (let x = 20; x < 20 + 32; x++) setCell(big, x, y, z, 0, true);
+      setCell(big, 52, y, 20, 0, true);
+    }
+    expect(16 * 32).toBe(PILLAR_AREA_MAX);
+    const bt = preCaveTops(big);
+    const bc = caveComponents(big, bt);
+    const slab = (x: number, y: number, z: number): boolean => x >= 20 && x < 52 && z >= 20 && z < 36 && y >= 10 && y <= 19;
+    expect(caveExamples(big, bt, bc, localThickness(bc, 64, 64), slab).pillars).toBeNull();
+    // Without that voxel (512) it stands free.
+    for (let y = 10; y <= 19; y++) setCell(big, 52, y, 20, K.cheese, false);
+    const bt2 = preCaveTops(big);
+    const bc2 = caveComponents(big, bt2);
+    // Its middle (35.5, 27.5) rounds to (36, 28); +z runs 26 open voxels out of the slab, capped at PILLAR_VIEW: the eye
+    // 20 out, at (36, 10, 55), looking back (yaw 0, −z); −x and −z run 18, +x 10.
+    expect(caveExamples(big, bt2, bc2, localThickness(bc2, 64, 64), slab).pillars)
+      .toEqual({ x: 36.5, y: 10.5, z: 55.5, yaw: 0, pitch: 0, voxel: [36, 10, 55], component: 36_000 - 5120 });
   });
 });
 

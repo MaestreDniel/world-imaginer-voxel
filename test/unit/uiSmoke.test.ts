@@ -1695,8 +1695,9 @@ describe('UI smoke test: the caves step, SP6a\'s review links and its review scr
       expect(CAVE_AT[id], id).toEqual(corners[k]);
       expect(reviewPose(id), id).toEqual({ ...CAVE_POSES[id], at: CAVE_AT[id] });
     }
-    // The pillars' eye one block back from the pillar's face, in its cavern.
-    expect(CAVE_AT.pillars).toEqual([-4, 5]);
+    // The pillars' eye in its cavern, 17 open voxels out from a free-standing pillar (caveExamples), all four
+    // voxels of its row clear at the low corner.
+    expect(CAVE_AT.pillars).toEqual([-18, 41]);
   });
 
   test('a review link opens seed 42\'s default world at the pose: `at` its corner (CAVE_AT), y exact, yaw and pitch as hereUrl writes them (spec §10.10)', () => {
