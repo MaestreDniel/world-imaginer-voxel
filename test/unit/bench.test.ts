@@ -20,7 +20,7 @@ import type { RayHit } from '../../src/player/raycast';
 import { EYE } from '../../src/player/walk';
 import { MAX_STEP_EDITS } from '../../src/sim/edits';
 import {
-  BENCH_CAVE_ROUTE, BENCH_CAVES, BENCH_CAVES_LEG, BENCH_TOGGLE_FRAMES, BENCH_XRAY, BENCH_XRAY_LEG, BENCH_XRAY_SCRIPT, BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
+  BENCH_CAVE_ROUTE, BENCH_CAVES, BENCH_CAVES_LEG, BENCH_MAP_OPEN_FRAMES, BENCH_TOGGLE_FRAMES, BENCH_XRAY, BENCH_XRAY_LEG, BENCH_XRAY_SCRIPT, BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
   BENCH_PASTE, BENCH_PASTE_LEG, BENCH_PASTE_PARTS, BENCH_PASTE_SCRIPT, BENCH_PROFILE, BENCH_SAVE, BENCH_SAVE_LEG, BENCH_SAVE_PARTS, BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
   createBenchRecord, createBenchRecorder, createLiveReveals, ENTER_AUTO_KEY, ENTER_AUTO_SETUP_PATH, ENTER_DENSE_COLUMNS, ENTER_DISC_RD, ENTER_PAIRS, ENTER_POSE, ENTER_SPARSE,
   enterAutoEnded, enterAutoJson, enterAutoRecorded, enterAutoStart, enterOrder as benchEnterOrder, enterPaths as benchEnterPaths, enterSaveDump, gpuOfRenderer, summarizeEnter, REVIEW_HOUSE, REVIEW_POOL, REVIEW_SCENE_BATCH, REVIEW_SCENES, REVIEW_SETTLE_S, REVIEW_SITE,
@@ -3429,6 +3429,29 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     expect(slow.result.xray.timedOut).toEqual([]);
   });
 
+  test('L14 hands the map\'s open to its figures: the open\'s frame and the next (mode B\'s resize) leave the X-ray\'s frame figures and are `xrayMapOpenMaxMs`; the frame after them counts (ruling R27)', async () => {
+    // Each L14 row: the open's own row 37.5 ms (its JS: main 10 ms), the next 41.7 ms (the resize's stall), the one after
+    // 50 ms (a long frame of the X-ray's own), every other at the display interval.
+    let x: ReturnType<typeof fakeXray> | null = null;
+    let openRow = -1;
+    const l14Row = (rec: BenchRecord, i: number): void => {
+      if (openRow < 0 && x!.events.some((e) => e.what === 'map open')) openRow = i;
+      const k = openRow < 0 ? -1 : i - openRow;
+      rec.snappedMs[i] = k === 0 ? 9 * HZ240 : k === 1 ? 10 * HZ240 : k === 2 ? 12 * HZ240 : HZ240;
+      rec.mainMs[i] = k === 0 ? 10 : 1;
+      rec.gpuMs[i] = 2;
+    };
+    const run = await runL13(fakeCaves(found(20010, 41, 0)).hooks, (at) => (x = fakeXray(at)).hooks, { l14Row });
+    const r = run.result.xray;
+    expect(r.timedOut).toEqual([]);
+    expect(openRow).toBeGreaterThan(0);
+    expect(r.xrayMapOpenMaxMs).toBe(10 * HZ240);
+    expect([r.rd12.max, r.rd12.over33]).toEqual([12 * HZ240, 1]);
+    expect(r.rd12.toggleMaxMs).toBe(HZ240);
+    // RD 16 has no open: every frame at the display interval.
+    expect([r.rd16.max, r.rd16.over33]).toEqual([HZ240, 0]);
+  });
+
   test('L14 runs only after L13, never after its time-out; after an L13 that found no entrance it holds at L10\'s hover point', async () => {
     const hang = await runL13(fakeCaves(null).hooks, (at) => fakeXray(at).hooks);
     expect(hang.result.caves.timedOut).toEqual(['find']);
@@ -3467,10 +3490,11 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
       rd12: seg(12, [0, 20], [20, 22], [0, 20], 9, 1_234_567, 176),
       rd16: seg(16, [25, 35], [22, 25], [25], 14, 2_345_678, 240),
       applyRefillMs: 4321,
+      mapOpenS: null,
       timedOut: ['rd16'],
     };
     const r = summarizeBench(recordOf(frames), FIXED, null, undefined, undefined, undefined, undefined, run).xray;
-    expect(Object.keys(r)).toEqual(['rd12', 'rd16', 'xrayApplyRefillMs', 'edit', 'timedOut']);
+    expect(Object.keys(r)).toEqual(['rd12', 'rd16', 'xrayApplyRefillMs', 'xrayMapOpenMaxMs', 'edit', 'timedOut']);
     expect(Object.keys(r.rd12)).toEqual([
       'rd', 'p50', 'p95', 'p99', 'max', 'over33', 'mainP95', 'gpuMs', 'gpuMB', 'drawCallsMax', 'xrayDrawCallsMax', 'toggleMaxMs',
       'xrayVertexBytes', 'radius', 'growthEvents',
@@ -3490,6 +3514,8 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     expect(r.rd16.gpuMs).toEqual({ on: { p50: 6, p95: 6 }, off: { p50: 3, p95: 3 } });
     expect([r.rd16.gpuMB, r.rd16.drawCallsMax, r.rd16.growthEvents]).toEqual([100 + 10 + 15.8, 90, 1]);
     expect([r.xrayApplyRefillMs, r.timedOut, r.edit]).toEqual([4321, ['rd16'], { path: 'caves.cheese.offset', from: 0.5, to: 0.2 }]);
+    // No map open in the run: nothing left out of the frame figures, no `xrayMapOpenMaxMs`.
+    expect(r.xrayMapOpenMaxMs).toBeNull();
     expect(summarizeBench(recordOf(frames), FIXED).legs.L14.frames.count).toBe(35);
     const json = JSON.stringify(r);
     expect(json).not.toContain('NaN');
@@ -3502,8 +3528,50 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
       drawCallsMax: null, xrayDrawCallsMax: null, toggleMaxMs: null, xrayVertexBytes: null, radius: null, growthEvents: 0,
     });
     expect(none.rd16).toEqual(none.rd12);
-    expect([none.xrayApplyRefillMs, none.timedOut]).toEqual([null, []]);
+    expect([none.xrayApplyRefillMs, none.xrayMapOpenMaxMs, none.timedOut]).toEqual([null, null, []]);
     expect(none.edit).toEqual(BENCH_XRAY_SCRIPT.edit);
+  });
+
+  test('the map\'s first open (mode B) leaves L14\'s frame figures: its own frame and the next (the resize\'s stall) are `xrayMapOpenMaxMs`, recorded; every other frame counts (ruling R27)', () => {
+    const frames: Frame[] = [];
+    // L14 at 1 s a frame: RD 12 on [0, 20), off [20, 22); RD 16 off [22, 25), on [25, 35). The map opens at 10.5 s: its
+    // own row is the first at or after it (11, the open's JS: main 10 ms), the next (12) the frame its resize stalls.
+    for (let i = 0; i < 35; i++) {
+      frames.push({
+        leg: 14, tMs: 1000 * i,
+        snappedMs: i === 10 ? 12 * HZ240 : i === 11 ? 9 * HZ240 : i === 12 ? 10 * HZ240 : i === 13 ? 8 * HZ240 : HZ240,
+        mainMs: i === 11 ? 10 : 1,
+      });
+    }
+    const seg = (rd: number, on: [number, number], off: [number, number], toggles: number[]): BenchXrayRun['rd12'] => ({
+      rd, on: { tS0: on[0], tS1: on[1] }, off: { tS0: off[0], tS1: off[1] }, toggles, drawCallsMax: 9, vertexBytesMax: 1, radius: 176,
+    });
+    const run: BenchXrayRun = {
+      edit: { path: 'caves.cheese.offset', from: 0.5, to: 0.2 },
+      rd12: seg(12, [0, 20], [20, 22], [0, 20]),
+      rd16: seg(16, [25, 35], [22, 25], [25]),
+      applyRefillMs: 4321,
+      mapOpenS: 10.5,
+      timedOut: [],
+    };
+    expect(BENCH_MAP_OPEN_FRAMES).toBe(2);
+    const r = summarizeBench(recordOf(frames), FIXED, null, undefined, undefined, undefined, undefined, run).xray;
+    // The open's two frames, the longest of them: recorded, not in the segment's frames.
+    expect(r.xrayMapOpenMaxMs).toBe(10 * HZ240);
+    // RD 12's 18 other frames with the X-ray on: the frame before the open (50 ms) and the one after the two (33.3 ms)
+    // count (nearest rank: p95 the 18th, p99 the 18th).
+    expect([r.rd12.p50, r.rd12.p95, r.rd12.p99, r.rd12.max, r.rd12.over33]).toEqual([HZ240, 12 * HZ240, 12 * HZ240, 12 * HZ240, 2]);
+    // The main thread's p95 still reads every frame with the X-ray on (the open's JS is one frame of 20).
+    expect(r.rd12.mainP95).toBe(1);
+    // The toggles' frames are not the open's: unchanged.
+    expect(r.rd12.toggleMaxMs).toBe(HZ240);
+    expect([r.rd16.max, r.rd16.over33]).toEqual([HZ240, 0]);
+    // The same frames without the open: every frame counts and nothing is recorded as the open's.
+    const without = summarizeBench(recordOf(frames), FIXED, null, undefined, undefined, undefined, undefined, { ...run, mapOpenS: null }).xray;
+    expect([without.rd12.max, without.rd12.over33, without.xrayMapOpenMaxMs]).toEqual([12 * HZ240, 4, null]);
+    // An open after L14's last row (none at or after it): nothing left out, nothing recorded.
+    const late = summarizeBench(recordOf(frames), FIXED, null, undefined, undefined, undefined, undefined, { ...run, mapOpenS: 99 }).xray;
+    expect([late.rd12.over33, late.xrayMapOpenMaxMs]).toEqual([4, null]);
   });
 
   test('the page\'s X-ray hooks (`benchXray`): X and PageDown through the page\'s X-ray, the renderer\'s X-ray draws, the rest as given', () => {

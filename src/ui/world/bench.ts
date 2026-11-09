@@ -32,7 +32,8 @@
  *    (`BenchXrayHooks`), a hold, a 360° sweep, PageDown four times, the map opened side by side and a cave parameter
  *    changed through the apply control (`BENCH_XRAY_SCRIPT.edit`), the refill awaited, X off, the map closed after
  *    the toggle's frames; then RD 16 (`RD_MAX`)
- *    filled, X on, the hold and the sweep again; the `xray` block holds each segment's figures and the refill's time;
+ *    filled, X on, the hold and the sweep again; the `xray` block holds each segment's figures (the map's open frames
+ *    left out, `BENCH_MAP_OPEN_FRAMES`), the open's longest frame and the refill's time;
  * 3. hands the driver the run's fixed figures (`done`); the driver publishes `summarizeBench`'s JSON as
  *    `window.__wiBench.result` (read by `measureChrome.ts --route bench`) and a "Download JSON" button (the Firefox
  *    cells, by hand).
@@ -309,6 +310,15 @@ const XRAY_EDIT_FROM = DEFAULTS.caves.cheese.offset;
 
 /** The rows from a toggle on: the toggle's own frame and the two after it (`toggleMaxMs`). */
 export const BENCH_TOGGLE_FRAMES = 3;
+
+/**
+ * The rows of L14's map open (mode B; ruling R27), left out of the X-ray's frame figures and recorded as
+ * `xrayMapOpenMaxMs`: the open's own row, the first at or after the open's script time (the page poses the frame, the
+ * driver calls `openMap`, and the overlay's `syncLayout` resizes the canvas and draws an extra frame in that frame's
+ * JS: its `mainMs`), and the row after it, whose interval holds the GPU work the resize stalls (its `rawMs`). As the
+ * close stays out of `toggleMaxMs` (`BENCH_XRAY_SCRIPT.closeFrames`).
+ */
+export const BENCH_MAP_OPEN_FRAMES = 2;
 
 /**
  * L14's script (plan; see `BENCH_XRAY`): PageDown's presses; the cave parameter changed with the map side by side; the
@@ -1124,7 +1134,8 @@ export interface CaveFigures {
 
 /**
  * One L14 segment's figures (SP6a spec §10.6): `rd` the RD it ran at; over its frames with the X-ray on, the snapped
- * frames' nearest-rank p50, p95, p99, max and the count over 33 ms (G1's `xrayP95`, `xrayOver33`), the main thread's
+ * frames' nearest-rank p50, p95, p99, max and the count over 33 ms (G1's `xrayP95`, `xrayOver33`; the map open's
+ * `BENCH_MAP_OPEN_FRAMES` rows left out, ruling R27: `XrayFigures.xrayMapOpenMaxMs`), the main thread's
  * p95 (`xrayMainP95`), the GPU estimate's peak (`gpuMB`, the X-ray's buffers included: `xrayGpuMB`) and the whole
  * frame's draw calls' max (`drawCallsMax`, the record's `calls`: `xrayDrawCalls`); `gpuMs` p50 and p95 over the timer's
  * samples with the X-ray on and over its frames with the X-ray off at the same RD (null without a sample);
@@ -1157,12 +1168,15 @@ export interface XraySegmentFigures {
 /**
  * L14's block (SP6a spec §10.6, D10, D29): the RD 12 segment (`rd12`, gated by G1.xray) and the RD 16 one (`rd16`,
  * recorded); `xrayApplyRefillMs`, from the edit's release to the frame that swapped the last column of the RD 12 disc
- * (null when it never did); the edit made; `timedOut` (`'map'`, `'refill'`, `'rd16'`).
+ * (null when it never did); `xrayMapOpenMaxMs`, the longest snapped frame of the map open's `BENCH_MAP_OPEN_FRAMES`
+ * rows, which the segments' frame figures leave out (recorded, not gated: ruling R27; null without an open or a row at
+ * or after it); the edit made; `timedOut` (`'map'`, `'refill'`, `'rd16'`).
  */
 export interface XrayFigures {
   readonly rd12: XraySegmentFigures;
   readonly rd16: XraySegmentFigures;
   readonly xrayApplyRefillMs: number | null;
+  readonly xrayMapOpenMaxMs: number | null;
   readonly edit: BenchXrayRun['edit'];
   readonly timedOut: readonly string[];
 }
@@ -1583,11 +1597,15 @@ export interface BenchXrayRun {
   readonly rd16: BenchXraySegment | null;
   /** From the edit's release to the frame that swapped the last column, ms; null without one. */
   readonly applyRefillMs: number | null;
+  /** The map's open (mode B), its script time, s; null when the map was never opened. */
+  readonly mapOpenS: number | null;
   readonly timedOut: readonly string[];
 }
 
 /** No L14 (a run that ended before it, or a driver bound without the X-ray hooks). */
-const NO_XRAY_RUN: BenchXrayRun = { edit: BENCH_XRAY_SCRIPT.edit, rd12: null, rd16: null, applyRefillMs: null, timedOut: [] };
+const NO_XRAY_RUN: BenchXrayRun = {
+  edit: BENCH_XRAY_SCRIPT.edit, rd12: null, rd16: null, applyRefillMs: null, mapOpenS: null, timedOut: [],
+};
 
 /** The bench's JSON (spec §8.3; SP4c spec §8.4's `live`; SP5a spec §6.2's `edit`). */
 export interface BenchResult {
@@ -1961,13 +1979,16 @@ function caveFiguresOf(rec: BenchRecord, idx: readonly number[], run: BenchCaveR
   };
 }
 
-/** An L14 segment's figures (SP6a spec §10.6) over L14's rows `idx`; every figure null without the segment. */
-function xraySegmentOf(rec: BenchRecord, idx: readonly number[], seg: BenchXraySegment | null): XraySegmentFigures {
+/**
+ * An L14 segment's figures (SP6a spec §10.6) over L14's rows `idx`, the snapped frame figures without the map open's
+ * rows `opening` (ruling R27); every figure null without the segment.
+ */
+function xraySegmentOf(rec: BenchRecord, idx: readonly number[], seg: BenchXraySegment | null, opening: readonly number[]): XraySegmentFigures {
   const within = (w: { readonly tS0: number; readonly tS1: number } | null): number[] =>
     w === null ? [] : idx.filter((i) => rec.tMs[i]! >= w.tS0 * 1000 && rec.tMs[i]! < w.tS1 * 1000);
   const on = seg === null ? [] : within(seg.on);
   const off = seg === null ? [] : within(seg.off);
-  const snapped = pick(rec.snappedMs, on);
+  const snapped = pick(rec.snappedMs, on.filter((i) => !opening.includes(i)));
   const gpuOf = (rows: readonly number[]): { readonly p50: number; readonly p95: number } | null => {
     const g = finite(pick(rec.gpuMs, rows));
     return g.length === 0 ? null : { p50: percentile(g, 50), p95: percentile(g, 95) };
@@ -2003,10 +2024,15 @@ function xraySegmentOf(rec: BenchRecord, idx: readonly number[], seg: BenchXrayS
 
 /** L14's block (SP6a spec §10.6) over its rows `idx`. */
 function xrayFiguresOf(rec: BenchRecord, idx: readonly number[], run: BenchXrayRun): XrayFigures {
+  // The map open's rows (`BENCH_MAP_OPEN_FRAMES`): its own, the first at or after its time, and the next, among L14's.
+  const open = run.mapOpenS;
+  const k = open === null ? -1 : idx.findIndex((i) => rec.tMs[i]! >= open * 1000);
+  const opening = k < 0 ? [] : idx.slice(k, k + BENCH_MAP_OPEN_FRAMES);
   return {
-    rd12: xraySegmentOf(rec, idx, run.rd12),
-    rd16: xraySegmentOf(rec, idx, run.rd16),
+    rd12: xraySegmentOf(rec, idx, run.rd12, opening),
+    rd16: xraySegmentOf(rec, idx, run.rd16, opening),
     xrayApplyRefillMs: run.applyRefillMs,
+    xrayMapOpenMaxMs: opening.length === 0 ? null : maxOf(pick(rec.snappedMs, opening)),
     edit: { ...run.edit },
     timedOut: [...run.timedOut],
   };
@@ -2650,9 +2676,9 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let caveStopped: string | null = null;
   // L14 (SP6a spec §10.6): its hooks (null until `bind`, and without them no L14), whether it started, its phase and
   // the phase's start (s), the X-ray's state, the band steps pressed, the camera's pose at its start (x y z yaw pitch),
-  // the edit's release (s, NaN before), the last pose's time (s), the refill's time (ms, NaN without one), the frames
-  // posed since X off and the one the map closed in (−1 before), the RD the script wants (12, then RD 16's), each
-  // segment's slots (`SEG_*`, NaN where not reached) and the time-outs.
+  // the edit's release (s, NaN before), the last pose's time (s), the refill's time (ms, NaN without one), the map's
+  // open (s, NaN before), the frames posed since X off and the one the map closed in (−1 before), the RD the script
+  // wants (12, then RD 16's), each segment's slots (`SEG_*`, NaN where not reached) and the time-outs.
   let xray: BenchXrayHooks | null = null;
   let xrayStarted = false;
   let xrayPhase = L14_HOLD;
@@ -2661,8 +2687,8 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let offFrames = 0;
   let closedFrame = -1;
   const xrayBase = new Float64Array(5);
-  // [the phase's start, the release, the last pose's time, the refill ms]
-  const xrayTimes = Float64Array.of(0, Number.NaN, Number.NaN, Number.NaN);
+  // [the phase's start, the release, the last pose's time, the refill ms, the map's open (s)]
+  const xrayTimes = Float64Array.of(0, Number.NaN, Number.NaN, Number.NaN, Number.NaN);
   let scriptRd = BENCH_RD;
   const xraySeg = new Float64Array(2 * SEG_SLOTS).fill(Number.NaN);
   const xrayTimedOut: string[] = [];
@@ -3417,6 +3443,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       }
       if (into < BENCH_XRAY.bandS - XRAY_EPS_S) return true;
       xrayNext(L14_MAP, tS);
+      xrayTimes[4] = tS;
       h.openMap();
       return true;
     }
@@ -3668,7 +3695,8 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
           },
           {
             edit: BENCH_XRAY_SCRIPT.edit, rd12: xraySegment(0, Number.POSITIVE_INFINITY), rd16: xraySegment(1, Number.POSITIVE_INFINITY),
-            applyRefillMs: Number.isNaN(xrayTimes[3]!) ? null : xrayTimes[3]!, timedOut: [...xrayTimedOut],
+            applyRefillMs: Number.isNaN(xrayTimes[3]!) ? null : xrayTimes[3]!,
+            mapOpenS: Number.isNaN(xrayTimes[4]!) ? null : xrayTimes[4]!, timedOut: [...xrayTimedOut],
           },
         );
       } catch (e) {
