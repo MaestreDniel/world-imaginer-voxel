@@ -135,6 +135,14 @@
  * through the family taps, the carver mask as the tag's carver kinds) and §5.6 (the cave slice at y is the Density tab's
  * horizontal cave-type field, its square on the map; a tile layer and carver tunnels go to SP10). The Chrome cells'
  * commit (Task 47) completes item 18 with G1's row: L13's and L14's parts, with their bounds as THRESHOLDS holds them.
+ * Task 48's levers pin §4.5's RegionBatch buffer policy as `regionBatch.ts` holds it (compaction at 10 %, growth ×1.25 or
+ * to the waiting rows' fit, the idle shrink) and item 22, §4.3's caps while the world regenerates (the non-interactive
+ * aux jobs wait; T, D and L may take the idle MESH slot). The master pins' commit (Task 50) pins item 19: §7's "Measured
+ * in SP6a" line (the cave rows with their measured values and the bench's gates, `finder.nearest` outside `BENCH_ROWS`,
+ * the kill criterion within 25 %, the fill read from `assets/sp6a/`), the T gate's "≤ 10 / 20" in §7's table and §3.0
+ * now gated as ruling R14 set it, and §8 risk 3's outcome (the levers that ran); and the describe's last test checks,
+ * from the titles of the tests registered in it, that every item of the SP6a spec's §13 as it stands has a test that
+ * names it (ruling P52).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -149,7 +157,10 @@ import { MAX_STEP_EDITS, SUB_BATCH } from '../../src/sim/edits';
 import { PIN_MAX } from '../../src/ui/inspector/sliceModel';
 import { MAX_HISTORY_EDITS } from '../../src/ui/world/blockHistory';
 import { REGISTRY } from '../../src/world/blocks';
-import { BENCH_ROWS, LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P99_MAX_MS } from '../bench/gates';
+import {
+  BENCH_ROWS, ISLANDS_P50_MAX_MS, ISLANDS_P99_MAX_MS, LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P99_MAX_MS,
+  SLICE_CAVES_P50_MAX_MS, TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS,
+} from '../bench/gates';
 import { THRESHOLDS } from '../thresholds';
 import { SP_DEPS } from '../harness/sp';
 import { DET_FILES } from './rules/banned';
@@ -2364,5 +2375,86 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(cells[1]).toContain('`G1.xray`; the RD 16 segment recorded) (the SP6a spec §10.6, D29; amended by SP6a)');
     // The target cell: L13's and L14's bounds as the plan words them.
     expect(cells[2]).toContain('caves: frame p95 ≤ 16.7 ms, no frame > 33 ms, main thread p95 ≤ 6 ms; the X-ray at RD 12: the same, GPU ≤ 150 MB, draw calls ≤ 100, a toggle\'s frame ≤ 33 ms (SP6a, from L13 and L14)');
+  });
+
+  test('§7\'s "Measured in SP6a" line names the rows with their values and gates; the T gate in §7 and §3.0 as ruling R14 set it; §8 risk 3\'s outcome (SP6a spec §13 item 19)', () => {
+    const lines = text.split('\n');
+    const line = lines.find((l) => l.startsWith('- **Measured in SP6a** (amended by SP6a):'));
+    expect(line, 'no `- **Measured in SP6a** (amended by SP6a): …` line in §7').toBeDefined();
+    // The bench rows it names are measured by BENCH_ROWS; finder.nearest is logged outside them (recorded, no gate).
+    const rows: readonly string[] = BENCH_ROWS;
+    for (const row of ['terrain.real', 'terrain.islands', 'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128', 'density.cornerInlined']) {
+      expect(line, `§7's "Measured in SP6a" line does not name ${row}`).toContain(`\`${row}\``);
+      expect(rows, `BENCH_ROWS does not measure ${row}`).toContain(row);
+    }
+    expect(line).toContain('`finder.nearest`');
+    expect(rows).not.toContain('finder.nearest');
+    // Each named row carries a measured value (a number of ms after its name).
+    for (const row of ['terrain.real', 'terrain.islands', 'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128', 'finder.nearest']) {
+      const after = line!.slice(line!.indexOf(`\`${row}\``));
+      expect(after, `${row} has no measured value`).toMatch(/^`[^`]+`[^;]*?\d+(?:\.\d+)? ms/);
+    }
+    // The gates are the bench's constants.
+    expect(line).toContain(`gated at p50 ≤ ${TERRAIN_P50_MAX_MS} ms, p99 ≤ ${TERRAIN_P99_MAX_MS} ms by \`TERRAIN_P50_MAX_MS\` and \`TERRAIN_P99_MAX_MS\``);
+    expect(line).toContain(`gated at p50 ≤ ${ISLANDS_P50_MAX_MS} ms, p99 ≤ ${ISLANDS_P99_MAX_MS} ms by \`ISLANDS_P50_MAX_MS\` and \`ISLANDS_P99_MAX_MS\``);
+    expect(line).toContain(`gated at p50 ≤ ${SLICE_CAVES_P50_MAX_MS} ms by \`SLICE_CAVES_P50_MAX_MS\``);
+    // The kill criterion's ratio, within its 25 % (the SP6a spec §10.5; master's Kill criterion below).
+    const kill = /the kill criterion: [^;]*?(\d+(?:\.\d+)?) % of `terrain\.real`'s p50/.exec(line!);
+    expect(kill, 'the line states the kill criterion\'s share of terrain.real\'s p50').not.toBeNull();
+    expect(Number(kill![1])).toBeLessThanOrEqual(25);
+    expect(line).toContain('so no `new Function` codegen');
+    // The fill is the committed 4-worker Chrome file's reveal (g1.metric.ts' mediumFill4wMs).
+    const w4 = JSON.parse(readFileSync(`${ROOT_DIR}docs/superpowers/specs/assets/sp6a/bench-iris-chrome-w4.json`, 'utf8')) as { load: { revealMs: number } };
+    expect(line).toContain(`\`mediumFill4wMs\` ${Math.round(w4.load.revealMs).toLocaleString('en-US')} ms in Chrome on the Iris Xe with 4 workers (\`assets/sp6a/bench-iris-chrome-w4.json\`)`);
+    // It follows SP4a's measured line, inside §7.
+    const sp4a = text.indexOf('- **Measured in SP4a** (amended by SP4a):');
+    const at = text.indexOf(line!);
+    expect(sp4a).toBeGreaterThan(text.indexOf('## 7. Performance budget'));
+    expect(at).toBeGreaterThan(sp4a);
+    expect(at).toBeLessThan(text.indexOf('## 8. Risks'));
+    // The T gate's text "≤ 10 / 20" in §7's table and §3.0's T budget, now gated as ruling R14 set it.
+    const gate = `now gated as p50 ≤ ${TERRAIN_P50_MAX_MS}, p99 ≤ ${TERRAIN_P99_MAX_MS} for \`terrain.real\` by \`TERRAIN_P50_MAX_MS\` and \`TERRAIN_P99_MAX_MS\`, and p50 ≤ ${ISLANDS_P50_MAX_MS}, p99 ≤ ${ISLANDS_P99_MAX_MS} for \`terrain.islands\` by \`ISLANDS_P50_MAX_MS\` and \`ISLANDS_P99_MAX_MS\` (ruling R14, the SP6a spec's Threshold log; amended by SP6a)`;
+    const tGate = lines.find((l) => l.startsWith('| **T gate** |'));
+    expect(tGate, 'no T gate row in §7').toBeDefined();
+    expect(tGate).toContain(`**≤ 10 / 20** (09: 150-270 ms per column; SP6a: ${gate}) |`);
+    const t30 = lines.find((l) => l.startsWith('| T (terrain) |'));
+    expect(t30, 'no T row in §3.0').toBeDefined();
+    expect(t30!.endsWith(`| none | ≤ 10 / 20 ms (SP6a: ${gate}) |`)).toBe(true);
+    // §8 risk 3: the outcome, which levers ran (the SP6a spec's Tasks 15, 37 and 48).
+    const r3 = text.slice(text.indexOf('3. **T cost of the full cave family in JS, plus DAG closures.**'), text.indexOf('4. **Hashed-lattice noise cost.**'));
+    const outcome = r3.split('\n').find((l) => l.startsWith('   - Outcome (SP6a; amended by SP6a):'));
+    expect(outcome, 'no `- Outcome (SP6a; amended by SP6a):` line under risk 3').toBeDefined();
+    for (const phrase of ['lever 4', 'lever 5', 'lever 6 recorded inert', 'lever 7a', 'lever 7c', 'ruling R14', 'was skipped, none being left (ruling R20 (a))', 'Task 48\'s render-side levers', 'the RegionBatch policy v2', 'the X-ray batches drawing nothing while the X-ray is off', 'the map tool premounted hidden', 'the refill levers (a)', 'The codegen kill criterion did not fire']) {
+      expect(outcome, `risk 3's outcome does not name ${phrase}`).toContain(phrase);
+    }
+  });
+
+  /**
+   * Ruling P52: every item of the SP6a spec's §13 has a test in this describe that names it in its title ("§13 item 16",
+   * "§13 items 1-7", "§13 items 7 and 11", "§13 items 14, 15"); the item numbers come from the describe's registered tests
+   * and from the spec's §13 as it stands, so an item added to §13 without its pin turns this red.
+   */
+  test('every item of the SP6a spec §13 is pinned by a test of this describe that names it (ruling P52)', ({ task }) => {
+    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-02-sp6a-cave-shapes-design.md`, 'utf8');
+    const s13 = spec.slice(spec.indexOf('## 13. Master-spec amendments made with this spec'), spec.indexOf('## 14. Notes handed to later SPs'));
+    const items = [...s13.matchAll(/^(\d+)\. \*\*/gm)].map((m) => Number(m[1]));
+    expect(items.length, 'the SP6a spec §13 lists no items').toBeGreaterThan(0);
+    expect(items, '§13\'s items are numbered 1 … n').toEqual(items.map((_, i) => i + 1));
+    const pinned = new Set<number>();
+    const titles = (task.suite?.tasks ?? []).map((t) => t.name);
+    expect(titles.length, 'the describe\'s tests').toBeGreaterThan(1);
+    for (const title of titles) {
+      for (const m of title.matchAll(/§13 items? ([^§)]*)/g)) {
+        for (const token of m[1]!.split(/,\s*|\s+and\s+/)) {
+          const range = /^(\d+)(?:-(\d+))?$/.exec(token.trim());
+          if (range === null) break;
+          const from = Number(range[1]), to = Number(range[2] ?? range[1]);
+          for (let i = from; i <= to; i++) pinned.add(i);
+        }
+      }
+    }
+    const missing = items.filter((i) => !pinned.has(i));
+    expect(missing, 'the SP6a spec §13 items with no test naming them in this describe').toEqual([]);
+    expect([...pinned].filter((i) => !items.includes(i)), 'tests naming a §13 item the spec does not have').toEqual([]);
   });
 });

@@ -1019,6 +1019,108 @@ Every Chrome route re-measured into `assets/sp6a/` (`npm run measure:chrome`, it
 
 `mediumFill4wMs` 4,995 ms (4 workers; gate 6,000); flight p95 4.165 ms, draw calls 12, main p95 2.31 ms; `enterRatio` 1.007 (gate 1.10). RTX 3060 Laptop (recorded, PRIME on-demand offload): stream p95 4.165 ms, GPU MB 150.24, L14 RD 12 GPU MB 132.40, `enterRatio` 1.010. Task 47's diagnostic (not committed): with the edit set in the frame after the open, as before R27, the open's stall and the edit's compounded into one 33.3-41.7 ms frame in 5 of 6 Iris files; with the edit 30 frames apart, the four frames after the open read 12.5, 12.5, 25.0 and 16.7 ms and the frame after the edit's 20.8 ms.
 
+### Master §7 and §8 as measured (Task 50)
+
+`npm run bench` at 702559b (the tree of every SP6a source change; Task 50 changes only the docs and the master's pins) on the reference machine (i7-12700H, Node v24.21.0), on 2026-11-10, turbo on (`intel_pstate/no_turbo` 0), x86_pkg_temp 50 °C and a 1-minute load of 0.23 before (0.89 after), every row at turbo (calibration 0.636-0.637 ns); exit 0, every absolute gate and the +30 % rule held, killRatio 0.846. Log: `test/metrics/.out/task50/bench.log` (git-ignored). Its rows, written into master §7's "Measured in SP6a" line: `terrain.real` p50 10.604 / p99 17.334 ms; `terrain.islands` 11.888 / 19.491 ms; `terrain.caves.warm` 9.783 / 15.524 ms (the path cache holds 360 of 1,024 paths after the spiral); `carver.paths` p50 0.026 ms (worm 10.50 µs, ravine 10.00 µs, underground worm 12.58 µs); `mesh.xray` 0.083 / 0.151 ms (`mesh.section` with pass 3 0.331 / 0.642 ms); `slice.caves128` p50 280.3 ms (`slice.vertical128` 109.1 ms); `finder.nearest` the worst kind's median 967.5 ms, spaghetti 2D (per kind 14.0, 173.5, 967.5, 168.5, 19.7, 7.6, 2.1 and 2.6 ms for kinds 1-8; none past the 2 s budget). The kill criterion at the final tree (ruling R20 (i)): `density.corner` 2,239.7 ns against `density.cornerInlined` 831.7 ns per corner (× the median 475 corners = 0.669 ms), `voxelFn` 356.9 ns against `inlinedVoxel` 135.9 ns per voxel (× the median 4,896 evaluated voxels = 1.082 ms; 1,276,976 voxels of 240 columns): the overhead is 1.750 ms, **16.5 %** of `terrain.real`'s p50, within 25 %, so no codegen. The fill is the committed Chrome file's: `mediumFill4wMs` 4,995 ms (`assets/sp6a/bench-iris-chrome-w4.json`, Task 47). Master §8 risk 3 states the levers that ran: Task 15's (levers 4, 5 and 7a-7c, lever 6 inert, the slice on release), Task 37 skipped because Task 36 met every gate with no lever left (ruling R20 (a)), and Task 48's render-side levers (the RegionBatch policy v2, the X-ray batches drawing nothing while off, the map tool's premount and its hidden marks, the refill levers (a) and (b)); `xrayApplyRefillMs` (about 8.3-8.4 s, ruling R26) and `xrayMapOpenMaxMs` (ruling R27) stay recorded, not gated, as Task 47's section and the Threshold log say. CI: Task 50 adds docs and two arch tests, no shard or metric, so push B's 9-minute budget (ruling R23) stands.
+
+### §17's audit (Task 50)
+
+Each row of §17 with the commit that lands its SP6a part, or the receiving SP's line in master §10 that places it ("SP6b's line" is SP6b's "Received from SP6a (its spec §14; amended by SP6a)" line; likewise for SP7-SP12; an SP's own contents line where the master already gave it the work). A row that a later SP6a task finishes names that task. No row is missing a placement.
+
+| ids | lands on | placed by |
+|---|---|---|
+| E1 header and dependencies | 6a + 6b | f722483 (§13 item 2: the SP6a header with SP3c, SP5c; SP6b's header "(…; SP6a)") |
+| E2 cave family terms; G7-G16, G18 | 6a | 96955b6 (`noiseScaled`, D18), fc38aac (the body as a def, the root's cave slots, D17), f2c6502 (entrances, cheese, pillars), e202f24 (spaghetti 3D and 2D, the noodle's four slots: G11), d3dd53d (the bands), d184dc9 (the island cap), 4b045e3 (the wet roof), 683f3b8 (the caps' G_f), 3b44852 (lever 5's octaves); G18 with E6 |
+| E3 worm and canyon carvers; L1; G20-G24; G34 | 6a; G24's structure skip → SP9; `aquifer.fluidAt` → SP7 | 722beae (sources, worms, rooms, branches), 60e3987 (ravines, underground worms, R = 11), e09841d (`carverCache.ts`, `carveColumn`: L1, G21, G24's `CARVABLE` and shrinks), b550af4 (the carvers in T); G34 by DT1's `carverCache` and `isolated` (f283dbb); SP9's line ("a structure's piece boxes shrink carvers through the SP6a spec §2.4's shrink term"); SP7's line ("`aquifer.fluidAt` per carved voxel") |
+| E4, E5, E9, E10, E15; M2; D2, D5; G2, G4, G26-G28, G30, G33; U2; T7 | 6b | SP6b's line: the picker and its registry with the depth axis (E4, M2, G4, G26), the abyss palette, lush and dripstone blocks (E5, D2), the map cave-biome layer (E9), `cave_heavy`'s overlay and `readyFrom` 'SP6b' (E10, G33; the code's `readyFrom: 'SP6b'` since f722483), B3 (E15, T7), `caveBiomeQ` in aux B (D5, G2), the `caveBiome` condition and rule 4 (G27, G28), `secondaryDepthRange` (G30); U2's biome table: master §5.4 "the 3 cave biomes arrive in SP6b" (f722483) |
+| E6, G18 debug tag channel | 6a | 4697bcf (the `cave` channel), 6a80631 (the tag, T writes it), a11805a (`caveTagAt`, DT2 `tagProbe`), cb03f02 (`debugTags`) |
+| E7 cave-type tint | 6a | c5b4525 (the cave-type slice field and the Cross-section's cave tint) |
+| E8 map cave slice | 6a; tile layer → SP10; aquifer fluid → SP7 | c5b4525 (the horizontal `caves` field), cad11a7 (the Caves tab's "Cave slice"); SP10's line ("the map cave tile layer"); SP7's line ("the `caves` slice field shows aquifer fluid in carved voxels") |
+| E11, E16; L2 (`render/culling`); D4; R1, R7; T8 | 6b | SP6b's line: "**cave culling** (§4.15) with R3 (§6.4), the raycast visibility reference (§6.1), `connectivity15` in the staging … and the meta bits 17-31 (§2.3)" |
+| E12 deliverable | 6a | the whole branch; the review links and shots 22b0b99, 1287a73, fc9468a, e5838a5; the user's check is Task 54's |
+| E13 SP3e's island runs | 6a; the surface predicate → SP12 | d184dc9 (`caves.limits.capTop`, 180 in floating_islands), e09841d (the carvers' island shrink), 1f763a2 (`islandBranchOnGround` before and after); SP12's line ("the floating_islands surface predicate over cave-hollowed summits"); the SP6a entry's "Received from SP3e" worded as delivered by Task 53 |
+| E14, T1-T6 C1-C6 | 6a; C1 cave_heavy → 6b records, SP12 gates | 3e881a2 (C1-C6 measured), 71fc362 (C5's thinnest axis), fb1e5d1 (the tuning), 7e4a859 (gated); SP6b's line ("C1's cave_heavy 10-22 % recorded"); SP12's line ("C1's 10-22 % gate") |
+| E17, T9 L2 | 6a | 1f763a2 |
+| E18, T10 S1 | 6a | f722483 (`grassSky0` activeFrom SP6a), 0e3ee48 (S1 with caves, R19's window recorded) |
+| E19, E20, T11 DT1, DT2 | 6a (density, carvers, tag) + 6b (surface parts) | 96955b6 (DT2's `compiledReference` with `noiseScaled`), a11805a (DT2 `tagProbe`), f283dbb (DT1 `carverCache`, `isolated`), 44196a4 (the goldens at `GENERATOR_VERSION` 7); SP6b's line ("DT1 and DT2 re-asserted (DT2's surface parts with the cave rules)") |
+| E21, G3, T12 P1 | 6a; 6b re-measures | 72b0f68 (P1's T gates), 62d9c63 (R14's gates), e2e80e9 (baselines), e49e1b7 (`terrain.caves.warm`, `carver.paths`, `mesh.xray`), c5b4525 (`slice.caves128`), Task 50 (master §7's T gate and "Measured in SP6a"); SP6b's line ("P1 re-measured with about 300 cave quarts") |
+| E22, P2 kill criterion | 6a | d28bc67 (`inlined.ts`, `density.cornerInlined`, the overhead), Task 50 (master §7: 16.5 %) |
+| E23, P5 cut line | 6a | f722483 (the Cut line in the SP6a entry); the three items built: da6ce22 (the Find buttons), e202f24 (the spaghetti-2D rarity bands), 60e3987 (the underground worm); the Cut line and the receivers worded as taken by Task 53 |
+| M1 09's pain points | 6a (entrances, morphology, noodle); 6b (cave biomes); → SP7 (lava) | f2c6502, e202f24, b550af4 (C2, C3, C5 gated in 7e4a859); SP6b's line (the picker, B3); SP7's own contents ("MC-style aquifers (water, lava, …)", "deep lava") |
+| M3 the abyss | 6b (stone); → SP8b; → SP8c | SP6b's line (the abyss palette; the abyss hand-overs SP6b writes into the master); SP8b's own contents (the abyss decoration set, the exclusive mineral); SP8c's own contents (the abyss beds and grains) |
+| L3 GLSL boundary | 6a | ed0a26a (the X-ray material in `render/materials/glsl/xray.glsl.ts`) |
+| L4 picker modules | 6b | SP6b's line ("the 3D quart cave-biome picker and its registry") |
+| L5 cave decoration kinds | → SP8b | SP8b's line ("cave decoration (glow lichen, cave vines, moss, dripstone) reads cave floors and ceilings …") |
+| L6 harness flood and components; raycast reference | 6a (flood, components, carver reference); 6b (raycast) | cb03f02 (3D components and the pre-cave top), 8385da5 (the global carver reference); master §6.1 pinned in 8385da5; SP6b's line ("the raycast visibility reference (§6.1)") |
+| D1 `CARVABLE` | 6a | e09841d (`carveColumn` carves `CARVABLE` voxels only) |
+| D3 `SOUND` abyss | built; 6b assigns it | SP6b's line ("the `SOUND` group `abyss`") |
+| D6 `SubProjectId` | 6a first commit | f722483 |
+| D7 Expr ops | 6a | 96955b6 (`noiseScaled`) |
+| G1 carver sources into T | 6a | b550af4 |
+| G5 lakes | 6a | 4b045e3 (the wet roof, `wetCover`) |
+| G6 early-out with cave taps | 6a | the interval program over the cave taps (their noises' ±clampSigma; master §3.6's early-out line, 4b045e3), 7a754d7 (lever 4's cell skips), 23fa77c, 4eb268c (the air witnesses), 7b575d2 (the sub-blocks) |
+| G17 level fields' −∞ rule | not needed | 4b045e3 (`wetMask`, master §2.4 and D19's sentence); SP7's line ("the level-field −∞ rule only if aquifers need `col` level fields") |
+| G19 `surfaceEst3` caching | → SP7 | SP7's line ("`surfaceEst3` caching with its first consumer") |
+| G25 aquifers, lava, the abyss exclusion | → SP7 | SP7's own contents (aquifers with lava, the abyss exclusion); the lava in the abyss in SP6b's line |
+| G29 grass only on the sky run | 6a (+ 6b keeps it) | b550af4 (the carvers before water and the surface pass), 0e3ee48 (S1); SP6b's line ("S1 … re-asserted") |
+| G31 cave decoration | → SP8b | SP8b's line |
+| G32 structures not in caves | → SP9 | SP9's line ("structures merging with caves without abrupt cuts …") |
+| G35 determinism, selftest | 6a + 6b | 44196a4 (62 goldens; Bun and `?selftest=1` 62/62 in its evidence), f283dbb (DT1); SP6b's line ("`GENERATOR_VERSION` bumped again", DT1 and DT2) |
+| R2 R2 re-baseline | 6a | 1f763a2 (R2 with caves), 7e4a859 (master §6.4's R2 row) |
+| R3, R4, R6 light rules, lightmap, night floor | 6a | 5f57308 (the light floor), 60f8c5b (night vision) |
+| R5 block-light emitters | → SP8b | SP8b's line ("block-light emitters lift caves above the floor") |
+| R8 settings | 6a | 60f8c5b (night vision in Settings) |
+| R9 ambience | → SP8c | SP8c's line ("the cave ambience may read the tag and the enclosure") and its own contents |
+| U1 Terrain scope | 6a (caves, carvers); 6b (cave biomes) | f2c6502 (the `caves` group, §5.1's "caves (`caves.*`)"), b550af4 (the carver leaves), 54918cf (the caves lints, a cave-only Apply); §5.1's Terrain row names cave biomes (unchanged) and SP6b's line (the picker) |
+| U3 slice fields | 6a (family taps, carver kinds, cave type); 6b (biome3d); → SP10 | c5b4525 (master §5.5 pinned there); SP6b's line ("the slice view's biome3d field"); SP10's own contents ("slice view of every 3D field") |
+| U4 probe fields | → SP10 | SP10's line ("the probe's carver hit and cave kind") |
+| U5 map layers | 6a (cave slice as a field); 6b (cave-biome layer); → SP10 | c5b4525, cad11a7 (master §5.6 pinned in c5b4525); SP6b's line ("the map cave-biome layer"); SP10's line ("the map cave tile layer and the carver-tunnel layer") |
+| U6 F3 biome | → SP10; 6b may add the cave biome | SP10's line ("full F3 with the kind at the feet") |
+| U7 bench cave scenario | 6a | 5871e45, e8b3383 (L13), de3bcb4 (L14), 702559b (gated) |
+| U8 controls | 6a | 73c32c2 (X, PageUp, PageDown, Home and L), 6e7a59d, 60f8c5b |
+| T13 U2-U4 | 6a + 6b | f2c6502, e202f24, d3dd53d, d184dc9, 4b045e3, b550af4 (each leaf live, U2's count; U4's fixtures and README); 6b: U2 and U4 stay gated on every tier (master §6.4, "once active it stays gated"), so SP6b's leaves must be live; SP6b's line does not name them |
+| T14 streaming metric with caves | 6a | 702559b (every Chrome cell, the stream legs included, re-measured with caves into `assets/sp6a/`), 5871e45 (L13) |
+| T15 A1-A4 | → SP7 | SP7's line ("A1-A4 use SP6a's 3D components and the tag") |
+| T16 O2, V4 | → SP8b | SP8b's own exit ("O1, O2, V1-V6") |
+| T17 AU3 | → SP8c | SP8c's line ("AU3's cave labels") |
+| T18 R4 | → SP8b gates; 6a records | `render.metric.ts`' R4 parts (recorded, activeFrom SP8b) run on the carved world since b550af4; SP8b's line ("R4 gated with cave walls") |
+| T19 traceability lines | 6a (C2-C6, L2); 6b (B3) | master §6.5's cave lines name C2-C6 and L2, which 7e4a859 and 1f763a2 gate; SP6b's line (B3) |
+| P1 T rows | 6a (corners, carvers); 6b (cave quarts) | 72b0f68, e49e1b7, Task 50 (master §7's "Measured in SP6a"); SP6b's line ("P1 re-measured with about 300 cave quarts") |
+| P3 risk 3 | 6a | 7a754d7, 3b44852 (levers 4, 5), 23fa77c … f6b697a (7a), 30f1ae4, d07e907, 733d892 (7c), 62d9c63 (R14); Task 50 (master §8 risk 3's outcome) |
+| P4 risk 11 visual review | 6a + 6b | 22b0b99, 1287a73, fc9468a, e5838a5 (the review links and shots in `assets/sp6a/`); 6b by master risk 11 ("in every SP exit") |
+| SP0:119, SP3a:311/:357 `SP_DEPS` | 6a first commit | f722483 |
+| SP1:397/:509 `cave_heavy {}` | 6b | SP6b's line (`cave_heavy`'s overlay, `readyFrom` 'SP6b') |
+| SP2b:348/:490 cave biomes in the table | 6b | master §5.4 (f722483: "the 3 cave biomes arrive in SP6b") |
+| SP3a:326 pin new ops | 6a | 96955b6 (`noiseScaled` in master §2.5, `sp6a.density.ops`) |
+| SP3b:21/:31, :416, :417/:438 | 6a | f2c6502, e202f24 (the caves and their ops), 72b0f68 (T benched with caves), a11805a and 96955b6 (DT2) |
+| SP3b:216-217/:415 dry pockets, water walls | → SP7; 6a's wet roof avoids new ones | SP7's own contents (aquifers, "dry caves below sea level"); 4b045e3 |
+| SP3b:222 `caveBiomeQ` | 6b | SP6b's line |
+| SP3b:330 small floating rocks | → SP12 | SP12's line ("SP3b's small floating rocks above peaks") |
+| SP3b:412 NaN endpoints | delivered by SP3d | — |
+| SP3b:414, SP4c:552 caching | → SP7 | SP7's line |
+| SP3c:21/:164/:307/:448/:467/:469 cave rules | 6b | SP6b's line (the `caveBiome` condition, rule 4) |
+| SP3c:117 `CARVABLE` | 6a | e09841d |
+| SP3c:342/… `dryPitsBelowSea` | → SP7 | SP7's line |
+| SP3c:357/… y mod 16 residue | 6a re-measures; → SP12 | `surface.metric.ts`' `landTopYmod16` runs on the carved world (0e3ee48); its value in Exit evidence is Task 53's; SP12's line ("the y mod 16 residue (re-measured in SP6a)") |
+| SP3c:449/:480, SP4a:16/:76/:579/:830 S1 | 6a | 0e3ee48 |
+| SP3d:22/:600 | 6a (taps; level fields not needed); 6b (rules) | f2c6502, e202f24 (every family a tap), 4b045e3 (`wetMask`); SP6b's line (the cave rules) |
+| SP3e:32 `cave_heavy` | 6b | SP6b's line |
+| SP3e:537/:550/:619 | 6a | with E13 |
+| SP4a:31, :60, :737/:777 culling, connectivity, meta bits | 6b | SP6b's line |
+| SP4a:384/:737 floating window for S1 | 6a | 0e3ee48 (floating_islands' large-island window, recorded apart, R19) |
+| SP4a:584/:737 L2 | 6a | 1f763a2 |
+| SP4a:735 D reads the decorated copy | → SP8b | SP8b's line |
+| SP4a:770 exit wording | done | — |
+| SP4b:38/:630-632 | 6b (culling); 6a (L2, streaming with caves) | SP6b's line; 1f763a2, 702559b |
+| SP4b:668 bench cave scenario | 6a | 5871e45 (L13) |
+| SP4c:79 D13 no daylight flash in a regenerating cave | 6a keeps it | 5f57308, 60f8c5b change display only; `frameStep.ts`' eye sky light rule is unchanged (60f8c5b adds the night-vision ease beside it) |
+| SP5a:77/:372 order and header | 6a | f722483 |
+| SP5b:57/:314 `cave_heavy` | 6b | SP6b's line |
+| SP5c:6/:509 states and the clipboard | 6b | SP6b's line ("new block states join the clipboard by state key and turn with `rotateState`") |
+| brief: X-ray by cave biome | 6b | SP6b's line ("the X-ray coloured by cave biome") |
+| brief: abyss palette, lush, dripstone | 6b | SP6b's line |
+| brief: SP8b crystals and gothic touch; SP8c silence; SP7 lava | 6b records; §14 states them now | SP6b's line (the abyss hand-overs SP6b writes into SP7, SP8b and SP8c) |
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
