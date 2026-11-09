@@ -429,8 +429,9 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
     cursor.setAttribute('x2', String(x));
     cursorY.setAttribute('y1', String(y));
     cursorY.setAttribute('y2', String(y));
-    cursor.setAttribute('visibility', 'visible');
-    cursorY.setAttribute('visibility', 'visible');
+    // Shown as `inherit`, never `visible`, so a hidden ancestor (the premounted map host) keeps it hidden (SP6a, Task 48f).
+    cursor.setAttribute('visibility', 'inherit');
+    cursorY.setAttribute('visibility', 'inherit');
     const text = voxelReadout(line, s, cell.i, cell.y);
     const at: RuleCell = { epoch: shownSlice.epoch, ...voxelPosition(line, cell.i, cell.y) };
     hovered = { cell: at, text };
@@ -457,7 +458,7 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
     const x = toPx(plot, p.distance[i]!, 0).px;
     cursor.setAttribute('x1', String(x));
     cursor.setAttribute('x2', String(x));
-    cursor.setAttribute('visibility', 'visible');
+    cursor.setAttribute('visibility', 'inherit');
     say(sectionReadout(p, i));
     readout.dataset['point'] = String(i);
   });

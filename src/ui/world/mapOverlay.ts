@@ -8,7 +8,8 @@
  *   before), so the first M only shows it; an M before it mounts the tool shown, and the timer then mounts nothing.
  *   The premounted host is rendered with `visibility: hidden` (not `display: none`) and laid out at the premount, so
  *   the first M restyles nothing (Task 48f: the first style and layout of the tool's subtree, 25-180 ms, forced in
- *   the open's frame); a close hides it with `display: none`.
+ *   the open's frame); a close hides it with `display: none`. No element under `src/ui` sets `visibility: visible`,
+ *   which would escape the hidden host (a mark shows as inherited; `test/arch/uiVisibility.test.ts`).
  * - **The first `open`** mounts the tool (`host: 'world'`, no URL sink, the toolbar slot, its `onTeleport` wrapping the
  *   page's: true in full closes the map, split keeps it, false keeps it as it is; in a saved world its `places`, whose
  *   ↗ moves the camera to the place and closes a full-screen map the same way, as does "+ Add at the pin" once B's
@@ -509,7 +510,8 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
       // but not visible, in the layout of the mode it will open in, and laid out now (SP6a, Task 48f): under display: none
       // its subtree had no style, so the first open paid the first style and layout of the whole tool (6,713 elements) in
       // the frame, forced by the renderer's resize in `syncLayout` (L14's 177-183 ms frame). Visibility hidden paints
-      // nothing, takes no pointer event and no focus; `open` makes it visible, `close` hides it with display: none.
+      // nothing, takes no pointer event and no focus (no descendant overrides it with `visible`: uiVisibility.test.ts);
+      // `open` makes it visible, `close` hides it with display: none.
       tool.hide();
       host.classList.toggle('split', mode === 'split');
       host.style.visibility = 'hidden';
