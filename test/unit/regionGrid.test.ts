@@ -471,7 +471,9 @@ const ALL_PASSES = [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT, M
 /**
  * The × `growth` steps a region's object of `pass` takes from its reservation to hold `vertices` and `indices` (vertices
  * and indices grow together, `Math.ceil` as both backends), with no deleted or free space to reclaim: Task 36's growth
- * event. RegionMesh grows × `GROWTH` (1.5), RegionBatch × `BATCH_GROWTH` (1.25, SP6a Task 48).
+ * event. RegionMesh grows × `GROWTH` (1.5), RegionBatch × `BATCH_GROWTH` (1.25, SP6a Task 48) or to the waiting rows'
+ * fit when that is more (Task 48d), so for RegionBatch the count is an upper bound: each of its growths is at least
+ * × 1.25, and one column's rows take one growth.
  */
 function growthSteps(pass: number, vertices: number, indices: number, growth: number): number {
   let [v, i] = RESERVATION[pass]!;
@@ -495,7 +497,7 @@ describe('regionGrid: the staging reservations kept, growth on demand over the c
     expect(BATCH_GROWTH).toBe(1.25);
   });
 
-  test('over Task 36\'s region use (test/fixtures/sp6a-region-use.json), the growth events per pass are, × 1.5 (RegionMesh and the fixture\'s own count), opaque 27, cutout 0, translucent 0, X-ray 69: 96 in all; × 1.25 (RegionBatch, SP6a Task 48) 48, 0, 0, 121: 169; recorded (R22: growth on demand, not 0)', () => {
+  test('over Task 36\'s region use (test/fixtures/sp6a-region-use.json), the growth events per pass are, × 1.5 (RegionMesh and the fixture\'s own count), opaque 27, cutout 0, translucent 0, X-ray 69: 96 in all; × 1.25 (RegionBatch\'s bound, SP6a Task 48) 48, 0, 0, 121: 169; recorded (R22: growth on demand, not 0)', () => {
     const use = JSON.parse(readFileSync(REGION_USE, 'utf8')) as RegionUse;
     expect(use.growth).toBe(GROWTH);
     expect(use.regions).toHaveLength(15);
@@ -517,7 +519,7 @@ describe('regionGrid: the staging reservations kept, growth on demand over the c
     // The largest region of each pass (518,388 opaque and 253,220 X-ray vertices) takes 4 and 7 growths × 1.5.
     expect(growthSteps(MESH_PASS_OPAQUE, 518_388, 777_582, GROWTH)).toBe(4);
     expect(growthSteps(MESH_PASS_XRAY, 253_220, 379_830, GROWTH)).toBe(7);
-    // RegionBatch's smaller steps: more of them, in the same regions.
+    // RegionBatch's smaller steps: at most this many (a growth sized to the waiting rows counts once), in the same regions.
     const batchEvents = eventsAt(BATCH_GROWTH);
     expect(batchEvents).toEqual([48, 0, 0, 121]);
     expect(batchEvents.reduce((a, b) => a + b, 0)).toBe(169);
@@ -527,7 +529,7 @@ describe('regionGrid: the staging reservations kept, growth on demand over the c
   });
 
   for (const kind of ['batch', 'mesh'] as const) {
-    test(`${kind}: the growth count above is the backend's: the disc's smallest growing X-ray region (−1, 1), 75,124 vertices in one column, grows its pass-3 object ${kind === 'batch' ? '7 times (× 1.25)' : '4 times (× 1.5)'} from 16,384 vertices`, () => {
+    test(`${kind}: the growth count above is the backend's: the disc's smallest growing X-ray region (−1, 1), 75,124 vertices in one column, grows its pass-3 object ${kind === 'batch' ? 'once, to the column (× 1.25 alone: 7 times)' : '4 times (× 1.5)'} from 16,384 vertices`, () => {
       const use = JSON.parse(readFileSync(REGION_USE, 'utf8')) as RegionUse;
       const region = use.regions.find((r) => r.rx === -1 && r.rz === 1)!;
       const vertices = region.vertices[MESH_PASS_XRAY]!;
@@ -546,7 +548,12 @@ describe('regionGrid: the staging reservations kept, growth on demand over the c
         const last = r.counts(createSectionRendererCounts()).lastStructural;
         if (last !== null) ops.push(last);
       }
-      expect(ops).toEqual(['create', ...Array<string>(steps).fill('grow')]);
+      // RegionBatch sizes the growth to the waiting column (Task 48d): one 'grow' to its 75,124 vertices, within the bound.
+      expect(ops).toEqual(['create', ...Array<string>(kind === 'batch' ? 1 : steps).fill('grow')]);
+      if (kind === 'batch') {
+        const xray = regionObjects(r.root).find((m) => m.userData['pass'] === MESH_PASS_XRAY)!;
+        expect(xray.geometry.getAttribute('position').count).toBe(vertices);
+      }
       r.dispose();
     });
   }

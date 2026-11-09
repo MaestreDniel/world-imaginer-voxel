@@ -792,6 +792,24 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       g.dispose();
     });
 
+    // The most quads a section holds: a 16³ checkerboard of one block, 2,048 cubes × 6 unmergeable faces (glass or ice
+    // for the cutout pass; SP5c's editing builds it, and a load reloads it under the uncapped structural gate). From
+    // the pass's reservation (cutout's 8,192 vertices the smallest) growth × 1.25 alone would need 9 operations for
+    // the first row's 49,152 vertices, past the row's 8 (SP6a, Task 48d).
+    test.each([0, 1, 2, 3] as const)('a 12,288-quad row in pass %i, in a fresh region under UNBOUNDED, uploads and shows in one pump, its growth sized to the waiting row', (pass) => {
+      const r = make();
+      r.stage(fakePayload(0, 0, [{ sy: 2, pass, quads: 12_288 }]), 1);
+      r.stage(fakePayload(1, 0, [{ sy: 3, pass, quads: 12_288 }, { sy: 4, pass, quads: 12_288 }]), 1);
+      r.pump(UNBOUNDED, 0, 0, 0);
+      expect(r.isRevealed(0, 0)).toBe(true);
+      expect(r.isRevealed(1, 0)).toBe(true);
+      expect(counts(r)).toMatchObject({ rows: 3, columnsRevealed: 2 });
+      // RegionBatch: 'create', then one 'grow' per row that does not fit: the opaque reservation (131,072 vertices)
+      // holds two rows of 49,152, so only the third grows; the other passes' (8,192 and 16,384) none, so each row grows.
+      if (kind === 'batch') expect(counts(r).structuralOps).toBe(pass === 0 ? 2 : 4);
+      r.dispose();
+    });
+
     test('probe\'s partial and mixed are 0 on every pump of a 1,000-step LCG sequence (seed 4242) of stage / re-stage / unstage / remove / pump over revealed columns', () => {
       const r = make();
       const rand = lcg(4242);

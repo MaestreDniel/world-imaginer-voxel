@@ -2174,10 +2174,10 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(calls).toContain('+1 per region with X-ray rows (SP6a)');
   });
 
-  test('§4.5\'s RegionBatch buffer policy: optimise at 10 % or when it makes the rows fit, else ×1.25, the idle shrink, as `regionBatch.ts` holds it (SP6a spec §5.1, Task 48)', () => {
+  test('§4.5\'s RegionBatch buffer policy: optimise at 10 % or when it makes the rows fit, else ×1.25 or to the rows\' fit, the idle shrink, as `regionBatch.ts` holds it (SP6a spec §5.1, Task 48)', () => {
     const at = text.indexOf('### 4.5 Render structure');
     const s45 = text.slice(at, text.indexOf('**Fallback.**', at));
-    expect(s45).toContain('Vertex and index capacity are reserved per preset (SP4b; SP4a sizes each region exactly at load) (Medium: opaque 131,072 vertices / 196,608 indices, translucent 16,384 / 24,576, cutout 8,192 / 12,288 on demand, 1,536 instances; when full, `optimize()` at 10 % deleted space or when it would make the waiting rows fit, else ×1.25, the instance table ×1.5; a batch above its reservation, idle for 240 pumps with ≥ 20 % slack, is compacted and shrunk to its use ×1.1 in the frame\'s structural slot; amended by SP6a: SP4b\'s `optimize()` above 40 % deleted space, else ×1.5, let a batch reach about 2.5 × its use); opaque starts at a reservation sized so the sum over regions matches §7 (≈ 100k vertices for a typical region) and grows via `setGeometrySize`.');
+    expect(s45).toContain('Vertex and index capacity are reserved per preset (SP4b; SP4a sizes each region exactly at load) (Medium: opaque 131,072 vertices / 196,608 indices, translucent 16,384 / 24,576, cutout 8,192 / 12,288 on demand, 1,536 instances; when full, `optimize()` at 10 % deleted space or when it would make the waiting rows fit, else ×1.25 or to the waiting rows\' fit when that is more, the instance table ×1.5; a batch above its reservation, idle for 240 pumps with ≥ 20 % slack, is compacted and shrunk to its use ×1.1 in the frame\'s structural slot; amended by SP6a: SP4b\'s `optimize()` above 40 % deleted space, else ×1.5, let a batch reach about 2.5 × its use); opaque starts at a reservation sized so the sum over regions matches §7 (≈ 100k vertices for a typical region) and grows via `setGeometrySize`.');
     expect(s45).toContain('- `optimize()` runs when fragmentation reaches 10% (SP6a; 40% before) or would make the waiting rows fit.');
     expect(s45).not.toContain('`optimize()` runs when fragmentation exceeds 40%');
     expect(s45).not.toContain('and grows ×1.5 via `setGeometrySize`');

@@ -528,8 +528,9 @@ describe('RegionBatch (SP4b spec §4.2, D14)', () => {
     r.pump(gate, 0, 0, 0);
     expect(gate.granted).toBe(1);
     expect(['grow', 'optimize']).toContain(counts(r).lastStructural);
-    // One growth × 1.25 holds the column: 20,480 vertices.
-    expect(batchOf(r, MESH_PASS_XRAY)!.geometry.getAttribute('position').count).toBe(Math.ceil(16_384 * BATCH_GROWTH));
+    // One growth holds the column: its use plus the column, 4 + 20,480 = 20,484 vertices (× 1.25 alone, 20,480, is 4 short).
+    expect(Math.ceil(16_384 * BATCH_GROWTH)).toBe(20_480);
+    expect(batchOf(r, MESH_PASS_XRAY)!.geometry.getAttribute('position').count).toBe(4 + 20_480);
     pumpAll(r);
     expect(r.isRevealed(0, 0)).toBe(true);
     r.dispose();

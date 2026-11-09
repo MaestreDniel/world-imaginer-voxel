@@ -25,7 +25,9 @@ import { XRAY_ORDER } from './selection';
  * The buffer policy (SP6a spec §5.1, Task 48; three's `addGeometry` only appends, so a released or swapped-out row
  * leaves a hole until `optimize`). A row that does not fit waits for the frame's structural operation: `optimize()` when
  * the batch's deleted space is ≥ `OPTIMIZE_AT` (10 %) of its buffers or would make the waiting rows fit, else
- * `setGeometrySize` × `BATCH_GROWTH` (1.25); a full instance table `setInstanceCount` × 1.5 (`GROWTH`). A batch above
+ * `setGeometrySize` × `BATCH_GROWTH` (1.25), or to the waiting rows' fit when that is more (so one growth always serves a
+ * row: × 1.25 alone took 9 growths from cutout's 8,192 vertices to a 16³ checkerboard's 49,152, past `MAX_OPS_PER_ROW`'s 8
+ * in `regionGrid.ts`, under the load's uncapped structural gate; Task 48d); a full instance table `setInstanceCount` × 1.5 (`GROWTH`). A batch above
  * its reservation that no upload, structural operation or release has written for `SHRINK_IDLE_PUMPS` pumps and whose
  * slack is ≥ `SHRINK_MIN_SLACK` of it is compacted and shrunk to its use × `SHRINK_HEADROOM` (never below the
  * reservation), one batch per pump in the frame's structural slot when no staged column needs it ('shrink').
@@ -157,6 +159,9 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
   const needVertices = new Float64Array(PASSES.length);
   const needIndices = new Float64Array(PASSES.length);
   let needPass = 0;
+  // The vertices and indices the last need waits to add to that pass's batch: a 'grow' fits them at least.
+  let needV = 0;
+  let needI = 0;
   // The pumps so far (`settle` counts them) and the batch the last `shrinkDue` chose.
   let pumpNo = 0;
   let shrinkNext: BatchPass | null = null;
@@ -235,6 +240,8 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
         const k = passNeed(passes[pass]!, needRows[pass]!, needVertices[pass]!, needIndices[pass]!);
         if (k !== null) {
           needPass = pass;
+          needV = needVertices[pass]!;
+          needI = needIndices[pass]!;
           return k;
         }
       }
@@ -244,7 +251,9 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
       needPass = passOf(c, r);
       const bp = c.region.data.passes[needPass] ?? null;
       if (bp === null) return 'create';
-      return passNeed(bp, 1, c.p.rows[r * ROW_INTS + 3]!, c.p.rows[r * ROW_INTS + 5]!);
+      needV = c.p.rows[r * ROW_INTS + 3]!;
+      needI = c.p.rows[r * ROW_INTS + 5]!;
+      return passNeed(bp, 1, needV, needI);
     },
     structural(c, kind) {
       const region = c.region;
@@ -284,7 +293,13 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
         case 'grow': {
           const mesh = bp!.mesh;
           const g = mesh.geometry;
-          mesh.setGeometrySize(Math.ceil(g.getAttribute('position').count * BATCH_GROWTH), Math.ceil(g.getIndex()!.count * BATCH_GROWTH));
+          const maxV = g.getAttribute('position').count;
+          const maxI = g.getIndex()!.count;
+          // × 1.25, or the appended use plus the waiting rows when that is more: one growth serves any row.
+          mesh.setGeometrySize(
+            Math.max(Math.ceil(maxV * BATCH_GROWTH), maxV - mesh.unusedVertexCount + needV),
+            Math.max(Math.ceil(maxI * BATCH_GROWTH), maxI - mesh.unusedIndexCount + needI),
+          );
           clearRangesOnFirstUpload(mesh.geometry);
           break;
         }
