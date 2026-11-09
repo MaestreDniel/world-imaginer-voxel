@@ -4689,8 +4689,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         // L14's map side by side (SP4c spec §2.2, mode B): the streaming route's overlay over the live legs' driver and
         // session, Watch live off, no Caves tab, no places, no teleport; it never saves the layout or the mode. It is
         // created at L0's second recorded frame, after the reveal (at bind its chunk and mount slowed the 6-worker reveal,
-        // 48i run C), and its tool mounted hidden there, so L14's first open only shows it (SP6a, Task 48: the mount's
-        // 75-80 ms frame).
+        // 48i run C), and the overlay's own premount mounts its tool hidden MAP_PRELOAD_MS later, as the product's overlay
+        // does after its reveal, so L14's first open only shows it (SP6a, Tasks 48 and 48e: the mount's 75-80 ms frame).
         const benchMapCreate = (): MapOverlay => {
           if (benchMap === null) {
             const overlay = createMapOverlay({
@@ -4883,10 +4883,10 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             // The live legs' reveals since their mark around the camera's column, before the recorder takes the row.
             if (landing) reveals.clear();
             else reveals.count(Math.floor(fly.x) >> 4, Math.floor(fly.z) >> 4, refillRd);
-            // L14's map: its arrow follows the camera while shown (SP4c spec §1.5); created and its tool mounted hidden at
-            // L0's second recorded frame (L0 hovers 5 s and is not gated).
+            // L14's map: its arrow follows the camera while shown (SP4c spec §1.5); created at L0's second recorded frame
+            // (L0 hovers 5 s and is not gated), its tool mounted hidden by the overlay's premount 2 s later.
             benchMap?.tick(counts);
-            if (bench.record.n === 1) benchMapCreate().premount();
+            if (bench.record.n === 1) benchMapCreate();
             recorder.frame(timing[T_RAW]!, performance.now() - timing[T_START]!, timing[T_COORD]!, timing[T_UPLOAD]!, timing[T_ROWS]!, counts.genCap);
             timing[T_COORD] = 0;
             timing[T_UPLOAD] = 0;

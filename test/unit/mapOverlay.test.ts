@@ -310,16 +310,32 @@ describe('the overlay host and the tool (SP4c spec §1.3, §1.5)', () => {
     expect(t.tool.view).toEqual({ x: 900, z: 64, bpp: 0.5, layer: 'biome' });
   });
 
-  test('the preload imports the chunk 2 s after the reveal without mounting; an open after it mounts at once', async () => {
-    const { overlay, timers } = setup();
+  test('the premount (SP6a, Task 48e: the product\'s first M): 2 s after the reveal the chunk loads and the tool mounts hidden, never shown; the first open mounts nothing and shows it at once', async () => {
+    const { overlay, timers, host } = setup();
     expect([...timers.pending.values()].map((t) => t.ms)).toEqual([MAP_PRELOAD_MS]);
     expect(MAP_PRELOAD_MS).toBe(2000);
-    timers.runAll();
     await settle();
     expect(tools()).toHaveLength(0);
-    // The chunk is in: the open mounts synchronously, the map drawn on the M's own frame.
+    timers.runAll();
+    await settle();
+    expect(tools()).toHaveLength(1);
+    const t = tools()[0]!;
+    expect([overlay.shown, overlay.owner, t.calls.show.length, t.calls.hide, host().style['display']]).toEqual([false, 'world', 0, 1, 'none']);
+    // The first M only shows the mounted tool, on the M's own frame.
     overlay.open();
     expect(tools()).toHaveLength(1);
+    expect([overlay.shown, t.calls.show.length]).toEqual([true, 1]);
+  });
+
+  test('an M before the premount\'s timer mounts the tool shown; the timer then mounts nothing more', async () => {
+    const { overlay, timers } = setup();
+    overlay.open();
+    await settle();
+    expect(tools()).toHaveLength(1);
+    timers.runAll();
+    await settle();
+    expect(tools()).toHaveLength(1);
+    expect(tools()[0]!.calls.hide).toBe(0);
   });
 
   test('premount (SP6a, Task 48): the chunk loads and the tool mounts hidden (never shown, nothing routed, the host still hidden, the world owning); the first open only shows it, on the camera', async () => {
@@ -391,17 +407,19 @@ describe('the overlay host and the tool (SP4c spec §1.3, §1.5)', () => {
     expect(tools()).toHaveLength(1);
   });
 
-  test('before the first M the overlay sets nothing on the driver; the first open calls the tool\'s show, which wants the preview (Task 13)', async () => {
+  test('before the first M the overlay sets nothing on the driver but the premount\'s hide (no preview wanted, as the page already set it; SP6a, Task 48e); the first open calls the tool\'s show, which wants the preview (Task 13)', async () => {
     const { overlay, driver, timers } = setup();
     timers.runAll();
     await settle();
     overlay.tick(createCoordinatorCounts());
-    for (const spy of [driver.change, driver.adopt, driver.setPreviewWanted, driver.onConfigured, driver.dispose]) expect(spy).not.toHaveBeenCalled();
-    const t = await openMounted(overlay);
+    for (const spy of [driver.change, driver.adopt, driver.onConfigured, driver.dispose]) expect(spy).not.toHaveBeenCalled();
+    expect(driver.setPreviewWanted.mock.calls).toEqual([[false]]);
+    overlay.open();
+    const t = tools()[0]!;
     expect(t.calls.show).toHaveLength(1);
-    expect(driver.setPreviewWanted.mock.calls).toEqual([[true]]);
+    expect(driver.setPreviewWanted.mock.calls).toEqual([[false], [true]]);
     overlay.close();
-    expect(driver.setPreviewWanted.mock.calls).toEqual([[true], [false]]);
+    expect(driver.setPreviewWanted.mock.calls).toEqual([[false], [true], [false]]);
   });
 
   test('shown: 30 rendered ticks while fly.x grows by 64 call setPlayer with the camera\'s x, z and yaw; hidden: none; open calls it once', async () => {

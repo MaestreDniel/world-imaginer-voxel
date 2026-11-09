@@ -336,18 +336,20 @@ describe('the map overlay draws with the frame step\'s live state (SP4c spec §2
   });
 });
 
-describe('the bench\'s L14 map is created and its tool mounted hidden at L0, after the reveal (SP6a, Task 48)', () => {
+describe('the bench\'s L14 map is created at L0, after the reveal, and premounted by the overlay itself as the product\'s (SP6a, Tasks 48, 48e)', () => {
   // The bench route's wiring cannot be mounted in the unit project, so its source is pinned: one creator, called by
-  // L14's open and once at L0's second recorded frame with `premount`; never at bind (48i run C: a mount at bind slowed
-  // the 6-worker reveal from 3.7 s to 4.26 s).
-  test('benchMapCreate() is called only by benchMapOpen and by `if (bench.record.n === 1) benchMapCreate().premount();` in onRendered', () => {
+  // L14's open and once at L0's second recorded frame; never at bind (48i run C: a mount at bind slowed the 6-worker
+  // reveal from 3.7 s to 4.26 s). No bench-only premount (Task 48e): the overlay's own MAP_PRELOAD_MS step mounts the
+  // tool hidden, as the product's overlay does after its reveal, so L1-L14 model the product.
+  test('benchMapCreate() is called only by benchMapOpen and by `if (bench.record.n === 1) benchMapCreate();` in onRendered; the page calls no premount', () => {
     const src = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
     const calls = [...src.matchAll(/benchMapCreate\(\)/g)].map((m) => m.index);
     expect(calls).toHaveLength(2);
     expect(src).toContain('const benchMapOpen = (): void => benchMapCreate().open();');
     const rendered = src.slice(src.indexOf('onRendered: (dtMs) => {'));
     const body = rendered.slice(0, rendered.indexOf('recorder.frame('));
-    expect(body).toContain('benchMap?.tick(counts);\n            if (bench.record.n === 1) benchMapCreate().premount();');
+    expect(body).toContain('benchMap?.tick(counts);\n            if (bench.record.n === 1) benchMapCreate();\n');
+    expect(src).not.toContain('.premount()');
     // The overlay is built inside the creator only (the streaming route's is the other `createMapOverlay`).
     const creator = src.slice(src.indexOf('const benchMapCreate = (): MapOverlay => {'), src.indexOf('const benchMapOpen = '));
     expect(creator).toContain('createMapOverlay({');

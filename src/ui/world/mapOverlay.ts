@@ -3,8 +3,9 @@
  * `#world-host` (not inside it, so the 3D host can move in mode B), created at the reveal (nothing may configure the
  * pool before it, `coordinator.ts:59`), which owns the map tool, the mode and the controls owner.
  *
- * - **Preload:** `MAP_PRELOAD_MS` after the reveal, `import('../map/mapTool')` loads the chunk and its CSS without
- *   mounting; an M after it mounts at once.
+ * - **Premount:** `MAP_PRELOAD_MS` after the reveal, `import('../map/mapTool')` loads the chunk and its CSS and the
+ *   tool mounts hidden (`premount`; SP6a, Task 48e: the mount is 75-80 ms of main thread, which the first M paid
+ *   before), so the first M only shows it; an M before it mounts the tool shown, and the timer then mounts nothing.
  * - **The first `open`** mounts the tool (`host: 'world'`, no URL sink, the toolbar slot, its `onTeleport` wrapping the
  *   page's: true in full closes the map, split keeps it, false keeps it as it is; in a saved world its `places`, whose
  *   ↗ moves the camera to the place and closes a full-screen map the same way, as does "+ Add at the pin" once B's
@@ -86,7 +87,7 @@ export type MapMode = WorldSettings['mapMode'];
 /** Who the keys, the wheel and the pointer act for (SP4c spec §2.3). */
 export type ControlsOwner = 'world' | 'map';
 
-/** How long after the reveal the map's chunk is loaded without mounting (SP4c spec §1.3). */
+/** How long after the reveal the map's chunk is loaded and its tool mounted hidden (SP4c spec §1.3; SP6a, Task 48e). */
 export const MAP_PRELOAD_MS = 2000;
 /** The map's zoom at the first open, in blocks per pixel (SP4c spec §1.6); later opens keep the last zoom. */
 export const WORLD_MAP_BPP = 4;
@@ -314,7 +315,8 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     });
     return loading;
   };
-  const preload = o.win.setTimeout(() => { load().catch(() => {}); }, MAP_PRELOAD_MS);
+  // The premount (Task 48e): after the reveal, while the player has not opened the map, so the first M has no mount.
+  const preload = o.win.setTimeout(() => { premount(); }, MAP_PRELOAD_MS);
 
   // The header's controls (SP4c spec §2.5), in the slot the tool's toolbar shows.
   const slot = el('span', 'map-overlay-slot');
@@ -508,6 +510,13 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     syncRoute();
   };
 
+  /** Loads the chunk and mounts the tool hidden (`MapOverlay.premount`; the preload timer's step, SP6a Task 48e). */
+  function premount(): void {
+    if (disposed || tool !== null) return;
+    if (mod !== null) mount(mod, true);
+    else load().then((m) => mount(m, true), () => {});
+  }
+
   function open(): void {
     if (disposed || shown) return;
     // M during a Watch-live regeneration: the map returns and the notice goes, before the route moves (D26).
@@ -560,11 +569,7 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     },
     open,
     close,
-    premount() {
-      if (disposed || tool !== null) return;
-      if (mod !== null) mount(mod, true);
-      else load().then((m) => mount(m, true), () => {});
-    },
+    premount,
     tick(counts) {
       if (shown && tool !== null) tool.setPlayer(o.fly.x, o.fly.z, o.fly.yaw);
       // Stale while the world regenerates: a stale count with no T, D, L or MESH job in flight or queued is a column
