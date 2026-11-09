@@ -1381,9 +1381,35 @@ describe('worker pool: the world and aux lanes and the aux policy (SP4c spec §6
     // Only a change pumps: one more tile under a cap of 2.
     pool.setAuxPolicy('world', 2);
     expect([posted(), pool.queued, running().tiles]).toEqual([2, 1, 2]);
-    expect(() => pool.setAuxPolicy('world', 0)).toThrow(RangeError);
+    expect(() => pool.setAuxPolicy('world', -1)).toThrow(RangeError);
     expect(() => pool.setAuxPolicy('world', 1.5)).toThrow(RangeError);
     expect(() => pool.setAuxPolicy('map' as 'aux', 1)).toThrow(RangeError);
+    pool.terminate();
+  });
+
+  test('(\'world\', 0) while the world regenerates in mode B (SP6a, Task 48e lever a): no tile runs, even on an idle worker; points and edit remeshes still run; a cap of 1 again runs the queued tile at once', () => {
+    const { pool, finish, workerOf, running } = manualPool(2);
+    pool.setAuxPolicy('world', 0);
+    void settle(pool.tile(tile(0), 5));
+    void settle(pool.tile(tile(1), 6));
+    expect(running()).toEqual({ world: 0, tiles: 0, all: 0 });
+    void worldJob(pool, 0);
+    expect(running()).toEqual({ world: 1, tiles: 0, all: 1 });
+    // Interactive jobs are uncapped and never counted.
+    void settle(pool.point(1, 2));
+    expect(workerOf('point')).toBe(1);
+    finish(1);
+    expect(running()).toEqual({ world: 1, tiles: 0, all: 1 });
+    // An edit's remesh (the aux lane at EDIT_MESH_PRIORITY) still runs on the free worker.
+    void settle(pool.meshColumn(3, 3, { edit: true }));
+    expect(running()).toEqual({ world: 2, tiles: 0, all: 2 });
+    finish(1);
+    finish(0);
+    expect(running()).toEqual({ world: 0, tiles: 0, all: 0 });
+    expect(pool.queued).toBe(2);
+    // The regeneration done: the cap rises and a tile runs at once.
+    pool.setAuxPolicy('world', 1);
+    expect(running()).toEqual({ world: 0, tiles: 1, all: 1 });
     pool.terminate();
   });
 

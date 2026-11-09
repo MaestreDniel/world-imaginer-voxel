@@ -17,7 +17,7 @@ import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
 import { createPreviewDriver, draftOf, type Configured, type DriverCanvas, type DriverStatus } from '../../src/ui/map/previewDriver';
 import { createTileSource } from '../../src/ui/map/tileSource';
 import {
-  APPLY_QUIET_MS, auxCap, auxFirst, coversWorld, createApplyControl, createEpochs, updateAuxPolicy,
+  APPLY_QUIET_MS, auxCap, auxFirst, coversWorld, createApplyControl, createEpochs, regeneratingOf, updateAuxPolicy,
 } from '../../src/ui/world/applyControl';
 
 const AMP = 'density.detailAmpHi';
@@ -710,5 +710,54 @@ describe('the aux policy (SP4c spec §6.2, D11)', () => {
     expect(p.set).toEqual([['aux', 3], ['world', 1], ['world', 1], ['aux', 3], ['world', 1]]);
     // Before the first M there is no overlay: the 3D is visible.
     expect(coversWorld(null)).toBe(false);
+  });
+
+  test('the regeneration (SP6a, Task 48e lever a): the 3D visible while the world regenerates inside RD → (world, 0), no map tile; held and covers keep their caps; with the regeneration done the SP4c table again', () => {
+    const at = (held: boolean, covers: boolean, tPending: boolean, n: number, regen: boolean): [AuxFirst, number] =>
+      [auxFirst(held, covers), auxCap(held, covers, tPending, n, regen)];
+    expect(at(false, false, true, 4, true)).toEqual(['world', 0]);
+    expect(at(false, false, false, 4, true)).toEqual(['world', 0]);
+    expect(at(true, false, true, 4, true)).toEqual(['aux', 4]);
+    expect(at(false, true, true, 4, true)).toEqual(['aux', 3]);
+    expect(at(false, false, true, 4, false)).toEqual(['world', 1]);
+    expect(at(false, false, false, 4, false)).toEqual(['world', 4]);
+  });
+
+  test('regeneratingOf: a stale count with a T, D, L or MESH job in flight or queued; a stale count with no job left (a skipped column\'s neighbours) or no stale column is not', () => {
+    const c = createCoordinatorCounts();
+    expect(regeneratingOf(c)).toBe(false);
+    c.stale = 489;
+    expect(regeneratingOf(c)).toBe(false);
+    for (const stage of ['T', 'D', 'L', 'MESH'] as const) {
+      for (const field of ['inFlight', 'queued'] as const) {
+        c[stage][field] = 1;
+        expect(regeneratingOf(c), `${stage}.${field}`).toBe(true);
+        c[stage][field] = 0;
+      }
+    }
+    c.MESH.queued = 3;
+    c.stale = 0;
+    expect(regeneratingOf(c)).toBe(false);
+  });
+
+  test('updateAuxPolicy in mode B over an Apply: (world, 1) while T is pending, (world, 0) once the Apply\'s refill is pending inside RD, (world, 1) when it is done and T is still pending beyond, (world, 4) at rest', () => {
+    const p = policyPool(3);
+    const counts = pendingT();
+    const split = coversWorld({ mode: 'split', shown: true });
+    updateAuxPolicy(p.pool, 3, split, counts);
+    // The Apply: every MESH-set column stale, its T queued.
+    counts.stale = 489;
+    counts.T.queued = 300;
+    counts.T.inFlight = 3;
+    updateAuxPolicy(p.pool, 3, split, counts);
+    // The last stale column swapped: T still pending beyond RD.
+    counts.stale = 0;
+    counts.T.queued = 40;
+    updateAuxPolicy(p.pool, 3, split, counts);
+    counts.T.done = counts.T.needed;
+    counts.T.queued = 0;
+    counts.T.inFlight = 0;
+    updateAuxPolicy(p.pool, 3, split, counts);
+    expect(p.set).toEqual([['world', 1], ['world', 0], ['world', 1], ['world', 4]]);
   });
 });

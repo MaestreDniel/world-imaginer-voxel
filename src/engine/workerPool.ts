@@ -271,9 +271,10 @@ export interface WorkerPool {
    * The aux policy (SP4c spec §6.2, D11), two scalars the page sets every frame: a free worker takes, in order, an aux job
    * of priority < 0 (points, probes, landing, the standalone spawn; uncapped and not counted); then, with `first`
    * 'world', the world FIFO's next job, else an aux job while fewer than `cap` non-interactive aux jobs run; with 'aux',
-   * an aux job while under `cap`, else the world FIFO's next job. The default is `('world', size)`. A changed policy pumps
-   * at once; unchanged values do nothing (and allocate nothing). Throws RangeError for another `first` or a `cap` that is
-   * not an integer ≥ 1.
+   * an aux job while under `cap`, else the world FIFO's next job. The default is `('world', size)`. A cap of 0 runs no
+   * non-interactive aux job, even on an idle worker (SP6a, Task 48e: the map's tiles wait while the world regenerates
+   * inside RD); interactive jobs and edit remeshes still run. A changed policy pumps at once; unchanged values do nothing
+   * (and allocate nothing). Throws RangeError for another `first` or a `cap` that is not an integer ≥ 0.
    */
   setAuxPolicy(first: AuxFirst, cap: number): void;
   /**
@@ -675,7 +676,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
     setAuxPolicy(first, cap) {
       if (first === auxFirst && cap === auxCap) return;
       if (first !== 'world' && first !== 'aux') throw new RangeError(`setAuxPolicy: first must be 'world' or 'aux', got ${String(first)}`);
-      if (!(Number.isSafeInteger(cap) && cap >= 1)) throw new RangeError(`setAuxPolicy: cap ${cap} is not an integer ≥ 1`);
+      if (!(Number.isSafeInteger(cap) && cap >= 0)) throw new RangeError(`setAuxPolicy: cap ${cap} is not an integer ≥ 0`);
       auxFirst = first;
       auxCap = cap;
       pump();

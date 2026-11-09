@@ -2187,6 +2187,14 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(text).toContain('compaction above 40 % free space, else ×1.5), and culling per region');
   });
 
+  test('§4.3\'s caps: the non-interactive aux jobs wait while the 3D is visible and the world regenerates inside RD (SP6a spec §13 item 22, §4; Task 48e lever a)', () => {
+    const at = text.indexOf('### 4.3 Scheduling');
+    const s43 = text.slice(at, text.indexOf('### 4.4 ', at));
+    const caps = s43.split('\n').find((l) => l.startsWith('- LOD, MAP, SLICE, METRIC and AUDIO_SYNTH ≤ 1 while any T is pending within RD'));
+    expect(caps, 'no `- LOD, MAP, SLICE, METRIC and AUDIO_SYNTH ≤ 1 …` line in §4.3').toBeDefined();
+    expect(caps).toContain('(SP6a: while the 3D is visible and the world regenerates inside RD after an Apply, the non-interactive aux jobs wait until the refill is done; the map\'s tiles resume after it)');
+  });
+
   test('§6.4\'s T5 row compares surfaceEst3 with the pre-cave top, its thresholds unchanged (SP6a spec §13 item 21)', () => {
     const t5 = text.split('\n').find((l) => l.startsWith('| T5 |'));
     expect(t5, 'no T5 row in §6.4').toBeDefined();
