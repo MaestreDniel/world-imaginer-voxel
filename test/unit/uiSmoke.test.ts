@@ -49,7 +49,16 @@ import {
   COPY_BADGE, exportedFile, FIRST_PLACE_DOT, importedNotice, MODIFY_EDIT, OLDER_BADGE, OLDER_WORLD, PAUSED_SPEED_INDEX, SETTINGS_FOV, SMOKE_BACKUP_NOTICE, SMOKE_BACKUP_NOTICE_MS, SMOKE_COPY,
   SMOKE_PLACE, SMOKE_PLACE_SAVED, SP5B_SHOTS, ADDED_PLACE_DOT, lookDiffers, PLACES_SHOT_DOTS, PLACES_SHOT_SOUTH_PX, worldsMenuFallback,
 } from '../tools/uiSmoke';
-import { CDP_SEND_MS, CDP_WAIT_MARGIN_MS, guardedCdp, untilBoundMs } from '../tools/uiSmoke';
+import { CDP_SEND_MS, CDP_WAIT_MARGIN_MS, guardedCdp, READY_EVAL_MS, untilBoundMs } from '../tools/uiSmoke';
+import {
+  CAVE_EDIT, CAVE_LINE, CAVE_LINKS, CAVE_POSES, caveLink, cavePageQuery, CAVES_STEP_PITCH, ENTRANCE_SHOT_UP, entranceShotPose, cavesStepQuery, clearColour, firstStepBandOk, parseStripBand, SEED_42_HASH,
+  SLIDER_LOW_START, SP6A_SHOTS, XRAY_ALL_TEXT, XRAY_CLEAR_RGB, XRAY_CLEAR_TOL, XRAY_SKY_PIXEL, xrayStripText,
+} from '../tools/uiSmoke';
+import { EXAMPLE_IDS } from '../harness/caveMetrics';
+import { XRAY_CLEAR } from '../../src/render/renderer';
+import { bandSet, bandStep, stripText, XRAY_ALL } from '../../src/ui/world/xrayStrip';
+import { CAVE_PARAMETERS_LEAF, sliderBand } from '../../src/ui/map/cavesTab';
+import { hereUrl } from '../../src/ui/world/reload';
 import type { Cdp } from '../tools/cdp';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
 import { EMIT, REGISTRY } from '../../src/world/blocks/index';
@@ -291,15 +300,15 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(mountainSummaryOk(flat), flat).toBe(false);
   });
 
-  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream, then SP4c\'s overlay and overlay-mesh, then SP5a\'s build and walk, then SP5b\'s menus, save, crash, two tabs, export/import, places, modify and settings-world, then SP5c\'s select before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, SP4c spec §8.6, SP5a spec §6.4, SP5b spec §6.5, SP5c spec §10.8, ruling P52)', () => {
+  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream, then SP4c\'s overlay and overlay-mesh, then SP5a\'s build and walk, then SP5b\'s menus, save, crash, two tabs, export/import, places, modify and settings-world, then SP5c\'s select, then SP6a\'s caves before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, SP4c spec §8.6, SP5a spec §6.4, SP5b spec §6.5, SP5c spec §10.8, SP6a spec §10.9, ruling P52)', () => {
     expect(SMOKE_STEPS).toEqual([
       'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
       'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
       'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'build', 'walk', 'menus', 'save', 'crash', 'two tabs',
-      'export/import', 'places', 'modify', 'settings-world', 'select', 'console',
+      'export/import', 'places', 'modify', 'settings-world', 'select', 'caves', 'console',
     ]);
     expect(SMOKE_STEPS.slice(SMOKE_STEPS.indexOf('walk'), SMOKE_STEPS.indexOf('console') + 1)).toEqual([
-      'walk', 'menus', 'save', 'crash', 'two tabs', 'export/import', 'places', 'modify', 'settings-world', 'select', 'console',
+      'walk', 'menus', 'save', 'crash', 'two tabs', 'export/import', 'places', 'modify', 'settings-world', 'select', 'caves', 'console',
     ]);
     expect(SMOKE_STEPS.indexOf('density tab')).toBe(SMOKE_STEPS.indexOf('rule') + 1);
     expect(SMOKE_STEPS.indexOf('start')).toBe(SMOKE_STEPS.indexOf('preset profiles') + 1);
@@ -310,8 +319,10 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(SMOKE_STEPS.indexOf('menus')).toBe(SMOKE_STEPS.indexOf('walk') + 1);
     expect(SMOKE_STEPS.indexOf('export/import')).toBe(SMOKE_STEPS.indexOf('two tabs') + 1);
     expect(SMOKE_STEPS.indexOf('select')).toBe(SMOKE_STEPS.indexOf('settings-world') + 1);
-    expect(SMOKE_STEPS.indexOf('select')).toBe(SMOKE_STEPS.indexOf('console') - 1);
+    expect(SMOKE_STEPS.indexOf('caves')).toBe(SMOKE_STEPS.indexOf('select') + 1);
+    expect(SMOKE_STEPS.indexOf('caves')).toBe(SMOKE_STEPS.indexOf('console') - 1);
     expect(stepId('select: a house, Q, Ctrl+C, Ctrl+V, one turn')).toBe('select');
+    expect(stepId('caves: X, PageDown, Home, L; the Caves tab, Cave slice, a cave parameter live')).toBe('caves');
     expect(stepId('export/import: Export, Delete, Import; worldHash() equal')).toBe('export/import');
     expect(stepId('settings-world: G opens, FOV 80 applies, Esc closes')).toBe('settings-world');
     expect(SMOKE_STEPS.indexOf('console')).toBe(SMOKE_STEPS.length - 1);
@@ -355,6 +366,10 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     const after = step.indexOf('d.n === 32 && d.t > ${releasedAt}');
     expect([released, after].every((i) => i > -1)).toBe(true);
     expect(released).toBeLessThan(after);
+    // Self-checking (ruling R16 (a)): the hold at 6 means something only if a draft arrives within DRAG_HOLD_MS, so the
+    // release's draft time is asserted below it, not printed.
+    expect(step).toMatch(/t\.check\(draftAt - releasedAt < DRAG_HOLD_MS,/);
+    expect(step).not.toMatch(/t\.check\(true, `the release asks/);
     expect(readFileSync(new URL('../../src/ui/inspector/sliceView.ts', import.meta.url), 'utf8')).toMatch(/createCaveGestureHold\(/);
   });
 });
@@ -1610,5 +1625,168 @@ describe('UI smoke test: CDP calls on a dead or hung renderer fail instead of ha
     g.on('Inspector.targetCrashed', () => { heard++; });
     f.fire('Inspector.targetCrashed');
     expect(heard).toBe(1);
+  });
+
+  test('goto\'s and reload\'s readiness polls bound each evaluation by READY_EVAL_MS (5 s), and only `wire` enables the Inspector (ruling R17 (b))', () => {
+    expect(READY_EVAL_MS).toBe(5000);
+    const src = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+    for (const head of ['  async goto(url: string, ready: string): Promise<void> {', '  async reload(ready: string): Promise<void> {']) {
+      const start = src.indexOf(head);
+      expect(start, head).toBeGreaterThan(-1);
+      const body = src.slice(start, src.indexOf('\n  }\n', start));
+      // The poll's one evaluation: 300 tries of 100 ms, each answered within 5 s or counted as not ready.
+      expect(body.match(/this\.eval<boolean>\(/g), head).toHaveLength(1);
+      expect(body, head).toMatch(/\(\$\{ready\}\)`, READY_EVAL_MS\)\.catch\(\(\) => false\)/);
+    }
+    // `wire` enables it on every page target (Inspector.targetCrashed reaches the guarded commands and `crash`).
+    expect(src.match(/send\('Inspector\.enable'\)/g)).toHaveLength(1);
+    expect(src.indexOf("await c.send('Inspector.enable');")).toBeGreaterThan(src.indexOf('const wire = async (c: Cdp): Promise<void> => {'));
+  });
+});
+
+describe('UI smoke test: the caves step, SP6a\'s review links and its review screenshots (SP6a spec §10.9, §10.10, D16)', () => {
+  /** The committed copy of `caves.metric.ts`' `.out/caves.examples.json` (git-ignored; the unit jobs read the copy). */
+  const readExamples = () => JSON.parse(readFileSync(new URL('../../docs/superpowers/specs/assets/sp6a/caves.examples.json', import.meta.url), 'utf8')) as {
+    id: string; tier: string; seed: string; profile: string;
+    poses: Record<string, { x: number; y: number; z: number; yaw: number; pitch: number; voxel: [number, number, number]; component: number; region: string } | null>;
+  };
+
+  test('the committed caves.examples.json is the quick tier\'s at seed 42 on the default profile, every pose found', () => {
+    const examples = readExamples();
+    expect([examples.id, examples.tier, examples.seed, examples.profile]).toEqual(['caves.examples', 'quick', '42', 'default']);
+    expect(Object.keys(examples.poses)).toEqual([...EXAMPLE_IDS]);
+    for (const id of EXAMPLE_IDS) expect(examples.poses[id], id).not.toBeNull();
+  });
+
+  test('CAVE_POSES mirror the committed file\'s poses (x, y, z, yaw, pitch), the eye at the voxel\'s centre', () => {
+    expect(Object.keys(CAVE_POSES)).toEqual([...EXAMPLE_IDS]);
+    const examples = readExamples();
+    for (const id of EXAMPLE_IDS) {
+      const e = examples.poses[id]!;
+      expect(CAVE_POSES[id], id).toEqual({ x: e.x, y: e.y, z: e.z, yaw: e.yaw, pitch: e.pitch });
+      expect([e.x, e.y, e.z], id).toEqual([e.voxel[0] + 0.5, e.voxel[1] + 0.5, e.voxel[2] + 0.5]);
+    }
+  });
+
+  test('a review link opens seed 42\'s default world at the pose: `at` the voxel\'s column, y exact, yaw and pitch as hereUrl writes them (spec §10.10)', () => {
+    expect(CAVE_LINKS).toEqual(['cheese', 'pillars', 'spaghetti3d', 'spaghetti2d', 'noodle', 'entrance', 'worm', 'ravine', 'interior']);
+    const hash = decodeMapState(SEED_42_HASH.slice(1));
+    expect(hash.error).toBeNull();
+    expect(hash.state).toEqual(DEFAULT_MAP_STATE);
+    expect(SEED_42_HASH).toBe(`#${encodeMapState(DEFAULT_MAP_STATE)}`);
+    for (const id of CAVE_LINKS) {
+      const pose = CAVE_POSES[id];
+      const link = caveLink(pose);
+      expect(link.startsWith('/?at='), id).toBe(true);
+      const url = new URL(link, 'http://127.0.0.1');
+      expect(url.hash, id).toBe(SEED_42_HASH);
+      const q = parseWorldQuery(url.searchParams);
+      expect(q.at, id).toEqual({ x: Math.floor(pose.x), z: Math.floor(pose.z) });
+      expect([q.y, q.yaw, q.pitch], id).toEqual([pose.y, pose.yaw, pose.pitch]);
+      expect([q.rd, q.renderer, q.world, q.shot], id).toEqual([null, null, null, false]);
+      // The search's yaw and pitch are hereUrl's own (one decimal); its at and y are not (hereUrl rounds y, §10.10 gives it exactly).
+      const here = new URL(hereUrl(pose, null, SEED_42_HASH), 'http://127.0.0.1').searchParams;
+      expect([url.searchParams.get('yaw'), url.searchParams.get('pitch')], id).toEqual([here.get('yaw'), here.get('pitch')]);
+    }
+    expect(caveLink(CAVE_POSES.cheese)).toBe(`/?at=96,-52&y=-15.5&yaw=90.0&pitch=0.0${SEED_42_HASH}`);
+  });
+
+  test('the step\'s page: the entrance pose pitched 20° up, at RD 4 on batch with the test hook', () => {
+    const url = new URL(`/${cavesStepQuery()}`, 'http://127.0.0.1');
+    const q = parseWorldQuery(url.searchParams);
+    const e = CAVE_POSES.entrance;
+    expect(q.at).toEqual({ x: Math.floor(e.x), z: Math.floor(e.z) });
+    expect([q.y, q.yaw, q.pitch, q.rd, q.renderer]).toEqual([e.y, e.yaw, CAVES_STEP_PITCH, WORLD_RD, 'batch']);
+    expect(url.searchParams.get('wiTest')).toBe('1');
+    expect(url.hash).toBe(SEED_42_HASH);
+    // The sky pixel is above the horizon: half the view's height spans half the field of view (the default or the
+    // settings-world step's 80°), so the pixel 410 px above the centre looks at least 20° + 9° up.
+    expect(VIEWPORT.height / 2 - XRAY_SKY_PIXEL.y).toBeGreaterThan(400);
+    expect(XRAY_SKY_PIXEL.x).toBeGreaterThan(VIEWPORT.width / 2 + 200);
+    expect(XRAY_SKY_PIXEL.x).toBeLessThan(VIEWPORT.width);
+  });
+
+  test('the entrance shot looks down at the entrance voxel from 12 blocks above its eye, along the pose\'s yaw and pitch', () => {
+    const e = CAVE_POSES.entrance;
+    const s = entranceShotPose();
+    expect([s.yaw, s.pitch, s.y]).toEqual([e.yaw, e.pitch, e.y + ENTRANCE_SHOT_UP]);
+    // The view ray (lookVector, the page's own) reaches the entrance eye's height at its column.
+    const [dx, dy, dz] = lookVector(s.yaw, s.pitch);
+    const k = (e.y - s.y) / dy;
+    expect(k).toBeGreaterThan(0);
+    expect(Math.hypot(s.x + k * dx - e.x, s.z + k * dz - e.z)).toBeLessThan(1e-9);
+    // Opened through the page's query, the eye stands within a block of that point (at takes integers).
+    const q = parseWorldQuery(new URL(`/${cavePageQuery(s)}`, 'http://127.0.0.1').searchParams);
+    expect(Math.hypot(q.at!.x - s.x, q.at!.z - s.z)).toBeLessThan(Math.SQRT2);
+  });
+
+  test('the clear colour is the renderer\'s XRAY_CLEAR (#0b0e14), within 2 per channel', () => {
+    expect((XRAY_CLEAR_RGB[0] << 16) | (XRAY_CLEAR_RGB[1] << 8) | XRAY_CLEAR_RGB[2]).toBe(XRAY_CLEAR);
+    expect(XRAY_CLEAR_TOL).toBe(2);
+    expect(clearColour([11, 14, 20])).toBe(true);
+    expect(clearColour([13, 12, 22])).toBe(true);
+    expect(clearColour([14, 14, 20])).toBe(false);
+    expect(clearColour([168, 204, 255])).toBe(false);
+  });
+
+  test('the strip\'s line is stripText\'s; a first PageDown from every depth gives 32 blocks around the eye, as bandStep does', () => {
+    for (const [a, b] of [[-64, 319], [68, 99], [-12, 19], [0, 0], [-1, 5]] as const) {
+      expect(xrayStripText(a, b)).toBe(stripText(bandSet(a, b)));
+      expect(parseStripBand(xrayStripText(a, b))).toEqual({ yMin: a, yMax: b });
+    }
+    expect(XRAY_ALL_TEXT).toBe(stripText(XRAY_ALL));
+    expect(parseStripBand('X-ray · y 1 … 2')).toBeNull();
+    for (const eye of [CAVE_POSES.entrance.y, -63.5, 318.9, 0, -0.5]) {
+      const b = bandStep(XRAY_ALL, -1, eye);
+      expect(firstStepBandOk(b, eye), String(eye)).toBe(true);
+    }
+    expect(firstStepBandOk(null, 0)).toBe(false);
+    expect(firstStepBandOk({ yMin: -64, yMax: 319 }, 0)).toBe(false);
+  });
+
+  test('the slider check: from Lowest y 0, a PageDown the world took would move the band 8 down, which the slider\'s own step cannot give', () => {
+    const start = sliderBand('low', SLIDER_LOW_START, 319);
+    expect(start).toEqual(bandSet(0, 319));
+    const world = bandStep(start, -1, CAVE_POSES.entrance.y);
+    expect([world.yMin, world.yMax]).toEqual([-8, 311]);
+    // The slider keeps Highest y at 319: a band ending below it is the world's step, never the slider's.
+    expect(world.yMax).not.toBe(319);
+  });
+
+  test('the live cave edit is Cave parameters\' leaf, typed from its default 0.5 to 0.45 within its range', () => {
+    expect(CAVE_EDIT.id).toBe(`pp-${CAVE_PARAMETERS_LEAF}`);
+    expect(resolveProfile('default').caves.cheese.offset).toBe(0.5);
+    const r = applyPatch(SCHEMA, resolveProfile('default'), { caves: { cheese: { offset: Number(CAVE_EDIT.value) } } });
+    expect(r.ok).toBe(true);
+  });
+
+  test('the vertical caves slice\'s line: 512 blocks along x through the cheese pose\'s row, drawn ± 128 px around a 2 blocks/px view', () => {
+    const { view, a, b } = CAVE_LINE;
+    expect(view.bpp).toBe(2);
+    expect([a[1], b[1], view.z]).toEqual([Math.floor(CAVE_POSES.cheese.z), Math.floor(CAVE_POSES.cheese.z), Math.floor(CAVE_POSES.cheese.z)]);
+    expect([(view.x - a[0]) / view.bpp, (b[0] - view.x) / view.bpp]).toEqual([128, 128]);
+    expect(a[0] < CAVE_POSES.cheese.x && CAVE_POSES.cheese.x < b[0]).toBe(true);
+  });
+
+  test('the caves step presses the key map\'s X, PageDown, Home and L, plain (SMOKE_KEYS)', () => {
+    const src = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+    const start = src.indexOf('async function cavesChecks(');
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf('\n}\n', start));
+    for (const k of ['xray', 'xrayDown', 'xrayAll', 'nightVision'] as const) expect(body, k).toContain(`SMOKE_KEYS.${k}, `);
+    expect(body).not.toMatch(/SMOKE_KEYS\.(xray|xrayDown|xrayAll|nightVision), \d+, [1-9]/);
+  });
+
+  test('--shots writes SP6a\'s fourteen review screenshots (spec §10.10), committed in assets/sp6a at 1400 × 900', () => {
+    expect(Object.values(SP6A_SHOTS)).toEqual([
+      'review-xray.png', 'review-xray-band.png', 'review-entrance.png', 'review-ravine.png', 'review-cheese-pillars.png', 'review-spaghetti3d.png',
+      'review-spaghetti2d.png', 'review-noodle.png', 'review-worm.png', 'review-light-floor.png', 'review-night-vision.png', 'review-night-surface.png',
+      'review-slice-vertical.png', 'review-slice-horizontal.png',
+    ]);
+    for (const name of Object.values(SP6A_SHOTS)) {
+      const png = readFileSync(new URL(`../../docs/superpowers/specs/assets/sp6a/${name}`, import.meta.url));
+      expect(png.subarray(1, 4).toString('latin1'), name).toBe('PNG');
+      expect([png.readUInt32BE(16), png.readUInt32BE(20)], name).toEqual([VIEWPORT.width, VIEWPORT.height]);
+    }
   });
 });

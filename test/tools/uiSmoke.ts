@@ -129,6 +129,14 @@
  *     its Close button, then T reaches the world (no hidden control keeps the world's keys);
  *   - select (SP5c spec §10.8): a house through the hook; Q, the corners, Ctrl+C; Ctrl+V, one turn, the paste; Ctrl+Z,
  *     Ctrl+Y; N moves a floating copy onto the ground; a reload, Ctrl+V again (`selectChecks`);
+ * - caves (SP6a spec §10.9), `/?rd=4&renderer=batch&wiTest=1` at the entrance's review pose (`CAVE_POSES`, the
+ *   committed `assets/sp6a/caves.examples.json`) pitched 20° up: X shows the strip at every depth, the F3 HUD's line,
+ *   and a sky pixel reads the clear colour #0b0e14 (the sky and the terrain hidden); PageDown gives 32 blocks around
+ *   the eye, Home every depth; L turns night vision on, the Settings checkbox follows, stored and kept across a reload,
+ *   and L turns it off; side by side at 1920 × 1080 (the panel beside the map), the world's map has the Caves tab after
+ *   Presets, "Cave slice" opens the Density tab with the horizontal `caves` field and its 128² slice, "Cave parameters"
+ *   shows `caves.cheese.offset`, typed 0.5 → 0.45 it regenerates live (the stale count above 0, then 0) and Ctrl+Z
+ *   restores it; with Lowest y focused at 0, PageDown moves only the slider (`cavesChecks`);
  * - console: no exception, console error or failed load, except the known favicon.ico 404 and Chrome's notice that it
  *   blocked a world page's `beforeunload` prompt when a step left it (`leaveGuardLog`); every step ran.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
@@ -153,7 +161,9 @@
  * (settings-world). Only those seven are committed, in `assets/sp5b/` (ruling P48). SP5c's five (`SP5C_SHOTS`, spec
  * §10.10, 1400 × 900) follow: `review-rename-save.png` (menus), `review-modify-notice.png` (modify), and
  * `review-selection.png`, `review-ghost.png` and `review-rotated-paste.png` (select, a scene built in front of the
- * camera after the step's checks); only those five are committed, in `assets/sp5c/`.
+ * camera after the step's checks); only those five are committed, in `assets/sp5c/`. SP6a's fourteen (`SP6A_SHOTS`,
+ * spec §10.10, 1400 × 900) close the `caves` step, each at its review pose (`caveShots`); all are committed, in
+ * `assets/sp6a/`.
  * Every command to a page is bounded (`guardedCdp`, SP6a ruling R16): a page-side wait by its own time plus a minute,
  * any other command by 5 minutes, and every command in flight fails at once when the page's renderer crashes
  * (`Inspector.targetCrashed`), so a dead renderer fails its step with a message instead of hanging the smoke.
@@ -526,14 +536,15 @@ export function presetProblems(text: string, expected: { readonly name: string; 
  * refuses a repeated id), then SP4c's `overlay` and `overlay-mesh` (spec §8.6: one step per renderer, each on its own
  * page), then SP5a's `build` and `walk` (SP5a spec §6.4, each on its own page), then SP5b's `menus`, `save`, `crash`,
  * `two tabs`, `export/import`, `places`, `modify` and `settings-world` (SP5b spec §6.5, on the saved world `menus`
- * creates and, from `export/import` on, its import), then SP5c's `select` (SP5c spec §10.8, on that import); `console`
- * stays last, the closing step main() runs after `runSmoke` (ruling P52).
+ * creates and, from `export/import` on, its import), then SP5c's `select` (SP5c spec §10.8, on that import), then
+ * SP6a's `caves` (SP6a spec §10.9, on unsaved pages of its own); `console` stays last, the closing step main() runs
+ * after `runSmoke` (ruling P52).
  */
 export const SMOKE_STEPS = [
   'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
   'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
   'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'build', 'walk', 'menus', 'save', 'crash', 'two tabs',
-  'export/import', 'places', 'modify', 'settings-world', 'select', 'console',
+  'export/import', 'places', 'modify', 'settings-world', 'select', 'caves', 'console',
 ] as const;
 export type SmokeStep = (typeof SMOKE_STEPS)[number];
 
@@ -1100,6 +1111,168 @@ export const SP5C_SHOTS = {
   modifyNotice: 'review-modify-notice.png',
 } as const;
 
+// ---------------------------------------------------------------- the caves step (SP6a spec §10.9, §10.10)
+
+/**
+ * SP6a's review screenshots (spec §10.10, risk 11's visual review), 1400 × 900, saved by the `caves` step with --shots
+ * and committed in `assets/sp6a/`: the X-ray at every depth and with a band (the cheese pose); the entrance from the
+ * surface; a ravine, a cheese cavern with pillars, a spaghetti 3D tunnel, a spaghetti 2D layer, a noodle and a worm with
+ * its flat floor (each at its review pose, with night vision, since a cave's walls at the light floor read almost
+ * black); a cave at the light floor without and with night vision (the large interior); the night surface with the
+ * floor (seed 42's spawn view at midnight); the `caves` slice on a vertical plane (`?map`, `CAVE_LINE`) and on the
+ * horizontal one ("Cave slice" in the world's map).
+ */
+export const SP6A_SHOTS = {
+  xray: 'review-xray.png',
+  xrayBand: 'review-xray-band.png',
+  entrance: 'review-entrance.png',
+  ravine: 'review-ravine.png',
+  cheesePillars: 'review-cheese-pillars.png',
+  spaghetti3d: 'review-spaghetti3d.png',
+  spaghetti2d: 'review-spaghetti2d.png',
+  noodle: 'review-noodle.png',
+  worm: 'review-worm.png',
+  lightFloor: 'review-light-floor.png',
+  nightVision: 'review-night-vision.png',
+  nightSurface: 'review-night-surface.png',
+  sliceVertical: 'review-slice-vertical.png',
+  sliceHorizontal: 'review-slice-horizontal.png',
+} as const;
+
+/** A review pose (`CavePose` of `test/harness/caveMetrics.ts`): the eye at a voxel's centre, yaw and pitch in degrees. */
+export interface CaveExamplePose { readonly x: number; readonly y: number; readonly z: number; readonly yaw: number; readonly pitch: number }
+
+/**
+ * The review poses at seed '42' on the default profile (spec §10.1, §10.10, D16): `caves.metric.ts`' quick-tier
+ * `caves.examples.json`, run at push B's generator and committed as
+ * `docs/superpowers/specs/assets/sp6a/caves.examples.json` (this tool cannot import `src/` or read the harness; a unit
+ * test keeps every pose equal to the committed file's).
+ */
+export const CAVE_POSES = {
+  cheese: { x: 96.5, y: -15.5, z: -51.5, yaw: 90, pitch: 0 },
+  pillars: { x: -3.5, y: 82.5, z: 4.5, yaw: 0, pitch: 0 },
+  spaghetti3d: { x: 25.5, y: -24.5, z: -50.5, yaw: 0, pitch: 0 },
+  spaghetti2d: { x: -94.5, y: 40.5, z: -79.5, yaw: 0, pitch: 0 },
+  noodle: { x: -27.5, y: -46.5, z: -46.5, yaw: 225, pitch: 0 },
+  entrance: { x: 38.5, y: 84.5, z: -15.5, yaw: 315, pitch: -60 },
+  worm: { x: 57.5, y: -22.5, z: -4.5, yaw: 90, pitch: 0 },
+  ravine: { x: -223.5, y: 14.5, z: -133.5, yaw: 0, pitch: 0 },
+  undergroundWorm: { x: -29.5, y: -46.5, z: -40.5, yaw: 0, pitch: 0 },
+  interior: { x: 174.5, y: -9.5, z: 32.5, yaw: 0, pitch: 0 },
+} as const satisfies Record<string, CaveExamplePose>;
+export type CavePoseId = keyof typeof CAVE_POSES;
+
+/**
+ * The review links (spec §10.10, D16), in D16's order: one per kind (the entrance from the surface, pillars as a kind)
+ * and a large interior.
+ */
+export const CAVE_LINKS: readonly CavePoseId[] = ['cheese', 'pillars', 'spaghetti3d', 'spaghetti2d', 'noodle', 'entrance', 'worm', 'ravine', 'interior'];
+
+/** The world page's hash of seed 42 on the default profile with no patch (`mapHash(START)`, the page's own encoding). */
+export const SEED_42_HASH = `#${mapHash(START)}`;
+
+/** Degrees as `hereUrl` writes them (`src/ui/world/reload.ts`): one decimal, without "-0.0". */
+function degText(v: number): string {
+  const s = v.toFixed(1);
+  return s === '-0.0' ? '0.0' : s;
+}
+
+/**
+ * The query opening seed 42's default world at `pose` (spec §10.10): `?at=<x>,<z>&y=<y>&yaw=…&pitch=…`, then
+ * `extra`, then `SEED_42_HASH`. `at` takes integers (`parseWorldQuery`), so x and z are the pose's voxel's (⌊x⌋, ⌊z⌋:
+ * the eye on the voxel's low corner); y is the eye's, used exactly (`firstView.ts`); yaw and pitch in `hereUrl`'s
+ * format. An unsaved world opens in flight.
+ */
+export function caveQuery(pose: CaveExamplePose, extra = ''): string {
+  return `?at=${Math.floor(pose.x)},${Math.floor(pose.z)}&y=${pose.y}&yaw=${degText(pose.yaw)}&pitch=${degText(pose.pitch)}${extra}${SEED_42_HASH}`;
+}
+
+/** A review link as the Exit evidence writes it: `/` and `caveQuery(pose)`. */
+export function caveLink(pose: CaveExamplePose): string {
+  return `/${caveQuery(pose)}`;
+}
+
+/** The query of a `caves` page at `pose`: RD 4, the batch renderer and the test hook. */
+export function cavePageQuery(pose: CaveExamplePose): string {
+  return caveQuery(pose, `&rd=${WORLD_RD}&renderer=batch&wiTest=1`);
+}
+
+/**
+ * The `caves` step's page (spec §10.9): `cavePageQuery` at the entrance's review pose pitched `CAVES_STEP_PITCH` up
+ * (its position and yaw kept), so that the sky over the opening fills the top of the view, where the X check reads its
+ * sky pixel.
+ */
+export const CAVES_STEP_PITCH = 20;
+export function cavesStepQuery(): string {
+  return cavePageQuery({ ...CAVE_POSES.entrance, pitch: CAVES_STEP_PITCH });
+}
+
+/** How far above the entrance pose's eye the entrance shot looks from (blocks). */
+export const ENTRANCE_SHOT_UP = 12;
+/**
+ * The entrance shot's pose: `ENTRANCE_SHOT_UP` blocks above the entrance pose's eye and moved back along its yaw, so
+ * that its own −60° pitch looks down at the opening (the pose itself stands on the opening's lip, whose view is the
+ * grass beside it). Yaw 0 faces −z, 90 faces +x (`player/fly.ts`).
+ */
+export function entranceShotPose(): CaveExamplePose {
+  const e = CAVE_POSES.entrance;
+  const back = ENTRANCE_SHOT_UP / Math.tan((-e.pitch * Math.PI) / 180);
+  const yaw = (e.yaw * Math.PI) / 180;
+  return { x: e.x - Math.sin(yaw) * back, y: e.y + ENTRANCE_SHOT_UP, z: e.z + Math.cos(yaw) * back, yaw: e.yaw, pitch: e.pitch };
+}
+
+/** The X-ray's clear colour #0b0e14 (`XRAY_CLEAR` in `src/render/renderer.ts`, spec §5.3; a unit test keeps them equal). */
+export const XRAY_CLEAR_RGB = [0x0b, 0x0e, 0x14] as const;
+/** The `caves` step's sky pixel (CSS px at DPR 1): the top right, clear of the HUD (top left) and the strip (top centre). */
+export const XRAY_SKY_PIXEL = { x: 1250, y: 40 } as const;
+/** How far a channel may read from the clear colour (SwiftShader's rounding). */
+export const XRAY_CLEAR_TOL = 2;
+
+/** Whether (r, g, b) is the X-ray's clear colour within `XRAY_CLEAR_TOL` per channel. */
+export function clearColour(rgb: readonly number[]): boolean {
+  return XRAY_CLEAR_RGB.every((c, i) => Math.abs((rgb[i] ?? -1000) - c) <= XRAY_CLEAR_TOL);
+}
+
+/** A y as the X-ray strip writes it: a negative one with the minus sign U+2212 (`stripText`). */
+const stripY = (y: number): string => (y < 0 ? `−${-y}` : String(y));
+
+/** The strip's line for the band `yMin` … `yMax` (`stripText` of `src/ui/world/xrayStrip.ts`; a unit test pins it). */
+export function xrayStripText(yMin: number, yMax: number): string {
+  return `X-ray · y ${stripY(yMin)} … ${stripY(yMax)} · by cave type`;
+}
+
+/** The strip's line at every depth (−64 … 319). */
+export const XRAY_ALL_TEXT = xrayStripText(-64, 319);
+
+/** The band a strip line names, or null when the text is not one. */
+export function parseStripBand(text: string): { readonly yMin: number; readonly yMax: number } | null {
+  const m = /^X-ray · y (−?\d+) … (−?\d+) · by cave type$/.exec(text);
+  if (m === null) return null;
+  const y = (s: string): number => (s.startsWith('−') ? -Number(s.slice(1)) : Number(s));
+  return { yMin: y(m[1]!), yMax: y(m[2]!) };
+}
+
+/** Whether `band` is a first PageDown's from every depth with the eye at `eyeY`: 32 blocks holding ⌊eyeY⌋ (spec §5.3). */
+export function firstStepBandOk(band: { readonly yMin: number; readonly yMax: number } | null, eyeY: number): boolean {
+  return band !== null && band.yMax - band.yMin + 1 === 32 && band.yMin <= Math.floor(eyeY) && Math.floor(eyeY) <= band.yMax;
+}
+
+/** The cave parameter the step changes live (spec §10.9): Cave parameters' leaf, typed from its default 0.5. */
+export const CAVE_EDIT = { id: 'pp-caves.cheese.offset', value: '0.45' } as const;
+/** The Lowest y the slider check starts from (the band 0 … 319), so that a PageDown the world took would show. */
+export const SLIDER_LOW_START = 0;
+
+/**
+ * The vertical `caves` slice shot's cut line (`?map`, drawn as the mountain line is, on a view at 2 blocks/px with the
+ * ends ± 128 CSS px around its centre): 512 blocks along x through the cheese pose's row z = −52, in seed 42's default
+ * region (−16, −16), which holds every kind.
+ */
+export const CAVE_LINE = {
+  view: { x: 96, z: -52, bpp: 2, layer: 'relief' },
+  a: [-160, -52],
+  b: [352, -52],
+} as const satisfies SmokeLine;
+
 /** The camera's pose as the hook reads it (`__wiTest.pose()`). */
 export interface PoseRead { readonly x: number; readonly y: number; readonly z: number; readonly yaw: number; readonly pitch: number }
 
@@ -1581,6 +1754,11 @@ function pageHelpers(): SmokePage {
  * by the kernel (Chrome's 8 GiB data limit) or stuck never answers, and the smoke hung on it instead of failing.
  */
 export const CDP_SEND_MS = 300_000;
+/**
+ * The bound of each evaluation of `goto`'s and `reload`'s readiness polls (SP6a ruling R17 (b)): a new document that has
+ * not answered within 5 s counts as not ready yet, so the poll keeps its 30 s instead of waiting `CDP_SEND_MS` on one try.
+ */
+export const READY_EVAL_MS = 5000;
 /** What a page-side wait (`until`, `untilAt`) may take beyond its own `ms` before its evaluation counts as unanswered. */
 export const CDP_WAIT_MARGIN_MS = 60_000;
 
@@ -1662,7 +1840,7 @@ class Page {
     await sleep(200);
     await this.cdp.send('Page.navigate', { url });
     for (let i = 0; i < 300; i++) {
-      if (await this.eval<boolean>(`typeof __wiSmoke === 'object' && document.readyState === 'complete' && (${ready})`).catch(() => false)) return;
+      if (await this.eval<boolean>(`typeof __wiSmoke === 'object' && document.readyState === 'complete' && (${ready})`, READY_EVAL_MS).catch(() => false)) return;
       await sleep(100);
     }
     throw new Error(`${url} was not ready after 30 s`);
@@ -1672,7 +1850,7 @@ class Page {
     await this.cdp.send('Page.reload', {});
     await sleep(300);
     for (let i = 0; i < 300; i++) {
-      if (await this.eval<boolean>(`typeof __wiSmoke === 'object' && document.readyState === 'complete' && (${ready})`).catch(() => false)) return;
+      if (await this.eval<boolean>(`typeof __wiSmoke === 'object' && document.readyState === 'complete' && (${ready})`, READY_EVAL_MS).catch(() => false)) return;
       await sleep(100);
     }
     throw new Error('the page was not ready 30 s after the reload');
@@ -2131,6 +2309,7 @@ async function runSmoke(t: Smoke): Promise<void> {
   await runBuild(t);
   await runWalk(t);
   await runSaved(t);
+  await runCaves(t);
 }
 
 const statsOf = (s: SliceRead): SliceStatsText | null => parseSliceStats(s.stats);
@@ -2358,7 +2537,8 @@ async function runDensity(t: Smoke): Promise<void> {
   // drawn until the release, which asks for the draft the drag ended on (`createCaveGestureHold`).
   t.check(during.length === 0, `the drag over the cave tree is held: ${during.filter((d) => d.n === 32).length} of 32², ${during.filter((d) => d.n === 128).length} of 128² drawn during it (held ${DRAG_HOLD_MS} ms at 6)`, during);
   const draftAt = await p.untilAt(`__wiSmoke.draws().some((d) => d.n === 32 && d.t > ${releasedAt})`, 'a draft drawn after the release', 15000);
-  t.check(true, `the release asks for the draft it ended on: drawn ${Math.round(draftAt - releasedAt)} ms after the release`);
+  // Self-checking (ruling R16 (a)): the hold at 6 shows the drag held only if a draft, once asked, lands within it.
+  t.check(draftAt - releasedAt < DRAG_HOLD_MS, `the release asks for the draft it ended on: drawn ${Math.round(draftAt - releasedAt)} ms after the release, within the ${DRAG_HOLD_MS} ms hold`, draftAt - releasedAt);
   await p.until(Page.draftRefused(), 'a fresh horizontal draft after the drag');
 
   t.step('density times: the URL length and the browser wall times of the 128² slices');
@@ -3764,8 +3944,8 @@ async function crashChecks(t: Smoke, id: string, voxels: readonly Voxel[]): Prom
   const rb = await hookEdit(p, b, SMOKE_STATE.stone);
   t.check(ra === 'ok' && flushed.ok && rb === 'ok', `crash: an edit (${ra}), flushNow() (flushSeq ${flushed.flushSeq ?? '?'}), one more edit (${rb})`, { ra, flushed, rb });
   let crashed = false;
+  // `wire` enabled the Inspector on this target, so its crash event arrives (ruling R17 (b)).
   p.cdp.on('Inspector.targetCrashed', () => { crashed = true; });
-  await p.cdp.send('Inspector.enable').catch(() => undefined);
   await Promise.race([p.cdp.send('Page.crash').catch(() => undefined), sleep(3000)]);
   for (let i = 0; i < 50 && !crashed; i++) await sleep(100);
   t.check(crashed, 'crash: CDP Page.crash crashed the page (Inspector.targetCrashed)');
@@ -4848,6 +5028,307 @@ async function runSaved(t: Smoke): Promise<void> {
   }
   t.record(`the select step took ${((Date.now() - select0) / 1000).toFixed(1)} s`);
   t.check(t.errors.length === errors0, 'select: no page error', t.errors.slice(errors0));
+}
+
+// ---------------------------------------------------------------- the caves step (SP6a spec §10.9, §10.10)
+
+/** The X-ray strip as it reads (`#world-xray-strip`): hidden or not and its line; null without one. */
+const STRIP_READ = `(() => { const s = document.getElementById('world-xray-strip'); return s === null ? null : { hidden: s.hidden, text: s.querySelector('.world-xray-line')?.textContent ?? '' }; })()`;
+/** The page expression "the strip is shown (or hidden) with the line `text`". */
+const stripIs = (shown: boolean, text: string): string =>
+  `(() => { const s = ${STRIP_READ}; return s !== null && s.hidden === ${!shown} && s.text === ${JSON.stringify(text)}; })()`;
+/** The night-vision setting as stored (`SETTINGS_KEY`), and the Settings' checkbox (null without the panel). */
+const NIGHT_VISION_STORED = `(() => { try { return JSON.parse(localStorage.getItem(${JSON.stringify(SETTINGS_KEY)}) ?? '{}').nightVision === true; } catch { return false; } })()`;
+const NIGHT_VISION_BOX = `document.getElementById('setting-night-vision')?.checked ?? null`;
+/** The Caves tab's band line and its two sliders' values (null before the tab mounts). */
+const CAVES_READ = `(() => {
+  const band = document.getElementById('map-caves-band');
+  const low = document.getElementById('map-caves-low');
+  const high = document.getElementById('map-caves-high');
+  return band === null || low === null || high === null ? null : { band: band.textContent, low: Number(low.value), high: Number(high.value), focus: document.activeElement?.id ?? null };
+})()`;
+interface CavesRead { readonly band: string; readonly low: number; readonly high: number; readonly focus: string | null }
+/** The world map's side-panel tabs, in order (their button ids). */
+const OVERLAY_TABS = `[...document.querySelectorAll('#map-overlay .map-tabs [role="tab"]')].map((b) => b.id)`;
+
+/** The RGB at page point (x, y) of a capture. */
+function pixelAt(c: { readonly width: number; readonly rgba: Uint8Array }, x: number, y: number): number[] {
+  const i = (y * c.width + x) * 4;
+  return [c.rgba[i]!, c.rgba[i + 1]!, c.rgba[i + 2]!];
+}
+
+/** Opens a `caves` page at `query` (the viewport `VIEWPORT`): the reveal and three frames; false when it did not reveal. */
+async function openCavePage(t: Smoke, query: string, what: string): Promise<boolean> {
+  const p = t.page;
+  await p.goto(`${p.base}${query}`, `window.__wiWorld !== undefined`);
+  if (!(await worldRevealed(t, what))) return false;
+  await p.until('window.__wiWorld.frames >= 3', `three frames after the ${what} reveal`, 30_000);
+  return true;
+}
+
+/** A plain key of the key map's (`SMOKE_KEYS`), the focus moved out of every field first (the world's keys). */
+async function worldKey(p: Page, key: string, code: string, keyCode: number): Promise<void> {
+  await p.blur();
+  await p.key(key, code, keyCode, 0, key.length === 1 ? key : undefined);
+}
+
+/** G opens the Settings: the night-vision checkbox reads `want`; Esc closes it. */
+async function nightVisionBox(t: Smoke, want: boolean, what: string): Promise<void> {
+  const p = t.page;
+  await worldKey(p, 'g', SMOKE_KEYS.settings, 71);
+  if (!(await holds(t, SETTINGS_SHOWN, `caves: G opens the Settings (${what})`, 5000, () => p.eval(FOCUSED)))) return;
+  const box = await p.eval<boolean | null>(NIGHT_VISION_BOX);
+  t.check(box === want, `caves: ${what}: the Settings' "Night vision (L)" checkbox is ${want ? 'checked' : 'unchecked'}`, box);
+  await p.key('Escape', 'Escape', 27);
+  await holds(t, SETTINGS_HIDDEN, `caves: Esc closes the Settings (${what})`, 5000, () => p.eval(FOCUSED));
+}
+
+/**
+ * The `caves` step's checks (spec §10.9), on `cavesStepQuery()`'s page: X shows the strip at every depth and hides the
+ * sky and the terrain (the sky pixel, sky before X, reads the clear colour after), and the HUD gains the strip's line;
+ * PageDown makes the band 32 blocks around the eye; Home restores every depth; X again hides the strip. L turns night
+ * vision on ("Night vision on"), the Settings checkbox follows, it is stored and survives a reload; L turns it off
+ * again. M, side by side: the Caves tab follows Presets in the world's map; "Cave slice" opens the Density tab with the
+ * horizontal `caves` field (its 128² slice); "Cave parameters" shows the cave leaf, a change of it regenerates live
+ * (the stale count rises, then falls to 0) and Ctrl+Z restores it; with the Lowest y slider focused at 0, PageDown
+ * moves only the slider (the band follows the slider; a PageDown the world took would give 8 lower, kept 32 wide).
+ */
+async function cavesChecks(t: Smoke): Promise<void> {
+  const p = t.page;
+  if (!(await openCavePage(t, cavesStepQuery(), 'caves: the entrance pose'))) return;
+  t.check(await p.eval<boolean>(stripIs(false, XRAY_ALL_TEXT)), 'caves: the X-ray strip is hidden at the start', await p.eval(STRIP_READ));
+  if (await p.eval<boolean>(NIGHT_VISION_STORED)) {
+    t.check(false, 'caves: night vision is off at the start (the stored setting)');
+    return;
+  }
+
+  // X: the strip at every depth; the sky dome and the terrain hidden, the clear colour behind (spec §5.3).
+  const sky = (c: { readonly width: number; readonly rgba: Uint8Array }): number[] => pixelAt(c, XRAY_SKY_PIXEL.x, XRAY_SKY_PIXEL.y);
+  const before = sky(await p.capture());
+  t.check(!clearColour(before), `caves: before X the sky pixel (${XRAY_SKY_PIXEL.x}, ${XRAY_SKY_PIXEL.y}) is not the clear colour (the sky: rgb ${before.join(', ')})`, before);
+  await worldKey(p, 'x', SMOKE_KEYS.xray, 88);
+  await holds(t, stripIs(true, XRAY_ALL_TEXT), `caves: X shows the strip "${XRAY_ALL_TEXT}"`, 5000, () => p.eval(STRIP_READ));
+  await frames(p, 3, 'caves: three frames with the X-ray on');
+  const after = sky(await p.capture());
+  t.check(clearColour(after), `caves: X hides the sky and the terrain: the sky pixel reads the clear colour #0b0e14 (rgb ${after.join(', ')}, ± ${XRAY_CLEAR_TOL})`, after);
+  await holds(t, `(${HUD_TEXT}).split('\\n').includes(${JSON.stringify(XRAY_ALL_TEXT)})`, 'caves: the F3 HUD shows the strip\'s line while the X-ray is on', 5000, () => p.eval(HUD_TEXT));
+
+  // PageDown: the band of 32 blocks around the eye; Home: every depth again.
+  const eyeY = (await hookPose(p)).y;
+  await worldKey(p, 'PageDown', SMOKE_KEYS.xrayDown, 34);
+  await holds(t, `(${STRIP_READ})?.text !== ${JSON.stringify(XRAY_ALL_TEXT)}`, 'caves: PageDown changes the strip\'s band', 5000, () => p.eval(STRIP_READ));
+  const stepped = (await p.eval<{ hidden: boolean; text: string } | null>(STRIP_READ))?.text ?? '';
+  t.check(firstStepBandOk(parseStripBand(stepped), eyeY), `caves: the first PageDown gives 32 blocks around the eye (y ${eyeY}): "${stepped}"`, stepped);
+  await worldKey(p, 'Home', SMOKE_KEYS.xrayAll, 36);
+  await holds(t, stripIs(true, XRAY_ALL_TEXT), 'caves: Home restores every depth ("all")', 5000, () => p.eval(STRIP_READ));
+  await worldKey(p, 'x', SMOKE_KEYS.xray, 88);
+  await holds(t, stripIs(false, XRAY_ALL_TEXT), 'caves: X again turns the X-ray off (the strip hidden)', 5000, () => p.eval(STRIP_READ));
+
+  // L: night vision on, followed by the Settings checkbox, stored and kept across a reload; L again turns it off.
+  await worldKey(p, 'l', SMOKE_KEYS.nightVision, 76);
+  await holds(t, `(${WORLD_NOTICES}).includes('Night vision on')`, 'caves: L turns night vision on ("Night vision on")', 5000, () => p.eval(WORLD_NOTICES));
+  t.check(await p.eval<boolean>(NIGHT_VISION_STORED), 'caves: night vision is stored on (wi.world.settings)');
+  await nightVisionBox(t, true, 'after L');
+  await p.reload('window.__wiWorld !== undefined');
+  if (!(await worldRevealed(t, 'caves: the reload'))) return;
+  await p.until('window.__wiWorld.frames >= 3', 'three frames after the caves reload', 30_000);
+  await nightVisionBox(t, true, 'after a reload');
+  await worldKey(p, 'l', SMOKE_KEYS.nightVision, 76);
+  await holds(t, `(${WORLD_NOTICES}).includes('Night vision off')`, 'caves: L again turns night vision off ("Night vision off")', 5000, () => p.eval(WORLD_NOTICES));
+  await nightVisionBox(t, false, 'after L again');
+
+  // The world's map, side by side at the overlay steps' 1920 × 1080, where the panel sits beside the map: at 1400 px it
+  // stacks under the map, and the Density drawer "Cave slice" opens covers its buttons.
+  await setViewport(p, OVERLAY_VIEWPORT.width, OVERLAY_VIEWPORT.height);
+  await pressM(p);
+  await p.until(OVERLAY_SHOWN, 'caves: the overlay after M', 15_000);
+  if (!(await p.eval<boolean>(WORLD_SPLIT))) {
+    await p.click('#map-mode-split');
+    await p.until(WORLD_SPLIT, 'caves: side by side', 5000);
+  }
+  t.check(await p.eval<boolean | null>(PANEL_BESIDE) === true, 'caves: side by side, the panel sits beside the map', await p.eval<boolean | null>(PANEL_BESIDE));
+  const tabs = await p.eval<string[]>(OVERLAY_TABS);
+  t.check(tabs.indexOf('map-tab-caves') === tabs.indexOf('map-tab-presets') + 1 && tabs.includes('map-tab-presets'), `caves: the world's map has the Caves tab after Presets (${tabs.join(', ')})`, tabs);
+  await p.click('#map-tab-caves');
+  await holds(t, `(${CAVES_READ})?.band === ${JSON.stringify(XRAY_ALL_TEXT)} && document.getElementById('map-caves-xray').checked === false`,
+    'caves: the Caves tab shows every depth with the X-ray off', 5000, () => p.eval(CAVES_READ));
+
+  // Cave slice: the Density tab with the horizontal caves field, its 128² slice (admitted at 256 blocks, SP6a §7.4).
+  await p.click('#map-caves-slice');
+  await holds(t, `${DENSITY_SHOWN} && document.querySelector(${JSON.stringify(SV_FIELD)}).value === 'caves' && document.querySelector(${JSON.stringify(SV_PLANE)}).value === 'horizontal'`,
+    'caves: "Cave slice" opens the Density tab with the horizontal caves field', 5000, () => p.slice());
+  await holds(t, Page.fresh(128), 'caves: the cave slice draws its 128² slice', 60_000, () => p.slice());
+
+  // Cave parameters: the cave leaf shown; a change applies live, and Ctrl+Z restores it.
+  await p.click('#map-tab-caves');
+  await p.click('#map-caves-params');
+  await holds(t, `document.getElementById('map-tab-parameters').getAttribute('aria-selected') === 'true' && document.getElementById(${JSON.stringify(CAVE_EDIT.id)})?.offsetParent != null`,
+    `caves: "Cave parameters" opens Parameters at ${CAVE_EDIT.id.slice(3)}`, 5000, () => p.eval(`document.getElementById(${JSON.stringify(CAVE_EDIT.id)})?.value ?? null`));
+  const v0 = await p.eval<string>(`document.getElementById(${JSON.stringify(CAVE_EDIT.id)})?.value ?? ''`);
+  await liveEdit(t, `caves: ${CAVE_EDIT.id.slice(3)} ${v0} → ${CAVE_EDIT.value} typed`, () => typeParam(p, CAVE_EDIT.id, CAVE_EDIT.value));
+  await liveEdit(t, 'caves: Ctrl+Z', async () => {
+    await p.blur();
+    await p.undoKey();
+  });
+  t.check(await p.eval<string>(`document.getElementById(${JSON.stringify(CAVE_EDIT.id)})?.value ?? ''`) === v0, `caves: Ctrl+Z puts ${CAVE_EDIT.id.slice(3)} back to ${v0}`);
+
+  // PageDown on a focused band slider moves only the slider.
+  await p.click('#map-tab-caves');
+  await p.eval(`(() => { const e = document.getElementById('map-caves-low'); e.value = '${SLIDER_LOW_START}'; e.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+  const fromText = xrayStripText(SLIDER_LOW_START, 319);
+  await holds(t, `(${CAVES_READ})?.band === ${JSON.stringify(fromText)} && (${STRIP_READ})?.text === ${JSON.stringify(fromText)}`,
+    `caves: Lowest y at ${SLIDER_LOW_START} gives the band ${SLIDER_LOW_START} … 319 (the tab and the world's strip)`, 5000, async () => ({ tab: await p.eval(CAVES_READ), strip: await p.eval(STRIP_READ) }));
+  await p.eval(`(document.getElementById('map-caves-low').focus(), true)`);
+  await p.key('PageDown', SMOKE_KEYS.xrayDown, 34);
+  await sleep(500);
+  const slid = await p.eval<CavesRead | null>(CAVES_READ);
+  const worldBand = (await p.eval<{ hidden: boolean; text: string } | null>(STRIP_READ))?.text ?? '';
+  const want = slid === null ? '' : xrayStripText(slid.low, 319);
+  t.check(slid !== null && slid.focus === 'map-caves-low' && slid.low < SLIDER_LOW_START && slid.high === 319 && slid.band === want && worldBand === want,
+    `caves: side by side, PageDown on the focused Lowest y moves only the slider (${SLIDER_LOW_START} → ${slid?.low ?? '?'}; the band "${worldBand}", not the world's step to −8 … 311)`, { slid, worldBand });
+  await p.blur();
+  await p.click('#map-caves-all');
+  await holds(t, `(${STRIP_READ})?.text === ${JSON.stringify(XRAY_ALL_TEXT)}`, 'caves: All depths restores every depth', 5000, () => p.eval(STRIP_READ));
+  await pressM(p);
+  await p.until(OVERLAY_CLOSED, 'caves: M closes the map', 10_000);
+  await setViewport(p, VIEWPORT.width, VIEWPORT.height);
+}
+
+/**
+ * With --shots, the viewport saved as `name` after `settleMs` (the night-vision ease is 0.3 s) and, on a world page,
+ * three more frames.
+ */
+async function caveShot(t: Smoke, name: string, settleMs = 500): Promise<void> {
+  if (t.shots === null) return;
+  await sleep(settleMs);
+  if (await t.page.eval<boolean>('window.__wiWorld !== undefined')) {
+    await clearShotView(t.page);
+    await frames(t.page, 3, `caves shots: three frames before ${name}`);
+  }
+  t.save(name, (await t.page.capture()).png);
+}
+
+/**
+ * A shot page's view cleared for the review: F3 hides the counts (the HUD; the X-ray strip stays) and the "not saved"
+ * notice is dismissed.
+ */
+async function clearShotView(p: Page): Promise<void> {
+  if (await p.eval<boolean>(`document.querySelector('.world-hud')?.hidden === false`)) await worldKey(p, 'F3', 'F3', 114);
+  if (await p.eval<boolean>(`document.querySelector('.world-notice-dismiss') !== null`)) await p.click('.world-notice-dismiss');
+}
+
+/** The map's drawer dragged to its tallest (60 % of the viewport), as runShots' Density shots do, so its slice reads. */
+async function tallDrawer(p: Page): Promise<void> {
+  const split = await p.center('.map-split-h');
+  const top = await p.dragBy(split.x, split.y, 0, -15, 20);
+  await p.mouse('mouseReleased', top.x, top.y);
+}
+
+/** Night vision set to `on` with L (a stored setting, so the next pages open with it), waited for in the store. */
+async function nightVisionTo(t: Smoke, on: boolean): Promise<void> {
+  const p = t.page;
+  if ((await p.eval<boolean>(NIGHT_VISION_STORED)) === on) return;
+  await worldKey(p, 'l', SMOKE_KEYS.nightVision, 76);
+  await p.until(`${NIGHT_VISION_STORED} === ${on}`, `caves shots: night vision ${on ? 'on' : 'off'}`, 5000);
+}
+
+/**
+ * SP6a's fourteen review screenshots (`SP6A_SHOTS`, spec §10.10), with --shots only, each on a page of its own at its
+ * review pose (`cavePageQuery`), the counts hidden and the "not saved" notice dismissed (`clearShotView`): the entrance
+ * by day, looked at from above (`entranceShotPose`); the X-ray from the cheese pose at every depth and with the band of a first PageDown (32 blocks around the
+ * eye); the large interior at the light floor, then with night vision; the kinds with night vision on (ravine, pillars,
+ * spaghetti 3D and 2D, noodle, worm), the horizontal `caves` slice from the worm's pose ("Cave slice", the map in full
+ * screen); night vision off; the night surface (seed 42's spawn view, `worldMeshQuery('batch')` at `&time=0`: midnight,
+ * no HUD); the vertical `caves` slice on `CAVE_LINE` in `?map`; both slices with the drawer at its tallest
+ * (`tallDrawer`).
+ */
+async function caveShots(t: Smoke): Promise<void> {
+  const p = t.page;
+  if (!(await openCavePage(t, cavePageQuery(entranceShotPose()), 'caves shots: the entrance'))) return;
+  await caveShot(t, SP6A_SHOTS.entrance);
+
+  if (!(await openCavePage(t, cavePageQuery(CAVE_POSES.cheese), 'caves shots: the X-ray in the cheese cavern'))) return;
+  await worldKey(p, 'x', SMOKE_KEYS.xray, 88);
+  await p.until(stripIs(true, XRAY_ALL_TEXT), 'caves shots: the X-ray on', 5000);
+  await sleep(6500); // X's first notice (6 s) gone
+  await caveShot(t, SP6A_SHOTS.xray);
+  await worldKey(p, 'PageDown', SMOKE_KEYS.xrayDown, 34);
+  await p.until(`(${STRIP_READ})?.text !== ${JSON.stringify(XRAY_ALL_TEXT)}`, 'caves shots: the band around the eye', 5000);
+  await caveShot(t, SP6A_SHOTS.xrayBand);
+  await worldKey(p, 'Home', SMOKE_KEYS.xrayAll, 36);
+  await worldKey(p, 'x', SMOKE_KEYS.xray, 88);
+
+  if (!(await openCavePage(t, cavePageQuery(CAVE_POSES.interior), 'caves shots: the interior'))) return;
+  await caveShot(t, SP6A_SHOTS.lightFloor);
+  await nightVisionTo(t, true);
+  await caveShot(t, SP6A_SHOTS.nightVision, 1600);
+
+  const kinds: ReadonlyArray<readonly [CavePoseId, string]> = [
+    ['ravine', SP6A_SHOTS.ravine], ['pillars', SP6A_SHOTS.cheesePillars], ['spaghetti3d', SP6A_SHOTS.spaghetti3d],
+    ['spaghetti2d', SP6A_SHOTS.spaghetti2d], ['noodle', SP6A_SHOTS.noodle], ['worm', SP6A_SHOTS.worm],
+  ];
+  for (const [id, name] of kinds) {
+    if (!(await openCavePage(t, cavePageQuery(CAVE_POSES[id]), `caves shots: ${id}`))) continue;
+    await caveShot(t, name);
+  }
+  // The horizontal caves slice from the worm's pose (its y, the band at all), the map in full screen.
+  await pressM(p);
+  await p.until(OVERLAY_SHOWN, 'caves shots: the overlay after M', 15_000);
+  if (await p.eval<boolean>(WORLD_SPLIT)) {
+    await p.click('#map-mode-full');
+    await p.until(`!(${WORLD_SPLIT})`, 'caves shots: the map in full screen', 5000);
+  }
+  await p.click('#map-tab-caves');
+  await p.click('#map-caves-slice');
+  await tallDrawer(p);
+  await p.until(Page.fresh(128, `document.querySelector(${JSON.stringify(SV_FIELD)}).value === 'caves'`), 'caves shots: the horizontal cave slice', 60_000);
+  await caveShot(t, SP6A_SHOTS.sliceHorizontal);
+  await pressM(p);
+  await p.until(OVERLAY_CLOSED, 'caves shots: M closes the map', 10_000);
+  await nightVisionTo(t, false);
+
+  await p.goto(`${p.base}${worldMeshQuery('batch')}&time=0`, 'window.__wiWorld !== undefined');
+  if (await worldRevealed(t, 'caves shots: the night surface')) {
+    await p.until('window.__wiWorld.frames >= 3', 'three frames after the night surface reveal', 30_000);
+    await caveShot(t, SP6A_SHOTS.nightSurface);
+  }
+
+  // The vertical caves slice in ?map, on CAVE_LINE.
+  await p.goto(`${p.base}?map#${mapHash({ ...START, view: CAVE_LINE.view })}`, MAP_READY);
+  await p.click('#map-tab-world');
+  await drawMountainLine(p, CAVE_LINE);
+  await p.until(`document.querySelector('.cs').dataset.state === 'fresh'`, 'caves shots: a fresh cross-section of the cave line');
+  await p.click('#map-drawer-tab-density');
+  await tallDrawer(p);
+  await p.until(`${DENSITY_SHOWN} && document.querySelector(${JSON.stringify(SV_PLANE)}).value === 'vertical'`, 'caves shots: the Density tab on the vertical plane', 5000);
+  await p.choose(SV_FIELD, 'caves');
+  await p.until(Page.fresh(128, `document.querySelector(${JSON.stringify(SV_FIELD)}).value === 'caves'`), 'caves shots: the vertical cave slice', 60_000);
+  await caveShot(t, SP6A_SHOTS.sliceVertical);
+}
+
+async function runCaves(t: Smoke): Promise<void> {
+  const p = t.page;
+  t.step(`caves: ${cavesStepQuery()} (the entrance pose, pitched up): X (the strip, the clear colour at a sky pixel), PageDown, Home; L and the Settings checkbox across a reload; the Caves tab, Cave slice, a cave parameter live; PageDown on a focused band slider`);
+  const errors0 = t.errors.length;
+  await setViewport(p, VIEWPORT.width, VIEWPORT.height);
+  try {
+    await cavesChecks(t);
+  } catch (e) {
+    t.check(false, `caves: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    await setViewport(p, VIEWPORT.width, VIEWPORT.height);
+  }
+  t.check(t.errors.length === errors0, 'caves: no page error', t.errors.slice(errors0));
+  if (t.shots === null) return;
+  try {
+    await caveShots(t);
+  } catch (e) {
+    t.check(false, `caves: the shots stopped: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    // The stored night vision is left off for whatever runs next.
+    if (await t.page.eval<boolean>(`typeof __wiTest === 'object' && ${NIGHT_VISION_STORED}`).catch(() => false)) await nightVisionTo(t, false).catch(() => undefined);
+  }
+  t.check(t.errors.length === errors0, 'caves: no page error during the shots', t.errors.slice(errors0));
 }
 
 // ---------------------------------------------------------------- screenshots (spec §12)

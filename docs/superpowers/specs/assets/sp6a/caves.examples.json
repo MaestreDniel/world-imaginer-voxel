@@ -1,0 +1,148 @@
+{
+  "id": "caves.examples",
+  "tier": "quick",
+  "seed": "42",
+  "profile": "default",
+  "poses": {
+    "cheese": {
+      "x": 96.5,
+      "y": -15.5,
+      "z": -51.5,
+      "yaw": 90,
+      "pitch": 0,
+      "voxel": [
+        96,
+        -16,
+        -52
+      ],
+      "component": 916929,
+      "region": "seed '42' default (-16, -16)"
+    },
+    "pillars": {
+      "x": -3.5,
+      "y": 82.5,
+      "z": 4.5,
+      "yaw": 0,
+      "pitch": 0,
+      "voxel": [
+        -4,
+        82,
+        4
+      ],
+      "component": 43356,
+      "region": "seed '42' default (-16, -16)"
+    },
+    "spaghetti3d": {
+      "x": 25.5,
+      "y": -24.5,
+      "z": -50.5,
+      "yaw": 0,
+      "pitch": 0,
+      "voxel": [
+        25,
+        -25,
+        -51
+      ],
+      "component": 916929,
+      "region": "seed '42' default (-16, -16)"
+    },
+    "spaghetti2d": {
+      "x": -94.5,
+      "y": 40.5,
+      "z": -79.5,
+      "yaw": 0,
+      "pitch": 0,
+      "voxel": [
+        -95,
+        40,
+        -80
+      ],
+      "component": 630411,
+      "region": "seed '42' default (-16, -16)"
+    },
+    "noodle": {
+      "x": -27.5,
+      "y": -46.5,
+      "z": -46.5,
+      "yaw": 225,
+      "pitch": 0,
+      "voxel": [
+        -28,
+        -47,
+        -47
+      ],
+      "component": 916929,
+      "region": "seed '42' default (-16, -16)"
+    },
+    "entrance": {
+      "x": 38.5,
+      "y": 84.5,
+      "z": -15.5,
+      "yaw": 315,
+      "pitch": -60,
+      "voxel": [
+        38,
+        84,
+        -16
+      ],
+      "component": 2728,
+      "region": "seed '42' default (-16, -16)"
+    },
+    "worm": {
+      "x": 57.5,
+      "y": -22.5,
+      "z": -4.5,
+      "yaw": 90,
+      "pitch": 0,
+      "voxel": [
+        57,
+        -23,
+        -5
+      ],
+      "component": 916929,
+      "region": "seed '42' default (-16, -16)"
+    },
+    "ravine": {
+      "x": -223.5,
+      "y": 14.5,
+      "z": -133.5,
+      "yaw": 0,
+      "pitch": 0,
+      "voxel": [
+        -224,
+        14,
+        -134
+      ],
+      "component": 630411,
+      "region": "seed '42' default (-16, -16)"
+    },
+    "undergroundWorm": {
+      "x": -29.5,
+      "y": -46.5,
+      "z": -40.5,
+      "yaw": 0,
+      "pitch": 0,
+      "voxel": [
+        -30,
+        -47,
+        -41
+      ],
+      "component": 916929,
+      "region": "seed '42' default (-16, -16)"
+    },
+    "interior": {
+      "x": 174.5,
+      "y": -9.5,
+      "z": 32.5,
+      "yaw": 0,
+      "pitch": 0,
+      "voxel": [
+        174,
+        -10,
+        32
+      ],
+      "component": 916929,
+      "region": "seed '42' default (-16, -16)"
+    }
+  }
+}
