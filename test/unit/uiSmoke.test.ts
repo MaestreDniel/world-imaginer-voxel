@@ -51,10 +51,12 @@ import {
 } from '../tools/uiSmoke';
 import { CDP_SEND_MS, CDP_WAIT_MARGIN_MS, guardedCdp, READY_EVAL_MS, untilBoundMs } from '../tools/uiSmoke';
 import {
-  CAVE_EDIT, CAVE_LINE, CAVE_LINKS, CAVE_POSES, caveLink, cavePageQuery, CAVES_STEP_PITCH, ENTRANCE_SHOT_UP, entranceShotPose, cavesStepQuery, clearColour, firstStepBandOk, parseStripBand, SEED_42_HASH,
+  CAVE_AT, CAVE_EDIT, CAVE_LINE, CAVE_LINKS, CAVE_POSES, caveLink, cavePageQuery, reviewPose, CAVES_STEP_PITCH, ENTRANCE_SHOT_UP, entranceShotPose, cavesStepQuery, clearColour, firstStepBandOk, parseStripBand, SEED_42_HASH,
   SLIDER_LOW_START, SP6A_SHOTS, XRAY_ALL_TEXT, XRAY_CLEAR_RGB, XRAY_CLEAR_TOL, XRAY_SKY_PIXEL, xrayStripText,
 } from '../tools/uiSmoke';
 import { EXAMPLE_IDS } from '../harness/caveMetrics';
+import { createDensityContext } from '../../src/gen/density/context';
+import { solidAt } from '../../src/gen/density/probe';
 import { XRAY_CLEAR } from '../../src/render/renderer';
 import { bandSet, bandStep, stripText, XRAY_ALL } from '../../src/ui/world/xrayStrip';
 import { CAVE_PARAMETERS_LEAF, sliderBand } from '../../src/ui/map/cavesTab';
@@ -1668,34 +1670,93 @@ describe('UI smoke test: the caves step, SP6a\'s review links and its review scr
     }
   });
 
-  test('a review link opens seed 42\'s default world at the pose: `at` the voxel\'s column, y exact, yaw and pitch as hereUrl writes them (spec §10.10)', () => {
+  test('each review pose\'s `at` is a corner of its voxel: the first clear at the eye\'s row, else the first whose rock lies behind the view', () => {
+    // `at` takes integers, so a link's eye stands on a corner of the pose's voxel (x, z). The corners in order (x, z),
+    // (x + 1, z), (x, z + 1), (x + 1, z + 1); the four voxels of the eye's row touching a corner; the first corner where
+    // all four are air (the generator's solidity after the carvers, `solidAt`), else the first where every solid one
+    // lies strictly behind the view (its centre's offset from the corner against the yaw's direction). An eye on a rock
+    // face with the rock ahead opens inside it, whose faces are culled from behind: the view shows the sky through the
+    // ground (Task 49's first pillars shot, at (−4, 4) on the pillar's face).
+    expect(Object.keys(CAVE_AT)).toEqual([...EXAMPLE_IDS]);
+    const dc = createDensityContext(ctxFor('42'));
+    const examples = readExamples();
+    for (const id of EXAMPLE_IDS) {
+      const e = examples.poses[id]!;
+      const [vx, vy, vz] = e.voxel;
+      const [fx, , fz] = lookVector(e.yaw, 0);
+      const corners: Array<[number, number]> = [[vx, vz], [vx + 1, vz], [vx, vz + 1], [vx + 1, vz + 1]];
+      const solids = corners.map(([ax, az]) => ([[-1, -1], [0, -1], [-1, 0], [0, 0]] as const)
+        .filter(([dx, dz]) => solidAt(dc, ax + dx, vy, az + dz))
+        .map(([dx, dz]) => [dx + 0.5, dz + 0.5] as const));
+      const clear = solids.findIndex((s) => s.length === 0);
+      const behind = solids.findIndex((s) => s.every(([ox, oz]) => ox * fx + oz * fz < -1e-9));
+      const k = clear >= 0 ? clear : behind;
+      expect(k, `${id}: a corner of its voxel`).toBeGreaterThanOrEqual(0);
+      expect(CAVE_AT[id], id).toEqual(corners[k]);
+      expect(reviewPose(id), id).toEqual({ ...CAVE_POSES[id], at: CAVE_AT[id] });
+    }
+    // The pillars' eye one block back from the pillar's face, in its cavern.
+    expect(CAVE_AT.pillars).toEqual([-4, 5]);
+  });
+
+  test('a review link opens seed 42\'s default world at the pose: `at` its corner (CAVE_AT), y exact, yaw and pitch as hereUrl writes them (spec §10.10)', () => {
     expect(CAVE_LINKS).toEqual(['cheese', 'pillars', 'spaghetti3d', 'spaghetti2d', 'noodle', 'entrance', 'worm', 'ravine', 'interior']);
     const hash = decodeMapState(SEED_42_HASH.slice(1));
     expect(hash.error).toBeNull();
     expect(hash.state).toEqual(DEFAULT_MAP_STATE);
     expect(SEED_42_HASH).toBe(`#${encodeMapState(DEFAULT_MAP_STATE)}`);
-    for (const id of CAVE_LINKS) {
-      const pose = CAVE_POSES[id];
+    for (const id of [...CAVE_LINKS, 'undergroundWorm'] as const) {
+      const pose = reviewPose(id);
       const link = caveLink(pose);
       expect(link.startsWith('/?at='), id).toBe(true);
       const url = new URL(link, 'http://127.0.0.1');
       expect(url.hash, id).toBe(SEED_42_HASH);
       const q = parseWorldQuery(url.searchParams);
-      expect(q.at, id).toEqual({ x: Math.floor(pose.x), z: Math.floor(pose.z) });
+      expect(q.at, id).toEqual({ x: CAVE_AT[id][0], z: CAVE_AT[id][1] });
       expect([q.y, q.yaw, q.pitch], id).toEqual([pose.y, pose.yaw, pose.pitch]);
       expect([q.rd, q.renderer, q.world, q.shot], id).toEqual([null, null, null, false]);
       // The search's yaw and pitch are hereUrl's own (one decimal); its at and y are not (hereUrl rounds y, §10.10 gives it exactly).
       const here = new URL(hereUrl(pose, null, SEED_42_HASH), 'http://127.0.0.1').searchParams;
       expect([url.searchParams.get('yaw'), url.searchParams.get('pitch')], id).toEqual([here.get('yaw'), here.get('pitch')]);
     }
+    expect(caveLink(reviewPose('cheese'))).toBe(`/?at=97,-52&y=-15.5&yaw=90.0&pitch=0.0${SEED_42_HASH}`);
+    // A pose without its corner (the entrance shot's, computed) opens at its column, ⌊x⌋, ⌊z⌋.
     expect(caveLink(CAVE_POSES.cheese)).toBe(`/?at=96,-52&y=-15.5&yaw=90.0&pitch=0.0${SEED_42_HASH}`);
+  });
+
+  test('the SP6a spec\'s Exit evidence lists every review link: D16\'s nine, then the underground worm, each row from the committed poses', () => {
+    const spec = readFileSync(new URL('../../docs/superpowers/specs/2026-11-02-sp6a-cave-shapes-design.md', import.meta.url), 'utf8');
+    const head = '### The review links and screenshots (Task 49)';
+    const from = spec.indexOf(head);
+    expect(from).toBeGreaterThan(0);
+    const end = spec.indexOf('\n## ', from);
+    const section = spec.slice(from, end < 0 ? undefined : end);
+    expect(section).not.toContain('{table}');
+    const kinds = {
+      cheese: 'cheese', pillars: 'pillars (a cheese cavern with pillars)', spaghetti3d: 'spaghetti 3D', spaghetti2d: 'spaghetti 2D',
+      noodle: 'noodle', entrance: 'entrance from the surface', worm: 'worm', ravine: 'ravine', interior: 'a large interior',
+      undergroundWorm: 'underground worm (not in D16\'s list)',
+    } as const;
+    const examples = readExamples();
+    const ids = [...CAVE_LINKS, 'undergroundWorm'] as const;
+    const rows = ids.map((id) => {
+      const e = examples.poses[id]!;
+      const voxel = e.voxel.map((v) => String(v).replace('-', '\u2212')).join(', ');
+      return `| ${kinds[id]} | (${voxel}) | ${e.component.toLocaleString('en-US')} | \`${caveLink(reviewPose(id))}\` |`;
+    });
+    const header = '| kind | voxel | its component (voxels) | link |\n|---|---|---|---|\n';
+    expect(section).toContain(`${header}${rows.join('\n')}\n`);
   });
 
   test('the step\'s page: the entrance pose pitched 20° up, at RD 4 on batch with the test hook', () => {
     const url = new URL(`/${cavesStepQuery()}`, 'http://127.0.0.1');
     const q = parseWorldQuery(url.searchParams);
     const e = CAVE_POSES.entrance;
-    expect(q.at).toEqual({ x: Math.floor(e.x), z: Math.floor(e.z) });
+    expect(q.at).toEqual({ x: CAVE_AT.entrance[0], z: CAVE_AT.entrance[1] });
+    // Every review page of the tool opens at its pose's corner: no page query from a bare CAVE_POSES entry.
+    const tool = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+    expect(tool).not.toMatch(/cavePageQuery\(CAVE_POSES[.[]/);
+    expect(tool).not.toMatch(/\.\.\.CAVE_POSES\.entrance, pitch: CAVES_STEP_PITCH/);
     expect([q.y, q.yaw, q.pitch, q.rd, q.renderer]).toEqual([e.y, e.yaw, CAVES_STEP_PITCH, WORLD_RD, 'batch']);
     expect(url.searchParams.get('wiTest')).toBe('1');
     expect(url.hash).toBe(SEED_42_HASH);

@@ -130,9 +130,9 @@
  *   - select (SP5c spec §10.8): a house through the hook; Q, the corners, Ctrl+C; Ctrl+V, one turn, the paste; Ctrl+Z,
  *     Ctrl+Y; N moves a floating copy onto the ground; a reload, Ctrl+V again (`selectChecks`);
  * - caves (SP6a spec §10.9), `/?rd=4&renderer=batch&wiTest=1` at the entrance's review pose (`CAVE_POSES`, the
- *   committed `assets/sp6a/caves.examples.json`) pitched 20° up: X shows the strip at every depth, the F3 HUD's line,
- *   and a sky pixel reads the clear colour #0b0e14 (the sky and the terrain hidden); PageDown gives 32 blocks around
- *   the eye, Home every depth; L turns night vision on, the Settings checkbox follows, stored and kept across a reload,
+ *   committed `assets/sp6a/caves.examples.json`, opened at its corner `CAVE_AT`) pitched 20° up: X shows the strip at
+ *   every depth, the F3 HUD's line, and a sky pixel reads the clear colour #0b0e14 (the sky and the terrain hidden);
+ *   PageDown gives 32 blocks around the eye, Home every depth; L turns night vision on, the Settings checkbox follows, stored and kept across a reload,
  *   and L turns it off; side by side at 1920 × 1080 (the panel beside the map), the world's map has the Caves tab after
  *   Presets, "Cave slice" opens the Density tab with the horizontal `caves` field and its 128² slice, "Cave parameters"
  *   shows `caves.cheese.offset`, typed 0.5 → 0.45 it regenerates live (the stale count above 0, then 0) and Ctrl+Z
@@ -1139,8 +1139,14 @@ export const SP6A_SHOTS = {
   sliceHorizontal: 'review-slice-horizontal.png',
 } as const;
 
-/** A review pose (`CavePose` of `test/harness/caveMetrics.ts`): the eye at a voxel's centre, yaw and pitch in degrees. */
-export interface CaveExamplePose { readonly x: number; readonly y: number; readonly z: number; readonly yaw: number; readonly pitch: number }
+/**
+ * A review pose (`CavePose` of `test/harness/caveMetrics.ts`): the eye at a voxel's centre, yaw and pitch in degrees;
+ * `at`, when given, the integer column a link opens it at (`CAVE_AT`), else ⌊x⌋, ⌊z⌋.
+ */
+export interface CaveExamplePose {
+  readonly x: number; readonly y: number; readonly z: number; readonly yaw: number; readonly pitch: number;
+  readonly at?: readonly [number, number];
+}
 
 /**
  * The review poses at seed '42' on the default profile (spec §10.1, §10.10, D16): `caves.metric.ts`' quick-tier
@@ -1163,6 +1169,32 @@ export const CAVE_POSES = {
 export type CavePoseId = keyof typeof CAVE_POSES;
 
 /**
+ * Where a review link puts each pose's eye (spec §10.10): `at` takes integers, so the eye stands on a corner of the
+ * pose's voxel, not at its centre. Of the corners (x, z), (x + 1, z), (x, z + 1), (x + 1, z + 1) of voxel (x, z), the
+ * first whose four voxels of the eye's row are air; failing that, the first whose rock lies strictly behind the view.
+ * An eye on a rock face's plane with the rock ahead opens inside the rock, whose faces are culled from behind, so the
+ * view shows the sky through the ground (Task 49's first pillars shot, at (−4, 4) on the pillar's face).
+ * `uiSmoke.test.ts` computes each corner from the generator (`solidAt`).
+ */
+export const CAVE_AT = {
+  cheese: [97, -52],
+  pillars: [-4, 5],
+  spaghetti3d: [25, -51],
+  spaghetti2d: [-95, -80],
+  noodle: [-28, -47],
+  entrance: [38, -16],
+  worm: [58, -5],
+  ravine: [-224, -134],
+  undergroundWorm: [-29, -41],
+  interior: [174, 32],
+} as const satisfies Record<CavePoseId, readonly [number, number]>;
+
+/** A review pose with its link's corner (`CAVE_AT`). */
+export function reviewPose(id: CavePoseId): CaveExamplePose {
+  return { ...CAVE_POSES[id], at: CAVE_AT[id] };
+}
+
+/**
  * The review links (spec §10.10, D16), in D16's order: one per kind (the entrance from the surface, pillars as a kind)
  * and a large interior.
  */
@@ -1179,12 +1211,13 @@ function degText(v: number): string {
 
 /**
  * The query opening seed 42's default world at `pose` (spec §10.10): `?at=<x>,<z>&y=<y>&yaw=…&pitch=…`, then
- * `extra`, then `SEED_42_HASH`. `at` takes integers (`parseWorldQuery`), so x and z are the pose's voxel's (⌊x⌋, ⌊z⌋:
- * the eye on the voxel's low corner); y is the eye's, used exactly (`firstView.ts`); yaw and pitch in `hereUrl`'s
- * format. An unsaved world opens in flight.
+ * `extra`, then `SEED_42_HASH`. `at` takes integers (`parseWorldQuery`), so x and z are the pose's corner (`at`,
+ * `CAVE_AT` through `reviewPose`), or without one ⌊x⌋, ⌊z⌋ (the eye on the voxel's low corner); y is the eye's, used
+ * exactly (`firstView.ts`); yaw and pitch in `hereUrl`'s format. An unsaved world opens in flight.
  */
 export function caveQuery(pose: CaveExamplePose, extra = ''): string {
-  return `?at=${Math.floor(pose.x)},${Math.floor(pose.z)}&y=${pose.y}&yaw=${degText(pose.yaw)}&pitch=${degText(pose.pitch)}${extra}${SEED_42_HASH}`;
+  const [ax, az] = pose.at ?? [Math.floor(pose.x), Math.floor(pose.z)];
+  return `?at=${ax},${az}&y=${pose.y}&yaw=${degText(pose.yaw)}&pitch=${degText(pose.pitch)}${extra}${SEED_42_HASH}`;
 }
 
 /** A review link as the Exit evidence writes it: `/` and `caveQuery(pose)`. */
@@ -1204,7 +1237,7 @@ export function cavePageQuery(pose: CaveExamplePose): string {
  */
 export const CAVES_STEP_PITCH = 20;
 export function cavesStepQuery(): string {
-  return cavePageQuery({ ...CAVE_POSES.entrance, pitch: CAVES_STEP_PITCH });
+  return cavePageQuery({ ...reviewPose('entrance'), pitch: CAVES_STEP_PITCH });
 }
 
 /** How far above the entrance pose's eye the entrance shot looks from (blocks). */
@@ -5247,7 +5280,7 @@ async function caveShots(t: Smoke): Promise<void> {
   if (!(await openCavePage(t, cavePageQuery(entranceShotPose()), 'caves shots: the entrance'))) return;
   await caveShot(t, SP6A_SHOTS.entrance);
 
-  if (!(await openCavePage(t, cavePageQuery(CAVE_POSES.cheese), 'caves shots: the X-ray in the cheese cavern'))) return;
+  if (!(await openCavePage(t, cavePageQuery(reviewPose('cheese')), 'caves shots: the X-ray in the cheese cavern'))) return;
   await worldKey(p, 'x', SMOKE_KEYS.xray, 88);
   await p.until(stripIs(true, XRAY_ALL_TEXT), 'caves shots: the X-ray on', 5000);
   await sleep(6500); // X's first notice (6 s) gone
@@ -5258,7 +5291,7 @@ async function caveShots(t: Smoke): Promise<void> {
   await worldKey(p, 'Home', SMOKE_KEYS.xrayAll, 36);
   await worldKey(p, 'x', SMOKE_KEYS.xray, 88);
 
-  if (!(await openCavePage(t, cavePageQuery(CAVE_POSES.interior), 'caves shots: the interior'))) return;
+  if (!(await openCavePage(t, cavePageQuery(reviewPose('interior')), 'caves shots: the interior'))) return;
   await caveShot(t, SP6A_SHOTS.lightFloor);
   await nightVisionTo(t, true);
   await caveShot(t, SP6A_SHOTS.nightVision, 1600);
@@ -5268,7 +5301,7 @@ async function caveShots(t: Smoke): Promise<void> {
     ['spaghetti2d', SP6A_SHOTS.spaghetti2d], ['noodle', SP6A_SHOTS.noodle], ['worm', SP6A_SHOTS.worm],
   ];
   for (const [id, name] of kinds) {
-    if (!(await openCavePage(t, cavePageQuery(CAVE_POSES[id]), `caves shots: ${id}`))) continue;
+    if (!(await openCavePage(t, cavePageQuery(reviewPose(id)), `caves shots: ${id}`))) continue;
     await caveShot(t, name);
   }
   // The horizontal caves slice from the worm's pose (its y, the band at all), the map in full screen.
