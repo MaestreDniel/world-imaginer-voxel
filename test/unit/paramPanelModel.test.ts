@@ -435,15 +435,35 @@ describe('cross-field lints of the caves (SP6a spec §4, D8)', () => {
     expect(paramLints(off.value)).toEqual([]);
   });
 
+  test('max(detailAmpLo, detailAmpHi) × the detail noise\'s clampSigma ≥ 16 warns (Task 52, determinism-1); below 16, nothing', () => {
+    const detail = (lo: number, hi: number, clampSigma: number) =>
+      paramLints(params({ density: { detailAmpLo: lo, detailAmpHi: hi, noises: { detail: { clampSigma } } } }));
+    const lint = (leaf: string, amp: number, clampSigma: number, reach: number) => ({
+      paths: ['density.detailAmpLo', 'density.detailAmpHi', 'density.noises.detail'],
+      message: `${metaOf(leaf)!.label} (${amp}) × Detail noise's clampSigma (${clampSigma}) lets |detail| reach ${reach} blocks, 16 or more: `
+        + 'detail is dropped where T ≥ 16, so the air it opens just short of T = 16 ends in a flat cut there (from 8, rock it raises 8 or more blocks above the surface is not carved).',
+    });
+    // The defaults: 1.5 × 3 = 4.5.
+    expect([DEFAULTS.density.detailAmpLo, DEFAULTS.density.detailAmpHi, noiseAt('density.noises.detail').clampSigma]).toEqual([0.6, 1.5, 3]);
+    expect(detail(0.6, 4, 4)).toEqual([lint('density.detailAmpHi', 4, 4, 16)]);
+    expect(detail(0.6, 3.95, 4)).toEqual([]);
+    expect(detail(8, 1.5, 2)).toEqual([lint('density.detailAmpLo', 8, 2, 16)]);
+    expect(detail(7.95, 1.5, 2)).toEqual([]);
+    // At the default clampSigma 3: 5.35 × 3 = 16.05 fires, 5.3 × 3 = 15.9 does not.
+    expect(detail(0.6, 5.35, 3)).toEqual([lint('density.detailAmpHi', 5.35, 3, 16.05)]);
+    expect(detail(0.6, 5.3, 3)).toEqual([]);
+    expect(detail(8, 8, 8)).toEqual([lint('density.detailAmpHi', 8, 8, 64)]);
+  });
+
   test('no built-in profile has a lint', () => {
     for (const id of PROFILE_IDS) expect([id, paramLints(resolveProfile(id))]).toEqual([id, []]);
   });
 
-  test('the caves lints come after the earlier pairs, in a fixed order: the bands, the carvers\' ranges, lengthVar, the island cap', () => {
-    let patch: unknown = { lakes: { offsetMin: 210 }, islands: { enabled: true }, caves: { worms: { lengthVar: 64, length: 64 } } };
+  test('the caves lints come after the earlier pairs, in a fixed order: the bands, the carvers\' ranges, lengthVar, the island cap, the detail reach', () => {
+    let patch: unknown = { lakes: { offsetMin: 210 }, islands: { enabled: true }, caves: { worms: { lengthVar: 64, length: 64 } }, density: { detailAmpHi: 8 } };
     for (const [lo, hi] of CAVE_PAIRS) patch = mergePatch(patch, at(lo, getPath(DEFAULTS, hi)));
     expect(paramLints(params(patch)).map((l) => l.paths[0])).toEqual([
-      'lakes.offsetMin', ...CAVE_PAIRS.map(([lo]) => lo), 'caves.worms.lengthVar', 'islands.enabled',
+      'lakes.offsetMin', ...CAVE_PAIRS.map(([lo]) => lo), 'caves.worms.lengthVar', 'islands.enabled', 'density.detailAmpLo',
     ]);
   });
 });
