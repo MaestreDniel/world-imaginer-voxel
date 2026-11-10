@@ -52,11 +52,18 @@ const TRILERP = trilerp;
  */
 export interface CornerMemo {
   clear(): void;
-  /** The bytes of the cells it holds (their slot values and flags plus a fixed overhead per cell); ≤ 8 MiB. */
+  /**
+   * The modelled bytes of the cells it holds (9 per slot for their values and flags, plus a modelled `CELL_OVERHEAD` per
+   * cell); ≤ 8 MiB of that model. Not measured: the real heap per cell differs from the model by a constant factor, so
+   * the cap still bounds it, as ruling R17 asks.
+   */
   readonly bytes: number;
 }
 
-/** The most bytes of cells one memo holds (ruling R17), and each cell's overhead beyond its 9 bytes per slot. */
+/**
+ * The most modelled bytes of cells one memo holds (ruling R17), and each cell's modelled overhead beyond its 9 bytes per
+ * slot: 160 B, not measured (the real heap of the Map entry, the cell object and its two typed arrays may differ).
+ */
 const MEMO_BYTES_MAX = 8388608;
 const CELL_OVERHEAD = 160;
 

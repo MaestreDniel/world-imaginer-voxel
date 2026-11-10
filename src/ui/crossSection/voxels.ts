@@ -18,7 +18,7 @@ import { JobCancelled, type SliceResult, type SurfaceProbeResult } from '../../e
 import { segmentLength, segmentPointAt, type Segment } from '../../metrics/crossSection';
 import { XRAY_COLORS } from '../../render/xrayPalette';
 import { FLAT_COLORS, LAVA_COLOR } from '../../textures/flatColors';
-import { FLUID_LAVA, FLUID_WATER, fluidFalling, fluidLevel, fluidType } from '../../world/blocks/fluid';
+import { FLUID_LAVA, FLUID_NONE, FLUID_WATER, fluidFalling, fluidLevel, fluidType } from '../../world/blocks/fluid';
 import { AIR, REGISTRY } from '../../world/blocks/index';
 import { SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES } from '../../workers/protocol';
 import type { Plot, PlotBox } from '../splineEditor/model';
@@ -115,7 +115,7 @@ const WATER_FLOOR = 0.3;
  */
 export function voxelRgb(state: number, fluid: number, depth: number): Rgb {
   if (state === AIR && fluidType(fluid) === FLUID_LAVA) return VOXEL_COLORS.lava;
-  if (state === AIR && fluidType(fluid) !== 0) {
+  if (state === AIR && fluidType(fluid) !== FLUID_NONE) {
     const f = Math.max(WATER_FLOOR, 1 - Math.max(0, depth) * WATER_FADE);
     const [r, g, b] = VOXEL_COLORS.water;
     return [Math.round(r * f), Math.round(g * f), Math.round(b * f)];
@@ -172,7 +172,7 @@ export function sliceRgba(s: SliceResult): Uint8ClampedArray<ArrayBuffer> {
       if (water && !wet) surface = y;
       wet = water;
       const kind = s.cave[k]!;
-      const c = kind !== 0 && state === AIR && fluidType(fluid) === 0 ? caveRgb(kind) : voxelRgb(state, fluid, water ? surface - y : 0);
+      const c = kind !== 0 && state === AIR && fluidType(fluid) === FLUID_NONE ? caveRgb(kind) : voxelRgb(state, fluid, water ? surface - y : 0);
       out[4 * k] = c[0];
       out[4 * k + 1] = c[1];
       out[4 * k + 2] = c[2];

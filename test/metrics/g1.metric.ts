@@ -128,8 +128,9 @@ import { metricTest } from '../harness/metric';
  * gated parts:
  * - `xrayP95`: the segment's snapped frame p95 with the X-ray on (`rd12.p95`), max 16.7;
  * - `xrayOver33`: its frames over 33 ms (`rd12.over33`), max 0; the map's open (mode B) leaves the segment's frame
- *   figures, its own frame and the next (the canvas resize's stall, `BENCH_MAP_OPEN_FRAMES`), as the close stays out of
- *   `xrayToggleMaxMs`, and is recorded as `xrayMapOpenMaxMs` (rulings R27, the user);
+ *   figures, its own frame and the four after it (the canvas resize's GPU stall, `BENCH_MAP_OPEN_FRAMES` = 5), the edit
+ *   set after them, as the close stays out of `xrayToggleMaxMs`, and is recorded as `xrayMapOpenMaxMs` (rulings R27, the
+ *   user);
  * - `xrayMainP95`: its main-thread p95 (`rd12.mainP95`), max 6;
  * - `xrayGpuMB`: the GPU estimate's peak, the X-ray's buffers included (`rd12.gpuMB`), max 150;
  * - `xrayDrawCalls`: the whole frame's draw calls' max (`rd12.drawCallsMax`, spec §5.5's budget; rulings P46), max 100;
