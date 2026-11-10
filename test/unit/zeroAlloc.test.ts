@@ -42,7 +42,7 @@
  */
 import v8 from 'node:v8';
 import { runInNewContext } from 'node:vm';
-import { Color, PerspectiveCamera } from 'three';
+import { Color, PerspectiveCamera, type Material, type Mesh } from 'three';
 import { afterAll, describe, expect, test, vi } from 'vitest';
 import { colKey } from '../../src/core/coords';
 import { hex64 } from '../../src/core/hash';
@@ -93,6 +93,7 @@ import {
   type GhostHost, type PageXray, type SelectActions,
 } from '../../src/ui/world/worldPage';
 import { createXrayStrip } from '../../src/ui/world/xrayStrip';
+import { fakePayload } from './fixtures/payloads';
 import { createClipboardStore, type ClipboardStore } from '../../src/ui/world/clipboardStore';
 import { createSelectTool, type SelectTool } from '../../src/ui/world/selectTool';
 import { GLASS, STONE } from '../../src/world/blocks/index';
@@ -1434,6 +1435,32 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     expect(out.drawingBufferBytes).toBe(1920 * 1080 * 8);
     expect(out.skyBytes).toBeGreaterThan(0);
     sky.geometry.dispose();
+    sections.dispose();
+    materials.dispose();
+    albedo.dispose();
+  }, TIMEOUT_MS);
+
+  test(`${N} draws of a RegionMesh X-ray arena (three's two hooks around each), the X-ray toggled every 256, grow the heap by less than 256 KB (SP6a spec §5.3; Task 52, firefox-1)`, () => {
+    const albedo = createFlatColorArray();
+    const materials = createMaterialSystem({ variant: 'mesh', ao: true, smoothLight: true }, albedo);
+    const sections = createSectionRenderer('mesh', materials);
+    sections.stage(fakePayload(0, 0, [{ sy: 4, pass: 3, quads: 2 }]), 1);
+    const unbounded = { exhausted: () => false, spend() {}, structural: () => true };
+    for (let i = 0; i < 100 && sections.pump(unbounded, 0, 0, 0) > 0; i++);
+    const arena = sections.root.children.find((o) => o.userData['pass'] === 3) as Mesh;
+    let k = 0;
+    let drawn = 0;
+    const g = allocationOver(() => {
+      const i = k++;
+      if ((i & 255) === 0) sections.setXray((i & 256) !== 0);
+      arena.onBeforeRender(null as never, null as never, null as never, arena.geometry, arena.material as Material, null as never);
+      drawn += arena.geometry.drawRange.count;
+      arena.onAfterRender(null as never, null as never, null as never, arena.geometry, arena.material as Material, null as never);
+    }, WARM_UP, ZERO_ALLOC_MAX);
+    expectAtRest(g);
+    // Half the calls drew the arena's 12 indices; outside the hooks the range stays its high-water mark.
+    expect(drawn).toBeGreaterThan(0);
+    expect(arena.geometry.drawRange.count).toBe(12);
     sections.dispose();
     materials.dispose();
     albedo.dispose();

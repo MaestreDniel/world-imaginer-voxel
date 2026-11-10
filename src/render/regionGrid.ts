@@ -211,7 +211,10 @@ export interface RegionBackend<R> {
   /** A hidden one-triangle object of the backend's own kind over `pass`'s material, and how to free it (rulings R11). */
   standIn(pass: number): { readonly object: Mesh; dispose(): void };
   setOrigin(x: number, y: number, z: number): void;
-  /** The X-ray's state (`SectionRenderer.setXray`); a backend without it draws its X-ray objects as before. */
+  /**
+   * The X-ray's state (`SectionRenderer.setXray`): while it is off both backends' X-ray objects draw nothing inside
+   * three's render call (RegionBatch a zero multi-draw count, RegionMesh a zero draw range count) and stay in the scene.
+   */
   setXray?(on: boolean): void;
   sortTranslucent(camX: number, camY: number, camZ: number): void;
   gpuBytes(): number;
@@ -239,7 +242,8 @@ export const RELEASE_SHARE = 16;
  * cap, at most `RELEASE_SHARE` while any staged column waits for an upload; (4) upload staged rows nearest-first with the rest, a
  * row that needs a refused (or second) structural operation waiting while farther columns go on; (5) reveal each
  * column whose last row was uploaded, all its rows in one call, or swap it with its `prev` in one call
- * (`onColumnRevealed` either way). With nothing staged or removed a pump allocates nothing (D25).
+ * (`onColumnRevealed` either way). With nothing staged or removed a pump allocates nothing (D25), but for the idle
+ * shrink of step (2): one batch per pump, once per idle period, which rebuilds that batch's geometry (RegionBatch only).
  *
  * The swap (SP4c spec §5.1, D9): `stage` on a revealed column makes the shown record the new record's `prev`; the
  * column stays revealed (the counts' `revealed` does not change) and `prev`'s rows stay drawn until step (5) swaps;

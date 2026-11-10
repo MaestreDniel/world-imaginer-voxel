@@ -30,7 +30,8 @@ import { XRAY_ORDER } from './selection';
  * in `regionGrid.ts`, under the load's uncapped structural gate; Task 48d); a full instance table `setInstanceCount` × 1.5 (`GROWTH`). A batch above
  * its reservation that no upload, structural operation or release has written for `SHRINK_IDLE_PUMPS` pumps and whose
  * slack is ≥ `SHRINK_MIN_SLACK` of it is compacted and shrunk to its use × `SHRINK_HEADROOM` (never below the
- * reservation), one batch per pump in the frame's structural slot when no staged column needs it ('shrink').
+ * reservation), one batch per pump in the frame's structural slot when nothing is staged or the nearest staged column
+ * needs no structural operation ('shrink').
  *
  * SP6a (spec §5.1, §5.2): a fourth batch per region, the X-ray's pass 3 over `materials.xray`, at `renderOrder`
  * `XRAY_ORDER` with `sortObjects` off (additive, no depth test: its order does not matter), staged, uploaded, revealed

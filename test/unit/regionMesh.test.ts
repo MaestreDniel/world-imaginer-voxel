@@ -1,4 +1,4 @@
-import { Quaternion, Sphere, Vector3, type BufferAttribute, type Mesh, type Object3D } from 'three';
+import { Quaternion, Sphere, Vector3, type BufferAttribute, type Material, type Mesh, type Object3D } from 'three';
 import { describe, expect, test } from 'vitest';
 import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { createMaterialSystem, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
@@ -340,6 +340,64 @@ describe('RegionMesh (SP4a spec §6.2, D2; SP4b spec §4.3)', () => {
     }
     expect(XRAY_ORDER).toBeLessThan(GHOST_ORDER);
     for (const m of meshes(r.root)) if (passOf(m) === MESH_PASS_OPAQUE) expect(m.renderOrder).toBe(0);
+    r.dispose();
+  });
+
+  test('while the X-ray is off its arenas draw nothing (a zero draw range inside three\'s render call, restored after it) but stay in the scene, visible, and their rows keep uploading; on, they draw their high-water range (Task 52, firefox-1: Task 48 lever 4c on RegionMesh)', () => {
+    const r = createSectionRenderer('mesh', system('mesh'));
+    r.stage(fakePayload(0, 0, [opaque(4), { sy: 4, pass: 3, quads: 2 }, { sy: 5, pass: 3, quads: 1 }]), 1);
+    pumpAll(r);
+    const x = arenaOf(r, MESH_PASS_XRAY)!;
+    const o = arenaOf(r, MESH_PASS_OPAQUE)!;
+    /** The index count three's `renderBufferDirect` would draw between the object's two hooks, as `renderObject` calls them. */
+    const drawn = (m: Mesh): number => {
+      m.onBeforeRender(null as never, null as never, null as never, m.geometry, m.material as Material, null as never);
+      const n = m.geometry.drawRange.count;
+      m.onAfterRender(null as never, null as never, null as never, m.geometry, m.material as Material, null as never);
+      return n;
+    };
+    // Off (the page's start): the X-ray arena draws nothing; outside the call its range is its high-water mark.
+    expect(drawn(x)).toBe(0);
+    expect([x.geometry.drawRange.start, x.geometry.drawRange.count]).toEqual([0, 18]);
+    expect(visibleIndices(x)).toBe(18);
+    // The terrain's arena is drawn as before.
+    expect(drawn(o)).toBe(o.geometry.drawRange.count);
+    expect(drawn(o)).toBeGreaterThan(0);
+    // Still in the scene and visible (never `visible = false`, which skips three's upload): its rows keep uploading.
+    expect(x.parent).toBe(r.root);
+    expect(x.visible).toBe(true);
+    const version = (x.geometry.getAttribute('position') as BufferAttribute).version;
+    r.stage(fakePayload(1, 0, [{ sy: 6, pass: 3, quads: 4 }]), 1);
+    pumpAll(r);
+    expect((x.geometry.getAttribute('position') as BufferAttribute).version).toBeGreaterThan(version);
+    expect(visibleIndices(x)).toBe(18 + 24);
+    expect(drawn(x)).toBe(0);
+    expect(x.geometry.drawRange.count).toBe(42);
+    // On: the high-water range.
+    r.setXray(true);
+    expect(drawn(x)).toBe(42);
+    // Off again: nothing, and the range restored.
+    r.setXray(false);
+    expect(drawn(x)).toBe(0);
+    expect(x.geometry.drawRange.count).toBe(42);
+    // A grown arena (a new geometry, Task 48's × 1.5) keeps the hooks: they act on the geometry three passes.
+    const before = x.geometry;
+    r.stage(fakePayload(2, 0, Array.from({ length: 5 }, (_, k) => ({ sy: k, pass: 3 as const, quads: 1024 }))), 1);
+    pumpAll(r);
+    expect(x.geometry).not.toBe(before);
+    const grown = x.geometry.drawRange.count;
+    expect(grown).toBeGreaterThan(42);
+    expect(drawn(x)).toBe(0);
+    expect(x.geometry.drawRange.count).toBe(grown);
+    // A region's X-ray arena created while the X-ray is on draws at once.
+    r.setXray(true);
+    expect(drawn(x)).toBe(grown);
+    r.stage(fakePayload(9, 0, [{ sy: 2, pass: 3, quads: 1 }]), 1);
+    pumpAll(r);
+    const x1 = arenaOf(r, MESH_PASS_XRAY, 1, 0)!;
+    expect(drawn(x1)).toBe(6);
+    r.setXray(false);
+    expect(drawn(x1)).toBe(0);
     r.dispose();
   });
 

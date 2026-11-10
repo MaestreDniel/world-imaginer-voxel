@@ -141,10 +141,11 @@ export interface SectionRenderer {
   /** Sets the floating origin (blocks): moves each region's object, O(regions). */
   setOrigin(x: number, y: number, z: number): void;
   /**
-   * The X-ray's state (SP6a spec §5.3; Task 48 lever 4c), off until called: while it is off RegionBatch's X-ray batches
-   * draw nothing (no per-instance cull or list, a zero multi-draw count) but stay in the scene, so three keeps uploading
-   * their rows and the first toggle uploads nothing; RegionMesh's X-ray objects draw as before (their vertex shader
-   * collapses them). Changes no count, byte or reveal; allocates nothing.
+   * The X-ray's state (SP6a spec §5.3; Task 48 lever 4c, on RegionMesh Task 52), off until called: while it is off the
+   * X-ray objects draw nothing, RegionBatch's batches through a zero multi-draw count (no per-instance cull or list) and
+   * RegionMesh's arenas through a zero draw range count inside three's render call (restored after it), but stay in
+   * the scene and visible, so three keeps uploading their rows and the first toggle uploads nothing. Changes no count,
+   * byte or reveal; allocates nothing.
    */
   setXray(on: boolean): void;
   /**

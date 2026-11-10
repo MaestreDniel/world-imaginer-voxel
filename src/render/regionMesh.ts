@@ -29,7 +29,14 @@ import { XRAY_ORDER } from './selection';
  * the shown ones, its indices zero until the swap, which zeroes the old spans' indices and writes the new in one call.
  *
  * SP6a (spec §5.1, §5.2): a fourth arena per region, the X-ray's pass 3 over `materials.xray`, at `renderOrder`
- * `XRAY_ORDER`; it is not translucent, so `sortTranslucent` never orders it (its additive blend needs no order).
+ * `XRAY_ORDER`; it is not translucent, so `sortTranslucent` never orders it (its additive blend needs no order). While
+ * the X-ray is off (`setXray`, Task 48 lever 4c as on RegionBatch; Task 52) these arenas draw nothing: their
+ * `onBeforeRender` sets the draw range's count to 0 for three's draw and their `onAfterRender` restores it, so outside
+ * the render call the range is `(0, the index high-water mark)` as always (the probe and the tests read it). They stay
+ * in the scene and visible (never `visible = false`, under which three skips their uploads), so three keeps uploading
+ * their rows and the first toggle uploads nothing. Before this, the GPU ran the X-ray vertex shader over every
+ * arena's whole range each frame only to collapse it (spec D23): at RD 12, 892,634 triangles beside the opaque
+ * 1,835,658 on Firefox.
  */
 
 /** A region's half extent in blocks: 8 columns across, 24 sections (384 blocks) high. */
@@ -209,6 +216,25 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
   let needPass = 0;
   let needVertices = 0;
   let needIndices = 0;
+  // The X-ray's state (`setXray`): off, the X-ray arenas draw nothing.
+  let xrayShown = false;
+  // The geometry an X-ray arena's `onBeforeRender` zeroed and its draw count, for its `onAfterRender` (three calls the
+  // two around each draw of the object, nothing between them reads another object's range).
+  let zeroed: BufferGeometry | null = null;
+  let zeroedCount = 0;
+  /** An X-ray arena's `onBeforeRender` (made once, shared): off, three draws none of its range. Allocates nothing. */
+  const xrayBeforeRender: Mesh['onBeforeRender'] = (_renderer, _scene, _camera, geometry) => {
+    if (xrayShown) return;
+    zeroed = geometry;
+    zeroedCount = geometry.drawRange.count;
+    geometry.drawRange.count = 0;
+  };
+  /** An X-ray arena's `onAfterRender`: the range `xrayBeforeRender` zeroed back to its count. */
+  const xrayAfterRender: Mesh['onAfterRender'] = (_renderer, _scene, _camera, geometry) => {
+    if (zeroed !== geometry) return;
+    geometry.drawRange.count = zeroedCount;
+    zeroed = null;
+  };
 
   const passOf = (c: Column, r: number): number => c.p.rows[r * ROW_INTS + 1]!;
 
@@ -311,7 +337,11 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
     mesh.userData['rx'] = g.rx;
     mesh.userData['rz'] = g.rz;
     mesh.userData['pass'] = pass;
-    if (pass === MESH_PASS_XRAY) mesh.renderOrder = XRAY_ORDER;
+    if (pass === MESH_PASS_XRAY) {
+      mesh.renderOrder = XRAY_ORDER;
+      mesh.onBeforeRender = xrayBeforeRender;
+      mesh.onAfterRender = xrayAfterRender;
+    }
     mesh.scale.setScalar(1 / UNITS);
     const a: Arena = {
       mesh, origin: regionOrigin(g.rx, g.rz),
@@ -586,6 +616,9 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
       origin[2] = z;
       // The geometry's bounds are region-local, so the mesh matrix is all that moves.
       for (const a of built) place(a);
+    },
+    setXray(on) {
+      xrayShown = on;
     },
     sortTranslucent(camX, camY, camZ) {
       // Region centres in the camera's frame: regionOrigin + (64, 192, 64) − floatingOrigin (ruling P17).

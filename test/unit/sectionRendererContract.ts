@@ -1,4 +1,4 @@
-import { Matrix4, type BatchedMesh, type BufferAttribute, type Material, type Mesh, type Object3D } from 'three';
+import { Matrix4, PerspectiveCamera, type BatchedMesh, type BufferAttribute, type Material, type Mesh, type Object3D } from 'three';
 import { describe, expect, test } from 'vitest';
 import { createUploadBudget } from '../../src/engine/uploadBudget';
 import { ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
@@ -746,14 +746,40 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       s.dispose();
     });
 
-    test('setXray (SP6a, Task 48) changes no count, byte, drawn index or reveal, on or off', () => {
+    test('setXray (SP6a, Task 48; Task 52 on RegionMesh) changes no count, byte, drawn index or reveal, on or off, before or after three\'s render call; inside it, the X-ray objects draw nothing while it is off and draw while it is on, and the other passes draw either way', () => {
       const r = make();
       r.stage(fakePayload(1, 1, [opaque(3), { sy: 3, pass: 3, quads: 2 }, water(4)]), 1);
       pumpAll(r);
-      const before = { counts: { ...counts(r) }, bytes: r.gpuBytes(), drawn: visibleIndices(r.root) };
-      for (const on of [true, false, true]) {
+      const camera = new PerspectiveCamera(90, 1, 0.1, 10_000);
+      camera.position.set(64, 600, 64);
+      camera.lookAt(64, 0, 64);
+      camera.updateMatrixWorld();
+      r.root.updateMatrixWorld(true);
+      /**
+       * What three's `renderObject` draws of `m`, read between the two hooks it calls around the draw: a BatchedMesh's
+       * multi-draw count, a Mesh's draw range count.
+       */
+      const drawnInCall = (m: Mesh): number => {
+        m.onBeforeRender(null as never, null as never, camera, m.geometry, m.material as Material, null as never);
+        const n = isBatch(m) ? (m as unknown as { _multiDrawCount: number })._multiDrawCount : m.geometry.drawRange.count;
+        m.onAfterRender(null as never, null as never, camera, m.geometry, m.material as Material, null as never);
+        return n;
+      };
+      const objects = regionObjects(r.root);
+      const xray = objects.filter((m) => m.userData['pass'] === 3);
+      const others = objects.filter((m) => m.userData['pass'] !== 3);
+      expect([xray.length, others.length]).toEqual([1, 2]);
+      const state = () => ({ counts: { ...counts(r) }, bytes: r.gpuBytes(), drawn: visibleIndices(r.root) });
+      const before = state();
+      // Off until called (the page's start).
+      expect(xray.map(drawnInCall)).toEqual([0]);
+      expect(state()).toEqual(before);
+      for (const on of [true, false, true, false]) {
         r.setXray(on);
-        expect({ counts: { ...counts(r) }, bytes: r.gpuBytes(), drawn: visibleIndices(r.root) }).toEqual(before);
+        expect(state()).toEqual(before);
+        expect(drawnInCall(xray[0]!) > 0, `X-ray ${on ? 'on' : 'off'}`).toBe(on);
+        for (const m of others) expect(drawnInCall(m)).toBeGreaterThan(0);
+        expect(state()).toEqual(before);
         expect(r.isRevealed(1, 1)).toBe(true);
       }
       r.dispose();

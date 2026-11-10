@@ -181,9 +181,10 @@ export interface WorldRenderer {
    */
   toolDrawCalls(): number;
   /**
-   * The X-ray pass's objects drawn in the last `frame` (`createXrayDrawCounter`): its region objects that three drew
-   * (culled ones not), the X-ray on or off (its rows are always drawn, collapsed while off). L14's `xrayDrawCallsMax`
-   * (SP6a spec §10.6), read per frame as `toolDrawCalls` is.
+   * The X-ray pass's objects drawn in the last `frame` (`createXrayDrawCounter`): its region objects that three passed
+   * to its render call (culled ones not), the X-ray on or off; while it is off each draws nothing in that call
+   * (`SectionRenderer.setXray`: RegionBatch a zero multi-draw count, RegionMesh a zero draw range). L14's
+   * `xrayDrawCallsMax` (SP6a spec §10.6), read per frame as `toolDrawCalls` is.
    */
   xrayDrawCalls(): number;
   /**
