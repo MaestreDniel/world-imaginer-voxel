@@ -97,9 +97,15 @@ const steady = (w: WalkState, r: WalkReader, k: Keys): [number, number, number] 
   return run(w, r, 1, k);
 };
 
+/** expectNoAllocation's attempts (Task 52, conformance-3; three before). */
+const WALK_ATTEMPTS = 8;
+
 /**
  * Warms `call` up over 100,000 calls, then expects the heap to grow by less than 256 KB over 10,000 more (the
- * zeroAlloc.test.ts pattern: up to three attempts, an attempt that saw a GC not counted).
+ * zeroAlloc.test.ts pattern: a double full gc before each attempt, an attempt that saw a GC not counted, the next attempt
+ * taken while one read over the bound). Up to `WALK_ATTEMPTS`, not three (Task 52, conformance-3): CI run 42686524873
+ * read 5,282,312, 2,511,248 and 781,544 B with no GC, falling as TurboFan's background jobs finished under the runner's
+ * load; an allocation in the code reads over the bound on every attempt, so the bound (unchanged) still catches it.
  */
 function expectNoAllocation(call: () => void): void {
   for (let i = 0; i < 100_000; i++) call();
@@ -112,7 +118,7 @@ function expectNoAllocation(call: () => void): void {
     return b;
   };
   const readings: number[] = [];
-  for (let t = 0; t < 3; t++) {
+  for (let t = 0; t < WALK_ATTEMPTS; t++) {
     gc();
     gc();
     const before = heapUsed();

@@ -26,7 +26,8 @@
  * the N calls run in `CHUNKS` chunks; before each a minor gc empties the young generation, the heap is read, a
  * `v8.GCProfiler` is started, the chunk's calls run, and the heap is read again with no gc in between. A chunk counts
  * only when the profiler recorded no GC (a scavenge would hide what the calls allocated) and is run again otherwise, up
- * to 3 tries; if every try saw a GC the test fails, since a scavenge during a chunk at rest already means far more
+ * to 3 tries, each retry after a full gc (which ends a marking in progress; Task 52, minors-7); if every try saw a GC
+ * the test fails (its message counts the GCs by type), since a scavenge during a chunk at rest already means far more
  * allocation than the bound. The chunks' growths are summed over the N calls. Up to 3 attempts, the next one taken when
  * an attempt read over the bound: an allocation in the code repeats on every attempt, while a function TurboFan has not
  * yet installed (it compiles on a background thread, slower under load) reads high once and then settles, the earlier
@@ -230,30 +231,41 @@ interface Growth {
   readonly readings: readonly number[];
   /** The GCs each attempt's chunks saw (each such chunk was run again). */
   readonly gcs: readonly number[];
+  /** Each attempt's GCs by V8's type (`statistics[].gcType`: a scavenge points to allocation in the loop, a mark-sweep to heap pressure). */
+  readonly gcTypes: readonly string[];
   /** The calls made, warm-up included. */
   readonly calls: number;
 }
 
 /**
  * The growth over `n` calls with no GC in between: a reading, the profiler started, the calls, a reading, the profiler
- * stopped. Taken again, up to `ATTEMPTS` tries, while the profiler saw a GC; NaN when every try saw one.
+ * stopped. Taken again, up to `ATTEMPTS` tries, while the profiler saw a GC; NaN when every try saw one. The first try
+ * empties only the young generation; a try after one that saw a GC runs a full `gc()` first, which ends any marking in
+ * progress (Task 52, minors-7: under the goldens stage's load every try of every chunk of the Apply case saw a GC after
+ * the minor gc alone). The GCs seen are counted by type in `types`.
  */
-function chunkGrowth(call: () => void, n: number): { bytes: number; gcs: number; calls: number } {
+function chunkGrowth(call: () => void, n: number, types: Map<string, number>): { bytes: number; gcs: number; calls: number } {
   let gcs = 0;
   for (let t = 1; t <= ATTEMPTS; t++) {
-    // Only the young generation needs emptying here (a scavenge, a few milliseconds).
-    gc({ type: 'minor' });
+    // A scavenge (a few milliseconds) on the first try; a full GC after a try that saw one.
+    if (t === 1) gc({ type: 'minor' });
+    else gc();
     const before = heapUsed();
     const profiler = new v8.GCProfiler();
     profiler.start();
     for (let i = 0; i < n; i++) call();
     const after = heapUsed();
-    const seen = profiler.stop()?.statistics.length ?? 0;
-    if (seen === 0) return { bytes: after - before, gcs, calls: t * n };
-    gcs += seen;
+    const stats = profiler.stop()?.statistics ?? [];
+    if (stats.length === 0) return { bytes: after - before, gcs, calls: t * n };
+    gcs += stats.length;
+    for (const s of stats) types.set(s.gcType, (types.get(s.gcType) ?? 0) + 1);
   }
   return { bytes: Number.NaN, gcs, calls: ATTEMPTS * n };
 }
+
+/** A count of GCs by type, as the failure message prints it: `Scavenge × 3 MarkSweepCompact × 1`, or `none`. */
+const typesText = (types: ReadonlyMap<string, number>): string =>
+  types.size === 0 ? 'none' : [...types].map(([t, k]) => `${t} × ${k}`).join(' ');
 
 /**
  * Warms `call` up with `warmUp` calls, then measures the heap growth over `n` (N by default) more with no GC inside a
@@ -265,27 +277,30 @@ function allocationOver(call: () => void, warmUp: number, max: number, n = N): G
   let calls = warmUp;
   const readings: number[] = [];
   const gcs: number[] = [];
+  const gcTypes: string[] = [];
   let bytes = Number.NaN;
   for (let a = 0; a < ATTEMPTS; a++) {
     gc();
     gc();
     bytes = 0;
     let seen = 0;
+    const types = new Map<string, number>();
     for (let c = 0; c < CHUNKS; c++) {
-      const g = chunkGrowth(call, n / CHUNKS);
+      const g = chunkGrowth(call, n / CHUNKS, types);
       bytes += g.bytes;
       seen += g.gcs;
       calls += g.calls;
     }
     readings.push(bytes);
     gcs.push(seen);
+    gcTypes.push(typesText(types));
     if (bytes < max) break;
   }
-  return { bytes, readings, gcs, calls };
+  return { bytes, readings, gcs, gcTypes, calls };
 }
 
 function expectAtRest(g: Growth, max = ZERO_ALLOC_MAX): void {
-  expect(g.bytes, `a chunk saw a GC on every try (GCs per attempt: ${g.gcs.join(', ')})`).not.toBeNaN();
+  expect(g.bytes, `a chunk saw a GC on every try (GCs per attempt: ${g.gcs.join(', ')}; by type: ${g.gcTypes.join('; ')})`).not.toBeNaN();
   expect(g.bytes, `heap growth ${g.bytes} bytes over ${N} calls (attempts: ${g.readings.join(', ')})`).toBeLessThan(max);
 }
 
