@@ -75,6 +75,11 @@ export interface DensityTab {
   setEditable(on: boolean): void;
   /** The drawer shows or hides the tab: scroll offsets are saved on hide and restored on show; a hidden tab skips renders. */
   setShown(shown: boolean): void;
+  /**
+   * Selects the Slice sub-tab, so the slice cell is shown in every layout (the Caves tab's "Cave slice", SP6a spec §7.3:
+   * the "tabs" and "stack" layouts hide it while JSON is selected).
+   */
+  showSlice(): void;
   dispose(): void;
 }
 
@@ -695,6 +700,11 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
         formPane.scrollTop = saved.form;
       }
       view.restoreScroll();
+    },
+    showSlice() {
+      if (subTab === 'slice') return;
+      subTab = 'slice';
+      applyLayout();
     },
     dispose() {
       unsubscribe();

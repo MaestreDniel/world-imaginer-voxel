@@ -58,6 +58,39 @@ describe('layout mode by drawer width (§3.1)', () => {
   });
 });
 
+describe('showSlice: the Caves tab\'s "Cave slice" shows the Slice pane (SP6a spec §7.3; Task 52, minors-3)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  test('in the "tabs" layout with the JSON sub-tab selected, showSlice() selects Slice and shows the slice cell', () => {
+    const dom = installDom();
+    // The tab's own observer is the first one made (the JSON editor makes its own after it).
+    const observers: Array<() => void> = [];
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(fn: () => void) { observers.push(fn); }
+      observe(): void {}
+      disconnect(): void {}
+    });
+    const session = new WorldSession(() => [1, 2], { validateParams: validateParamTrees });
+    const host = dom.document.createElement('div');
+    const tab = createDensityTab(host as unknown as HTMLElement, { session, edit: (_e, fn) => fn(), clock: { setTimeout: () => 0, clearTimeout: () => {} } });
+    const element = host.children[0]!;
+    element.rect = { left: 0, top: 0, width: 1000, height: 600 };
+    observers[0]!();
+    expect(element.dataset['layout']).toBe('tabs');
+    const bar = element.children.find((e) => e.className === 'it-subtabs')!;
+    const sub = (label: string): FakeElement => bar.children.find((b) => b.textContent === label)!;
+    sub('JSON').click();
+    expect([tab.sliceHost.hidden, sub('JSON').getAttribute('aria-selected')]).toEqual([true, 'true']);
+
+    tab.showSlice();
+    expect(tab.sliceHost.hidden).toBe(false);
+    expect([sub('Slice').getAttribute('aria-selected'), sub('JSON').getAttribute('aria-selected')]).toEqual(['true', 'false']);
+    // Already on Slice: nothing changes.
+    tab.showSlice();
+    expect(tab.sliceHost.hidden).toBe(false);
+  });
+});
+
 describe('JSON editor lines (§3.5)', () => {
   const text = '{\n  "a": 1,\n  "b": [1, 2]\n}';
 
