@@ -8,7 +8,8 @@
  * fresh tuple and record. A lakeCell miss allocates its memoised LakeCell (bounded by CELL_CACHE_MAX per context), so
  * a warm cache costs nothing. What remains is V8's short-lived boxing of doubles returned by non-inlined calls (the
  * noises, here and in climate, shape and rivers), which scavenges collect: measured on the T stage's hot path, about
- * 1.5 MB of such garbage per column (≈ 190 scavenges per 1000 columns) and no retained growth (test/unit/terrainHeap).
+ * 1.5 MB of such garbage per column in SP3b (≈ 190 scavenges per 1000 columns), 11.2 MB with SP6a's caves (169
+ * scavenges per 1000 columns, SP6a spec §2.5), and no retained growth (test/unit/terrainHeap).
  */
 import { hash2, hash4 } from '../../core/hash';
 import type { LakeParams } from '../../core/params/schema';

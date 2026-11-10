@@ -142,7 +142,10 @@
  * the kill criterion within 25 %, the fill read from `assets/sp6a/`), the T gate's "≤ 10 / 20" in §7's table and §3.0
  * now gated as ruling R14 set it, and §8 risk 3's outcome (the levers that ran); and the describe's last test checks,
  * from the titles of the tests registered in it, that every item of the SP6a spec's §13 as it stands has a test that
- * names it (ruling P52).
+ * names it (ruling P52). The exit (SP6a §15, Task 53): none of the three cut-line items was cut, so SP6a's Cut line, the
+ * receivers and SP10's and SP12's "Received from SP6a" lines say nothing moved; SP6a's "Received from SP3e" ends
+ * "(delivered: …)", pinned with `toBe`; SP6b's line gains the SP6a spec §14's exit hand-overs; §5.9 drops the unbound
+ * 'L (slice)'; §4.3 names the idle shrink; G1's target cell records the map's first open (ruling R27).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1902,8 +1905,9 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(sp6a.startsWith('**SP6a — The shape of the caves** (XL; SP3c, SP5c; walking for in-game review from SP5a). Spec: `2026-11-02-sp6a-cave-shapes-design.md`.'), 'the SP6a header').toBe(true);
     expect(sp6a).toContain('- Cave family terms in the default DAG, one interpolated slot per family (cheese / layer / pillars, spaghetti 2D and 3D with rarity, noodle, entrances, roughness, cheese roof term, the wet roof); worm, underground-worm and ravine carvers (detMath, LRU, a window of 11 chunks); the cave-type tag channel, the X-ray (X, PageUp/PageDown/Home), the cave-type slice field and the Caves tab; the cave parameters (the `caves` group); the light floor and night vision (L).');
     expect(sp6a).toContain('**Deliverable:** explorable caves with visible surface entrances and ravines, seen through the X-ray.');
-    // Moved from the SP3e describe: SP3e's note, verbatim from the SP6 entry.
-    expect(sp6a).toContain(`- Received from SP3e (its spec §12): exclude cave-detached runs above y ${ISLAND_RUN_MIN_BOTTOM - 1} from the floating_islands island branch, water v0's island rule and the surface scan's sky-open run under islands when caves reach y ≥ ${ISLAND_RUN_MIN_BOTTOM}.`);
+    // Moved from the SP3e describe: SP3e's note, verbatim from the SP6 entry, worded as delivered at the exit (Task 53).
+    const fromSp3e = sp6a.split('\n').find((l) => l.startsWith('- Received from SP3e (its spec §12):'));
+    expect(fromSp3e).toBe(`- Received from SP3e (its spec §12): exclude cave-detached runs above y ${ISLAND_RUN_MIN_BOTTOM - 1} from the floating_islands island branch, water v0's island rule and the surface scan's sky-open run under islands when caves reach y ≥ ${ISLAND_RUN_MIN_BOTTOM} (delivered: the SP6a spec §1.4, D8: no cave air at y ≥ 180, so water v0's island rule and the sky-open run stay exact; except the island branch over cave-hollowed summits → SP12 with the summit caps, the SP6a spec D31 and its Point 2).`);
     expect(sp6a).toContain('**Exit:** as the SP6a spec §16 (C1-C9; re-asserted with caves: L2, S1 `grassSky0`, DT1, DT2 probe == bulk and the tag; P1 T ≤ 13 ms p50, ≤ 20 ms p99 (`terrain.islands` ≤ 14.5 ms p50, ≤ 26.5 ms p99; set to the measurement after D25\'s levers, the SP6a spec\'s Threshold log); the DAG-closure overhead measured; L13 and L14; the user\'s check)');
     // The Cut line: the SP6a spec §15's three items, in its order.
     const cut = sp6a.split('\n').find((l) => l.startsWith('- **Cut line:**'));
@@ -1914,6 +1918,8 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(at, 'the Cut line\'s order').toEqual([...at].sort((a, b) => a - b));
     expect(cut).toContain('(→ SP10); the spaghetti-2D rarity bands');
     expect(cut!.split('(→ SP12)').length - 1, 'two items go to SP12').toBe(2);
+    // The exit (SP6a spec §15, Task 53): all three shipped (the finder's Find buttons, the rarity bands, the underground worm).
+    expect(cut!.endsWith('Each is cut whole. It was not taken: the Find buttons, the spaghetti-2D rarity bands and the underground-only carver shipped in SP6a, so nothing moved.'), 'the Cut line as taken').toBe(true);
     // Item 2: the SP6b entry.
     const sp6b = spEntry('SP6b', 'SP7');
     expect(sp6b.startsWith('**SP6b — Cave biomes** (size set by the SP6b spec; SP6a).'), 'the SP6b header').toBe(true);
@@ -1942,6 +1948,17 @@ describe('master spec amendments (SP6a §13)', () => {
       // Item 3: the abyss hand-overs (SP7's lava, SP8b's crystals and gothic touch, SP8c's silence) are SP6b's to record.
       expect(line, `${id}'s "Received from SP6a" line holds an abyss hand-over`).not.toMatch(/lava may appear|crystals or gems|gothic|silent|Oscuro y silencioso/);
     }
+    // Item 3 at the exit (Task 53): the cut-line items reached SP10's and SP12's lines as delivered; SP6b's line gains
+    // the SP6a spec §14's exit hand-overs (U2-U4, the CI work item, C6, the refill, the slice margin, cave_heavy).
+    const receivedOf = (entry: string): string => entry.split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):')) ?? '';
+    expect(receivedOf(spEntry('SP10', 'SP11'))).toContain('the Caves tab\'s Find buttons, SP6a\'s first cut-line item, were delivered in SP6a, so nothing moved here (the SP6a spec §15).');
+    expect(receivedOf(sp12Entry())).toContain('the underground-only carver and the spaghetti-2D rarity bands, SP6a\'s other cut-line items, were delivered in SP6a, so nothing moved here (the SP6a spec §15);');
+    for (const phrase of ['U2-U4 over its new leaves', 'the CI work item before or at its start', '`C6.latticeBias` at 1.25 for SP6a', '`xrayApplyRefillMs` about 8.3-8.4 s', '`slice.caves128`\'s margin', '`cave_heavy`\'s `cheese.offset` 0.20']) {
+      expect(sp6bReceived, `SP6b's "Received from SP6a" line names ${phrase}`).toContain(phrase);
+    }
+    for (const [id, line] of [['SP10', receivedOf(spEntry('SP10', 'SP11'))], ['SP12', receivedOf(sp12Entry())]] as const) {
+      expect(line, `${id}'s line still reads "if cut"`).not.toMatch(/if (they were )?cut/);
+    }
     // Item 3: SP7's line carries §14's text to its last item before the abyss lava (left to SP6b).
     const sp7Received = spEntry('SP7', 'SP8a').split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
     expect(sp7Received, 'SP7\'s "Received from SP6a" line ends with the bench\'s flood scenario').toMatch(/`dryPitsBelowSea` \(SP3c\); the bench's flood scenario after L13\.$/);
@@ -1954,7 +1971,8 @@ describe('master spec amendments (SP6a §13)', () => {
     const visible = text.split('\n').find((l) => l.startsWith('Visible value in every SP: '));
     expect(visible).toContain('caves and the X-ray in SP6a, cave biomes in SP6b');
     const receivers = text.split('\n').find((l) => l.startsWith('**Cut lines.**'));
-    expect(receivers).toContain('SP6a underground-only carver and spaghetti-2D rarity bands → SP12; SP6a cave finder → SP10 (worded by the SP6a spec)');
+    expect(receivers).toContain('SP6a underground-only carver and spaghetti-2D rarity bands → SP12 (delivered in SP6a, so nothing moved); SP6a cave finder → SP10 (delivered in SP6a, so nothing moved);');
+    expect(receivers).not.toContain('(worded by the SP6a spec)');
     // Item 7: each bare "SP6" names SP6a or SP6b.
     const line = (head: string): string => {
       const l = text.split('\n').find((x) => x.startsWith(head));
@@ -2195,6 +2213,8 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(s45).not.toContain('and grows ×1.5 via `setGeometrySize`');
     // The values are the code's.
     expect([OPTIMIZE_AT, BATCH_GROWTH, GROWTH, SHRINK_IDLE_PUMPS, SHRINK_MIN_SLACK, SHRINK_HEADROOM]).toEqual([0.1, 1.25, 1.5, 240, 0.2, 1.1]);
+    // §4.3's structural operations name the idle shrink (Task 53; SP4b's clause pinned in the SP4b describe).
+    expect(text.split('\n').find((l) => l.startsWith('**Uploads** are capped'))).toContain('(SP6a: RegionBatch\'s idle shrink is one more structural operation, at most one batch per pump, §4.5)');
     // RegionMesh's arena keeps SP4b's rule (the Fallback paragraph, pinned in the SP4b describe).
     expect(text).toContain('compaction above 40 % free space, else ×1.5), and culling per region');
   });
@@ -2224,6 +2244,8 @@ describe('master spec amendments (SP6a §13)', () => {
     const at59 = text.indexOf('### 5.9 Controls');
     const s59 = text.slice(at59, text.indexOf('## 6. ', at59));
     expect(s59).toContain('while placing a paste, the wheel, ↑, ↓ (turn, raise, lower it; SP5c); X (X-ray; SP6a); PageUp / PageDown / Home (the X-ray band; SP6a); L (night vision; SP6a);');
+    // The master's 'L (slice)' was never bound; L is night vision (dropped at the exit, Task 53).
+    expect(s59).not.toContain('L (slice)');
   });
 
   test('§4.8\'s Lightmap gains the light floor; §6.3\'s Lightmap line states it against the midnight sky-15 texel (SP6a spec §13 item 14, §6.1)', () => {
@@ -2374,7 +2396,7 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(cells[1]).toContain('`G1.caves`');
     expect(cells[1]).toContain('`G1.xray`; the RD 16 segment recorded) (the SP6a spec §10.6, D29; amended by SP6a)');
     // The target cell: L13's and L14's bounds as the plan words them.
-    expect(cells[2]).toContain('caves: frame p95 ≤ 16.7 ms, no frame > 33 ms, main thread p95 ≤ 6 ms; the X-ray at RD 12: the same, GPU ≤ 150 MB, draw calls ≤ 100, a toggle\'s frame ≤ 33 ms (SP6a, from L13 and L14)');
+    expect(cells[2]).toContain('caves: frame p95 ≤ 16.7 ms, no frame > 33 ms, main thread p95 ≤ 6 ms; the X-ray at RD 12: the same, GPU ≤ 150 MB, draw calls ≤ 100, a toggle\'s frame ≤ 33 ms (SP6a, from L13 and L14; the map\'s first open in L14 recorded, not gated: `xrayMapOpenMaxMs`, the SP6a spec §10.6)');
   });
 
   test('§7\'s "Measured in SP6a" line names the rows with their values and gates; the T gate in §7 and §3.0 as ruling R14 set it; §8 risk 3\'s outcome (SP6a spec §13 item 19)', () => {
@@ -2445,7 +2467,7 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(titles.length, 'the describe\'s tests').toBeGreaterThan(1);
     for (const title of titles) {
       for (const m of title.matchAll(/§13 items? ([^§)]*)/g)) {
-        for (const token of m[1]!.split(/,\s*|\s+and\s+/)) {
+        for (const token of m[1]!.split(/[,;]\s*|\s+and\s+/)) {
           const range = /^(\d+)(?:-(\d+))?$/.exec(token.trim());
           if (range === null) break;
           const from = Number(range[1]), to = Number(range[2] ?? range[1]);
