@@ -1,9 +1,9 @@
-import { Quaternion, Sphere, Vector3, type BufferAttribute, type Material, type Mesh, type Object3D } from 'three';
+import { Frustum, Matrix4, PerspectiveCamera, Quaternion, Sphere, Vector3, type BufferAttribute, type Camera, type Material, type Mesh, type Object3D } from 'three';
 import { describe, expect, test } from 'vitest';
 import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { createMaterialSystem, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
 import { RESERVATION } from '../../src/render/regionGrid';
-import { createFreeList, firstFit, giveRange, takeFirstFit } from '../../src/render/regionMesh';
+import { createFreeList, firstFit, giveRange, HIDDEN_RANGES_MAX, takeFirstFit } from '../../src/render/regionMesh';
 import {
   createRevealProbe, createSectionRenderer, createSectionRendererCounts, regionOf, selectSectionRenderer,
   type RevealProbe, type SectionRenderer, type SectionRendererCounts,
@@ -68,6 +68,24 @@ const counts = (r: SectionRenderer): SectionRendererCounts => r.counts(createSec
 /** The arena of `pass` in region (rx, rz). */
 const arenaOf = (r: SectionRenderer, pass: number, rx = 0, rz = 0): Mesh | undefined =>
   regionObjects(r.root).find((m) => passOf(m) === pass && m.userData['rx'] === rx && m.userData['rz'] === rz);
+
+/**
+ * The meshes three's render call lists under `root`, in scene order (r186 `projectObject`, WebGLRenderer.js:1860-1975):
+ * an object whose `visible` is false is skipped with its subtree (`traverseVisible`: no `objects.update`, so no upload,
+ * and no draw); a mesh is listed when its layers meet the camera's, it is unculled or meets the frustum, and its material
+ * is visible. Each listed mesh is a draw call: `renderBufferDirect` returns before the draw only on a negative count
+ * (WebGLRenderer.js:1250), so a zero draw range still draws.
+ */
+function threeDrawList(root: Object3D, camera: Camera): Mesh[] {
+  const frustum = new Frustum().setFromProjectionMatrix(new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  const out: Mesh[] = [];
+  root.traverseVisible((o) => {
+    const m = o as Mesh;
+    if (m.isMesh !== true || !m.layers.test(camera.layers) || !(m.material as Material).visible) return;
+    if (!m.frustumCulled || m.intersectsFrustum(frustum)) out.push(m);
+  });
+  return out;
+}
 
 /** The arena's position, data and index attributes. */
 const attributesOf = (m: Mesh): [BufferAttribute, BufferAttribute, BufferAttribute] => [
@@ -321,6 +339,8 @@ describe('RegionMesh (SP4a spec §6.2, D2; SP4b spec §4.3)', () => {
       { sy: 4, pass: 0, quads: 1 }, { sy: 4, pass: 3, quads: 2 }, { sy: 5, pass: 2, quads: 1 }, { sy: 6, pass: 3, quads: 1 },
     ]));
     const r = built(ps, materials);
+    // Shown (off, the arenas are invisible: Task 52c), so `visibleIndices` counts their revealed indices.
+    r.setXray(true);
     const xray = meshes(r.root).filter((m) => passOf(m) === MESH_PASS_XRAY);
     expect(xray.map((m) => m.userData['rx'] as number).sort()).toEqual([0, 1, 2]);
     for (const m of xray) {
@@ -343,61 +363,91 @@ describe('RegionMesh (SP4a spec §6.2, D2; SP4b spec §4.3)', () => {
     r.dispose();
   });
 
-  test('while the X-ray is off its arenas draw nothing (a zero draw range inside three\'s render call, restored after it) but stay in the scene, visible, and their rows keep uploading; on, they draw their high-water range (Task 52, firefox-1: Task 48 lever 4c on RegionMesh)', () => {
+  test('while the X-ray is off its arenas are invisible, so three\'s render call lists none of them (no draw call, no upload) while their rows keep being written and their pending upload ranges stay bounded; on, they are listed and drawn over their high-water range (Task 52, firefox-1; ruling of Task 52c)', () => {
     const r = createSectionRenderer('mesh', system('mesh'));
     r.stage(fakePayload(0, 0, [opaque(4), { sy: 4, pass: 3, quads: 2 }, { sy: 5, pass: 3, quads: 1 }]), 1);
     pumpAll(r);
     const x = arenaOf(r, MESH_PASS_XRAY)!;
     const o = arenaOf(r, MESH_PASS_OPAQUE)!;
-    /** The index count three's `renderBufferDirect` would draw between the object's two hooks, as `renderObject` calls them. */
-    const drawn = (m: Mesh): number => {
-      m.onBeforeRender(null as never, null as never, null as never, m.geometry, m.material as Material, null as never);
-      const n = m.geometry.drawRange.count;
-      m.onAfterRender(null as never, null as never, null as never, m.geometry, m.material as Material, null as never);
-      return n;
+    const camera = new PerspectiveCamera(90, 1, 0.1, 10_000);
+    camera.position.set(64, 600, 64);
+    camera.lookAt(64, 0, 64);
+    camera.updateMatrixWorld();
+    const listed = (): Mesh[] => {
+      r.root.updateMatrixWorld(true);
+      return threeDrawList(r.root, camera);
     };
-    // Off (the page's start): the X-ray arena draws nothing; outside the call its range is its high-water mark.
-    expect(drawn(x)).toBe(0);
-    expect([x.geometry.drawRange.start, x.geometry.drawRange.count]).toEqual([0, 18]);
-    expect(visibleIndices(x)).toBe(18);
-    // The terrain's arena is drawn as before.
-    expect(drawn(o)).toBe(o.geometry.drawRange.count);
-    expect(drawn(o)).toBeGreaterThan(0);
-    // Still in the scene and visible (never `visible = false`, which skips three's upload): its rows keep uploading.
+    // Off (the page's start): the X-ray arena is in the scene but invisible, so three lists only the terrain's arena.
     expect(x.parent).toBe(r.root);
-    expect(x.visible).toBe(true);
+    expect([x.visible, o.visible]).toEqual([false, true]);
+    expect(listed()).toEqual([o]);
+    // Its draw range is its high-water mark as always (the hidden arena is not zeroed or collapsed).
+    expect([x.geometry.drawRange.start, x.geometry.drawRange.count]).toEqual([0, 18]);
+    // Rows keep being written into its arrays while it is off; three uploads them when it is next listed.
     const version = (x.geometry.getAttribute('position') as BufferAttribute).version;
     r.stage(fakePayload(1, 0, [{ sy: 6, pass: 3, quads: 4 }]), 1);
     pumpAll(r);
     expect((x.geometry.getAttribute('position') as BufferAttribute).version).toBeGreaterThan(version);
-    expect(visibleIndices(x)).toBe(18 + 24);
-    expect(drawn(x)).toBe(0);
     expect(x.geometry.drawRange.count).toBe(42);
-    // On: the high-water range.
+    expect(listed()).toEqual([o]);
+    // On: listed (a draw call over (0, 42)); the terrain's arena still drawn.
     r.setXray(true);
-    expect(drawn(x)).toBe(42);
-    // Off again: nothing, and the range restored.
-    r.setXray(false);
-    expect(drawn(x)).toBe(0);
+    expect(x.visible).toBe(true);
+    expect(listed()).toEqual([o, x]);
     expect(x.geometry.drawRange.count).toBe(42);
-    // A grown arena (a new geometry, Task 48's × 1.5) keeps the hooks: they act on the geometry three passes.
+    // Off again: not listed.
+    r.setXray(false);
+    expect(listed()).toEqual([o]);
+    // A grown arena (a new geometry, × 1.5) is the same mesh: still invisible while off, listed when on.
     const before = x.geometry;
     r.stage(fakePayload(2, 0, Array.from({ length: 5 }, (_, k) => ({ sy: k, pass: 3 as const, quads: 1024 }))), 1);
     pumpAll(r);
     expect(x.geometry).not.toBe(before);
-    const grown = x.geometry.drawRange.count;
-    expect(grown).toBeGreaterThan(42);
-    expect(drawn(x)).toBe(0);
-    expect(x.geometry.drawRange.count).toBe(grown);
-    // A region's X-ray arena created while the X-ray is on draws at once.
+    expect(x.visible).toBe(false);
+    expect(listed()).toEqual([o]);
     r.setXray(true);
-    expect(drawn(x)).toBe(grown);
+    expect(listed()).toEqual([o, x]);
+    // A region's X-ray arena created while the X-ray is on is visible at once; created while it is off, invisible.
     r.stage(fakePayload(9, 0, [{ sy: 2, pass: 3, quads: 1 }]), 1);
     pumpAll(r);
     const x1 = arenaOf(r, MESH_PASS_XRAY, 1, 0)!;
-    expect(drawn(x1)).toBe(6);
+    expect(x1.visible).toBe(true);
     r.setXray(false);
-    expect(drawn(x1)).toBe(0);
+    expect([x.visible, x1.visible]).toEqual([false, false]);
+    r.stage(fakePayload(17, 0, [{ sy: 2, pass: 3, quads: 1 }]), 1);
+    pumpAll(r);
+    const x2 = arenaOf(r, MESH_PASS_XRAY, 2, 0)!;
+    expect(x2.visible).toBe(false);
+    expect(listed().filter((m) => passOf(m) === MESH_PASS_XRAY)).toEqual([]);
+    // The terrain arenas never change visibility.
+    for (const m of regionObjects(r.root)) if (passOf(m) !== MESH_PASS_XRAY) expect(m.visible).toBe(true);
+    r.dispose();
+  });
+
+  test('a hidden X-ray arena (never uploaded while off) keeps at most HIDDEN_RANGES_MAX pending ranges per attribute: past it the attribute is sent whole at its next upload, and a visible arena keeps every range (ruling of Task 52c)', () => {
+    const r = createSectionRenderer('mesh', system('mesh'));
+    r.stage(fakePayload(0, 0, [opaque(1), { sy: 0, pass: 3, quads: 1 }]), 1);
+    pumpAll(r);
+    const x = arenaOf(r, MESH_PASS_XRAY)!;
+    const o = arenaOf(r, MESH_PASS_OPAQUE)!;
+    expect(x.visible).toBe(false);
+    // 3 × HIDDEN_RANGES_MAX columns of region (0, 0) replaced over and over: every replacement writes rows (position,
+    // data) and a reveal and a hide (index) into both arenas; three uploads neither (no render call).
+    for (let k = 0; k < 3 * HIDDEN_RANGES_MAX; k++) {
+      r.stage(fakePayload(k & 7, (k >> 3) & 7, [opaque(1), { sy: 1 + (k % 20), pass: 3, quads: 1 }]), 2 + k);
+      pumpAll(r);
+    }
+    // Each attribute passed the cap: its ranges were dropped and it waits for one whole upload, adding no range since.
+    expect(attributesOf(x).map((a) => a.updateRanges.length)).toEqual([0, 0, 0]);
+    // The visible opaque arena keeps every range (three uploads them at its next render call, as before).
+    expect(Math.min(...attributesOf(o).map((a) => a.updateRanges.length))).toBeGreaterThan(HIDDEN_RANGES_MAX);
+    // Shown again, three's upload of the X-ray arena (its onUpload callbacks) leaves no range pending; the next writes
+    // add ranges again.
+    r.setXray(true);
+    for (const a of attributesOf(x)) a.onUploadCallback();
+    r.stage(fakePayload(3, 3, [opaque(1), { sy: 22, pass: 3, quads: 1 }]), 10_000);
+    pumpAll(r);
+    expect(attributesOf(x).map((a) => a.updateRanges.length > 0)).toEqual([true, true, true]);
     r.dispose();
   });
 

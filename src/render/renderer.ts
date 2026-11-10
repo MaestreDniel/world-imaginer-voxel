@@ -182,8 +182,8 @@ export interface WorldRenderer {
   toolDrawCalls(): number;
   /**
    * The X-ray pass's objects drawn in the last `frame` (`createXrayDrawCounter`): its region objects that three passed
-   * to its render call (culled ones not), the X-ray on or off; while it is off each draws nothing in that call
-   * (`SectionRenderer.setXray`: RegionBatch a zero multi-draw count, RegionMesh a zero draw range). L14's
+   * to its render call (culled ones not). While the X-ray is off RegionBatch's are passed and draw nothing (a zero
+   * multi-draw count) and RegionMesh's are invisible, so none is passed (`SectionRenderer.setXray`, Task 52c). L14's
    * `xrayDrawCallsMax` (SP6a spec §10.6), read per frame as `toolDrawCalls` is.
    */
   xrayDrawCalls(): number;

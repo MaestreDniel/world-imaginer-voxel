@@ -372,9 +372,18 @@ describe('regionGrid: the X-ray pass in the staging, the swap and the stand-ins 
   });
 
   /** The indices three would draw per pass under `root` (`visibleIndices` per region object). */
+  /**
+   * The revealed indices by pass: `visibleIndices` of each region object as if it were visible, since RegionMesh's X-ray
+   * arenas are invisible while the sections' X-ray is off (Task 52c) and this test reads reveals and swaps, not the toggle.
+   */
   const byPass = (root: Object3D): number[] => {
     const out = [0, 0, 0, 0];
-    for (const m of regionObjects(root)) out[m.userData['pass'] as number]! += visibleIndices(m);
+    for (const m of regionObjects(root)) {
+      const visible = m.visible;
+      m.visible = true;
+      out[m.userData['pass'] as number]! += visibleIndices(m);
+      m.visible = visible;
+    }
     return out;
   };
 

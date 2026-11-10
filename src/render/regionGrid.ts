@@ -212,8 +212,9 @@ export interface RegionBackend<R> {
   standIn(pass: number): { readonly object: Mesh; dispose(): void };
   setOrigin(x: number, y: number, z: number): void;
   /**
-   * The X-ray's state (`SectionRenderer.setXray`): while it is off both backends' X-ray objects draw nothing inside
-   * three's render call (RegionBatch a zero multi-draw count, RegionMesh a zero draw range count) and stay in the scene.
+   * The X-ray's state (`SectionRenderer.setXray`): while it is off both backends' X-ray objects draw nothing and stay in
+   * the scene (RegionBatch a zero multi-draw count inside three's render call; RegionMesh invisible arenas, which three
+   * skips, Task 52c).
    */
   setXray?(on: boolean): void;
   sortTranslucent(camX: number, camY: number, camZ: number): void;

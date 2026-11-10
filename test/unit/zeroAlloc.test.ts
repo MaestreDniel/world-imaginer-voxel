@@ -1455,27 +1455,26 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     albedo.dispose();
   }, TIMEOUT_MS);
 
-  test(`${N} draws of a RegionMesh X-ray arena (three's two hooks around each), the X-ray toggled every 256, grow the heap by less than 256 KB (SP6a spec §5.3; Task 52, firefox-1)`, () => {
+  test(`${N} X-ray toggles on a RegionMesh with X-ray arenas in two regions (each one's visibility set) grow the heap by less than 256 KB (SP6a spec §5.3; Task 52, firefox-1; Task 52c)`, () => {
     const albedo = createFlatColorArray();
     const materials = createMaterialSystem({ variant: 'mesh', ao: true, smoothLight: true }, albedo);
     const sections = createSectionRenderer('mesh', materials);
     sections.stage(fakePayload(0, 0, [{ sy: 4, pass: 3, quads: 2 }]), 1);
+    sections.stage(fakePayload(8, 0, [{ sy: 4, pass: 3, quads: 1 }]), 1);
     const unbounded = { exhausted: () => false, spend() {}, structural: () => true };
     for (let i = 0; i < 100 && sections.pump(unbounded, 0, 0, 0) > 0; i++);
-    const arena = sections.root.children.find((o) => o.userData['pass'] === 3) as Mesh;
+    const arenas = sections.root.children.filter((o) => o.userData['pass'] === 3) as Mesh[];
+    expect(arenas).toHaveLength(2);
     let k = 0;
-    let drawn = 0;
+    let shown = 0;
     const g = allocationOver(() => {
-      const i = k++;
-      if ((i & 255) === 0) sections.setXray((i & 256) !== 0);
-      arena.onBeforeRender(null as never, null as never, null as never, arena.geometry, arena.material as Material, null as never);
-      drawn += arena.geometry.drawRange.count;
-      arena.onAfterRender(null as never, null as never, null as never, arena.geometry, arena.material as Material, null as never);
+      sections.setXray(((k++) & 1) === 1);
+      if (arenas[0]!.visible) shown++;
     }, WARM_UP, ZERO_ALLOC_MAX);
     expectAtRest(g);
-    // Half the calls drew the arena's 12 indices; outside the hooks the range stays its high-water mark.
-    expect(drawn).toBeGreaterThan(0);
-    expect(arena.geometry.drawRange.count).toBe(12);
+    // Half the calls showed the arenas; the draw range stays the high-water mark.
+    expect(shown).toBeGreaterThan(0);
+    expect(arenas[0]!.geometry.drawRange.count).toBe(12);
     sections.dispose();
     materials.dispose();
     albedo.dispose();

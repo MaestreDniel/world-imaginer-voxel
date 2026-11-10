@@ -746,7 +746,7 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       s.dispose();
     });
 
-    test('setXray (SP6a, Task 48; Task 52 on RegionMesh) changes no count, byte, drawn index or reveal, on or off, before or after three\'s render call; inside it, the X-ray objects draw nothing while it is off and draw while it is on, and the other passes draw either way', () => {
+    test('setXray (SP6a, Task 48; Task 52 on RegionMesh) changes no count, byte, revealed index, reveal or probe, on or off; in three\'s render call the X-ray objects draw nothing while it is off (RegionBatch: listed with a zero multi-draw count; RegionMesh: invisible, so not listed, Task 52c) and draw while it is on, and the other passes draw either way', () => {
       const r = make();
       r.stage(fakePayload(1, 1, [opaque(3), { sy: 3, pass: 3, quads: 2 }, water(4)]), 1);
       pumpAll(r);
@@ -756,21 +756,36 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       camera.updateMatrixWorld();
       r.root.updateMatrixWorld(true);
       /**
-       * What three's `renderObject` draws of `m`, read between the two hooks it calls around the draw: a BatchedMesh's
-       * multi-draw count, a Mesh's draw range count.
+       * What three's render call draws of `m`: nothing when it or an ancestor is invisible (`projectObject` skips it),
+       * else what `renderObject` draws, read between the two hooks it calls around the draw: a BatchedMesh's multi-draw
+       * count, a Mesh's draw range count.
        */
       const drawnInCall = (m: Mesh): number => {
+        if (!shown(m)) return 0;
         m.onBeforeRender(null as never, null as never, camera, m.geometry, m.material as Material, null as never);
         const n = isBatch(m) ? (m as unknown as { _multiDrawCount: number })._multiDrawCount : m.geometry.drawRange.count;
         m.onAfterRender(null as never, null as never, camera, m.geometry, m.material as Material, null as never);
+        return n;
+      };
+      /** `visibleIndices` of `m` as if it were visible: its revealed indices, whatever the X-ray's state. */
+      const revealedIndices = (m: Mesh): number => {
+        const visible = m.visible;
+        m.visible = true;
+        const n = visibleIndices(m);
+        m.visible = visible;
         return n;
       };
       const objects = regionObjects(r.root);
       const xray = objects.filter((m) => m.userData['pass'] === 3);
       const others = objects.filter((m) => m.userData['pass'] !== 3);
       expect([xray.length, others.length]).toEqual([1, 2]);
-      const state = () => ({ counts: { ...counts(r) }, bytes: r.gpuBytes(), drawn: visibleIndices(r.root) });
+      const state = () => ({
+        counts: { ...counts(r) }, bytes: r.gpuBytes(), probe: { ...probe(r) },
+        drawn: others.reduce((n, m) => n + visibleIndices(m), 0), xray: revealedIndices(xray[0]!),
+      });
       const before = state();
+      expect(before.probe).toMatchObject({ partial: 0, mixed: 0 });
+      expect(before.xray).toBeGreaterThan(0);
       // Off until called (the page's start).
       expect(xray.map(drawnInCall)).toEqual([0]);
       expect(state()).toEqual(before);

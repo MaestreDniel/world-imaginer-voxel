@@ -30,13 +30,16 @@ import { XRAY_ORDER } from './selection';
  *
  * SP6a (spec §5.1, §5.2): a fourth arena per region, the X-ray's pass 3 over `materials.xray`, at `renderOrder`
  * `XRAY_ORDER`; it is not translucent, so `sortTranslucent` never orders it (its additive blend needs no order). While
- * the X-ray is off (`setXray`, Task 48 lever 4c as on RegionBatch; Task 52) these arenas draw nothing: their
- * `onBeforeRender` sets the draw range's count to 0 for three's draw and their `onAfterRender` restores it, so outside
- * the render call the range is `(0, the index high-water mark)` as always (the probe and the tests read it). They stay
- * in the scene and visible (never `visible = false`, under which three skips their uploads), so three keeps uploading
- * their rows and the first toggle uploads nothing. Before this, the GPU ran the X-ray vertex shader over every
- * arena's whole range each frame only to collapse it (spec D23): at RD 12, 892,634 triangles beside the opaque
- * 1,835,658 on Firefox.
+ * the X-ray is off (`setXray`, Task 48 lever 4c as on RegionBatch; Task 52, ruled in Task 52c) these arenas are
+ * invisible (`mesh.visible` follows the X-ray, set at creation and by `setXray`): three's render call skips them, so
+ * they cost no draw call (a zero draw range would still issue one: r186's `renderBufferDirect` returns early only on
+ * a negative count) and no vertex work. Their draw range stays `(0, the index high-water mark)` and their rows keep
+ * being written into their arrays; three uploads them when they are next listed (the first frame after a toggle on),
+ * and `rowVisible` reads them as the X-ray on would (the probe asks about reveals, not the pass's toggle; RegionBatch's
+ * read the same). While hidden an attribute keeps at most `HIDDEN_RANGES_MAX` update ranges: past that it is sent whole
+ * at its next upload, so a long session with the X-ray off holds no growing range list. Before Task 52, the GPU ran
+ * the X-ray vertex shader over every arena's whole range each frame only to collapse it (spec D23): at RD 12, 892,634
+ * triangles beside the opaque 1,835,658 on Firefox.
  */
 
 /** A region's half extent in blocks: 8 columns across, 24 sections (384 blocks) high. */
@@ -44,6 +47,11 @@ const REGION_HALF_XZ = 64;
 const REGION_HALF_Y = 192;
 /** An arena whose free space reaches this share of its capacity is compacted instead of grown. */
 const COMPACT_AT = 0.4;
+/**
+ * The update ranges an attribute of an invisible arena (an X-ray arena while the X-ray is off: three uploads nothing of
+ * it) keeps; the write past them drops them and sends the attribute whole at its next upload (Task 52c).
+ */
+export const HIDDEN_RANGES_MAX = 256;
 
 const PASSES = [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY] as const;
 
@@ -216,25 +224,8 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
   let needPass = 0;
   let needVertices = 0;
   let needIndices = 0;
-  // The X-ray's state (`setXray`): off, the X-ray arenas draw nothing.
+  // The X-ray's state (`setXray`): off, the X-ray arenas are invisible (three skips them: no draw call).
   let xrayShown = false;
-  // The geometry an X-ray arena's `onBeforeRender` zeroed and its draw count, for its `onAfterRender` (three calls the
-  // two around each draw of the object, nothing between them reads another object's range).
-  let zeroed: BufferGeometry | null = null;
-  let zeroedCount = 0;
-  /** An X-ray arena's `onBeforeRender` (made once, shared): off, three draws none of its range. Allocates nothing. */
-  const xrayBeforeRender: Mesh['onBeforeRender'] = (_renderer, _scene, _camera, geometry) => {
-    if (xrayShown) return;
-    zeroed = geometry;
-    zeroedCount = geometry.drawRange.count;
-    geometry.drawRange.count = 0;
-  };
-  /** An X-ray arena's `onAfterRender`: the range `xrayBeforeRender` zeroed back to its count. */
-  const xrayAfterRender: Mesh['onAfterRender'] = (_renderer, _scene, _camera, geometry) => {
-    if (zeroed !== geometry) return;
-    geometry.drawRange.count = zeroedCount;
-    zeroed = null;
-  };
 
   const passOf = (c: Column, r: number): number => c.p.rows[r * ROW_INTS + 1]!;
 
@@ -249,10 +240,18 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
       unculled.push(a);
     }
   };
-  /** Marks `[start, start + count)` of attribute `k` (0 position, 1 data, 2 index) for three's next upload. */
+  /**
+   * Marks `[start, start + count)` of attribute `k` (0 position, 1 data, 2 index) for three's next upload; on an
+   * invisible arena, which three does not upload, past `HIDDEN_RANGES_MAX` ranges the attribute goes whole instead.
+   */
   const mark = (a: Arena, k: 0 | 1 | 2, start: number, count: number): void => {
     const attribute = k === 0 ? a.position : k === 1 ? a.data : a.index;
-    if (!a.whole[k]) attribute.addUpdateRange(start, count);
+    if (!a.whole[k]) {
+      if (!a.mesh.visible && attribute.updateRanges.length >= HIDDEN_RANGES_MAX) {
+        attribute.clearUpdateRanges();
+        a.whole[k] = true;
+      } else attribute.addUpdateRange(start, count);
+    }
     attribute.needsUpdate = true;
   };
   /**
@@ -339,8 +338,7 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
     mesh.userData['pass'] = pass;
     if (pass === MESH_PASS_XRAY) {
       mesh.renderOrder = XRAY_ORDER;
-      mesh.onBeforeRender = xrayBeforeRender;
-      mesh.onAfterRender = xrayAfterRender;
+      mesh.visible = xrayShown;
     }
     mesh.scale.setScalar(1 / UNITS);
     const a: Arena = {
@@ -567,8 +565,10 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
     rowVisible(c, r) {
       const start = c.ids[2 * r]!;
       if (start < 0) return false;
-      const a = c.region.data.passes[passOf(c, r)] ?? null;
-      if (a === null || !root.visible || !a.mesh.visible || a.mesh.parent !== root) return false;
+      const pass = passOf(c, r);
+      const a = c.region.data.passes[pass] ?? null;
+      // An X-ray arena's visibility is the X-ray's toggle, not a reveal: its rows read as they would with it on.
+      if (a === null || !root.visible || !(a.mesh.visible || pass === MESH_PASS_XRAY) || a.mesh.parent !== root) return false;
       const index = a.index.array;
       const end = Math.min(start + c.ids[2 * r + 1]!, a.highWater);
       for (let k = start; k + 2 < end; k += 3) if (index[k] !== index[k + 1] || index[k + 1] !== index[k + 2]) return true;
@@ -619,6 +619,10 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
     },
     setXray(on) {
       xrayShown = on;
+      for (let i = 0; i < built.length; i++) {
+        const a = built[i]!;
+        if (a.mesh.userData['pass'] === MESH_PASS_XRAY) a.mesh.visible = on;
+      }
     },
     sortTranslucent(camX, camY, camZ) {
       // Region centres in the camera's frame: regionOrigin + (64, 192, 64) − floatingOrigin (ruling P17).
