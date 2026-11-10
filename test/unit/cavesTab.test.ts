@@ -16,7 +16,7 @@ import {
 import { panelTree, type SectionSpec } from '../../src/ui/paramPanel/model';
 import { createPageXray, pageKeyName } from '../../src/ui/world/worldPage';
 import { bandSet, createXrayStrip, stripText, XRAY_ALL, type XrayBand } from '../../src/ui/world/xrayStrip';
-import { installDom, type FakeElement } from './fixtures/domShim';
+import { FakeElement, installDom } from './fixtures/domShim';
 
 let dom: ReturnType<typeof installDom>;
 beforeEach(() => { dom = installDom(); });
@@ -215,6 +215,48 @@ describe('the Caves tab (SP6a spec §7.3, D12)', () => {
     m.tab.set(true, bandSet(10, 41), 176);
     expect(band.childNodes[0]).toBe(line);
     expect([m.calls, m.bands, m.slices]).toEqual([[], [], []]);
+  });
+});
+
+describe('`set` on an X toggle (SP6a spec §5.3: a toggle allocates nothing; Task 52, minors-11)', () => {
+  /** Counts the reads and writes of an input's `value` (the DOM string the tab would compare and build). */
+  function spyValue(e: FakeElement): { reads: number; writes: number } {
+    const d = Object.getOwnPropertyDescriptor(FakeElement.prototype, 'value')!;
+    const n = { reads: 0, writes: 0 };
+    Object.defineProperty(e, 'value', {
+      configurable: true,
+      get() { n.reads++; return d.get!.call(e); },
+      set(v: string) { n.writes++; d.set!.call(e, v); },
+    });
+    return n;
+  }
+
+  test('with the band and the radius unchanged, `set` reads and writes no slider value: an X toggle, on or off, compares numbers only', () => {
+    const m = mount();
+    m.tab.set(false, bandSet(10, 41), 176);
+    const low = spyValue(m.$('map-caves-low'));
+    const high = spyValue(m.$('map-caves-high'));
+    for (const on of [true, false, true, false]) m.tab.set(on, bandSet(10, 41), 176);
+    expect([low, high]).toEqual([{ reads: 0, writes: 0 }, { reads: 0, writes: 0 }]);
+    expect(checked(m.$('map-caves-xray'))).toBe(false);
+    // A changed band writes both sliders.
+    m.tab.set(false, bandSet(12, 41), 176);
+    expect([low.writes, high.writes, m.$('map-caves-low').value]).toEqual([1, 1, '12']);
+  });
+
+  test('a slider left where the band is not (a value the tab does not take) is put back by the next `set`, as before', () => {
+    const m = mount();
+    m.tab.set(true, bandSet(10, 41), 176);
+    slide(m.$('map-caves-low'), 10.5);
+    expect(m.bands).toEqual([]);
+    m.tab.set(false, bandSet(10, 41), 176);
+    expect([m.$('map-caves-low').value, m.$('map-caves-high').value]).toEqual(['10', '41']);
+    // Moved by the user, the sliders are the band's: the page's echo of it writes nothing.
+    slide(m.$('map-caves-high'), 60);
+    expect(m.bands).toEqual([bandSet(10, 60)]);
+    const low = spyValue(m.$('map-caves-low'));
+    m.tab.set(true, bandSet(10, 60), 176);
+    expect(low).toEqual({ reads: 0, writes: 0 });
   });
 });
 

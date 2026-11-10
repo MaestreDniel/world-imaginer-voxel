@@ -190,12 +190,18 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
   let on = false;
   let band: XrayBand = XRAY_ALL;
   let radius = Number.NaN;
+  // The sliders' values as numbers, as last written or moved to: `set` compares them, so a call with the band unchanged
+  // (every X toggle, with the tab mounted from the premount on) reads no input and builds no string (Task 52).
+  let lowAt: number = XRAY_ALL.yMin;
+  let highAt: number = XRAY_ALL.yMax;
   /** The band's sliders and line; the line only when the band changed. */
   const showBand = (b: XrayBand): void => {
     const changed = b.all !== band.all || b.yMin !== band.yMin || b.yMax !== band.yMax;
     band = b;
     low.input.value = String(b.yMin);
     high.input.value = String(b.yMax);
+    lowAt = b.yMin;
+    highAt = b.yMax;
     if (changed) bandLine.textContent = stripText(b);
   };
 
@@ -203,6 +209,8 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
   const moved = (which: 'low' | 'high') => (): void => {
     const lo = Number(low.input.value);
     const hi = Number(high.input.value);
+    lowAt = lo;
+    highAt = hi;
     if (!Number.isInteger(lo) || !Number.isInteger(hi)) return;
     const b = sliderBand(which, lo, hi);
     showBand(b);
@@ -269,7 +277,7 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
         on = nextOn;
         xrayBox.checked = on;
       }
-      if (b.all !== band.all || b.yMin !== band.yMin || b.yMax !== band.yMax || low.input.value !== String(b.yMin) || high.input.value !== String(b.yMax)) showBand(b);
+      if (b.all !== band.all || b.yMin !== band.yMin || b.yMax !== band.yMax || lowAt !== b.yMin || highAt !== b.yMax) showBand(b);
       if (r !== radius) {
         radius = r;
         radiusOut.textContent = radiusText(r);
