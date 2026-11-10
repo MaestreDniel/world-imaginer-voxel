@@ -261,7 +261,11 @@ describe('`set` on an X toggle (SP6a spec §5.3: a toggle allocates nothing; Tas
 });
 
 describe('the Caves tab over the page\'s X-ray (SP6a spec §7.3; worldPage.ts wires the same)', () => {
-  /** The page's X-ray, its strip and the tab, wired as the page wires them: the tab's changes to the page, the page's state back. */
+  /**
+   * The page's X-ray, its strip and the tab, wired as the page wires them (worldPage.ts): the X-ray's `changed` hook pushes
+   * its state into the tab, the tab's `onXray` and `onBand` change the X-ray only (Task 52, minors-12: no push by hand,
+   * so a page whose hook stopped pushing fails here). The first push stands for the mount, which reads the state itself.
+   */
   function wired(cameraY = 80.5) {
     const calls: string[] = [];
     const strip = createXrayStrip(dom.body as unknown as HTMLElement);
@@ -276,16 +280,11 @@ describe('the Caves tab over the page\'s X-ray (SP6a spec §7.3; worldPage.ts wi
       notices: { show: () => {} },
       cameraY: () => cameraY,
       keyName: pageKeyName,
+      changed: push,
     });
     tab = createCavesTab(host as unknown as HTMLElement, {
-      onXray: (on) => {
-        if (on !== xray.on) xray.action('xray');
-        push();
-      },
-      onBand: (b) => {
-        xray.setBand(b);
-        push();
-      },
+      onXray: (on) => { if (on !== xray.on) xray.action('xray'); },
+      onBand: (b) => xray.setBand(b),
       openSlice: () => {},
       revealParameters: () => {},
       find: () => new Promise<FindOutcome>(() => {}),
@@ -294,10 +293,7 @@ describe('the Caves tab over the page\'s X-ray (SP6a spec §7.3; worldPage.ts wi
       camera: () => ({ x: 0, y: cameraY, z: 0 }),
     });
     push();
-    const key = (a: 'xray' | 'xrayDown' | 'xrayUp' | 'xrayAll'): void => {
-      xray.action(a);
-      push();
-    };
+    const key = (a: 'xray' | 'xrayDown' | 'xrayUp' | 'xrayAll'): void => xray.action(a);
     return { xray, calls, key, $: (id: string) => dom.el(id), stripLine: () => dom.el('world-xray-strip').children[0]!.textContent };
   }
 
