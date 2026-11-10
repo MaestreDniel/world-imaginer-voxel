@@ -610,17 +610,35 @@ export function fieldSliceSpec(s: SliceState, line: Segment | null, field: Slice
  * `interpolated`, and less with one, whose corners the memo shares, SP6a §7.4), and L = the largest c accepted,
  * ⌊(limit − a) / n⌋. The draft's (`draft`) reads "node too heavy to slice", the full slice's "node too heavy for a 128²
  * slice". A caves slice (SP6a §7.4) reads "cave type too heavy …" with c = ⌈columnCost / n⌉ and L = ⌊limit / n⌋, its
- * acquisition included (the chunk columns a wide horizontal plane visits are most of it).
+ * acquisition included (the chunk columns a wide horizontal plane visits are most of it); given `narrowTo` (a horizontal
+ * caves slice's `widestCaveExtent`), it ends "— narrow the extent to `narrowTo` or less" (Task 52, minors-16).
  */
 export function tooHeavyText(
   stage: 'draft' | 'full', params: Params, field: 'density' | 'node' | 'caves', path: string, plane: SliceGeometry['plane'], n: number, columnCost: number, limit: number,
+  narrowTo: number | null = null,
 ): string {
   const a = field === 'caves' ? 0 : sliceAcquisitionCost(params, field, path, plane, n);
   const c = Math.ceil((columnCost - a) / n);
   const l = Math.floor((limit - a) / n);
   const who = field === 'caves' ? 'cave type' : 'node';
   const what = stage === 'draft' ? `${who} too heavy to slice` : `${who} too heavy for a ${SLICE_FULL_N}² slice`;
-  return `${what} (cost ${countText(c)}, limit ${countText(l)})`;
+  const hint = narrowTo === null ? '' : ` — narrow the extent to ${narrowTo} or less`;
+  return `${what} (cost ${countText(c)}, limit ${countText(l)})${hint}`;
+}
+
+/**
+ * The widest of `SLICE_EXTENTS` at which a horizontal `caves` slice under `params` is requested (SP6a §7.4): its draft
+ * admitted by the work bound, or (ruling R9) its 128² slice; null when none is. A caves slice's cost grows with the extent
+ * (the chunk columns it visits), so every narrower extent is admitted too. 512 at the defaults (Task 52, minors-16).
+ */
+export function widestCaveExtent(params: Params): number | null {
+  let widest: number | null = null;
+  for (const e of SLICE_EXTENTS) {
+    const draft = planFieldSlice(SLICE_DRAFT_N, sliceCostOf(params, 'caves', '', 'horizontal', SLICE_DRAFT_N, e), 1, DRAFT_BUDGET);
+    const full = planFieldSlice(SLICE_FULL_N, sliceCostOf(params, 'caves', '', 'horizontal', SLICE_FULL_N, e), 1, REQUEST_BUDGET);
+    if (!draft.refused || !full.refused) widest = e;
+  }
+  return widest;
 }
 
 /** The pool's last resolved configure (`DriverStatus.poolEpoch`, `sessionEpoch`) and the params of the draft it holds. */
@@ -735,8 +753,12 @@ export function createFieldSliceRequests(src: FieldSliceSource): FieldSliceReque
       return;
     }
     const budget = draft ? DRAFT_BUDGET : REQUEST_BUDGET;
-    const heavy = (limit: number): string =>
-      tooHeavyText(draft ? 'draft' : 'full', cfg.params, field as 'density' | 'node' | 'caves', path, state.plane, n, cost, limit);
+    const heavy = (limit: number): string => {
+      // A horizontal caves slice names the widest extent it is admitted at, when narrower (Task 52, minors-16).
+      const widest = field === 'caves' && state.plane === 'horizontal' ? widestCaveExtent(cfg.params) : null;
+      const narrowTo = widest !== null && widest < state.extent ? widest : null;
+      return tooHeavyText(draft ? 'draft' : 'full', cfg.params, field as 'density' | 'node' | 'caves', path, state.plane, n, cost, limit, narrowTo);
+    };
     if (isRefusableField(field)) {
       const plan = planFieldSlice(n, cost, src.pool.size, budget);
       if (plan.refused) {

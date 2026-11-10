@@ -11,7 +11,7 @@
  * up to 3, each with its own plane, field and node, re-requested on every edit like the live slice; `sliceImage`).
  */
 import { describe, expect, test } from 'vitest';
-import { COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, DRAFT_BUDGET, REQUEST_BUDGET, SLICE_RULE_NA } from '../../src/core/constants';
+import { COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, DRAFT_BUDGET, REQUEST_BUDGET, SLICE_EXTENTS, SLICE_RULE_NA } from '../../src/core/constants';
 import { WINDOW_HALF } from '../../src/core/coords';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import type { Params } from '../../src/core/params/schema';
@@ -29,7 +29,7 @@ import {
   sliceStats, type SliceState,
   createFieldSliceRequests, fieldSliceSpec, fieldSliceView, sliceRequestKey, tooHeavyText, BLOCKS_HORIZONTAL_NOTE, RULE_HORIZONTAL_NOTE,
   SLICE_DRAFT_N, SLICE_DRAFT_PRIORITY, SLICE_FULL_N, SLICE_FULL_PRIORITY, type ConfiguredDraft, type SliceWant,
-  contourPath, createSlicePins, pinWant, PIN_DUPLICATE_TEXT, PIN_FULL_TEXT, PIN_MAX, sliceImage, createCaveGestureHold,
+  contourPath, createSlicePins, pinWant, PIN_DUPLICATE_TEXT, PIN_FULL_TEXT, PIN_MAX, sliceImage, createCaveGestureHold, widestCaveExtent,
   CAVES_LABEL, CAVES_SOLID, CAVES_SOLID_RGB, cavesRgba, fieldOptionLabel,
 } from '../../src/ui/inspector/sliceModel';
 import { VOXEL_COLORS } from '../../src/ui/crossSection/voxels';
@@ -1010,10 +1010,27 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       const cost = sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 32, 2048);
       const plan = planFieldSlice(32, cost, 3, DRAFT_BUDGET);
       if (!plan.refused) throw new Error('expected a refusal');
-      expect(r.notice).toBe(tooHeavyText('draft', DEFAULTS, 'caves', '', 'horizontal', 32, cost, plan.limit));
+      expect(r.notice).toBe(tooHeavyText('draft', DEFAULTS, 'caves', '', 'horizontal', 32, cost, plan.limit, 512));
       // Per sample, its chunk column's acquisition included: ⌈3,871,328 / 32⌉ against ⌊DRAFT_BUDGET / 32 / 32⌋.
       expect([cost, plan.limit]).toEqual([3871328, DRAFT_BUDGET / 32]);
-      expect(r.notice).toBe('cave type too heavy to slice (cost 120 979, limit 16 384)');
+      // The widest extent whose request is admitted is named (Task 52, minors-16).
+      expect(r.notice).toBe('cave type too heavy to slice (cost 120 979, limit 16 384) — narrow the extent to 512 or less');
+    });
+
+    test('the widest admitted caves extent (Task 52, minors-16): 512 at the defaults (the 128² slice admitted at 256 and 512, nothing from 1024); named from 1024 up', () => {
+      const admitted = (e: number): boolean =>
+        !planFieldSlice(SLICE_DRAFT_N, sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', SLICE_DRAFT_N, e), 1, DRAFT_BUDGET).refused
+        || !planFieldSlice(SLICE_FULL_N, sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', SLICE_FULL_N, e), 1, REQUEST_BUDGET).refused;
+      expect(SLICE_EXTENTS.map(admitted)).toEqual([true, true, false, false, false, false]);
+      expect(widestCaveExtent(DEFAULTS)).toBe(512);
+      for (const extent of [1024, 8192]) {
+        const { r } = harness(DEFAULTS);
+        r.request(want({ ...CAVES_H, extent }));
+        expect(r.notice).toMatch(/^cave type too heavy to slice \(cost [\d ]+, limit 16 384\) — narrow the extent to 512 or less$/);
+      }
+      // The node and density notices and a notice with no admitted extent are unchanged.
+      expect(tooHeavyText('draft', DEFAULTS, 'caves', '', 'horizontal', 32, 3871328, DRAFT_BUDGET / 32, null)).toBe('cave type too heavy to slice (cost 120 979, limit 16 384)');
+      expect(tooHeavyText('full', DEFAULTS, 'density', '', 'vertical', 128, sliceCostOf(DEFAULTS, 'density', '', 'vertical', 128), 2 ** 20)).toBe('node too heavy for a 128² slice (cost 1 870, limit 7 936)');
     });
 
     test('a cave-leaf drag requests no caves slice until the gesture ends; blocks still request per configure', async () => {
