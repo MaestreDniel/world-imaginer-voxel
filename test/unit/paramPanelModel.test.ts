@@ -440,8 +440,8 @@ describe('cross-field lints of the caves (SP6a spec §4, D8)', () => {
       paramLints(params({ density: { detailAmpLo: lo, detailAmpHi: hi, noises: { detail: { clampSigma } } } }));
     const lint = (leaf: string, amp: number, clampSigma: number, reach: number) => ({
       paths: ['density.detailAmpLo', 'density.detailAmpHi', 'density.noises.detail'],
-      message: `${metaOf(leaf)!.label} (${amp}) × Detail noise's clampSigma (${clampSigma}) lets |detail| reach ${reach} blocks, 16 or more: `
-        + 'detail is dropped where T ≥ 16, so the air it opens just short of T = 16 ends in a flat cut there (from 8, rock it raises 8 or more blocks above the surface is not carved).',
+      message: `${metaOf(leaf)!.label} (${amp}) × Detail noise's clampSigma (${clampSigma}) lets |detail| reach ${reach} blocks, `
+        + 'but detail is dropped where T ≥ 16, so the air it opens just short of T = 16 ends in a flat cut there (from 8, rock it raises 8 or more blocks above the surface is not carved).',
     });
     // The defaults: 1.5 × 3 = 4.5.
     expect([DEFAULTS.density.detailAmpLo, DEFAULTS.density.detailAmpHi, noiseAt('density.noises.detail').clampSigma]).toEqual([0.6, 1.5, 3]);

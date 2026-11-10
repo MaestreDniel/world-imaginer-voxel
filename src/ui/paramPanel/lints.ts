@@ -79,8 +79,8 @@ export function paramLints(p: Params): ParamLint[] {
   if (detailReach >= DETAIL_SKIP_T) {
     out.push({
       paths: ['density.detailAmpLo', 'density.detailAmpHi', DETAIL_NOISE],
-      message: `${metaOf(detailLeaf)!.label} (${detailAmp}) × ${metaOf(DETAIL_NOISE)!.label}'s clampSigma (${detailSigma}) lets |detail| reach ${Math.round(detailReach * 100) / 100} blocks, ${DETAIL_SKIP_T} or more: `
-        + `detail is dropped where T ≥ ${DETAIL_SKIP_T}, so the air it opens just short of T = ${DETAIL_SKIP_T} ends in a flat cut there (from 8, rock it raises 8 or more blocks above the surface is not carved).`,
+      message: `${metaOf(detailLeaf)!.label} (${detailAmp}) × ${metaOf(DETAIL_NOISE)!.label}'s clampSigma (${detailSigma}) lets |detail| reach ${Math.round(detailReach * 100) / 100} blocks, `
+        + `but detail is dropped where T ≥ ${DETAIL_SKIP_T}, so the air it opens just short of T = ${DETAIL_SKIP_T} ends in a flat cut there (from 8, rock it raises 8 or more blocks above the surface is not carved).`,
     });
   }
   return out;
