@@ -632,6 +632,33 @@ describe('createCoordinator: the fill (SP4b spec §3.1-§3.3, §3.6, §3.11)', (
     expect(allWaits).toBeGreaterThan(0);
   });
 
+  test('the refill\'s bound where a T outranks the waiting MESH (Task 52, minors-1): the camera turning 180° at every update during the refill re-scores the heaps, so a T ahead (score d − 3) can rank below a ready MESH behind (d − 1.5); after every settle a waiting MESH still finds T + D + L at the unboosted cap, because the boost needs an empty MESH heap (dropping `heapLen[3] === 0` fails here)', async () => {
+    for (const workers of [2, 3] as const) {
+      const { w, c } = make({ rd: 6, workers });
+      await fill(w, c, cam(0, 0, 0));
+      applyTo(w, c, 2);
+      const k = createCoordinatorCounts();
+      let waits = 0;
+      for (let u = 0; u < 2000 && c.regenerating; u++) {
+        c.update(cam(0, 0, u % 2 === 0 ? 0 : 180));
+        await flush();
+        // Two settles per update, the oldest job first: the turn's rebuild lands between them.
+        for (let i = 0; i < 2 && w.fake.pending.length > 0; i++) {
+          w.settle(0);
+          await flush();
+          c.counts(k);
+          if (k.MESH.queued === 0) continue;
+          waits++;
+          expect(k.T.inFlight + k.D.inFlight + k.L.inFlight, `N ${workers}, update ${u}: T + D + L with a MESH waiting`)
+            .toBeLessThanOrEqual(w.throttle.cap());
+        }
+      }
+      expect(w.fake.violations, `N ${workers}`).toEqual([]);
+      expect(waits, `N ${workers}: a MESH waited`).toBeGreaterThan(0);
+      expect([read(c).stale, c.regenerating], `N ${workers}: the refill done`).toEqual([0, false]);
+    }
+  });
+
   test('regenerating (SP6a, Task 48e): set by `apply`, kept while a stale MESH-set column has a job left, cleared by the counts pass that finds none; never set by `adopt` or a crossing', async () => {
     const { w, c } = make({ rd: 4, workers: 4 });
     await fill(w, c, cam(0, 0));
