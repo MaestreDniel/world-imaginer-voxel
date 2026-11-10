@@ -337,11 +337,24 @@ export function chunkColumnOrder(xs: Int32Array, zs: Int32Array): { keys: Float6
 /**
  * `caveTagBatch`'s codes at the samples order[from … to), into out[q] for each such q (every other out[q] untouched):
  * visited in that order, so a run of one chunk column (`chunkColumnOrder`) makes the column current once. The same
- * values in any order (pure).
+ * values in any order (pure). Throws a RangeError, before writing anything, unless xs, ys, zs, order and out have one
+ * length n, from and to are integers with 0 ≤ from ≤ to ≤ n and order[from … to) lie in 0 … n − 1 (Task 52c, as
+ * `caveTagBatch`); a sample's coordinates are checked by `probe` (a RangeError otherwise).
  */
 export function caveTagRun(
   dc: DensityContext, xs: Int32Array, ys: Int32Array, zs: Int32Array, order: Int32Array, from: number, to: number, out: Uint8Array,
 ): void {
+  const count = xs.length;
+  if (ys.length !== count || zs.length !== count || order.length !== count || out.length !== count) {
+    throw new RangeError('caveTagRun: xs, ys, zs, order and out need one length');
+  }
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || from > to || to > count) {
+    throw new RangeError(`caveTagRun: [${from}, ${to}) is not a range of the ${count} order entries`);
+  }
+  for (let t = from; t < to; t++) {
+    const q = order[t]!;
+    if (q < 0 || q >= count) throw new RangeError(`caveTagRun: order[${t}] = ${q} is not a sample index 0 … ${count - 1}`);
+  }
   const c = dc.compiled;
   const readers = resolve(c).readers;
   const th = dc.ctx.params.caves.pillars.threshold;

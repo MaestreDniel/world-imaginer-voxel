@@ -474,6 +474,37 @@ describe('evaluateFieldSlice: caves, the cave type (SP6a spec §7.4, D13)', () =
     caveTagBatch(dc, xs, ys, zs, batch);
     expect([...all]).toEqual([...batch]);
   });
+
+  test('caveTagRun throws a RangeError, before writing anything, on arrays of other lengths, a range outside order or an order entry outside the samples (Task 52c, as caveTagBatch)', () => {
+    const xs = Int32Array.of(16, -1, 15, 0, -16, 31, 5);
+    const zs = Int32Array.of(0, 3, -1, 15, 0, 2, -16);
+    const ys = Int32Array.of(10, 20, 40, 30, 50, 60, 70);
+    const { order } = chunkColumnOrder(xs, zs);
+    const dc = surfaceContextOf(ctxFor('42')).density;
+    const out = new Uint8Array(7).fill(255);
+    const run = (o: { xs?: Int32Array; ys?: Int32Array; zs?: Int32Array; order?: Int32Array; from?: number; to?: number; out?: Uint8Array }) => () =>
+      caveTagRun(dc, o.xs ?? xs, o.ys ?? ys, o.zs ?? zs, o.order ?? order, o.from ?? 0, o.to ?? 7, o.out ?? out);
+    const cases: Array<[string, () => void]> = [
+      ['ys shorter', run({ ys: ys.subarray(0, 6) })],
+      ['zs longer', run({ zs: Int32Array.of(...zs, 0) })],
+      ['out shorter', run({ out: new Uint8Array(6) })],
+      ['order shorter', run({ order: order.subarray(0, 6) })],
+      ['from < 0', run({ from: -1 })],
+      ['to past the order', run({ to: 8 })],
+      ['from > to', run({ from: 4, to: 3 })],
+      ['a fractional from', run({ from: 1.5 })],
+      ['a NaN to', run({ to: Number.NaN })],
+      ['an order entry past the samples', run({ order: Int32Array.of(1, 4, 2, 6, 3, 0, 7) })],
+      ['a negative order entry', run({ order: Int32Array.of(1, 4, 2, 6, 3, -1, 5), from: 4, to: 7 })],
+    ];
+    for (const [what, f] of cases) {
+      expect(f, what).toThrow(RangeError);
+      expect([...out], `${what}: nothing written`).toEqual(new Array(7).fill(255));
+    }
+    // An empty range is a valid run that writes nothing.
+    run({ from: 3, to: 3 })();
+    expect([...out]).toEqual(new Array(7).fill(255));
+  });
 });
 
 describe('field problems and argument checks (SP3d spec §5.1)', () => {
