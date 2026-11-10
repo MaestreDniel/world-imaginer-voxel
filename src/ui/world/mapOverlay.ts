@@ -467,6 +467,8 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
       storage: o.storage,
       initialView: worldMapView(null, o.fly),
       host: 'world',
+      // The premount's tool is created hidden: nothing requests before the `hide` below (MAP-2; Task 52).
+      hidden: !shown,
       urlSink: null,
       onView: () => { if (!disposed) o.viewChanged(); },
       onTeleport: (x, z) => {
@@ -506,14 +508,16 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     // A saved world's tool shows the modification mode in force from its mount (D10); the mode tells it of later switches.
     if (o.modify !== null) tool.setEditable(o.modify.on());
     if (!shown) {
-      // Premounted: hidden until the first open shows it (no tile, preview or tab request meanwhile). The host is rendered
-      // but not visible, in the layout of the mode it will open in, and laid out now (SP6a, Task 48f): under display: none
+      // Premounted: created hidden (`hidden` above), hidden until the first open shows it (no tile, preview or tab request
+      // meanwhile; `hide` also tells the driver no preview is wanted). The host is rendered but not visible, in the layout
+      // of the mode it will open in (`modeFor()` now: the window may have crossed SPLIT_MIN_WIDTH since the overlay's
+      // creation, and `mode` follows it only while shown), and laid out now (SP6a, Task 48f): under display: none
       // its subtree had no style, so the first open paid the first style and layout of the whole tool (6,713 elements) in
       // the frame, forced by the renderer's resize in `syncLayout` (L14's 177-183 ms frame). Visibility hidden paints
       // nothing, takes no pointer event and no focus (no descendant overrides it with `visible`: uiVisibility.test.ts);
       // `open` makes it visible, `close` hides it with display: none.
       tool.hide();
-      host.classList.toggle('split', mode === 'split');
+      host.classList.toggle('split', modeFor() === 'split');
       host.style.visibility = 'hidden';
       host.style.display = '';
       void host.offsetWidth;

@@ -32,6 +32,11 @@ export interface MapViewOptions {
    * The page passes it to the preview driver's `previewProgress`.
    */
   onPreviewProgress(poolEpoch: number, nearestDrawn: number, visible: number): void;
+  /**
+   * Created hidden (SP6a Task 52: the world map's premount): as after `setHidden(true)`, no tile request and no draw
+   * until `setHidden(false)`, so the source the driver's replaying sink hands it at the mount plans nothing. Absent: shown.
+   */
+  readonly hidden?: boolean;
 }
 
 /** The horizontal slice plane's square (SP3d spec §4.2): the blocks [cx − E/2, cx + E/2) × [cz − E/2, cz + E/2). */
@@ -119,7 +124,7 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
   /** The tile requests this canvas has on the pool (the pool keeps each request object as its job's `tile`). */
   const asked = new Set<TileRequest>();
   let destroyed = false;
-  let hidden = false;
+  let hidden = opts.hidden === true;
   /** The player (the last `setPlayer`), and the arrow as last drawn: position, yaw and time (ms). */
   let player = false;
   let playerX = 0;

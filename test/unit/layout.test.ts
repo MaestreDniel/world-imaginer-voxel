@@ -202,8 +202,9 @@ describe('a hidden map requests nothing (SP2b spec §5.5; final review MAP-2)', 
     expect(src).toContain("visible: () => drawerTabOnScreen(shown, layout, 'spline'),");
     expect(src).toContain("visible: () => drawerTabOnScreen(shown, layout, 'section'),");
     expect(src).toContain("tabVisible: () => tabOnScreen(shown, layout, 'biomes'),");
-    // The standalone page never hides the tool: shown from the mount, so ?map behaves as before.
-    expect(src).toContain('let shown = true;');
+    // The standalone page never hides the tool (it passes no `hidden`): shown from the mount, so ?map behaves as before;
+    // the world's premount mounts it hidden (SP6a Task 52).
+    expect(src).toContain('let shown = deps.hidden !== true;');
     const show = src.slice(src.indexOf('    show(centre) {'), src.indexOf('    hide() {'));
     const hide = src.slice(src.indexOf('    hide() {'), src.indexOf('    setPlayer:'));
     // Shown again, every view on screen catches up once (as when it comes on screen); hidden, the slice viewer stops.

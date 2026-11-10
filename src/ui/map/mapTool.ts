@@ -131,6 +131,12 @@ export interface MapToolDeps {
   readonly places?: MapPlaces | null;
   /** The world's Caves tab (SP6a spec §7.3, D12): the page's X-ray controls and the camera; absent or null on `?map`. */
   readonly caves?: MapCaves | null;
+  /**
+   * Mounted hidden (the world overlay's premount, SP6a Task 48e; Task 52): as after `hide`, nothing requests (no tile,
+   * no tab or drawer view) until the first `show`, so the driver's source replayed at the mount plans no tile (MAP-2).
+   * Absent or false: mounted shown.
+   */
+  readonly hidden?: boolean;
   /** Called once, at the end of the mount, with the parts the standalone page's `?perf=edit` hook reads. */
   readonly onMounted?: (parts: { canvas: MapCanvas; host: HTMLElement; view(): MapView; editAt<T>(at: number, fn: () => T): T }) => void;
 }
@@ -239,10 +245,11 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
     return () => { pinFns.delete(f); };
   };
   /**
-   * Whether the map is shown: always on the standalone page; in the world, between `show` and `hide`. Hidden, no tab or
-   * drawer tab is on screen, so the shares, spline, cross-section and Density views request nothing (final review MAP-2).
+   * Whether the map is shown: always on the standalone page; in the world, between `show` and `hide`, and from the mount
+   * unless it is mounted hidden (`deps.hidden`, the premount). Hidden, no tab or drawer tab is on screen, so the shares,
+   * spline, cross-section and Density views request nothing (final review MAP-2).
    */
-  let shown = true;
+  let shown = deps.hidden !== true;
   const densityShown = (): boolean => drawerTabOnScreen(shown, layout, 'density');
   const canvas = createMapCanvas(layout.map, pool, view, {
     onView: (v) => { view = v; canvas.setView(v); viewChanged(); renderStatus(); },
@@ -276,6 +283,8 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
       }
     },
     onPreviewProgress: (epoch, drawn, visible) => driver.previewProgress(epoch, drawn, visible),
+    // Mounted hidden, the canvas is hidden before the replaying sink below hands it the driver's source (Task 52).
+    hidden: !shown,
   });
   disposers.add(() => canvas.destroy());
   // The driver pushes into its replaying sink (SP4c spec §4.2); the canvas and the spawn readout take its last source,

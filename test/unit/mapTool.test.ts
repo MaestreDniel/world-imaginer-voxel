@@ -114,3 +114,19 @@ describe('the tool mounts the Caves tab in the world\'s map only (SP6a spec §7.
     expect(args).not.toMatch(/\bplaces\b/);
   });
 });
+
+describe('the tool mounted hidden (SP6a Task 48e\'s premount; Task 52, runtime-1)', () => {
+  test('`deps.hidden` makes the tool hidden from its mount: `shown` false and the canvas created hidden before the replaying sink hands it the driver\'s source; `?map` passes none (shown)', () => {
+    const src = SRC();
+    expect(src).toContain('readonly hidden?: boolean;');
+    expect(src).toContain('  let shown = deps.hidden !== true;');
+    const canvas = src.indexOf('  const canvas = createMapCanvas(layout.map, pool, view, {');
+    const hidden = src.indexOf('    hidden: !shown,\n  });', canvas);
+    const attach = src.indexOf('  deps.relay.attach({');
+    expect([canvas > 0, hidden > canvas, attach > hidden]).toEqual([true, true, true]);
+    expect(src.indexOf('  let shown = deps.hidden !== true;')).toBeLessThan(canvas);
+    const page = readFileSync(new URL('../../src/ui/map/mapPage.ts', import.meta.url), 'utf8');
+    const call = page.slice(page.indexOf('createMapTool(root, {'));
+    expect(call.slice(0, call.indexOf('\n  });'))).not.toMatch(/\bhidden\b/);
+  });
+});

@@ -350,6 +350,51 @@ describe('the overlay host and the tool (SP4c spec §1.3, §1.5)', () => {
     expect([b.host().style['display'], b.host().style['visibility'] ?? '']).toEqual(['', '']);
   });
 
+  test('the premounted tool is created hidden (Task 52, runtime-1): `createMapTool` gets `hidden: true`, so its canvas requests no tile before the overlay\'s `hide` (SP4c MAP-2); an open\'s mount creates it shown', async () => {
+    const { overlay } = setup();
+    overlay.premount();
+    await settle();
+    expect(tools()[0]!.deps.hidden).toBe(true);
+    const b = setup();
+    b.overlay.open();
+    await settle();
+    expect(tools()[1]!.deps.hidden).toBe(false);
+  });
+
+  test('the premount lays the host out in the mode the next open uses, `modeFor()` at the premount (Task 52, minors-4): a stored B premounted after the window narrowed below SPLIT_MIN_WIDTH gets no split class, and the open shows A', async () => {
+    const { overlay, host, timers } = setup({ mode: 'split', width: 1920 });
+    timers.resizeTo(SPLIT_MIN_WIDTH - 200);
+    overlay.premount();
+    await settle();
+    expect([host().style['visibility'], host().classList.contains('split')]).toEqual(['hidden', false]);
+    overlay.open();
+    expect([overlay.mode, host().classList.contains('split')]).toEqual(['full', false]);
+    // Widened again before the premount: the split layout.
+    const b = setup({ mode: 'split', width: SPLIT_MIN_WIDTH - 200 });
+    b.timers.resizeTo(1920);
+    b.overlay.premount();
+    await settle();
+    expect(b.host().classList.contains('split')).toBe(true);
+  });
+
+  test('the premount forces the host\'s first style and layout (Task 48f; Task 52, minors-5): it reads `offsetWidth` once, after the host is visibility: hidden, rendered and in its layout', async () => {
+    const { overlay, host } = setup({ mode: 'split' });
+    const reads: Array<[string | undefined, string | undefined, boolean]> = [];
+    Object.defineProperty(host(), 'offsetWidth', {
+      get: () => {
+        reads.push([host().style['visibility'], host().style['display'], host().classList.contains('split')]);
+        return 960;
+      },
+    });
+    overlay.premount();
+    await settle();
+    expect(tools()).toHaveLength(1);
+    expect(reads).toEqual([['hidden', '', true]]);
+    overlay.open();
+    overlay.close();
+    expect(reads).toHaveLength(1);
+  });
+
   test('an M before the premount\'s timer mounts the tool shown; the timer then mounts nothing more', async () => {
     const { overlay, timers } = setup();
     overlay.open();
