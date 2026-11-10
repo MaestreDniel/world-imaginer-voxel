@@ -1905,6 +1905,17 @@ describe('UI smoke test: the caves step, SP6a\'s review links and its review scr
     expect(body).not.toMatch(/SMOKE_KEYS\.(xray|xrayDown|xrayAll|nightVision), \d+, [1-9]/);
   });
 
+  test('PageDown on the focused Lowest y: the step waits for the slider to move, then reads the tab and the strip once (Task 52, minors-9)', () => {
+    const src = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+    const press = src.indexOf("  await p.key('PageDown', SMOKE_KEYS.xrayDown, 34);");
+    expect(press).toBeGreaterThan(-1);
+    const read = src.indexOf('  const slid = await p.eval<CavesRead | null>(CAVES_READ);', press);
+    expect(read).toBeGreaterThan(press);
+    const between = src.slice(press, read);
+    expect(between).not.toContain('sleep(');
+    expect(between).toContain('await holds(t, `(${CAVES_READ})?.low < ${SLIDER_LOW_START}`, ');
+  });
+
   test('--shots writes SP6a\'s fourteen review screenshots (spec §10.10), committed in assets/sp6a at 1400 × 900', () => {
     expect(Object.values(SP6A_SHOTS)).toEqual([
       'review-xray.png', 'review-xray-band.png', 'review-entrance.png', 'review-ravine.png', 'review-cheese-pillars.png', 'review-spaghetti3d.png',

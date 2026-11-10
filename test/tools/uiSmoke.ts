@@ -5283,7 +5283,8 @@ async function cavesChecks(t: Smoke): Promise<void> {
     `caves: Lowest y at ${SLIDER_LOW_START} gives the band ${SLIDER_LOW_START} … 319 (the tab and the world's strip)`, 5000, async () => ({ tab: await p.eval(CAVES_READ), strip: await p.eval(STRIP_READ) }));
   await p.eval(`(document.getElementById('map-caves-low').focus(), true)`);
   await p.key('PageDown', SMOKE_KEYS.xrayDown, 34);
-  await sleep(500);
+  // The world's keys act in the keydown, before the slider's own step: once the slider moved, a world step would show.
+  await holds(t, `(${CAVES_READ})?.low < ${SLIDER_LOW_START}`, 'caves: PageDown on the focused Lowest y steps the slider', 5000, () => p.eval(CAVES_READ));
   const slid = await p.eval<CavesRead | null>(CAVES_READ);
   const worldBand = (await p.eval<{ hidden: boolean; text: string } | null>(STRIP_READ))?.text ?? '';
   const want = slid === null ? '' : xrayStripText(slid.low, 319);
