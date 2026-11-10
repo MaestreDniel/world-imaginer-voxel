@@ -9,10 +9,10 @@
  * This file runs in its own process (vitest isolates each file), with `--no-turbo-inlining` set before any of the
  * coordinator's code is hot: every call is a call, the worst case of TurboFan's inlining budget. `--no-maglev` is set
  * with it (SP6a Task 53): Maglev inlines small callees whatever TurboFan's flag says, so a closure still in Maglev read
- * 41,120 B in the first test's first attempt and the test flaked on tiering timing. Without Maglev a function runs in
+ * 41,120 B locally (40,824 B in CI run 42758530442) in the first test's first attempt and the test flaked on tiering timing. Without Maglev a function runs in
  * Ignition or Sparkplug (every double a HeapNumber) until TurboFan, which inlines nothing here, so the first test boxes
- * on every tier (about 678 KB per attempt); and the Apply case's reading under 256 KB can only be TurboFan's, the
- * interpreter's boxing each of its ~440 scores per call (it read 165,960 B locally, against 27,560 B with Maglev on).
+ * on every tier (about 678 KB per attempt); and the Apply case's reading under 256 KB can only be TurboFan's, since the
+ * interpreter boxes each of its ~440 scores per call (it read 165,960 B locally, against 27,560 B with Maglev on).
  * The first test shows the flags are in force (a returned double is boxed); the bound and the measurement are
  * `zeroAlloc.test.ts`' own. Both flags are restored after the file (Node's defaults are on).
  */
