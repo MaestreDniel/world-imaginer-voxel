@@ -5054,7 +5054,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       teardown.push(flushOnPageHide(window, urlWriter));
       worldUrl = createWorldUrl({
         session,
-        view: () => worldMapView(mapRef?.tool ?? null, fly),
+        view: () => worldMapView(mapRef?.shownTool ?? null, fly),
         camera: fly,
         writer: urlWriter,
         loc: location,

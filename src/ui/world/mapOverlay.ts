@@ -106,8 +106,9 @@ const COVERED_CAP = 60;
 export const WATCH_LIVE_NOTICE = 'Regenerating… near → far · M returns to the map';
 
 /**
- * The map view the world's URL carries (SP4c spec §1.3, §1.6): the mounted tool's, else (before the first M mounted it)
- * the view the first M opens, centred on the camera at `WORLD_MAP_BPP` blocks/px on the default layer. The camera
+ * The map view the world's URL carries (SP4c spec §1.3, §1.6): the tool's once it was shown (`MapOverlay.shownTool`),
+ * else (before the first M; the premounted tool keeps its premount's view, SP6a Task 52) the view the first M opens,
+ * centred on the camera at `WORLD_MAP_BPP` blocks/px on the default layer. The camera
  * flies with no horizontal limit, so its centre is clamped to ±`AT_LIMIT` (inside the hash's window, ±524,288): a
  * reload from far out still decodes.
  */
@@ -251,8 +252,14 @@ export interface MapOverlay {
    * mounted or after `dispose`; opened while the chunk loads, the tool mounts shown, once.
    */
   premount(): void;
-  /** The mounted tool, or null before the first `open` mounted it and after `dispose`. */
+  /** The mounted tool (premounted or opened), or null before the mount and after `dispose`. */
   readonly tool: MapTool | null;
+  /**
+   * The mounted tool once it was shown (an open), else null: the tool whose view the world's URL carries (`worldMapView`,
+   * SP4c spec §1.6). A premounted tool never shown keeps its premount's view, so until the first M the URL carries the
+   * camera-centred view (Task 52).
+   */
+  readonly shownTool: MapTool | null;
   /** Ends an open gesture while the tool still feeds the driver, disposes the tool and removes the host; once. */
   dispose(): void;
 }
@@ -276,6 +283,8 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
   let worldSplit = false;
   let disposed = false;
   let tool: MapTool | null = null;
+  // Whether the tool was shown since its mount (`shownTool`).
+  let toolShown = false;
   let mod: ToolModule | null = null;
   let loading: Promise<ToolModule> | null = null;
   // The notices' route (D27): the tool's row while A covers the 3D, else null.
@@ -444,6 +453,7 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
 
   /** Centres the shown tool on the camera at its zoom and draws the arrow there (SP4c spec §1.5). */
   const showOnCamera = (t: MapTool): void => {
+    toolShown = true;
     t.show({ x: o.fly.x, z: o.fly.z });
     t.setPlayer(o.fly.x, o.fly.z, o.fly.yaw);
   };
@@ -581,6 +591,7 @@ export function createMapOverlay(o: MapOverlayOptions): MapOverlay {
     get shown() { return shown; },
     get mode() { return mode; },
     get tool() { return tool; },
+    get shownTool() { return toolShown ? tool : null; },
     toggle() {
       if (shown) close();
       else open();

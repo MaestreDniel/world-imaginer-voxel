@@ -113,9 +113,10 @@ export interface WorldUrl {
  * The world page's URL rules (SP4c spec §1.6, D20): after every Apply and every view change of the map tool,
  * `pathname + search + '#' + worldHash(session, view())` goes to `writer` (the page's `createUrlWriter`: a 200 ms
  * debounce, `history.replaceState`, a hash over 64 KiB dropped with `oversizeNotice`); never `?map`. `view()` is the
- * tool's view, or the camera-centred one before the first M (`MapOverlay.view`). The search is the page's at
- * creation; only `arrived` rewrites it, kept here rather than read back from `loc`, so a write still waiting in the
- * writer's debounce cannot be undone by a later one. No `hashchange` listener: the world never reads its hash again.
+ * tool's view once it was shown, or the camera-centred one before the first M (`worldMapView` of
+ * `MapOverlay.shownTool`). The search is the page's at creation; only `arrived` rewrites it, kept here rather than read
+ * back from `loc`, so a write still waiting in the writer's debounce cannot be undone by a later one. No `hashchange`
+ * listener: the world never reads its hash again.
  */
 export function createWorldUrl(o: {
   readonly session: Pick<WorldSession, 'state'>;

@@ -4,6 +4,7 @@
  * one, subscribes to the session and calls `driver.change` (ruling R1), installs P and Escape through `installShortcuts`
  * with the overlay's predicate, and on dispose removes its subscribe before its toolbar ends an open drag.
  */
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { createCoordinatorCounts } from '../../src/engine/coordinator';
 import { WorldSession, type SessionChange } from '../../src/engine/session';
@@ -19,7 +20,7 @@ import type { FpsCap } from '../../src/render/fpsLimiter';
 import type { FrameState } from '../../src/render/frameState';
 import {
   createMapOverlay, followSession, frameCapFor, MAP_PRELOAD_MS, ownerOf, SPLIT_MIN_WIDTH, splitAvailable, WATCH_LIVE_NOTICE,
-  WORLD_MAP_BPP, type MapMode, type MapOverlay, type MapOverlayOptions,
+  WORLD_MAP_BPP, worldMapView, type MapMode, type MapOverlay, type MapOverlayOptions,
 } from '../../src/ui/world/mapOverlay';
 import { createPlaces, PLACE_COLOURS } from '../../src/ui/world/places';
 import type { Place } from '../../src/persist/saves';
@@ -393,6 +394,32 @@ describe('the overlay host and the tool (SP4c spec §1.3, §1.5)', () => {
     overlay.open();
     overlay.close();
     expect(reads).toHaveLength(1);
+  });
+
+  test('the URL\'s map view stays camera-centred until the tool was first shown (SP4c spec §1.6; Task 52, runtime-3): the premounted tool is `tool` but not `shownTool`; from the first open its view is the URL\'s, closed or not', async () => {
+    const fly = flyAt(100, -40, 30);
+    const { overlay } = setup({ fly });
+    overlay.premount();
+    await settle();
+    const t = tools()[0]!;
+    expect([overlay.tool, overlay.shownTool]).toEqual([t.tool, null]);
+    // The player flies 2 km without pressing M: the URL follows the camera, not the premount's view.
+    fly.x = 2100;
+    fly.z = 900;
+    expect(worldMapView(overlay.shownTool, fly)).toEqual({ x: 2100, z: 900, bpp: WORLD_MAP_BPP, layer: 'biome' });
+    expect(t.tool.view).toEqual({ x: 100, z: -40, bpp: WORLD_MAP_BPP, layer: 'biome' });
+    overlay.open();
+    expect(overlay.shownTool).toBe(t.tool);
+    t.tool.setView({ ...t.tool.view, bpp: 0.5 });
+    overlay.close();
+    fly.x = 5000;
+    expect(worldMapView(overlay.shownTool, fly)).toEqual({ x: 2100, z: 900, bpp: 0.5, layer: 'biome' });
+    overlay.dispose();
+    expect(overlay.shownTool).toBeNull();
+    // The page writes its URL from `shownTool`.
+    const page = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(page).toContain('view: () => worldMapView(mapRef?.shownTool ?? null, fly),');
+    expect(page).not.toContain('worldMapView(mapRef?.tool');
   });
 
   test('an M before the premount\'s timer mounts the tool shown; the timer then mounts nothing more', async () => {
