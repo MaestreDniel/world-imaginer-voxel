@@ -134,8 +134,8 @@
  *   issues it again). `onEditStaged(cx, cz)` is called when a payload issued at or after the slot's latest
  *   `markEdited` is staged: the first reveal of that column after it is the edit's.
  */
-import { TORUS_SIZE, colKey, colKeyCx, colKeyCz } from '../core/coords';
-import { STAGE_BONUS, streamScore } from '../core/streamScore';
+import { TORUS_SIZE, colKeyCx, colKeyCz, colKeyInto } from '../core/coords';
+import { STAGE_BONUS, streamScoreInto } from '../core/streamScore';
 import type { ColumnMeshPayload } from '../mesh/column';
 import type { ColumnDiff } from '../world/store/api';
 import { StoreCorrupt } from '../world/store/pool';
@@ -558,6 +558,12 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
   const inFlight = new Int32Array(4);
   let total = 0;
   const scratch = new Int32Array(18);
+  /**
+   * The key and tie of the entry being pushed (SP6a Task 52d): written in place (`streamScoreInto`, `colKeyInto`) and
+   * read by `pushKeyed`, so no fresh double crosses a call: a returned double is boxed at every call TurboFan does not
+   * inline, and under load it compiled `apply` with none of its callees inlined (`zeroAllocNoInline.test.ts`).
+   */
+  const pushed = new Float64Array(2);
 
   /** The camera's column at the last update, and whether one happened. */
   let camCx = 0;
@@ -664,7 +670,11 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
         const n = slotOf(cx + dx, cz + dz);
         if (protoAlive[n] !== 0) continue;
         ready = false;
-        if (busy[n] === 0 && failed[n] === 0 && !paused) pushKeyed(0, n, score(cx, cz, 1), colKey(cx + dx, cz + dz));
+        if (busy[n] === 0 && failed[n] === 0 && !paused) {
+          scoreInto(cx, cz, 1);
+          colKeyInto(pushed, 1, cx + dx, cz + dz);
+          pushKeyed(0, n);
+        }
       }
     }
     return ready ? 1 : -1;
@@ -745,14 +755,18 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
     place(h, i, s);
   }
 
-  /** The stage score of column (cx, cz)'s job of stage h, from the last rebuild's centre and forward. */
-  const score = (cx: number, cz: number, h: number): number => streamScore(cx - rcx, cz - rcz, fx, fz, BONUS[h]!);
+  /** The stage score of column (cx, cz)'s job of stage h, from the last rebuild's centre and forward, into `pushed[0]`. */
+  const scoreInto = (cx: number, cz: number, h: number): void => {
+    streamScoreInto(pushed, 0, cx - rcx, cz - rcz, fx, fz, BONUS[h]!);
+  };
 
   /**
-   * Pushes slot s into heap h with this key, or lowers its key if it is there with a larger one (a T(protoOnly) wanted
-   * by a nearer D). In bulk mode the entry is appended unsifted.
+   * Pushes slot s into heap h with the key and tie in `pushed`, or lowers its key if it is there with a larger one (a
+   * T(protoOnly) wanted by a nearer D). In bulk mode the entry is appended unsifted.
    */
-  function pushKeyed(h: number, s: number, key: number, tie: number): void {
+  function pushKeyed(h: number, s: number): void {
+    const key = pushed[0]!;
+    const tie = pushed[1]!;
     const at = h * SLOTS + s;
     const pos = heapPos[at]!;
     if (pos >= 0) {
@@ -772,7 +786,9 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
 
   /** Slot s into stage heap h, keyed by its tracked column's score. */
   function push(h: number, s: number): void {
-    pushKeyed(h, s, score(tcx[s]!, tcz[s]!, h), colKey(tcx[s]!, tcz[s]!));
+    scoreInto(tcx[s]!, tcz[s]!, h);
+    colKeyInto(pushed, 1, tcx[s]!, tcz[s]!);
+    pushKeyed(h, s);
   }
 
   /**
@@ -782,7 +798,10 @@ export function createCoordinator(o: CoordinatorOptions): Coordinator {
   function pushUnload(h: number, s: number): void {
     const x = wcx[s]!;
     const z = wcz[s]!;
-    pushKeyed(h, s, (wflags[s]! & M_T) !== 0 ? score(x, z, 0) : Infinity, colKey(x, z));
+    if ((wflags[s]! & M_T) !== 0) scoreInto(x, z, 0);
+    else pushed[0] = Infinity;
+    colKeyInto(pushed, 1, x, z);
+    pushKeyed(h, s);
   }
 
   function top(h: number): number {

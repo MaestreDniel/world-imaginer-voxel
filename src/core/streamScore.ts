@@ -20,7 +20,20 @@ export const VIEW_MIN_DH = 2;
  * stage bonus (`STAGE_BONUS`). The quotient is never computed at d ≤ 2, so (0, 0) gives −bonus, never NaN.
  */
 export function streamScore(dx: number, dz: number, fx: number, fz: number, bonus: number): number {
+  streamScoreInto(ONE, 0, dx, dz, fx, fz, bonus);
+  return ONE[0]!;
+}
+
+/** `streamScore`'s result, read back. */
+const ONE = new Float64Array(1);
+
+/**
+ * `streamScore` written to `out[i]` (the one formula; SP6a Task 52d). A double a function returns is boxed as a
+ * HeapNumber at every call TurboFan does not inline; a caller that stores the score, as the coordinator's heaps do,
+ * keeps it unboxed whatever is inlined (`zeroAllocNoInline.test.ts`).
+ */
+export function streamScoreInto(out: Float64Array, i: number, dx: number, dz: number, fx: number, fz: number, bonus: number): void {
   const d = Math.sqrt(dx * dx + dz * dz);
   const view = d > VIEW_MIN_DH ? VIEW_WEIGHT * Math.max(0, (dx * fx + dz * fz) / d) : 0;
-  return d - view - bonus;
+  out[i] = d - view - bonus;
 }

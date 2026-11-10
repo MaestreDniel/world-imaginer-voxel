@@ -33,7 +33,9 @@
  * yet installed (it compiles on a background thread, slower under load) reads high once and then settles, the earlier
  * attempts having warmed it up further. The heap is summed without V8's JIT spaces (`code_*`, `trusted_*`: what the
  * compiler installs there depends on its background threads, `terrainHeap.test.ts`); `new_space`, where short-lived
- * objects land, is counted.
+ * objects land, is counted. The harness and the coordinator at rest live in `fixtures/heapGrowth.ts`; the Apply case is
+ * also measured with no TurboFan inlining in `zeroAllocNoInline.test.ts` (SP6a Task 52d: under load TurboFan compiled
+ * `apply` with none of its callees inlined, and the doubles they returned were boxed).
  *
  * The bound, 256 KB over N = 10,000 calls, is under 26 B per call: one object per call fails it (measured on Node 24:
  * a double boxed as a HeapNumber 16 B, a closure's context 40 B, a 3-element array more). The whole frame step has a
@@ -42,7 +44,6 @@
  * the frame-step tests (rulings R7: the file stays under 25 s under the full suite's load).
  */
 import v8 from 'node:v8';
-import { runInNewContext } from 'node:vm';
 import { Color, PerspectiveCamera, type Material, type Mesh } from 'three';
 import { afterAll, describe, expect, test, vi } from 'vitest';
 import { colKey } from '../../src/core/coords';
@@ -50,17 +51,12 @@ import { hex64 } from '../../src/core/hash';
 import { MEDIUM } from '../../src/core/params/graphicsPresets';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
 import { OPENING_T, TIME_SPEEDS } from '../../src/daynight/dayNight';
-import {
-  createCoordinator, createCoordinatorCounts, type Coordinator, type CoordinatorCounts, type CoordinatorJobs,
-  type StreamStore,
-} from '../../src/engine/coordinator';
+import { createCoordinator, createCoordinatorCounts, type Coordinator, type CoordinatorCounts } from '../../src/engine/coordinator';
 import { appliedDraftOf, type WorldStage } from '../../src/engine/invalidation';
-import type { Stage } from '../../src/engine/rings';
 import type { SessionState, WorldSession } from '../../src/engine/session';
 import { createThrottle } from '../../src/engine/throttle';
 import { createUploadBudget } from '../../src/engine/uploadBudget';
 import { createWorkerPool, type WorkerLike } from '../../src/engine/workerPool';
-import type { ColumnMeshPayload } from '../../src/mesh/column';
 import { SPEED_DEFAULT, stepFly, toggleMode, type FlyState } from '../../src/player/fly';
 import { createHotbar } from '../../src/player/hotbar';
 import type { Action } from '../../src/player/keymap';
@@ -95,6 +91,9 @@ import {
 } from '../../src/ui/world/worldPage';
 import { createXrayStrip } from '../../src/ui/world/xrayStrip';
 import { fakePayload } from './fixtures/payloads';
+import {
+  ATTEMPTS, N, ZERO_ALLOC_MAX, allocationOver, applyLoop, expectAtRest, fakeWorld, filledCoordinator, flush, gc,
+} from './fixtures/heapGrowth';
 import { createClipboardStore, type ClipboardStore } from '../../src/ui/world/clipboardStore';
 import { createSelectTool, type SelectTool } from '../../src/ui/world/selectTool';
 import { GLASS, STONE } from '../../src/world/blocks/index';
@@ -159,21 +158,6 @@ vi.mock('../../src/ui/map/mapTool', async () => {
   };
 });
 
-v8.setFlagsFromString('--expose-gc');
-const gc = runInNewContext('gc') as (o?: { type: 'major' | 'minor' }) => void;
-/** V8's spaces for compiled code and its metadata: not counted (`terrainHeap.test.ts`). */
-const JIT_SPACE = /^(code|trusted|shared_trusted)_/;
-
-/** The heap's used bytes without the JIT spaces, read as it is (no gc here). */
-function heapUsed(): number {
-  let n = 0;
-  for (const s of v8.getHeapSpaceStatistics()) if (!JIT_SPACE.test(s.space_name)) n += s.space_used_size;
-  return n;
-}
-
-/** The growth bound over N calls: under 26 B per call (SP4b spec §8.5). */
-const ZERO_ALLOC_MAX = 256 * 1024;
-const N = 10_000;
 /**
  * The whole frame step's bound: a boxing budget of 256 B per tick (rulings R7, SP4b spec §8.5, D25). The frame's fresh
  * doubles cross calls TurboFan does not inline, and V8 boxes each as a 16 B HeapNumber: the median interval, the
@@ -201,15 +185,8 @@ const WARM_UP = 10 * N;
  * the settled code; warming the cheap parts on their own first changes nothing measurable.
  */
 const FRAME_WARM_UP = N;
-const ATTEMPTS = 3;
 /** `apply` + `update` pairs measured (and warmed up) in the Apply test: each is a pass over the 4,096 slots and a rebuild. */
 const APPLY_N = 1_000;
-/**
- * The measured calls run in chunks of N / CHUNKS, each read on its own: under the full suite's load V8 shrinks the
- * young generation to 1 MB of usable space (its allocation rate per second is low), so the frame step's 1.6-1.9 MB over
- * N ticks forced a scavenge in every attempt; a chunk of 1,000 ticks allocates under 260 KB.
- */
-const CHUNKS = 10;
 const TIMEOUT_MS = 120_000;
 
 /**
@@ -224,163 +201,8 @@ function boxedTimes(stepMs: number, warmUp = WARM_UP): readonly number[] {
   return t as number[];
 }
 
-interface Growth {
-  /** The last attempt's growth over N calls; NaN when one of its chunks saw a GC on every try. */
-  readonly bytes: number;
-  /** Each attempt's growth (NaN as above). */
-  readonly readings: readonly number[];
-  /** The GCs each attempt's chunks saw (each such chunk was run again). */
-  readonly gcs: readonly number[];
-  /** Each attempt's GCs by V8's type (`statistics[].gcType`: a scavenge points to allocation in the loop, a mark-sweep to heap pressure). */
-  readonly gcTypes: readonly string[];
-  /** The calls made, warm-up included. */
-  readonly calls: number;
-}
-
-/**
- * The growth over `n` calls with no GC in between: a reading, the profiler started, the calls, a reading, the profiler
- * stopped. Taken again, up to `ATTEMPTS` tries, while the profiler saw a GC; NaN when every try saw one. The first try
- * empties only the young generation; a try after one that saw a GC runs a full `gc()` first, which ends any marking in
- * progress (Task 52, minors-7: under the goldens stage's load every try of every chunk of the Apply case saw a GC after
- * the minor gc alone). The GCs seen are counted by type in `types`.
- */
-function chunkGrowth(call: () => void, n: number, types: Map<string, number>): { bytes: number; gcs: number; calls: number } {
-  let gcs = 0;
-  for (let t = 1; t <= ATTEMPTS; t++) {
-    // A scavenge (a few milliseconds) on the first try; a full GC after a try that saw one.
-    if (t === 1) gc({ type: 'minor' });
-    else gc();
-    const before = heapUsed();
-    const profiler = new v8.GCProfiler();
-    profiler.start();
-    for (let i = 0; i < n; i++) call();
-    const after = heapUsed();
-    const stats = profiler.stop()?.statistics ?? [];
-    if (stats.length === 0) return { bytes: after - before, gcs, calls: t * n };
-    gcs += stats.length;
-    for (const s of stats) types.set(s.gcType, (types.get(s.gcType) ?? 0) + 1);
-  }
-  return { bytes: Number.NaN, gcs, calls: ATTEMPTS * n };
-}
-
-/** A count of GCs by type, as the failure message prints it: `Scavenge × 3 MarkSweepCompact × 1`, or `none`. */
-const typesText = (types: ReadonlyMap<string, number>): string =>
-  types.size === 0 ? 'none' : [...types].map(([t, k]) => `${t} × ${k}`).join(' ');
-
-/**
- * Warms `call` up with `warmUp` calls, then measures the heap growth over `n` (N by default) more with no GC inside a
- * reading: after a double `gc()`, the calls run as `CHUNKS` chunks, each read on its own (`chunkGrowth`), and the
- * growths are summed. An attempt that read `max` or more is followed by another, up to `ATTEMPTS`.
- */
-function allocationOver(call: () => void, warmUp: number, max: number, n = N): Growth {
-  for (let i = 0; i < warmUp; i++) call();
-  let calls = warmUp;
-  const readings: number[] = [];
-  const gcs: number[] = [];
-  const gcTypes: string[] = [];
-  let bytes = Number.NaN;
-  for (let a = 0; a < ATTEMPTS; a++) {
-    gc();
-    gc();
-    bytes = 0;
-    let seen = 0;
-    const types = new Map<string, number>();
-    for (let c = 0; c < CHUNKS; c++) {
-      const g = chunkGrowth(call, n / CHUNKS, types);
-      bytes += g.bytes;
-      seen += g.gcs;
-      calls += g.calls;
-    }
-    readings.push(bytes);
-    gcs.push(seen);
-    gcTypes.push(typesText(types));
-    if (bytes < max) break;
-  }
-  return { bytes, readings, gcs, gcTypes, calls };
-}
-
-function expectAtRest(g: Growth, max = ZERO_ALLOC_MAX): void {
-  expect(g.bytes, `a chunk saw a GC on every try (GCs per attempt: ${g.gcs.join(', ')}; by type: ${g.gcTypes.join('; ')})`).not.toBeNaN();
-  expect(g.bytes, `heap growth ${g.bytes} bytes over ${N} calls (attempts: ${g.readings.join(', ')})`).toBeLessThan(max);
-}
-
-/**
- * A store model and jobs that settle at once (the replies arrive in the next microtask): T commits a record at Proto,
- * D at Decorated (block version + 1), L at Published (light version + 1), MESH stages a payload; L and MESH carry the
- * versions they read at their start, as the workers do. Every proto stays alive (`retainAllProtos`).
- */
-function fakeWorld() {
-  const slotOf = (cx: number, cz: number): number => (cx & 63) + 64 * (cz & 63);
-  const records = new Map<number, { cx: number; cz: number; status: number; block: number; light: number }>();
-  const held = (cx: number, cz: number) => {
-    const r = records.get(slotOf(cx, cz));
-    return r !== undefined && r.cx === cx && r.cz === cz ? r : undefined;
-  };
-  let staged = 0;
-  const store: StreamStore = {
-    versionsInto(cx, cz, out) {
-      for (let dz = -1; dz <= 1; dz++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const k = 2 * (3 * (dz + 1) + (dx + 1));
-          const r = held(cx + dx, cz + dz);
-          out[k] = r?.block ?? -1;
-          out[k + 1] = r?.light ?? -1;
-        }
-      }
-    },
-    holder(cx, cz) {
-      const r = records.get(slotOf(cx, cz));
-      return r === undefined ? 'free' : r.cx === cx && r.cz === cz ? 'self' : 'other';
-    },
-    freeColumn(cx, cz) {
-      if (held(cx, cz) !== undefined) records.delete(slotOf(cx, cz));
-    },
-    freeProto() {},
-  };
-  const jobs: CoordinatorJobs = {
-    run(stage: Stage, cx, cz) {
-      const versions = new Int32Array(18);
-      store.versionsInto(cx, cz, versions);
-      if (stage === 'T') records.set(slotOf(cx, cz), { cx, cz, status: 1, block: 1, light: 0 });
-      else if (stage === 'D') { const r = held(cx, cz)!; r.status = 2; r.block++; }
-      else if (stage === 'L') { const r = held(cx, cz)!; r.status = 3; r.light++; }
-      const payload = stage === 'MESH' ? ({ cx, cz, versions } as unknown as ColumnMeshPayload) : null;
-      return Promise.resolve({ versions: stage === 'L' || stage === 'MESH' ? versions : null, payload, generation: 0 });
-    },
-    cancel() {},
-    liveWorkers: () => 4,
-    generation: () => 0,
-  };
-  return { store, jobs, sink: { stage() { staged++; }, unstage: () => false, remove() {} }, staged: () => staged };
-}
-
-const flush = (): Promise<void> => new Promise((r) => setImmediate(r));
-
 /** The camera at rest: fractional values, as at run time (whole numbers would be Smis, never boxed). */
 const restingFly = (): FlyState => ({ x: 8.5, y: 100.5, z: 8.5, yaw: 37.5, pitch: -10.5, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT, mode: 'fly' });
-
-/** A coordinator at RD 12 (the page's default) filled around the camera, with every set done and nothing in flight. */
-async function filledCoordinator(cam: { x: number; z: number; yawDeg: number }): Promise<Coordinator> {
-  const w = fakeWorld();
-  const c = createCoordinator({
-    jobs: w.jobs, store: w.store, sink: w.sink, throttle: createThrottle({ max: 3 }), rd: 12, rdMax: 16,
-    retainAllProtos: true, strict: true, generation: 0, epoch: 1, onEvent: (e) => { throw new Error(`unexpected event ${e.kind}`); },
-  });
-  for (let i = 0; i < 100 && !c.firstFill(); i++) {
-    c.update(cam);
-    await flush();
-  }
-  c.update(cam);
-  await flush();
-  const counts = c.counts(createCoordinatorCounts());
-  expect(c.firstFill()).toBe(true);
-  for (const s of ['T', 'D', 'L', 'MESH'] as const) {
-    expect(counts[s], s).toEqual({ needed: counts[s].needed, done: counts[s].needed, inFlight: 0, queued: 0 });
-  }
-  expect(w.staged()).toBe(counts.MESH.needed);
-  expect([counts.dropped, counts.failed]).toEqual([0, 0]);
-  return c;
-}
 
 /** The ready reply the workers send for a session state: hex stage hashes and genKey (`taskHandler.ts`). */
 function readyOf(s: SessionState): Configured['ready'] {
@@ -952,15 +774,7 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     const cam = { x: fly.x, z: fly.z, yawDeg: fly.yaw };
     const c = await filledCoordinator(cam);
     const counts = createCoordinatorCounts();
-    // The arguments are made once: the call under test is `apply`, not the caller's literal.
-    const to2 = { epoch: 2, generation: 1, from: 'T' } as const;
-    const to3 = { epoch: 3, generation: 1, from: 'T' } as const;
-    let odd = false;
-    const g = allocationOver(() => {
-      c.apply(odd ? to3 : to2);
-      odd = !odd;
-      c.update(cam);
-    }, APPLY_N, ZERO_ALLOC_MAX, APPLY_N);
+    const g = allocationOver(applyLoop(c, cam), APPLY_N, ZERO_ALLOC_MAX, APPLY_N);
     c.counts(counts);
     expect(counts.T.inFlight + counts.D.inFlight + counts.L.inFlight + counts.MESH.inFlight).toBe(0);
     expect(counts.epoch === 2 || counts.epoch === 3).toBe(true);

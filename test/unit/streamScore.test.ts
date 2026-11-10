@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { STAGE_BONUS, VIEW_MIN_DH, VIEW_WEIGHT, streamScore } from '../../src/core/streamScore';
+import { STAGE_BONUS, VIEW_MIN_DH, VIEW_WEIGHT, streamScore, streamScoreInto } from '../../src/core/streamScore';
 
 const EAST = [1, 0] as const;
 const NORTH = [0, -1] as const;
@@ -28,5 +28,24 @@ describe('streamScore (SP4b spec §3.3, master §4.3)', () => {
     expect(Number.isNaN(t)).toBe(false);
     expect(t).toBe(0);
     expect(streamScore(0, 0, NORTH[0], NORTH[1], STAGE_BONUS.MESH)).toBe(-1.5);
+  });
+
+  test('streamScoreInto writes streamScore\'s value, bit for bit, into out[i] and nothing else (SP6a Task 52d)', () => {
+    const out = new Float64Array(3).fill(-7);
+    const yaws = [0, 0.3, 1, 2.5, -1.2];
+    for (const yaw of yaws) {
+      // A unit forward as the coordinator's (sin, −cos), from a rational point on the circle so core needs no trig.
+      const fx = (1 - yaw * yaw) / (1 + yaw * yaw);
+      const fz = -(2 * yaw) / (1 + yaw * yaw);
+      for (let dx = -20; dx <= 20; dx += 3) {
+        for (let dz = -20; dz <= 20; dz += 4) {
+          for (const bonus of Object.values(STAGE_BONUS)) {
+            streamScoreInto(out, 1, dx, dz, fx, fz, bonus);
+            expect(Object.is(out[1], streamScore(dx, dz, fx, fz, bonus)), `${dx}, ${dz}, ${yaw}, ${bonus}`).toBe(true);
+            expect([out[0], out[2]]).toEqual([-7, -7]);
+          }
+        }
+      }
+    }
   });
 });

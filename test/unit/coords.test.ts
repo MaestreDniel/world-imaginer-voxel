@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
-  colKey, colKeyCx, colKeyCz, columnIndex, columnInWindow, chunkCoord, inWindow, localCoord, localY, MAX_Y, quartCoord,
+  colKey, colKeyCx, colKeyCz, colKeyInto, columnIndex, columnInWindow, chunkCoord, inWindow, localCoord, localY, MAX_Y, quartCoord,
   quartY, QUARTS_Y, SECTION_VOXELS, sectionBaseY, sectionKey, sectionKeyColKey, sectionKeySy, sectionY, SECTIONS,
   TORUS_RECORDS, TORUS_SIZE, torusSlot, voxelIndex, voxelLx, voxelLy, voxelLz, WINDOW_HALF, yInWorld,
 } from '../../src/core/coords';
@@ -93,6 +93,17 @@ describe('colKey and sectionKey (numeric, < 2^32 and < 2^37)', () => {
     expect(colKey(0, 0)).toBe(32768 * 65536 + 32768);
     expect(colKey(-32768, 32767)).toBe(65535);
     expect(colKey(32767, -32768)).toBe(65535 * 65536);
+  });
+
+  test('colKeyInto writes colKey into out[i] and nothing else (SP6a Task 52d)', () => {
+    const edges = [-32768, -32767, -65, -1, 0, 1, 63, 32766, 32767];
+    const out = new Float64Array(3).fill(-7);
+    for (const cx of edges) {
+      for (const cz of edges) {
+        colKeyInto(out, 1, cx, cz);
+        expect([out[0], out[1], out[2]], `${cx}, ${cz}`).toEqual([-7, colKey(cx, cz), -7]);
+      }
+    }
   });
 
   test('colKey round-trips through colKeyCx/colKeyCz over the whole window', () => {
