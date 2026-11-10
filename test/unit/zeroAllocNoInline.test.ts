@@ -7,22 +7,32 @@
  * generation once per try ("Scavenge × 30"). The keys are now written in place (`streamScoreInto`, `colKeyInto`).
  *
  * This file runs in its own process (vitest isolates each file), with `--no-turbo-inlining` set before any of the
- * coordinator's code is hot: every call is a call, the worst case of TurboFan's inlining budget. The first test shows
- * the flag is in force (a returned double is boxed); the bound and the measurement are `zeroAlloc.test.ts`' own.
+ * coordinator's code is hot: every call is a call, the worst case of TurboFan's inlining budget. `--no-maglev` is set
+ * with it (SP6a Task 53): Maglev inlines small callees whatever TurboFan's flag says, so a closure still in Maglev read
+ * 41,120 B in the first test's first attempt and the test flaked on tiering timing. Without Maglev a function runs in
+ * Ignition or Sparkplug (every double a HeapNumber) until TurboFan, which inlines nothing here, so the first test boxes
+ * on every tier (about 678 KB per attempt); and the Apply case's reading under 256 KB can only be TurboFan's, the
+ * interpreter's boxing each of its ~440 scores per call (it read 165,960 B locally, against 27,560 B with Maglev on).
+ * The first test shows the flags are in force (a returned double is boxed); the bound and the measurement are
+ * `zeroAlloc.test.ts`' own. Both flags are restored after the file (Node's defaults are on).
  */
 import v8 from 'node:v8';
 import { afterAll, describe, expect, test } from 'vitest';
 import { N, ZERO_ALLOC_MAX, allocationOver, applyLoop, expectAtRest, filledCoordinator } from './fixtures/heapGrowth';
 
 v8.setFlagsFromString('--no-turbo-inlining');
-afterAll(() => { v8.setFlagsFromString('--turbo-inlining'); });
+v8.setFlagsFromString('--no-maglev');
+afterAll(() => {
+  v8.setFlagsFromString('--turbo-inlining');
+  v8.setFlagsFromString('--maglev');
+});
 
 /** `apply` + `update` pairs measured and warmed up, as in `zeroAlloc.test.ts`. */
 const APPLY_N = 1_000;
 const TIMEOUT_MS = 120_000;
 
 describe('zero allocation with no TurboFan inlining (SP4c spec §4.10, SP6a Task 52d)', () => {
-  test('the flag is in force: four returned doubles per call box 64 B per call', () => {
+  test('the flags are in force: four returned doubles per call box 64 B per call, on every tier', () => {
     const quarter = (x: number): number => x * 0.5 + 0.25;
     const sink = new Float64Array(1);
     let i = 0;

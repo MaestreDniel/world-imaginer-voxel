@@ -48,4 +48,26 @@ describe('streamScore (SP4b spec §3.3, master §4.3)', () => {
       }
     }
   });
+
+  test('the view clamp equals the Math.max form bit for bit, a −0 dot product included (SP6a Task 53)', () => {
+    // The formula as it was written before Task 53 (`Math.max(0, q)`), the reference for the ternary clamp.
+    const before = (dx: number, dz: number, fx: number, fz: number, bonus: number): number => {
+      const d = Math.sqrt(dx * dx + dz * dz);
+      const view = d > VIEW_MIN_DH ? VIEW_WEIGHT * Math.max(0, (dx * fx + dz * fz) / d) : 0;
+      return d - view - bonus;
+    };
+    // Forwards with ±0 components (a dot product of exactly ±0 beside the camera) and rational points on the circle.
+    const forwards: Array<[number, number]> = [[0, -1], [-0, -1], [1, 0], [1, -0], [-1, 0], [0, 1], [-0, 1], [-0, -0]];
+    for (const yaw of [0, 0.3, 1, 2.5, -1.2]) forwards.push([(1 - yaw * yaw) / (1 + yaw * yaw), -(2 * yaw) / (1 + yaw * yaw)]);
+    for (const [fx, fz] of forwards) {
+      for (let dx = -20; dx <= 20; dx++) {
+        for (const dz of [-20, -7, -3, -2, -0, 0, 1, 2, 3, 9, 20]) {
+          for (const bonus of Object.values(STAGE_BONUS)) {
+            const got = streamScore(dx, dz, fx, fz, bonus);
+            expect(Object.is(got, before(dx, dz, fx, fz, bonus)), `${dx}, ${dz}, ${fx}, ${fz}, ${bonus}`).toBe(true);
+          }
+        }
+      }
+    }
+  });
 });

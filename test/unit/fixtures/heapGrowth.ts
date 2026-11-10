@@ -24,9 +24,12 @@ export function heapUsed(): number {
   return n;
 }
 
-/** The young generation's size now (`new_space`: its two semi-spaces), which a chunk's calls must fill to see a scavenge. */
-function youngBytes(): number {
-  for (const s of v8.getHeapSpaceStatistics()) if (s.space_name === 'new_space') return s.space_size;
+/**
+ * The young generation's semi-space now: half of `new_space`'s size, which counts its two semi-spaces. A chunk's calls
+ * must fill about one semi-space (the space new objects are allocated in) to see a scavenge.
+ */
+function semiSpaceBytes(): number {
+  for (const s of v8.getHeapSpaceStatistics()) if (s.space_name === 'new_space') return s.space_size / 2;
   return 0;
 }
 
@@ -52,7 +55,7 @@ export interface Growth {
   readonly gcTypes: readonly string[];
   /** The calls each reading covers. */
   readonly n: number;
-  /** The young generation's size after the last attempt (bytes). */
+  /** The young generation's semi-space after the last attempt (bytes; half of `new_space`'s size). */
   readonly young: number;
   /** The calls made, warm-up included. */
   readonly calls: number;
@@ -116,18 +119,18 @@ export function allocationOver(call: () => void, warmUp: number, max: number, n 
     gcTypes.push(typesText(types));
     if (bytes < max) break;
   }
-  return { bytes, readings, gcs, gcTypes, n, young: youngBytes(), calls };
+  return { bytes, readings, gcs, gcTypes, n, young: semiSpaceBytes(), calls };
 }
 
 /**
  * The growth is under `max`. NaN (a chunk's growth could not be read) fails with what happened: every try of a chunk
- * saw a GC, which a chunk of calls at rest cannot cause unless it allocates about the young generation's size.
+ * saw a GC, which a chunk of calls at rest cannot cause unless it allocates about one young-generation semi-space.
  */
 export function expectAtRest(g: Growth, max = ZERO_ALLOC_MAX): void {
   expect(g.bytes, `no reading: in the last attempt a chunk of ${g.n / CHUNKS} calls saw a GC on each of its ${ATTEMPTS} tries, so `
-    + `its growth could not be read. A scavenge on every try means those calls allocate about the young generation's `
-    + `${g.young} B, far over the bound of ${max} B per ${g.n} calls; a mark-sweep points to heap pressure instead `
-    + `(GCs per attempt: ${g.gcs.join(', ')}; by type: ${g.gcTypes.join('; ')})`).not.toBeNaN();
+    + `its growth could not be read. A scavenge on every try means those calls allocate about a young-generation `
+    + `semi-space, ${g.young} B, far over the bound of ${max} B per ${g.n} calls; a mark-sweep points to heap pressure `
+    + `instead (GCs per attempt: ${g.gcs.join(', ')}; by type: ${g.gcTypes.join('; ')})`).not.toBeNaN();
   expect(g.bytes, `heap growth ${g.bytes} bytes over ${g.n} calls (attempts: ${g.readings.join(', ')})`).toBeLessThan(max);
 }
 

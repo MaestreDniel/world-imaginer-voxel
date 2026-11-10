@@ -34,6 +34,13 @@ const ONE = new Float64Array(1);
  */
 export function streamScoreInto(out: Float64Array, i: number, dx: number, dz: number, fx: number, fz: number, bonus: number): void {
   const d = Math.sqrt(dx * dx + dz * dz);
-  const view = d > VIEW_MIN_DH ? VIEW_WEIGHT * Math.max(0, (dx * fx + dz * fz) / d) : 0;
+  // max(0, q) as a comparison, not a builtin call (one call fewer where Maglev compiles this; SP6a Task 53): the same
+  // double for every finite q, −0 included (both give +0, and the view only ever subtracts). A NaN q (a NaN forward,
+  // which a finite camera yaw never gives) would give 0 here where Math.max gave NaN.
+  let view = 0;
+  if (d > VIEW_MIN_DH) {
+    const q = (dx * fx + dz * fz) / d;
+    view = VIEW_WEIGHT * (q > 0 ? q : 0);
+  }
   out[i] = d - view - bonus;
 }

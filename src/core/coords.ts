@@ -46,11 +46,15 @@ export const voxelLz = (i: number): number => (i >> 4) & 15;
 /** Index in a 16 × 16 per-position column map (heightmaps, surfaceBiome): lz·16 + lx. */
 export const columnIndex = (lx: number, lz: number): number => (lz << 4) | lx;
 
-/** Numeric column key: (cx + 32768)·65536 + (cz + 32768), in [0, 2^32). */
+/**
+ * Numeric column key: (cx + 32768)·65536 + (cz + 32768), in [0, 2^32). `colKeyInto` below writes the same formula a
+ * second time: change both together (`coords.test.ts` pins them equal over an edge grid).
+ */
 export const colKey = (cx: number, cz: number): number => (cx + 32768) * 65536 + (cz + 32768);
 /**
  * colKey written to `out[i]` (SP6a Task 52d): a key above 2^30 is a HeapNumber when returned from a call TurboFan does
- * not inline; a caller that stores it keeps it unboxed (the coordinator's heap ties).
+ * not inline; a caller that stores it keeps it unboxed (the coordinator's heap ties). colKey's formula, written again
+ * (not a call, which would box): keep the two equal.
  */
 export const colKeyInto = (out: Float64Array, i: number, cx: number, cz: number): void => {
   out[i] = (cx + 32768) * 65536 + (cz + 32768);
