@@ -37,7 +37,7 @@ import {
   type SmokePreset, pixelDiffShare, SWIFTSHADER_ARGS, START_SEED_7_HASH, PARITY_VIEW, PARITY_WATER_VIEW, PARITY_VIEWS, WORLD_RD, worldMeshQuery, PARITY_TOL, PARITY_MAX_SHARE, leaveGuardLog,
   expectedRenderer, HUD_POLL_MS, hudMoved, hudOnce, parseHud, STREAM_HOLD_MS, STREAM_MIN_MOVE, STREAM_RD, STREAM_RD_MS, STREAM_REVEAL_MS, STREAM_RUNS, streamQuery,
   type HudRead,
-  LANDING_ABOVE as SMOKE_LANDING_ABOVE, LANDING_MAX_Y as SMOKE_LANDING_MAX_Y, listenerDiff, listenerKey, listenersLeakFree, OVERLAY_APPLY_MS, OVERLAY_NARROW_WIDTH,
+  LANDING_ABOVE as SMOKE_LANDING_ABOVE, LANDING_MAX_Y as SMOKE_LANDING_MAX_Y, listenerDiff, listenerKey, listenersLeakFree, OVERLAY_APPLY_MS, OVERLAY_NARROW_WIDTH, TOOL_DISPOSE_REMOVES, TOOL_FREE_SESSION_LISTENERS, toolDisposeClean,
   OVERLAY_REVEAL_MS, OVERLAY_RUNS, OVERLAY_SHOTS, OVERLAY_TILES_MS, OVERLAY_VIEWPORT, overlayQuery, parseHudStale, hudStaleRowOk, previewMs, smokeLandingY, SETTINGS_KEY as SMOKE_SETTINGS_KEY,
   storedMapMode, TELEPORT_EAST_PX, teleportTarget, WORLD_MAP_BPP as SMOKE_WORLD_MAP_BPP,
   acrossFace, BUILD_QUERY, JUMP_MIN_RISE, PALETTE_SWATCHES, parseHudEdits, SMOKE_FACE, SMOKE_STATE, SMOKE_WATER_SOURCE, TORCH_MIN_LIGHT, WALK_GROUND_MS,
@@ -1082,6 +1082,36 @@ describe('UI smoke test: the overlay steps (SP4c spec §8.6)', () => {
     expect(listenersLeakFree(hintGone, false)).toBe(false);
     expect(listenersLeakFree(listenerDiff(base, base.slice(1)), true)).toBe(false);
     expect(listenersLeakFree(listenerDiff(base, base), false)).toBe(true);
+  });
+});
+
+describe('UI smoke test: the map tool\'s dispose in the leak check (SP4c spec §8.6 step 7; SP6a Task 52, minors-2)', () => {
+  const l = (type: string, script: string, useCapture = false) => ({ type, useCapture, scriptId: script, lineNumber: 1, columnNumber: 2 });
+
+  test('the dispose, diffed against the listeners just before it, removes exactly the tool\'s window keydown and window pointerdown capture and adds none', () => {
+    const before = [
+      listenerKey('window', l('resize', '6')), listenerKey('document', l('pointerlockchange', '6')),
+      listenerKey('window', l('keydown', '22')), listenerKey('window', l('pointerdown', '41', true)),
+    ];
+    const after = before.slice(0, 2);
+    expect(TOOL_DISPOSE_REMOVES).toEqual(['window keydown', 'window pointerdown capture']);
+    expect(toolDisposeClean(listenerDiff(before, after))).toBe(true);
+    // A listener the dispose left (here its keydown) or one it added fails; so does one it removed beyond its own.
+    expect(toolDisposeClean(listenerDiff(before, [...after, before[2]!]))).toBe(false);
+    expect(toolDisposeClean(listenerDiff(before, [...after, listenerKey('window', l('blur', '22'))]))).toBe(false);
+    expect(toolDisposeClean(listenerDiff(before, after.slice(1)))).toBe(false);
+    expect(toolDisposeClean(listenerDiff(before, before))).toBe(false);
+  });
+
+  test('the overlay step checks the dispose\'s listener diff, its timers against the baseline and the tool-free session listeners (3: 11 with the tool in Task 48e\'s and 48f\'s runs)', () => {
+    expect(TOOL_FREE_SESSION_LISTENERS).toBe(3);
+    const src = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+    const step = src.slice(src.indexOf("  await p.eval('(__wiTest.disposeTool(), true)');"));
+    const block = step.slice(0, step.indexOf('  // 8. The reload'));
+    expect(block.length).toBeGreaterThan(0);
+    expect(block).toContain('toolDisposeClean(listenerDiff(listeners, disposed))');
+    expect(block).toContain('timersAfter <= baseline.timers');
+    expect(block).toContain('sessionAfter === TOOL_FREE_SESSION_LISTENERS');
   });
 });
 

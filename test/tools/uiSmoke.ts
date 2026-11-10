@@ -726,6 +726,26 @@ export function listenersLeakFree(diff: { readonly added: readonly string[]; rea
   return lockGranted && diff.gone.length === 1 && diff.gone[0]!.startsWith('document pointerlockchange @');
 }
 
+/**
+ * What the map tool's dispose removes from window and document, by target, type and phase (SP6a Task 52, minors-2): its
+ * P and Escape shortcuts' `keydown` (`installShortcuts`) and the spline drawer's outside-click `pointerdown` capture,
+ * both on window. Task 48e's first run shows them beside the click hint's own `pointerlockchange` (gone at the lock,
+ * `listenersLeakFree`), so the dispose is diffed against the listeners just before it, not against the baseline.
+ */
+export const TOOL_DISPOSE_REMOVES: readonly string[] = ['window keydown', 'window pointerdown capture'];
+/** The session listeners the page holds with no map tool: Task 48e's and 48f's runs read 11 with the tool, 3 after its dispose. */
+export const TOOL_FREE_SESSION_LISTENERS = 3;
+
+/** A listener key without its handler's location: 'window keydown @7:40:3' → 'window keydown'. */
+const listenerKind = (key: string): string => key.replace(/ @[^ ]*$/, '');
+
+/** Whether the dispose's diff, against the listeners just before it, removed exactly `TOOL_DISPOSE_REMOVES` and added none. */
+export function toolDisposeClean(diff: { readonly added: readonly string[]; readonly gone: readonly string[] }): boolean {
+  if (diff.added.length > 0) return false;
+  const kinds = diff.gone.map(listenerKind).sort();
+  return kinds.length === TOOL_DISPOSE_REMOVES.length && kinds.every((k, i) => k === TOOL_DISPOSE_REMOVES[i]);
+}
+
 // ---------------------------------------------------------------- the build and walk steps (SP5a spec §6.4)
 
 /**
@@ -3395,9 +3415,21 @@ async function overlayBatch(t: Smoke, what: string): Promise<void> {
   await sleep(1000);
   const tilesGone1 = await p.eval<number>('__wiTest.tileRequests()');
   t.check(tilesGone1 === tilesGone, `${what}: no tile request over 1 s after dispose (${tilesGone} → ${tilesGone1})`);
-  // The disposed tool leaves no session listener of its own (the baseline's hidden tool held its subscriptions).
+  // The dispose reaches every disposer (Task 52): exactly its own window listeners go (against the list just before it,
+  // so the click hint's lock-time removal is not counted), its timers end (transient ones within a few seconds) and the
+  // session keeps only the page's own listeners (the baseline's hidden tool held its subscriptions).
+  let disposed = await pageListeners(p);
+  let timersAfter = await p.eval<number>('__wiTest.timers()');
+  for (let i = 0; i < 20 && (timersAfter > baseline.timers || !toolDisposeClean(listenerDiff(listeners, disposed))); i++) {
+    await sleep(500);
+    disposed = await pageListeners(p);
+    timersAfter = await p.eval<number>('__wiTest.timers()');
+  }
+  const disposeDiff = listenerDiff(listeners, disposed);
+  t.check(toolDisposeClean(disposeDiff), `${what}: the tool's dispose removes exactly its own listeners on window and document (${TOOL_DISPOSE_REMOVES.join(', ')})`, disposeDiff);
+  t.check(timersAfter <= baseline.timers, `${what}: the pending timers after the dispose are at most the baseline's (${timersAfter} vs ${baseline.timers})`);
   const sessionAfter = await p.eval<number>('__wiTest.listenerCount()');
-  t.check(sessionAfter < baseline.sessionListeners, `${what}: the tool disposed drops its session listeners (${baseline.sessionListeners} → ${sessionAfter})`);
+  t.check(sessionAfter === TOOL_FREE_SESSION_LISTENERS, `${what}: the tool disposed leaves the page's ${TOOL_FREE_SESSION_LISTENERS} session listeners (${baseline.sessionListeners} → ${sessionAfter})`);
 
   // 8. The reload keeps side by side and the edited values (the URL follows the session).
   const kept = await p.state();
