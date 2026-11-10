@@ -19,7 +19,8 @@
  * `caveTagAt` is the rule at one voxel (SP6a spec §3.4, D22), equal to T's stored tag voxel for voxel (DT2's `tagProbe`).
  * `caveTagBatch` is the slice's `caves` field (SP6a spec §7.4, D13): per sample the tag, or `CAVE_SLICE_SOLID` for a
  * solid voxel, evaluated chunk column by chunk column so that a column's ColumnSample, corners, carver window and path
- * list are shared by all its samples.
+ * list are shared by all its samples: `chunkColumnOrder` groups the samples and `caveTagRun` tags a run of the order
+ * (the slice's part calls the two itself, polling its stop between columns).
  *
  * The cell tags (SP6a ruling R13, output-keeping). With the compile's bounds (`cellTags`), corners, and the taps
  * `precave`, the four families, `pillars` and `noodle` all outside `interpolated`, a cell to tag that holds density air
@@ -312,18 +313,39 @@ export function caveTagAt(dc: DensityContext, x: number, y: number, z: number): 
 export function caveTagBatch(dc: DensityContext, xs: Int32Array, ys: Int32Array, zs: Int32Array, out: Uint8Array): void {
   const count = xs.length;
   if (ys.length !== count || zs.length !== count || out.length !== count) throw new RangeError('caveTagBatch: xs, ys, zs and out need one length');
+  caveTagRun(dc, xs, ys, zs, chunkColumnOrder(xs, zs).order, 0, count, out);
+}
+
+/**
+ * The samples (xs[q], zs[q]) grouped by chunk column (Task 52, minors-13: one grouping for `caveTagBatch` and the slice's
+ * `caves` part, `gen/inspect/fieldSlice.ts`): `keys[q]` = (cx + 2^15)·2^16 + (cz + 2^15) (chunk coordinates of the world
+ * window lie in [−2^15, 2^15)), and `order` the indices 0 … n − 1 sorted by key, then index, so each column's samples are
+ * one run of `order`, in index order.
+ */
+export function chunkColumnOrder(xs: Int32Array, zs: Int32Array): { keys: Float64Array; order: Int32Array } {
+  const count = xs.length;
   const keys = new Float64Array(count);
   const order = new Int32Array(count);
   for (let q = 0; q < count; q++) {
-    // (cx + 2^15)·2^16 + (cz + 2^15): chunk coordinates of the world window lie in [−2^15, 2^15).
     keys[q] = ((xs[q]! >> 4) + 32768) * 65536 + ((zs[q]! >> 4) + 32768);
     order[q] = q;
   }
   order.sort((a, b) => keys[a]! - keys[b]! || a - b);
+  return { keys, order };
+}
+
+/**
+ * `caveTagBatch`'s codes at the samples order[from … to), into out[q] for each such q (every other out[q] untouched):
+ * visited in that order, so a run of one chunk column (`chunkColumnOrder`) makes the column current once. The same
+ * values in any order (pure).
+ */
+export function caveTagRun(
+  dc: DensityContext, xs: Int32Array, ys: Int32Array, zs: Int32Array, order: Int32Array, from: number, to: number, out: Uint8Array,
+): void {
   const c = dc.compiled;
   const readers = resolve(c).readers;
   const th = dc.ctx.params.caves.pillars.threshold;
-  for (let t = 0; t < count; t++) {
+  for (let t = from; t < to; t++) {
     const q = order[t]!;
     const x = xs[q]!, y = ys[q]!, z = zs[q]!;
     const v = PROBE(dc, x, y, z);

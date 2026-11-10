@@ -26,7 +26,7 @@
  * an injected T-column source, since gen cannot reach the worker's store) and `rule` (1 when the voxel's rule path
  * passes through the selected rule, or the selected condition holds there; 0 otherwise; `SLICE_RULE_NA` on voxels the
  * rules never evaluate) on vertical planes only; `caves` (SP6a spec §7.4, D13: the cave type, both planes) through
- * `caveTagBatch` on the stage's compile, one chunk column at a time. A part covers the sample columns [from, to) and
+ * `caveTagRun` on the stage's compile, one chunk column at a time (`caveTagBatch`'s codes). A part covers the sample columns [from, to) and
  * holds each sample column's n samples in row order (index (c − from)·n + k), so parts concatenate into the whole.
  * `stop()` is polled once per sample (once per chunk column the part visits for `caves`). `probeField` evaluates one voxel exactly as a slice sample (full ColumnSamples, which the corner
  * samples equal bit for bit), polling `stop()` before acquiring its column and before evaluating. The DensityReferences
@@ -46,7 +46,7 @@ import type { Params } from '../../core/params/schema';
 import type { ColumnView } from '../../world/store/api';
 import { newPointRecord, samplePoint, type ColumnPoint, type PointRecord } from '../column/columnPoint';
 import { buildCornerSample, newColumnSample, type ColumnSample, type SampleField } from '../column/columnStage';
-import { caveTagBatch } from '../caves/tags';
+import { caveTagRun, chunkColumnOrder } from '../caves/tags';
 import type { GenContext } from '../context';
 import { EXPR_CHILD_KEYS, type DensityExpr, type Expr } from '../density/expr';
 import { createCornerMemo, createDensityReference, type DensityReference } from '../density/reference';
@@ -81,7 +81,8 @@ const PROBE_COLUMN = surfaceProbeColumn;
 const MEMO_WORK = memoWorkCost;
 const T_COLUMN_COST = tColumnCost;
 const RULE_NODES = ruleNodeCount;
-const CAVE_BATCH = caveTagBatch;
+const CAVE_RUN = caveTagRun;
+const COLUMN_ORDER = chunkColumnOrder;
 
 /** A line point (xᵢ, zᵢ) in blocks. */
 export type SlicePoint = readonly [x: number, z: number];
@@ -400,7 +401,7 @@ function ruleValue(sc: SurfaceContext, node: RuleNodeRef, id: string, c: Surface
  * Vertical `density`/`node` samples read the ColumnCache's ColumnSample of each chunk column; horizontal ones corner
  * samples memoised over this part (or full samples, `horizontalSampling`); `rule` the SurfaceContext's probe column, whose
  * build polls `stop()` too (`surfaceProbeColumn`'s density fill); `caves` visits its samples grouped by chunk column
- * (`caveTagBatch`), polling `stop()` before each.
+ * (`chunkColumnOrder`, then `caveTagRun` per column, `caveTagBatch`'s codes), polling `stop()` before each.
  */
 export function evaluateFieldSlice(ctx: GenContext, req: FieldSliceRequest, stop: () => boolean, tColumns?: TColumnSource): FieldSliceValues | null {
   const g = req.geometry;
@@ -473,12 +474,10 @@ export function evaluateFieldSlice(ctx: GenContext, req: FieldSliceRequest, stop
   }
 
   if (field === 'caves') {
-    // SP6a spec §7.4: the stage's own compile (`sc.density`, as T), through `caveTagBatch` one chunk column at a time:
-    // the part's samples in row order, then their indices sorted by chunk column, each column's run copied into the
-    // scratch, evaluated, and its codes written back; stop() is polled before each column.
+    // SP6a spec §7.4: the stage's own compile (`sc.density`, as T), through `caveTagRun` one chunk column at a time: the
+    // part's samples in row order, grouped by chunk column (`chunkColumnOrder`, the grouping `caveTagBatch` uses; Task 52,
+    // minors-13), each column's run of the order tagged into `values`; stop() is polled before each column.
     const xv = new Int32Array(size), yv = new Int32Array(size), zv = new Int32Array(size);
-    const keys = new Float64Array(size);
-    const order = new Int32Array(size);
     for (let c = from; c < to; c++) {
       const base = (c - from) * n;
       for (let k = 0; k < n; k++) {
@@ -487,28 +486,18 @@ export function evaluateFieldSlice(ctx: GenContext, req: FieldSliceRequest, stop
         xv[q] = x;
         yv[q] = y;
         zv[q] = z;
-        keys[q] = ((x >> 4) + 32768) * 65536 + ((z >> 4) + 32768);
-        order[q] = q;
       }
     }
-    order.sort((a, b) => keys[a]! - keys[b]! || a - b);
+    const { keys, order } = COLUMN_ORDER(xv, zv);
     const values = new Uint8Array(size);
-    const bx = new Int32Array(size), by = new Int32Array(size), bz = new Int32Array(size);
-    const codes = new Uint8Array(size);
     const dc = sc.density;
     for (let t = 0; t < size;) {
       if (stop()) return null;
       const key = keys[order[t]!]!;
-      let m = 0;
-      for (let u = t; u < size && keys[order[u]!] === key; u++, m++) {
-        const q = order[u]!;
-        bx[m] = xv[q]!;
-        by[m] = yv[q]!;
-        bz[m] = zv[q]!;
-      }
-      CAVE_BATCH(dc, bx.subarray(0, m), by.subarray(0, m), bz.subarray(0, m), codes.subarray(0, m));
-      for (let u = 0; u < m; u++) values[order[t + u]!] = codes[u]!;
-      t += m;
+      let u = t + 1;
+      while (u < size && keys[order[u]!] === key) u++;
+      CAVE_RUN(dc, xv, yv, zv, order, t, u, values);
+      t = u;
     }
     return { field, values, fluid: null };
   }

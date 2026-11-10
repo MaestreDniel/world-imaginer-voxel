@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { CAVE_KIND, CAVE_SLICE_SOLID, DENSITY_COLUMN_COST_MAX, SLICE_RULE_NA } from '../../src/core/constants';
-import { caveTagAt, caveTagBatch } from '../../src/gen/caves/tags';
+import { caveTagAt, caveTagBatch, caveTagRun, chunkColumnOrder } from '../../src/gen/caves/tags';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import type { GenContext } from '../../src/gen/context';
 import { createCornerMemo, createDensityReference } from '../../src/gen/density/reference';
@@ -450,6 +450,29 @@ describe('evaluateFieldSlice: caves, the cave type (SP6a spec §7.4, D13)', () =
     expect([...rev].reverse()).toEqual([...out]);
     expect(() => caveTagBatch(dc2, xs, ys, zs, new Uint8Array(n - 1))).toThrow(RangeError);
     expect(() => caveTagBatch(dc2, Int32Array.of(0), Int32Array.of(320), Int32Array.of(0), new Uint8Array(1))).toThrow(RangeError);
+  });
+
+  test('chunkColumnOrder: the indices sorted by chunk column, then index, with their keys; caveTagRun tags order[from … to) only (Task 52, minors-13)', () => {
+    // Columns (−1, 0), (0, −1), (0, 0) and (1, 0), interleaved; x −1 and −16 are column −1, 15 column 0, 16 column 1.
+    const xs = Int32Array.of(16, -1, 15, 0, -16, 31, 5);
+    const zs = Int32Array.of(0, 3, -1, 15, 0, 2, -16);
+    const { keys, order } = chunkColumnOrder(xs, zs);
+    const key = (cx: number, cz: number): number => (cx + 32768) * 65536 + (cz + 32768);
+    expect([...keys]).toEqual([key(1, 0), key(-1, 0), key(0, -1), key(0, 0), key(-1, 0), key(1, 0), key(0, -1)]);
+    expect([...order]).toEqual([1, 4, 2, 6, 3, 0, 5]);
+    // A run: column (0, −1)'s two samples (order[2 … 4)) at y 40 and 70; every other out[q] untouched.
+    const ys = Int32Array.of(10, 20, 40, 30, 50, 60, 70);
+    const dc = surfaceContextOf(ctxFor('42')).density;
+    const out = new Uint8Array(7).fill(255);
+    caveTagRun(dc, xs, ys, zs, order, 2, 4, out);
+    const point = createDensityContext(ctxFor('42'));
+    expect([...out]).toEqual([255, 255, pointCode(point, 15, 40, -1), 255, 255, 255, pointCode(point, 5, 70, -16)]);
+    // The whole order: caveTagBatch's codes.
+    const all = new Uint8Array(7);
+    caveTagRun(dc, xs, ys, zs, order, 0, 7, all);
+    const batch = new Uint8Array(7);
+    caveTagBatch(dc, xs, ys, zs, batch);
+    expect([...all]).toEqual([...batch]);
   });
 });
 
