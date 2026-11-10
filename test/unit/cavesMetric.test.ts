@@ -736,5 +736,30 @@ describe('the caves instruments on fixtures (SP6a §10.1, C7-C9)', () => {
     expect(caveExamples(big, bt2, bc2, localThickness(bc2, 64, 64), slab).pillars)
       .toEqual({ x: 36.5, y: 10.5, z: 55.5, yaw: 0, pitch: 0, voxel: [36, 10, 55], component: 36_000 - 5120 });
   });
+
+  test('the cave examples\' pillars: a cavern\'s pillar wins over a nearer pocket\'s; with no cavern, the pocket\'s (Task 52, minors-8)', () => {
+    // A 48 × 48 region, centre (24, 24). The cavern: 20 × 10 × 20 cheese with a 2 × 2 rock column at (6 … 7, 6 … 7),
+    // 3,960 voxels. The pocket, apart from it: 22 × 6 × 4 cheese at x 24 … 45, y 10 … 15, z 24 … 27 with a 1 × 1 rock
+    // pillar at (26, 25), 522 voxels; its pillar is nearer the centre.
+    const g = rock(48, 48, 60);
+    carve(g, K.cheese, 2, 21, 10, 19, 2, 21);
+    for (let y = 10; y <= 19; y++) for (const [x, z] of [[6, 6], [7, 6], [6, 7], [7, 7]] as const) setCell(g, x, y, z, 0, true);
+    carve(g, K.cheese, 24, 45, 10, 15, 24, 27);
+    for (let y = 10; y <= 15; y++) setCell(g, 26, y, 25, 0, true);
+    const tops = preCaveTops(g);
+    const c = caveComponents(g, tops);
+    expect([...c.size.values()].sort((a, b) => a - b)).toEqual([522, 3960]);
+    const thick = localThickness(c, 48, 48);
+    const pillars = (x: number, y: number, z: number): boolean =>
+      (x >= 6 && x <= 7 && z >= 6 && z <= 7 && y >= 10 && y <= 19) || (x === 26 && z === 25 && y >= 10 && y <= 15);
+    // A cavern from 3,000 voxels: the cavern's column, as in the test above (+x runs 14 open voxels to the wall: the eye
+    // at (21, 10, 7), looking back, yaw 270), though the pocket's pillar is nearer the centre.
+    expect(caveExamples(g, tops, c, thick, pillars, 3000).pillars)
+      .toEqual({ x: 21.5, y: 10.5, z: 7.5, yaw: 270, pitch: 0, voxel: [21, 10, 7], component: 3960 });
+    // No component reaches C4's 10,000 voxels: any cheese air, so the nearest pillar, the pocket's; +x runs 19 open voxels
+    // (x 27 … 45; −x 2, ±z and the diagonals under PILLAR_BACK): the eye at (45, 10, 25), looking back (yaw 270).
+    expect(caveExamples(g, tops, c, thick, pillars).pillars)
+      .toEqual({ x: 45.5, y: 10.5, z: 25.5, yaw: 270, pitch: 0, voxel: [45, 10, 25], component: 522 });
+  });
 });
 
