@@ -679,6 +679,32 @@ describe('createCoordinator: the fill (SP4b spec §3.1-§3.3, §3.6, §3.11)', (
     expect(w.fake.violations).toEqual([]);
   });
 
+  test('regenerating after a refill with a skipped column (Task 52, runtime-2): its neighbours stay stale for good, the first counts pass with no job clears it, and it stays cleared while the player moves on and world jobs run beside that stale count (the page\'s aux hold reads it)', async () => {
+    const boom = new Error('INTERNAL: boom');
+    let failing = false;
+    const { w, c } = make({ rd: 4, failOf: (j) => (failing && j.stage === 'D' && j.cx === 1 && j.cz === 1 ? boom : null) });
+    await fill(w, c, cam(0, 0));
+    failing = true;
+    applyTo(w, c, 2);
+    expect(c.regenerating).toBe(true);
+    await settleDown(w, c, cam(0, 0), () => 0);
+    expect(w.fake.events).toEqual([{ kind: 'skipped', cx: 1, cz: 1 }]);
+    const k = read(c);
+    // The skipped column's MESH-set neighbours: stale, with no job left that would regenerate them.
+    expect(k.stale).toBeGreaterThan(0);
+    expect(c.regenerating).toBe(false);
+    // The player moves on: new columns' jobs queue and run while that stale count stays.
+    c.update(cam(1, 0));
+    await flush();
+    c.counts(k);
+    expect(k.stale).toBeGreaterThan(0);
+    expect(k.T.inFlight + k.T.queued + k.D.inFlight + k.D.queued + k.L.inFlight + k.L.queued + k.MESH.inFlight + k.MESH.queued).toBeGreaterThan(0);
+    expect(c.regenerating).toBe(false);
+    await settleDown(w, c, cam(1, 0), () => 0);
+    expect(c.regenerating).toBe(false);
+    expect(w.fake.violations).toEqual([]);
+  });
+
   test('re-centring on a crossing: after moving one column east the sets follow and no job outside its set is issued', async () => {
     const { w, c } = make({ rd: 4 });
     await fill(w, c, cam(0, 0));

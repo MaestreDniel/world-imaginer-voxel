@@ -294,7 +294,7 @@ export async function openPersistWorld(o: {
       control?.tick();
       coordinator.update(cam);
       coordinator.counts(counts);
-      if (control !== null) updateAuxPolicy(pool, control.generation, false, counts);
+      if (control !== null) updateAuxPolicy(pool, control.generation, false, counts, coordinator.regenerating);
       store.drain();
       await turn();
       const e = events[0];

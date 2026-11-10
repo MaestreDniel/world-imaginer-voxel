@@ -610,7 +610,7 @@ async function buildAtRest(): Promise<AtRest> {
   // policy from the counts (§6.2), and on rendered frames the overlay's tick, which moves the arrow while shown (§1.5).
   const paused = (): boolean => overlay.owner === 'map';
   const beforeUpdate = (): void => applyControl.tick();
-  const afterCounts = (c: CoordinatorCounts): void => updateAuxPolicy(pool, applyControl.generation, coversWorld(overlay), c);
+  const afterCounts = (c: CoordinatorCounts): void => updateAuxPolicy(pool, applyControl.generation, coversWorld(overlay), c, coordinator.regenerating);
   let owned = 0;
 
   // SP5a's frame additions (SP5a spec §3.5, §4.1, §4.3), as the world page wires them: the page's aim with the click

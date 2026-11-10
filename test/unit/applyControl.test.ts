@@ -17,7 +17,7 @@ import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
 import { createPreviewDriver, draftOf, type Configured, type DriverCanvas, type DriverStatus } from '../../src/ui/map/previewDriver';
 import { createTileSource } from '../../src/ui/map/tileSource';
 import {
-  APPLY_QUIET_MS, auxCap, auxFirst, coversWorld, createApplyControl, createEpochs, regeneratingOf, updateAuxPolicy,
+  APPLY_QUIET_MS, auxCap, auxFirst, coversWorld, createApplyControl, createEpochs, updateAuxPolicy,
 } from '../../src/ui/world/applyControl';
 
 const AMP = 'density.detailAmpHi';
@@ -674,10 +674,10 @@ describe('the aux policy (SP4c spec §6.2, D11)', () => {
   test('updateAuxPolicy: held is the pool\'s epoch against the applied generation; T pending from the counts', () => {
     const p = policyPool(7);
     const counts = pendingT();
-    updateAuxPolicy(p.pool, 6, false, counts);
-    updateAuxPolicy(p.pool, 7, false, counts);
+    updateAuxPolicy(p.pool, 6, false, counts, false);
+    updateAuxPolicy(p.pool, 7, false, counts, false);
     counts.T.done = 349;
-    updateAuxPolicy(p.pool, 7, false, counts);
+    updateAuxPolicy(p.pool, 7, false, counts, false);
     expect(p.set).toEqual([['aux', 4], ['world', 1], ['world', 4]]);
   });
 
@@ -685,13 +685,13 @@ describe('the aux policy (SP4c spec §6.2, D11)', () => {
     const p = policyPool(5);
     const counts = pendingT();
     p.kill();
-    updateAuxPolicy(p.pool, 5, true, counts);
-    updateAuxPolicy(p.pool, 4, true, counts);
+    updateAuxPolicy(p.pool, 5, true, counts, false);
+    updateAuxPolicy(p.pool, 4, true, counts, false);
     counts.T.done = counts.T.needed;
-    updateAuxPolicy(p.pool, 5, false, counts);
+    updateAuxPolicy(p.pool, 5, false, counts, false);
     p.kill();
     p.kill();
-    updateAuxPolicy(p.pool, 5, true, counts);
+    updateAuxPolicy(p.pool, 5, true, counts, false);
     expect(p.set).toEqual([['aux', 2], ['aux', 3], ['world', 3], ['aux', 1]]);
   });
 
@@ -706,7 +706,7 @@ describe('the aux policy (SP4c spec §6.2, D11)', () => {
       { mode: 'full', shown: true },
       { mode: 'full', shown: false },
     ];
-    for (const s of steps) updateAuxPolicy(p.pool, 3, coversWorld(s), counts);
+    for (const s of steps) updateAuxPolicy(p.pool, 3, coversWorld(s), counts, false);
     expect(p.set).toEqual([['aux', 3], ['world', 1], ['world', 1], ['aux', 3], ['world', 1]]);
     // Before the first M there is no overlay: the 3D is visible.
     expect(coversWorld(null)).toBe(false);
@@ -723,41 +723,42 @@ describe('the aux policy (SP4c spec §6.2, D11)', () => {
     expect(at(false, false, false, 4, false)).toEqual(['world', 4]);
   });
 
-  test('regeneratingOf: a stale count with a T, D, L or MESH job in flight or queued; a stale count with no job left (a skipped column\'s neighbours) or no stale column is not', () => {
-    const c = createCoordinatorCounts();
-    expect(regeneratingOf(c)).toBe(false);
-    c.stale = 489;
-    expect(regeneratingOf(c)).toBe(false);
-    for (const stage of ['T', 'D', 'L', 'MESH'] as const) {
-      for (const field of ['inFlight', 'queued'] as const) {
-        c[stage][field] = 1;
-        expect(regeneratingOf(c), `${stage}.${field}`).toBe(true);
-        c[stage][field] = 0;
-      }
-    }
-    c.MESH.queued = 3;
-    c.stale = 0;
-    expect(regeneratingOf(c)).toBe(false);
+  test('updateAuxPolicy\'s regeneration is the coordinator\'s latch (Task 52, runtime-2): a stale count that no job will clear (a skipped column\'s neighbours) with other world jobs running holds nothing once the latch cleared; the latch on holds the 3D-visible cap at 0', () => {
+    const p = policyPool(3);
+    const counts = pendingT();
+    const split = coversWorld({ mode: 'split', shown: true });
+    // After the refill: the skipped column's neighbours stale for good, and the player's new columns' jobs running.
+    counts.stale = 25;
+    counts.T.queued = 40;
+    counts.T.inFlight = 2;
+    counts.MESH.queued = 3;
+    updateAuxPolicy(p.pool, 3, split, counts, false);
+    counts.T.done = counts.T.needed;
+    counts.T.queued = 0;
+    updateAuxPolicy(p.pool, 3, split, counts, false);
+    // During a refill (the latch on): nothing for the map while the 3D is visible.
+    updateAuxPolicy(p.pool, 3, split, counts, true);
+    expect(p.set).toEqual([['world', 1], ['world', 4], ['world', 0]]);
   });
 
   test('updateAuxPolicy in mode B over an Apply: (world, 1) while T is pending, (world, 0) once the Apply\'s refill is pending inside RD, (world, 1) when it is done and T is still pending beyond, (world, 4) at rest', () => {
     const p = policyPool(3);
     const counts = pendingT();
     const split = coversWorld({ mode: 'split', shown: true });
-    updateAuxPolicy(p.pool, 3, split, counts);
+    updateAuxPolicy(p.pool, 3, split, counts, false);
     // The Apply: every MESH-set column stale, its T queued.
     counts.stale = 489;
     counts.T.queued = 300;
     counts.T.inFlight = 3;
-    updateAuxPolicy(p.pool, 3, split, counts);
+    updateAuxPolicy(p.pool, 3, split, counts, true);
     // The last stale column swapped: T still pending beyond RD.
     counts.stale = 0;
     counts.T.queued = 40;
-    updateAuxPolicy(p.pool, 3, split, counts);
+    updateAuxPolicy(p.pool, 3, split, counts, false);
     counts.T.done = counts.T.needed;
     counts.T.queued = 0;
     counts.T.inFlight = 0;
-    updateAuxPolicy(p.pool, 3, split, counts);
+    updateAuxPolicy(p.pool, 3, split, counts, false);
     expect(p.set).toEqual([['world', 1], ['world', 0], ['world', 1], ['world', 4]]);
   });
 });

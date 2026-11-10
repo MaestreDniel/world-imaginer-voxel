@@ -4879,7 +4879,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           // The apply control before the coordinator's update; the aux policy from its counts, the map covering the 3D
           // only were L14's ever in mode A (SP4c spec §4.3, §6.2, §8.4).
           beforeUpdate: () => applyControl.tick(),
-          afterCounts: (c) => updateAuxPolicy(workers, applyControl.generation, coversWorld(benchMap), c),
+          afterCounts: (c) => updateAuxPolicy(workers, applyControl.generation, coversWorld(benchMap), c, coordinator.regenerating),
           // The frame's input, walk step and aim on the bench's clock, into the row the recorder takes next (`playerMs`:
           // L10's `mainP95Ms`, SP5a spec §6.2).
           timing: {
@@ -5809,7 +5809,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       nightVision: () => settings.nightVision,
       // The apply control before the coordinator's update; the aux policy from its counts (SP4c spec §4.3, §6.2).
       beforeUpdate: () => applyControl.tick(),
-      afterCounts: (c) => updateAuxPolicy(workers, applyControl.generation, coversWorld(mapRef), c),
+      afterCounts: (c) => updateAuxPolicy(workers, applyControl.generation, coversWorld(mapRef), c, coordinator.regenerating),
       onRendered: (dtMs) => {
         frames.push(dtMs);
         // The map's arrow follows the camera while it is shown (SP4c spec §1.5).

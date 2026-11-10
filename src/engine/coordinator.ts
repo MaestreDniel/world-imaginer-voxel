@@ -333,8 +333,9 @@ export interface Coordinator {
   /**
    * Whether the world regenerates inside RD (SP6a, Task 48e lever b): set by `apply`; cleared by the first `counts`
    * pass that finds no stale MESH-set column, or one with no T, D, L or MESH job in flight or queued and no free queued
-   * (a skipped column's neighbours, which nothing regenerates under this draft). The page reads the counts every frame.
-   * While it holds and no MESH job waits, T, D and L may take the idle MESH slot (the caps above).
+   * (a skipped column's neighbours, which nothing regenerates under this draft). The page reads the counts every frame,
+   * and this latch after them for its aux policy (`updateAuxPolicy`, SP6a Task 52). While it holds and no MESH job
+   * waits, T, D and L may take the idle MESH slot (the caps above).
    */
   readonly regenerating: boolean;
   dispose(): void;

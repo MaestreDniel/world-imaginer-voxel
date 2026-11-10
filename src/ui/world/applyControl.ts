@@ -142,8 +142,8 @@ export function auxFirst(held: boolean, covers: boolean): AuxFirst {
 /**
  * The cap on non-interactive aux jobs (spec §6.2): held → n (the world issues nothing, so the map takes every worker);
  * covers → n − 1, at least 1 (one worker left to the world); else 0 while the world regenerates inside RD
- * (`regeneratingOf`; SP6a, Task 48e lever a: the map's preview tiles wait for the refill and resume after it), 1 while a
- * current-epoch T is pending, n otherwise (master §4.3's MAP ≤ 1 while any T is pending within RD).
+ * (`Coordinator.regenerating`; SP6a, Task 48e lever a: the map's preview tiles wait for the refill and resume after it),
+ * 1 while a current-epoch T is pending, n otherwise (master §4.3's MAP ≤ 1 while any T is pending within RD).
  */
 export function auxCap(held: boolean, covers: boolean, tPending: boolean, n: number, regenerating = false): number {
   if (held) return n;
@@ -153,32 +153,25 @@ export function auxCap(held: boolean, covers: boolean, tPending: boolean, n: num
 }
 
 /**
- * Whether the world regenerates inside RD (SP6a, Task 48e): a stale MESH-set column (`counts.stale`) while a T, D, L or
- * MESH job is in flight or queued. A stale count with no job left is a skipped column's neighbours, which nothing
- * regenerates under this draft (the overlay's readout reads it as 0, final review WLD-3), so it holds nothing.
- */
-export function regeneratingOf(counts: CoordinatorCounts): boolean {
-  if (counts.stale === 0) return false;
-  const { T, D, L, MESH } = counts;
-  return T.inFlight + D.inFlight + L.inFlight + MESH.inFlight + T.queued + D.queued + L.queued + MESH.queued > 0;
-}
-
-/**
  * The page's frame-step `afterCounts` (spec §6.2): `pool.setAuxPolicy(first, cap)` with `held = pool.epoch !==
- * generation` (the apply control's), `covers` (the overlay full and shown), T pending and `regeneratingOf` from the
- * counts and n the pool's
- * live workers (`liveWorkers()`, as the coordinator's caps: after a non-fatal worker death, n − 1 still leaves one live
- * worker to the world, D11). Scalars only; the pool ignores unchanged values.
+ * generation` (the apply control's), `covers` (the overlay full and shown), T pending from the counts, `regenerating`
+ * the coordinator's latch (`Coordinator.regenerating`, read after the counts pass that updates it: from an `apply`
+ * until the first pass with no stale column or no job at all) and n the pool's live workers (`liveWorkers()`, as the
+ * coordinator's caps: after a non-fatal worker death, n − 1 still leaves one live worker to the world, D11). The latch,
+ * not the counts: a skipped column's neighbours stay stale for good (final review WLD-3), so a stale count with the
+ * player's new columns' jobs running would hold the map's jobs after the refill, for as long as the player moves
+ * (SP6a Task 52). Scalars only; the pool ignores unchanged values.
  */
 export function updateAuxPolicy(
   pool: Pick<WorkerPool, 'epoch' | 'liveWorkers' | 'setAuxPolicy'>,
   generation: number,
   covers: boolean,
   counts: CoordinatorCounts,
+  regenerating: boolean,
 ): void {
   const held = pool.epoch !== generation;
   const tPending = counts.T.done < counts.T.needed;
-  pool.setAuxPolicy(auxFirst(held, covers), auxCap(held, covers, tPending, pool.liveWorkers(), regeneratingOf(counts)));
+  pool.setAuxPolicy(auxFirst(held, covers), auxCap(held, covers, tPending, pool.liveWorkers(), regenerating));
 }
 
 /**

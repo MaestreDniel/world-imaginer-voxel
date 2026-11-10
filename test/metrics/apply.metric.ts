@@ -318,7 +318,7 @@ async function edit(kind: SectionRendererKind): Promise<Run> {
       const f = failure();
       if (f !== null) throw new Error(`${kind}: ${f}`);
       coordinator.counts(counts);
-      updateAuxPolicy(pool, generation(), false, counts);
+      updateAuxPolicy(pool, generation(), false, counts, coordinator.regenerating);
       pump();
       store.drain();
       sections.probe(probe);

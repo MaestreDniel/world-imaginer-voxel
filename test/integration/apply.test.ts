@@ -188,7 +188,7 @@ async function frame(): Promise<void> {
   w.control?.tick();
   w.coordinator.update(CAM);
   w.coordinator.counts(counts);
-  if (w.control !== null) updateAuxPolicy(w.pool, w.control.generation, false, counts);
+  if (w.control !== null) updateAuxPolicy(w.pool, w.control.generation, false, counts, w.coordinator.regenerating);
   w.store.drain();
   await new Promise((r) => setTimeout(r, FRAME_MS));
 }
