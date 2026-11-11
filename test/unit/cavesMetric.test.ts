@@ -59,6 +59,29 @@ describe('the caves instruments on fixtures (SP6a §10.1, C1-C6)', () => {
     expect(thinnestAxes(g, caveComponents(g, preCaveTops(g))).all.length).toBe(2);
   });
 
+  test('C5.thinnest reads the components ≥ 64 voxels that are not mostly noodle (ruling R32): a noodle-majority one is left out, cheese, spaghetti and a half-noodle one kept', () => {
+    const g = rock(48, 48, 100);
+    carve(g, K.cheese, 2, 11, 10, 19, 2, 11); // a 10 × 10 × 10 cavern: 10
+    carve(g, K.spaghetti3d, 0, 47, 40, 43, 20, 23); // a straight 4 × 4 tunnel: 4
+    carve(g, K.noodle, 0, 47, 60, 61, 30, 31); // a 2 × 2 noodle tube, 192 voxels: 2, mostly noodle
+    carve(g, K.noodle, 0, 47, 70, 71, 40, 41); // another: 2, mostly noodle
+    // A 2 × 2 tube half noodle, half spaghetti 3D (96 + 96 voxels): not MORE than half noodle, so kept.
+    carve(g, K.noodle, 0, 23, 80, 81, 10, 11);
+    carve(g, K.spaghetti3d, 24, 47, 80, 81, 10, 11);
+    const c = caveComponents(g, preCaveTops(g));
+    expect(c.size.size).toBe(5);
+    const t = thinnestAxes(g, c);
+    expect([...t.all].sort((a, b) => a - b)).toEqual([2, 2, 2, 4, 10]);
+    expect([...t.notNoodle].sort((a, b) => a - b)).toEqual([2, 4, 10]);
+    expect(t.cheese).toEqual([10]);
+    expect(t.spaghetti3d).toEqual([4]);
+    // The parts read the population without the noodle-majority components: median(2, 4, 10) = 4, not median(2, 2, 2, 4, 10) = 2.
+    const counts = caveRegionCounts(g, () => false, { paths: [], carves: () => false }, 16);
+    expect(counts.thinnest.notNoodle.length).toBe(3);
+    expect(c1c6Parts([{ profile: 'default', counts }])['C5.thinnest']).toBe(4);
+    expect(median(counts.thinnest.all)).toBe(2);
+  });
+
   /**
    * Carves a straight round tube of diameter `dia` along `axis`, from `from` to `to` on that axis, its axis at (a, b)
    * in the two other axes in order (y, z for 'x'; x, z for 'y'; x, y for 'z'): a voxel is in when its centre lies

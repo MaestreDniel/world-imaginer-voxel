@@ -533,16 +533,17 @@ async function measureC1C6(): Promise<Record<C1C6Part, number>> {
     tagged: c.kinds.reduce((a, k) => a + k, 0), components: c.components, skyComponentsAll: c.skyComponents,
     tiles: c.pillars.tiles, tilesWithPillar: c.pillars.withPillar, ravineSources: c.ravines.sources,
     ravineSkySources: c.ravines.skySources, ravineVoxels: c.ravines.voxels, landPositions: c.land.land,
-    thinnestComponents: c.thinnest.all.length, cheeseComponents: c.thinnest.cheese.length,
+    thinnestComponents: c.thinnest.all.length, notNoodleComponents: c.thinnest.notNoodle.length, cheeseComponents: c.thinnest.cheese.length,
     spaghetti3dComponents: c.thinnest.spaghetti3d.length,
   }));
-  // C5.thinnest's population: how many components ≥ 64 voxels read each thinnest axis, pooled over the regions.
+  // C5.thinnest's population: how many components ≥ 64 voxels read each thinnest axis, pooled over the regions (all of
+  // them, recorded; those not mostly noodle, which the part reads, ruling R32; mostly cheese; mostly spaghetti 3D).
   const histOf = (pick: (t: CaveRegionCounts['thinnest']) => number[]): Record<string, number> => {
     const hist: Record<string, number> = {};
     for (const m of measured) for (const v of pick(m.counts.thinnest)) hist[String(v)] = (hist[String(v)] ?? 0) + 1;
     return hist;
   };
-  const thinnest = { all: histOf((t) => t.all), cheese: histOf((t) => t.cheese), spaghetti3d: histOf((t) => t.spaghetti3d) };
+  const thinnest = { all: histOf((t) => t.all), notNoodle: histOf((t) => t.notNoodle), cheese: histOf((t) => t.cheese), spaghetti3d: histOf((t) => t.spaghetti3d) };
   mkdirSync(OUT_DIR, { recursive: true });
   writeFileSync(join(OUT_DIR, 'caves.C1-C6.json'), json({
     id: 'C1-C6', tier: process.env.METRICS_TIER ?? null, values: parts, nanParts: nan, perProfile, bands, thinnest, regions,

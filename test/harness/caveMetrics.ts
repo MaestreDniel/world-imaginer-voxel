@@ -28,8 +28,9 @@
  *   a round tube of diameter D (its voxels' centres within D/2 of its axis) D, a diagonal one of diameter 6 within 1
  *   of 6. Unlike a bounding box it follows a winding tunnel, and unlike the shortest axis-aligned run through a voxel
  *   it does not read a round section's edge voxels as thin (that run gave 2, 3, 5, 6, 8 for D 4, 5, 6, 8, 10). The
- *   box's faces cut the components (a component cut by the region's border or by y −56 reads thinner there). "Mostly"
- *   a kind: more than half its voxels.
+ *   box's faces cut the components (a component cut by the region's border or by y −56 reads thinner there).
+ *   `thinnest` is the median over the components ≥ 64 voxels that are not mostly noodle (ruling R32), `thinnestByKind`
+ *   over those mostly cheese / mostly spaghetti 3D. "Mostly" a kind: more than half its voxels.
  * - C6: per band, the carve rate of the underground voxels with y ≡ r (mod 8), x ≡ r (mod 4) and z ≡ r (mod 4), each
  *   over the band's rate; the maximum over residues and the bands whose rate is > 0.
  * The region parts pool their counts over the regions (C1 per profile); the per-km² parts divide by the regions' area.
@@ -816,24 +817,27 @@ export function localThickness(c: CaveComponents, w: number, d: number): Uint8Ar
 
 /**
  * C5.thinnest's values: per component ≥ `minSize` voxels, its thinnest axis (the median over its voxels of their
- * local thickness, `localThickness`), all of them and those of the components mostly cheese and mostly spaghetti 3D
- * (more than half their voxels of that tag).
+ * local thickness, `localThickness`): all of them (recorded); those of the components not mostly noodle, which
+ * C5.thinnest reads (ruling R32: noodles are thin tubes by design, about one voxel wide, and the gate guards the
+ * blurring of the other families); and those of the components mostly cheese and mostly spaghetti 3D, which
+ * C5.thinnestByKind reads. "Mostly" a tag: more than half the component's voxels.
  */
 export function thinnestAxes(
   g: CaveGrid, c: CaveComponents, minSize = THIN_MIN_VOXELS, thickness: Uint8Array | null = null,
-): { all: number[]; cheese: number[]; spaghetti3d: number[] } {
+): { all: number[]; notNoodle: number[]; cheese: number[]; spaghetti3d: number[] } {
   const plane = g.w * g.d;
   const n = plane * (c.yMax - c.yMin + 1);
   const label = c.label;
   const slot = new Map<number, number>();
   for (const [l, s] of c.size) if (s >= minSize) slot.set(l, slot.size);
-  const out = { all: [] as number[], cheese: [] as number[], spaghetti3d: [] as number[] };
+  const out = { all: [] as number[], notNoodle: [] as number[], cheese: [] as number[], spaghetti3d: [] as number[] };
   if (slot.size === 0) return out;
   const thick = thickness ?? localThickness(c, g.w, g.d);
-  // A histogram of thicknesses per large component, and its cheese and spaghetti 3D voxels.
+  // A histogram of thicknesses per large component, and its cheese, spaghetti 3D and noodle voxels.
   const hist = new Int32Array(slot.size * (THICK_CAP + 1));
   const cheese = new Int32Array(slot.size);
   const spag = new Int32Array(slot.size);
+  const noodle = new Int32Array(slot.size);
   for (let i = 0; i < n; i++) {
     const l = label[i]!;
     if (l === 0) continue;
@@ -843,11 +847,13 @@ export function thinnestAxes(
     const t = g.cells[i + (c.yMin - GRID_Y0) * plane]! & TAG_MASK;
     if (t === CAVE_KIND.cheese) cheese[s]!++;
     else if (t === CAVE_KIND.spaghetti3d) spag[s]!++;
+    else if (t === CAVE_KIND.noodle) noodle[s]!++;
   }
   for (const [l, s] of slot) {
     const v = histMedian(hist, s * (THICK_CAP + 1), THICK_CAP + 1);
     out.all.push(v);
     const size = c.size.get(l)!;
+    if (!(2 * noodle[s]! > size)) out.notNoodle.push(v);
     if (2 * cheese[s]! > size) out.cheese.push(v);
     if (2 * spag[s]! > size) out.spaghetti3d.push(v);
   }
@@ -871,7 +877,7 @@ export interface CaveRegionCounts {
   readonly floors: number[];
   readonly largest: { largest: number; void: number };
   readonly land: { land: number; carved: number };
-  readonly thinnest: { all: number[]; cheese: number[]; spaghetti3d: number[] };
+  readonly thinnest: { all: number[]; notNoodle: number[]; cheese: number[]; spaghetti3d: number[] };
   readonly components: number;
   readonly skyComponents: number;
 }
@@ -972,7 +978,7 @@ export function c1c6Parts(regions: ReadonlyArray<{ readonly profile: string; rea
     if (!Number.isNaN(l) && !(l <= largest)) largest = l;
     land += r.land.land;
     landCarved += r.land.carved;
-    thin.push(...r.thinnest.all);
+    thin.push(...r.thinnest.notNoodle);
     cheese.push(...r.thinnest.cheese);
     spag.push(...r.thinnest.spaghetti3d);
   }

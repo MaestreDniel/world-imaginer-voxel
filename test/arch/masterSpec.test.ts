@@ -2363,6 +2363,8 @@ describe('master spec amendments (SP6a §13)', () => {
     // C6's definition as built (item 18) and D4's figures accepted by the user (R21 (a)).
     expect(def('C6')).toContain('within each 16-block band, the carve rate per lattice residue (y mod 8, x and z mod 4) over the band\'s mean');
     expect(def('C9')).toContain('the user accepted these bounds with the measurements at SP6a\'s tuning (the SP6a spec D4, R21)');
+    // R32 (the user's check): C5.thinnest reads the components not mostly noodle, as thinnestAxes' notNoodle does (test/harness/caveMetrics.ts).
+    expect(def('C5')).toContain('/ `thinnest`, the median local thickness of the components ≥ 64 voxels that are not mostly noodle (more than half their voxels noodle; noodles are about one voxel wide by design; the SP6a spec\'s ruling R32, the user\'s) /');
     // Item 18's S1, L2 and R2 rows.
     expect(lines.find((l) => l.startsWith('| S1 |'))).toContain('(SP6a: `grassSky0` gated from SP6a and `grassNoSky` stays beside it, the SP6a spec D33; amended by SP6a)');
     expect(lines.find((l) => l.startsWith('| L2 |'))).toBe('| L2 | enclosed cave air ≥ 16 deep with sky > 0 (SP6a: re-asserted with real caves, most of the enclosed air it counts the caves\' and the carvers\'; amended by SP6a) | 0 |');
