@@ -626,21 +626,25 @@ describe('the noodle (SP6a spec §1.1, §1.3)', () => {
   });
 
   test('the toggle slot is nb(Nt − regional·Nrb − threshold, −1): the threshold leaf subtracted inside the band gate (the user\'s check, R31)', () => {
-    const tap = at(DEFAULT_DENSITY_TREE as unknown as Expr, P.noodle) as TapExpr;
-    const slots: unknown[] = [];
-    const walk = (x: unknown): void => { if (isRec(x)) { if (x['op'] === 'interpolated' && JSON.stringify(x['x']).includes('"noodleToggle"')) slots.push(x['x']); else Object.values(x).forEach(walk); } else if (Array.isArray(x)) x.forEach(walk); };
-    walk(tap);
-    expect(slots.length).toBe(1);
-    const inner = (slots[0] as { inside: { inside: unknown } }).inside.inside; // nb: the two rangeChoice, in-band
-    expect(inner).toEqual({
+    /** The toggle slot's in-band node under the noodle tap of `tree` (nb: the two rangeChoice, in-band). */
+    const toggleInner = (tree: unknown): unknown => {
+      const slots: unknown[] = [];
+      const walk = (x: unknown): void => { if (isRec(x)) { if (x['op'] === 'interpolated' && JSON.stringify(x['x']).includes('"noodleToggle"')) slots.push(x['x']); else Object.values(x).forEach(walk); } else if (Array.isArray(x)) x.forEach(walk); };
+      walk(at(tree, P.noodle));
+      expect(slots.length).toBe(1);
+      return (slots[0] as { inside: { inside: unknown } }).inside.inside;
+    };
+    expect(toggleInner(DEFAULT_DENSITY_TREE)).toEqual({
       op: 'add',
       a: { op: 'add', a: { op: 'noise', id: 'noodleToggle' }, b: { op: 'neg', x: { op: 'mul', a: { op: 'param', path: 'caves.noodles.regional' }, b: { op: 'noise2', id: 'spagRegional' } } } },
       b: { op: 'neg', x: { op: 'param', path: 'caves.noodles.threshold' } },
     });
-    // Resolved, the threshold folds to its negated default: with Nt − regional·Nrb = threshold the slot reads 0.
-    const resolved = at(dc.expr, P.noodle) as TapExpr;
-    const text = JSON.stringify(resolved);
-    expect(text).toContain(`{"op":"const","v":${-DEFAULTS.caves.noodles.threshold}}`);
+    // Resolved, the threshold folds to its negated value in that slot's own `add` (Task 56's review, minor 2: nb's −1
+    // elsewhere in the slot cannot satisfy this): at the default 1 and at 0.4.
+    for (const threshold of [DEFAULTS.caves.noodles.threshold, 0.4]) {
+      const resolved = threshold === DEFAULTS.caves.noodles.threshold ? dc.expr : createDensityContext(ctxFor('42', { caves: { noodles: { threshold } } })).expr;
+      expect(toggleInner(resolved), `threshold ${threshold}`).toMatchObject({ op: 'add', b: { op: 'const', v: -threshold } });
+    }
   });
 
   test('the noodle noises are not evaluated at corners more than 40 blocks outside the band y −60 … 48 (a counting stub)', () => {
