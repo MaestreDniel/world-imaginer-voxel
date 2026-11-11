@@ -33,6 +33,7 @@ import { NO_ENTRY } from '../../src/sim/diffStore';
 import { Y_MAX, Y_MIN } from '../../src/ui/world/query';
 import { REGISTRY } from '../../src/world/blocks';
 import { sp5cTrees, type Sp5cKind } from '../harness/sp5cTrees';
+import { sp6aTrees, type Sp6aKind } from '../harness/sp6aTrees';
 
 const FIXTURE = new URL('../fixtures/sp5bWorldParams.json', import.meta.url);
 const fixture = (): { schemaVersion: number; profile: 'default'; params: JsonObject } =>
@@ -487,6 +488,52 @@ describe('GV5 worlds open with today\'s built-in trees (SP6a D36, spec §12.4)',
     expect(hex64(genKey(w.seed, stageHashes(p.value)))).toBe(pageKey(w, p.value));
     // Today's genKey of the same params is the stored one while GENERATOR_VERSION is 5 (Task 6 bumps it).
     expect(olderGenerator(w, p.value)).toBe(false);
+  });
+});
+
+describe('GV7 worlds (schema 3) and the user\'s check\'s migration (R31, R32; SP6a spec §12.4; Task 58)', () => {
+  const KINDS: readonly Sp6aKind[] = ['default', 'amplified', 'floating_islands'];
+  /** SP6a's noodle group (its defaults at the exit, before the threshold leaf). */
+  const SP6A_NOODLES = { thickness: 0.11, ridgeMul: 1.5, regional: 0.1, minY: -60, maxY: 64 };
+  /**
+   * A GV7 world record as SP6a's Create, Apply and backup wrote it (`createdRecord`, `appliedRecord`, `newWorldRecord`):
+   * the full params, so both noodle leaves are stored, `density.defs` = `defs`, and no threshold leaf; schema 3.
+   */
+  const gv7 = (profile: Sp6aKind, defs: unknown): WorldRecord => {
+    const params = JSON.parse(canonicalJSON(resolveProfile(profile))) as Record<string, any>;
+    params['density'].defs = defs;
+    params['caves'].noodles = { ...SP6A_NOODLES };
+    return {
+      id: `w-${profile}`, name: profile, seedText: 's', seed: [1, 2], profile, params: params as JsonObject, schemaVersion: 3,
+      paramsHash: '0123456789abcdef', generatorVersion: 7, genKey: '0123456789abcdef', stateTable: todayStateTable(), created: 1, backupOf: null,
+    };
+  };
+
+  test.each(KINDS)('the %s world holding SP6a\'s built-in tree opens with today\'s tree and today\'s noodles (0.22, 48, threshold 1)', (kind) => {
+    const p = loadParams(gv7(kind, sp6aTrees()[kind]));
+    if (!p.ok) throw new Error(JSON.stringify(p.issues));
+    expect(canonicalJSON(p.value)).toBe(canonicalJSON(resolveProfile(kind)));
+  });
+
+  test.each(KINDS)('the %s world holding an edited tree keeps it and its stored SP6a noodles (0.11, 64), the threshold the profile\'s 1', (kind) => {
+    const tree = sp6aTrees()[kind] as { root: { b: { x: Record<string, any> } } };
+    if (kind === 'floating_islands') tree.root.b.x['x'].lo = 0.3;
+    else tree.root.b.x['v'] = -10;
+    const p = loadParams(gv7(kind, tree));
+    if (!p.ok) throw new Error(JSON.stringify(p.issues));
+    expect(canonicalJSON(p.value.density.defs)).toBe(canonicalJSON(tree));
+    expect(p.value.caves.noodles).toEqual({ ...SP6A_NOODLES, threshold: 1 });
+  });
+
+  test('a GV5 world record (schema 2, SP5c\'s params: no caves group) holding an edited tree gets SP6a\'s 0.11 and 64, as SP6a opened it', () => {
+    const params = JSON.parse(canonicalJSON(resolveProfile('default'))) as Record<string, any>;
+    const tree = sp5cTrees().default as { root: { b: { x: Record<string, any> } } };
+    tree.root.b.x['v'] = -10;
+    params['density'].defs = tree;
+    delete params['caves'];
+    const p = loadParams({ params: params as JsonObject, schemaVersion: 2, profile: 'default' });
+    if (!p.ok) throw new Error(JSON.stringify(p.issues));
+    expect(p.value.caves.noodles).toEqual({ ...resolveProfile('default').caves.noodles, thickness: 0.11, maxY: 64 });
   });
 });
 

@@ -61,22 +61,36 @@ const SP6A_NOODLE_DEFAULTS: ReadonlyArray<readonly [path: string, was: number, n
   ['caves.noodles.maxY', 64, 48],
 ];
 
+/** Today's three built-in trees' hashes (computed on first use): a document holding one has the threshold term. */
+let todayTreeHashes: ReadonlySet<string> | null = null;
+const isTodayTree = (hash: string): boolean =>
+  (todayTreeHashes ??= new Set([DEFAULT_DENSITY_TREE, AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE].map((t) => hex64(fnv1a64(canonicalJSON(t)))))).has(hash);
+
 /**
  * 3 → 4 (the user's check, R31, R32; SP6a spec §12.4): a stored `density.defs` canonically equal to one of SP6a's
  * built-in trees becomes today's tree of that kind, and in those documents only a stored `caves.noodles.thickness`
  * equal to SP6a's default 0.11 becomes 0.22 and a stored `caves.noodles.maxY` equal to 64 becomes 48; any other value
- * (the user's) is kept. A document whose tree is anything else (an edit, today's, an SP5c tree, which 2 → 3 has already
- * made today's) is returned as is, so an edited tree keeps its thickness and its band: without the threshold term a
- * doubled thickness would carve two to three times the noodles. The new `caves.noodles.threshold` is not written: a
- * missing leaf takes the profile's value. The input is never mutated.
+ * (the user's) is kept, and a missing one takes the profile's value. A document whose tree is edited (any object but
+ * SP6a's built-in trees and today's, which 2 → 3 makes of SP5c's) keeps its tree and every stored value, and gets
+ * SP6a's 0.11 and 64 where those two leaves are missing: a preset file stores a diff over its profile
+ * (`exportPreset`), so an SP6a preset with an edited tree and the default noodles holds neither, and without the
+ * threshold term today's 0.22 would carve two to three times the noodles (Task 56's review, Task 58). A saved world
+ * stores its full params, so it has both. A leaf whose parent is present but not an object is left for `checkParams`.
+ * A document without `density.defs` (the profile's tree, today's) is returned as is. The new
+ * `caves.noodles.threshold` is not written: a missing leaf takes the profile's value. The input is never mutated.
  */
 function sp6aNoodles(doc: JsonObject): JsonObject {
   const density = doc['density'];
   if (!isObject(density) || !Object.hasOwn(density, 'defs') || !isObject(density['defs'])) return doc;
-  const today = SP6A_TREE_HASHES.get(hex64(fnv1a64(canonicalJSON(density['defs']))));
-  if (today === undefined) return doc;
-  let out = mapPath(doc, 'density.defs', () => today);
-  for (const [path, was, now] of SP6A_NOODLE_DEFAULTS) out = mapPath(out, path, (v) => (v === was ? now : v));
+  const hash = hex64(fnv1a64(canonicalJSON(density['defs'])));
+  const today = SP6A_TREE_HASHES.get(hash);
+  let out = doc;
+  if (today !== undefined) {
+    out = mapPath(out, 'density.defs', () => today);
+    for (const [path, was, now] of SP6A_NOODLE_DEFAULTS) out = mapPath(out, path, (v) => (v === was ? now : v));
+  } else if (!isTodayTree(hash)) {
+    for (const [path, was] of SP6A_NOODLE_DEFAULTS) out = fillPath(out, path, was);
+  }
   return out;
 }
 
@@ -139,6 +153,21 @@ export function mapPath(doc: JsonObject, path: string, fn: (v: JsonValue) => Jso
   const keys = path.split('.');
   const at = getAt(doc, keys);
   return at.found ? setAt(doc, keys, fn(at.value)) : doc;
+}
+
+/**
+ * `doc` with `value` at a missing `path` (its missing parents created), or `doc` itself when the path is present or a
+ * parent on it is present but not an object.
+ */
+export function fillPath(doc: JsonObject, path: string, value: JsonValue): JsonObject {
+  const keys = path.split('.');
+  let cur: JsonValue = doc;
+  for (const k of keys) {
+    if (!isObject(cur)) return doc;
+    if (!Object.hasOwn(cur, k)) return setAt(doc, keys, value);
+    cur = cur[k]!;
+  }
+  return doc;
 }
 
 export function renamePath(doc: JsonObject, from: string, to: string): JsonObject {

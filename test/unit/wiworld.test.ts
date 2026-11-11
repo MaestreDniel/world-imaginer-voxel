@@ -22,6 +22,7 @@ import {
 import { readWiworld, WIWORLD_VERSION, wiworldHash, writeWiworld } from '../../src/persist/wiworld';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
 import { REGISTRY } from '../../src/world/blocks';
+import { sp6aTrees } from '../harness/sp6aTrees';
 
 const S = (key: string): number => REGISTRY.parseStateKey(key);
 const NOW = 1_900_000_000_000;
@@ -290,6 +291,31 @@ describe('.wiworld refusals and repairs (SP5b spec §2.4, D15, §2.1)', () => {
     const src = sourceDump();
     const r = await readWiworld(await writeWiworld({ ...src, history: null }), STATE_BOUNDS, 'imported', NOW);
     expect(r.ok && r.dump.history).toBe(null);
+  });
+
+  test('a GV7 file (its record schema 3, the full params as SP6a wrote them) imports as stored and loads through the 3 → 4 migration: SP6a\'s amplified tree becomes today\'s with today\'s noodles; an edited tree keeps its stored 0.11 and 64 (R31, R32; Task 58)', async () => {
+    const src = sourceDump();
+    const sp6aNoodles = { thickness: 0.11, ridgeMul: 1.5, regional: 0.1, minY: -60, maxY: 64 };
+    const edited = sp6aTrees().amplified as { root: { b: { x: Record<string, any> } } };
+    edited.root.b.x['v'] = -10;
+    for (const [defs, noodles] of [
+      [sp6aTrees().amplified, resolveProfile('amplified').caves.noodles],
+      [edited, { ...sp6aNoodles, threshold: 1 }],
+    ] as const) {
+      const params = JSON.parse(canonicalJSON(src.world.params)) as Record<string, any>;
+      params['density'].defs = defs;
+      params['caves'].noodles = { ...sp6aNoodles };
+      const world: WorldRecord = { ...src.world, params: params as JsonObject, schemaVersion: 3, generatorVersion: 7 };
+      const r = await importInto(createMemoryKV(), await writeWiworld({ ...src, world }));
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect([r.dump.world.schemaVersion, canonicalJSON(r.dump.world.params)]).toEqual([3, canonicalJSON(params)]);
+      const p = loadParams(r.dump.world);
+      if (!p.ok) throw new Error(JSON.stringify(p.issues));
+      expect(p.value.caves.noodles).toEqual(noodles);
+      if (defs === edited) expect(canonicalJSON(p.value.density.defs)).toBe(canonicalJSON(edited));
+      else expect(p.value.density.defs).toBe(resolveProfile('amplified').density.defs);
+    }
   });
 
   test('Review Focus 3: a file whose header\'s `stateTable` is today\'s 58 keys permuted and cut to 55 plus one unknown key `nope[x=1]`, with a stored genKey of another generator: imports with every voxel equal by state key, the unknown key\'s 3 voxels air, the record\'s `stateTable` today\'s, its records re-encoded under today\'s ids, and `olderGenerator` true; a file whose `version` is 2 is refused with nothing written', async () => {

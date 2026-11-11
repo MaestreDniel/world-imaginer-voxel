@@ -4,11 +4,11 @@ import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import { AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE } from '../../src/core/params/presetTrees';
-import { deletePath, mapPath, migrate, MIGRATIONS, renamePath, SCHEMA_VERSION, type JsonObject, type JsonValue } from '../../src/core/params/migrate';
+import { deletePath, fillPath, mapPath, migrate, MIGRATIONS, renamePath, SCHEMA_VERSION, type JsonObject, type JsonValue } from '../../src/core/params/migrate';
 import { exportPreset, importPreset } from '../../src/core/params/presets';
 import { CURRENT_SP } from '../../src/core/ids';
 import { isProfileReady, PROFILE_IDS, PROFILES, resolveProfile } from '../../src/core/params/profiles';
-import { SCHEMA } from '../../src/core/params/schema';
+import { SCHEMA, type Params } from '../../src/core/params/schema';
 import { dirtyStages, genKey, stageHashes } from '../../src/core/stage/hash';
 import { STAGES } from '../../src/core/stage/registry';
 import { randomParams } from '../harness/params';
@@ -182,6 +182,73 @@ describe('migrations', () => {
       expect(MIGRATIONS[2]!(oddCaves)['caves']).toBe(7);
     });
 
+    /** SP6a's `kind` tree with one literal changed (as the test above): an edited tree, without the threshold term. */
+    const editedSp6a = (kind: Sp6aKind): JsonValue => {
+      const tree = sp6aTrees()[kind] as { root: { b: { x: Record<string, any> } } };
+      if (kind === 'floating_islands') tree.root.b.x['x'].lo = 0.3;
+      else tree.root.b.x['v'] = -10;
+      return tree as unknown as JsonValue;
+    };
+
+    // Task 56's review, minor 1 (Task 58): a preset file stores a diff over its profile (`exportPreset`), so an SP6a
+    // preset with an edited tree and the default noodles holds neither noodle leaf; without SP6a's values written there
+    // they would take today's 0.22 and 48 under a tree with no threshold term, two to three times the noodles.
+    test.each(KINDS)('an edited %s tree gets SP6a\'s thickness 0.11 and maxY 64 where those leaves are missing; the tree and every stored value are kept', (kind) => {
+      const tree = editedSp6a(kind);
+      const out = MIGRATIONS[2]!({ density: { defs: tree } } as JsonObject);
+      expect(out).toEqual({ density: { defs: tree }, caves: { noodles: { thickness: 0.11, maxY: 64 } } });
+      expect((out['density'] as JsonObject)['defs']).toBe(tree);
+      expect(noodlesOf(MIGRATIONS[2]!(v3(tree, { thickness: 0.15 })))).toEqual({ thickness: 0.15, maxY: 64 });
+      expect(noodlesOf(MIGRATIONS[2]!(v3(tree, { maxY: 100, ridgeMul: 2 })))).toEqual({ thickness: 0.11, maxY: 100, ridgeMul: 2 });
+      const cheese = MIGRATIONS[2]!({ density: { defs: tree }, caves: { cheese: { offset: 0.4 } } } as JsonObject);
+      expect(cheese['caves']).toEqual({ cheese: { offset: 0.4 }, noodles: { thickness: 0.11, maxY: 64 } });
+    });
+
+    test('an edited tree with both leaves stored, or an odd caves value, is the same object; the input is never mutated; any tree but SP6a\'s and today\'s counts as edited (an SP5c tree too)', () => {
+      const tree = editedSp6a('default');
+      const full = v3(tree);
+      expect(MIGRATIONS[2]!(full)).toBe(full);
+      for (const caves of [7, null, { noodles: null }, { noodles: 'x' }, { noodles: [] }] as JsonValue[]) {
+        const d = { density: { defs: tree }, caves } as JsonObject;
+        expect(MIGRATIONS[2]!(d)).toBe(d);
+      }
+      const doc = { density: { defs: tree }, caves: { cheese: { offset: 0.4 } } } as JsonObject;
+      const before = canonicalJSON(doc);
+      expect(MIGRATIONS[2]!(doc)).not.toBe(doc);
+      expect(canonicalJSON(doc)).toBe(before);
+      expect(noodlesOf(MIGRATIONS[2]!({ density: { defs: sp5cTrees().default } } as JsonObject))).toEqual({ thickness: 0.11, maxY: 64 });
+    });
+
+    test('today\'s trees (what 2 → 3 makes of SP5c\'s, or a copy) are not edits: a document holding one is the same object, its missing leaves the profile\'s', () => {
+      for (const t of [DEFAULT_DENSITY_TREE, AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE] as JsonValue[]) {
+        for (const defs of [t, JSON.parse(JSON.stringify(t)) as JsonValue]) {
+          const d = { density: { defs } } as JsonObject;
+          expect(MIGRATIONS[2]!(d)).toBe(d);
+        }
+      }
+    });
+
+    test.each(['default', 'amplified', 'floating_islands'] as const)('a schema-3 preset file of profile %s with an edited tree and SP6a\'s default noodles (its diff stores neither leaf) imports with the tree, thickness 0.11, maxY 64 and the profile\'s threshold 1', (profile) => {
+      const tree = editedSp6a(profile);
+      const r = importPreset({ format: 'wi10-preset', schemaVersion: 3, name: 'Edited', profile, params: { density: { defs: tree } } });
+      expect(r.ok, r.ok ? '' : JSON.stringify(r.issues)).toBe(true);
+      if (!r.ok) return;
+      expect(canonicalJSON(r.value.params.density.defs)).toBe(canonicalJSON(tree));
+      expect(r.value.params.caves.noodles).toEqual({ ...resolveProfile(profile).caves.noodles, thickness: 0.11, maxY: 64 });
+      expect(r.value.params.caves.noodles.threshold).toBe(1);
+      const rest = (p: Params) => canonicalJSON({ ...p, density: { ...p.density, defs: null }, caves: { ...p.caves, noodles: null } });
+      expect(rest(r.value.params)).toBe(rest(resolveProfile(profile)));
+    });
+
+    test('a schema-2 preset with an edited SP5c tree chains to the same values (2 → 3 keeps the tree); a schema-4 preset (today\'s export) with an edited tree is not migrated', () => {
+      const sp5c = sp5cTrees().default as { root: { b: { x: Record<string, any> } } };
+      sp5c.root.b.x['v'] = -10;
+      const r2 = importPreset({ format: 'wi10-preset', schemaVersion: 2, name: 'SP5c', profile: 'default', params: { density: { defs: sp5c } } });
+      expect(r2.ok && r2.value.params.caves.noodles).toEqual({ ...DEFAULTS.caves.noodles, thickness: 0.11, maxY: 64 });
+      const r4 = importPreset({ format: 'wi10-preset', schemaVersion: 4, name: 'Today', profile: 'default', params: { density: { defs: editedSp6a('default') } } });
+      expect(r4.ok && r4.value.params.caves.noodles).toEqual(DEFAULTS.caves.noodles);
+    });
+
     test('a schema-3 preset on SP6a\'s default tree imports with today\'s tree, thickness 0.22, maxY 48 and the profile\'s threshold 1; a v2 SP5c one chains to today\'s', () => {
       const params = JSON.parse(JSON.stringify(DEFAULTS)) as Record<string, any>;
       params.density.defs = sp6aTrees().default;
@@ -219,6 +286,15 @@ describe('migrations', () => {
     expect(mapPath(doc, 'x.y', () => 5)).toEqual(doc);
     expect(renamePath(doc, 'a.b', 'd.e')).toEqual({ a: { c: 2 }, d: { e: 1 } });
     expect(doc).toEqual({ a: { b: 1, c: 2 } });
+  });
+  test('fillPath writes only a missing leaf (creating its missing parents) and never replaces a present non-object parent', () => {
+    const doc: JsonObject = { a: { b: 1 }, n: 7 };
+    expect(fillPath(doc, 'a.b', 5)).toBe(doc);
+    expect(fillPath(doc, 'a.c', 5)).toEqual({ a: { b: 1, c: 5 }, n: 7 });
+    expect(fillPath(doc, 'x.y.z', 5)).toEqual({ a: { b: 1 }, n: 7, x: { y: { z: 5 } } });
+    expect(fillPath(doc, 'n.m', 5)).toBe(doc);
+    expect(fillPath(doc, 'a.b.c', 5)).toBe(doc);
+    expect(doc).toEqual({ a: { b: 1 }, n: 7 });
   });
 });
 
