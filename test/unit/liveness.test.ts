@@ -33,20 +33,23 @@ const ISLAND_DRAW = 33;
 /**
  * SP6a's cave class columns at seed 42 (its spec §4), one per scan slot, and their indices among the sp6a.liveness.caves
  * draws. Task 38's tuned defaults moved both: the caverns' (546, 25857) at draw 7 and the tunnels' (4705, −24478) at
- * draw 224 before it.
+ * draw 224 before it. The user's check's noodles (R31, R32: threshold 1, thickness 0.22, maxY 48) moved both again: the
+ * caverns' (4705, −24478) at draw 224 (where caves.limits.bandSpan no longer changes the T column: it changed the noodle's
+ * band edge there) and the tunnels' (−24763, −17996) at draw 314 before them.
  */
 const CAVE_PINS: Readonly<Record<CaveSlot, readonly [LivenessColumn, number]>> = {
-  caverns: [{ cx: 4705, cz: -24478, cls: 'cave' }, 224],
-  tunnels: [{ cx: -24763, cz: -17996, cls: 'cave' }, 314],
+  caverns: [{ cx: 19524, cz: -7785, cls: 'cave' }, 512],
+  tunnels: [{ cx: -16103, cz: 13714, cls: 'cave' }, 422],
 };
 /** The two cave class columns' verdict strings. */
-const CAVERNS_VIA = 'cave column (4705, -24478)';
-const TUNNELS_VIA = 'cave column (-24763, -17996)';
+const CAVERNS_VIA = 'cave column (19524, -7785)';
+const TUNNELS_VIA = 'cave column (-16103, 13714)';
 /**
  * The leaves of SP6a Tasks 6, 7, 8, 9 and 27 (the caves group): U2 covers 73 + 19 + 30 + 11 + 1 + 1 + 36 = 171 leaves
- * (Task 9: the island cap's capTop, then the wet roof's waterDepth; Task 27: the 36 carver leaves).
+ * (Task 9: the island cap's capTop, then the wet roof's waterDepth; Task 27: the 36 carver leaves), and the user's check's
+ * `caves.noodles.threshold` (R31): 172.
  */
-const U2_LEAVES = 171;
+const U2_LEAVES = 172;
 /** The carver leaves (SP6a Task 27), decided on the class columns or on their bounded carver witness (ruling P18). */
 const CARVER_LEAVES = SCHEMA.leaves.filter((l) => /^caves\.(worms|undergroundWorms|ravines)\./.test(l.path)).map((l) => l.path);
 /** The spaghetti scale leaves (SP6a Task 7), decided on the class columns or on their bounded witness search (ruling P5). */
@@ -63,18 +66,19 @@ const BAND_LEAVES = [
   'caves.entrances.minY', 'caves.entrances.maxY',
 ] as const;
 /**
- * Each depth-band leaf's U2 verdict at seed 42 (SP6a spec §4): the minY leaves and the noodle's maxY on a class column
- * (P4), the maxY leaves of cheese, spaghetti 3D and the entrances on the amplified base (P3: the default base's scan has
- * none), spaghetti 2D's maxY 215 on its witness (R5).
+ * Each depth-band leaf's U2 verdict at seed 42 (SP6a spec §4): cheese's and spaghetti 3D's minY and the noodle's maxY
+ * on a class column, spaghetti 2D's and the noodle's minY on their own band witness (P4; on the caverns column before
+ * the user's check moved it), the maxY leaves of cheese, spaghetti 3D and the entrances on the amplified base (P3: the
+ * default base's scan has none), spaghetti 2D's maxY 215 on its witness (R5).
  */
 const BAND_PINS: Readonly<Record<(typeof BAND_LEAVES)[number], string>> = {
-  'caves.cheese.minY': TUNNELS_VIA,
+  'caves.cheese.minY': CAVERNS_VIA,
   'caves.cheese.maxY': 'amplified witness column (15998, 4660)',
   'caves.spaghetti3d.minY': TUNNELS_VIA,
   'caves.spaghetti3d.maxY': 'amplified witness column (15676, 27143)',
-  'caves.spaghetti2d.minY': CAVERNS_VIA,
+  'caves.spaghetti2d.minY': 'witness column (-17888, 14467)',
   'caves.spaghetti2d.maxY': 'witness column (-8539, 19151)',
-  'caves.noodles.minY': CAVERNS_VIA,
+  'caves.noodles.minY': 'witness column (-1578, -11634)',
   'caves.noodles.maxY': CAVERNS_VIA,
   'caves.entrances.minY': 'badlands column (-26426, -31088)',
   'caves.entrances.maxY': 'amplified witness column (17330, 32119)',
@@ -89,25 +93,26 @@ const ONE_STEP = [
   'caves.worms.floorMin', 'caves.worms.roomYScaleMin', 'caves.worms.roomYScaleMax', 'caves.limits.capTop',
 ];
 /**
- * Each carver leaf's U2 verdict at seed 42 (Task 27, ruling P18; re-pinned at Task 38's tuned defaults): most worm
- * leaves and the underground worms' start range on the caverns' cave column, the worms' chance on the snowline class
- * column, their floorMin and roomChance on a land class column, the ravine leaves but vRotation on the tunnels' cave
- * column, the rest on their carver witness (the spiral's first source whose path a step changes; for
- * `undergroundWorms.maxY` the first reaching its shrink's band).
+ * Each carver leaf's U2 verdict at seed 42 (Task 27, ruling P18; re-pinned at Task 38's tuned defaults and at the
+ * user's check's cave columns): most worm leaves, the underground worms' start range and every ravine leaf on the
+ * caverns' cave column, the worms' start range on the tunnels' cave column, their chance on the snowline class column,
+ * the rest on their carver witness (the spiral's first source whose path a step changes; for `undergroundWorms.maxY` the
+ * first reaching its shrink's band). Before the user's check the worms' floorMin and roomChance were decided on a land
+ * class column (−25833, 16792), the ravine leaves but vRotation on the tunnels' cave column and vRotation on its carver
+ * witness (5, 1).
  */
 const CARVER_PINS: Readonly<Record<string, string>> = {
   'caves.worms.chance': 'snowline column (-25681, 32120)',
-  'caves.worms.floorMin': 'land column (-25833, 16792)',
-  'caves.worms.roomChance': 'land column (-25833, 16792)',
+  'caves.worms.startYMin': TUNNELS_VIA,
+  'caves.worms.startYMax': TUNNELS_VIA,
   'caves.worms.branchChance': 'carver witness column (-3, -5)',
   'caves.worms.roomYScaleMin': 'carver witness column (5, 5)',
   'caves.worms.roomYScaleMax': 'carver witness column (-3, -5)',
   'caves.undergroundWorms.chance': 'carver witness column (3, -6)',
   'caves.undergroundWorms.maxY': 'carver witness column (-2, -2)',
-  'caves.ravines.vRotation': 'carver witness column (5, 1)',
 };
-/** The ravine leaves but vRotation: decided on the tunnels' cave column. */
-const RAVINE_VIA = TUNNELS_VIA;
+/** The ravine leaves: decided on the caverns' cave column. */
+const RAVINE_VIA = CAVERNS_VIA;
 
 /** The island cap's top (SP6a Task 9), decided on a floating_islands base at its own witness. */
 const CAP_TOP = 'caves.limits.capTop';
@@ -613,13 +618,13 @@ describe('the cave class columns (SP6a spec §4)', () => {
 
   test('the caves leaves are the caves.* group, in schema order, after the islands leaves; the slots share them but the scale leaves', () => {
     expect(caveLeaves().map((l) => l.path)).toEqual(SCHEMA.leaves.filter((l) => l.path.startsWith('caves.')).map((l) => l.path));
-    expect(caveLeaves().length).toBe(98);
+    expect(caveLeaves().length).toBe(99);
     expect(CAVE_SLOTS).toEqual(['caverns', 'tunnels']);
     const tunnels = caveSlotLeaves('tunnels').map((l) => l.path);
     expect(tunnels).toEqual([
       'caves.spaghetti3d.thickness', 'caves.spaghetti3d.thicknessVar', 'caves.spaghetti3d.regional',
       'caves.spaghetti2d.thickness', 'caves.spaghetti2d.layerAmp',
-      'caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional',
+      'caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional', 'caves.noodles.threshold',
       'caves.noises.spag3dA', 'caves.noises.spag3dB', 'caves.noises.spag3dRarity', 'caves.noises.spag3dThickness',
       'caves.noises.spagRegional', 'caves.noises.spag2d', 'caves.noises.spag2dElevation', 'caves.noises.spag2dThickness',
       'caves.noises.spag2dRarity', 'caves.noises.noodleToggle', 'caves.noises.noodleThickness', 'caves.noises.noodleRidgeA',
@@ -757,7 +762,7 @@ describe('the depth-band leaves (SP6a Task 8; rulings P3, P4, R5)', () => {
     expect(bandWindow(CTX, 'caves.cheese.maxY')).toEqual([265, 319]);
     expect(bandWindow(CTX, 'caves.cheese.minY')).toEqual([-63, -41]);
     expect(bandWindow(CTX, 'caves.entrances.minY')).toEqual([-63, -47]);
-    expect(bandWindow(CTX, 'caves.noodles.maxY')).toEqual([47, 319]);
+    expect(bandWindow(CTX, 'caves.noodles.maxY')).toEqual([34, 319]);
     expect(bandWindow(CTX, 'caves.spaghetti2d.maxY')).toEqual([176, 319]);
     expect(() => bandWindow(CTX, 'caves.limits.bandSpan')).toThrow('not a depth-band leaf');
     expect(() => bandWitness(CTX, 'caves.noodles.regional')).toThrow('not a depth-band leaf');

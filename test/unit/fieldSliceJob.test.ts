@@ -102,14 +102,14 @@ describe('the fieldSlice job (SP3d spec §5.1)', () => {
     bad(vMsg(MOUNTAIN, 'node', 'constructor', 0, 8), 'path "constructor" names no node of density.defs');
     bad(vMsg(MOUNTAIN, 'rule', 'root.rules[99]', 0, 1), 'path "root.rules[99]" names no rule or condition of surface.rules');
     for (const [from, to] of [[5, 5], [0, 33], [1.5, 3], [-1, 2], [Number.NaN, 2]]) bad(vMsg(MOUNTAIN, 'density', '', from!, to!), `samples [${from}, ${to}) are not integers with 0 ≤ from < to ≤ 32`);
-    // A 128² vertical density sample column under the corner memo's bound (SP6a §7.4, Task 13): 128 × 179 + 196 × 1,104
-    // + COLUMN_SAMPLE_COST = 272,064 since D25's lever 5 (274,416 before it; 2,278,784 without the memo, with SP6a's cave
-    // terms, caps, island cap and wet roof; 106,240 before them), so a part holds at most 30 of them (3 without the
-    // memo-aware bound, 78 before SP6a).
-    bad(vMsg(MOUNTAIN, 'density', '', 0, 128, 128), `too heavy: 128 × 272064 work units exceed the part budget ${PART_BUDGET}`);
-    bad(vMsg(MOUNTAIN, 'blocks', '', 0, 2), 'too heavy: 2 sample columns of cost 24881818, at most 1 per part');
+    // A 128² vertical density sample column under the corner memo's bound (SP6a §7.4, Task 13): 128 × 179 + 196 × 1,106
+    // + COLUMN_SAMPLE_COST = 272,456 since the user's check's noodle threshold (272,064 from D25's lever 5 until it,
+    // 274,416 before it; 2,278,784 without the memo, with SP6a's cave terms, caps, island cap and wet roof; 106,240 before
+    // them), so a part holds at most 30 of them (3 without the memo-aware bound, 78 before SP6a).
+    bad(vMsg(MOUNTAIN, 'density', '', 0, 128, 128), `too heavy: 128 × 272456 work units exceed the part budget ${PART_BUDGET}`);
+    bad(vMsg(MOUNTAIN, 'blocks', '', 0, 2), 'too heavy: 2 sample columns of cost 24885493, at most 1 per part');
     expect(h.handle(vMsg(MOUNTAIN, 'density', '', 0, 30, 128)).msg.type).toBe('fieldSliceResult');
-    bad(vMsg(MOUNTAIN, 'density', '', 0, 31, 128), `too heavy: 31 × 272064 work units exceed the part budget ${PART_BUDGET}`);
+    bad(vMsg(MOUNTAIN, 'density', '', 0, 31, 128), `too heavy: 31 × 272456 work units exceed the part budget ${PART_BUDGET}`);
   });
   test('before configure NOT_CONFIGURED, at another epoch STALE_EPOCH; with epoch cells a fieldSlice whose epoch the cell has left replies ABORTED', () => {
     const sab = new SharedArrayBuffer(16);

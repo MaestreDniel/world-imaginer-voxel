@@ -52,7 +52,7 @@ describe('the source model (SP3d spec §1.3, §1.4)', () => {
       'caves.spaghetti2d.thickness', 'caves.spaghetti2d.layerAmp',
       'caves.spaghetti2d.scales.s0', 'caves.spaghetti2d.scales.s1', 'caves.spaghetti2d.scales.s2', 'caves.spaghetti2d.scales.s3',
       'caves.spaghetti2d.scales.s4', 'caves.spaghetti2d.minY', 'caves.spaghetti2d.maxY',
-      'caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional', 'caves.noodles.minY', 'caves.noodles.maxY',
+      'caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional', 'caves.noodles.threshold', 'caves.noodles.minY', 'caves.noodles.maxY',
       'caves.pillars.threshold', 'caves.entrances.offset', 'caves.entrances.threshold', 'caves.entrances.minY', 'caves.entrances.maxY',
       // Task 27: the carver leaves, between the entrances and the limits.
       'caves.worms.chance', 'caves.worms.length', 'caves.worms.lengthVar', 'caves.worms.radiusMin', 'caves.worms.radiusMax',

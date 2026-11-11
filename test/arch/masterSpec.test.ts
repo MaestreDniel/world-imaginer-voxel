@@ -2047,11 +2047,11 @@ describe('master spec amendments (SP6a §13)', () => {
   });
 
   test('§6.4\'s U2 row covers the schema\'s U2 leaves, the caves.* leaves decided on the cave class columns (SP6a spec §13 item 20)', () => {
-    // Moved from the SP3e describe; Tasks 6, 7, 8, 9 and 27 rewrite n (SP6a Spec correction 12).
+    // Moved from the SP3e describe; Tasks 6, 7, 8, 9 and 27 rewrite n (SP6a Spec correction 12), and the user's check's threshold leaf (R31).
     const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
     expect(u2, 'no U2 row in §6.4').toBeDefined();
     const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
-    expect(n).toBe(171);
+    expect(n).toBe(172);
     // Task 8: the two scan slots (Task 7) and the amplified base of three maxY leaves (ruling P3); Task 9: capTop's
     // floating_islands base and waterDepth's coast class column; Task 27: the carver leaves' bounded witness (ruling P18).
     expect(u2).toContain(`; SP6a: the caves.* leaves are decided on the cave class columns (two scan slots) or a bounded witness, the maxY leaves of cheese, spaghetti 3D and the entrances on an amplified base, the island cap's \`caves.limits.capTop\` on a floating_islands base, the wet roof's \`caves.limits.waterDepth\` on the coast class column, the carver leaves (\`caves.worms.*\`, \`caves.undergroundWorms.*\`, \`caves.ravines.*\`) on a bounded carver witness where the class columns leave them dead; U2 covers ${n} leaves (amended by SP6a)`);
@@ -2081,7 +2081,7 @@ describe('master spec amendments (SP6a §13)', () => {
       `pillars   = (2·Np − 1 − rare)·(0.55 + 0.55·thk)³                                       Np ${xz('pillar')}; rare, thk ${xz('pillarRare')}`,
       `spag3D    = rough + clamp(rm·max(|S1|, |S2|) − ${c.spaghetti3d.thickness} − ${c.spaghetti3d.thicknessVar}·thk − ${c.spaghetti3d.regional}·Nrb, −1, 1)  S1, S2 ${lam('spag3dA')} at p/rm, rm ${s3.s0}, ${s3.s1}, ${s3.s2}, ${s3.s3} by rarity ${lam('spag3dRarity')}; thk ${lam('spag3dThickness')}; Nrb 2D ${lam('spagRegional')}, 2 oct`,
       `spag2D    = clamp(max(rm·|S| + 0.083·tm, (|${c.spaghetti2d.layerAmp}·Nel + yGrad(−64→8, 320→−40)| + tm)³), −1, 1), tm = −${c.spaghetti2d.thickness} − 0.35·thk   S ${lam('spag2d')} at p/rm, rm ${s2.s0}, ${s2.s1}, ${s2.s2}, ${s2.s3}, ${s2.s4} by rarity ${lam('spag2dRarity')}; Nel 2D ${lam('spag2dElevation')}, 2 oct; thk ${lam('spag2dThickness')}`,
-      `noodle    = −${c.noodles.thickness} − 0.025·thk + ${c.noodles.ridgeMul}·max(|Ra|, |Rb|) + 4·max(0, −(Nt − ${c.noodles.regional}·Nrb))      Nt ${lam('noodleToggle')}, thk ${lam('noodleThickness')}, Ra/Rb ${lam('noodleRidgeA')}; each noise its own interpolated slot, combined per voxel`,
+      `noodle    = −${c.noodles.thickness} − 0.025·thk + ${c.noodles.ridgeMul}·max(|Ra|, |Rb|) + 4·max(0, −(Nt − ${c.noodles.regional}·Nrb − ${c.noodles.threshold}))      Nt ${lam('noodleToggle')}, thk ${lam('noodleThickness')}, Ra/Rb ${lam('noodleRidgeA')}; each noise its own interpolated slot, combined per voxel; the ${c.noodles.threshold} is \`caves.noodles.threshold\` (the SP6a spec's user's check, R31: about a third of the noodles, each about twice as thick)`,
       `entr      = min(Ne·(1/6) + ${c.entrances.offset} + yGrad(−10→0.3, 30→0), rough + clamp(max(|E1|,|E2|) − ${c.entrances.threshold}, −1, 1))   Ne ${lam('entrance')}, amps [0.5,1.0]; E1, E2 ${lam('entranceA')}`,
       `P         = tap('pillars', interpolated( 16·pillars ))      keep = rangeChoice(P·(1/16), −1e9, ${c.pillars.threshold}, −1e6, P)`,
       'caves     = max( min(E, C, S3, S2), keep )',
@@ -2321,9 +2321,9 @@ describe('master spec amendments (SP6a §13)', () => {
       ['C1', [['voidShareMin', { min: 0.05 }], ['voidShareMax', { max: 0.15 }]], '5-15%; cave_heavy 10-22%'],
       ['C2', [['skyComponents', { min: 20 }], ['skyShare', { min: 0.2 }]], '≥ 20 per km² / ≥ 20%'],
       ['C3', [
-        ['cheeseShare', { min: 0.2 }], ['spaghettiShare', { min: 0.1 }], ['noodleShare', { min: 0.02 }], ['carverShare', { min: 0.1 }],
+        ['cheeseShare', { min: 0.2 }], ['spaghettiShare', { min: 0.1 }], ['noodleShare', { min: 0.005 }], ['carverShare', { min: 0.1 }],
         ['entranceShare', { min: 0.02 }], ['pillars', { min: 0.9 }], ['ravines', { min: 10 }], ['ravinesSky', { min: 3 }], ['maxShare', { max: 0.7 }],
-      ], 'cheese ≥ 20%, spaghetti ≥ 10%, noodle ≥ 2%, carvers ≥ 10%, entrances ≥ 2%; pillars in ≥ 90% of 8×8-chunk blocks; ravines ≥ 10/km² (sky-exposed ≥ 3/km²); the largest kind ≤ 70%'],
+      ], 'cheese ≥ 20%, spaghetti ≥ 10%, noodle ≥ 0.5% (2% until the SP6a user\'s check, R31), carvers ≥ 10%, entrances ≥ 2%; pillars in ≥ 90% of 8×8-chunk blocks; ravines ≥ 10/km² (sky-exposed ≥ 3/km²); the largest kind ≤ 70%'],
       ['C4', [['bands', { min: 0.02 }], ['floorPeak', { max: 0.1 }]], '≥ 2% each / ≤ 10%'],
       ['C5', [['largest', { max: 0.6, tiers: QF }], ['landCarved', { min: 0.6 }], ['thinnest', { min: 4 }], ['thinnestByKind', { min: 1.5 }]], '< 60% of void / ≥ 60% / ≥ 4 / ≥ 1.5'],
       ['C6', [['latticeBias', { max: 1.25 }]], '≤ 1.1 (1.25 at SP6a (R21), 1.1 pending)'],

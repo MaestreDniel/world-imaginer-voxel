@@ -138,7 +138,7 @@ describe('the hand-inlined default expression (SP6a §10.5, the kill criterion)'
         pillars: { threshold: 0.05 },
         spaghetti3d: { thickness: 0.09, thicknessVar: 0.02, regional: 0.07, minY: -48, maxY: 150, scales: { s0: 0.8, s1: 1.1, s2: 1.4, s3: 1.9 } },
         spaghetti2d: { thickness: 0.9, layerAmp: 6, minY: -60, maxY: 160, scales: { s0: 0.6, s1: 0.8, s2: 1.1, s3: 1.8, s4: 2.5 } },
-        noodles: { thickness: 0.06, ridgeMul: 1.4, regional: 0.12, minY: -50, maxY: 40 },
+        noodles: { thickness: 0.06, ridgeMul: 1.4, regional: 0.12, threshold: 0.4, minY: -50, maxY: 40 },
       },
     });
     const r = check(params, COLUMNS.cave[0], COLUMNS.cave[1]);

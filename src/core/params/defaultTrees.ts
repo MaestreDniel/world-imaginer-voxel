@@ -214,7 +214,7 @@ const spag2d = (): JsonValue => tap(S2_BANDS.tap, interpolated(sky(add(add(fl(mu
 /**
  * nb(N, c) = rangeChoice(y − maxY_n, −1e9, 40, rangeChoice(minY_n − y, −1e9, 40, N, c), c): a noodle noise only at
  * corners within 40 blocks of the noodle band (lever 3, SP6a §1.1; 40 = bandSpan's static maximum 32 + 8), the constant
- * c (which closes the tube) outside; minY_n, maxY_n the leaves `caves.noodles.minY` / `.maxY` (y −60 … 64). The bound 40
+ * c (which closes the tube) outside; minY_n, maxY_n the leaves `caves.noodles.minY` / `.maxY` (y −60 … 48). The bound 40
  * stays a literal (a `rangeChoice` bound is a literal or one ref): beyond bandSpan + 8 ≤ 40 blocks outside the band the
  * steep part of the noodle's cap has closed it already.
  */
@@ -224,14 +224,16 @@ const nb = (x: JsonValue, cst: number): JsonValue =>
 /**
  * noodle = tap noodle(fl(16·(−thickness − 0.025·Kn + ridgeMul·max(|An|, |Bn|) + 4·max(0, −Nn))) + cap_n), combined at
  * voxel level (outside `interpolated`, its cap read at the voxel's y) from four slots: Nn = interpolated(nb(Nt −
- * regional·Nrb, −1)), Kn = interpolated(nb(thk_n, 0)), An = interpolated(nb(Ra, 1)), Bn = interpolated(nb(Rb, 1)). The
- * toggle `+ 4·max(0, −Nn)` narrows the tube and closes it by Nn ≈ −0.019 (SP6a §1.3).
+ * regional·Nrb − threshold, −1)), Kn = interpolated(nb(thk_n, 0)), An = interpolated(nb(Ra, 1)), Bn = interpolated(nb(Rb,
+ * 1)). The toggle `+ 4·max(0, −Nn)` narrows the tube and closes it by Nn ≈ −thickness/4 (SP6a §1.3); the threshold
+ * leaf `caves.noodles.threshold` (the user's check, R31) sets how much of the unit-sd toggle noise opens: 1 keeps
+ * about a third of the noodles a threshold of 0 opens.
  */
 const noodle = (): JsonValue => tap('noodle', add(fl(mul(c(16), add(add(add(
   neg(param('caves.noodles.thickness')),
   mul(c(-0.025), interpolated(nb(noise('noodleThickness'), 0)))),
   mul(param('caves.noodles.ridgeMul'), max(abs(interpolated(nb(noise('noodleRidgeA'), 1))), abs(interpolated(nb(noise('noodleRidgeB'), 1)))))),
-  mul(c(4), max(c(0), neg(interpolated(nb(add(noise('noodleToggle'), neg(mul(param('caves.noodles.regional'), noise2('spagRegional')))), -1)))))))), cap('noodles', () => interpolated(body()))));
+  mul(c(4), max(c(0), neg(interpolated(nb(add(add(noise('noodleToggle'), neg(mul(param('caves.noodles.regional'), noise2('spagRegional')))), neg(param('caves.noodles.threshold'))), -1)))))))), cap('noodles', () => interpolated(body()))));
 
 /** The caves slot (SP6a §1.1): max(min(E, C, S3, S2), keep), the mins left-nested in that order. */
 const caves = (): JsonValue => max(min(min(min(entrances(), cheese()), spag3d()), spag2d()), keep());

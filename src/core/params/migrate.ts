@@ -11,7 +11,7 @@ export interface JsonObject {
 
 export type Migration = (doc: JsonObject) => JsonObject;
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 const isObject = (v: unknown): v is JsonObject => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -41,13 +41,55 @@ function builtInTrees(doc: JsonObject): JsonObject {
 }
 
 /**
+ * The three SP6a built-in density trees (default, amplified, floating_islands, as at dc60e67, unchanged since 0689c4f:
+ * the trees of SP6a's exit, before the user's check gave the noodle toggle its threshold), by
+ * `hex64(fnv1a64(canonicalJSON(tree)))`, each mapped to today's tree of the same kind (ruling R31). The trees themselves
+ * are in `test/fixtures/sp6a-density-trees.json`, and `test/unit/sp6aTrees.test.ts` pins the same three hashes.
+ */
+const SP6A_TREE_HASHES: ReadonlyMap<string, JsonValue> = new Map<string, JsonValue>([
+  ['8cf2fa9f77894514', DEFAULT_DENSITY_TREE as JsonValue],
+  ['e9aa9c6d389bfe7a', AMPLIFIED_DENSITY_TREE as JsonValue],
+  ['0b64462b64d8c360', FLOATING_DENSITY_TREE as JsonValue],
+]);
+
+/**
+ * SP6a's noodle defaults and the user's check's (R31, R32), in the documents 3 → 4 migrates: a stored value equal to
+ * SP6a's default becomes today's. `test/unit/profiles.test.ts` pins the targets equal to `DEFAULTS.caves.noodles`.
+ */
+const SP6A_NOODLE_DEFAULTS: ReadonlyArray<readonly [path: string, was: number, now: number]> = [
+  ['caves.noodles.thickness', 0.11, 0.22],
+  ['caves.noodles.maxY', 64, 48],
+];
+
+/**
+ * 3 → 4 (the user's check, R31, R32; SP6a spec §12.4): a stored `density.defs` canonically equal to one of SP6a's
+ * built-in trees becomes today's tree of that kind, and in those documents only a stored `caves.noodles.thickness`
+ * equal to SP6a's default 0.11 becomes 0.22 and a stored `caves.noodles.maxY` equal to 64 becomes 48; any other value
+ * (the user's) is kept. A document whose tree is anything else (an edit, today's, an SP5c tree, which 2 → 3 has already
+ * made today's) is returned as is, so an edited tree keeps its thickness and its band: without the threshold term a
+ * doubled thickness would carve two to three times the noodles. The new `caves.noodles.threshold` is not written: a
+ * missing leaf takes the profile's value. The input is never mutated.
+ */
+function sp6aNoodles(doc: JsonObject): JsonObject {
+  const density = doc['density'];
+  if (!isObject(density) || !Object.hasOwn(density, 'defs') || !isObject(density['defs'])) return doc;
+  const today = SP6A_TREE_HASHES.get(hex64(fnv1a64(canonicalJSON(density['defs']))));
+  if (today === undefined) return doc;
+  let out = mapPath(doc, 'density.defs', () => today);
+  for (const [path, was, now] of SP6A_NOODLE_DEFAULTS) out = mapPath(out, path, (v) => (v === was ? now : v));
+  return out;
+}
+
+/**
  * MIGRATIONS[v - 1] upgrades a version-v document to v + 1; invariant: length === SCHEMA_VERSION - 1.
  * 1 → 2 (SP3d spec §1.11): the identity — version 2 adds the `json` leaves `density.defs` and `surface.rules`, which a
  * version-1 document lacks, and a missing leaf takes the profile's value.
  * 2 → 3 (SP6a D36): SP5c's built-in density trees become today's (`builtInTrees`), so a world saved before SP6a opens
  * with the caves tree; an edited tree is kept.
+ * 3 → 4 (the user's check, R31, R32): SP6a's built-in trees become today's, with the noodle toggle's threshold, and
+ * their documents' SP6a noodle defaults today's (`sp6aNoodles`); an edited tree or value is kept.
  */
-export const MIGRATIONS: readonly Migration[] = [(doc) => doc, builtInTrees];
+export const MIGRATIONS: readonly Migration[] = [(doc) => doc, builtInTrees, sp6aNoodles];
 
 /** Upgrades a document from `from` to migrations.length + 1 (SP1 spec §4.6). */
 export function migrate(doc: JsonObject, from: number, migrations: readonly Migration[] = MIGRATIONS): Result<JsonObject> {

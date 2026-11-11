@@ -129,11 +129,13 @@ describe('the caves group (SP6a spec §4)', () => {
       ['caves.spaghetti2d.minY', -64, -64, 320],
       // 215, not 320: the highest default from 208 to 244 (no generated output moves) whose U2 step has a witness (spec §4).
       ['caves.spaghetti2d.maxY', 215, -64, 320],
-      ['caves.noodles.thickness', 0.11, 0, 0.3],
+      // The user's check (R31, R32): thickness 0.11 → 0.22, the toggle's threshold 1 (new), maxY 64 → 48.
+      ['caves.noodles.thickness', 0.22, 0, 0.3],
       ['caves.noodles.ridgeMul', 1.5, 0.5, 4],
       ['caves.noodles.regional', 0.1, 0, 0.4],
+      ['caves.noodles.threshold', 1, -1, 2],
       ['caves.noodles.minY', -60, -64, 320],
-      ['caves.noodles.maxY', 64, -64, 320],
+      ['caves.noodles.maxY', 48, -64, 320],
       ['caves.pillars.threshold', 0.03, 0, 0.5],
       ['caves.entrances.offset', 0.37, -0.5, 1],
       ['caves.entrances.threshold', 0.08, 0, 0.5],
@@ -152,6 +154,14 @@ describe('the caves group (SP6a spec §4)', () => {
       expect([l.path, l.meta.scope, l.meta.stage]).toEqual([l.path, 'terrain', 'terrain']);
     }
     expect(Object.keys(DEFAULTS).at(-1)).toBe('caves');
+  });
+
+  test('caves.noodles.threshold: "Frequency threshold", −1 … 2 step 0.01, its doc; the group doc names the threshold (the user\'s check, R31)', () => {
+    const l = SCHEMA.leaves.find((x) => x.path === 'caves.noodles.threshold')!;
+    expect([l.leaf.kind, l.leaf.def, l.leaf.min, l.leaf.max, l.meta.step, l.meta.label]).toEqual(['number', 1, -1, 2, 0.01, 'Frequency threshold']);
+    expect(l.meta.doc).toBe('Noodles open only where the toggle noise minus regional·Nrb is above this: higher → fewer noodles (Nn is unit-sd: 0.5 keeps about 62 %, 1 about 32 %)');
+    const group = SCHEMA.byPath.get('caves.noodles') as { doc: string };
+    expect(group.doc).toBe('Thin tubes: 16·(−thickness − 0.025·Kn + ridgeMul·max(|An|, |Bn|) + 4·max(0, −(Nn − regional·Nrb − threshold))), carved where it is below 0; they narrow and close where the toggle noise Nn − regional·Nrb is below the threshold (SP6a spec §1.1-§1.3, the user\'s check).');
   });
 
   test('the cave noises: single stacks except cheese, clampSigma 3, remap none, every vertical wavelength ≥ 16', () => {
@@ -589,31 +599,52 @@ describe('the noodle (SP6a spec §1.1, §1.3)', () => {
   const SIGMA = 3;
   const grid = [-SIGMA, -2, -1, -0.5, -0.1, 0, 0.1, 0.5, 1, 2, SIGMA];
 
-  test('with Nrb = 0 and Nn ≤ −0.05 the noodle is closed (> 0) for every Kn, An, Bn in ±clampSigma', () => {
-    // Closure needs 4·|Nn| ≥ thickness + 0.025·clampSigma = 0.185 at the defaults, so Nn ≤ −0.04625.
+  // Nn below is the toggle slot's value, Nt − regional·Nrb − threshold (the user's check, R31): `noodleAt` replaces the
+  // whole slot by it, and the test after these pins that the slot subtracts the threshold.
+  test('with the toggle slot Nn ≤ −0.075 the noodle is closed (> 0) for every Kn, An, Bn in ±clampSigma', () => {
+    // Closure needs 4·|Nn| ≥ thickness + 0.025·clampSigma = 0.295 at the defaults, so Nn ≤ −0.07375.
     expect(DEFAULTS.caves.noises.noodleThickness.clampSigma).toBe(SIGMA);
-    for (const nn of [-0.05, -0.1, -0.5, -1, -SIGMA]) {
+    for (const nn of [-0.075, -0.1, -0.5, -1, -SIGMA]) {
       for (const kn of grid) for (const an of grid) for (const bn of grid) {
         const v = noodleAt(nn, kn, an, bn);
         if (!(v > 0)) throw new Error(`noodle ${v} at Nn ${nn}, Kn ${kn}, An ${an}, Bn ${bn}`);
       }
     }
-    // The tightest case: Kn = clampSigma, An = Bn = 0 is open at Nn = −0.046 and closed at −0.047.
-    expect(noodleAt(-0.046, SIGMA, 0, 0)).toBeLessThan(0);
-    expect(noodleAt(-0.047, SIGMA, 0, 0)).toBeGreaterThan(0);
+    // The tightest case: Kn = clampSigma, An = Bn = 0 is open at Nn = −0.073 and closed at −0.074.
+    expect(noodleAt(-0.073, SIGMA, 0, 0)).toBeLessThan(0);
+    expect(noodleAt(-0.074, SIGMA, 0, 0)).toBeGreaterThan(0);
   });
 
-  test('at Kn = 0 and An = Bn = 0 it closes by Nn = −0.0275 (−thickness / 4), and is open at the full toggle (Nn ≥ 0)', () => {
-    expect(DEFAULTS.caves.noodles.thickness).toBe(0.11);
-    expect(noodleAt(-0.027, 0, 0, 0)).toBeLessThan(0);
-    expect(noodleAt(-0.028, 0, 0, 0)).toBeGreaterThan(0);
-    for (const nn of [0, 0.5, SIGMA]) expect(noodleAt(nn, 0, 0, 0)).toBe(16 * -0.11);
-    // The ridges: open only where max(|An|, |Bn|) < thickness / ridgeMul ≈ 0.0733.
-    expect(noodleAt(0, 0, 0.073, -0.073)).toBeLessThan(0);
-    expect(noodleAt(0, 0, 0.074, 0)).toBeGreaterThan(0);
+  test('at Kn = 0 and An = Bn = 0 it closes by Nn = −0.055 (−thickness / 4), and is open at the full toggle (Nn ≥ 0)', () => {
+    expect(DEFAULTS.caves.noodles.thickness).toBe(0.22);
+    expect(noodleAt(-0.054, 0, 0, 0)).toBeLessThan(0);
+    expect(noodleAt(-0.056, 0, 0, 0)).toBeGreaterThan(0);
+    for (const nn of [0, 0.5, SIGMA]) expect(noodleAt(nn, 0, 0, 0)).toBe(16 * -0.22);
+    // The ridges: open only where max(|An|, |Bn|) < thickness / ridgeMul ≈ 0.1467.
+    expect(noodleAt(0, 0, 0.146, -0.146)).toBeLessThan(0);
+    expect(noodleAt(0, 0, 0.147, 0)).toBeGreaterThan(0);
   });
 
-  test('the noodle noises are not evaluated at corners more than 40 blocks outside y −60 … 64 (a counting stub)', () => {
+  test('the toggle slot is nb(Nt − regional·Nrb − threshold, −1): the threshold leaf subtracted inside the band gate (the user\'s check, R31)', () => {
+    const tap = at(DEFAULT_DENSITY_TREE as unknown as Expr, P.noodle) as TapExpr;
+    const slots: unknown[] = [];
+    const walk = (x: unknown): void => { if (isRec(x)) { if (x['op'] === 'interpolated' && JSON.stringify(x['x']).includes('"noodleToggle"')) slots.push(x['x']); else Object.values(x).forEach(walk); } else if (Array.isArray(x)) x.forEach(walk); };
+    walk(tap);
+    expect(slots.length).toBe(1);
+    const inner = (slots[0] as { inside: { inside: unknown } }).inside.inside; // nb: the two rangeChoice, in-band
+    expect(inner).toEqual({
+      op: 'add',
+      a: { op: 'add', a: { op: 'noise', id: 'noodleToggle' }, b: { op: 'neg', x: { op: 'mul', a: { op: 'param', path: 'caves.noodles.regional' }, b: { op: 'noise2', id: 'spagRegional' } } } },
+      b: { op: 'neg', x: { op: 'param', path: 'caves.noodles.threshold' } },
+    });
+    // Resolved, the threshold folds to its negated default: with Nt − regional·Nrb = threshold the slot reads 0.
+    const resolved = at(dc.expr, P.noodle) as TapExpr;
+    const text = JSON.stringify(resolved);
+    expect(text).toContain(`{"op":"const","v":${-DEFAULTS.caves.noodles.threshold}}`);
+  });
+
+  test('the noodle noises are not evaluated at corners more than 40 blocks outside the band y −60 … 48 (a counting stub)', () => {
+    expect([DEFAULTS.caves.noodles.minY, DEFAULTS.caves.noodles.maxY]).toEqual([-60, 48]);
     const { source, calls } = countingNoises(dc.noises, NOODLE_NOISES);
     const c = compileDensity(dc.expr, source);
     const constants: number[] = [];
@@ -624,7 +655,7 @@ describe('the noodle (SP6a spec §1.1, §1.3)', () => {
       c.positionFn(s);
       for (let k = 0; k <= 48; k++) {
         const y = -64 + 8 * k;
-        const near = y - 64 < 40 && -60 - y < 40;
+        const near = y - 48 < 40 && -60 - y < 40;
         for (let j = 0; j <= 4; j++) {
           for (let i = 0; i <= 4; i++) {
             const before = NOODLE_NOISES.map((id) => calls.get(id)!);
@@ -646,7 +677,7 @@ describe('the noodle (SP6a spec §1.1, §1.3)', () => {
     walk(at(dc.expr, P.noodle));
     for (const e of slots) constants.push(ref.corner(s, e, 0, 48, 0));
     expect(constants).toEqual([0, 1, 1, -1]);
-    expect(noodleAt(-1, 0, 1, 1)).toBe(16 * (-0.11 + 1.5 + 4));
+    expect(noodleAt(-1, 0, 1, 1)).toBe(16 * (-0.22 + 1.5 + 4));
   });
 });
 

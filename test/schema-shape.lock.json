@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "leaves": {
     "biomes.table": "boxTable",
     "biomes.zoomJitter": "number",
@@ -46,6 +46,7 @@
     "caves.noodles.regional": "number",
     "caves.noodles.ridgeMul": "number",
     "caves.noodles.thickness": "number",
+    "caves.noodles.threshold": "number",
     "caves.pillars.threshold": "number",
     "caves.ravines.chance": "number",
     "caves.ravines.lengthMax": "int",

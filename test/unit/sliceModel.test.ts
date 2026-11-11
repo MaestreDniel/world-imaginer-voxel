@@ -744,8 +744,8 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       await flush();
       // ⌈(32 × 30 + 196 × 68) / 32⌉ = 447 per sample under the corner memo (the 196 corners of 49 layers shared by its rows).
       expect(r.notice).toBe('node too heavy to slice (cost 447, limit 15 360)');
-      // The default's 128² vertical column: ⌈(128 × 179 + 196 × 1,104) / 128⌉ = 1,870 (17,451 without the memo).
-      expect(tooHeavyText('full', DEFAULTS, 'density', '', 'vertical', 128, sliceCostOf(DEFAULTS, 'density', '', 'vertical', 128), 2 ** 20)).toBe('node too heavy for a 128² slice (cost 1 870, limit 7 936)');
+      // The default's 128² vertical column: ⌈(128 × 179 + 196 × 1,106) / 128⌉ = 1,873 (17,467 without the memo).
+      expect(tooHeavyText('full', DEFAULTS, 'density', '', 'vertical', 128, sliceCostOf(DEFAULTS, 'density', '', 'vertical', 128), 2 ** 20)).toBe('node too heavy for a 128² slice (cost 1 873, limit 7 936)');
       // A tree without interpolated: its work cost per sample, as before the memo.
       expect(tooHeavyText('draft', P8, 'density', '', 'vertical', 32, sliceCostOf(P8, 'density', '', 'vertical', 32), 2 ** 19)).toBe('node too heavy to slice (cost 8 255, limit 15 360)');
     });
@@ -766,10 +766,10 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
           await flush();
           expect([r.shown?.result, r.pending, r.notice]).toEqual([f, null, null]);
         } else {
-          // The full slice is refused before any job: the draft stays with the notice (⌈(128 × 2,227 + 1,024 × 1,104 −
-          // 128 × 2,048) / 128⌉ = 9,011 per sample against 6,144).
+          // The full slice is refused before any job: the draft stays with the notice (⌈(128 × 2,227 + 1,024 × 1,106 −
+          // 128 × 2,048) / 128⌉ = 9,027 per sample against 6,144).
           expect(calls).toHaveLength(1);
-          expect([r.shown?.result, r.pending, r.notice]).toEqual([d, null, 'node too heavy for a 128² slice (cost 9 011, limit 6 144)']);
+          expect([r.shown?.result, r.pending, r.notice]).toEqual([d, null, 'node too heavy for a 128² slice (cost 9 027, limit 6 144)']);
         }
       }
     });
@@ -1011,10 +1011,10 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       const plan = planFieldSlice(32, cost, 3, DRAFT_BUDGET);
       if (!plan.refused) throw new Error('expected a refusal');
       expect(r.notice).toBe(tooHeavyText('draft', DEFAULTS, 'caves', '', 'horizontal', 32, cost, plan.limit, 512));
-      // Per sample, its chunk column's acquisition included: ⌈3,871,328 / 32⌉ against ⌊DRAFT_BUDGET / 32 / 32⌋.
-      expect([cost, plan.limit]).toEqual([3871328, DRAFT_BUDGET / 32]);
+      // Per sample, its chunk column's acquisition included: ⌈3,874,528 / 32⌉ against ⌊DRAFT_BUDGET / 32 / 32⌋.
+      expect([cost, plan.limit]).toEqual([3874528, DRAFT_BUDGET / 32]);
       // The widest extent whose request is admitted is named (Task 52, minors-16).
-      expect(r.notice).toBe('cave type too heavy to slice (cost 120 979, limit 16 384) — narrow the extent to 512 or less');
+      expect(r.notice).toBe('cave type too heavy to slice (cost 121 079, limit 16 384) — narrow the extent to 512 or less');
     });
 
     test('the widest admitted caves extent (Task 52, minors-16): 512 at the defaults (the 128² slice admitted at 256 and 512, nothing from 1024); named from 1024 up', () => {
@@ -1029,8 +1029,8 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
         expect(r.notice).toMatch(/^cave type too heavy to slice \(cost [\d ]+, limit 16 384\) — narrow the extent to 512 or less$/);
       }
       // The node and density notices and a notice with no admitted extent are unchanged.
-      expect(tooHeavyText('draft', DEFAULTS, 'caves', '', 'horizontal', 32, 3871328, DRAFT_BUDGET / 32, null)).toBe('cave type too heavy to slice (cost 120 979, limit 16 384)');
-      expect(tooHeavyText('full', DEFAULTS, 'density', '', 'vertical', 128, sliceCostOf(DEFAULTS, 'density', '', 'vertical', 128), 2 ** 20)).toBe('node too heavy for a 128² slice (cost 1 870, limit 7 936)');
+      expect(tooHeavyText('draft', DEFAULTS, 'caves', '', 'horizontal', 32, 3874528, DRAFT_BUDGET / 32, null)).toBe('cave type too heavy to slice (cost 121 079, limit 16 384)');
+      expect(tooHeavyText('full', DEFAULTS, 'density', '', 'vertical', 128, sliceCostOf(DEFAULTS, 'density', '', 'vertical', 128), 2 ** 20)).toBe('node too heavy for a 128² slice (cost 1 873, limit 7 936)');
     });
 
     test('a cave-leaf drag requests no caves slice until the gesture ends; blocks still request per configure', async () => {

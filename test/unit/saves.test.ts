@@ -102,8 +102,8 @@ describe('loadParams (D33)', () => {
     }
   });
 
-  test('`schemaVersion` 4 → a `MIGRATION_FAILED` issue', () => {
-    const r = loadParams({ ...fixture(), schemaVersion: 4 });
+  test('`schemaVersion` 5 → a `MIGRATION_FAILED` issue', () => {
+    const r = loadParams({ ...fixture(), schemaVersion: 5 });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.issues.map((i) => i.code)).toContain('MIGRATION_FAILED');
   });

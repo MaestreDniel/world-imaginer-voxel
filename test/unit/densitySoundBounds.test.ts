@@ -391,15 +391,16 @@ describe('the default world is unchanged (SP3d spec §1.9 D: proven, not only cl
     // 'e757035f5c1f15a1 568704 986564'; with the caps' gentle rises from D25's measurement (Task 14: G_f 0.4, 5.8, 0.5,
     // 0.3, 0.4, so the caps narrow the families less): 'a89dd9967f37f513 590080 985254'; with D25's lever 5 (Task 15b:
     // cheese 3 octaves, entrance 2): 'eb36083e7b0f2a7a 588160 984869'; with Task 38's tuned defaults (an isotropic layer
-    // noise, wider spaghetti 3D and noodles, fewer caverns, surfaceDepth 10):
-    expect(hashed(createDensityContext(ctxFor('42')))).toBe('f30720d232d0399d 526848 965608');
+    // noise, wider spaghetti 3D and noodles, fewer caverns, surfaceDepth 10): 'f30720d232d0399d 526848 965608'; with the
+    // user's check's noodles (R31, R32: a third of them, twice as thick, the band's top at 48):
+    expect(hashed(createDensityContext(ctxFor('42')))).toBe('60f0c3d6ec016667 405632 965020');
   });
 
   test('… and with the sub-blocks (SP6a ruling R13): the same solid voxels, fewer evaluated', () => {
     const c = ctxFor('42');
     for (const [dc, solids] of [
       [createDensityContext(c, resolveDensity(cavesMuted(DEFAULT_DENSITY_TREE), c.params)), 1040924],
-      [createDensityContext(ctxFor('42')), 965608],
+      [createDensityContext(ctxFor('42')), 965020],
     ] as const) {
       const [, masked, solid] = hashed(dc, true).split(' ').map(Number);
       expect(solid).toBe(solids);

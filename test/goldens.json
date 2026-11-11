@@ -1,5 +1,5 @@
 {
-  "generatorVersion": 7,
+  "generatorVersion": 8,
   "entries": {
     "sp1.detMath.detCos": "feb91af46e2d5fa8",
     "sp1.detMath.detErf": "2e75e35244a19c1a",
@@ -23,7 +23,7 @@
     "sp1.noise.test.adv3d32": "a456079e4b571a2c",
     "sp1.noise.test.adv3d8": "439e4ef6ce852dd6",
     "sp1.noise.test.density3d": "127615bde2c54f3e",
-    "sp1.params": "6cb1c6bfca1cc730",
+    "sp1.params": "20fce73923f99405",
     "sp1.spline.JAG": "445a1955b3113d35",
     "sp1.spline.OFFSET": "9d5ae62fbb06366d",
     "sp1.spline.SIGMA": "7163452d6496dba1",
@@ -48,20 +48,20 @@
     "sp2a.tile.rivers.256": "d075bd749fbcc025",
     "sp2a.tile.rivers.4": "de3776fe6877fcd5",
     "sp2a.tile.rivers.64": "9dc9184c9d07926c",
-    "sp3a.region.T.default": "147675f158636952",
-    "sp3a.region.T.large_biomes": "b1cef671cb45e9dd",
+    "sp3a.region.T.default": "81a3d1bb98c18ede",
+    "sp3a.region.T.large_biomes": "da2a311c4e6b56fd",
     "sp3a.registry": "5e1febd88b449b63",
-    "sp3b.density.default": "a2d65c788fc3a90b",
+    "sp3b.density.default": "00aa66d15602cdfa",
     "sp3b.density.ops": "adad71e21efc60cb",
     "sp3c.registry": "2ade4ab7c488e7c2",
-    "sp3c.surface.ops": "7a8758c790a0067d",
+    "sp3c.surface.ops": "9f42afc1e6c79e0c",
     "sp3e.column.point.archipelago": "576dcc24bc474a96",
     "sp3e.column.point.floating_islands": "38ad6e018c200781",
-    "sp3e.region.T.amplified": "fd1b311fce28a12b",
-    "sp3e.region.T.archipelago": "9610bd63910ac34c",
-    "sp3e.region.T.floating_islands": "72fd4df03856cc14",
+    "sp3e.region.T.amplified": "1ad5a34202e791e7",
+    "sp3e.region.T.archipelago": "cf55adc30962120b",
+    "sp3e.region.T.floating_islands": "7870604f646fad93",
     "sp6a.carver.paths": "f01d27e99576808f",
     "sp6a.density.ops": "631964217f1d4c07",
-    "sp6a.region.T.caves": "fbfd737769f463b5"
+    "sp6a.region.T.caves": "264d6ee39e73e285"
   }
 }

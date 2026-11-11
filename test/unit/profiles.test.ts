@@ -13,6 +13,7 @@ import { dirtyStages, genKey, stageHashes } from '../../src/core/stage/hash';
 import { STAGES } from '../../src/core/stage/registry';
 import { randomParams } from '../harness/params';
 import { sp5cTrees, type Sp5cKind } from '../harness/sp5cTrees';
+import { sp6aTrees, type Sp6aKind } from '../harness/sp6aTrees';
 import { testRng } from '../harness/stats';
 
 describe('profiles', () => {
@@ -69,8 +70,8 @@ describe('migrations', () => {
     const r = migrate(doc, SCHEMA_VERSION);
     expect(r.ok && r.value).toBe(doc);
   });
-  test('SCHEMA_VERSION 3 (SP6a D36): two migrations, 1 → 2 the identity, 2 → 3 the built-in trees', () => {
-    expect([SCHEMA_VERSION, MIGRATIONS.length]).toEqual([3, 2]);
+  test('SCHEMA_VERSION 4 (the user\'s check, R31): three migrations, 1 → 2 the identity, 2 → 3 the built-in trees, 3 → 4 SP6a\'s trees and noodles', () => {
+    expect([SCHEMA_VERSION, MIGRATIONS.length]).toEqual([4, 3]);
   });
   test('1 → 2 (SP3d spec §1.11) is the identity (the trees a v1 document lacks are the profile\'s), and 2 → 3 keeps a document without density.defs', () => {
     const doc = { climate: { scaleMul: 2 }, density: { detailAmpLo: 0.8 } } as JsonObject;
@@ -120,12 +121,92 @@ describe('migrations', () => {
     });
   });
 
+  describe('3 → 4 (the user\'s check, R31, R32; SP6a spec §12.4): SP6a\'s built-in trees become today\'s, and their noodle defaults with them', () => {
+    const TODAY: Record<Sp6aKind, JsonValue> = { default: DEFAULT_DENSITY_TREE, amplified: AMPLIFIED_DENSITY_TREE, floating_islands: FLOATING_DENSITY_TREE };
+    const KINDS = Object.keys(TODAY) as Sp6aKind[];
+    const v3 = (defs: unknown, noodles: Record<string, number> = { thickness: 0.11, ridgeMul: 1.5, regional: 0.1, minY: -60, maxY: 64 }): JsonObject =>
+      ({ climate: { scaleMul: 2 }, density: { detailAmpLo: 0.8, defs }, caves: { cheese: { offset: 0.4 }, noodles } }) as unknown as JsonObject;
+    const noodlesOf = (d: JsonObject): JsonObject => (d['caves'] as JsonObject)['noodles'] as JsonObject;
+
+    test('the new defaults are the migration\'s targets: thickness 0.22, maxY 48, threshold 1 (from SP6a\'s 0.11 and 64)', () => {
+      expect([DEFAULTS.caves.noodles.thickness, DEFAULTS.caves.noodles.maxY, DEFAULTS.caves.noodles.threshold]).toEqual([0.22, 48, 1]);
+    });
+
+    test.each(KINDS)('the SP6a %s tree migrates to today\'s tree of its kind; thickness 0.11 → 0.22 and maxY 64 → 48; every other leaf kept; threshold left missing', (kind) => {
+      const doc = v3(sp6aTrees()[kind]);
+      const r = MIGRATIONS[2]!(doc);
+      expect((r['density'] as JsonObject)['defs']).toBe(TODAY[kind]);
+      expect(noodlesOf(r)).toEqual({ thickness: 0.22, ridgeMul: 1.5, regional: 0.1, minY: -60, maxY: 48 });
+      expect({ ...r, density: { ...(r['density'] as JsonObject), defs: null }, caves: { ...(r['caves'] as JsonObject), noodles: null } })
+        .toEqual({ climate: { scaleMul: 2 }, density: { detailAmpLo: 0.8, defs: null }, caves: { cheese: { offset: 0.4 }, noodles: null } });
+      const m = migrate(doc, 3);
+      expect(m.ok && (m.value['density'] as JsonObject)['defs']).toBe(TODAY[kind]);
+    });
+
+    test('on an SP6a tree an edited thickness or maxY is kept (each value tested apart), and a missing one stays missing', () => {
+      const tree = sp6aTrees().default;
+      expect(noodlesOf(MIGRATIONS[2]!(v3(tree, { thickness: 0.15, maxY: 64 })))).toEqual({ thickness: 0.15, maxY: 48 });
+      expect(noodlesOf(MIGRATIONS[2]!(v3(tree, { thickness: 0.11, maxY: 120 })))).toEqual({ thickness: 0.22, maxY: 120 });
+      expect(noodlesOf(MIGRATIONS[2]!(v3(tree, { ridgeMul: 2 })))).toEqual({ ridgeMul: 2 });
+      const noCaves = { density: { defs: tree } } as unknown as JsonObject;
+      expect(MIGRATIONS[2]!(noCaves)).toEqual({ density: { defs: DEFAULT_DENSITY_TREE } });
+    });
+
+    test.each(KINDS)('the SP6a %s tree with one literal changed is kept, with its thickness 0.11 and maxY 64', (kind) => {
+      const tree = sp6aTrees()[kind] as { root: { b: { x: Record<string, any> } } };
+      if (kind === 'floating_islands') tree.root.b.x['x'].lo = 0.3;
+      else tree.root.b.x['v'] = -10;
+      const doc = v3(tree);
+      expect(MIGRATIONS[2]!(doc)).toBe(doc);
+    });
+
+    test('a document without density.defs, with today\'s tree or with an SP5c tree is the same object; the input is never mutated', () => {
+      const plain = { climate: { scaleMul: 2 }, caves: { noodles: { thickness: 0.11, maxY: 64 } } } as unknown as JsonObject;
+      expect(MIGRATIONS[2]!(plain)).toBe(plain);
+      const empty = {} as JsonObject;
+      expect(MIGRATIONS[2]!(empty)).toBe(empty);
+      const current = v3(DEFAULT_DENSITY_TREE);
+      expect(MIGRATIONS[2]!(current)).toBe(current);
+      const sp5c = v3(sp5cTrees().default);
+      expect(MIGRATIONS[2]!(sp5c)).toBe(sp5c);
+      const doc = v3(sp6aTrees().default);
+      const before = canonicalJSON(doc);
+      const out = MIGRATIONS[2]!(doc);
+      expect(out).not.toBe(doc);
+      expect(canonicalJSON(doc)).toBe(before);
+      for (const odd of [{ density: 3 }, { density: { defs: 'x' } }, { density: { defs: null } }] as JsonObject[]) expect(MIGRATIONS[2]!(odd)).toBe(odd);
+      // Non-number or odd caves values on an SP6a tree: the tree migrates, the values are left for checkParams.
+      const odd = { density: { defs: sp6aTrees().default }, caves: { noodles: { thickness: '0.11', maxY: null } } } as unknown as JsonObject;
+      expect(noodlesOf(MIGRATIONS[2]!(odd))).toEqual({ thickness: '0.11', maxY: null });
+      const oddCaves = { density: { defs: sp6aTrees().default }, caves: 7 } as unknown as JsonObject;
+      expect(MIGRATIONS[2]!(oddCaves)['caves']).toBe(7);
+    });
+
+    test('a schema-3 preset on SP6a\'s default tree imports with today\'s tree, thickness 0.22, maxY 48 and the profile\'s threshold 1; a v2 SP5c one chains to today\'s', () => {
+      const params = JSON.parse(JSON.stringify(DEFAULTS)) as Record<string, any>;
+      params.density.defs = sp6aTrees().default;
+      params.caves.noodles = { thickness: 0.11, ridgeMul: 1.5, regional: 0.1, minY: -60, maxY: 64 };
+      const r = importPreset({ format: 'wi10-preset', schemaVersion: 3, name: 'SP6a', profile: 'default', params });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.value.params.density.defs).toBe(DEFAULTS.density.defs);
+      expect(r.value.params.caves.noodles).toEqual(DEFAULTS.caves.noodles);
+      expect(canonicalJSON(r.value.params)).toBe(canonicalJSON(DEFAULTS));
+      const v2 = JSON.parse(JSON.stringify(DEFAULTS)) as Record<string, any>;
+      v2.density.defs = sp5cTrees().default;
+      delete v2.caves;
+      const r2 = importPreset({ format: 'wi10-preset', schemaVersion: 2, name: 'SP5c', profile: 'default', params: v2 });
+      expect(r2.ok && canonicalJSON(r2.value.params)).toBe(canonicalJSON(DEFAULTS));
+    });
+  });
+
   test('an injected v1 → v2 rename', () => {
     const toV2 = (d: JsonObject) => renamePath(d, 'climate.zoom', 'climate.scaleMul');
     const r = migrate({ climate: { zoom: 3, C: { octaves: 5 } } }, 1, [toV2]);
     expect(r.ok && r.value).toEqual({ climate: { scaleMul: 3, C: { octaves: 5 } } });
     expect(migrate({ climate: {} }, 1, [toV2])).toEqual({ ok: true, value: { climate: {} } });
     expect(migrate({}, 3, [toV2]).ok).toBe(false);
+    expect(migrate({}, 5).ok).toBe(false);
     expect(migrate({}, 0).ok).toBe(false);
     const boom = migrate({}, 1, [() => { throw new Error('boom'); }]);
     expect(!boom.ok && boom.issues[0]!.code).toBe('MIGRATION_FAILED');
@@ -173,7 +254,7 @@ describe('presets', () => {
     ['reserved name', (d) => { d.name = 'large_biomes'; }, ['RESERVED_NAME @ name']],
     ['unknown profile', (d) => { d.profile = 'nope'; }, ['UNKNOWN_PROFILE @ profile']],
     ['bad schema version', (d) => { d.schemaVersion = 1.5; }, ['BAD_SCHEMA_VERSION @ schemaVersion']],
-    ['newer schema version', (d) => { d.schemaVersion = 4; }, ['NEWER_SCHEMA_VERSION @ schemaVersion']],
+    ['newer schema version', (d) => { d.schemaVersion = 5; }, ['NEWER_SCHEMA_VERSION @ schemaVersion']],
     ['params not an object', (d) => { d.params = []; }, ['NOT_OBJECT @ params']],
     ['typo in params', (d) => { d.params = { climate: { scaleMull: 4 } }; }, ['UNKNOWN_KEY @ params.climate.scaleMull']],
     ['invalid value', (d) => { d.params = { climate: { scaleMul: 99 } }; }, ['OUT_OF_RANGE @ params.climate.scaleMul']],

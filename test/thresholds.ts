@@ -86,7 +86,7 @@ export const THRESHOLDS: ThresholdTable = {
   C1: { voidShareMin: { min: 0.05, activeFrom: 'SP6a' }, voidShareMax: { max: 0.15, activeFrom: 'SP6a' } },
   C2: { skyComponents: { min: 20, activeFrom: 'SP6a' }, skyShare: { min: 0.2, activeFrom: 'SP6a' } },
   C3: {
-    cheeseShare: { min: 0.2, activeFrom: 'SP6a' }, spaghettiShare: { min: 0.1, activeFrom: 'SP6a' }, noodleShare: { min: 0.02, activeFrom: 'SP6a' },
+    cheeseShare: { min: 0.2, activeFrom: 'SP6a' }, spaghettiShare: { min: 0.1, activeFrom: 'SP6a' }, noodleShare: { min: 0.005, activeFrom: 'SP6a' },
     carverShare: { min: 0.1, activeFrom: 'SP6a' }, entranceShare: { min: 0.02, activeFrom: 'SP6a' }, pillars: { min: 0.9, activeFrom: 'SP6a' },
     ravines: { min: 10, activeFrom: 'SP6a' }, ravinesSky: { min: 3, activeFrom: 'SP6a' }, maxShare: { max: 0.7, activeFrom: 'SP6a' },
   },

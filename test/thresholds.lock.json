@@ -1,5 +1,5 @@
 {
-  "sha256": "a36fd8243e04c2e31e864c326f9722a6347bd27c5c1285be024b2c397697094a",
+  "sha256": "7924ad8e94d03e6baea238618baf139a9dc8943709f11ca3f3fef2400009289a",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -184,7 +184,7 @@
         },
         "noodleShare": {
           "activeFrom": "SP6a",
-          "min": 0.02
+          "min": 0.005
         },
         "pillars": {
           "activeFrom": "SP6a",

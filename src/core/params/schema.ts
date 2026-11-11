@@ -218,12 +218,14 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       // generated output, and 215 is the highest of those whose U2 lower step (183) has a band witness.
       maxY: bandY(215, 'maxY', 'The flat tunnels'),
     }),
-    noodles: group('Noodles', 'Thin tubes: 16·(−thickness − 0.025·Kn + ridgeMul·max(|An|, |Bn|) + 4·max(0, −Nn)), carved where it is below 0; they narrow and close where the toggle noise Nn is below 0 (SP6a spec §1.1-§1.3).', {
-      thickness: num(0.11, { ...TERRAIN, label: 'Thickness', doc: 'Subtracted from the ridges: higher → wider noodles.', min: 0, max: 0.3, step: 0.0025 }),
+    // The user's check (R31, R32): thickness 0.11 → 0.22, the toggle's threshold (new, 1), maxY 64 → 48.
+    noodles: group('Noodles', 'Thin tubes: 16·(−thickness − 0.025·Kn + ridgeMul·max(|An|, |Bn|) + 4·max(0, −(Nn − regional·Nrb − threshold))), carved where it is below 0; they narrow and close where the toggle noise Nn − regional·Nrb is below the threshold (SP6a spec §1.1-§1.3, the user\'s check).', {
+      thickness: num(0.22, { ...TERRAIN, label: 'Thickness', doc: 'Subtracted from the ridges: higher → wider noodles.', min: 0, max: 0.3, step: 0.0025 }),
       ridgeMul: num(1.5, { ...TERRAIN, label: 'Ridge multiplier', doc: 'Times the ridge noises max(|An|, |Bn|): higher → thinner noodles.', min: 0.5, max: 4, step: 0.05 }),
       regional: num(0.1, { ...TERRAIN, label: 'Regional swing', doc: 'Lowers the toggle noise by this × the regional noise Nrb (λ 1024), so noodles close together where Nrb is high.', min: 0, max: 0.4, step: 0.01 }),
+      threshold: num(1, { ...TERRAIN, label: 'Frequency threshold', doc: 'Noodles open only where the toggle noise minus regional·Nrb is above this: higher → fewer noodles (Nn is unit-sd: 0.5 keeps about 62 %, 1 about 32 %)', min: -1, max: 2, step: 0.01 }),
       minY: bandY(-60, 'minY', 'Noodles'),
-      maxY: bandY(64, 'maxY', 'Noodles'),
+      maxY: bandY(48, 'maxY', 'Noodles'),
     }),
     pillars: group('Pillars', 'Rock pillars kept inside caverns: P = 16·(2·Np − 1 − rare)·(0.55 + 0.55·thickness)³.', {
       threshold: num(0.03, { ...TERRAIN, label: 'Threshold', doc: 'Rock is kept where P / 16 is at least this (lower → more and thicker pillars).', min: 0, max: 0.5, step: 0.005 }),
@@ -308,7 +310,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       spag2dElevation: caveNoise('Spaghetti 2D elevation noise', 'Nel (2D): raises and lowers the flat tunnels\' layer, times the layer amplitude.', { dims: 2, wavelength: 256, octaves: 2 }, 3, CAVE_WAVELENGTH),
       spag2dThickness: caveNoise('Spaghetti 2D thickness noise', 'Nthk of tm = −thickness − 0.35·Nthk.', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
       spag2dRarity: caveNoise('Spaghetti 2D rarity noise', 'r of the flat tunnels: its band picks the tunnel scale rm (Spaghetti 2D, Scales).', { dims: 3, wavelength: 128, octaves: 1 }, 3, CAVE_WAVELENGTH),
-      noodleToggle: caveNoise('Noodle toggle noise', 'Nn of the noodles: they narrow and close where Nn − regional·Nrb is below 0.', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      noodleToggle: caveNoise('Noodle toggle noise', 'Nn of the noodles: they narrow and close where Nn − regional·Nrb is below caves.noodles.threshold.', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
       noodleThickness: caveNoise('Noodle thickness noise', 'Kn of the noodles, times 0.025.', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
       noodleRidgeA: caveNoise('Noodle ridge noise A', 'An of the noodle ridges max(|An|, |Bn|).', { dims: 3, wavelength: 18, octaves: 1 }, 3, CAVE_WAVELENGTH),
       noodleRidgeB: caveNoise('Noodle ridge noise B', 'Bn of the noodle ridges max(|An|, |Bn|).', { dims: 3, wavelength: 18, octaves: 1 }, 3, CAVE_WAVELENGTH),

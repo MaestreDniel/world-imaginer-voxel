@@ -241,8 +241,9 @@ describe('the default trees as data (SP3d spec §2)', () => {
     // roof: g_w = wet′·clamp((waterDepth + 8 + s − d)·recip(s), 0, 1) is 17 nodes with d = `ref body` (wet′ =
     // clamp(4·wetMask) 4 of them) and 18 with the noodle's d = interpolated(ref body), plus the add joining it to g_f, in
     // each of the five caps (+91); defs.wetSteep = 128·wet′·clamp((waterDepth + 8 − d)·0.125, 0, 1) (+17); the root's two
-    // `add(…, ref wetSteep)` (+4): 1087 (README's row).
-    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(1087);
+    // `add(…, ref wetSteep)` (+4): 1087. The user's check (R31): the noodle toggle's `add(…, neg(param threshold))` (+3):
+    // 1090 (README's row).
+    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(1090);
   });
 
   test('DEFAULT_SURFACE_RULES holds exactly §2.2\'s 15 refs', () => {

@@ -100,6 +100,8 @@ export interface InlinedLeaves {
   readonly nNegThickness: number;
   readonly nRidgeMul: number;
   readonly nRegional: number;
+  /** −caves.noodles.threshold, the toggle slot's last term (the user's check, R31). */
+  readonly nNegThreshold: number;
   // The y nodes at the corner layers k (y = −64 + 8k, 49 entries).
   /** −y. */
   readonly kNegY: Float64Array;
@@ -175,7 +177,7 @@ export function inlinedLeavesOf(params: Params): InlinedLeaves {
     s3Scales: [s3.scales.s0, s3.scales.s1, s3.scales.s2, s3.scales.s3],
     s2NegThickness: -s2.thickness, s2LayerAmp: s2.layerAmp,
     s2Scales: [s2.scales.s0, s2.scales.s1, s2.scales.s2, s2.scales.s3, s2.scales.s4],
-    nNegThickness: -n.thickness, nRidgeMul: n.ridgeMul, nRegional: n.regional,
+    nNegThickness: -n.thickness, nRidgeMul: n.ridgeMul, nRegional: n.regional, nNegThreshold: -n.threshold,
     kNegY: k49((y) => -y),
     kFloor: k49((y) => { const b = -56 + -y; return 2 * (b > 0 ? b : 0); }),
     kCeil: k49((y) => { const b = y + -296; return -(2 * (b > 0 ? b : 0)); }),
@@ -321,7 +323,7 @@ export function inlinedCorner(s: ColumnSample, p: InlinedLeaves, n: InlinedNoise
   out[7350 + idx] = band ? n.noodleThickness.z3(x, y, z) : 0;
   out[8575 + idx] = band ? n.noodleRidgeA.z3(x, y, z) : 1;
   out[9800 + idx] = band ? n.noodleRidgeB.z3(x, y, z) : 1;
-  out[11025 + idx] = band ? n.noodleToggle.z3(x, y, z) + cols[150 + cc]! : -1;
+  out[11025 + idx] = band ? (n.noodleToggle.z3(x, y, z) + cols[150 + cc]!) + p.nNegThreshold : -1;
 }
 
 /** trilerp (nodes.ts: x, then z, then y) of slot `slot` at the cell base `c` (corner index (ck·5 + cj)·5 + ci). */

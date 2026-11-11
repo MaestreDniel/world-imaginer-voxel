@@ -182,7 +182,7 @@ describe('AMPLIFIED_DENSITY_TREE (SP3e spec §1.2, D1, D2, user point 2)', () =>
     expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.b.x')).toEqual({ op: 'const', v: -1e6 });
   });
 
-  test('1,107 nodes; tier 2 []; static costs: structural 14,740, column 50,781,342, work 20,011 (the default 12,180, 50,389,342, 17,451)', () => {
+  test('1,110 nodes; tier 2 []; static costs: structural 14,764, column 50,785,017, work 20,027 (the default 12,204, 50,393,017, 17,467)', () => {
     // SP6a §1.1 adds 6 nodes to every tree (precave, ref, two mins, two slots) and 5 voxel units to its costs (86 nodes,
     // structural 498, column 15,423,937, work 734 before the cave terms), then the cave terms (Task 6: 112 nodes, 198 in
     // all, structural 3,322, column 21,160,576, work 5,166; Task 7: 438 more; Task 8's caps: 244 more, 636 before them;
@@ -193,19 +193,23 @@ describe('AMPLIFIED_DENSITY_TREE (SP3e spec §1.2, D1, D2, user point 2)', () =>
     // roof and ramp, each spaghetti slot's sky and ramp read `ref body`; 5 times with Task 6's, 9 with Task 7's; the wet
     // roof's g_w in the four slots, the noodle cap's `interpolated(ref body)` and S_w's, read through its two refs, 7 more).
     // D25's lever 5 (Task 15b) lowers both works by 96 (cheese 3 octaves, entrance 2, at 8 corner reads each): 20,107 and
-    // 17,547 before it; the structural and column costs are static, at the noises' maximum weight.
-    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(1087);
-    expect(countTreeNodes(AMPLIFIED_DENSITY_TREE, 'density')).toBe(1107);
+    // 17,547 before it; the structural and column costs are static, at the noises' maximum weight. The user's check (R31)
+    // adds the noodle toggle's `add(…, neg(param threshold))` to every tree: 3 nodes, structural +24, column +3,675 (3
+    // corner units), work +16 (1,087 and 1,107 nodes, 12,180 and 14,740, 50,389,342 and 50,781,342, 17,451 and 20,011
+    // before it).
+    expect(countTreeNodes(DEFAULT_DENSITY_TREE, 'density')).toBe(1090);
+    expect(countTreeNodes(AMPLIFIED_DENSITY_TREE, 'density')).toBe(1110);
     expect(validateParamTrees(amplified)).toEqual([]);
     const t = AMPLIFIED_DENSITY_TREE as unknown as { root: unknown; defs: unknown };
-    expect(structuralCost(t.root, t.defs)).toBe(14740);
-    expect(densityColumnCost(AMPLIFIED_DENSITY_TREE)).toBe(50_781_342);
+    expect(structuralCost(t.root, t.defs)).toBe(14764);
+    expect(densityColumnCost(AMPLIFIED_DENSITY_TREE)).toBe(50_785_017);
     const work = (tree: unknown, p: Params) => workCost(resolveDensity(tree, p), p);
-    expect(work(DEFAULT_DENSITY_TREE, DEFAULTS)).toBe(17451);
-    expect(work(AMPLIFIED_DENSITY_TREE, amplified)).toBe(20011);
+    expect(work(DEFAULT_DENSITY_TREE, DEFAULTS)).toBe(17467);
+    expect(work(AMPLIFIED_DENSITY_TREE, amplified)).toBe(20027);
     expect([17547 - 17451, 20107 - 20011]).toEqual([8 * (32 - 24) + 8 * (12 - 8), 96]);
     expect([10081 - 8641, 40_528_567 - 40_308_067, 14092 - 12652]).toEqual([9 * 160, 9 * 24_500, 9 * 160]);
-    expect([14740 - 12180, 50_781_342 - 50_389_342, 20011 - 17451]).toEqual([16 * 160, 16 * 24_500, 16 * 160]);
+    expect([14764 - 12204, 50_785_017 - 50_393_017, 20027 - 17467]).toEqual([16 * 160, 16 * 24_500, 16 * 160]);
+    expect([12204 - 12180, 50_393_017 - 50_389_342, 17467 - 17451]).toEqual([3 * 8, 3 * 1225, 2 * 8]);
   });
 
   test('the inspector\'s cost lint does not fire (work ≤ 4 × the default) and the rules keep their fast path', () => {
@@ -478,24 +482,25 @@ describe('FLOATING_DENSITY_TREE (SP3e spec §3.1, §3.3, §3.4, D3, D4, D12, D13
     expect(nodeAt(DEFAULT_DENSITY_TREE, 'root.b.x')).toEqual({ op: 'const', v: -1e6 });
   });
 
-  test('1,114 nodes (BODY 21, the replacement 28; 93 before SP6a\'s cave terms, 205 with Task 6\'s, 643 with Task 7\'s, 887 with Task 8\'s, 1,002 with the island cap); tier 2 []; the inspector\'s cost lint does not fire', () => {
+  test('1,117 nodes (BODY 21, the replacement 28; 93 before SP6a\'s cave terms, 205 with Task 6\'s, 643 with Task 7\'s, 887 with Task 8\'s, 1,002 with the island cap, 1,114 with the wet roof; the noodle threshold 3 more); tier 2 []; the inspector\'s cost lint does not fire', () => {
     expect(countTreeNodes(ISLANDS_BODY as JsonValue, 'density')).toBe(21);
-    expect(countTreeNodes(FLOATING_DENSITY_TREE, 'density')).toBe(1114);
+    expect(countTreeNodes(FLOATING_DENSITY_TREE, 'density')).toBe(1117);
     expect(validateParamTrees(floating)).toEqual([]);
     expect(treeLints(floating)).toEqual([]);
   });
 
-  test('static costs: structural 12,396, column 50,577,992, work 17,787 (§3.4\'s computed figures 549, 15,096,567, 905, plus SP6a\'s 5 voxel nodes, then its cave terms)', () => {
+  test('static costs: structural 12,420, column 50,581,667, work 17,803 (§3.4\'s computed figures 549, 15,096,567, 905, plus SP6a\'s 5 voxel nodes, then its cave terms)', () => {
     const t = FLOATING_DENSITY_TREE as unknown as { root: unknown; defs: unknown };
     // 554, 15,588,087 and 910 before the cave terms (2,738, 21,226,726 and 4,702 with Task 6's; 7,241, 35,538,025 and
     // 11,668 with Task 7's; 8,857, 40,496,717 and 12,988 with Task 8's caps; 9,616, 42,870,409 and 13,648 with Task 9's
     // island cap); the islands term adds 216 structural units, 188,650 column units and 336 work units to the default's
     // 12,180, 50,389,342 and 17,451, as before them (554 − 338, 15,588,087 − 15,399,437, 910 − 574); D25's lever 5 lowered
-    // both works by 96 (17,883 and 17,547 before it).
-    expect(structuralCost(t.root, t.defs)).toBe(12396);
-    expect(densityColumnCost(FLOATING_DENSITY_TREE)).toBe(50_577_992);
-    expect(workCost(resolveDensity(FLOATING_DENSITY_TREE, floating), floating)).toBe(17787);
-    expect([12396 - 12180, 50_577_992 - 50_389_342, 17787 - 17451]).toEqual([554 - 338, 15_588_087 - 15_399_437, 910 - 574]);
+    // both works by 96 (17,883 and 17,547 before it); the user's check's noodle threshold adds 24, 3,675 and 16 to both
+    // (12,396, 50,577,992 and 17,787 before it).
+    expect(structuralCost(t.root, t.defs)).toBe(12420);
+    expect(densityColumnCost(FLOATING_DENSITY_TREE)).toBe(50_581_667);
+    expect(workCost(resolveDensity(FLOATING_DENSITY_TREE, floating), floating)).toBe(17803);
+    expect([12420 - 12204, 50_581_667 - 50_393_017, 17803 - 17467]).toEqual([554 - 338, 15_588_087 - 15_399_437, 910 - 574]);
   });
 });
 

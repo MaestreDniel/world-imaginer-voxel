@@ -88,11 +88,11 @@ describe('presetFileName', () => {
 describe('presetText', () => {
   test('pretty JSON of exportPreset in envelope order, with a final newline', () => {
     expect(presetText(' My world ', 'default', withScaleMul(2))).toBe(
-      '{\n  "format": "wi10-preset",\n  "schemaVersion": 3,\n  "name": "My world",\n  "profile": "default",\n' +
+      '{\n  "format": "wi10-preset",\n  "schemaVersion": 4,\n  "name": "My world",\n  "profile": "default",\n' +
       '  "params": {\n    "climate": {\n      "scaleMul": 2\n    }\n  }\n}\n',
     );
     expect(presetText('Big', 'large_biomes', resolveProfile('large_biomes'))).toBe(
-      '{\n  "format": "wi10-preset",\n  "schemaVersion": 3,\n  "name": "Big",\n  "profile": "large_biomes",\n  "params": {}\n}\n',
+      '{\n  "format": "wi10-preset",\n  "schemaVersion": 4,\n  "name": "Big",\n  "profile": "large_biomes",\n  "params": {}\n}\n',
     );
   });
   test('equals exportPreset for random drafts', () => {
@@ -162,7 +162,7 @@ describe('readPresetText', () => {
     ]],
     ['reserved name', doc({ name: 'default' }), ['name: RESERVED_NAME — "default" is a built-in profile name']],
     ['unknown profile', doc({ profile: 'nope' }), ['profile: UNKNOWN_PROFILE — unknown profile "nope"']],
-    ['newer schema version', doc({ schemaVersion: 4 }), ['schemaVersion: NEWER_SCHEMA_VERSION — schemaVersion 4 is newer than this build (3)']],
+    ['newer schema version', doc({ schemaVersion: 5 }), ['schemaVersion: NEWER_SCHEMA_VERSION — schemaVersion 5 is newer than this build (4)']],
     ['a profile that is not ready', doc({ profile: 'cave_heavy' }), ['profile cave_heavy arrives in SP6b']],
     ['a profile that is not ready, with invalid params: import issues first', doc({ profile: 'cave_heavy', params: { climate: { scaleMull: 4 } } }), [
       'params.climate.scaleMull: UNKNOWN_KEY — unknown key "scaleMull"',
@@ -358,7 +358,7 @@ describe('edited trees and version-1 presets (SP3d spec §1.11)', () => {
     const a = open({ patch: editedPatch(), profile: 'large_biomes' });
     expect(a.initNotice).toBeNull();
     const text = presetText('Edited trees', a.state.profile, a.state.params);
-    expect(JSON.parse(text).schemaVersion).toBe(3);
+    expect(JSON.parse(text).schemaVersion).toBe(4);
     const imported = importPreset(JSON.parse(text) as unknown);
     expect(imported.ok).toBe(true);
     if (!imported.ok) return;

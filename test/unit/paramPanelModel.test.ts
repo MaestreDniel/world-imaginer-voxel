@@ -81,7 +81,7 @@ describe('panel tree', () => {
     expect(s3.sections.map((s) => [s.path, s.label, s.controls.map((c) => c.path.split('.').at(-1))])).toEqual([['caves.spaghetti3d.scales', 'Scales', ['s0', 's1', 's2', 's3']]]);
     expect(s2.controls.map((c) => c.path)).toEqual(['caves.spaghetti2d.thickness', 'caves.spaghetti2d.layerAmp', 'caves.spaghetti2d.minY', 'caves.spaghetti2d.maxY']);
     expect(s2.sections.map((s) => [s.path, s.label, s.controls.map((c) => c.path.split('.').at(-1))])).toEqual([['caves.spaghetti2d.scales', 'Scales', ['s0', 's1', 's2', 's3', 's4']]]);
-    expect(caves.sections[3]!.controls.map((c) => c.path)).toEqual(['caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional', 'caves.noodles.minY', 'caves.noodles.maxY']);
+    expect(caves.sections[3]!.controls.map((c) => c.path)).toEqual(['caves.noodles.thickness', 'caves.noodles.ridgeMul', 'caves.noodles.regional', 'caves.noodles.threshold', 'caves.noodles.minY', 'caves.noodles.maxY']);
     expect(caves.sections[5]!.controls.map((c) => c.path)).toEqual(['caves.entrances.offset', 'caves.entrances.threshold', 'caves.entrances.minY', 'caves.entrances.maxY']);
     // The worms' sizes first, then their chances, rooms and starts, the drift constants as a sub-section (Task 27).
     const worms = caves.sections[6]!;
@@ -494,8 +494,8 @@ describe('panel controls (Task 17): kinds, slider positions, typed values, issue
     // 34 before SP3c, + the 7 number and int leaves of the surface group, + islands.lo and islands.hi (SP3e), + SP6a's 8
     // caves number leaves (Task 6), + its 8 linear spaghetti and noodle leaves (Task 7; the band scales are log), + the 10
     // band ends minY and maxY (Task 8; the band span 1 … 32 is log), + capTop and waterDepth (Task 9), + 32 of the 36
-    // carver leaves (Task 27; the worms' radius and height factors are log).
-    expect(linear.length).toBe(103);
+    // carver leaves (Task 27; the worms' radius and height factors are log), + the noodles' threshold (the user's check).
+    expect(linear.length).toBe(104);
     for (const c of linear) {
       const n = sliderPositions(c);
       expect(n).toBe(Math.round((c.max! - c.min!) / c.step!));
