@@ -2503,11 +2503,11 @@
   },
   "firefox": {
     "by": "the user, by hand, in their own Firefox, on production",
-    "browser": "Firefox 158, RegionMesh",
+    "browser": "Firefox 158 (RegionMesh, the Firefox path; not reported by the user)",
     "date": "the night of 2026-11-10, after the Chrome check above",
     "url": "https://world-imaginer-voxel.vercel.app/",
     "build": "main at 0689c4f, the build the Chrome check above found served (index-C1YOH6uU.js); main was not pushed again before the user's run",
-    "steps": "the Chrome check's steps in an SP6a world (the X-ray on and off, the band with PageDown, PageUp and Home, a live cave edit with the map side by side, night vision on and off, the light floor in a cave, a walk down an entrance) and the user's own check (§10.11: down an entrance and through each kind of cave): the user, \"Todo está bien\", apart from the two findings below",
+    "steps": "the Chrome check's steps in an SP6a world (the X-ray on and off, the band with PageDown, PageUp and Home, a live cave edit with the map side by side, night vision on and off, the light floor in a cave, a walk down an entrance): the user, \"Todo está bien\", apart from the two findings below",
     "selftest": "62/62 (every expected equals actual and test/goldens.json) and \"IndexedDB contract: 10/10 passed\"",
     "findings": "two, at the user's check: (1) too many noodles, and no parameter for their frequency: rulings R31 and R32, Task 56 (the leaf caves.noodles.threshold, t 1.0, thickness 0.22, maxY 48, GENERATOR_VERSION 8) and Task 58; (2) the Density drawer overlaps the parameter panel in the narrow layout: Task 55, with Task 57's slice scroll (R32 c). Both merged to main at fc316c9 and re-checked in production-check-gv8.json"
   }

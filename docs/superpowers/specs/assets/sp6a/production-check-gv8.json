@@ -2476,12 +2476,12 @@
   },
   "firefox": {
     "by": "the user, by hand, in their own Firefox, on production",
-    "browser": "Firefox 158, RegionMesh",
+    "browser": "Firefox 158 (RegionMesh, the Firefox path; not reported by the user)",
     "date": "2026-11-11, after the Chrome re-check above",
     "url": "https://world-imaginer-voxel.vercel.app/",
     "build": "main at fc316c9 (GENERATOR_VERSION 8), the build the Chrome re-check above found served (index-D86N0JbD.js); main was not pushed again before the user's run",
     "steps": "the user's re-check after the merge of sp6a/user-check (the noodles' new defaults, the narrow layout): the user, \"Todo bien\" (ruling R33, the user's verdict on SP6a)",
     "selftest": "62/62 (every expected equals actual and test/goldens.json, the GV 8 keys included) and \"IndexedDB contract: 10/10 passed\"",
-    "newFinding": "\"a menudo se nota demasiado el límite de altura del mundo por debajo y se expone un suelo plano de bedrock en las cuevas amplias\" (wide caves often reach the world's bottom and expose a flat bedrock floor): handed to SP6b at the user's suggestion (R33; master §10's SP6b entry, \"Received from SP6a's user check\")"
+    "newFinding": "\"a menudo se nota demasiado el límite de altura del mundo por debajo y se expone un suelo plano de bedrock en las cuevas amplias\" (the world's lower limit often shows too much, and a flat bedrock floor is exposed in wide caves): handed to SP6b at the user's suggestion (R33; master §10's SP6b entry, \"Received from SP6a's user check\")"
   }
 }
