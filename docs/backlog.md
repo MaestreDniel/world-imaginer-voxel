@@ -26,6 +26,7 @@ Improvements noted for later. They belong to no SP spec; pick them up when conve
 ## Map
 
 - **The map shows the builds and edits in the world (the user, SP5c's check, 2026-11-02).** The map (`?map` and the in-world map, M) is drawn from the generator's column stage (biomes, relief, rivers), so a saved world's builds, pastes and other block edits never appear on it; only the generated terrain does. No SP has taken this so far. A likely shape: a layer over the map tiles from the loaded columns' final heightmaps and top blocks (or the DiffStore's edited columns), toggled like SP10's other map layers.
+- **"Edit in Density" leaves the slice below the fold on a narrow `?map` (SP6a's GV 8 production check, 2026-11-11, R33).** On `?map` at 850 px the map pane stacks. "Edit in Density" scrolls the drawer into view (`openDrawer` in `src/ui/map/layout.ts`), but the drawer's tree and op form fill the visible part and its slice image sits below the fold (at 1002-1130 px of an 869 px window) until it is scrolled to. Only the Caves tab's "Cave slice" also scrolls the slice into view (R32 c, Task 57: `revealSlice` in `src/ui/inspector/densityTab.ts`). The controller noted it; the user did not ask for it. A likely shape: the same `revealSlice` when "Edit in Density" opens the Density tab on its Slice sub-tab, or leave it, since the tree is what that link opens.
 
 ## Measurement tools
 

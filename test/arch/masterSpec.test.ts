@@ -145,7 +145,8 @@
  * names it (ruling P52). The exit (SP6a §15, Task 53): none of the three cut-line items was cut, so SP6a's Cut line, the
  * receivers and SP10's and SP12's "Received from SP6a" lines say nothing moved; SP6a's "Received from SP3e" ends
  * "(delivered: …)", pinned with `toBe`; SP6b's line gains the SP6a spec §14's exit hand-overs; §5.9 drops the unbound
- * 'L (slice)'; §4.3 names the idle shrink; G1's target cell records the map's first open (ruling R27).
+ * 'L (slice)'; §4.3 names the idle shrink; G1's target cell records the map's first open (ruling R27). The user's check
+ * (ruling R33): SP6b's entry gains "Received from SP6a's user check", the flat bedrock floor in wide caves.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2002,6 +2003,18 @@ describe('master spec amendments (SP6a §13)', () => {
     const bare = text.split('\n').filter((l) => /\bSP6\b/.test(l));
     for (const l of bare) expect(kept.some((k) => l.startsWith(k)), `a bare SP6 outside the split paragraphs: ${l.slice(0, 120)}`).toBe(true);
     for (const k of kept) expect(bare.some((l) => l.startsWith(k)), `no line starts with ${k}`).toBe(true);
+  });
+  test('SP6b\'s "Received from SP6a\'s user check": the flat bedrock floor in wide caves (ruling R33, SP6a spec §14)', () => {
+    const lines = spEntry('SP6b', 'SP7').split('\n');
+    const at = lines.findIndex((l) => l.startsWith('- Received from SP6a\'s user check (the SP6a spec §14, ruling R33; amended by SP6a):'));
+    expect(at, 'SP6b has no "Received from SP6a\'s user check" line').toBeGreaterThan(-1);
+    expect(lines[at - 1]!.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'), 'it follows SP6b\'s "Received from SP6a" line').toBe(true);
+    const line = lines[at]!;
+    expect(line).toContain('"a menudo se nota demasiado el límite de altura del mundo por debajo y se expone un suelo plano de bedrock en las cuevas amplias"');
+    expect(line).toContain('`C7.flatWallShare` has about a quarter of its flat faces on the bedrock floor y −63');
+    for (const shape of ['a bottom cap closing the cave families above the floor, as the band caps do', 'a noisy bedrock layer', 'a deep fluid floor (lava stays SP7\'s and SP8\'s)']) {
+      expect(line, `the candidate shape: ${shape}`).toContain(shape);
+    }
   });
   test('§2.5\'s Expr ops gain noiseScaled{id, s} (SP6a spec §13 item 10, §1.5)', () => {
     const lines = text.split('\n');
