@@ -37,7 +37,7 @@ import {
   type SmokePreset, pixelDiffShare, SWIFTSHADER_ARGS, START_SEED_7_HASH, PARITY_VIEW, PARITY_WATER_VIEW, PARITY_VIEWS, WORLD_RD, worldMeshQuery, PARITY_TOL, PARITY_MAX_SHARE, leaveGuardLog,
   expectedRenderer, HUD_POLL_MS, hudMoved, hudOnce, parseHud, STREAM_HOLD_MS, STREAM_MIN_MOVE, STREAM_RD, STREAM_RD_MS, STREAM_REVEAL_MS, STREAM_RUNS, streamQuery,
   type HudRead,
-  LANDING_ABOVE as SMOKE_LANDING_ABOVE, LANDING_MAX_Y as SMOKE_LANDING_MAX_Y, listenerDiff, listenerKey, listenersLeakFree, OVERLAY_APPLY_MS, OVERLAY_NARROW_WIDTH, TOOL_DISPOSE_REMOVES, TOOL_FREE_SESSION_LISTENERS, toolDisposeClean,
+  LANDING_ABOVE as SMOKE_LANDING_ABOVE, LANDING_MAX_Y as SMOKE_LANDING_MAX_Y, listenerDiff, listenerKey, listenersLeakFree, OVERLAY_APPLY_MS, OVERLAY_NARROW_WIDTH, CAVES_NARROW_VIEWPORT, MAP_NARROW_WIDTH, PANES_APART, TOOL_DISPOSE_REMOVES, TOOL_FREE_SESSION_LISTENERS, toolDisposeClean,
   OVERLAY_REVEAL_MS, OVERLAY_RUNS, OVERLAY_SHOTS, OVERLAY_TILES_MS, OVERLAY_VIEWPORT, overlayQuery, parseHudStale, hudStaleRowOk, previewMs, smokeLandingY, SETTINGS_KEY as SMOKE_SETTINGS_KEY,
   storedMapMode, TELEPORT_EAST_PX, teleportTarget, WORLD_MAP_BPP as SMOKE_WORLD_MAP_BPP,
   acrossFace, BUILD_QUERY, JUMP_MIN_RISE, PALETTE_SWATCHES, parseHudEdits, SMOKE_FACE, SMOKE_STATE, SMOKE_WATER_SOURCE, TORCH_MIN_LIGHT, WALK_GROUND_MS,
@@ -978,6 +978,21 @@ describe('UI smoke test: the overlay steps (SP4c spec §8.6)', () => {
     expect(OVERLAY_VIEWPORT.width / 2).toBeGreaterThanOrEqual(900);
     expect(OVERLAY_NARROW_WIDTH / 2).toBeLessThan(900);
     expect(OVERLAY_NARROW_WIDTH).toBeGreaterThanOrEqual(1000);
+    // The narrow layout checks (the SP6a user's check, finding 2): the split half and `?map` both under 900 px.
+    expect(CAVES_NARROW_VIEWPORT).toEqual({ width: OVERLAY_NARROW_WIDTH, height: 900 });
+    expect(MAP_NARROW_WIDTH).toBe(850);
+    expect(MAP_NARROW_WIDTH).toBeLessThan(900);
+    // The caves step keeps its wide part and adds the narrow one; `density narrow` checks `?map` after "Edit in Density".
+    const src = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+    const caves = src.slice(src.indexOf('async function cavesChecks('));
+    expect(caves.indexOf('setViewport(p, OVERLAY_VIEWPORT.width, OVERLAY_VIEWPORT.height);')).toBeGreaterThan(0);
+    expect(caves.indexOf('setViewport(p, nw, nh);')).toBeGreaterThan(caves.indexOf('setViewport(p, OVERLAY_VIEWPORT.width, OVERLAY_VIEWPORT.height);'));
+    expect(caves.match(/p\.eval<PanesApart \| null>\(PANES_APART\)/g)).toHaveLength(2);
+    const narrow = src.slice(src.indexOf("t.step('density narrow:"), src.indexOf("t.step('density horizontal:"));
+    expect(narrow).toContain('await setViewport(p, MAP_NARROW_WIDTH, VIEWPORT.height);');
+    expect(narrow).toContain('await p.click(DENSITY_LINK);');
+    expect(narrow).toContain('p.eval<PanesApart | null>(PANES_APART)');
+    expect(PANES_APART).toContain("return { apart, tabHit: hit !== null && hit.closest('.map-tabs') === button.parentElement, drawerInView,");
     // The smoke's own viewport is unchanged.
     expect(VIEWPORT).toEqual({ width: 1400, height: 900 });
     expect(OVERLAY_SHOTS).toEqual({ full: 'review-overlay-full.png', split: 'review-overlay-split.png' });

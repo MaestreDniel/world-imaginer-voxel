@@ -43,7 +43,11 @@
 .map-readout { font-family: ui-monospace, monospace; white-space: pre; }
 .map.panel-hidden { grid-template-columns: minmax(0, 1fr) 0 0; }
 .map.panel-hidden .map-side, .map.panel-hidden .map-split-v { display: none; }
-/* Below 900 px of host width the side panel stacks under the map and the page scrolls. */
+/*
+ * Below 900 px of host width the side panel stacks under the map and the page scrolls. The side panel's `auto` row keeps
+ * its content's height (`min-height: auto`): with the wide layout's `min-height: 0` it collapsed to 0-1 px once the
+ * drawer opened, and the panel's tabs and list were drawn over the drawer (the SP6a user's check, finding 2).
+ */
 @container map (max-width: 899px) {
   .map, .map.panel-hidden {
     overflow-y: auto;
@@ -52,6 +56,6 @@
     grid-template-areas: "toolbar" "notices" "view" "side" "hsplit" "drawer";
   }
   .map-split-v { display: none; }
-  .map-side { border-top: 1px solid #333; }
+  .map-side { border-top: 1px solid #333; min-height: auto; }
   .map-tab { overflow: visible; }
 }

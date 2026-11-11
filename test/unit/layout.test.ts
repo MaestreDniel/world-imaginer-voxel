@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import {
-  clampDrawerHeight, clampPanelWidth, DEFAULT_LAYOUT, drawerTabOnScreen, DRAWER_TAB_IDS, DRAWER_TAB_LABELS, LAYOUT_KEY, layoutTabs, loadLayout, parseLayout, saveLayout, serializeLayout, TAB_IDS, TAB_LABELS, tabKeyTarget, tabOnScreen, withSection,
+  clampDrawerHeight, clampPanelWidth, DEFAULT_LAYOUT, drawerTabOnScreen, DRAWER_TAB_IDS, DRAWER_TAB_LABELS, LAYOUT_KEY, layoutTabs, loadLayout, parseLayout, saveLayout, serializeLayout, stackedColumns, TAB_IDS, TAB_LABELS, tabKeyTarget, tabOnScreen, withSection,
   type Layout, type LayoutStorage,
 } from '../../src/ui/map/layout';
 
@@ -215,5 +215,49 @@ describe('a hidden map requests nothing (SP2b spec §5.5; final review MAP-2)', 
     expect(hide).toContain('slices.setShown(false);');
     const caughtUp = src.slice(src.indexOf('const caughtUp = (): void => {'));
     for (const call of ['splines.open(splines.leaf)', 'section.shown();', 'densityChanged();', 'shares.shown();']) expect(caughtUp.slice(0, caughtUp.indexOf('\n  };'))).toContain(call);
+  });
+});
+
+/** The body of the first `@container map (max-width: 899px) { … }` block of map.css, braces matched. */
+function narrowBlock(css: string): string {
+  const head = '@container map (max-width: 899px) {';
+  const at = css.indexOf(head);
+  if (at < 0) throw new Error(`map.css has no ${head}`);
+  let depth = 1;
+  for (let i = at + head.length; i < css.length; i++) {
+    if (css[i] === '{') depth++;
+    else if (css[i] === '}' && --depth === 0) return css.slice(at + head.length, i);
+  }
+  throw new Error('the narrow block is not closed');
+}
+
+describe('the narrow layout (SP2b spec §3.1, SP4c spec §2.2; the SP6a user\'s check, finding 2)', () => {
+  const css = readFileSync(new URL('../../src/ui/map/map.css', import.meta.url), 'utf8');
+
+  // Below 900 px the side panel's row is `auto`: with `min-height: 0` it collapsed to 0-1 px once the 300 px drawer
+  // opened, and the side panel's tabs and list were drawn over the drawer. The browser check is the smoke's.
+  test('the stacked side panel keeps its content height (min-height: auto), so the drawer row starts below it', () => {
+    const block = narrowBlock(css);
+    const side = /(^|[\s}])\.map-side\s*\{([^}]*)\}/.exec(block);
+    expect(side, 'the narrow block styles .map-side').not.toBeNull();
+    expect(side![2]).toMatch(/min-height:\s*auto\s*(;|$)/);
+    expect(side![2]).not.toMatch(/min-height:\s*0/);
+    expect(block).toContain('grid-template-areas: "toolbar" "notices" "view" "side" "hsplit" "drawer";');
+  });
+
+  test('stackedColumns: one column track is the stacked layout; the wide layout has three (with the panel hidden too)', () => {
+    expect(stackedColumns('850px')).toBe(true);
+    expect(stackedColumns(' 799.5px ')).toBe(true);
+    expect(stackedColumns('1215px 5px 340px')).toBe(false);
+    expect(stackedColumns('1560px 0px 0px')).toBe(false);
+    // Not laid out as a grid (detached, display: none): never stacked.
+    expect(stackedColumns('')).toBe(false);
+    expect(stackedColumns('none')).toBe(false);
+  });
+
+  // createLayout mounts only in the browser (the smoke checks the scroll): the wiring is pinned on the source.
+  test('openDrawer scrolls the drawer into view in the stacked layout only, after the drawer change listeners ran', () => {
+    const src = readFileSync(new URL('../../src/ui/map/layout.ts', import.meta.url), 'utf8');
+    expect(src).toContain('openDrawer(tab) {\n      setDrawer(true, tab);\n      if (stackedColumns(getComputedStyle(page).gridTemplateColumns)) drawer.scrollIntoView({ block: \'nearest\' });\n    },');
   });
 });

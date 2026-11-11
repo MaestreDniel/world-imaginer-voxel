@@ -193,7 +193,7 @@ export interface PageLayout {
   readonly drawerOpen: boolean;
   /** The drawer tab shown while the drawer is open (not stored; Spline at first). */
   readonly drawerTab: DrawerTabId;
-  /** Shows the drawer row on `tab`. */
+  /** Shows the drawer row on `tab`; in the stacked layout (`stackedColumns`) it also scrolls the drawer into view. */
   openDrawer(tab: DrawerTabId): void;
   closeDrawer(): void;
   /** Calls `fn` after the drawer opens or closes or, while open, shows another tab; returns the unsubscribe function. */
@@ -202,6 +202,15 @@ export interface PageLayout {
   setSectionOpen(path: string, open: boolean): void;
   /** Removes the grid (its splitters' and tabs' listeners go with it) and the host's class; drops the change listeners. */
   dispose(): void;
+}
+
+/**
+ * Whether the grid's computed `grid-template-columns` is the stacked layout's single track (map.css's narrow block, below
+ * 900 px of host width); the wide layout has three (map, splitter, panel), and a grid not laid out reads '' or 'none'.
+ */
+export function stackedColumns(columns: string): boolean {
+  const tracks = columns.trim().split(/\s+/);
+  return tracks.length === 1 && tracks[0] !== '' && tracks[0] !== 'none';
 }
 
 /** The class that makes a layout's host the `map` size container (map.css). */
@@ -372,7 +381,12 @@ export function createLayout(host: HTMLElement, storage: LayoutStorage | null, o
     },
     get drawerOpen() { return !drawer.hidden; },
     get drawerTab() { return drawerTab; },
-    openDrawer(tab) { setDrawer(true, tab); },
+    // In the stacked layout the drawer row is under the side panel, often below the window: an editor that opens it
+    // ("Cave slice", "Edit in Density", a spline's Edit, a cut line) scrolls it into view (the SP6a user's check).
+    openDrawer(tab) {
+      setDrawer(true, tab);
+      if (stackedColumns(getComputedStyle(page).gridTemplateColumns)) drawer.scrollIntoView({ block: 'nearest' });
+    },
     closeDrawer() { setDrawer(false); },
     onDrawerChange(fn) {
       drawerFns.add(fn);
