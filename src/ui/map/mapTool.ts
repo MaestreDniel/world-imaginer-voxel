@@ -82,13 +82,15 @@ export type MapCaves = Omit<CavesTabDeps, 'openSlice' | 'revealParameters'>;
  * The Caves tab's deps in the world's map (SP6a spec §7.3): the page's `caves`, with the tool's two links. "Cave slice" at
  * y opens the Density tab's horizontal `caves` slice at y, `CAVE_SLICE_EXTENT` blocks across, centred on the camera as
  * it is at the press, selects the tab's Slice pane (hidden in its narrow layouts while JSON is selected), then shows the
- * drawer on Density (which requests it); "Cave parameters" shows Parameters and
- * reveals `CAVE_PARAMETERS_LEAF`.
+ * drawer on Density (which requests it; in the stacked layout it scrolls the drawer into view), and last scrolls the
+ * slice cell into view inside the drawer (the Density tab stacks it under the tree and the form below 900 px; the SP6a
+ * user's check, R32 c); "Cave parameters" shows Parameters and reveals `CAVE_PARAMETERS_LEAF`.
  */
 export function caveTabDeps(caves: MapCaves, tool: {
   openSlice(s: SliceState): void;
   showSlice(): void;
   openDrawer(tab: 'density'): void;
+  revealSlice(): void;
   showTab(tab: 'parameters'): void;
   reveal(path: string): void;
 }): CavesTabDeps {
@@ -99,6 +101,7 @@ export function caveTabDeps(caves: MapCaves, tool: {
       tool.openSlice({ plane: 'horizontal', field: 'caves', y, cx: c.x, cz: c.z, extent: CAVE_SLICE_EXTENT });
       tool.showSlice();
       tool.openDrawer('density');
+      tool.revealSlice();
     },
     revealParameters() {
       tool.showTab('parameters');
@@ -493,6 +496,7 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
     openSlice: (s) => slices.open(s),
     showSlice: () => densityTab.showSlice(),
     openDrawer: (t) => layout.openDrawer(t),
+    revealSlice: () => densityTab.revealSlice(),
     showTab: (t) => layout.showTab(t),
     reveal: (path) => panel.reveal(path),
   }));

@@ -137,11 +137,13 @@
  *   every depth, the F3 HUD's line, and a sky pixel reads the clear colour #0b0e14 (the sky and the terrain hidden);
  *   PageDown gives 32 blocks around the eye, Home every depth; L turns night vision on, the Settings checkbox follows, stored and kept across a reload,
  *   and L turns it off; side by side at 1920 × 1080 (the panel beside the map), the world's map has the Caves tab after
- *   Presets, "Cave slice" opens the Density tab with the horizontal `caves` field and its 128² slice, "Cave parameters"
+ *   Presets, "Cave slice" opens the Density tab with the horizontal `caves` field and its 128² slice in view without
+ *   scrolling anything, "Cave parameters"
  *   shows `caves.cheese.offset`, typed 0.5 → 0.45 it regenerates live (the stale count above 0, then 0) and Ctrl+Z
  *   restores it; with Lowest y focused at 0, PageDown moves only the slider; at 1600 × 900 (the panel stacked under
- *   the map) "Cave slice" shows the drawer in the window below the side panel, and "Cave parameters" still works with
- *   the drawer open (`cavesChecks`, `PANES_APART`; the SP6a user's check, finding 2);
+ *   the map) "Cave slice" shows the drawer in the window below the side panel and scrolls the slice into view under
+ *   the stacked tree and form, and "Cave parameters" still works with the drawer open (`cavesChecks`, `PANES_APART`,
+ *   `SLICE_IN_VIEW`; the SP6a user's check, finding 2 and R32 c);
  * - console: no exception, console error or failed load, except the known favicon.ico 404 and Chrome's notice that it
  *   blocked a world page's `beforeunload` prompt when a step left it (`leaveGuardLog`); every step ran.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
@@ -2572,7 +2574,7 @@ async function runDensity(t: Smoke): Promise<void> {
   if (!(await p.eval<boolean>(revealParam(`document.querySelector(${JSON.stringify(DENSITY_LINK)})`)))) throw new Error(`no ${DENSITY_LINK}`);
   await p.click(DENSITY_LINK);
   await sleep(300);
-  const edited = await p.eval<PanesApart | null>(PANES_APART);
+  const edited = await panesApart(p);
   t.check(await p.eval<boolean>(DENSITY_SHOWN) && edited !== null && edited.apart && edited.tabHit && edited.drawerInView,
     `?map at ${MAP_NARROW_WIDTH} px: "Edit in Density" shows the drawer in the window, below the stacked side panel, whose selected tab is clickable`, edited);
   await p.eval(`(document.getElementById(${JSON.stringify(shownTab)}).click(), true)`);
@@ -3079,33 +3081,82 @@ const PANEL_BESIDE = `(() => {
 })()`;
 /**
  * The map's side panel and its open drawer, in the overlay or on `?map` (the SP6a user's check, finding 2; null while
- * the drawer is closed): `apart`, the side panel and its shown tab's content (to its scroll height while the stacked
- * layout lets it overflow) end above the drawer's top or start below its bottom; `tabHit`, the selected side tab,
- * scrolled into view, is the element under its own centre (not covered by the drawer); `drawerInView`, the drawer's top
- * is inside the window, as "Cave slice" and "Edit in Density" leave it.
+ * the drawer is closed), a pure read (it scrolls nothing): `apart`, the side panel and its shown tab's content (to its
+ * scroll height while the stacked layout lets it overflow) end above the drawer's top or start below its bottom (false
+ * without a shown tab); `drawerInView`, the drawer's top is inside the window, as "Cave slice" and "Edit in Density"
+ * leave it. The side tab's check (`SIDE_TAB_HIT`) scrolls, so `panesApart` runs it after this read.
  */
 export const PANES_APART = `(() => {
   const root = document.getElementById('map-overlay') ?? document;
   const side = root.querySelector('.map-side');
   const drawer = root.querySelector('.map-drawer');
   if (side === null || drawer === null || drawer.hidden) return null;
-  const d0 = drawer.getBoundingClientRect();
-  const drawerInView = d0.top >= 0 && d0.top < innerHeight;
-  const tab = side.querySelector(':scope > .map-tab:not([hidden])');
   const s = side.getBoundingClientRect();
   const d = drawer.getBoundingClientRect();
+  const drawerInView = d.top >= 0 && d.top < innerHeight;
+  const at = { drawerInView, side: [Math.round(s.top), Math.round(s.bottom)], drawer: [Math.round(d.top), Math.round(d.bottom)], window: innerHeight };
+  const tab = side.querySelector(':scope > .map-tab:not([hidden])');
+  if (tab === null) return { apart: false, ...at, content: null };
   const t = tab.getBoundingClientRect();
   const contentBottom = getComputedStyle(tab).overflowY === 'visible' ? t.top + tab.scrollHeight : t.bottom;
   const apart = Math.max(s.bottom, contentBottom) <= d.top + 0.5 || s.top >= d.bottom - 0.5;
-  const button = side.querySelector('.map-tabs [aria-selected="true"]');
+  return { apart, ...at, content: Math.round(contentBottom) };
+})()`;
+/**
+ * Whether the selected tab of the map's side panel, scrolled into view (`block: 'nearest'`: a tab above the window reads
+ * no element), is the element under its own centre (not covered by the drawer); false without a selected tab. It
+ * scrolls the page, so it runs after the pure reads (`PANES_APART`, `SLICE_IN_VIEW`).
+ */
+export const SIDE_TAB_HIT = `(() => {
+  const root = document.getElementById('map-overlay') ?? document;
+  const button = root.querySelector('.map-side .map-tabs [aria-selected="true"]');
+  if (button === null) return false;
   button.scrollIntoView({ block: 'nearest' });
   const b = button.getBoundingClientRect();
   const hit = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2);
-  return { apart, tabHit: hit !== null && hit.closest('.map-tabs') === button.parentElement, drawerInView,
-    side: [Math.round(s.top), Math.round(s.bottom)], content: Math.round(contentBottom), drawer: [Math.round(d.top), Math.round(d.bottom)], window: innerHeight };
+  return hit !== null && hit.closest('.map-tabs') === button.parentElement;
 })()`;
-/** The shape `PANES_APART` reads. */
+/** The shape `panesApart` reads: `PANES_APART`'s, with `SIDE_TAB_HIT`'s `tabHit`. */
 interface PanesApart { readonly apart: boolean; readonly tabHit: boolean; readonly drawerInView: boolean }
+/** `PANES_APART` (null while the drawer is closed), then `SIDE_TAB_HIT`, which scrolls: the read first. */
+async function panesApart(p: Page): Promise<PanesApart | null> {
+  const read = await p.eval<Omit<PanesApart, 'tabHit'> | null>(PANES_APART);
+  return read === null ? null : { ...read, tabHit: await p.eval<boolean>(SIDE_TAB_HIT) };
+}
+/**
+ * The Density tab's slice image (its canvas in the slice cell, not a pin's) in the overlay or on `?map`, a pure read
+ * (the SP6a user's check, R32 c; null without one): `inView`, at least half its height is visible, inside the window
+ * and inside every clipping ancestor (the slice cell, the drawer's tab, the drawer, the stacked page), whose padding
+ * boxes cut its rect in turn.
+ */
+export const SLICE_IN_VIEW = `(() => {
+  const root = document.getElementById('map-overlay') ?? document;
+  const c = root.querySelector('.map-drawer .it-slice > .sv > .sv-body .sv-box > .sv-image');
+  if (c === null) return null;
+  const r = c.getBoundingClientRect();
+  let top = Math.max(r.top, 0);
+  let bottom = Math.min(r.bottom, innerHeight);
+  for (let e = c.parentElement; e !== null && e !== document.documentElement && e !== document.body; e = e.parentElement) {
+    if (getComputedStyle(e).overflowY === 'visible') continue;
+    const b = e.getBoundingClientRect();
+    top = Math.max(top, b.top + e.clientTop);
+    bottom = Math.min(bottom, b.top + e.clientTop + e.clientHeight);
+  }
+  const visible = Math.max(0, bottom - top);
+  return { inView: r.height > 0 && visible >= r.height / 2, canvas: [Math.round(r.top), Math.round(r.bottom)], visible: Math.round(visible), window: innerHeight };
+})()`;
+/** The shape `SLICE_IN_VIEW` reads. */
+interface SliceInView { readonly inView: boolean; readonly canvas: readonly [number, number]; readonly visible: number }
+/**
+ * The scroll offsets of the overlay's (or `?map`'s) page: the document, the map's grid (it scrolls in the stacked
+ * layout), the Density drawer tab and the slice cell; a pure read, compared around "Cave slice" in the wide layout.
+ */
+export const PAGE_SCROLLS = `(() => {
+  const root = document.getElementById('map-overlay') ?? document;
+  const top = (e) => (e === null ? null : Math.round(e.scrollTop));
+  return { document: top(document.scrollingElement), map: top(root.querySelector('.map')),
+    drawer: top(root.querySelector('#map-drawer-tabpanel-density')), slice: top(root.querySelector('.map-drawer .it-slice')) };
+})()`;
 /** The density tree's "Edit in Density" link in the Parameters tab. */
 const DENSITY_LINK = '.pp-control[data-path="density.defs"] .pp-link';
 /** The world notices' texts (`.world-notices`), joined. */
@@ -5246,11 +5297,12 @@ async function nightVisionBox(t: Smoke, want: boolean, what: string): Promise<vo
  * PageDown makes the band 32 blocks around the eye; Home restores every depth; X again hides the strip. L turns night
  * vision on ("Night vision on"), the Settings checkbox follows, it is stored and survives a reload; L turns it off
  * again. M, side by side: the Caves tab follows Presets in the world's map; "Cave slice" opens the Density tab with the
- * horizontal `caves` field (its 128² slice); "Cave parameters" shows the cave leaf, a change of it regenerates live
+ * horizontal `caves` field (its 128² slice, in view, nothing scrolled); "Cave parameters" shows the cave leaf, a change of it regenerates live
  * (the stale count rises, then falls to 0) and Ctrl+Z restores it; with the Lowest y slider focused at 0, PageDown
  * moves only the slider (the band follows the slider; a PageDown the world took would give 8 lower, kept 32 wide).
  * Then at the narrow split window (`CAVES_NARROW_VIEWPORT`, the panel stacked under the map), "Cave slice" shows the
- * drawer in the window below the side panel and "Cave parameters" still works with the drawer open (`PANES_APART`).
+ * drawer in the window below the side panel and the slice in view under the stacked tree and form (`SLICE_IN_VIEW`),
+ * and "Cave parameters" still works with the drawer open (`PANES_APART`).
  */
 async function cavesChecks(t: Smoke): Promise<void> {
   const p = t.page;
@@ -5313,10 +5365,16 @@ async function cavesChecks(t: Smoke): Promise<void> {
     'caves: the Caves tab shows every depth with the X-ray off', 5000, () => p.eval(CAVES_READ));
 
   // Cave slice: the Density tab with the horizontal caves field, its 128² slice (admitted at 256 blocks, SP6a §7.4).
+  // Side by side the slice cell is already in view: its scroll into view moves nothing (the SP6a user's check, R32 c).
+  const scrolls0 = await p.eval<Record<string, number | null>>(PAGE_SCROLLS);
   await p.click('#map-caves-slice');
   await holds(t, `${DENSITY_SHOWN} && document.querySelector(${JSON.stringify(SV_FIELD)}).value === 'caves' && document.querySelector(${JSON.stringify(SV_PLANE)}).value === 'horizontal'`,
     'caves: "Cave slice" opens the Density tab with the horizontal caves field', 5000, () => p.slice());
   await holds(t, Page.fresh(128), 'caves: the cave slice draws its 128² slice', 60_000, () => p.slice());
+  const scrolls1 = await p.eval<Record<string, number | null>>(PAGE_SCROLLS);
+  const wideSlice = await p.eval<SliceInView | null>(SLICE_IN_VIEW);
+  t.check(wideSlice !== null && wideSlice.inView && scrolls1['document'] === scrolls0['document'] && scrolls1['map'] === scrolls0['map'] && scrolls1['drawer'] === 0 && scrolls1['slice'] === 0,
+    'caves: side by side "Cave slice" shows the slice without scrolling the page, the drawer or the slice cell', { before: scrolls0, after: scrolls1, slice: wideSlice });
 
   // Cave parameters: the cave leaf shown; a change applies live, and Ctrl+Z restores it.
   await p.click('#map-tab-caves');
@@ -5351,9 +5409,12 @@ async function cavesChecks(t: Smoke): Promise<void> {
   await holds(t, `(${STRIP_READ})?.text === ${JSON.stringify(XRAY_ALL_TEXT)}`, 'caves: All depths restores every depth', 5000, () => p.eval(STRIP_READ));
 
   // The narrow split window (the SP6a user's check, finding 2; the user's was 1,687 px): the map half stacks its panel
-  // under the map. "Cave slice" scrolls the drawer into view, the side panel's rows stay above the drawer and its tabs
-  // stay clickable, so "Cave parameters" works after it.
+  // under the map. "Cave slice" scrolls the drawer into view, then the slice cell inside the drawer, under the stacked
+  // tree and form (R32 c); the side panel's rows stay above the drawer and its tabs stay clickable, so "Cave
+  // parameters" works after it. The drawer shows Spline while the window narrows, so the Density tab comes back at a
+  // width it was not laid out for (the first open of the user's case).
   const { width: nw, height: nh } = CAVES_NARROW_VIEWPORT;
+  await p.eval(`(document.getElementById('map-drawer-tab-spline').click(), true)`);
   await setViewport(p, nw, nh);
   await holds(t, `${PANEL_BESIDE} === false`, `caves: at a ${nw} × ${nh} window the panel stacks under the map`, 5000, () => p.eval(PANEL_BESIDE));
   await p.click('#map-tab-caves');
@@ -5361,15 +5422,18 @@ async function cavesChecks(t: Smoke): Promise<void> {
   await holds(t, `${DENSITY_SHOWN} && document.querySelector(${JSON.stringify(SV_FIELD)}).value === 'caves' && document.querySelector(${JSON.stringify(SV_PLANE)}).value === 'horizontal'`,
     `caves: at ${nw} px "Cave slice" opens the Density tab with the horizontal caves field`, 5000, () => p.slice());
   await sleep(300);
-  const sliced = await p.eval<PanesApart | null>(PANES_APART);
+  // Both reads are pure; panesApart's tab check scrolls the page last.
+  const sliceShown = await p.eval<SliceInView | null>(SLICE_IN_VIEW);
+  const sliced = await panesApart(p);
   t.check(sliced !== null && sliced.apart && sliced.tabHit && sliced.drawerInView,
     `caves: at ${nw} px "Cave slice" shows the drawer in the window, below the stacked side panel, whose Caves tab is clickable`, sliced);
+  t.check(sliceShown !== null && sliceShown.inView, `caves: at ${nw} px "Cave slice" scrolls the slice into view, under the stacked tree and form`, sliceShown);
   await p.click('#map-tab-caves');
   await p.click('#map-caves-params');
   await holds(t, `document.getElementById('map-tab-parameters').getAttribute('aria-selected') === 'true' && document.getElementById(${JSON.stringify(CAVE_EDIT.id)})?.offsetParent != null`,
     `caves: at ${nw} px "Cave parameters" opens Parameters at ${CAVE_EDIT.id.slice(3)} with the drawer open`, 5000, () => p.eval(PANES_APART));
   await sleep(300);
-  const listed = await p.eval<PanesApart | null>(PANES_APART);
+  const listed = await panesApart(p);
   t.check(listed !== null && listed.apart && listed.tabHit,
     `caves: at ${nw} px the Parameters list stays above the open drawer, its tab clickable`, listed);
   await setViewport(p, OVERLAY_VIEWPORT.width, OVERLAY_VIEWPORT.height);

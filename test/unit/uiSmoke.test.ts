@@ -37,7 +37,7 @@ import {
   type SmokePreset, pixelDiffShare, SWIFTSHADER_ARGS, START_SEED_7_HASH, PARITY_VIEW, PARITY_WATER_VIEW, PARITY_VIEWS, WORLD_RD, worldMeshQuery, PARITY_TOL, PARITY_MAX_SHARE, leaveGuardLog,
   expectedRenderer, HUD_POLL_MS, hudMoved, hudOnce, parseHud, STREAM_HOLD_MS, STREAM_MIN_MOVE, STREAM_RD, STREAM_RD_MS, STREAM_REVEAL_MS, STREAM_RUNS, streamQuery,
   type HudRead,
-  LANDING_ABOVE as SMOKE_LANDING_ABOVE, LANDING_MAX_Y as SMOKE_LANDING_MAX_Y, listenerDiff, listenerKey, listenersLeakFree, OVERLAY_APPLY_MS, OVERLAY_NARROW_WIDTH, CAVES_NARROW_VIEWPORT, MAP_NARROW_WIDTH, PANES_APART, TOOL_DISPOSE_REMOVES, TOOL_FREE_SESSION_LISTENERS, toolDisposeClean,
+  LANDING_ABOVE as SMOKE_LANDING_ABOVE, LANDING_MAX_Y as SMOKE_LANDING_MAX_Y, listenerDiff, listenerKey, listenersLeakFree, OVERLAY_APPLY_MS, OVERLAY_NARROW_WIDTH, CAVES_NARROW_VIEWPORT, MAP_NARROW_WIDTH, PAGE_SCROLLS, PANES_APART, SIDE_TAB_HIT, SLICE_IN_VIEW, TOOL_DISPOSE_REMOVES, TOOL_FREE_SESSION_LISTENERS, toolDisposeClean,
   OVERLAY_REVEAL_MS, OVERLAY_RUNS, OVERLAY_SHOTS, OVERLAY_TILES_MS, OVERLAY_VIEWPORT, overlayQuery, parseHudStale, hudStaleRowOk, previewMs, smokeLandingY, SETTINGS_KEY as SMOKE_SETTINGS_KEY,
   storedMapMode, TELEPORT_EAST_PX, teleportTarget, WORLD_MAP_BPP as SMOKE_WORLD_MAP_BPP,
   acrossFace, BUILD_QUERY, JUMP_MIN_RISE, PALETTE_SWATCHES, parseHudEdits, SMOKE_FACE, SMOKE_STATE, SMOKE_WATER_SOURCE, TORCH_MIN_LIGHT, WALK_GROUND_MS,
@@ -987,12 +987,33 @@ describe('UI smoke test: the overlay steps (SP4c spec §8.6)', () => {
     const caves = src.slice(src.indexOf('async function cavesChecks('));
     expect(caves.indexOf('setViewport(p, OVERLAY_VIEWPORT.width, OVERLAY_VIEWPORT.height);')).toBeGreaterThan(0);
     expect(caves.indexOf('setViewport(p, nw, nh);')).toBeGreaterThan(caves.indexOf('setViewport(p, OVERLAY_VIEWPORT.width, OVERLAY_VIEWPORT.height);'));
-    expect(caves.match(/p\.eval<PanesApart \| null>\(PANES_APART\)/g)).toHaveLength(2);
+    expect(caves.match(/await panesApart\(p\)/g)).toHaveLength(2);
     const narrow = src.slice(src.indexOf("t.step('density narrow:"), src.indexOf("t.step('density horizontal:"));
     expect(narrow).toContain('await setViewport(p, MAP_NARROW_WIDTH, VIEWPORT.height);');
     expect(narrow).toContain('await p.click(DENSITY_LINK);');
-    expect(narrow).toContain('p.eval<PanesApart | null>(PANES_APART)');
-    expect(PANES_APART).toContain("return { apart, tabHit: hit !== null && hit.closest('.map-tabs') === button.parentElement, drawerInView,");
+    expect(narrow).toContain('const edited = await panesApart(p);');
+    // The side panel's read is pure (Task 55's minor): the tab's scroll is SIDE_TAB_HIT's, run after it; a missing tab
+    // or button reads false instead of throwing.
+    expect(PANES_APART).not.toContain('scrollIntoView');
+    expect(PANES_APART).toContain("if (tab === null) return { apart: false, ...at, content: null };");
+    expect(SIDE_TAB_HIT).toContain('if (button === null) return false;');
+    expect(SIDE_TAB_HIT).toContain("button.scrollIntoView({ block: 'nearest' });");
+    expect(SIDE_TAB_HIT).toContain("return hit !== null && hit.closest('.map-tabs') === button.parentElement;");
+    expect(src).toContain("  const read = await p.eval<Omit<PanesApart, 'tabHit'> | null>(PANES_APART);\n  return read === null ? null : { ...read, tabHit: await p.eval<boolean>(SIDE_TAB_HIT) };");
+    // "Cave slice" shows the slice (the user's check, R32 c): pure reads, at least half the canvas inside the window and
+    // every clipping ancestor; side by side nothing scrolls, at the narrow window it is in view under the tree and form,
+    // read before panesApart's scroll, with the Density tab hidden while the window narrowed.
+    for (const read of [SLICE_IN_VIEW, PAGE_SCROLLS]) expect(read).not.toContain('scrollIntoView');
+    expect(SLICE_IN_VIEW).toContain("root.querySelector('.map-drawer .it-slice > .sv > .sv-body .sv-box > .sv-image')");
+    expect(SLICE_IN_VIEW).toContain("if (getComputedStyle(e).overflowY === 'visible') continue;");
+    expect(SLICE_IN_VIEW).toContain('inView: r.height > 0 && visible >= r.height / 2,');
+    const wide = caves.slice(0, caves.indexOf('setViewport(p, nw, nh);'));
+    expect(wide.indexOf('const scrolls0 = await p.eval<Record<string, number | null>>(PAGE_SCROLLS);')).toBeLessThan(wide.indexOf("await p.click('#map-caves-slice');"));
+    expect(wide).toContain("wideSlice.inView && scrolls1['document'] === scrolls0['document'] && scrolls1['map'] === scrolls0['map'] && scrolls1['drawer'] === 0 && scrolls1['slice'] === 0");
+    const stacked = caves.slice(caves.indexOf('setViewport(p, nw, nh);'));
+    expect(caves.indexOf("document.getElementById('map-drawer-tab-spline').click()")).toBeLessThan(caves.indexOf('setViewport(p, nw, nh);'));
+    expect(stacked.indexOf('const sliceShown = await p.eval<SliceInView | null>(SLICE_IN_VIEW);')).toBeLessThan(stacked.indexOf('const sliced = await panesApart(p);'));
+    expect(stacked).toContain('sliceShown !== null && sliceShown.inView');
     // The smoke's own viewport is unchanged.
     expect(VIEWPORT).toEqual({ width: 1400, height: 900 });
     expect(OVERLAY_SHOTS).toEqual({ full: 'review-overlay-full.png', split: 'review-overlay-split.png' });

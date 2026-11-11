@@ -80,6 +80,14 @@ export interface DensityTab {
    * the "tabs" and "stack" layouts hide it while JSON is selected).
    */
   showSlice(): void;
+  /**
+   * Scrolls the slice cell into view (`block: 'nearest'`: nothing moves when it is already visible, as in the wider
+   * layouts); the "stack" layout puts it under the tree and the form, inside the drawer's own scroll. The layout is
+   * first brought to the tab's current width (its observer runs only after the next layout); a hidden cell (JSON
+   * selected) or a hidden tab (width 0) is left alone. The Caves tab's "Cave slice", after the drawer's own scroll (the
+   * SP6a user's check, R32 c).
+   */
+  revealSlice(): void;
   dispose(): void;
 }
 
@@ -174,10 +182,12 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
     for (const [id, b] of subButtons) b.setAttribute('aria-selected', String(id === subTab));
     if (panes.json) jsonView?.restoreScroll();
   };
-  const resize = new ResizeObserver(() => {
+  /** The layout mode for the tab's current width (a hidden tab, width 0, keeps it). */
+  const fitLayout = (): void => {
     const next = densityLayout(element.getBoundingClientRect().width, layout);
     if (next !== layout) { layout = next; applyLayout(); }
-  });
+  };
+  const resize = new ResizeObserver(fitLayout);
   resize.observe(element);
   applyLayout();
 
@@ -705,6 +715,11 @@ export function createDensityTab(host: HTMLElement, deps: DensityTabDeps): Densi
       if (subTab === 'slice') return;
       subTab = 'slice';
       applyLayout();
+    },
+    revealSlice() {
+      if (!(element.getBoundingClientRect().width > 0)) return;
+      fitLayout();
+      if (!sliceHost.hidden) sliceHost.scrollIntoView({ block: 'nearest' });
     },
     dispose() {
       unsubscribe();

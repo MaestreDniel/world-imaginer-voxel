@@ -33,6 +33,7 @@ function setup(camera = { x: 100.5, y: 80.9, z: -40.5 }) {
     openSlice: (s) => { opened.push(s); log.push('open'); },
     showSlice: () => { log.push('slice pane'); },
     openDrawer: (t) => { log.push(`drawer ${t}`); },
+    revealSlice: () => { log.push('reveal slice'); },
     showTab: (t) => { log.push(`tab ${t}`); },
     reveal: (path) => { log.push(`reveal ${path}`); },
   });
@@ -40,11 +41,12 @@ function setup(camera = { x: 100.5, y: 80.9, z: -40.5 }) {
 }
 
 describe('the Caves tab\'s links in the world\'s map (SP6a spec §7.3)', () => {
-  test('"Cave slice" opens the horizontal `caves` slice at y, 256 blocks across, centred on the camera, then shows the drawer on Density with its Slice pane (Task 52, minors-3)', () => {
+  test('"Cave slice" opens the horizontal `caves` slice at y, 256 blocks across, centred on the camera, then shows the drawer on Density with its Slice pane (Task 52, minors-3), and last scrolls the slice cell into view (the user\'s check, R32 c)', () => {
     const s = setup();
     s.deps.openSlice(207);
     expect(s.opened).toEqual([{ plane: 'horizontal', field: 'caves', y: 207, cx: 100.5, cz: -40.5, extent: CAVE_SLICE_EXTENT }]);
-    expect(s.log).toEqual(['open', 'slice pane', 'drawer density']);
+    // The slice cell's scroll runs after the drawer's own (openDrawer scrolls the drawer into view in the stacked layout).
+    expect(s.log).toEqual(['open', 'slice pane', 'drawer density', 'reveal slice']);
     // The camera at the press, not at the mount.
     s.camera.x = -3000;
     s.camera.z = 12;
@@ -83,6 +85,7 @@ describe('the tool mounts the Caves tab in the world\'s map only (SP6a spec §7.
     expect(block).toContain('openSlice: (s) => slices.open(s),');
     expect(block).toContain('showSlice: () => densityTab.showSlice(),');
     expect(block).toContain('openDrawer: (t) => layout.openDrawer(t),');
+    expect(block).toContain('revealSlice: () => densityTab.revealSlice(),');
     expect(block).toContain("showTab: (t) => layout.showTab(t),");
     expect(block).toContain('reveal: (path) => panel.reveal(path),');
     expect(src).toContain('    disposers.add(() => cavesTab.dispose());');

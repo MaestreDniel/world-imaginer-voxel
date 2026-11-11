@@ -91,6 +91,63 @@ describe('showSlice: the Caves tab\'s "Cave slice" shows the Slice pane (SP6a sp
   });
 });
 
+describe('revealSlice: "Cave slice" scrolls the slice cell into view (the SP6a user\'s check, R32 c)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  /** A Density tab on the shim, its own ResizeObserver held back (the first one made), and its `.it` element. */
+  function mount() {
+    const dom = installDom();
+    const observers: Array<() => void> = [];
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(fn: () => void) { observers.push(fn); }
+      observe(): void {}
+      disconnect(): void {}
+    });
+    const session = new WorldSession(() => [1, 2], { validateParams: validateParamTrees });
+    const host = dom.document.createElement('div');
+    const tab = createDensityTab(host as unknown as HTMLElement, { session, edit: (_e, fn) => fn(), clock: { setTimeout: () => 0, clearTimeout: () => {} } });
+    const element = host.children[0]!;
+    const sub = (label: string): FakeElement => element.children.find((e) => e.className === 'it-subtabs')!.children.find((b) => b.textContent === label)!;
+    return { tab, element, observers, slice: tab.sliceHost as unknown as FakeElement, sub };
+  }
+
+  test('the slice cell is scrolled into view with block "nearest" (no scroll when it is already visible)', () => {
+    const m = mount();
+    m.element.rect = { left: 0, top: 0, width: 800, height: 600 };
+    m.observers[0]!();
+    expect(m.element.dataset['layout']).toBe('stack');
+    m.tab.revealSlice();
+    expect(m.slice.scrolledIntoView).toEqual([{ block: 'nearest' }]);
+  });
+
+  // The drawer just opened on a tab hidden at another width: the tab's observer has not run yet (it runs after the next
+  // layout), so the cell would be scrolled to where the old layout put it and then move under the tree and the form.
+  test('the layout follows the tab\'s width first: a tab shown at a narrow width since its last observer stacks before the scroll', () => {
+    const m = mount();
+    m.element.rect = { left: 0, top: 0, width: 1000, height: 600 };
+    m.observers[0]!();
+    expect(m.element.dataset['layout']).toBe('tabs');
+    m.element.rect = { left: 0, top: 0, width: 800, height: 600 };
+    m.tab.revealSlice();
+    expect(m.element.dataset['layout']).toBe('stack');
+    expect(m.slice.hidden).toBe(false);
+    expect(m.slice.scrolledIntoView).toEqual([{ block: 'nearest' }]);
+  });
+
+  test('a hidden slice cell (JSON selected) or a hidden tab (width 0) is not scrolled, and the layout is kept', () => {
+    const m = mount();
+    m.element.rect = { left: 0, top: 0, width: 800, height: 600 };
+    m.observers[0]!();
+    m.sub('JSON').click();
+    m.tab.revealSlice();
+    expect(m.slice.scrolledIntoView).toEqual([]);
+    m.tab.showSlice();
+    m.element.rect = { left: 0, top: 0, width: 0, height: 0 };
+    m.tab.revealSlice();
+    expect([m.element.dataset['layout'], m.slice.scrolledIntoView]).toEqual(['stack', []]);
+  });
+});
+
 describe('JSON editor lines (§3.5)', () => {
   const text = '{\n  "a": 1,\n  "b": [1, 2]\n}';
 

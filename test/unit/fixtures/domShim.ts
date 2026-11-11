@@ -211,6 +211,13 @@ export class FakeElement extends EventTarget {
     return { ...r, right: r.left + r.width, bottom: r.top + r.height, x: r.left, y: r.top };
   }
 
+  /** The argument of each `scrollIntoView` call, in order (the Density tab's slice cell; the SP6a user's check). */
+  readonly scrolledIntoView: Array<ScrollIntoViewOptions | boolean | undefined> = [];
+
+  scrollIntoView(arg?: ScrollIntoViewOptions | boolean): void {
+    this.scrolledIntoView.push(arg);
+  }
+
   /** The pointer ids captured by `setPointerCapture` (a bar's or a plot's drag, SP5b). */
   readonly captured = new Set<number>();
 
