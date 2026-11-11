@@ -1005,7 +1005,7 @@ Both gates are met, so the drag hold stays as ruling R16 keeps it (no new fallba
 
 **The screenshots** (`--shots`, `SP6A_SHOTS`, 1400 × 900, in `assets/sp6a/`; SwiftShader; the counts hidden; Task 49 took them at RD 4, and Task 48e retook every one at RD 12, below): `review-xray.png` (the X-ray at every depth from the cheese pose), `review-xray-band.png` (the band of a first PageDown there, y −32 … −1), `review-entrance.png` (the entrance from 12 blocks above its pose, looking down at the opening), `review-ravine.png`, `review-cheese-pillars.png`, `review-spaghetti3d.png`, `review-spaghetti2d.png`, `review-noodle.png`, `review-worm.png` (each at its pose, with night vision: at the light floor alone their walls read almost black), `review-light-floor.png` and `review-night-vision.png` (the large interior without and with night vision), `review-night-surface.png` (seed 42's spawn view at midnight, `&shot=1&time=0`), `review-slice-vertical.png` (the `caves` field on a vertical plane in `?map`, 512 blocks along z = −52 through the cheese pose) and `review-slice-horizontal.png` ("Cave slice" from the worm's pose, y −23, 256 blocks across). Each 3D shot opens at its link's corner; `review-cheese-pillars.png` shows the re-picked pose: the free-standing pillar ahead from its middle, under the cavern's roof, the cavern open on both sides. (At Task 49 the pillars shot came from its last run, `review-xray.png`, `review-xray-band.png` and `review-worm.png`, whose corners moved, from the run before and the other ten from the run before that; every PNG committed now is from Task 48e's run, below.) Risk 11's visual review (master :1721) is the controller's and the user's; the implementer's notes are in Task 49's report.
 
-**Retaken at RD 12 (Task 48e, the user's check of 2026-11-09: "the shots look as if the render distance were very low").** Every 3D shot above now opens at RD 12 (`SHOT_RD`, `caveShotQuery`; the night surface through `nightSurfaceQuery`) and waits for the stream to settle at that RD before its capture (`STREAM_SETTLED`: `__wiTest.rd()` ≥ 12 and every column within it revealed around the camera, `__wiTest.filled()`); the links carry `&rd=12`; the rest of the smoke stays at RD 4. The smoke (`npm run build`, then `node test/tools/uiSmoke.ts --skip-build --profile-dir <mktemp -d /tmp/wi10-XXXX> --shots <mktemp -d>`): 558/558 checks pass, 0 page errors, `?selftest=1` `✓ all 62 goldens match (10.9 s)` and `IndexedDB contract: 10/10 passed`; every shot's stream wait held at once (the reveal waits for the whole RD 12 disc); the caves step's live edit "stale 69 / 69", 0 after 2.7 s, Ctrl+Z 0 after 3.0 s. The overlay step's leak check now compares with the overlay closed (the tool hidden, as the 2 s premount left it at the baseline, Task 48e), then disposes the tool (its session listeners 11 → 3). All fourteen PNGs in `assets/sp6a/` are from this run (two runs gave byte-identical 3D shots). At RD 12 `review-noodle.png`'s left strip shows sky and terrain through the wall: its eye stands on a rock face's plane, which RD 4's fog hid (Task 48e's review); the noodle link opens the same view. The corner is not re-picked; the user's check judges it.
+**Retaken at RD 12 (Task 48e, the user's check of 2026-11-09: "the shots look as if the render distance were very low").** Every 3D shot above now opens at RD 12 (`SHOT_RD`, `caveShotQuery`; the night surface through `nightSurfaceQuery`) and waits for the stream to settle at that RD before its capture (`STREAM_SETTLED`: `__wiTest.rd()` ≥ 12 and every column within it revealed around the camera, `__wiTest.filled()`); the links carry `&rd=12`; the rest of the smoke stays at RD 4. The smoke (`npm run build`, then `node test/tools/uiSmoke.ts --skip-build --profile-dir <mktemp -d /tmp/wi10-XXXX> --shots <mktemp -d>`): 558/558 checks pass, 0 page errors, `?selftest=1` `✓ all 62 goldens match (10.9 s)` and `IndexedDB contract: 10/10 passed`; every shot's stream wait held at once (the reveal waits for the whole RD 12 disc); the caves step's live edit "stale 69 / 69", 0 after 2.7 s, Ctrl+Z 0 after 3.0 s. The overlay step's leak check now compares with the overlay closed (the tool hidden, as the 2 s premount left it at the baseline, Task 48e), then disposes the tool (its session listeners 11 → 3). All fourteen PNGs in `assets/sp6a/` were from this run (two runs gave byte-identical 3D shots), until the user's check retook them at `GENERATOR_VERSION` 8 (below). At RD 12 `review-noodle.png`'s left strip shows sky and terrain through the wall: its eye stands on a rock face's plane, which RD 4's fog hid (Task 48e's review); the noodle link opens the same view. The corner is not re-picked; the user's check judges it.
 
 ### L13 and L14 in Chrome (Task 47)
 
@@ -1190,6 +1190,62 @@ Seven jobs passed §11's 3 min 30 s in the green run, so levers 1-2 could not re
 **Recorded from Task 47's files** (ruling R28): the 4-worker Iris Xe bench and the RTX bench were measured at 12746af, before R27, so their L14 blocks (recorded only) hold no `xrayMapOpenMaxMs` and count the map's open: the 4-worker file reads `xrayOver33` 1 (max 37.48 ms) and the RTX file `xrayOver33` 2 (max 237.4 ms) at RD 12; `assets/sp6a/` is therefore not R27-consistent in those two files. The RTX bench's stream `gpuMB` reads 150.24, over Medium's 150 (recorded, not gated on the RTX). G2.flush's `replyDuringFlushP95Ms` (gate 5) read 5.18, 5.28 and 5.45 ms in 3 of 10 Iris Xe bench runs across Task 47's re-runs, all with the same L11 code, against the committed file's 3.89: not a miss under the plan (the committed file is the gate's reading), but flaky on the reference machine; Task 52 found no code cause in the L11 or reply path (SP5c read 1.74). Task 48's RegionBatch policy v2 raised the stream replay's structural operations (Task 48d, Node): L1's growths 110 → 189 and L3's 654 → 1,115, with 18 shrinks, frames that G1's no-frame-over-33-ms check and L13's and L14's growth counts see; Task 47's cells, measured after it, hold.
 
 **`xrayApplyRefillMs` and `xrayMapOpenMaxMs`.** The refill after L14's cave edit read 8,404 and 8,317 ms on the Iris Xe (Task 47), against §10.6's ≤ 6,000 ms: accepted by the user, recorded and not gated in SP6a (ruling R26; the Threshold log), its 6 s target and the levers left (a frame cap while regenerating, a cached non-cave density) handed to SP6b's brainstorming and SP12 (§14). The map's first open in L14 is recorded as `xrayMapOpenMaxMs` (24.99 and 29.15 ms on the Iris Xe; ruling R27), out of `xrayOver33`, which stays gated over every other frame.
+
+### The user's check (rulings R31, R32)
+
+**Finding 1 (R31, 2026-11-11):** too many noodles, and no parameter for their frequency. An investigation measured the levers over the quick tier's default group:
+- **The toggle threshold t:** a pure frequency lever. Nt is unit-sd, so t keeps P(Nt > t)/0.5 of the noodles: t 0.3 keeps 0.77, t 1 keeps 0.32.
+- **Thickness, ridgeMul and the band:** they change the section or the band, not the count. Thinner tubes break into dotted fragments.
+- **C3.noodleShare ≥ 2 %:** it read 0.02324 and failed from t 0.2.
+
+**The user's choice:** t 1.0, the thickness about doubled ("duplicar aproximadamente el grosor respecto al actual": 0.11 → 0.22), and C3.noodleShare ≥ 0.5 %.
+
+**Task 56's Step 1:** at t 1 and thickness ≥ 0.18, C5.thinnest read 3 at every maxY. Thicker noodles become continuous tubes about one voxel wide: 700 to 1,216 components of at least 64 voxels that are mostly noodle, against 102 at SP6a's exit. They pulled the pooled median below 4. Without them the median read 4 in every variant. The wider tubes also broke through the surface near the band's top: C9.entrancesMax read 164.7 at maxY 64 and 134.8 at maxY 48.
+
+**R32, the user's option 1:**
+- C5.thinnest reads the components ≥ 64 voxels that are not mostly noodle (dc60e67; §10.1, master §6.4). The bound stays 4.
+- `caves.noodles.maxY` 64 → 48.
+
+Step 1 then re-ran t 1, thickness 0.22, maxY 48 over the whole quick tier with that population, and every gate held. Its scratch harness and data are in `test/metrics/.out/task56/` (git-ignored).
+
+**The change** (eab335e):
+- The leaf `caves.noodles.threshold` and the new defaults (§1.2's "Retuned at the user's check", §4).
+- `GENERATOR_VERSION` 8, `SCHEMA_VERSION` 4 with `MIGRATIONS[2]` (§12.4), and C3.noodleShare ≥ 0.005 (the Threshold log).
+- The golden diff against dc60e67: `generatorVersion` and 9 entries, all of §12.3's allowed keys: `sp1.params`, `sp3a.region.T.default`, `sp3a.region.T.large_biomes`, `sp3b.density.default`, `sp3c.surface.ops`, `sp3e.region.T.amplified`, `.archipelago`, `.floating_islands`, `sp6a.region.T.caves`. The other 53 entries are unchanged.
+- The tree gains 3 nodes (1,090). Its work cost goes from 17,451 to 17,467, and a 128² vertical slice's sample column from 272,064 to 272,456 work units. No slice admission changes.
+- U2 covers 172 leaves, and both cave class columns moved (§4): `caverns` to (19524, −7785) at draw 512 and `tunnels` to (−16103, 13714) at draw 422. On the old caverns column `caves.limits.bandSpan` had acted only through the noodle's band edge.
+
+**C1-C9 before and after** (before: SP6a's exit defaults, Task 56's Step 1 on quick and Task 53 on full; after: eab335e's `caves.metric.ts` on each tier):
+
+| part | quick before | quick after | full before | full after | bound |
+|---|---|---|---|---|---|
+| C3.noodleShare | 0.02324 | 0.02624 | 0.02474 | 0.02904 | ≥ 0.005 (0.02 before) |
+| C3.maxShare | 0.6863 | 0.6843 | 0.6942 | 0.6912 | ≤ 0.7 |
+| C5.thinnest (not mostly noodle) | 4 (1,955 components; 4 over all 2,057) | 4 (1,907; 3 over all 2,845) | 4 (over all) | 4 | ≥ 4 |
+| C5.thinnestByKind | 1.8 | 1.8 | 1.8 | 2.25 | ≥ 1.5 |
+| C6.latticeBias | 1.124 | 1.123 | 1.185 | 1.186 | ≤ 1.25 |
+| C7.flatWallShare | 0.0292 | 0.0306 | 0.0319 | 0.0324 | ≤ 0.037 |
+| C9.entrancesMax (= C2.skyComponents) | 138.6 | 134.8 | 74.70 | 72.48 | ≤ 150 |
+| C9.holedSurface | 0.01543 | 0.01478 | 0.01997 | 0.01892 | ≤ 0.02 |
+| C9.thinRoof | 0.01158 | 0.01028 | 0.01166 | 0.01028 | ≤ 0.05 |
+
+Every other part stays within its bound on both tiers. Quick after: C1 0.0816 / 0.0837, C4 0.0789 / 0.0139, C5.largest 0.366, C8.typeMixVariation 0.0332, C9.nearestEntrance 79.7. Full after: C1 0.0750 / 0.0763, C8.typeMixVariation 0.0495, C9.nearestEntrance 80.1.
+
+**The runs at eab335e:**
+- **`npm run typecheck && npm test`:** 356 files passed (2 skipped); 6,508 tests passed, 1 expected fail, 12 skipped.
+- **`npm run test:metrics`:** 19 files passed (70 tests, 7 skipped, 393 s).
+- **`caves.metric.ts` on the full tier:** 10 tests passed in 565 s.
+- **Bun:** `npx --yes bun@1 test/tools/goldensJsc.ts`: 62/62 match on Bun 1.4.4 (JavaScriptCore).
+- **The smoke:** `node test/tools/uiSmoke.ts --profile-dir <mktemp -d /tmp/wi10-XXXX> --shots <dir>` passed 569/569 checks with 0 page errors. `?selftest=1` read `✓ all 62 goldens match (10.5 s)` and `IndexedDB contract: 10/10 passed`.
+
+**The review shots and links:**
+- **The noodle's pose moved:** `caves.examples.json`'s largest noodle component is now entered at voxel (−34, −40, −33), looking west, where it was (−28, −47, −47). The link table above follows the committed file: the noodle's row, and the component sizes that the noodles' joins changed.
+- **`review-noodle.png`:** a tube about two to three blocks across, running ahead and stepping down. Its walls are close on both sides and its floor is visible ahead. The old shot's sky strip through the wall is gone.
+- **`review-xray.png` and `review-xray-band.png`:** the magenta noodles are fewer and longer, continuous tubes in place of the scattered specks.
+- **The other shots:** the slice shots and the remaining 3D shots differ from the committed ones by 0.5 % of their pixels or less (the night-vision shot 0.51 %).
+- All fourteen SP6a PNGs in `assets/sp6a/` are from this run.
+
+**The push:** the branch `sp6a/user-check` was pushed with `GENERATOR_VERSION` 8. Merging to `main` waits for the user's go-ahead.
 
 ## Threshold log
 
