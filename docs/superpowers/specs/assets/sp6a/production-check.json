@@ -1,0 +1,2514 @@
+{
+  "date": "2026-11-10T22:27:06.351Z",
+  "url": "https://world-imaginer-voxel.vercel.app/",
+  "gitHead": "0689c4f661c2c0926c8ef6b9768da43a82cf007d",
+  "servedBundle": "index-C1YOH6uU.js",
+  "localBundle": "index-C1YOH6uU.js",
+  "sameBuild": true,
+  "bundleCompare": {
+    "servedBundle": "index-C1YOH6uU.js",
+    "servedCss": "index-DsmeYR9W.css",
+    "localBundle": "index-C1YOH6uU.js",
+    "indexSha256": "55a810f5f95abfeca188ce0427fc6d2b9015902b46eb0eee820b3d3bf2da50f2",
+    "localIndexHtmlEqual": true,
+    "distDir": "/home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/task54/step2/dist-main",
+    "distBuiltAt": "2026-11-10T22:10:44.068Z",
+    "assetsCompared": 51,
+    "assetsEqual": 51,
+    "assetsDiffering": []
+  },
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  "chromeVersion": "Chrome/155.0.8059.39",
+  "glRenderer": "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)",
+  "glVendor": "Google Inc. (Intel)",
+  "multiDraw": true,
+  "windowAtStart": {
+    "left": 0,
+    "top": 32,
+    "width": 1756,
+    "height": 956,
+    "windowState": "maximized"
+  },
+  "window": {
+    "left": 0,
+    "top": 32,
+    "width": 1756,
+    "height": 956,
+    "windowState": "maximized"
+  },
+  "windowOnEdp1": true,
+  "windowMovedToEdp": false,
+  "screen": {
+    "width": 1756,
+    "height": 988,
+    "availLeft": 0,
+    "availTop": 32,
+    "screenX": 0,
+    "screenY": 32
+  },
+  "viewport": {
+    "innerWidth": 1756,
+    "innerHeight": 869,
+    "devicePixelRatio": 1.09375,
+    "hasFocus": false
+  },
+  "windowEnd": {
+    "left": 0,
+    "top": 32,
+    "width": 1756,
+    "height": 956,
+    "windowState": "maximized"
+  },
+  "wiTestHonoured": true,
+  "loadBefore": {
+    "uptime": "23:27:06 up 34 min,  1 user,  load average: 0,49, 1,33, 0,96",
+    "loadavg": [
+      0.49,
+      1.33,
+      0.96
+    ]
+  },
+  "loadAfter": {
+    "uptime": "23:29:02 up 35 min,  1 user,  load average: 3,49, 2,35, 1,39",
+    "loadavg": [
+      3.49,
+      2.35,
+      1.39
+    ]
+  },
+  "allStepsPass": true,
+  "stepSummary": [
+    {
+      "step": 0,
+      "name": "pre-checks (read-only: PRIME on-demand, eDP-1 at 240 Hz, the session unlocked, load < 1) and the bundle compare against a local build of main",
+      "pass": true,
+      "checks": "5/5 checks",
+      "wallMs": 3278
+    },
+    {
+      "step": 1,
+      "name": "the SP5c world (D36): Load world lists it with the \"older generator\" badge; it opens with the noise caves (the SP6a tree), the plank edit kept at (-1021, 71, -957), the migration 2 → 3 leaves it working",
+      "pass": true,
+      "checks": "14/14 checks",
+      "wallMs": 25810
+    },
+    {
+      "step": 2,
+      "name": "an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, night vision on and off, the light floor in a cave, a walk down an entrance",
+      "pass": true,
+      "checks": "38/38 checks",
+      "wallMs": 71313
+    },
+    {
+      "step": 3,
+      "name": "?selftest=1 on production (the kept profile: the selftest never opens wi10, only its own wi10-selftest, deleted before and after)",
+      "pass": true,
+      "checks": "4/4 checks",
+      "wallMs": 13409
+    },
+    {
+      "step": 4,
+      "name": "page and console errors",
+      "pass": true,
+      "checks": "2/2 checks",
+      "wallMs": 0
+    }
+  ],
+  "steps": [
+    {
+      "step": 0,
+      "name": "pre-checks (read-only: PRIME on-demand, eDP-1 at 240 Hz, the session unlocked, load < 1) and the bundle compare against a local build of main",
+      "notes": [],
+      "checks": [
+        {
+          "pass": true,
+          "what": "PRIME is on-demand (prime-select query: on-demand)"
+        },
+        {
+          "pass": true,
+          "what": "eDP-1 is connected and runs at 240 Hz (1920x1080    240.00*+ 240.00    60.00)",
+          "detail": [
+            "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+            "   1920x1080    240.00*+ 240.00    60.00  ",
+            "   1680x1050    240.00  "
+          ]
+        },
+        {
+          "pass": true,
+          "what": "the session is active and unlocked (Type=x11, Active=yes, LockedHint=no)"
+        },
+        {
+          "pass": true,
+          "what": "the 1-minute load 0.49 is below 1"
+        },
+        {
+          "pass": true,
+          "what": "production serves the local build of main: served index-C1YOH6uU.js, local index-C1YOH6uU.js, index.html equal true, 51/51 files byte-identical",
+          "detail": {
+            "servedBundle": "index-C1YOH6uU.js",
+            "servedCss": "index-DsmeYR9W.css",
+            "localBundle": "index-C1YOH6uU.js",
+            "indexSha256": "55a810f5f95abfeca188ce0427fc6d2b9015902b46eb0eee820b3d3bf2da50f2",
+            "localIndexHtmlEqual": true,
+            "distDir": "dist-main",
+            "distBuiltAt": "2026-11-10T22:10:44.068Z",
+            "assetsCompared": 51,
+            "assetsEqual": 51,
+            "assetsDiffering": []
+          }
+        }
+      ],
+      "pass": true,
+      "pre": {
+        "prime": "on-demand",
+        "eDP1": [
+          "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+          "   1920x1080    240.00*+ 240.00    60.00  ",
+          "   1680x1050    240.00  "
+        ],
+        "eDP1Current": "   1920x1080    240.00*+ 240.00    60.00  ",
+        "session": "2",
+        "sessionProps": "Type=x11\nActive=yes\nLockedHint=no",
+        "loadavg": [
+          0.49,
+          1.33,
+          0.96
+        ],
+        "uptime": "23:27:06 up 34 min,  1 user,  load average: 0,49, 1,33, 0,96",
+        "gitHead": "0689c4f661c2c0926c8ef6b9768da43a82cf007d",
+        "gitStatus": "?? .superpowers/"
+      },
+      "wallMs": 3278,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 1,
+      "name": "the SP5c world (D36): Load world lists it with the \"older generator\" badge; it opens with the noise caves (the SP6a tree), the plank edit kept at (-1021, 71, -957), the migration 2 → 3 leaves it working",
+      "notes": [
+        "after the open, the row reads {\"id\":\"7010b829-2b39-46e0-9dc1-46313931b7b2\",\"name\":\"SP5c world\",\"title\":\"SP5c world · default · seed 4242\",\"info\":[\"Modified 2026-11-10 23:27\"],\"badges\":[]}: the open wrote today's genKey (olderGeneratorRecord, SP5b D8), so the badge is gone, as designed"
+      ],
+      "checks": [
+        {
+          "pass": true,
+          "what": "before opening: worlds[7010b829-2b39-46e0-9dc1-46313931b7b2] is Step 0's record (name \"SP5c world\", seed \"4242\", generatorVersion 5, schemaVersion 2, genKey 87bc03c64b0ba369)",
+          "detail": {
+            "id": "7010b829-2b39-46e0-9dc1-46313931b7b2",
+            "name": "SP5c world",
+            "seedText": "4242",
+            "seed": [
+              4242,
+              0
+            ],
+            "profile": "default",
+            "schemaVersion": 2,
+            "paramsHash": "5ce41646fd2b91e0",
+            "generatorVersion": 5,
+            "genKey": "87bc03c64b0ba369",
+            "created": 1794347988914,
+            "backupOf": null,
+            "stateTableLength": 58,
+            "densityDefsKeys": 2,
+            "densityDefsNames": [
+              "defs",
+              "root"
+            ]
+          }
+        },
+        {
+          "pass": true,
+          "what": "before opening: its one edit is stored (historySteps 1, diffs 1)",
+          "detail": {
+            "perWorld": {
+              "7010b829-2b39-46e0-9dc1-46313931b7b2": 1
+            },
+            "steps": [
+              {
+                "key": [
+                  "7010b829-2b39-46e0-9dc1-46313931b7b2",
+                  0
+                ],
+                "edits": [
+                  {
+                    "x": -1021,
+                    "y": 71,
+                    "z": -957,
+                    "before": 4294967295,
+                    "after": 6400
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "pass": true,
+          "what": "Load world lists \"SP5c world\" (SP5c world · default · seed 4242)",
+          "detail": [
+            {
+              "id": "7010b829-2b39-46e0-9dc1-46313931b7b2",
+              "name": "SP5c world",
+              "title": "SP5c world · default · seed 4242",
+              "info": [
+                "Modified 2026-11-10 23:00",
+                "opens with today's terrain; your blocks stay at their coordinates"
+              ],
+              "badges": [
+                "older generator"
+              ]
+            }
+          ]
+        },
+        {
+          "pass": true,
+          "what": "its row carries the \"older generator\" badge and the line \"opens with today's terrain; your blocks stay at their coordinates\" (D36, SP5b D8): badges [\"older generator\"], lines [\"Modified 2026-11-10 23:00\",\"opens with today's terrain; your blocks stay at their coordinates\"]",
+          "detail": {
+            "id": "7010b829-2b39-46e0-9dc1-46313931b7b2",
+            "name": "SP5c world",
+            "title": "SP5c world · default · seed 4242",
+            "info": [
+              "Modified 2026-11-10 23:00",
+              "opens with today's terrain; your blocks stay at their coordinates"
+            ],
+            "badges": [
+              "older generator"
+            ]
+          }
+        },
+        {
+          "pass": true,
+          "what": "Play opens /?world=7010b829-2b39-46e0-9dc1-46313931b7b2",
+          "detail": "https://world-imaginer-voxel.vercel.app/?world=7010b829-2b39-46e0-9dc1-46313931b7b2"
+        },
+        {
+          "pass": true,
+          "what": "the SP5c world reveals after Play (4017 ms)"
+        },
+        {
+          "pass": true,
+          "what": "production honours &wiTest=1: the hook names the SP5c world"
+        },
+        {
+          "pass": true,
+          "what": "the plank edit is still at (-1021, 71, -957): blockAt reads 25 (oak_planks is 25)"
+        },
+        {
+          "pass": true,
+          "what": "cave air below the surface in the SP5c world: 1936 air voxels at least 5 below heightAt in the 41 × 41 columns around the plank (by 16-block band {\"0\":306,\"16\":150,\"32\":275,\"48\":249,\"64\":10,\"-48\":324,\"-16\":449,\"-64\":137,\"-32\":36}; deepest at [-1022,-63,-968]); volume hash c99c2234",
+          "detail": {
+            "box": {
+              "x0": -1041,
+              "x1": -1000,
+              "z0": -977,
+              "z1": -936,
+              "y0": -64,
+              "y1": 78
+            },
+            "skippedColumns": [
+              [
+                -1021,
+                -957
+              ]
+            ],
+            "columns": 1680,
+            "voxels": 240240,
+            "caveAir": 1936,
+            "caveAirBy16": {
+              "0": 306,
+              "16": 150,
+              "32": 275,
+              "48": 249,
+              "64": 10,
+              "-48": 324,
+              "-16": 449,
+              "-64": 137,
+              "-32": 36
+            },
+            "deepestCaveAir": [
+              -1022,
+              -63,
+              -968
+            ],
+            "unloaded": 0,
+            "hash": "c99c2234"
+          }
+        },
+        {
+          "pass": true,
+          "what": "X turns the X-ray on in the SP5c world (the strip \"X-ray · y −64 … 319 · by cave type\")",
+          "detail": {
+            "hidden": false,
+            "text": "X-ray · y −64 … 319 · by cave type"
+          }
+        },
+        {
+          "pass": true,
+          "what": "the X-ray draws the caves' hollows in the SP5c world: 69.2 % of the canvas' sampled pixels coloured (saturation ≥ 24), 4.5 % the clear colour #0b0e14",
+          "detail": {
+            "samples": 174381,
+            "pureBlack": 0,
+            "darkest": {
+              "x": 123,
+              "y": 948,
+              "rgb": [
+                11,
+                14,
+                20
+              ],
+              "lum": 13.8
+            },
+            "maxChannel": {
+              "min": 20,
+              "p01": 20,
+              "p10": 30,
+              "p50": 89
+            },
+            "luminance": {
+              "min": 13.8,
+              "p01": 13.8,
+              "p50": 60.61,
+              "mean": 71.91
+            },
+            "nearClearShare": 0.0447,
+            "saturatedShare": 0.6917
+          }
+        },
+        {
+          "pass": true,
+          "what": "after opening: the stored record carries today's generator (generatorVersion 5 → 7, genKey 87bc03c64b0ba369 → a793e8164850930b; schemaVersion of the stored params 2, migrated on every read by loadParams), its edit kept (diffs 1)",
+          "detail": {
+            "id": "7010b829-2b39-46e0-9dc1-46313931b7b2",
+            "name": "SP5c world",
+            "seedText": "4242",
+            "seed": [
+              4242,
+              0
+            ],
+            "profile": "default",
+            "schemaVersion": 2,
+            "paramsHash": "3d7777aa4d1612ce",
+            "generatorVersion": 7,
+            "genKey": "a793e8164850930b",
+            "created": 1794347988914,
+            "backupOf": null,
+            "stateTableLength": 58,
+            "densityDefsKeys": 2,
+            "densityDefsNames": [
+              "defs",
+              "root"
+            ]
+          }
+        },
+        {
+          "pass": true,
+          "what": "the comparison world is unsaved (no world id)"
+        },
+        {
+          "pass": true,
+          "what": "the SP5c world's terrain is SP6a's default terrain: the probe volume (240240 voxels, the plank's column left out) hashes c99c2234 in the SP5c world and c99c2234 in an unsaved seed-4242 default world of today's build; cave air 1936 = 1936",
+          "detail": {
+            "saved": "c99c2234",
+            "fresh": "c99c2234"
+          }
+        }
+      ],
+      "pass": true,
+      "idbBefore": {
+        "exists": true,
+        "databases": [
+          "wi10@2"
+        ],
+        "version": 2,
+        "stores": [
+          "diffs",
+          "history",
+          "historySteps",
+          "meta",
+          "state",
+          "worlds"
+        ],
+        "counts": {
+          "diffs": 1,
+          "history": 1,
+          "historySteps": 1,
+          "meta": 0,
+          "state": 1,
+          "worlds": 1
+        },
+        "worlds": [
+          {
+            "id": "7010b829-2b39-46e0-9dc1-46313931b7b2",
+            "name": "SP5c world",
+            "seedText": "4242",
+            "seed": [
+              4242,
+              0
+            ],
+            "profile": "default",
+            "schemaVersion": 2,
+            "paramsHash": "5ce41646fd2b91e0",
+            "generatorVersion": 5,
+            "genKey": "87bc03c64b0ba369",
+            "created": 1794347988914,
+            "backupOf": null,
+            "stateTableLength": 58,
+            "densityDefsKeys": 2,
+            "densityDefsNames": [
+              "defs",
+              "root"
+            ]
+          }
+        ],
+        "state": [
+          {
+            "worldId": "7010b829-2b39-46e0-9dc1-46313931b7b2",
+            "flushSeq": 4,
+            "player": {
+              "x": -1024,
+              "y": 71,
+              "z": -960,
+              "yaw": 90,
+              "pitch": -10,
+              "mode": "fly",
+              "speed": 12
+            }
+          }
+        ],
+        "history": [
+          {
+            "worldId": "7010b829-2b39-46e0-9dc1-46313931b7b2",
+            "done": [
+              0
+            ],
+            "undone": []
+          }
+        ],
+        "historySteps": {
+          "perWorld": {
+            "7010b829-2b39-46e0-9dc1-46313931b7b2": 1
+          },
+          "steps": [
+            {
+              "key": [
+                "7010b829-2b39-46e0-9dc1-46313931b7b2",
+                0
+              ],
+              "edits": [
+                {
+                  "x": -1021,
+                  "y": 71,
+                  "z": -957,
+                  "before": 4294967295,
+                  "after": 6400
+                }
+              ]
+            }
+          ]
+        },
+        "diffs": {
+          "perWorld": {
+            "7010b829-2b39-46e0-9dc1-46313931b7b2": 1
+          },
+          "keys": [
+            [
+              "7010b829-2b39-46e0-9dc1-46313931b7b2",
+              2143322052
+            ]
+          ]
+        }
+      },
+      "loadListBefore": [
+        {
+          "id": "7010b829-2b39-46e0-9dc1-46313931b7b2",
+          "name": "SP5c world",
+          "title": "SP5c world · default · seed 4242",
+          "info": [
+            "Modified 2026-11-10 23:00",
+            "opens with today's terrain; your blocks stay at their coordinates"
+          ],
+          "badges": [
+            "older generator"
+          ]
+        }
+      ],
+      "shotLoadList": "shots/1-load-world-older-generator.png",
+      "playToRevealMs": 4017,
+      "noticesAtOpen": "This world was made with an earlier generator version; it opens with today's terrain and your blocks stay at their coordinates. Dismiss",
+      "shotOpened": "shots/1-sp5c-world-opened.png",
+      "poseAtOpen": {
+        "x": -1024,
+        "y": 71,
+        "z": -960,
+        "yaw": 90,
+        "pitch": -10
+      },
+      "modeAtOpen": "fly",
+      "plankRead": 25,
+      "blockHistory": {
+        "size": 1,
+        "redo": 0
+      },
+      "probeSaved": {
+        "box": {
+          "x0": -1041,
+          "x1": -1000,
+          "z0": -977,
+          "z1": -936,
+          "y0": -64,
+          "y1": 78
+        },
+        "skippedColumns": [
+          [
+            -1021,
+            -957
+          ]
+        ],
+        "columns": 1680,
+        "voxels": 240240,
+        "caveAir": 1936,
+        "caveAirBy16": {
+          "0": 306,
+          "16": 150,
+          "32": 275,
+          "48": 249,
+          "64": 10,
+          "-48": 324,
+          "-16": 449,
+          "-64": 137,
+          "-32": 36
+        },
+        "deepestCaveAir": [
+          -1022,
+          -63,
+          -968
+        ],
+        "unloaded": 0,
+        "hash": "c99c2234"
+      },
+      "lookDown": true,
+      "xrayStats": {
+        "samples": 174381,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 123,
+          "y": 948,
+          "rgb": [
+            11,
+            14,
+            20
+          ],
+          "lum": 13.8
+        },
+        "maxChannel": {
+          "min": 20,
+          "p01": 20,
+          "p10": 30,
+          "p50": 89
+        },
+        "luminance": {
+          "min": 13.8,
+          "p01": 13.8,
+          "p50": 60.61,
+          "mean": 71.91
+        },
+        "nearClearShare": 0.0447,
+        "saturatedShare": 0.6917
+      },
+      "shotXray": "shots/1-sp5c-world-xray.png",
+      "flush": {
+        "ok": true,
+        "flushSeq": 11
+      },
+      "worldAfterOpen": {
+        "id": "7010b829-2b39-46e0-9dc1-46313931b7b2",
+        "name": "SP5c world",
+        "seedText": "4242",
+        "seed": [
+          4242,
+          0
+        ],
+        "profile": "default",
+        "schemaVersion": 2,
+        "paramsHash": "3d7777aa4d1612ce",
+        "generatorVersion": 7,
+        "genKey": "a793e8164850930b",
+        "created": 1794347988914,
+        "backupOf": null,
+        "stateTableLength": 58,
+        "densityDefsKeys": 2,
+        "densityDefsNames": [
+          "defs",
+          "root"
+        ]
+      },
+      "idbAfterOpen": {
+        "counts": {
+          "diffs": 1,
+          "history": 1,
+          "historySteps": 1,
+          "meta": 0,
+          "state": 1,
+          "worlds": 1
+        },
+        "state": [
+          {
+            "worldId": "7010b829-2b39-46e0-9dc1-46313931b7b2",
+            "flushSeq": 11,
+            "player": {
+              "x": -1024,
+              "y": 71,
+              "z": -960,
+              "yaw": 90,
+              "pitch": -50.05000000000001,
+              "mode": "fly",
+              "speed": 12
+            }
+          }
+        ],
+        "historySteps": {
+          "perWorld": {
+            "7010b829-2b39-46e0-9dc1-46313931b7b2": 1
+          },
+          "steps": [
+            {
+              "key": [
+                "7010b829-2b39-46e0-9dc1-46313931b7b2",
+                0
+              ],
+              "edits": [
+                {
+                  "x": -1021,
+                  "y": 71,
+                  "z": -957,
+                  "before": 4294967295,
+                  "after": 6400
+                }
+              ]
+            }
+          ]
+        },
+        "diffs": {
+          "perWorld": {
+            "7010b829-2b39-46e0-9dc1-46313931b7b2": 1
+          },
+          "keys": [
+            [
+              "7010b829-2b39-46e0-9dc1-46313931b7b2",
+              2143322052
+            ]
+          ]
+        }
+      },
+      "probeUnsavedSp6a": {
+        "box": {
+          "x0": -1041,
+          "x1": -1000,
+          "z0": -977,
+          "z1": -936,
+          "y0": -64,
+          "y1": 78
+        },
+        "skippedColumns": [
+          [
+            -1021,
+            -957
+          ]
+        ],
+        "columns": 1680,
+        "voxels": 240240,
+        "caveAir": 1936,
+        "caveAirBy16": {
+          "0": 306,
+          "16": 150,
+          "32": 275,
+          "48": 249,
+          "64": 10,
+          "-48": 324,
+          "-16": 449,
+          "-64": 137,
+          "-32": 36
+        },
+        "deepestCaveAir": [
+          -1022,
+          -63,
+          -968
+        ],
+        "unloaded": 0,
+        "hash": "c99c2234"
+      },
+      "plankInUnsaved": 0,
+      "shotUnsavedSame": "shots/1-unsaved-seed-4242.png",
+      "loadListAfter": [
+        {
+          "id": "7010b829-2b39-46e0-9dc1-46313931b7b2",
+          "name": "SP5c world",
+          "title": "SP5c world · default · seed 4242",
+          "info": [
+            "Modified 2026-11-10 23:27"
+          ],
+          "badges": []
+        }
+      ],
+      "shotLoadListAfter": "shots/1-load-world-after-open.png",
+      "wallMs": 25810,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 2,
+      "name": "an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, night vision on and off, the light floor in a cave, a walk down an entrance",
+      "notes": [
+        "undo back to the start: 0.04 % of the world half's sampled pixels differ from the shot before the edit (edit → 39.9 %)",
+        "the shaft: column (43, -13), air from the eye's y 84 down to a floor at y 74; 6.5 blocks away at yaw 122.5",
+        "at the end the feet stand at column (50, -7), y 75: under a roof (the first solid block above the head at y 85), the eye's light byte 176 (sky 11, block 0)"
+      ],
+      "checks": [
+        {
+          "pass": true,
+          "what": "an unsaved world (no saved world is touched)"
+        },
+        {
+          "pass": true,
+          "what": "the cheese cavern: the stream settled at RD 12 (rd, filled = [12,12], after 3 ms)",
+          "detail": [
+            12,
+            12
+          ]
+        },
+        {
+          "pass": true,
+          "what": "the X-ray strip is hidden at the start",
+          "detail": {
+            "hidden": true,
+            "text": "X-ray · y −64 … 319 · by cave type"
+          }
+        },
+        {
+          "pass": true,
+          "what": "X turns the X-ray on: the strip reads \"X-ray · y −64 … 319 · by cave type\"",
+          "detail": {
+            "hidden": false,
+            "text": "X-ray · y −64 … 319 · by cave type"
+          }
+        },
+        {
+          "pass": true,
+          "what": "the F3 HUD shows the strip's line while the X-ray is on"
+        },
+        {
+          "pass": true,
+          "what": "with the X-ray the rock is gone and the hollows show coloured by cave type: coloured pixels (saturation ≥ 24) 0.0 % → 92.7 % of the canvas' samples, 97.8 % of them changed (inside the cavern, so no sky: the clear colour #0b0e14 shows on 0.0 %)",
+          "detail": {
+            "off": {
+              "samples": 177777,
+              "pureBlack": 0,
+              "darkest": {
+                "x": 1575,
+                "y": 150,
+                "rgb": [
+                  2,
+                  2,
+                  3
+                ],
+                "lum": 2.07
+              },
+              "maxChannel": {
+                "min": 3,
+                "p01": 4,
+                "p10": 5,
+                "p50": 6
+              },
+              "luminance": {
+                "min": 2.07,
+                "p01": 3.07,
+                "p50": 5.07,
+                "mean": 5.84
+              },
+              "nearClearShare": 0.0025,
+              "saturatedShare": 0
+            },
+            "on": {
+              "samples": 177777,
+              "pureBlack": 0,
+              "darkest": {
+                "x": 1392,
+                "y": 9,
+                "rgb": [
+                  22,
+                  19,
+                  11
+                ],
+                "lum": 19.06
+              },
+              "maxChannel": {
+                "min": 22,
+                "p01": 38,
+                "p10": 57,
+                "p50": 165
+              },
+              "luminance": {
+                "min": 19.06,
+                "p01": 32.41,
+                "p50": 122.77,
+                "mean": 132.88
+              },
+              "nearClearShare": 0,
+              "saturatedShare": 0.9273
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "PageDown: the first band is 32 blocks around the eye (y -15.5): \"X-ray · y −32 … −1 · by cave type\"",
+          "detail": "X-ray · y −32 … −1 · by cave type"
+        },
+        {
+          "pass": true,
+          "what": "the band changes the X-ray picture (61.7 % of the canvas' sampled pixels differ from every depth)"
+        },
+        {
+          "pass": true,
+          "what": "PageDown again moves the band 8 down: \"X-ray · y −40 … −9 · by cave type\"",
+          "detail": "X-ray · y −40 … −9 · by cave type"
+        },
+        {
+          "pass": true,
+          "what": "PageUp moves it 8 up again: \"X-ray · y −32 … −1 · by cave type\"",
+          "detail": "X-ray · y −32 … −1 · by cave type"
+        },
+        {
+          "pass": true,
+          "what": "PageUp again: 8 higher than the first band: \"X-ray · y −24 … 7 · by cave type\"",
+          "detail": "X-ray · y −24 … 7 · by cave type"
+        },
+        {
+          "pass": true,
+          "what": "Home restores every depth: \"X-ray · y −64 … 319 · by cave type\""
+        },
+        {
+          "pass": true,
+          "what": "M opens the world's map"
+        },
+        {
+          "pass": true,
+          "what": "the map side by side (#world-host.split)"
+        },
+        {
+          "pass": true,
+          "what": "the Caves tab shows every depth with its X-ray box checked (the world's X-ray is on)",
+          "detail": {
+            "band": "X-ray · y −64 … 319 · by cave type",
+            "xray": true
+          }
+        },
+        {
+          "pass": true,
+          "what": "\"Cave parameters\" opens Parameters at caves.cheese.offset"
+        },
+        {
+          "pass": true,
+          "what": "caves.cheese.offset 0.5 → 0.45 typed (Enter): applies live (the stale count rose to 489, the HUD read \"stale 489 / 489\", back to 0 after 6.3 s)",
+          "detail": {
+            "what": "caves.cheese.offset 0.5 → 0.45 typed (Enter)",
+            "staleRoseAfterMs": 174,
+            "maxStale": 489,
+            "hudRow": "stale 489 / 489",
+            "settledMs": 6348,
+            "frames": {
+              "before": {
+                "frames": 133,
+                "p50": 4.17,
+                "p95": 8.33,
+                "p99": 8.33,
+                "max": 8.33,
+                "over33": 0,
+                "over50": 0
+              },
+              "after": {
+                "frames": 1063,
+                "p50": 8.33,
+                "p95": 12.5,
+                "p99": 16.67,
+                "max": 20.83,
+                "over33": 0,
+                "over50": 0
+              },
+              "longTasksAfterMark": []
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "the field reads 0.45"
+        },
+        {
+          "pass": true,
+          "what": "after the cave edit: the stream settled at RD 12 (rd, filled = [12,12], after 1 ms)",
+          "detail": [
+            12,
+            12
+          ]
+        },
+        {
+          "pass": true,
+          "what": "the caves changed in place in the X-ray beside the map: 39.9 % of the world half's sampled pixels differ before and after the edit"
+        },
+        {
+          "pass": true,
+          "what": "Ctrl+Z: applies live (the stale count rose to 489, the HUD read \"stale 489 / 489\", back to 0 after 6.0 s)",
+          "detail": {
+            "what": "Ctrl+Z",
+            "staleRoseAfterMs": 167,
+            "maxStale": 489,
+            "hudRow": "stale 489 / 489",
+            "settledMs": 5953,
+            "frames": {
+              "before": {
+                "frames": 132,
+                "p50": 4.17,
+                "p95": 8.33,
+                "p99": 8.34,
+                "max": 8.34,
+                "over33": 0,
+                "over50": 0
+              },
+              "after": {
+                "frames": 976,
+                "p50": 8.33,
+                "p95": 12.5,
+                "p99": 12.51,
+                "max": 20.83,
+                "over33": 0,
+                "over50": 0
+              },
+              "longTasksAfterMark": []
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "Ctrl+Z puts caves.cheese.offset back to 0.5 (reads 0.5)"
+        },
+        {
+          "pass": true,
+          "what": "after Ctrl+Z: the stream settled at RD 12 (rd, filled = [12,12], after 6 ms)",
+          "detail": [
+            12,
+            12
+          ]
+        },
+        {
+          "pass": true,
+          "what": "M closes the map"
+        },
+        {
+          "pass": true,
+          "what": "the live edit and its undo kept the same document (no reload)"
+        },
+        {
+          "pass": true,
+          "what": "X again turns the X-ray off (the strip hidden)"
+        },
+        {
+          "pass": true,
+          "what": "the interior: the stream settled at RD 12 (rd, filled = [12,12], after 3 ms)",
+          "detail": [
+            12,
+            12
+          ]
+        },
+        {
+          "pass": true,
+          "what": "night vision is off (stored setting)"
+        },
+        {
+          "pass": true,
+          "what": "the light floor: the eye's voxel stores light 0 (sky 0, block 0; 100 % of the air ahead too), yet no sampled canvas pixel is pure black (0 of 399251); the darkest reads rgb 2, 2, 3 (luminance 2.07); max-channel min 3, p01 4, p50 7",
+          "detail": {
+            "lightAtEye": 0,
+            "lightAhead": {
+              "0": 405
+            },
+            "stats": {
+              "samples": 399251,
+              "pureBlack": 0,
+              "darkest": {
+                "x": 762,
+                "y": 54,
+                "rgb": [
+                  2,
+                  2,
+                  3
+                ],
+                "lum": 2.07
+              },
+              "maxChannel": {
+                "min": 3,
+                "p01": 4,
+                "p10": 5,
+                "p50": 7
+              },
+              "luminance": {
+                "min": 2.07,
+                "p01": 3.07,
+                "p50": 6.07,
+                "mean": 6.61
+              },
+              "saturatedShare": 0
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "L turns night vision on (\"Night vision on\")",
+          "detail": "This world is not saved: it was opened from a link. Use New world on the start screen to keep one. DismissNight vision on Dismiss"
+        },
+        {
+          "pass": true,
+          "what": "night vision is stored on"
+        },
+        {
+          "pass": true,
+          "what": "night vision brightens the cave: mean luminance 6.61 → 62.46, median max-channel 7 → 65",
+          "detail": {
+            "off": {
+              "min": 2.07,
+              "p01": 3.07,
+              "p50": 6.07,
+              "mean": 6.61
+            },
+            "on": {
+              "min": 29.94,
+              "p01": 43.29,
+              "p50": 60.36,
+              "mean": 62.46
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "L again turns night vision off (\"Night vision off\")",
+          "detail": "This world is not saved: it was opened from a link. Use New world on the start screen to keep one. DismissNight vision off Dismiss"
+        },
+        {
+          "pass": true,
+          "what": "night vision is stored off"
+        },
+        {
+          "pass": true,
+          "what": "off again: back to the light floor (mean luminance 6.61, pure black 0)",
+          "detail": {
+            "min": 2.07,
+            "p01": 3.07,
+            "p50": 6.07,
+            "mean": 6.61
+          }
+        },
+        {
+          "pass": true,
+          "what": "the entrance: the stream settled at RD 12 (rd, filled = [12,12], after 4 ms)",
+          "detail": [
+            12,
+            12
+          ]
+        },
+        {
+          "pass": true,
+          "what": "F switches to walking (__wiTest.mode() reads walk)"
+        },
+        {
+          "pass": true,
+          "what": "walking (W held) into the entrance takes the feet down: y 84 → 75 (9 blocks), on the ground at the end, in walk mode; the first floor below the lip at 74",
+          "detail": {
+            "startFeetY": 84,
+            "endFeetY": 75,
+            "minFeetY": 75,
+            "drop": 9,
+            "mode": "walk",
+            "surfaceAtPose": 80,
+            "eyeLightEnd": 176,
+            "columnAtEnd": [
+              50,
+              -7
+            ],
+            "heightAtEndColumn": 98,
+            "solidAboveHead": 85
+          }
+        }
+      ],
+      "pass": true,
+      "settingsAtStart": null,
+      "linkCheese": "https://world-imaginer-voxel.vercel.app/?at=97,-52&y=-15.5&yaw=90.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "poseCheese": {
+        "x": 97,
+        "y": -15.5,
+        "z": -52,
+        "yaw": 90,
+        "pitch": 0
+      },
+      "renderer": "batch",
+      "statsXrayOff": {
+        "samples": 177777,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 1575,
+          "y": 150,
+          "rgb": [
+            2,
+            2,
+            3
+          ],
+          "lum": 2.07
+        },
+        "maxChannel": {
+          "min": 3,
+          "p01": 4,
+          "p10": 5,
+          "p50": 6
+        },
+        "luminance": {
+          "min": 2.07,
+          "p01": 3.07,
+          "p50": 5.07,
+          "mean": 5.84
+        },
+        "nearClearShare": 0.0025,
+        "saturatedShare": 0
+      },
+      "shotXrayOff": "shots/2a-cheese-xray-off.png",
+      "framesXrayOn": {
+        "before": {
+          "frames": 189,
+          "p50": 4.16,
+          "p95": 4.17,
+          "p99": 8.33,
+          "max": 8.34,
+          "over33": 0,
+          "over50": 0
+        },
+        "after": {
+          "frames": 207,
+          "p50": 4.17,
+          "p95": 8.34,
+          "p99": 12.5,
+          "max": 54.15,
+          "over33": 1,
+          "over50": 1
+        },
+        "longTasksAfterMark": [
+          54
+        ]
+      },
+      "statsXrayAll": {
+        "samples": 177777,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 1392,
+          "y": 9,
+          "rgb": [
+            22,
+            19,
+            11
+          ],
+          "lum": 19.06
+        },
+        "maxChannel": {
+          "min": 22,
+          "p01": 38,
+          "p10": 57,
+          "p50": 165
+        },
+        "luminance": {
+          "min": 19.06,
+          "p01": 32.41,
+          "p50": 122.77,
+          "mean": 132.88
+        },
+        "nearClearShare": 0,
+        "saturatedShare": 0.9273
+      },
+      "shotXrayAll": "shots/2a-cheese-xray-all.png",
+      "diffOffToAll": 0.9782,
+      "statsXrayBand": {
+        "samples": 177777,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 1359,
+          "y": 948,
+          "rgb": [
+            11,
+            14,
+            20
+          ],
+          "lum": 13.8
+        },
+        "maxChannel": {
+          "min": 20,
+          "p01": 20,
+          "p10": 40,
+          "p50": 102
+        },
+        "luminance": {
+          "min": 13.8,
+          "p01": 13.8,
+          "p50": 72.8,
+          "mean": 93.89
+        },
+        "nearClearShare": 0.036,
+        "saturatedShare": 0.8101
+      },
+      "diffAllToBand": 0.6173,
+      "shotXrayBand": "shots/2a-cheese-xray-band.png",
+      "shotXrayBandDown": "shots/2a-cheese-xray-band-down8.png",
+      "shotXrayBandUp": "shots/2a-cheese-xray-band-up8.png",
+      "bands": [
+        "X-ray · y −32 … −1 · by cave type",
+        "X-ray · y −40 … −9 · by cave type",
+        "X-ray · y −32 … −1 · by cave type",
+        "X-ray · y −24 … 7 · by cave type"
+      ],
+      "diffAllToHome": 0.0001,
+      "shotXrayHome": "shots/2a-cheese-xray-home.png",
+      "caveParamBefore": "0.5",
+      "splitCanvas": {
+        "x0": 961,
+        "y0": 0,
+        "x1": 1921,
+        "y1": 951
+      },
+      "shotEditBefore": "shots/2b-side-by-side-before-edit.png",
+      "liveEdit": {
+        "what": "caves.cheese.offset 0.5 → 0.45 typed (Enter)",
+        "staleRoseAfterMs": 174,
+        "maxStale": 489,
+        "hudRow": "stale 489 / 489",
+        "settledMs": 6348,
+        "frames": {
+          "before": {
+            "frames": 133,
+            "p50": 4.17,
+            "p95": 8.33,
+            "p99": 8.33,
+            "max": 8.33,
+            "over33": 0,
+            "over50": 0
+          },
+          "after": {
+            "frames": 1063,
+            "p50": 8.33,
+            "p95": 12.5,
+            "p99": 16.67,
+            "max": 20.83,
+            "over33": 0,
+            "over50": 0
+          },
+          "longTasksAfterMark": []
+        }
+      },
+      "caveParamAfter": "0.45",
+      "diffEdit": 0.3991,
+      "shotEditAfter": "shots/2b-side-by-side-after-edit.png",
+      "liveUndo": {
+        "what": "Ctrl+Z",
+        "staleRoseAfterMs": 167,
+        "maxStale": 489,
+        "hudRow": "stale 489 / 489",
+        "settledMs": 5953,
+        "frames": {
+          "before": {
+            "frames": 132,
+            "p50": 4.17,
+            "p95": 8.33,
+            "p99": 8.34,
+            "max": 8.34,
+            "over33": 0,
+            "over50": 0
+          },
+          "after": {
+            "frames": 976,
+            "p50": 8.33,
+            "p95": 12.5,
+            "p99": 12.51,
+            "max": 20.83,
+            "over33": 0,
+            "over50": 0
+          },
+          "longTasksAfterMark": []
+        }
+      },
+      "caveParamUndone": "0.5",
+      "diffUndoToBefore": 0.0004,
+      "shotEditUndone": "shots/2b-side-by-side-undone.png",
+      "statsXrayOffAgain": {
+        "samples": 177777,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 1575,
+          "y": 150,
+          "rgb": [
+            2,
+            2,
+            3
+          ],
+          "lum": 2.07
+        },
+        "maxChannel": {
+          "min": 3,
+          "p01": 4,
+          "p10": 5,
+          "p50": 6
+        },
+        "luminance": {
+          "min": 2.07,
+          "p01": 3.07,
+          "p50": 5.07,
+          "mean": 5.84
+        },
+        "nearClearShare": 0.0025,
+        "saturatedShare": 0
+      },
+      "shotXrayOffAgain": "shots/2a-cheese-xray-off-again.png",
+      "linkInterior": "https://world-imaginer-voxel.vercel.app/?at=174,32&y=-9.5&yaw=0.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "poseInterior": {
+        "x": 174,
+        "y": -9.5,
+        "z": 32,
+        "yaw": 0,
+        "pitch": 0
+      },
+      "lightAtEye": 0,
+      "lightAhead": {
+        "0": 405
+      },
+      "statsLightFloor": {
+        "samples": 399251,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 762,
+          "y": 54,
+          "rgb": [
+            2,
+            2,
+            3
+          ],
+          "lum": 2.07
+        },
+        "maxChannel": {
+          "min": 3,
+          "p01": 4,
+          "p10": 5,
+          "p50": 7
+        },
+        "luminance": {
+          "min": 2.07,
+          "p01": 3.07,
+          "p50": 6.07,
+          "mean": 6.61
+        },
+        "saturatedShare": 0
+      },
+      "shotLightFloor": "shots/2c-interior-light-floor-nv-off.png",
+      "statsNightVision": {
+        "samples": 399251,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 1018,
+          "y": 480,
+          "rgb": [
+            26,
+            30,
+            41
+          ],
+          "lum": 29.94
+        },
+        "maxChannel": {
+          "min": 39,
+          "p01": 48,
+          "p10": 55,
+          "p50": 65
+        },
+        "luminance": {
+          "min": 29.94,
+          "p01": 43.29,
+          "p50": 60.36,
+          "mean": 62.46
+        },
+        "saturatedShare": 0
+      },
+      "shotNightVision": "shots/2c-interior-night-vision-on.png",
+      "statsNightVisionOffAgain": {
+        "samples": 399251,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 762,
+          "y": 54,
+          "rgb": [
+            2,
+            2,
+            3
+          ],
+          "lum": 2.07
+        },
+        "maxChannel": {
+          "min": 3,
+          "p01": 4,
+          "p10": 5,
+          "p50": 7
+        },
+        "luminance": {
+          "min": 2.07,
+          "p01": 3.07,
+          "p50": 6.07,
+          "mean": 6.61
+        },
+        "saturatedShare": 0
+      },
+      "shotNightVisionOff": "shots/2c-interior-night-vision-off-again.png",
+      "linkEntrance": "https://world-imaginer-voxel.vercel.app/?at=38,-16&y=84.5&yaw=315.0&pitch=-60.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "poseEntrance": {
+        "x": 38,
+        "y": 84.5,
+        "z": -16,
+        "yaw": 315,
+        "pitch": -60
+      },
+      "shaftColumns": [
+        {
+          "x": 43,
+          "z": -13,
+          "floor": 74,
+          "top": 75
+        },
+        {
+          "x": 43,
+          "z": -12,
+          "floor": 74,
+          "top": 75
+        },
+        {
+          "x": 43,
+          "z": -11,
+          "floor": 74,
+          "top": 91
+        },
+        {
+          "x": 43,
+          "z": -10,
+          "floor": 74,
+          "top": 92
+        },
+        {
+          "x": 44,
+          "z": -14,
+          "floor": 74,
+          "top": 75
+        },
+        {
+          "x": 44,
+          "z": -13,
+          "floor": 74,
+          "top": 75
+        }
+      ],
+      "walkTarget": {
+        "x": 43,
+        "z": -13,
+        "floor": 74,
+        "top": 75,
+        "yaw": 122.5,
+        "dist": 6.5
+      },
+      "facedShaft": {
+        "looked": true,
+        "pose": {
+          "x": 38,
+          "y": 84.5,
+          "z": -16,
+          "yaw": 122.54999999999995,
+          "pitch": -35.249999999999986
+        }
+      },
+      "feetStart": {
+        "x": 38,
+        "y": 84.0000001,
+        "z": -16,
+        "onGround": true,
+        "snapPending": false,
+        "snapY": null
+      },
+      "shotWalkStart": "shots/2d-entrance-walk-start.png",
+      "shotWalkMid": "shots/2d-entrance-walk-falling.png",
+      "walkTrace": [
+        {
+          "ms": 5,
+          "x": 38,
+          "y": 84,
+          "z": -16,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 160,
+          "x": 38.4,
+          "y": 84,
+          "z": -15.8,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 316,
+          "x": 38.8,
+          "y": 83.8,
+          "z": -15.5,
+          "onGround": false,
+          "roof": null
+        },
+        {
+          "ms": 469,
+          "x": 39.2,
+          "y": 82.9,
+          "z": -15.3,
+          "onGround": false,
+          "roof": null
+        },
+        {
+          "ms": 624,
+          "x": 39.6,
+          "y": 81.3,
+          "z": -15.2,
+          "onGround": false,
+          "roof": null
+        },
+        {
+          "ms": 778,
+          "x": 40.1,
+          "y": 79.2,
+          "z": -15.1,
+          "onGround": false,
+          "roof": null
+        },
+        {
+          "ms": 932,
+          "x": 40.7,
+          "y": 78.9,
+          "z": -14.8,
+          "onGround": false,
+          "roof": null
+        },
+        {
+          "ms": 1085,
+          "x": 41.1,
+          "y": 78.2,
+          "z": -14.6,
+          "onGround": false,
+          "roof": null
+        },
+        {
+          "ms": 1238,
+          "x": 41.5,
+          "y": 77,
+          "z": -14.3,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 1581,
+          "x": 42.8,
+          "y": 76.5,
+          "z": -13.6,
+          "onGround": false,
+          "roof": null
+        },
+        {
+          "ms": 1737,
+          "x": 43.3,
+          "y": 76,
+          "z": -13.3,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 1892,
+          "x": 44,
+          "y": 76,
+          "z": -12.8,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 2046,
+          "x": 44.5,
+          "y": 75.8,
+          "z": -12.4,
+          "onGround": false,
+          "roof": null
+        },
+        {
+          "ms": 2201,
+          "x": 44.9,
+          "y": 75,
+          "z": -12.2,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 2356,
+          "x": 45.5,
+          "y": 75,
+          "z": -11.8,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 2508,
+          "x": 46.1,
+          "y": 75,
+          "z": -11.5,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 2666,
+          "x": 46.6,
+          "y": 75,
+          "z": -11.1,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 2820,
+          "x": 47.2,
+          "y": 75,
+          "z": -10.7,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 2975,
+          "x": 47.7,
+          "y": 75,
+          "z": -10.4,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 3142,
+          "x": 48.3,
+          "y": 75,
+          "z": -10,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 3298,
+          "x": 48.8,
+          "y": 75,
+          "z": -9.6,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 3456,
+          "x": 49.2,
+          "y": 75,
+          "z": -9.2,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 3614,
+          "x": 49.7,
+          "y": 75,
+          "z": -8.9,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 3769,
+          "x": 49.7,
+          "y": 75,
+          "z": -8.5,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 3924,
+          "x": 49.7,
+          "y": 75,
+          "z": -8.1,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 4080,
+          "x": 49.7,
+          "y": 75,
+          "z": -7.8,
+          "onGround": true,
+          "roof": 87
+        },
+        {
+          "ms": 4235,
+          "x": 49.9,
+          "y": 75,
+          "z": -7.4,
+          "onGround": true,
+          "roof": 87
+        },
+        {
+          "ms": 4390,
+          "x": 50.6,
+          "y": 75,
+          "z": -7,
+          "onGround": true,
+          "roof": 85
+        },
+        {
+          "ms": 4545,
+          "x": 50.7,
+          "y": 75,
+          "z": -6.6,
+          "onGround": true,
+          "roof": 85
+        },
+        {
+          "ms": 6056,
+          "x": 50.7,
+          "y": 75,
+          "z": -6.5,
+          "onGround": true,
+          "after": "W released"
+        }
+      ],
+      "feetEnd": {
+        "x": 50.6999999,
+        "y": 75.0000001,
+        "z": -6.456117521166043,
+        "onGround": true,
+        "snapPending": false,
+        "snapY": null
+      },
+      "walkSummary": {
+        "startFeetY": 84,
+        "endFeetY": 75,
+        "minFeetY": 75,
+        "drop": 9,
+        "mode": "walk",
+        "surfaceAtPose": 80,
+        "eyeLightEnd": 176,
+        "columnAtEnd": [
+          50,
+          -7
+        ],
+        "heightAtEndColumn": 98,
+        "solidAboveHead": 85
+      },
+      "shotWalkEnd": "shots/2d-entrance-walk-bottom.png",
+      "lookUpAtBottom": true,
+      "shotWalkLookUp": "shots/2d-entrance-walk-bottom-looking-up.png",
+      "wallMs": 71313,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 3,
+      "name": "?selftest=1 on production (the kept profile: the selftest never opens wi10, only its own wi10-selftest, deleted before and after)",
+      "notes": [],
+      "checks": [
+        {
+          "pass": true,
+          "what": "✓ all 62 goldens match (11.3 s) (test/goldens.json holds 62; 62 ✓ rows, 62 of them the repo's keys)",
+          "detail": "✓ all 62 goldens match (11.3 s)"
+        },
+        {
+          "pass": true,
+          "what": "IndexedDB contract: 10/10 passed",
+          "detail": {
+            "kv": "IndexedDB contract: 10/10 passed",
+            "kvFailures": []
+          }
+        },
+        {
+          "pass": true,
+          "what": "the selftest database wi10-selftest is deleted after the run",
+          "detail": [
+            "wi10@2"
+          ]
+        },
+        {
+          "pass": true,
+          "what": "the kept profile's wi10 is the same before and after the selftest (counts {\"diffs\":1,\"history\":1,\"historySteps\":1,\"meta\":0,\"state\":1,\"worlds\":1})",
+          "detail": {
+            "before": {
+              "diffs": 1,
+              "history": 1,
+              "historySteps": 1,
+              "meta": 0,
+              "state": 1,
+              "worlds": 1
+            },
+            "after": {
+              "diffs": 1,
+              "history": 1,
+              "historySteps": 1,
+              "meta": 0,
+              "state": 1,
+              "worlds": 1
+            }
+          }
+        }
+      ],
+      "pass": true,
+      "summaryMs": 11331,
+      "summary": "✓ all 62 goldens match (11.3 s)",
+      "keyCount": 62,
+      "repoGoldenCount": 62,
+      "equalCount": 62,
+      "matchesRepoGoldens": 62,
+      "byGroup": {
+        "sp1": 27,
+        "sp2a": 20,
+        "sp3a": 3,
+        "sp3b": 2,
+        "sp3c": 2,
+        "sp3e": 5,
+        "sp6a": 3
+      },
+      "mismatches": [],
+      "kv": "IndexedDB contract: 10/10 passed",
+      "kvFailures": [],
+      "kvMs": 52,
+      "databasesAfter": [
+        "wi10@2"
+      ],
+      "wallMs": 13409,
+      "shot": "shots/3-selftest.png",
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 4,
+      "name": "page and console errors",
+      "notes": [],
+      "checks": [
+        {
+          "pass": true,
+          "what": "no page error (0)",
+          "detail": []
+        },
+        {
+          "pass": true,
+          "what": "no console error (0; 2 benign logs ignored and listed)",
+          "detail": []
+        }
+      ],
+      "pass": true,
+      "pageErrors": 0,
+      "consoleErrors": 0,
+      "ignored": 2,
+      "wallMs": 0,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    }
+  ],
+  "selftest": "62/62",
+  "kvContract": "IndexedDB contract: 10/10 passed",
+  "stutter": {
+    "how": "recorded only, never gated: the check's own requestAnimationFrame recorder (frame deltas, ms) and a PerformanceObserver('longtask') in the page around each action, as SP5c's check: 'before' is the 0.6-0.8 s at rest before the action, 'after' the action to 0.8-1.2 s after its result",
+    "xrayToggleOn": {
+      "before": {
+        "frames": 189,
+        "p50": 4.16,
+        "p95": 4.17,
+        "p99": 8.33,
+        "max": 8.34,
+        "over33": 0,
+        "over50": 0
+      },
+      "after": {
+        "frames": 207,
+        "p50": 4.17,
+        "p95": 8.34,
+        "p99": 12.5,
+        "max": 54.15,
+        "over33": 1,
+        "over50": 1
+      },
+      "longTasksAfterMark": [
+        54
+      ]
+    },
+    "liveCaveEdit": {
+      "before": {
+        "frames": 133,
+        "p50": 4.17,
+        "p95": 8.33,
+        "p99": 8.33,
+        "max": 8.33,
+        "over33": 0,
+        "over50": 0
+      },
+      "after": {
+        "frames": 1063,
+        "p50": 8.33,
+        "p95": 12.5,
+        "p99": 16.67,
+        "max": 20.83,
+        "over33": 0,
+        "over50": 0
+      },
+      "longTasksAfterMark": []
+    },
+    "liveCaveEditUndo": {
+      "before": {
+        "frames": 132,
+        "p50": 4.17,
+        "p95": 8.33,
+        "p99": 8.34,
+        "max": 8.34,
+        "over33": 0,
+        "over50": 0
+      },
+      "after": {
+        "frames": 976,
+        "p50": 8.33,
+        "p95": 12.5,
+        "p99": 12.51,
+        "max": 20.83,
+        "over33": 0,
+        "over50": 0
+      },
+      "longTasksAfterMark": []
+    }
+  },
+  "consoleErrors": [],
+  "pageErrors": [],
+  "ignoredLogs": [
+    {
+      "step": "0-pre-checks (read-only: PRIME on-demand, eDP-1 at 240 Hz, the session unlocked, load < 1) and the bundle compare against a local build of main",
+      "source": "log.network",
+      "text": "Failed to load resource: the server responded with a status of 404 ()",
+      "url": "https://world-imaginer-voxel.vercel.app/favicon.ico",
+      "why": "index.html declares no icon, so Chrome asks for /favicon.ico and the host answers 404 (the same ignore as test/tools/cdp.ts ignoredLog and SP5b/SP5c's checks)"
+    },
+    {
+      "step": "1-the SP5c world (D36): Load world lists it with the \"older generator\" badge; it opens with the noise caves (the SP6a tree), the plank edit kept at (-1021, 71, -957), the migration 2 → 3 leaves it working",
+      "source": "log.intervention",
+      "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+      "url": "https://world-imaginer-voxel.vercel.app/?at=-1024,-960&y=71&yaw=90.0&pitch=-10.0&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+      "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+    }
+  ],
+  "consoleWarnings": [],
+  "dialogs": [
+    {
+      "step": "1-the SP5c world (D36): Load world lists it with the \"older generator\" badge; it opens with the noise caves (the SP6a tree), the plank edit kept at (-1021, 71, -957), the migration 2 → 3 leaves it working",
+      "type": "beforeunload",
+      "message": "",
+      "url": "https://world-imaginer-voxel.vercel.app/?world=7010b829-2b39-46e0-9dc1-46313931b7b2"
+    },
+    {
+      "step": "1-the SP5c world (D36): Load world lists it with the \"older generator\" badge; it opens with the noise caves (the SP6a tree), the plank edit kept at (-1021, 71, -957), the migration 2 → 3 leaves it working",
+      "type": "beforeunload",
+      "message": "",
+      "url": "https://world-imaginer-voxel.vercel.app/?world=7010b829-2b39-46e0-9dc1-46313931b7b2&wiTest=1"
+    },
+    {
+      "step": "2-an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, night vision on and off, the light floor in a cave, a walk down an entrance",
+      "type": "beforeunload",
+      "message": "",
+      "url": "https://world-imaginer-voxel.vercel.app/?at=97,-52&y=-15.5&yaw=90.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjQsImxheWVyIjoiYmlvbWUiLCJ4Ijo5NywieiI6LTUyfX0"
+    },
+    {
+      "step": "2-an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, night vision on and off, the light floor in a cave, a walk down an entrance",
+      "type": "beforeunload",
+      "message": "",
+      "url": "https://world-imaginer-voxel.vercel.app/?at=174,32&y=-9.5&yaw=0.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19"
+    },
+    {
+      "step": "3-?selftest=1 on production (the kept profile: the selftest never opens wi10, only its own wi10-selftest, deleted before and after)",
+      "type": "beforeunload",
+      "message": "",
+      "url": "https://world-imaginer-voxel.vercel.app/?at=38,-16&y=84.5&yaw=315.0&pitch=-60.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19"
+    }
+  ],
+  "lockAttempts": [
+    {
+      "step": "1-the SP5c world (D36): Load world lists it with the \"older generator\" badge; it opens with the noise caves (the SP6a tree), the plank edit kept at (-1021, 71, -957), the migration 2 → 3 leaves it working",
+      "what": "SP5c X-ray look",
+      "attempt": 1,
+      "elementAtCentre": "canvas",
+      "granted": true,
+      "viewport": {
+        "innerWidth": 1756,
+        "innerHeight": 869,
+        "devicePixelRatio": 1.09375,
+        "hasFocus": true
+      }
+    },
+    {
+      "step": "2-an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, night vision on and off, the light floor in a cave, a walk down an entrance",
+      "what": "entrance walk",
+      "attempt": 1,
+      "elementAtCentre": "canvas",
+      "granted": true,
+      "viewport": {
+        "innerWidth": 1756,
+        "innerHeight": 869,
+        "devicePixelRatio": 1.09375,
+        "hasFocus": true
+      }
+    },
+    {
+      "step": "2-an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, night vision on and off, the light floor in a cave, a walk down an entrance",
+      "what": "face the shaft (recentre)",
+      "attempt": 1,
+      "elementAtCentre": "canvas",
+      "granted": true,
+      "viewport": {
+        "innerWidth": 1756,
+        "innerHeight": 869,
+        "devicePixelRatio": 1.09375,
+        "hasFocus": true
+      }
+    },
+    {
+      "step": "2-an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, night vision on and off, the light floor in a cave, a walk down an entrance",
+      "what": "look back up the entrance (recentre)",
+      "attempt": 1,
+      "elementAtCentre": "canvas",
+      "granted": true,
+      "viewport": {
+        "innerWidth": 1756,
+        "innerHeight": 869,
+        "devicePixelRatio": 1.09375,
+        "hasFocus": true
+      }
+    }
+  ],
+  "recentres": [
+    {
+      "step": "2-an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, night vision on and off, the light floor in a cave, a walk down an entrance",
+      "what": "face the shaft",
+      "ok": true
+    },
+    {
+      "step": "2-an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, night vision on and off, the light floor in a cave, a walk down an entrance",
+      "what": "look back up the entrance",
+      "ok": true
+    }
+  ],
+  "settings": {
+    "before": null,
+    "atEndBeforeRestore": "{\"rd\":null,\"fpsCap\":0,\"fov\":70,\"sensitivity\":1,\"brightness\":0.3,\"mapMode\":\"split\",\"watchLive\":true,\"holdRepeat\":false,\"nightVision\":false}",
+    "end": null
+  },
+  "idbEnd": {
+    "exists": true,
+    "databases": [
+      "wi10@2"
+    ],
+    "version": 2,
+    "stores": [
+      "diffs",
+      "history",
+      "historySteps",
+      "meta",
+      "state",
+      "worlds"
+    ],
+    "counts": {
+      "diffs": 1,
+      "history": 1,
+      "historySteps": 1,
+      "meta": 0,
+      "state": 1,
+      "worlds": 1
+    },
+    "worlds": [
+      {
+        "id": "7010b829-2b39-46e0-9dc1-46313931b7b2",
+        "name": "SP5c world",
+        "seedText": "4242",
+        "seed": [
+          4242,
+          0
+        ],
+        "profile": "default",
+        "schemaVersion": 2,
+        "paramsHash": "3d7777aa4d1612ce",
+        "generatorVersion": 7,
+        "genKey": "a793e8164850930b",
+        "created": 1794347988914,
+        "backupOf": null,
+        "stateTableLength": 58,
+        "densityDefsKeys": 2,
+        "densityDefsNames": [
+          "defs",
+          "root"
+        ]
+      }
+    ],
+    "state": [
+      {
+        "worldId": "7010b829-2b39-46e0-9dc1-46313931b7b2",
+        "flushSeq": 13,
+        "player": {
+          "x": -1024,
+          "y": 71,
+          "z": -960,
+          "yaw": 90,
+          "pitch": -50.05000000000001,
+          "mode": "fly",
+          "speed": 12
+        }
+      }
+    ],
+    "history": [
+      {
+        "worldId": "7010b829-2b39-46e0-9dc1-46313931b7b2",
+        "done": [
+          0
+        ],
+        "undone": []
+      }
+    ],
+    "historySteps": {
+      "perWorld": {
+        "7010b829-2b39-46e0-9dc1-46313931b7b2": 1
+      },
+      "steps": [
+        {
+          "key": [
+            "7010b829-2b39-46e0-9dc1-46313931b7b2",
+            0
+          ],
+          "edits": [
+            {
+              "x": -1021,
+              "y": 71,
+              "z": -957,
+              "before": 4294967295,
+              "after": 6400
+            }
+          ]
+        }
+      ]
+    },
+    "diffs": {
+      "perWorld": {
+        "7010b829-2b39-46e0-9dc1-46313931b7b2": 1
+      },
+      "keys": [
+        [
+          "7010b829-2b39-46e0-9dc1-46313931b7b2",
+          2143322052
+        ]
+      ]
+    }
+  },
+  "notes": [
+    "Git HEAD 0689c4f661c2c0926c8ef6b9768da43a82cf007d (main = origin/main, the working tree clean but for the untracked .superpowers/). Served build = local build of main, checked as SP5c checked it: a fresh local build made for this check (npx vite build --outDir test/metrics/.out/task54/step2/dist-main, inside the ignored test/metrics/.out/; no tracked file touched, git status unchanged before and after; npm run build's typecheck step not run, it writes nothing to dist) references assets/index-C1YOH6uU.js and index-DsmeYR9W.css; production's / is byte-equal to the local index.html and every one of the 51 files in its assets/ was fetched from production and is byte-identical (51/51 sha256 equal).",
+    "Pre-checks, read-only, before Chrome started (step 0 of the run): prime-select query 'on-demand'; xrandr: eDP-1 connected primary 1920x1080+0+0 at 240.00* (HDMI-1-0 at +1920+0 untouched); loginctl: Type=x11, Active=yes, LockedHint=no; 1-minute load 0.49. Nothing was switched: no PRIME change, no display change, no xdotool or desktop input; every input was a CDP Input event into this check's own Chrome.",
+    "Chrome: /usr/bin/google-chrome 155.0.8059.39 headful, --user-data-dir=/tmp/wi10-KfLJ (the controller's KEPT profile from Step 0: not created, replaced or removed here; it still exists after the run), MESA_SHADER_CACHE_DISABLE=true in that Chrome's environment only, --remote-debugging-port=0 --window-position=0,0 --start-maximized --ignore-gpu-blocklist. Chrome placed the window maximized at (0, 32), 1756 x 956 CSS px on eDP-1 (as Step 0 and SP5c), viewport 1756 x 869 at devicePixelRatio 1.09375; WebGL renderer 'ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)', the world pages on RegionBatch (canvas data-renderer 'batch', the HUD's 'batch'). Closed with CDP Browser.close (exit code 0), so the profile flushed.",
+    "Step 1 (D36): before anything opened it, wi10 held Step 0's record unchanged (schemaVersion 2, generatorVersion 5, genKey 87bc03c64b0ba369, one history step and one diff). Load world listed 'SP5c world · default · seed 4242' with the badge 'older generator' and the line \"opens with today's terrain; your blocks stay at their coordinates\". Play opened /?world=7010b829-2b39-46e0-9dc1-46313931b7b2 and revealed in 4.0 s with the notice \"This world was made with an earlier generator version; it opens with today's terrain and your blocks stay at their coordinates.\" Reopened with &wiTest=1: blockAt(-1021, 71, -957) = 25 (oak_planks), block history 1 step.",
+    "Step 1, the noise caves: in the 41 x 41 columns around the plank (x -1041..-1001, z -977..-937, the plank's column left out), y -64 to 3 above the highest heightAt, 240,240 voxels read with __wiTest.blockAt: 1,936 air voxels at least 5 below their column's heightAt (cave air), from y -64 up to the 64-79 band. The same volume in an unsaved seed-4242 default world of today's build (an ?at= link with the hash {seed:'4242', profile:'default', patch:{}}) hashes the same (FNV-1a c99c2234 in both, cave air 1,936 = 1,936): the migrated world generates exactly today's default terrain, i.e. the SP6a tree with the noise families, not SP5c's tree (which has the carvers only). The X-ray (X) in the SP5c world, looked 50 degrees down from the saved pose, drew the hollows coloured by kind (69.2 % of the canvas' samples coloured): noodles, spaghetti 3D and 2D and cheese (noise families) among the worms, shot 1-sp5c-world-xray.png.",
+    "Step 1, after the open: the stored record is today's generator (generatorVersion 7, genKey a793e8164850930b, paramsHash 3d7777aa4d1612ce), its stored params still at schemaVersion 2 (as designed: olderGeneratorRecord rewrites genKey, generatorVersion and paramsHash only; loadParams migrates 2 -> 3 on every read), the edit kept (diffs 1). The Load list's badge is gone after this first open (by design, SP5b D8: the open writes today's genKey), so the badge check could be made once only; it was made before the open.",
+    "Step 2 used seed 42's review links (spec §10.10, the Exit evidence's, with &wiTest=1), all unsaved worlds, so no saved world was touched: cheese /?at=97,-52&y=-15.5&yaw=90.0&pitch=0.0&rd=12, interior /?at=174,32&y=-9.5&yaw=0.0&pitch=0.0&rd=12, entrance /?at=38,-16&y=84.5&yaw=315.0&pitch=-60.0&rd=12. Each page waited for the stream to settle at RD 12 (__wiTest.filled() = rd() = 12) before its first shot.",
+    "Step 2a, the X-ray in the cheese cavern: X showed the strip 'X-ray · y −64 … 319 · by cave type' (also in the F3 HUD); coloured pixels 0.0 % -> 92.7 % of the canvas' samples, 97.8 % changed. PageDown: 'y −32 … −1' (32 blocks around the eye at y -15.5); PageDown: 'y −40 … −9'; PageUp: 'y −32 … −1'; PageUp: 'y −24 … 7'; Home: 'y −64 … 319'; the first band changed 61.7 % of the picture. X again hid the strip and the terrain came back.",
+    "Step 2b, a live cave edit with the map side by side, the X-ray on: M, 'Side by side' (#world-host.split), the Caves tab (every depth, its X-ray box checked), 'Cave parameters' -> Parameters at caves.cheese.offset; 0.5 -> 0.45 typed and committed with Enter (the Apply path of applyControl): the stale count rose to 489, the HUD read 'stale 489 / 489', back to 0 after 6.3 s, the stream settled at RD 12; 39.9 % of the world half's samples changed (the caves moved in place in the X-ray). Ctrl+Z: 'stale 489 / 489', 0 after 6.0 s, the field back to 0.5, the picture back to within 0.04 % of the shot before the edit. Same document throughout (no reload).",
+    "Step 2c, the light floor and night vision in the large interior: the eye's voxel and all 405 air voxels in a 9 x 5 x 9 box ahead store light 0 (sky 0, block 0). With night vision off no sampled canvas pixel (399,251 samples, every 2nd device px, the HUD, notices, hotbar and the crosshair's 40 px square left out) is pure black: the darkest reads rgb (2, 2, 3), max-channel p01 4, median 7, mean luminance 6.61. L: 'Night vision on', stored, mean luminance 62.46 (median max-channel 65); L again: 'Night vision off', stored off, mean luminance 6.61 again, pure black 0.",
+    "Step 2d, the walk: around the entrance pose, the column whose first floor below the eye lies deepest is (43, -13), floor at y 74, 6.5 blocks away at yaw 122.5. The pointer lock taken by a CDP click, the look turned by CDP mouse moves to yaw 122.5, pitch -35; F -> walk (__wiTest.mode() 'walk'); W held (CDP keyDown, keyUp 4.5 s later): the feet went 84 -> 75 (9 blocks, going down between 0.3 and 2.2 s, then along the floor at 75) and the walk stopped once down at least 6, on the ground and under a roof for 4 samples: at column (50, -7), the first solid block above the head at y 85, the eye's light byte 176 (sky 11, block 0). Shots: start, falling, bottom, and the bottom looking back up at the opening.",
+    "Step 3: ?selftest=1 ran in the same kept profile, because it never opens wi10 (src/ui/selftest/selftestPage.ts: the KV contract runs in its own database wi10-selftest, deleted before and after); wi10 read before and after the selftest is identical (counts, the worlds record, history steps, diffs), and wi10-selftest is gone after the run. '✓ all 62 goldens match (11.3 s)' (sp1 27, sp2a 20, sp3a 3, sp3b 2, sp3c 2, sp3e 5, sp6a 3; every key one of test/goldens.json's 62) and 'IndexedDB contract: 10/10 passed'. No separate profile was needed.",
+    "The profile's world settings: the kept profile had no 'wi.world.settings' key before the run; the check's side-by-side map and its night-vision toggles wrote one ({mapMode 'split', nightVision false, ...}), which the check removed at the end on the start page, so localStorage's settings are as Step 0 left them (absent).",
+    "Rehearsals before the run (runs list): steps 0 and 2 only, three times, in a fresh profile of the check's own (mktemp -d under the agent's scratchpad, removed after), so that the kept profile's one first open of the SP5c world (which removes its 'older generator' badge) was spent only on the recorded run. They settled the X-ray criterion (inside a cavern there is no sky, so the clear-colour share cannot rise: the criterion became the coloured share) and the walk's stop (rehearsal 2 stopped in the open part of the pit; from rehearsal 3 the walk goes on until under a roof). Their figures match the recorded run's (the same strip texts, stale 489 / 489, light-floor and night-vision statistics, the same walk)."
+  ],
+  "observations": [
+    "With the F3 HUD shown and the X-ray on, the X-ray strip's legend (top centre) is drawn over the right end of the HUD's first two lines at this 1756 CSS px wide window: 'revealed 489 · sections 7145' and the legend's first entries ('Cheese', 'Spaghetti 3D') overlap and are hard to read (shots 1-sp5c-world-xray.png, 2a-cheese-xray-all.png). Cosmetic; F3 hides the HUD (the review shots are taken that way). Not a check failure; for the user's eye.",
+    "The first X-ray toggle in the cheese cavern had one frame of 54 ms (one long task of 54 ms) in the 1.2 s after X; frames before it p50 4.16 ms, max 8.34; after it p50 4.17, p95 8.34, p99 12.5. Recorded only (no gate in production; L14's bench covers the X-ray). The live cave edit and its undo had no frame above 20.83 ms and no long task (p50 8.33 ms while 489 columns regenerated).",
+    "The light floor's reading: darkest canvas pixel rgb (2, 2, 3), median max-channel 7 at the default brightness 0.3 (the settings' brightness 0.3 in the key the check wrote). Spec §6.1 computes a stone north face at the floor as sRGB 18 at brightness 0.3; this cave at y -10 is darker (darker blocks and texels, distance fog), but nothing reads pure black, which is the check. §6.1 leaves the floor's value to the user's eye.",
+    "The stored params of the SP5c world remain at schemaVersion 2 after the open (generatorVersion 7, genKey and paramsHash rewritten): the 2 -> 3 migration runs on every read through loadParams, as §12.4 specifies; it is not written back."
+  ],
+  "findings": [],
+  "runs": [
+    {
+      "run": 1,
+      "kind": "rehearsal (not the record)",
+      "date": "2026-11-10T22:18:10.246Z",
+      "file": "raw-rehearsal-1.json",
+      "log": "rehearsal-1.log",
+      "shots": "shots-rehearsal-1/",
+      "profile": "a fresh mktemp -d profile in the agent's scratchpad (removed after)",
+      "steps": "0:pass 2:fail 4:pass",
+      "pageErrors": 0,
+      "consoleErrors": 0,
+      "why": "steps 0 and 2 only, before the kept profile's one first open of the SP5c world; the X-ray check's criterion (the clear colour's share must rise) was wrong inside a cavern, which has no sky: the X-ray itself worked (92.7 % of the samples coloured); the criterion became the coloured share"
+    },
+    {
+      "run": 2,
+      "kind": "rehearsal (not the record)",
+      "date": "2026-11-10T22:21:58.261Z",
+      "file": "raw-rehearsal-2.json",
+      "log": "rehearsal-2.log",
+      "shots": "shots-rehearsal-2/",
+      "profile": "the same scratch profile",
+      "steps": "0:pass 2:pass 4:pass",
+      "pageErrors": 0,
+      "consoleErrors": 0,
+      "why": "all checks passed; the walk stopped in the open part of the entrance's pit (sky above), so the stop was changed to: down at least 6, on the ground and under a roof"
+    },
+    {
+      "run": 3,
+      "kind": "rehearsal (not the record)",
+      "date": "2026-11-10T22:23:41.334Z",
+      "file": "raw-rehearsal-3.json",
+      "log": "rehearsal-3.log",
+      "shots": "shots-rehearsal-3/",
+      "profile": "the same scratch profile",
+      "steps": "2:pass 4:pass",
+      "pageErrors": 0,
+      "consoleErrors": 0,
+      "why": "step 2 only, all checks passed with the walk ending under a roof; the script was then run unchanged on the kept profile"
+    },
+    {
+      "run": 4,
+      "kind": "the recorded run",
+      "date": "2026-11-10T22:27:06.351Z",
+      "file": "raw-run.json",
+      "log": "run.log",
+      "shots": "shots/",
+      "profile": "/tmp/wi10-KfLJ",
+      "steps": "0:pass 1:pass 2:pass 3:pass 4:pass",
+      "summary": "0 5/5 checks; 1 14/14 checks; 2 38/38 checks; 3 4/4 checks; 4 2/2 checks"
+    }
+  ],
+  "script": "/home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/task54/step2/prodcheck.mjs (Node v24.21.0, no npm dependency, run as: node prodcheck.mjs /home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/task54/step2 /home/maestre/Proyectos/world-imaginer-voxel /home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/task54/step2/dist-main), then /home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/task54/step2/assemble.mjs for this file; raw output /home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/task54/step2/raw-run.json, log /home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/task54/step2/run.log, screenshots /home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/task54/step2/shots/",
+  "chrome": {
+    "by": "the agent's own headful Chrome over CDP (Task 54 Step 2, the Chrome half)",
+    "browser": "Chrome/155.0.8059.39 (pid 20824), Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+    "renderer": "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6); the world pages on RegionBatch (canvas data-renderer 'batch')",
+    "profile": "/tmp/wi10-KfLJ, the controller's kept profile from Step 0 (Step 0's SP5c world 7010b829-2b39-46e0-9dc1-46313931b7b2), kept (exists after the run: true); MESA_SHADER_CACHE_DISABLE=true in this Chrome's env only; stopped by CDP Browser.close (exited after Browser.close (code 0, signal null))",
+    "date": "2026-11-10T22:27:06.351Z",
+    "url": "https://world-imaginer-voxel.vercel.app/",
+    "build": "main at 0689c4f661c2c0926c8ef6b9768da43a82cf007d; production serves index-C1YOH6uU.js, byte-identical to a local build of main (51/51 files, index.html equal true)",
+    "preChecks": {
+      "prime": "on-demand",
+      "eDP1": [
+        "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+        "   1920x1080    240.00*+ 240.00    60.00  ",
+        "   1680x1050    240.00  "
+      ],
+      "eDP1Current": "   1920x1080    240.00*+ 240.00    60.00  ",
+      "session": "2",
+      "sessionProps": "Type=x11\nActive=yes\nLockedHint=no",
+      "loadavg": [
+        0.49,
+        1.33,
+        0.96
+      ],
+      "uptime": "23:27:06 up 34 min,  1 user,  load average: 0,49, 1,33, 0,96",
+      "gitHead": "0689c4f661c2c0926c8ef6b9768da43a82cf007d",
+      "gitStatus": "?? .superpowers/"
+    },
+    "allStepsPass": true,
+    "stepSummary": [
+      {
+        "step": 0,
+        "name": "pre-checks (read-only: PRIME on-demand, eDP-1 at 240 Hz, the session unlocked, load < 1) and the bundle compare against a local build of main",
+        "pass": true,
+        "checks": "5/5 checks",
+        "wallMs": 3278
+      },
+      {
+        "step": 1,
+        "name": "the SP5c world (D36): Load world lists it with the \"older generator\" badge; it opens with the noise caves (the SP6a tree), the plank edit kept at (-1021, 71, -957), the migration 2 → 3 leaves it working",
+        "pass": true,
+        "checks": "14/14 checks",
+        "wallMs": 25810
+      },
+      {
+        "step": 2,
+        "name": "an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, night vision on and off, the light floor in a cave, a walk down an entrance",
+        "pass": true,
+        "checks": "38/38 checks",
+        "wallMs": 71313
+      },
+      {
+        "step": 3,
+        "name": "?selftest=1 on production (the kept profile: the selftest never opens wi10, only its own wi10-selftest, deleted before and after)",
+        "pass": true,
+        "checks": "4/4 checks",
+        "wallMs": 13409
+      },
+      {
+        "step": 4,
+        "name": "page and console errors",
+        "pass": true,
+        "checks": "2/2 checks",
+        "wallMs": 0
+      }
+    ],
+    "sp5cWorld": {
+      "olderGeneratorBadgeBeforeOpen": [
+        "older generator"
+      ],
+      "noticeAtOpen": "This world was made with an earlier generator version; it opens with today's terrain and your blocks stay at their coordinates. Dismiss",
+      "playToRevealMs": 4017,
+      "plankAt": [
+        -1021,
+        71,
+        -957
+      ],
+      "plankRead": 25,
+      "caveAirBelowSurface": 1936,
+      "probeVoxels": 240240,
+      "probeHashSaved": "c99c2234",
+      "probeHashUnsavedSp6aSameSeed": "c99c2234",
+      "xrayColouredShare": 0.6917,
+      "recordBefore": {
+        "schemaVersion": 2,
+        "generatorVersion": 5,
+        "genKey": "87bc03c64b0ba369",
+        "paramsHash": "5ce41646fd2b91e0"
+      },
+      "recordAfter": {
+        "schemaVersion": 2,
+        "generatorVersion": 7,
+        "genKey": "a793e8164850930b",
+        "paramsHash": "3d7777aa4d1612ce"
+      },
+      "shots": {
+        "shotLoadList": "shots/1-load-world-older-generator.png",
+        "shotOpened": "shots/1-sp5c-world-opened.png",
+        "shotXray": "shots/1-sp5c-world-xray.png",
+        "shotUnsavedSame": "shots/1-unsaved-seed-4242.png",
+        "shotLoadListAfter": "shots/1-load-world-after-open.png"
+      }
+    },
+    "sp6aWorld": {
+      "links": {
+        "cheese": "https://world-imaginer-voxel.vercel.app/?at=97,-52&y=-15.5&yaw=90.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "interior": "https://world-imaginer-voxel.vercel.app/?at=174,32&y=-9.5&yaw=0.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "entrance": "https://world-imaginer-voxel.vercel.app/?at=38,-16&y=84.5&yaw=315.0&pitch=-60.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19"
+      },
+      "xray": {
+        "colouredShareOff": 0,
+        "colouredShareOn": 0.9273,
+        "changedShare": 0.9782,
+        "bands": [
+          "X-ray · y −32 … −1 · by cave type",
+          "X-ray · y −40 … −9 · by cave type",
+          "X-ray · y −32 … −1 · by cave type",
+          "X-ray · y −24 … 7 · by cave type"
+        ],
+        "bandChangedShare": 0.6173
+      },
+      "liveCaveEdit": {
+        "param": "caves.cheese.offset",
+        "from": "0.5",
+        "to": "0.45",
+        "staleMax": 489,
+        "hudRow": "stale 489 / 489",
+        "settledMs": 6348,
+        "worldHalfChangedShare": 0.3991,
+        "undo": {
+          "value": "0.5",
+          "hudRow": "stale 489 / 489",
+          "settledMs": 5953,
+          "residualShare": 0.0004
+        }
+      },
+      "lightFloor": {
+        "lightAtEye": 0,
+        "lightAhead": {
+          "0": 405
+        },
+        "pureBlack": 0,
+        "samples": 399251,
+        "darkest": {
+          "x": 762,
+          "y": 54,
+          "rgb": [
+            2,
+            2,
+            3
+          ],
+          "lum": 2.07
+        },
+        "maxChannel": {
+          "min": 3,
+          "p01": 4,
+          "p10": 5,
+          "p50": 7
+        },
+        "meanLuminance": 6.61
+      },
+      "nightVision": {
+        "meanLuminanceOn": 62.46,
+        "meanLuminanceOffAgain": 6.61
+      },
+      "walk": {
+        "target": {
+          "x": 43,
+          "z": -13,
+          "floor": 74,
+          "top": 75,
+          "yaw": 122.5,
+          "dist": 6.5
+        },
+        "startFeetY": 84,
+        "endFeetY": 75,
+        "minFeetY": 75,
+        "drop": 9,
+        "mode": "walk",
+        "surfaceAtPose": 80,
+        "eyeLightEnd": 176,
+        "columnAtEnd": [
+          50,
+          -7
+        ],
+        "heightAtEndColumn": 98,
+        "solidAboveHead": 85
+      },
+      "shots": {
+        "shotXrayOff": "shots/2a-cheese-xray-off.png",
+        "shotXrayAll": "shots/2a-cheese-xray-all.png",
+        "shotXrayBand": "shots/2a-cheese-xray-band.png",
+        "shotXrayBandDown": "shots/2a-cheese-xray-band-down8.png",
+        "shotXrayBandUp": "shots/2a-cheese-xray-band-up8.png",
+        "shotXrayHome": "shots/2a-cheese-xray-home.png",
+        "shotEditBefore": "shots/2b-side-by-side-before-edit.png",
+        "shotEditAfter": "shots/2b-side-by-side-after-edit.png",
+        "shotEditUndone": "shots/2b-side-by-side-undone.png",
+        "shotXrayOffAgain": "shots/2a-cheese-xray-off-again.png",
+        "shotLightFloor": "shots/2c-interior-light-floor-nv-off.png",
+        "shotNightVision": "shots/2c-interior-night-vision-on.png",
+        "shotNightVisionOff": "shots/2c-interior-night-vision-off-again.png",
+        "shotWalkStart": "shots/2d-entrance-walk-start.png",
+        "shotWalkMid": "shots/2d-entrance-walk-falling.png",
+        "shotWalkEnd": "shots/2d-entrance-walk-bottom.png",
+        "shotWalkLookUp": "shots/2d-entrance-walk-bottom-looking-up.png"
+      }
+    },
+    "selftest": "62/62",
+    "selftestSummary": "✓ all 62 goldens match (11.3 s)",
+    "kvContract": "IndexedDB contract: 10/10 passed",
+    "selftestProfile": "the kept profile (the selftest never opens wi10; wi10 identical before and after)",
+    "pageErrors": 0,
+    "consoleErrors": 0,
+    "ignoredLogs": [
+      "Failed to load resource: the server responded with a status of 404 ()",
+      "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808"
+    ]
+  },
+  "firefox": {
+    "by": "the user, by hand, in their own Firefox, on production",
+    "browser": "Firefox 158, RegionMesh",
+    "date": "the night of 2026-11-10, after the Chrome check above",
+    "url": "https://world-imaginer-voxel.vercel.app/",
+    "build": "main at 0689c4f, the build the Chrome check above found served (index-C1YOH6uU.js); main was not pushed again before the user's run",
+    "steps": "the Chrome check's steps in an SP6a world (the X-ray on and off, the band with PageDown, PageUp and Home, a live cave edit with the map side by side, night vision on and off, the light floor in a cave, a walk down an entrance) and the user's own check (§10.11: down an entrance and through each kind of cave): the user, \"Todo está bien\", apart from the two findings below",
+    "selftest": "62/62 (every expected equals actual and test/goldens.json) and \"IndexedDB contract: 10/10 passed\"",
+    "findings": "two, at the user's check: (1) too many noodles, and no parameter for their frequency: rulings R31 and R32, Task 56 (the leaf caves.noodles.threshold, t 1.0, thickness 0.22, maxY 48, GENERATOR_VERSION 8) and Task 58; (2) the Density drawer overlaps the parameter panel in the narrow layout: Task 55, with Task 57's slice scroll (R32 c). Both merged to main at fc316c9 and re-checked in production-check-gv8.json"
+  }
+}

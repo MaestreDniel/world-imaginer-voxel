@@ -1,0 +1,2487 @@
+{
+  "date": "2026-11-11T22:13:44.235Z",
+  "url": "https://world-imaginer-voxel.vercel.app/",
+  "gitHead": "fc316c9b440ff2f7698a8df7a418fc78b5c59344",
+  "servedBundle": "index-D86N0JbD.js",
+  "localBundle": "index-D86N0JbD.js",
+  "sameBuild": true,
+  "bundleCompare": {
+    "servedBundle": "index-D86N0JbD.js",
+    "servedCss": "index-DsmeYR9W.css",
+    "localBundle": "index-D86N0JbD.js",
+    "indexSha256": "9bffe2d8c28012f3665e83eea3126e72b0f93cbeee3ac7ae75f9673df5a34a94",
+    "localIndexHtmlEqual": true,
+    "distDir": "/home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/usercheck-prod/dist-main",
+    "distBuiltAt": "2026-11-11T22:06:41.453Z",
+    "assetsCompared": 51,
+    "assetsEqual": 51,
+    "assetsDiffering": []
+  },
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  "chromeVersion": "Chrome/155.0.8059.39",
+  "glRenderer": "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)",
+  "glVendor": "Google Inc. (Intel)",
+  "multiDraw": true,
+  "windowAtStart": {
+    "left": 0,
+    "top": 32,
+    "width": 1756,
+    "height": 956,
+    "windowState": "maximized"
+  },
+  "window": {
+    "left": 0,
+    "top": 32,
+    "width": 1756,
+    "height": 956,
+    "windowState": "maximized"
+  },
+  "windowOnEdp1": true,
+  "windowMovedToEdp": false,
+  "screen": {
+    "width": 1756,
+    "height": 988,
+    "availLeft": 0,
+    "availTop": 32,
+    "screenX": 0,
+    "screenY": 32
+  },
+  "viewport": {
+    "innerWidth": 1756,
+    "innerHeight": 869,
+    "devicePixelRatio": 1.09375,
+    "hasFocus": false
+  },
+  "windowEnd": {
+    "left": 0,
+    "top": 32,
+    "width": 1756,
+    "height": 956,
+    "windowState": "maximized"
+  },
+  "wiTestHonoured": true,
+  "loadBefore": {
+    "uptime": "23:13:44 up  3:06,  1 user,  load average: 0,59, 1,25, 1,55",
+    "loadavg": [
+      0.59,
+      1.25,
+      1.55
+    ]
+  },
+  "loadAfter": {
+    "uptime": "23:15:51 up  3:08,  1 user,  load average: 3,78, 2,26, 1,88",
+    "loadavg": [
+      3.78,
+      2.26,
+      1.88
+    ]
+  },
+  "allStepsPass": true,
+  "stepSummary": [
+    {
+      "step": 0,
+      "name": "pre-checks (read-only: PRIME on-demand, eDP-1 at 240 Hz, the session unlocked, load < 1) and the bundle compare against a local build of main",
+      "pass": true,
+      "checks": "6/6 checks",
+      "wallMs": 5075
+    },
+    {
+      "step": 2,
+      "name": "an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, the Caves group's noodle leaves (threshold 1, thickness 0.22, maxY 48), the narrow layout (\"Cave slice\" / \"Cave parameters\" with the map pane under 900 px; ?map at 850 px \"Edit in Density\"), night vision on and off, the light floor in a cave, the moved noodle link, a walk down an entrance",
+      "pass": true,
+      "checks": "53/53 checks",
+      "wallMs": 102945
+    },
+    {
+      "step": 3,
+      "name": "?selftest=1 on production (the run's fresh profile: the selftest never opens wi10, only its own wi10-selftest, deleted before and after)",
+      "pass": true,
+      "checks": "4/4 checks",
+      "wallMs": 15325
+    },
+    {
+      "step": 4,
+      "name": "page and console errors",
+      "pass": true,
+      "checks": "2/2 checks",
+      "wallMs": 0
+    }
+  ],
+  "steps": [
+    {
+      "step": 0,
+      "name": "pre-checks (read-only: PRIME on-demand, eDP-1 at 240 Hz, the session unlocked, load < 1) and the bundle compare against a local build of main",
+      "notes": [],
+      "checks": [
+        {
+          "pass": true,
+          "what": "PRIME is on-demand (prime-select query: on-demand)"
+        },
+        {
+          "pass": true,
+          "what": "eDP-1 is connected and runs at 240 Hz (1920x1080    240.00*+ 240.00    60.00)",
+          "detail": [
+            "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+            "   1920x1080    240.00*+ 240.00    60.00  ",
+            "   1680x1050    240.00  "
+          ]
+        },
+        {
+          "pass": true,
+          "what": "the session is active and unlocked (Seat=seat0, Type=x11, Active=yes, LockedHint=no)"
+        },
+        {
+          "pass": true,
+          "what": "the 1-minute load 0.59 is below 1"
+        },
+        {
+          "pass": true,
+          "what": "the repo is main at fc316c9b440ff2f7698a8df7a418fc78b5c59344 (= origin/main fc316c9b440ff2f7698a8df7a418fc78b5c59344), the tree clean but for the untracked .superpowers/ (\"?? .superpowers/\")"
+        },
+        {
+          "pass": true,
+          "what": "production serves the local build of main: served index-D86N0JbD.js, local index-D86N0JbD.js, index.html equal true, 51/51 files byte-identical",
+          "detail": {
+            "servedBundle": "index-D86N0JbD.js",
+            "servedCss": "index-DsmeYR9W.css",
+            "localBundle": "index-D86N0JbD.js",
+            "indexSha256": "9bffe2d8c28012f3665e83eea3126e72b0f93cbeee3ac7ae75f9673df5a34a94",
+            "localIndexHtmlEqual": true,
+            "distDir": "dist-main",
+            "distBuiltAt": "2026-11-11T22:06:41.453Z",
+            "assetsCompared": 51,
+            "assetsEqual": 51,
+            "assetsDiffering": []
+          }
+        }
+      ],
+      "pass": true,
+      "pre": {
+        "prime": "on-demand",
+        "eDP1": [
+          "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+          "   1920x1080    240.00*+ 240.00    60.00  ",
+          "   1680x1050    240.00  "
+        ],
+        "eDP1Current": "   1920x1080    240.00*+ 240.00    60.00  ",
+        "session": "3",
+        "sessionFrom": "loginctl list-sessions: the seat0 x11 session",
+        "sessions": "3 1000 maestre seat0 tty2 active no -",
+        "sessionProps": "Seat=seat0\nType=x11\nActive=yes\nLockedHint=no",
+        "gitBranch": "main",
+        "originMain": "fc316c9b440ff2f7698a8df7a418fc78b5c59344",
+        "loadavg": [
+          0.59,
+          1.25,
+          1.55
+        ],
+        "uptime": "23:13:44 up  3:06,  1 user,  load average: 0,59, 1,25, 1,55",
+        "gitHead": "fc316c9b440ff2f7698a8df7a418fc78b5c59344",
+        "gitStatus": "?? .superpowers/"
+      },
+      "wallMs": 5075,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 2,
+      "name": "an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, the Caves group's noodle leaves (threshold 1, thickness 0.22, maxY 48), the narrow layout (\"Cave slice\" / \"Cave parameters\" with the map pane under 900 px; ?map at 850 px \"Edit in Density\"), night vision on and off, the light floor in a cave, the moved noodle link, a walk down an entrance",
+      "notes": [
+        "undo back to the start: 0.04 % of the world half's sampled pixels differ from the shot before the edit (edit → 39.9 %)",
+        "?map at 850 px \"Edit in Density\": the slice (32², horizontal) at [1002,1130], 0 px visible in the window (in view: false); spec R32 c's scroll of the slice into view is the \"Cave slice\" path's (checked above in the world's map)",
+        "the shaft: column (43, -13), air from the eye's y 84 down to a floor at y 74; 6.5 blocks away at yaw 122.5",
+        "at the end the feet stand at column (50, -7), y 75: under a roof (the first solid block above the head at y 85), the eye's light byte 176 (sky 11, block 0)"
+      ],
+      "checks": [
+        {
+          "pass": true,
+          "what": "an unsaved world (no saved world is touched)"
+        },
+        {
+          "pass": true,
+          "what": "the cheese cavern: the stream settled at RD 12 (rd, filled = [12,12], after 4 ms)",
+          "detail": [
+            12,
+            12
+          ]
+        },
+        {
+          "pass": true,
+          "what": "the X-ray strip is hidden at the start",
+          "detail": {
+            "hidden": true,
+            "text": "X-ray · y −64 … 319 · by cave type"
+          }
+        },
+        {
+          "pass": true,
+          "what": "X turns the X-ray on: the strip reads \"X-ray · y −64 … 319 · by cave type\"",
+          "detail": {
+            "hidden": false,
+            "text": "X-ray · y −64 … 319 · by cave type"
+          }
+        },
+        {
+          "pass": true,
+          "what": "the F3 HUD shows the strip's line while the X-ray is on"
+        },
+        {
+          "pass": true,
+          "what": "with the X-ray the rock is gone and the hollows show coloured by cave type: coloured pixels (saturation ≥ 24) 0.0 % → 92.0 % of the canvas' samples, 97.8 % of them changed (inside the cavern, so no sky: the clear colour #0b0e14 shows on 0.0 %)",
+          "detail": {
+            "off": {
+              "samples": 177777,
+              "pureBlack": 0,
+              "darkest": {
+                "x": 1575,
+                "y": 150,
+                "rgb": [
+                  2,
+                  2,
+                  3
+                ],
+                "lum": 2.07
+              },
+              "maxChannel": {
+                "min": 3,
+                "p01": 4,
+                "p10": 5,
+                "p50": 6
+              },
+              "luminance": {
+                "min": 2.07,
+                "p01": 3.07,
+                "p50": 5.07,
+                "mean": 5.83
+              },
+              "nearClearShare": 0.0025,
+              "saturatedShare": 0
+            },
+            "on": {
+              "samples": 177777,
+              "pureBlack": 0,
+              "darkest": {
+                "x": 1023,
+                "y": 9,
+                "rgb": [
+                  26,
+                  21,
+                  11
+                ],
+                "lum": 21.34
+              },
+              "maxChannel": {
+                "min": 26,
+                "p01": 38,
+                "p10": 47,
+                "p50": 160
+              },
+              "luminance": {
+                "min": 21.34,
+                "p01": 32.41,
+                "p50": 121.14,
+                "mean": 131.48
+              },
+              "nearClearShare": 0,
+              "saturatedShare": 0.9198
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "PageDown: the first band is 32 blocks around the eye (y -15.5): \"X-ray · y −32 … −1 · by cave type\"",
+          "detail": "X-ray · y −32 … −1 · by cave type"
+        },
+        {
+          "pass": true,
+          "what": "the band changes the X-ray picture (59.9 % of the canvas' sampled pixels differ from every depth)"
+        },
+        {
+          "pass": true,
+          "what": "PageDown again moves the band 8 down: \"X-ray · y −40 … −9 · by cave type\"",
+          "detail": "X-ray · y −40 … −9 · by cave type"
+        },
+        {
+          "pass": true,
+          "what": "PageUp moves it 8 up again: \"X-ray · y −32 … −1 · by cave type\"",
+          "detail": "X-ray · y −32 … −1 · by cave type"
+        },
+        {
+          "pass": true,
+          "what": "PageUp again: 8 higher than the first band: \"X-ray · y −24 … 7 · by cave type\"",
+          "detail": "X-ray · y −24 … 7 · by cave type"
+        },
+        {
+          "pass": true,
+          "what": "Home restores every depth: \"X-ray · y −64 … 319 · by cave type\""
+        },
+        {
+          "pass": true,
+          "what": "M opens the world's map"
+        },
+        {
+          "pass": true,
+          "what": "the map side by side (#world-host.split)"
+        },
+        {
+          "pass": true,
+          "what": "the Caves tab shows every depth with its X-ray box checked (the world's X-ray is on)",
+          "detail": {
+            "band": "X-ray · y −64 … 319 · by cave type",
+            "xray": true
+          }
+        },
+        {
+          "pass": true,
+          "what": "\"Cave parameters\" opens Parameters at caves.cheese.offset"
+        },
+        {
+          "pass": true,
+          "what": "caves.cheese.offset 0.5 → 0.45 typed (Enter): applies live (the stale count rose to 489, the HUD read \"stale 489 / 489\", back to 0 after 6.3 s)",
+          "detail": {
+            "what": "caves.cheese.offset 0.5 → 0.45 typed (Enter)",
+            "staleRoseAfterMs": 169,
+            "maxStale": 489,
+            "hudRow": "stale 489 / 489",
+            "settledMs": 6306,
+            "frames": {
+              "before": {
+                "frames": 110,
+                "p50": 4.17,
+                "p95": 8.34,
+                "p99": 8.34,
+                "max": 12.51,
+                "over33": 0,
+                "over50": 0
+              },
+              "after": {
+                "frames": 955,
+                "p50": 8.33,
+                "p95": 12.5,
+                "p99": 12.51,
+                "max": 33.33,
+                "over33": 0,
+                "over50": 0
+              },
+              "longTasksAfterMark": []
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "the field reads 0.45"
+        },
+        {
+          "pass": true,
+          "what": "after the cave edit: the stream settled at RD 12 (rd, filled = [12,12], after 3 ms)",
+          "detail": [
+            12,
+            12
+          ]
+        },
+        {
+          "pass": true,
+          "what": "the caves changed in place in the X-ray beside the map: 39.9 % of the world half's sampled pixels differ before and after the edit"
+        },
+        {
+          "pass": true,
+          "what": "Ctrl+Z: applies live (the stale count rose to 489, the HUD read \"stale 489 / 489\", back to 0 after 8.0 s)",
+          "detail": {
+            "what": "Ctrl+Z",
+            "staleRoseAfterMs": 164,
+            "maxStale": 489,
+            "hudRow": "stale 489 / 489",
+            "settledMs": 7957,
+            "frames": {
+              "before": {
+                "frames": 113,
+                "p50": 4.17,
+                "p95": 8.34,
+                "p99": 8.34,
+                "max": 8.34,
+                "over33": 0,
+                "over50": 0
+              },
+              "after": {
+                "frames": 947,
+                "p50": 8.33,
+                "p95": 16.67,
+                "p99": 20.83,
+                "max": 33.33,
+                "over33": 0,
+                "over50": 0
+              },
+              "longTasksAfterMark": []
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "Ctrl+Z puts caves.cheese.offset back to 0.5 (reads 0.5)"
+        },
+        {
+          "pass": true,
+          "what": "after Ctrl+Z: the stream settled at RD 12 (rd, filled = [12,12], after 3 ms)",
+          "detail": [
+            12,
+            12
+          ]
+        },
+        {
+          "pass": true,
+          "what": "the parameter panel's caves.noodles.threshold reads 1 (label \"Frequency threshold\", section \"NoodlesReset\"; want 1)",
+          "detail": {
+            "value": "1",
+            "type": "text",
+            "tag": "input",
+            "label": "Frequency threshold",
+            "section": "NoodlesReset"
+          }
+        },
+        {
+          "pass": true,
+          "what": "the parameter panel's caves.noodles.thickness reads 0.22 (label \"Thickness\", section \"NoodlesReset\"; want 0.22)",
+          "detail": {
+            "value": "0.22",
+            "type": "text",
+            "tag": "input",
+            "label": "Thickness",
+            "section": "NoodlesReset"
+          }
+        },
+        {
+          "pass": true,
+          "what": "the parameter panel's caves.noodles.maxY reads 48 (label \"Highest y\", section \"NoodlesReset\"; want 48)",
+          "detail": {
+            "value": "48",
+            "type": "text",
+            "tag": "input",
+            "label": "Highest y",
+            "section": "NoodlesReset"
+          }
+        },
+        {
+          "pass": true,
+          "what": "the map pane is 878 px wide (under 900) and its panel stacks under the map (this window's own width, no emulation)",
+          "detail": {
+            "pane": {
+              "width": 878,
+              "height": 869,
+              "columns": "863.543px"
+            },
+            "beside": false
+          }
+        },
+        {
+          "pass": true,
+          "what": "\"Cave slice\" opens the Density drawer with the horizontal caves field",
+          "detail": {
+            "status": "slicing 128² …",
+            "plane": "horizontal",
+            "field": "caves"
+          }
+        },
+        {
+          "pass": true,
+          "what": "the cave slice draws its 128² slice ({\"status\":\"128²\",\"plane\":\"horizontal\",\"field\":\"caves\"})"
+        },
+        {
+          "pass": true,
+          "what": "narrow \"Cave slice\": the parameter panel (rows 361–564, its tab's content to 565) and the drawer (569–869) do not overlap (intersection 0 px²), the drawer's top is in the 869 px window, the panel's selected tab clickable (true)",
+          "detail": {
+            "apart": {
+              "apart": true,
+              "drawerInView": true,
+              "side": [
+                361,
+                564
+              ],
+              "drawer": [
+                569,
+                869
+              ],
+              "window": 869,
+              "sideRect": {
+                "left": 0,
+                "top": 361,
+                "right": 864,
+                "bottom": 564
+              },
+              "drawerRect": {
+                "left": 0,
+                "top": 569,
+                "right": 864,
+                "bottom": 869
+              },
+              "content": 565,
+              "tabId": "map-tabpanel-caves",
+              "overlapArea": 0
+            },
+            "tabHit": true
+          }
+        },
+        {
+          "pass": true,
+          "what": "narrow \"Cave slice\": the slice is in view (119 of 128 px visible, at [750,878])",
+          "detail": {
+            "inView": true,
+            "canvas": [
+              750,
+              878
+            ],
+            "visible": 119,
+            "window": 869
+          }
+        },
+        {
+          "pass": true,
+          "what": "narrow \"Cave parameters\" with the drawer open: Parameters at caves.cheese.offset, the list (to 1578) above the drawer (1583–1883), no overlap (0 px²), its tab clickable (true)",
+          "detail": {
+            "apart2": {
+              "apart": true,
+              "drawerInView": false,
+              "side": [
+                361,
+                1578
+              ],
+              "drawer": [
+                1583,
+                1883
+              ],
+              "window": 869,
+              "sideRect": {
+                "left": 0,
+                "top": 361,
+                "right": 864,
+                "bottom": 1578
+              },
+              "drawerRect": {
+                "left": 0,
+                "top": 1583,
+                "right": 864,
+                "bottom": 1883
+              },
+              "content": 1578,
+              "tabId": "map-tabpanel-parameters",
+              "overlapArea": 0
+            },
+            "hit2": true
+          }
+        },
+        {
+          "pass": true,
+          "what": "M closes the map"
+        },
+        {
+          "pass": true,
+          "what": "the live edit and its undo kept the same document (no reload)"
+        },
+        {
+          "pass": true,
+          "what": "X again turns the X-ray off (the strip hidden)"
+        },
+        {
+          "pass": true,
+          "what": "the interior: the stream settled at RD 12 (rd, filled = [12,12], after 4 ms)",
+          "detail": [
+            12,
+            12
+          ]
+        },
+        {
+          "pass": true,
+          "what": "night vision is off (stored setting)"
+        },
+        {
+          "pass": true,
+          "what": "the light floor: the eye's voxel stores light 0 (sky 0, block 0; 100 % of the air ahead too), yet no sampled canvas pixel is pure black (0 of 399251); the darkest reads rgb 2, 2, 3 (luminance 2.07); max-channel min 3, p01 4, p50 7",
+          "detail": {
+            "lightAtEye": 0,
+            "lightAhead": {
+              "0": 405
+            },
+            "stats": {
+              "samples": 399251,
+              "pureBlack": 0,
+              "darkest": {
+                "x": 762,
+                "y": 54,
+                "rgb": [
+                  2,
+                  2,
+                  3
+                ],
+                "lum": 2.07
+              },
+              "maxChannel": {
+                "min": 3,
+                "p01": 4,
+                "p10": 5,
+                "p50": 7
+              },
+              "luminance": {
+                "min": 2.07,
+                "p01": 3.07,
+                "p50": 6.07,
+                "mean": 6.61
+              },
+              "saturatedShare": 0
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "L turns night vision on (\"Night vision on\")",
+          "detail": "This world is not saved: it was opened from a link. Use New world on the start screen to keep one. DismissNight vision on Dismiss"
+        },
+        {
+          "pass": true,
+          "what": "night vision is stored on"
+        },
+        {
+          "pass": true,
+          "what": "night vision brightens the cave: mean luminance 6.61 → 62.45, median max-channel 7 → 65",
+          "detail": {
+            "off": {
+              "min": 2.07,
+              "p01": 3.07,
+              "p50": 6.07,
+              "mean": 6.61
+            },
+            "on": {
+              "min": 29.94,
+              "p01": 43.29,
+              "p50": 60.36,
+              "mean": 62.45
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "L again turns night vision off (\"Night vision off\")",
+          "detail": "This world is not saved: it was opened from a link. Use New world on the start screen to keep one. DismissNight vision off Dismiss"
+        },
+        {
+          "pass": true,
+          "what": "night vision is stored off"
+        },
+        {
+          "pass": true,
+          "what": "off again: back to the light floor (mean luminance 6.61, pure black 0)",
+          "detail": {
+            "min": 2.07,
+            "p01": 3.07,
+            "p50": 6.07,
+            "mean": 6.61
+          }
+        },
+        {
+          "pass": true,
+          "what": "the noodle: the stream settled at RD 12 (rd, filled = [12,12], after 1 ms)",
+          "detail": [
+            12,
+            12
+          ]
+        },
+        {
+          "pass": true,
+          "what": "the noodle link's eye (-34, -39.5, -33) stands in air (blockAt 0)"
+        },
+        {
+          "pass": true,
+          "what": "the X-ray at the noodle pose draws coloured hollows (97.1 % of the canvas' samples coloured)",
+          "detail": {
+            "samples": 177777,
+            "pureBlack": 0,
+            "darkest": {
+              "x": 213,
+              "y": 246,
+              "rgb": [
+                22,
+                12,
+                26
+              ],
+              "lum": 15.14
+            },
+            "maxChannel": {
+              "min": 26,
+              "p01": 45,
+              "p10": 47,
+              "p50": 109
+            },
+            "luminance": {
+              "min": 15.14,
+              "p01": 25.63,
+              "p50": 58.44,
+              "mean": 79.51
+            },
+            "nearClearShare": 0,
+            "saturatedShare": 0.9714
+          }
+        },
+        {
+          "pass": true,
+          "what": "?map at 850 × 869: the map pane 850 px wide, its panel stacked (one grid column: 835.657px)",
+          "detail": {
+            "width": 850,
+            "height": 869,
+            "mapPane": {
+              "width": 850,
+              "height": 869,
+              "columns": "835.657px"
+            },
+            "panelBeside": false
+          }
+        },
+        {
+          "pass": true,
+          "what": "?map's parameter panel reads the same noodle leaves: threshold 1, thickness 0.22, maxY 48",
+          "detail": {
+            "caves.noodles.threshold": {
+              "value": "1",
+              "type": "text",
+              "tag": "input",
+              "label": "Frequency threshold",
+              "section": "NoodlesReset"
+            },
+            "caves.noodles.thickness": {
+              "value": "0.22",
+              "type": "text",
+              "tag": "input",
+              "label": "Thickness",
+              "section": "NoodlesReset"
+            },
+            "caves.noodles.maxY": {
+              "value": "48",
+              "type": "text",
+              "tag": "input",
+              "label": "Highest y",
+              "section": "NoodlesReset"
+            }
+          }
+        },
+        {
+          "pass": true,
+          "what": "?map at 850 px \"Edit in Density\": the drawer (569–869) below the stacked panel (rows -821–564, content to 564), no overlap (0 px²), its top in the 869 px window, the selected tab clickable (true)",
+          "detail": {
+            "apart": {
+              "apart": true,
+              "drawerInView": true,
+              "side": [
+                -821,
+                564
+              ],
+              "drawer": [
+                569,
+                869
+              ],
+              "window": 869,
+              "sideRect": {
+                "left": 0,
+                "top": -821,
+                "right": 836,
+                "bottom": 564
+              },
+              "drawerRect": {
+                "left": 0,
+                "top": 569,
+                "right": 836,
+                "bottom": 869
+              },
+              "content": 564,
+              "tabId": "map-tabpanel-parameters",
+              "overlapArea": 0
+            },
+            "tabHit": true
+          }
+        },
+        {
+          "pass": true,
+          "what": "the entrance: the stream settled at RD 12 (rd, filled = [12,12], after 4 ms)",
+          "detail": [
+            12,
+            12
+          ]
+        },
+        {
+          "pass": true,
+          "what": "F switches to walking (__wiTest.mode() reads walk)"
+        },
+        {
+          "pass": true,
+          "what": "walking (W held) into the entrance takes the feet down: y 84 → 75 (9 blocks), on the ground at the end, in walk mode; the first floor below the lip at 74",
+          "detail": {
+            "startFeetY": 84,
+            "endFeetY": 75,
+            "minFeetY": 75,
+            "drop": 9,
+            "mode": "walk",
+            "surfaceAtPose": 80,
+            "eyeLightEnd": 176,
+            "columnAtEnd": [
+              50,
+              -7
+            ],
+            "heightAtEndColumn": 98,
+            "solidAboveHead": 85
+          }
+        }
+      ],
+      "pass": true,
+      "settingsAtStart": null,
+      "linkCheese": "https://world-imaginer-voxel.vercel.app/?at=97,-52&y=-15.5&yaw=90.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "poseCheese": {
+        "x": 97,
+        "y": -15.5,
+        "z": -52,
+        "yaw": 90,
+        "pitch": 0
+      },
+      "renderer": "batch",
+      "statsXrayOff": {
+        "samples": 177777,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 1575,
+          "y": 150,
+          "rgb": [
+            2,
+            2,
+            3
+          ],
+          "lum": 2.07
+        },
+        "maxChannel": {
+          "min": 3,
+          "p01": 4,
+          "p10": 5,
+          "p50": 6
+        },
+        "luminance": {
+          "min": 2.07,
+          "p01": 3.07,
+          "p50": 5.07,
+          "mean": 5.83
+        },
+        "nearClearShare": 0.0025,
+        "saturatedShare": 0
+      },
+      "shotXrayOff": "shots/2a-cheese-xray-off.png",
+      "framesXrayOn": {
+        "before": {
+          "frames": 174,
+          "p50": 4.16,
+          "p95": 8.34,
+          "p99": 8.34,
+          "max": 62.49,
+          "over33": 1,
+          "over50": 1
+        },
+        "after": {
+          "frames": 186,
+          "p50": 8.33,
+          "p95": 8.34,
+          "p99": 12.5,
+          "max": 12.51,
+          "over33": 0,
+          "over50": 0
+        },
+        "longTasksAfterMark": []
+      },
+      "statsXrayAll": {
+        "samples": 177777,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 1023,
+          "y": 9,
+          "rgb": [
+            26,
+            21,
+            11
+          ],
+          "lum": 21.34
+        },
+        "maxChannel": {
+          "min": 26,
+          "p01": 38,
+          "p10": 47,
+          "p50": 160
+        },
+        "luminance": {
+          "min": 21.34,
+          "p01": 32.41,
+          "p50": 121.14,
+          "mean": 131.48
+        },
+        "nearClearShare": 0,
+        "saturatedShare": 0.9198
+      },
+      "shotXrayAll": "shots/2a-cheese-xray-all.png",
+      "diffOffToAll": 0.9781,
+      "statsXrayBand": {
+        "samples": 177777,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 1359,
+          "y": 948,
+          "rgb": [
+            11,
+            14,
+            20
+          ],
+          "lum": 13.8
+        },
+        "maxChannel": {
+          "min": 20,
+          "p01": 20,
+          "p10": 40,
+          "p50": 102
+        },
+        "luminance": {
+          "min": 13.8,
+          "p01": 13.8,
+          "p50": 73.04,
+          "mean": 93.91
+        },
+        "nearClearShare": 0.036,
+        "saturatedShare": 0.7957
+      },
+      "diffAllToBand": 0.5989,
+      "shotXrayBand": "shots/2a-cheese-xray-band.png",
+      "shotXrayBandDown": "shots/2a-cheese-xray-band-down8.png",
+      "shotXrayBandUp": "shots/2a-cheese-xray-band-up8.png",
+      "bands": [
+        "X-ray · y −32 … −1 · by cave type",
+        "X-ray · y −40 … −9 · by cave type",
+        "X-ray · y −32 … −1 · by cave type",
+        "X-ray · y −24 … 7 · by cave type"
+      ],
+      "diffAllToHome": 0.0003,
+      "shotXrayHome": "shots/2a-cheese-xray-home.png",
+      "caveParamBefore": "0.5",
+      "splitCanvas": {
+        "x0": 961,
+        "y0": 0,
+        "x1": 1921,
+        "y1": 951
+      },
+      "shotEditBefore": "shots/2b-side-by-side-before-edit.png",
+      "liveEdit": {
+        "what": "caves.cheese.offset 0.5 → 0.45 typed (Enter)",
+        "staleRoseAfterMs": 169,
+        "maxStale": 489,
+        "hudRow": "stale 489 / 489",
+        "settledMs": 6306,
+        "frames": {
+          "before": {
+            "frames": 110,
+            "p50": 4.17,
+            "p95": 8.34,
+            "p99": 8.34,
+            "max": 12.51,
+            "over33": 0,
+            "over50": 0
+          },
+          "after": {
+            "frames": 955,
+            "p50": 8.33,
+            "p95": 12.5,
+            "p99": 12.51,
+            "max": 33.33,
+            "over33": 0,
+            "over50": 0
+          },
+          "longTasksAfterMark": []
+        }
+      },
+      "caveParamAfter": "0.45",
+      "diffEdit": 0.3987,
+      "shotEditAfter": "shots/2b-side-by-side-after-edit.png",
+      "liveUndo": {
+        "what": "Ctrl+Z",
+        "staleRoseAfterMs": 164,
+        "maxStale": 489,
+        "hudRow": "stale 489 / 489",
+        "settledMs": 7957,
+        "frames": {
+          "before": {
+            "frames": 113,
+            "p50": 4.17,
+            "p95": 8.34,
+            "p99": 8.34,
+            "max": 8.34,
+            "over33": 0,
+            "over50": 0
+          },
+          "after": {
+            "frames": 947,
+            "p50": 8.33,
+            "p95": 16.67,
+            "p99": 20.83,
+            "max": 33.33,
+            "over33": 0,
+            "over50": 0
+          },
+          "longTasksAfterMark": []
+        }
+      },
+      "caveParamUndone": "0.5",
+      "diffUndoToBefore": 0.0004,
+      "shotEditUndone": "shots/2b-side-by-side-undone.png",
+      "noodleLeavesWorld": {
+        "caves.noodles.threshold": {
+          "value": "1",
+          "type": "text",
+          "tag": "input",
+          "label": "Frequency threshold",
+          "section": "NoodlesReset"
+        },
+        "caves.noodles.thickness": {
+          "value": "0.22",
+          "type": "text",
+          "tag": "input",
+          "label": "Thickness",
+          "section": "NoodlesReset"
+        },
+        "caves.noodles.maxY": {
+          "value": "48",
+          "type": "text",
+          "tag": "input",
+          "label": "Highest y",
+          "section": "NoodlesReset"
+        }
+      },
+      "shotNoodleLeaves": "shots/2b-noodle-leaves.png",
+      "narrowAtWindow": {
+        "mapPane": {
+          "width": 878,
+          "height": 869,
+          "columns": "863.543px"
+        },
+        "panelBeside": false,
+        "viewport": {
+          "innerWidth": 1756,
+          "innerHeight": 869,
+          "devicePixelRatio": 1.09375,
+          "hasFocus": true
+        }
+      },
+      "narrowLayout": {
+        "emulated": null,
+        "mapPane": {
+          "width": 878,
+          "height": 869,
+          "columns": "863.543px"
+        },
+        "panelBeside": false
+      },
+      "shotNarrowCaveSlice": "shots/2b-narrow-cave-slice.png",
+      "narrowCaveSlice": {
+        "slice": {
+          "inView": true,
+          "canvas": [
+            750,
+            878
+          ],
+          "visible": 119,
+          "window": 869
+        },
+        "panes": {
+          "apart": true,
+          "drawerInView": true,
+          "side": [
+            361,
+            564
+          ],
+          "drawer": [
+            569,
+            869
+          ],
+          "window": 869,
+          "sideRect": {
+            "left": 0,
+            "top": 361,
+            "right": 864,
+            "bottom": 564
+          },
+          "drawerRect": {
+            "left": 0,
+            "top": 569,
+            "right": 864,
+            "bottom": 869
+          },
+          "content": 565,
+          "tabId": "map-tabpanel-caves",
+          "overlapArea": 0
+        },
+        "tabHit": true
+      },
+      "shotNarrowCaveParams": "shots/2b-narrow-cave-parameters.png",
+      "narrowCaveParams": {
+        "panes": {
+          "apart": true,
+          "drawerInView": false,
+          "side": [
+            361,
+            1578
+          ],
+          "drawer": [
+            1583,
+            1883
+          ],
+          "window": 869,
+          "sideRect": {
+            "left": 0,
+            "top": 361,
+            "right": 864,
+            "bottom": 1578
+          },
+          "drawerRect": {
+            "left": 0,
+            "top": 1583,
+            "right": 864,
+            "bottom": 1883
+          },
+          "content": 1578,
+          "tabId": "map-tabpanel-parameters",
+          "overlapArea": 0
+        },
+        "tabHit": true
+      },
+      "statsXrayOffAgain": {
+        "samples": 177777,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 1575,
+          "y": 150,
+          "rgb": [
+            2,
+            2,
+            3
+          ],
+          "lum": 2.07
+        },
+        "maxChannel": {
+          "min": 3,
+          "p01": 4,
+          "p10": 5,
+          "p50": 6
+        },
+        "luminance": {
+          "min": 2.07,
+          "p01": 3.07,
+          "p50": 5.07,
+          "mean": 5.83
+        },
+        "nearClearShare": 0.0025,
+        "saturatedShare": 0
+      },
+      "shotXrayOffAgain": "shots/2a-cheese-xray-off-again.png",
+      "linkInterior": "https://world-imaginer-voxel.vercel.app/?at=174,32&y=-9.5&yaw=0.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "poseInterior": {
+        "x": 174,
+        "y": -9.5,
+        "z": 32,
+        "yaw": 0,
+        "pitch": 0
+      },
+      "lightAtEye": 0,
+      "lightAhead": {
+        "0": 405
+      },
+      "statsLightFloor": {
+        "samples": 399251,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 762,
+          "y": 54,
+          "rgb": [
+            2,
+            2,
+            3
+          ],
+          "lum": 2.07
+        },
+        "maxChannel": {
+          "min": 3,
+          "p01": 4,
+          "p10": 5,
+          "p50": 7
+        },
+        "luminance": {
+          "min": 2.07,
+          "p01": 3.07,
+          "p50": 6.07,
+          "mean": 6.61
+        },
+        "saturatedShare": 0
+      },
+      "shotLightFloor": "shots/2c-interior-light-floor-nv-off.png",
+      "statsNightVision": {
+        "samples": 399251,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 1018,
+          "y": 480,
+          "rgb": [
+            26,
+            30,
+            41
+          ],
+          "lum": 29.94
+        },
+        "maxChannel": {
+          "min": 39,
+          "p01": 47,
+          "p10": 55,
+          "p50": 65
+        },
+        "luminance": {
+          "min": 29.94,
+          "p01": 43.29,
+          "p50": 60.36,
+          "mean": 62.45
+        },
+        "saturatedShare": 0
+      },
+      "shotNightVision": "shots/2c-interior-night-vision-on.png",
+      "statsNightVisionOffAgain": {
+        "samples": 399251,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 762,
+          "y": 54,
+          "rgb": [
+            2,
+            2,
+            3
+          ],
+          "lum": 2.07
+        },
+        "maxChannel": {
+          "min": 3,
+          "p01": 4,
+          "p10": 5,
+          "p50": 7
+        },
+        "luminance": {
+          "min": 2.07,
+          "p01": 3.07,
+          "p50": 6.07,
+          "mean": 6.61
+        },
+        "saturatedShare": 0
+      },
+      "shotNightVisionOff": "shots/2c-interior-night-vision-off-again.png",
+      "linkNoodle": "https://world-imaginer-voxel.vercel.app/?at=-34,-33&y=-39.5&yaw=270.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "poseNoodle": {
+        "x": -34,
+        "y": -39.5,
+        "z": -33,
+        "yaw": 270,
+        "pitch": 0
+      },
+      "noodleEyeBlock": 0,
+      "statsNoodleOff": {
+        "samples": 177777,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 1755,
+          "y": 0,
+          "rgb": [
+            2,
+            2,
+            3
+          ],
+          "lum": 2.07
+        },
+        "maxChannel": {
+          "min": 3,
+          "p01": 3,
+          "p10": 4,
+          "p50": 5
+        },
+        "luminance": {
+          "min": 2.07,
+          "p01": 2.07,
+          "p50": 4.07,
+          "mean": 4.71
+        },
+        "nearClearShare": 0.0027,
+        "saturatedShare": 0
+      },
+      "shotNoodle": "shots/2e-noodle.png",
+      "statsNoodleXray": {
+        "samples": 177777,
+        "pureBlack": 0,
+        "darkest": {
+          "x": 213,
+          "y": 246,
+          "rgb": [
+            22,
+            12,
+            26
+          ],
+          "lum": 15.14
+        },
+        "maxChannel": {
+          "min": 26,
+          "p01": 45,
+          "p10": 47,
+          "p50": 109
+        },
+        "luminance": {
+          "min": 15.14,
+          "p01": 25.63,
+          "p50": 58.44,
+          "mean": 79.51
+        },
+        "nearClearShare": 0,
+        "saturatedShare": 0.9714
+      },
+      "shotNoodleXray": "shots/2e-noodle-xray.png",
+      "mapNarrow": {
+        "width": 850,
+        "height": 869,
+        "mapPane": {
+          "width": 850,
+          "height": 869,
+          "columns": "835.657px"
+        },
+        "panelBeside": false
+      },
+      "noodleLeavesMap": {
+        "caves.noodles.threshold": {
+          "value": "1",
+          "type": "text",
+          "tag": "input",
+          "label": "Frequency threshold",
+          "section": "NoodlesReset"
+        },
+        "caves.noodles.thickness": {
+          "value": "0.22",
+          "type": "text",
+          "tag": "input",
+          "label": "Thickness",
+          "section": "NoodlesReset"
+        },
+        "caves.noodles.maxY": {
+          "value": "48",
+          "type": "text",
+          "tag": "input",
+          "label": "Highest y",
+          "section": "NoodlesReset"
+        }
+      },
+      "shotMapNarrow": "shots/2f-map-850-edit-in-density.png",
+      "mapNarrowEditInDensity": {
+        "slice": {
+          "inView": false,
+          "canvas": [
+            1002,
+            1130
+          ],
+          "visible": 0,
+          "window": 869
+        },
+        "status": {
+          "status": "32²",
+          "plane": "horizontal",
+          "field": "density"
+        },
+        "panes": {
+          "apart": true,
+          "drawerInView": true,
+          "side": [
+            -821,
+            564
+          ],
+          "drawer": [
+            569,
+            869
+          ],
+          "window": 869,
+          "sideRect": {
+            "left": 0,
+            "top": -821,
+            "right": 836,
+            "bottom": 564
+          },
+          "drawerRect": {
+            "left": 0,
+            "top": 569,
+            "right": 836,
+            "bottom": 869
+          },
+          "content": 564,
+          "tabId": "map-tabpanel-parameters",
+          "overlapArea": 0
+        },
+        "tabHit": true
+      },
+      "mapNarrowSliceAfterScroll": {
+        "inView": true,
+        "canvas": [
+          742,
+          870
+        ],
+        "visible": 127,
+        "window": 869
+      },
+      "shotMapNarrowSlice": "shots/2f-map-850-slice-scrolled.png",
+      "linkEntrance": "https://world-imaginer-voxel.vercel.app/?at=38,-16&y=84.5&yaw=315.0&pitch=-60.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "poseEntrance": {
+        "x": 38,
+        "y": 84.5,
+        "z": -16,
+        "yaw": 315,
+        "pitch": -60
+      },
+      "shaftColumns": [
+        {
+          "x": 43,
+          "z": -13,
+          "floor": 74,
+          "top": 75
+        },
+        {
+          "x": 43,
+          "z": -12,
+          "floor": 74,
+          "top": 75
+        },
+        {
+          "x": 43,
+          "z": -11,
+          "floor": 74,
+          "top": 91
+        },
+        {
+          "x": 43,
+          "z": -10,
+          "floor": 74,
+          "top": 92
+        },
+        {
+          "x": 44,
+          "z": -14,
+          "floor": 74,
+          "top": 75
+        },
+        {
+          "x": 44,
+          "z": -13,
+          "floor": 74,
+          "top": 75
+        }
+      ],
+      "walkTarget": {
+        "x": 43,
+        "z": -13,
+        "floor": 74,
+        "top": 75,
+        "yaw": 122.5,
+        "dist": 6.5
+      },
+      "facedShaft": {
+        "looked": true,
+        "pose": {
+          "x": 38,
+          "y": 84.5,
+          "z": -16,
+          "yaw": 122.54999999999961,
+          "pitch": -35.10000000000001
+        }
+      },
+      "feetStart": {
+        "x": 38,
+        "y": 84.0000001,
+        "z": -16,
+        "onGround": true,
+        "snapPending": false,
+        "snapY": null
+      },
+      "shotWalkStart": "shots/2d-entrance-walk-start.png",
+      "shotWalkMid": "shots/2d-entrance-walk-falling.png",
+      "walkTrace": [
+        {
+          "ms": 6,
+          "x": 38,
+          "y": 84,
+          "z": -16,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 164,
+          "x": 38.4,
+          "y": 84,
+          "z": -15.8,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 322,
+          "x": 38.8,
+          "y": 83.8,
+          "z": -15.5,
+          "onGround": false,
+          "roof": null
+        },
+        {
+          "ms": 479,
+          "x": 39.2,
+          "y": 82.9,
+          "z": -15.3,
+          "onGround": false,
+          "roof": null
+        },
+        {
+          "ms": 636,
+          "x": 39.6,
+          "y": 81.3,
+          "z": -15.2,
+          "onGround": false,
+          "roof": null
+        },
+        {
+          "ms": 794,
+          "x": 40.2,
+          "y": 79,
+          "z": -15,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 953,
+          "x": 40.8,
+          "y": 78.8,
+          "z": -14.8,
+          "onGround": false,
+          "roof": null
+        },
+        {
+          "ms": 1109,
+          "x": 41.2,
+          "y": 77.9,
+          "z": -14.5,
+          "onGround": false,
+          "roof": null
+        },
+        {
+          "ms": 1656,
+          "x": 43.1,
+          "y": 76,
+          "z": -13.4,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 1815,
+          "x": 43.7,
+          "y": 76,
+          "z": -13,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 1973,
+          "x": 44.2,
+          "y": 76,
+          "z": -12.6,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 2130,
+          "x": 44.6,
+          "y": 75.5,
+          "z": -12.4,
+          "onGround": false,
+          "roof": null
+        },
+        {
+          "ms": 2285,
+          "x": 45.1,
+          "y": 75,
+          "z": -12.1,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 2440,
+          "x": 45.7,
+          "y": 75,
+          "z": -11.7,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 2597,
+          "x": 46.4,
+          "y": 75,
+          "z": -11.2,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 2755,
+          "x": 47,
+          "y": 75,
+          "z": -10.9,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 2913,
+          "x": 47.6,
+          "y": 75,
+          "z": -10.5,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 3071,
+          "x": 48.1,
+          "y": 75,
+          "z": -10.2,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 3226,
+          "x": 48.7,
+          "y": 75,
+          "z": -9.8,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 3395,
+          "x": 48.9,
+          "y": 75,
+          "z": -9.4,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 3554,
+          "x": 49.6,
+          "y": 75,
+          "z": -9,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 3710,
+          "x": 49.7,
+          "y": 75,
+          "z": -8.6,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 3869,
+          "x": 49.7,
+          "y": 75,
+          "z": -8.3,
+          "onGround": true,
+          "roof": null
+        },
+        {
+          "ms": 4026,
+          "x": 49.7,
+          "y": 75,
+          "z": -7.9,
+          "onGround": true,
+          "roof": 87
+        },
+        {
+          "ms": 4181,
+          "x": 49.8,
+          "y": 75,
+          "z": -7.5,
+          "onGround": true,
+          "roof": 87
+        },
+        {
+          "ms": 4335,
+          "x": 50.2,
+          "y": 75,
+          "z": -7.2,
+          "onGround": true,
+          "roof": 87
+        },
+        {
+          "ms": 4493,
+          "x": 50.7,
+          "y": 75,
+          "z": -6.7,
+          "onGround": true,
+          "roof": 85
+        },
+        {
+          "ms": 6003,
+          "x": 50.7,
+          "y": 75,
+          "z": -6.6,
+          "onGround": true,
+          "after": "W released"
+        }
+      ],
+      "feetEnd": {
+        "x": 50.6999999,
+        "y": 75.0000001,
+        "z": -6.574627538980384,
+        "onGround": true,
+        "snapPending": false,
+        "snapY": null
+      },
+      "walkSummary": {
+        "startFeetY": 84,
+        "endFeetY": 75,
+        "minFeetY": 75,
+        "drop": 9,
+        "mode": "walk",
+        "surfaceAtPose": 80,
+        "eyeLightEnd": 176,
+        "columnAtEnd": [
+          50,
+          -7
+        ],
+        "heightAtEndColumn": 98,
+        "solidAboveHead": 85
+      },
+      "shotWalkEnd": "shots/2d-entrance-walk-bottom.png",
+      "lookUpAtBottom": true,
+      "shotWalkLookUp": "shots/2d-entrance-walk-bottom-looking-up.png",
+      "wallMs": 102945,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 3,
+      "name": "?selftest=1 on production (the run's fresh profile: the selftest never opens wi10, only its own wi10-selftest, deleted before and after)",
+      "notes": [],
+      "checks": [
+        {
+          "pass": true,
+          "what": "✓ all 62 goldens match (13.1 s) (test/goldens.json holds 62; 62 ✓ rows, 62 of them the repo's keys)",
+          "detail": "✓ all 62 goldens match (13.1 s)"
+        },
+        {
+          "pass": true,
+          "what": "IndexedDB contract: 10/10 passed",
+          "detail": {
+            "kv": "IndexedDB contract: 10/10 passed",
+            "kvFailures": []
+          }
+        },
+        {
+          "pass": true,
+          "what": "the selftest database wi10-selftest is deleted after the run",
+          "detail": [
+            "wi10@2"
+          ]
+        },
+        {
+          "pass": true,
+          "what": "the profile's wi10 is the same before and after the selftest (counts {\"diffs\":0,\"history\":0,\"historySteps\":0,\"meta\":0,\"state\":0,\"worlds\":0})",
+          "detail": {
+            "before": {
+              "diffs": 0,
+              "history": 0,
+              "historySteps": 0,
+              "meta": 0,
+              "state": 0,
+              "worlds": 0
+            },
+            "after": {
+              "diffs": 0,
+              "history": 0,
+              "historySteps": 0,
+              "meta": 0,
+              "state": 0,
+              "worlds": 0
+            }
+          }
+        }
+      ],
+      "pass": true,
+      "summaryMs": 13127,
+      "summary": "✓ all 62 goldens match (13.1 s)",
+      "keyCount": 62,
+      "repoGoldenCount": 62,
+      "equalCount": 62,
+      "matchesRepoGoldens": 62,
+      "byGroup": {
+        "sp1": 27,
+        "sp2a": 20,
+        "sp3a": 3,
+        "sp3b": 2,
+        "sp3c": 2,
+        "sp3e": 5,
+        "sp6a": 3
+      },
+      "mismatches": [],
+      "kv": "IndexedDB contract: 10/10 passed",
+      "kvFailures": [],
+      "kvMs": 53,
+      "databasesAfter": [
+        "wi10@2"
+      ],
+      "wallMs": 15325,
+      "shot": "shots/3-selftest.png",
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    },
+    {
+      "step": 4,
+      "name": "page and console errors",
+      "notes": [],
+      "checks": [
+        {
+          "pass": true,
+          "what": "no page error (0)",
+          "detail": []
+        },
+        {
+          "pass": true,
+          "what": "no console error (0; 1 benign logs ignored and listed)",
+          "detail": []
+        }
+      ],
+      "pass": true,
+      "pageErrors": 0,
+      "consoleErrors": 0,
+      "ignored": 1,
+      "wallMs": 0,
+      "pageErrorsDuring": 0,
+      "consoleErrorsDuring": 0
+    }
+  ],
+  "selftest": "62/62",
+  "kvContract": "IndexedDB contract: 10/10 passed",
+  "stutter": {
+    "how": "recorded only, never gated: the check's own requestAnimationFrame recorder (frame deltas, ms) and a PerformanceObserver('longtask') in the page around each action, as SP5c's check: 'before' is the 0.6-0.8 s at rest before the action, 'after' the action to 0.8-1.2 s after its result",
+    "xrayToggleOn": {
+      "before": {
+        "frames": 174,
+        "p50": 4.16,
+        "p95": 8.34,
+        "p99": 8.34,
+        "max": 62.49,
+        "over33": 1,
+        "over50": 1
+      },
+      "after": {
+        "frames": 186,
+        "p50": 8.33,
+        "p95": 8.34,
+        "p99": 12.5,
+        "max": 12.51,
+        "over33": 0,
+        "over50": 0
+      },
+      "longTasksAfterMark": []
+    },
+    "liveCaveEdit": {
+      "before": {
+        "frames": 110,
+        "p50": 4.17,
+        "p95": 8.34,
+        "p99": 8.34,
+        "max": 12.51,
+        "over33": 0,
+        "over50": 0
+      },
+      "after": {
+        "frames": 955,
+        "p50": 8.33,
+        "p95": 12.5,
+        "p99": 12.51,
+        "max": 33.33,
+        "over33": 0,
+        "over50": 0
+      },
+      "longTasksAfterMark": []
+    },
+    "liveCaveEditUndo": {
+      "before": {
+        "frames": 113,
+        "p50": 4.17,
+        "p95": 8.34,
+        "p99": 8.34,
+        "max": 8.34,
+        "over33": 0,
+        "over50": 0
+      },
+      "after": {
+        "frames": 947,
+        "p50": 8.33,
+        "p95": 16.67,
+        "p99": 20.83,
+        "max": 33.33,
+        "over33": 0,
+        "over50": 0
+      },
+      "longTasksAfterMark": []
+    }
+  },
+  "consoleErrors": [],
+  "pageErrors": [],
+  "ignoredLogs": [
+    {
+      "step": "0-pre-checks (read-only: PRIME on-demand, eDP-1 at 240 Hz, the session unlocked, load < 1) and the bundle compare against a local build of main",
+      "source": "log.network",
+      "text": "Failed to load resource: the server responded with a status of 404 ()",
+      "url": "https://world-imaginer-voxel.vercel.app/favicon.ico",
+      "why": "index.html declares no icon, so Chrome asks for /favicon.ico and the host answers 404 (the same ignore as test/tools/cdp.ts ignoredLog and SP5b/SP5c's checks)"
+    }
+  ],
+  "consoleWarnings": [],
+  "dialogs": [
+    {
+      "step": "2-an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, the Caves group's noodle leaves (threshold 1, thickness 0.22, maxY 48), the narrow layout (\"Cave slice\" / \"Cave parameters\" with the map pane under 900 px; ?map at 850 px \"Edit in Density\"), night vision on and off, the light floor in a cave, the moved noodle link, a walk down an entrance",
+      "type": "beforeunload",
+      "message": "",
+      "url": "https://world-imaginer-voxel.vercel.app/?at=97,-52&y=-15.5&yaw=90.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjQsImxheWVyIjoiYmlvbWUiLCJ4Ijo5NywieiI6LTUyfX0"
+    },
+    {
+      "step": "2-an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, the Caves group's noodle leaves (threshold 1, thickness 0.22, maxY 48), the narrow layout (\"Cave slice\" / \"Cave parameters\" with the map pane under 900 px; ?map at 850 px \"Edit in Density\"), night vision on and off, the light floor in a cave, the moved noodle link, a walk down an entrance",
+      "type": "beforeunload",
+      "message": "",
+      "url": "https://world-imaginer-voxel.vercel.app/?at=174,32&y=-9.5&yaw=0.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19"
+    },
+    {
+      "step": "2-an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, the Caves group's noodle leaves (threshold 1, thickness 0.22, maxY 48), the narrow layout (\"Cave slice\" / \"Cave parameters\" with the map pane under 900 px; ?map at 850 px \"Edit in Density\"), night vision on and off, the light floor in a cave, the moved noodle link, a walk down an entrance",
+      "type": "beforeunload",
+      "message": "",
+      "url": "https://world-imaginer-voxel.vercel.app/?at=-34,-33&y=-39.5&yaw=270.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19"
+    },
+    {
+      "step": "3-?selftest=1 on production (the run's fresh profile: the selftest never opens wi10, only its own wi10-selftest, deleted before and after)",
+      "type": "beforeunload",
+      "message": "",
+      "url": "https://world-imaginer-voxel.vercel.app/?at=38,-16&y=84.5&yaw=315.0&pitch=-60.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19"
+    }
+  ],
+  "lockAttempts": [
+    {
+      "step": "2-an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, the Caves group's noodle leaves (threshold 1, thickness 0.22, maxY 48), the narrow layout (\"Cave slice\" / \"Cave parameters\" with the map pane under 900 px; ?map at 850 px \"Edit in Density\"), night vision on and off, the light floor in a cave, the moved noodle link, a walk down an entrance",
+      "what": "entrance walk",
+      "attempt": 1,
+      "elementAtCentre": "canvas",
+      "granted": true,
+      "viewport": {
+        "innerWidth": 1756,
+        "innerHeight": 869,
+        "devicePixelRatio": 1.09375,
+        "hasFocus": true
+      }
+    }
+  ],
+  "recentres": [],
+  "settings": {
+    "before": null,
+    "atEndBeforeRestore": "{\"rd\":null,\"fpsCap\":0,\"fov\":70,\"sensitivity\":1,\"brightness\":0.3,\"mapMode\":\"split\",\"watchLive\":true,\"holdRepeat\":false,\"nightVision\":false}",
+    "end": null
+  },
+  "idbEnd": {
+    "exists": true,
+    "databases": [
+      "wi10@2"
+    ],
+    "version": 2,
+    "stores": [
+      "diffs",
+      "history",
+      "historySteps",
+      "meta",
+      "state",
+      "worlds"
+    ],
+    "counts": {
+      "diffs": 0,
+      "history": 0,
+      "historySteps": 0,
+      "meta": 0,
+      "state": 0,
+      "worlds": 0
+    },
+    "worlds": [],
+    "state": [],
+    "history": [],
+    "historySteps": {
+      "perWorld": {},
+      "steps": []
+    },
+    "diffs": {
+      "perWorld": {},
+      "keys": []
+    }
+  },
+  "notes": [
+    "Git HEAD fc316c9b440ff2f7698a8df7a418fc78b5c59344 on main (= origin/main), the working tree clean except for the untracked .superpowers/ (step 0 checks this). GENERATOR_VERSION 8 (src/core/constants.ts), SCHEMA_VERSION 4 (src/core/params/migrate.ts). Served build = local build of main, checked the way SP5c and Task 54 checked it. A fresh local build was made for this check with npx vite build --outDir test/metrics/.out/usercheck-prod/dist-main. That folder is inside the git-ignored test/metrics/.out/, no tracked file was touched and git status was the same before and after. The local build references assets/index-D86N0JbD.js and index-DsmeYR9W.css. Production's / is byte-equal to the local index.html. Every one of the 51 files in the local assets/ was fetched from production and all 51 are byte-identical (sha256).",
+    "Pre-checks, read-only, before Chrome started (step 0 of the recorded run): prime-select query 'on-demand'. xrandr: eDP-1 connected primary 1920x1080+0+0 at 240.00*. XDG_SESSION_ID is unset in this shell, so the session is the seat0 x11 session from loginctl list-sessions, session 3: Type=x11, Active=yes, LockedHint=no. 1-minute load 0.59. Before any run, at 23:06, a manual read of session 3 gave LockedHint=yes, and nothing was started then. At 23:09 it read LockedHint=no, and both runs' own pre-checks passed (23:09:25 and 23:13:44). Nothing was switched: no PRIME change, no display change, no xdotool or desktop input. Every input was a CDP Input event into this check's own Chrome.",
+    "Chrome: /usr/bin/google-chrome 155.0.8059.39, headful, with a FRESH profile from mktemp -d (/tmp/tmp.JSN1wHifnS) passed as PC_PROFILE. The profile was removed after the run. The old kept profile /tmp/wi10-KfLJ was neither used nor created. MESA_SHADER_CACHE_DISABLE=true was set in that Chrome's environment only. Flags: --remote-debugging-port=0 --window-position=0,0 --start-maximized --ignore-gpu-blocklist. The window was maximized at (0, 32), 1756 x 956 CSS px on eDP-1, viewport 1756 x 869 at devicePixelRatio 1.09375. WebGL renderer: 'ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)'. The world pages ran on RegionBatch ('batch'). Chrome was closed with CDP Browser.close (exit code 0, pid 78660). No other process was signalled.",
+    "Scope: steps 0, 2, 3 and 4 (PC_ONLY=0,2,3,4). Step 1 needs the SP5c world of the lost kept profile and was verified at 0689c4f (../task54/step2/production-check.json).",
+    "Step 2 used seed 42's review poses, read at run time from test/tools/uiSmoke.ts' CAVE_POSES and CAVE_AT. Cheese, interior and entrance are unchanged since 0689c4f. The noodle pose moved to (-34, -39.5, -33) at yaw 270 in 851a0a9 and is the same as the spec's Exit evidence link. Every world was an unsaved link world opened with &wiTest=1, and each page waited for the stream to settle at RD 12 before its first shot. 2a, the X-ray in the cheese cavern: X showed the strip 'X-ray · y −64 … 319 · by cave type'. Coloured share went from 0.0 % to 92.0 % of the canvas, with 97.8 % of the pixels changed. Bands: 'y −32 … −1', then −40 … −9, −32 … −1 and −24 … 7, and Home restored every depth. The first band changed 59.9 % of the picture. 2b, side by side: Caves tab, then 'Cave parameters', then caves.cheese.offset 0.5 → 0.45. The edit gave 'stale 489 / 489', back to 0 in 6.3 s, with 39.9 % of the world half changed. Ctrl+Z: back to 0 in 8.0 s, the field read 0.5 again, and the picture was within 0.04 % of the shot before the edit. It stayed the same document throughout.",
+    "Step 2, the noodle leaves (new in GV 8, eab335e): with Parameters open at the Caves group, the panel's fields read caves.noodles.threshold = 1 (label 'Frequency threshold'), caves.noodles.thickness = 0.22 ('Thickness') and caves.noodles.maxY = 48 ('Highest y'). All three are under the Noodles section (shot 2b-noodle-leaves.png). ?map's own parameter panel reads the same three values.",
+    "Step 2, the narrow layout (the user's check, finding 2 and R32 c). No emulation was needed in the world's map: side by side at this 1756 px window, the map pane is 878 px wide (under 900) and its panel stacks under the map, which matches the user's own case (1,687 px). 'Cave slice' opened the Density drawer with the horizontal caves field and drew its 128² slice. The panel (rows 361–564, its Caves tab content to 565) and the drawer (569–869) do not overlap: the bounding-rect intersection is 0 px². The drawer's top is in the 869 px window, the panel's selected tab is clickable, and the slice image is in view (119 of its 128 px visible, at 750–878). After that, 'Cave parameters' with the drawer open: the Parameters list (to 1578) stays above the drawer (1583–1883), intersection 0 px², tab clickable. ?map at 850 x 869 (Emulation.setDeviceMetricsOverride): the map pane is 850 px wide with one grid column (stacked). 'Edit in Density' opened the drawer at 569–869, below the panel, whose content ends at 564. Intersection 0 px², drawer top in the window, tab clickable.",
+    "Step 2c, the light floor and night vision in the large interior: the eye's voxel and all air ahead store light 0, yet no sampled canvas pixel is pure black (0 of 399,251). The darkest is rgb (2, 2, 3), max-channel p01 4, median 7, mean luminance 6.61. L: 'Night vision on', stored, mean luminance 62.45 (median max-channel 65). L again: off, mean luminance 6.61, pure black 0. These are the same figures as at 0689c4f. 2e, the moved noodle link: the eye (-34, -39.5, -33) stands in air (blockAt 0). With the X-ray on, 97.1 % of the canvas is coloured. 2d, the walk down the entrance: shaft column (43, -13), floor at 74. The feet went from 84 to 75 (9 blocks) in walk mode and ended under a roof at (50, -7), first solid block above the head at 85, eye light byte 176 (sky 11). This is the same walk as at 0689c4f.",
+    "Step 3: ?selftest=1 ran in the run's fresh profile and gave '✓ all 62 goldens match (13.1 s)': sp1 27, sp2a 20, sp3a 3, sp3b 2, sp3c 2, sp3e 5, sp6a 3. Every key is one of test/goldens.json's 62, and these include the keys re-recorded for GV 8. 'IndexedDB contract: 10/10 passed'. wi10-selftest was deleted after the run, and wi10 was the same before and after (empty: a fresh profile). Step 4: 0 page errors and 0 console errors. One benign log was ignored: the favicon.ico 404. Four beforeunload dialogs from the leave guard were accepted when the check left a world page. The run was started as PC_PROFILE=$(mktemp -d) PC_ONLY=0,2,3,4 node prodcheck.mjs <outDir> <repo> <dist-main>.",
+    "Screenshots, looked at one by one. 2b-narrow-cave-slice.png: at the left, the map half shows the stacked layout: the map, then the side panel's tab row (World, Parameters, Biomes, Presets, Caves) with the Caves tab (X-ray box checked, the legend, 'Cave slice' / 'Cave parameters', the Find buttons). Below that, separated, is the drawer (Spline / Cross-section / Density). Its Slice sub-tab shows plane 'horizontal (XZ)', field 'Cave type', y −16, extent 256 blocks and the 128² slice with its cave-type legend at the bottom. Nothing overlaps. At the right, the world shows the X-ray at the cheese cavern. 2b-narrow-cave-parameters.png: the same window with Parameters open at Caves › Cheese (Offset 0.5 focused) above the fold, with the drawer below it, out of the window. 2b-noodle-leaves.png: Caves › Noodles expanded, showing Thickness 0.22, Ridge multiplier 1.5, Regional swing 0.1, Frequency threshold 1, Lowest y −60, Highest y 48. 2f-map-850-edit-in-density.png (?map at 850 px, just after 'Edit in Density'): the Noodles rows at the top, the remaining Caves sections, then the drawer (Density tab) with the expression tree (root max, defs.body …) and the op form. The drawer starts right under the panel's last row with no overlap. 2f-map-850-slice-scrolled.png: the same page scrolled to the slice cell, showing plane horizontal, field density, extent 2048, a 32² draft with the notice 'node too heavy for a 128² slice (cost 9 027, limit 6 144)' and its histogram. 2e-noodle.png is a near-black cave view (the light floor). 2e-noodle-xray.png shows magenta noodle tubes, including ring cross-sections, among yellow cheese and cyan spaghetti 3D. The 2a shots match the earlier check's (the yellow cheese hollows in the X-ray, the band shots). 2c: the light-floor shot is very dark but not black, and the night-vision shot is bright. 2d-entrance-walk-bottom-looking-up.png: a stone wall, the pit's grassy lip and the sky above. 3-selftest.png: '✓ all 62 goldens match (13.1 s)' with ✓ rows.",
+    "Rehearsal: one earlier run of the same script on its own fresh profile (runs list) passed every check. Its narrow-layout shots were taken after the side-tab check, which scrolls the page, so the shots were moved before that check and the run was repeated as the record."
+  ],
+  "observations": [
+    "On ?map at 850 px, 'Edit in Density' leaves the drawer in the window (its top at 569 of 869) but not the slice image. The drawer's top part (the expression tree and the op form) fills the visible part, and the slice canvas sits at 1002–1130, 0 px visible, until it is scrolled to (then 127 of 128 px visible, shot 2f-map-850-slice-scrolled.png). R32 c's scroll-into-view covers the 'Cave slice' path, which passes here (119/128 px in view). The smoke's ?map check also asks only for the drawer in the window. This is not a check failure, but the user may want the same scroll on 'Edit in Density'.",
+    "The ?map Density slice opened as horizontal at extent 2048 with field density. The default tree's 128² slice is refused there by the work bound ('node too heavy for a 128² slice (cost 9 027, limit 6 144)', the 32² draft shown), as SP6a §7.4 designs. The horizontal plane carried over from the world's 'Cave slice' earlier in the same profile.",
+    "With the F3 HUD shown and the X-ray on, the X-ray strip's legend still overlaps the right end of the HUD's first lines at this 1756 px window (2a-cheese-xray-all.png, 2e-noodle-xray.png, and the right half of the narrow shots). This is the same cosmetic overlap the 0689c4f check noted.",
+    "Stutter is recorded only. The first X-ray toggle had one 62 ms frame in the 0.8 s at rest before X (frames after X: p50 8.33 ms, max 12.5, no long task). The live cave edit and its undo had max frames of 33.3 ms and no long task. Settle times were 6.3 s and 8.0 s (the rehearsal: 14.3 s and 11.9 s; 0689c4f: 6.3 s and 6.0 s)."
+  ],
+  "findings": [],
+  "runs": [
+    {
+      "run": 1,
+      "kind": "rehearsal (not the record)",
+      "date": "2026-11-11T22:09:25.371Z",
+      "file": "raw-rehearsal-1.json",
+      "log": "rehearsal-1.log",
+      "shots": "shots-rehearsal-1/",
+      "profile": "its own fresh mktemp -d profile (/tmp/tmp.S6E3cT34ne), removed right after it",
+      "steps": "0:pass 2:pass 3:pass 4:pass",
+      "pageErrors": 0,
+      "consoleErrors": 0,
+      "why": "the same script on steps 0, 2, 3, 4: every check passed, but the narrow-layout shots were taken after SIDE_TAB_HIT, which scrolls the selected side tab into view; on ?map at 850 px that scrolled the page back up 821 px, so 2f-map-850-edit-in-density.png showed the parameter list without the drawer. The three narrow shots were moved before the tab check (the reads unchanged) and the check was run again on a new fresh profile as the recorded run. Its live cave edit settled in 14.3 s and its undo in 11.9 s (the recorded run: 6.3 s and 8.0 s; recorded only, never gated)"
+    },
+    {
+      "run": 2,
+      "kind": "the recorded run",
+      "date": "2026-11-11T22:13:44.235Z",
+      "file": "raw-run.json",
+      "log": "run.log",
+      "shots": "shots/",
+      "profile": "/tmp/tmp.JSN1wHifnS",
+      "steps": "0:pass 2:pass 3:pass 4:pass",
+      "summary": "0 6/6 checks; 2 53/53 checks; 3 4/4 checks; 4 2/2 checks"
+    }
+  ],
+  "script": "/home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/usercheck-prod/prodcheck.mjs (Node v24.21.0, no npm dependency, run as: node prodcheck.mjs /home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/usercheck-prod /home/maestre/Proyectos/world-imaginer-voxel /home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/usercheck-prod/dist-main), then /home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/usercheck-prod/assemble.mjs for this file; raw output /home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/usercheck-prod/raw-run.json, log /home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/usercheck-prod/run.log, screenshots /home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/usercheck-prod/shots/",
+  "chrome": {
+    "by": "the agent's own headful Chrome over CDP (the production re-check after the user's-check fixes reached main)",
+    "browser": "Chrome/155.0.8059.39 (pid 78660), Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+    "renderer": "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6); the world pages on RegionBatch (canvas data-renderer 'batch')",
+    "profile": "/tmp/tmp.JSN1wHifnS, a fresh mktemp -d profile of this run (exists right after the run: true; removed afterwards); MESA_SHADER_CACHE_DISABLE=true in this Chrome's env only; stopped by CDP Browser.close (exited after Browser.close (code 0, signal null))",
+    "date": "2026-11-11T22:13:44.235Z",
+    "url": "https://world-imaginer-voxel.vercel.app/",
+    "build": "main at fc316c9b440ff2f7698a8df7a418fc78b5c59344; production serves index-D86N0JbD.js, byte-identical to a local build of main (51/51 files, index.html equal true)",
+    "preChecks": {
+      "prime": "on-demand",
+      "eDP1": [
+        "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+        "   1920x1080    240.00*+ 240.00    60.00  ",
+        "   1680x1050    240.00  "
+      ],
+      "eDP1Current": "   1920x1080    240.00*+ 240.00    60.00  ",
+      "session": "3",
+      "sessionFrom": "loginctl list-sessions: the seat0 x11 session",
+      "sessions": "3 1000 maestre seat0 tty2 active no -",
+      "sessionProps": "Seat=seat0\nType=x11\nActive=yes\nLockedHint=no",
+      "gitBranch": "main",
+      "originMain": "fc316c9b440ff2f7698a8df7a418fc78b5c59344",
+      "loadavg": [
+        0.59,
+        1.25,
+        1.55
+      ],
+      "uptime": "23:13:44 up  3:06,  1 user,  load average: 0,59, 1,25, 1,55",
+      "gitHead": "fc316c9b440ff2f7698a8df7a418fc78b5c59344",
+      "gitStatus": "?? .superpowers/"
+    },
+    "allStepsPass": true,
+    "stepSummary": [
+      {
+        "step": 0,
+        "name": "pre-checks (read-only: PRIME on-demand, eDP-1 at 240 Hz, the session unlocked, load < 1) and the bundle compare against a local build of main",
+        "pass": true,
+        "checks": "6/6 checks",
+        "wallMs": 5075
+      },
+      {
+        "step": 2,
+        "name": "an SP6a world, headful (seed 42 review links, RD 12): the X-ray on and off, the band (PageDown, PageUp, Home), a live cave edit with the map side by side, the Caves group's noodle leaves (threshold 1, thickness 0.22, maxY 48), the narrow layout (\"Cave slice\" / \"Cave parameters\" with the map pane under 900 px; ?map at 850 px \"Edit in Density\"), night vision on and off, the light floor in a cave, the moved noodle link, a walk down an entrance",
+        "pass": true,
+        "checks": "53/53 checks",
+        "wallMs": 102945
+      },
+      {
+        "step": 3,
+        "name": "?selftest=1 on production (the run's fresh profile: the selftest never opens wi10, only its own wi10-selftest, deleted before and after)",
+        "pass": true,
+        "checks": "4/4 checks",
+        "wallMs": 15325
+      },
+      {
+        "step": 4,
+        "name": "page and console errors",
+        "pass": true,
+        "checks": "2/2 checks",
+        "wallMs": 0
+      }
+    ],
+    "sp5cWorld": null,
+    "sp6aWorld": {
+      "links": {
+        "cheese": "https://world-imaginer-voxel.vercel.app/?at=97,-52&y=-15.5&yaw=90.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "interior": "https://world-imaginer-voxel.vercel.app/?at=174,32&y=-9.5&yaw=0.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "entrance": "https://world-imaginer-voxel.vercel.app/?at=38,-16&y=84.5&yaw=315.0&pitch=-60.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19"
+      },
+      "xray": {
+        "colouredShareOff": 0,
+        "colouredShareOn": 0.9198,
+        "changedShare": 0.9781,
+        "bands": [
+          "X-ray · y −32 … −1 · by cave type",
+          "X-ray · y −40 … −9 · by cave type",
+          "X-ray · y −32 … −1 · by cave type",
+          "X-ray · y −24 … 7 · by cave type"
+        ],
+        "bandChangedShare": 0.5989
+      },
+      "liveCaveEdit": {
+        "param": "caves.cheese.offset",
+        "from": "0.5",
+        "to": "0.45",
+        "staleMax": 489,
+        "hudRow": "stale 489 / 489",
+        "settledMs": 6306,
+        "worldHalfChangedShare": 0.3987,
+        "undo": {
+          "value": "0.5",
+          "hudRow": "stale 489 / 489",
+          "settledMs": 7957,
+          "residualShare": 0.0004
+        }
+      },
+      "lightFloor": {
+        "lightAtEye": 0,
+        "lightAhead": {
+          "0": 405
+        },
+        "pureBlack": 0,
+        "samples": 399251,
+        "darkest": {
+          "x": 762,
+          "y": 54,
+          "rgb": [
+            2,
+            2,
+            3
+          ],
+          "lum": 2.07
+        },
+        "maxChannel": {
+          "min": 3,
+          "p01": 4,
+          "p10": 5,
+          "p50": 7
+        },
+        "meanLuminance": 6.61
+      },
+      "nightVision": {
+        "meanLuminanceOn": 62.45,
+        "meanLuminanceOffAgain": 6.61
+      },
+      "walk": {
+        "target": {
+          "x": 43,
+          "z": -13,
+          "floor": 74,
+          "top": 75,
+          "yaw": 122.5,
+          "dist": 6.5
+        },
+        "startFeetY": 84,
+        "endFeetY": 75,
+        "minFeetY": 75,
+        "drop": 9,
+        "mode": "walk",
+        "surfaceAtPose": 80,
+        "eyeLightEnd": 176,
+        "columnAtEnd": [
+          50,
+          -7
+        ],
+        "heightAtEndColumn": 98,
+        "solidAboveHead": 85
+      },
+      "noodleLeaves": {
+        "world": {
+          "caves.noodles.threshold": {
+            "value": "1",
+            "type": "text",
+            "tag": "input",
+            "label": "Frequency threshold",
+            "section": "NoodlesReset"
+          },
+          "caves.noodles.thickness": {
+            "value": "0.22",
+            "type": "text",
+            "tag": "input",
+            "label": "Thickness",
+            "section": "NoodlesReset"
+          },
+          "caves.noodles.maxY": {
+            "value": "48",
+            "type": "text",
+            "tag": "input",
+            "label": "Highest y",
+            "section": "NoodlesReset"
+          }
+        },
+        "map": {
+          "caves.noodles.threshold": {
+            "value": "1",
+            "type": "text",
+            "tag": "input",
+            "label": "Frequency threshold",
+            "section": "NoodlesReset"
+          },
+          "caves.noodles.thickness": {
+            "value": "0.22",
+            "type": "text",
+            "tag": "input",
+            "label": "Thickness",
+            "section": "NoodlesReset"
+          },
+          "caves.noodles.maxY": {
+            "value": "48",
+            "type": "text",
+            "tag": "input",
+            "label": "Highest y",
+            "section": "NoodlesReset"
+          }
+        }
+      },
+      "narrowLayout": {
+        "atWindow": {
+          "mapPane": {
+            "width": 878,
+            "height": 869,
+            "columns": "863.543px"
+          },
+          "panelBeside": false,
+          "viewport": {
+            "innerWidth": 1756,
+            "innerHeight": 869,
+            "devicePixelRatio": 1.09375,
+            "hasFocus": true
+          }
+        },
+        "layout": {
+          "emulated": null,
+          "mapPane": {
+            "width": 878,
+            "height": 869,
+            "columns": "863.543px"
+          },
+          "panelBeside": false
+        },
+        "caveSlice": {
+          "slice": {
+            "inView": true,
+            "canvas": [
+              750,
+              878
+            ],
+            "visible": 119,
+            "window": 869
+          },
+          "panes": {
+            "apart": true,
+            "drawerInView": true,
+            "side": [
+              361,
+              564
+            ],
+            "drawer": [
+              569,
+              869
+            ],
+            "window": 869,
+            "sideRect": {
+              "left": 0,
+              "top": 361,
+              "right": 864,
+              "bottom": 564
+            },
+            "drawerRect": {
+              "left": 0,
+              "top": 569,
+              "right": 864,
+              "bottom": 869
+            },
+            "content": 565,
+            "tabId": "map-tabpanel-caves",
+            "overlapArea": 0
+          },
+          "tabHit": true
+        },
+        "caveParameters": {
+          "panes": {
+            "apart": true,
+            "drawerInView": false,
+            "side": [
+              361,
+              1578
+            ],
+            "drawer": [
+              1583,
+              1883
+            ],
+            "window": 869,
+            "sideRect": {
+              "left": 0,
+              "top": 361,
+              "right": 864,
+              "bottom": 1578
+            },
+            "drawerRect": {
+              "left": 0,
+              "top": 1583,
+              "right": 864,
+              "bottom": 1883
+            },
+            "content": 1578,
+            "tabId": "map-tabpanel-parameters",
+            "overlapArea": 0
+          },
+          "tabHit": true
+        },
+        "map850": {
+          "width": 850,
+          "height": 869,
+          "mapPane": {
+            "width": 850,
+            "height": 869,
+            "columns": "835.657px"
+          },
+          "panelBeside": false
+        },
+        "map850EditInDensity": {
+          "slice": {
+            "inView": false,
+            "canvas": [
+              1002,
+              1130
+            ],
+            "visible": 0,
+            "window": 869
+          },
+          "status": {
+            "status": "32²",
+            "plane": "horizontal",
+            "field": "density"
+          },
+          "panes": {
+            "apart": true,
+            "drawerInView": true,
+            "side": [
+              -821,
+              564
+            ],
+            "drawer": [
+              569,
+              869
+            ],
+            "window": 869,
+            "sideRect": {
+              "left": 0,
+              "top": -821,
+              "right": 836,
+              "bottom": 564
+            },
+            "drawerRect": {
+              "left": 0,
+              "top": 569,
+              "right": 836,
+              "bottom": 869
+            },
+            "content": 564,
+            "tabId": "map-tabpanel-parameters",
+            "overlapArea": 0
+          },
+          "tabHit": true
+        },
+        "map850SliceAfterScroll": {
+          "inView": true,
+          "canvas": [
+            742,
+            870
+          ],
+          "visible": 127,
+          "window": 869
+        }
+      },
+      "noodleLink": {
+        "link": "https://world-imaginer-voxel.vercel.app/?at=-34,-33&y=-39.5&yaw=270.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "pose": {
+          "x": -34,
+          "y": -39.5,
+          "z": -33,
+          "yaw": 270,
+          "pitch": 0
+        },
+        "eyeBlock": 0,
+        "colouredShareOff": 0,
+        "colouredShareXray": 0.9714
+      },
+      "shots": {
+        "shotXrayOff": "shots/2a-cheese-xray-off.png",
+        "shotXrayAll": "shots/2a-cheese-xray-all.png",
+        "shotXrayBand": "shots/2a-cheese-xray-band.png",
+        "shotXrayBandDown": "shots/2a-cheese-xray-band-down8.png",
+        "shotXrayBandUp": "shots/2a-cheese-xray-band-up8.png",
+        "shotXrayHome": "shots/2a-cheese-xray-home.png",
+        "shotEditBefore": "shots/2b-side-by-side-before-edit.png",
+        "shotEditAfter": "shots/2b-side-by-side-after-edit.png",
+        "shotEditUndone": "shots/2b-side-by-side-undone.png",
+        "shotNoodleLeaves": "shots/2b-noodle-leaves.png",
+        "shotNarrowCaveSlice": "shots/2b-narrow-cave-slice.png",
+        "shotNarrowCaveParams": "shots/2b-narrow-cave-parameters.png",
+        "shotXrayOffAgain": "shots/2a-cheese-xray-off-again.png",
+        "shotLightFloor": "shots/2c-interior-light-floor-nv-off.png",
+        "shotNightVision": "shots/2c-interior-night-vision-on.png",
+        "shotNightVisionOff": "shots/2c-interior-night-vision-off-again.png",
+        "shotNoodle": "shots/2e-noodle.png",
+        "shotNoodleXray": "shots/2e-noodle-xray.png",
+        "shotMapNarrow": "shots/2f-map-850-edit-in-density.png",
+        "shotMapNarrowSlice": "shots/2f-map-850-slice-scrolled.png",
+        "shotWalkStart": "shots/2d-entrance-walk-start.png",
+        "shotWalkMid": "shots/2d-entrance-walk-falling.png",
+        "shotWalkEnd": "shots/2d-entrance-walk-bottom.png",
+        "shotWalkLookUp": "shots/2d-entrance-walk-bottom-looking-up.png"
+      }
+    },
+    "selftest": "62/62",
+    "selftestSummary": "✓ all 62 goldens match (13.1 s)",
+    "kvContract": "IndexedDB contract: 10/10 passed",
+    "selftestProfile": "the run's fresh profile (the selftest never opens wi10; wi10 identical before and after)",
+    "pageErrors": 0,
+    "consoleErrors": 0,
+    "ignoredLogs": [
+      "Failed to load resource: the server responded with a status of 404 ()"
+    ]
+  },
+  "firefox": {
+    "by": "the user, by hand, in their own Firefox, on production",
+    "browser": "Firefox 158, RegionMesh",
+    "date": "2026-11-11, after the Chrome re-check above",
+    "url": "https://world-imaginer-voxel.vercel.app/",
+    "build": "main at fc316c9 (GENERATOR_VERSION 8), the build the Chrome re-check above found served (index-D86N0JbD.js); main was not pushed again before the user's run",
+    "steps": "the user's re-check after the merge of sp6a/user-check (the noodles' new defaults, the narrow layout): the user, \"Todo bien\" (ruling R33, the user's verdict on SP6a)",
+    "selftest": "62/62 (every expected equals actual and test/goldens.json, the GV 8 keys included) and \"IndexedDB contract: 10/10 passed\"",
+    "newFinding": "\"a menudo se nota demasiado el límite de altura del mundo por debajo y se expone un suelo plano de bedrock en las cuevas amplias\" (wide caves often reach the world's bottom and expose a flat bedrock floor): handed to SP6b at the user's suggestion (R33; master §10's SP6b entry, \"Received from SP6a's user check\")"
+  }
+}
