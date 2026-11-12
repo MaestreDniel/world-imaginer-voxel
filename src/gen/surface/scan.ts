@@ -8,6 +8,9 @@
  *   `ISLAND_RUN_MIN_BOTTOM`, so the ground under a floating island keeps its palette; none (−1) when no run qualifies;
  * - per run: yTop (`runTop`), its bottom voxel (`runBottom`), `waterAbove` (the voxel above yTop holds water) and
  *   `waterTop` (the highest voxel of the contiguous water directly above yTop);
+ * - per run, from the column's cave tags when given (SP6b spec §3.1, D18): `floorBiome`, the cave biome (bits 4-7) of
+ *   the voxel above yTop when it is tagged (kind ≠ 0), and `ceilBiome`, the same for the voxel below the bottom voxel;
+ *   −1 otherwise, so a run resting on the bedrock never has a ceiling biome;
  * - per solid voxel at y of run r: floorDepth = runTop[r] − y (0 at the run's top voxel), ceilDepth = y − runBottom[r];
  * - per position: `steep` and `T` (bilinear `readField`, as SP3b's `col`), the per-block surface biome (the stage's
  *   256-entry buffer, `fillSurfaceBiomes`), `lakeLevel` at the nearest quart corner (`readLevel`'s corner) and
@@ -18,8 +21,9 @@
  * parameters (the depth noise through a SurfaceNoiseSource, `depthMul`, `lapse`, `lapseBase`, `islandRuns`), so it runs on
  * hand-built columns and noises as well as on the schema's. Follows the gen determinism rules.
  */
-import { ISLAND_RUN_MIN_BOTTOM, MIN_Y } from '../../core/constants';
+import { caveBiomeOf, caveKindOf, ISLAND_RUN_MIN_BOTTOM, MIN_Y } from '../../core/constants';
 import { deriveSeed, hash2, type Seed64 } from '../../core/hash';
+import type { CaveColumnPass, CavePickerInputs } from '../biomes/cavePicker';
 import { nearestCornerIndex, readBiome, readField, type ColumnSample } from '../column/columnStage';
 import type { GenContext } from '../context';
 import type { SurfaceNoise, SurfaceNoiseSource } from './rules';
@@ -31,6 +35,8 @@ const HASH2 = hash2;
 const READ_FIELD = readField;
 const CORNER = nearestCornerIndex;
 const BIOME = readBiome;
+const KIND_OF = caveKindOf;
+const CAVE_BIOME_OF = caveBiomeOf;
 
 /** 2^−32: a u32 hash times this lies in [0, 1). */
 const INV_U32 = 1 / 4294967296;
@@ -40,6 +46,13 @@ const COLUMN_VOXELS = 98304;
 const MAX_RUNS = 256 * 192;
 /** waterTop of a run without water directly above it (never read: `water` holds there whatever waterTop is). */
 const NO_WATER = Y0 - 1;
+/** A run's floor or ceiling cave biome when the voxel there is not tagged cave air (or there is no such voxel). */
+const NO_CAVE_BIOME = -1;
+
+/** The cave biome of a tag byte when its kind is not 0, else NO_CAVE_BIOME. */
+function tagBiome(byte: number): number {
+  return KIND_OF(byte) !== 0 ? CAVE_BIOME_OF(byte) : NO_CAVE_BIOME;
+}
 
 /** The schema path of the depth noise `Ns`. */
 export const SURFACE_DEPTH_NOISE = 'surface.noises.depth';
@@ -84,6 +97,13 @@ export interface SurfaceScan {
   readonly runWaterAbove: Uint8Array;
   /** Per run: the y of the highest voxel of the contiguous water directly above its top (when runWaterAbove). */
   readonly runWaterTop: Int16Array;
+  /** Per run: the cave biome of the tagged voxel above its top, or −1 (untagged, above y 319, or no tags given). */
+  readonly runFloorBiome: Int8Array;
+  /** Per run: the cave biome of the tagged voxel below its bottom, or −1 (untagged, a run on the bedrock, no tags). */
+  readonly runCeilBiome: Int8Array;
+  /** The column's cave picker and its filled pass, for `caveBiome{here}` (SP6b spec §3.2); null when not given. */
+  cavePicker: CavePickerInputs | null;
+  cavePass: CaveColumnPass | null;
   /** Per position: bilinear steep and T, the surface biome id, lakeLevel at the nearest quart corner, surfaceDepth. */
   readonly steep: Float64Array;
   readonly T: Float64Array;
@@ -97,6 +117,7 @@ export function newSurfaceScan(): SurfaceScan {
     cx: 0, cz: 0,
     runFirst: new Int32Array(257), skyRun: new Int32Array(256), runTop: new Int16Array(MAX_RUNS), runBottom: new Int16Array(MAX_RUNS),
     runWaterAbove: new Uint8Array(MAX_RUNS), runWaterTop: new Int16Array(MAX_RUNS),
+    runFloorBiome: new Int8Array(MAX_RUNS), runCeilBiome: new Int8Array(MAX_RUNS), cavePicker: null, cavePass: null,
     steep: new Float64Array(256), T: new Float64Array(256), biome: new Uint8Array(256), lakeLevel: new Float64Array(256),
     surfaceDepth: new Int32Array(256),
   };
@@ -158,18 +179,27 @@ export function fillSurfaceBiomes(s: ColumnSample, ctx: GenContext, out: Uint8Ar
 /**
  * Scans column (s.cx, s.cz) into `scan`. `solid` and `water` (98,304 entries each, index `256·(y + 64) + p`): a voxel
  * is solid when `solid` ≠ 0, and water when it is not solid and `water` ≠ 0; the y −64 entries are ignored.
- * `biomes` is the column's 256-entry surface biome buffer. Throws a RangeError on other sizes.
+ * `biomes` is the column's 256-entry surface biome buffer. `tags` (optional, 98,304 entries in the same order) is the
+ * column's `cave` bytes, from which each run's floor and ceiling cave biome are read (all −1 when null); `cave`
+ * (optional) is the column's cave picker and its pass, already filled for this column, kept on the scan for
+ * `caveBiome{here}`. Throws a RangeError on other sizes.
  */
 export function scanColumn(
   scan: SurfaceScan, set: SurfaceScanSettings, s: ColumnSample, solid: Uint8Array, water: Uint8Array, biomes: Uint8Array,
+  tags: Uint8Array | null = null, cave: { readonly inputs: CavePickerInputs; readonly pass: CaveColumnPass } | null = null,
 ): SurfaceScan {
   if (solid.length !== COLUMN_VOXELS || water.length !== COLUMN_VOXELS || biomes.length !== 256) {
     throw new RangeError(`scanColumn: solid ${solid.length}, water ${water.length}, biomes ${biomes.length} entries; expected ${COLUMN_VOXELS}, ${COLUMN_VOXELS}, 256`);
   }
-  const { runFirst, skyRun, runTop, runBottom, runWaterAbove, runWaterTop } = scan;
+  if (tags !== null && tags.length !== COLUMN_VOXELS) {
+    throw new RangeError(`scanColumn: tags ${tags.length} entries; expected ${COLUMN_VOXELS}`);
+  }
+  const { runFirst, skyRun, runTop, runBottom, runWaterAbove, runWaterTop, runFloorBiome, runCeilBiome } = scan;
   const islandRuns = set.islandRuns;
   scan.cx = s.cx;
   scan.cz = s.cz;
+  scan.cavePicker = cave === null ? null : cave.inputs;
+  scan.cavePass = cave === null ? null : cave.pass;
   const x0 = 16 * s.cx;
   const z0 = 16 * s.cz;
   const noise = set.depthNoise;
@@ -191,12 +221,16 @@ export function scanColumn(
           runTop[r] = yi + Y0;
           runWaterAbove[r] = prevWater ? 1 : 0;
           runWaterTop[r] = prevWater ? waterSegTop : NO_WATER;
+          // The voxel above yTop (none above y 319).
+          runFloorBiome[r] = tags === null || yi === 383 ? NO_CAVE_BIOME : tagBiome(tags[i + 256]!);
           inRun = true;
         }
         prevWater = false;
       } else {
         if (inRun) {
           runBottom[r] = yi + 1 + Y0;
+          // The voxel below the run's bottom voxel.
+          runCeilBiome[r] = tags === null ? NO_CAVE_BIOME : tagBiome(tags[i]!);
           r++;
           inRun = false;
         }
@@ -210,6 +244,7 @@ export function scanColumn(
     }
     if (inRun) {
       runBottom[r] = Y0 + 1;
+      runCeilBiome[r] = NO_CAVE_BIOME;
       r++;
     }
     const first = runFirst[p]!;

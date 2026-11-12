@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { deriveSeed, hash2, type Seed64 } from '../../src/core/hash';
+import { newCaveColumnPass, type CavePickerInputs } from '../../src/gen/biomes/cavePicker';
 import {
   buildColumnSample, latticeIndex, LEVEL_FIELDS, nearestCornerIndex, newColumnSample, readBiome, readField, readLevel,
   SAMPLE_FIELDS, type ColumnSample,
@@ -309,6 +310,142 @@ describe('surface scan (SP3c spec §3.2)', () => {
     expect(Array.from(a.runTop.subarray(0, n))).toEqual(Array.from(b.runTop.subarray(0, n)));
     expect(Array.from(a.runBottom.subarray(0, n))).toEqual(Array.from(b.runBottom.subarray(0, n)));
     expect(Array.from(a.runWaterAbove.subarray(0, n))).toEqual(Array.from(b.runWaterAbove.subarray(0, n)));
+  });
+});
+
+describe('the scan\'s per-run cave biomes (SP6b spec §3.1, D18)', () => {
+  const biomes = new Uint8Array(256);
+
+  /** Every run of position p as [floorBiome, ceilBiome]. */
+  function caveBiomesOf(scan: ReturnType<typeof newSurfaceScan>, p: number): number[][] {
+    const out: number[][] = [];
+    for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) out.push([scan.runFloorBiome[r]!, scan.runCeilBiome[r]!]);
+    return out;
+  }
+
+  /** The hand-built column of the floor and ceiling cases, with its tags. */
+  function tagged(): { solid: Uint8Array; water: Uint8Array; tags: Uint8Array } {
+    const solid = new Uint8Array(VOXELS);
+    const water = new Uint8Array(VOXELS);
+    const tags = new Uint8Array(VOXELS);
+    for (let p = 0; p < 256; p++) solid[at(p, -64)] = 1;
+    // p 0: ground −63 … 40 under tagged air of byte 1 | 1 << 4 at 41 … 45; a tag below the bedrock-resting run (y −64).
+    fill(solid, 0, -63, 40);
+    for (let y = 41; y <= 45; y++) tags[at(0, y)] = 1 | (1 << 4);
+    tags[at(0, -64)] = 5 | (3 << 4);
+    // p 1: ground −63 … 40 under untagged air.
+    fill(solid, 1, -63, 40);
+    // p 2: an overhang 50 … 60 over tagged air of byte 5 | 3 << 4 at 49 (untagged air above it), ground −63 … 40.
+    fill(solid, 2, 50, 60);
+    fill(solid, 2, -63, 40);
+    tags[at(2, 49)] = 5 | (3 << 4);
+    // p 3: ground −63 … 40 under water-filled tagged air of byte 2 | 2 << 4 at 41 … 50.
+    fill(solid, 3, -63, 40);
+    for (let y = 41; y <= 50; y++) { water[at(3, y)] = 1; tags[at(3, y)] = 2 | (2 << 4); }
+    // p 4: a run 300 … 319 (no voxel above y 319) over tagged air of byte 1 | 1 << 4 at 299; a run resting on the
+    // bedrock −63 … 10 under tagged air of byte 3 | 3 << 4 at 11.
+    fill(solid, 4, 300, 319);
+    tags[at(4, 299)] = 1 | (1 << 4);
+    fill(solid, 4, -63, 10);
+    tags[at(4, 11)] = 3 | (3 << 4);
+    // p 5: a byte with kind 0 above and below a run is untagged, whatever its high nibble.
+    fill(solid, 5, 20, 30);
+    tags[at(5, 31)] = 2 << 4;
+    tags[at(5, 19)] = 3 << 4;
+    return { solid, water, tags };
+  }
+
+  test('floorBiome: the nibble of the tagged voxel above the run\'s top, −1 when untagged or above y 319', () => {
+    const { solid, water, tags } = tagged();
+    const scan = scanColumn(newSurfaceScan(), settingsWith(constNoise(0)), flatSample(), solid, water, biomes, tags);
+    expect(caveBiomesOf(scan, 0)).toEqual([[1, -1]]);
+    expect(caveBiomesOf(scan, 1)).toEqual([[-1, -1]]);
+    // Water-filled tagged air counts like dry tagged air.
+    expect(caveBiomesOf(scan, 3)).toEqual([[2, -1]]);
+    expect(runsOf(scan, 3)).toEqual([[40, -63, 1, 50]]);
+    expect(caveBiomesOf(scan, 4)[0]![0]).toBe(-1);
+    expect(caveBiomesOf(scan, 5)).toEqual([[-1, -1]]);
+  });
+
+  test('ceilBiome: the nibble of the tagged voxel below the run\'s bottom; −1 for a run resting on the bedrock', () => {
+    const { solid, water, tags } = tagged();
+    const scan = scanColumn(newSurfaceScan(), settingsWith(constNoise(0)), flatSample(), solid, water, biomes, tags);
+    expect(caveBiomesOf(scan, 2)).toEqual([[-1, 3], [-1, -1]]);
+    expect(caveBiomesOf(scan, 4)).toEqual([[-1, 1], [3, -1]]);
+    // A run with bottom −63 has none, whatever lies below it (p 0's tag at y −64).
+    expect(runsOf(scan, 0)).toEqual([[40, -63, 0]]);
+    expect(caveBiomesOf(scan, 0)[0]![1]).toBe(-1);
+  });
+
+  test('tags omitted: every run\'s floor and ceiling biome is −1 (also over a scan that had tags)', () => {
+    const { solid, water, tags } = tagged();
+    const scan = newSurfaceScan();
+    scanColumn(scan, settingsWith(constNoise(0)), flatSample(), solid, water, biomes, tags);
+    scanColumn(scan, settingsWith(constNoise(0)), flatSample(), solid, water, biomes);
+    const n = scan.runFirst[256]!;
+    expect(n).toBe(8);
+    expect(Array.from(scan.runFloorBiome.subarray(0, n)).every((b) => b === -1)).toBe(true);
+    expect(Array.from(scan.runCeilBiome.subarray(0, n)).every((b) => b === -1)).toBe(true);
+    scanColumn(scan, settingsWith(constNoise(0)), flatSample(), solid, water, biomes, null);
+    expect(Array.from(scan.runFloorBiome.subarray(0, n)).every((b) => b === -1)).toBe(true);
+  });
+
+  test('the other scan outputs are identical with and without tags', () => {
+    const next = testRng(3204);
+    const noises = surfaceFuzzNoiseSource(SEED);
+    for (let k = 0; k < 8; k++) {
+      const set = surfaceScanSettings(SEED, randomSurfaceParams(next), noises);
+      const col = randomSurfaceColumn(next);
+      const tags = new Uint8Array(VOXELS);
+      for (let i = 0; i < VOXELS; i++) if (col.solid[i] === 0 && next() % 3 !== 0) tags[i] = (1 + (next() % 9)) | ((next() % 4) << 4);
+      const a = scanColumn(newSurfaceScan(), set, col.sample, col.solid, col.water, col.biomes);
+      const b = scanColumn(newSurfaceScan(), set, col.sample, col.solid, col.water, col.biomes, tags);
+      const n = a.runFirst[256]!;
+      expect(b.cx).toBe(a.cx);
+      expect(b.cz).toBe(a.cz);
+      expect(Array.from(b.runFirst)).toEqual(Array.from(a.runFirst));
+      expect(Array.from(b.skyRun)).toEqual(Array.from(a.skyRun));
+      expect(Array.from(b.runTop.subarray(0, n))).toEqual(Array.from(a.runTop.subarray(0, n)));
+      expect(Array.from(b.runBottom.subarray(0, n))).toEqual(Array.from(a.runBottom.subarray(0, n)));
+      expect(Array.from(b.runWaterAbove.subarray(0, n))).toEqual(Array.from(a.runWaterAbove.subarray(0, n)));
+      expect(Array.from(b.runWaterTop.subarray(0, n))).toEqual(Array.from(a.runWaterTop.subarray(0, n)));
+      for (const f of ['steep', 'T', 'lakeLevel'] as const) {
+        for (let p = 0; p < 256; p++) expect(Object.is(b[f][p], a[f][p]), `${f} ${p}`).toBe(true);
+      }
+      expect(Array.from(b.biome)).toEqual(Array.from(a.biome));
+      expect(Array.from(b.surfaceDepth)).toEqual(Array.from(a.surfaceDepth));
+      // The tags do reach some runs (the comparison is not vacuous).
+      let seen = 0;
+      for (let r = 0; r < n; r++) if (b.runFloorBiome[r] !== -1 || b.runCeilBiome[r] !== -1) seen++;
+      expect(seen).toBeGreaterThan(0);
+    }
+  });
+
+  test('the cave picker and pass are kept for the caveBiome here condition; null without them', () => {
+    const { solid, water, tags } = tagged();
+    const noise = { z2: () => 0, clamp: 1 };
+    const inputs: CavePickerInputs = {
+      settings: {
+        lush: { hMin: 0.4, depthMin: 0.2, depthMax: 0.9 }, dripstone: { cMin: 0.6, depthMin: 0.2, depthMax: 0.9 },
+        abyss: { eMax: -0.5, cMin: -0.1, depthMin: 1.0 }, depthScale: 128, borderWarp: 0.05, depthWarp: 10, edgeJitter: 2,
+      },
+      borderC: noise, borderE: noise, borderH: noise, depth: noise, jitterSeed: 7,
+    };
+    const pass = newCaveColumnPass();
+    const scan = newSurfaceScan();
+    expect(scan.cavePicker).toBeNull();
+    expect(scan.cavePass).toBeNull();
+    scanColumn(scan, settingsWith(constNoise(0)), flatSample(), solid, water, biomes, tags, { inputs, pass });
+    expect(scan.cavePicker).toBe(inputs);
+    expect(scan.cavePass).toBe(pass);
+    scanColumn(scan, settingsWith(constNoise(0)), flatSample(), solid, water, biomes, tags);
+    expect(scan.cavePicker).toBeNull();
+    expect(scan.cavePass).toBeNull();
+  });
+
+  test('a tag array of the wrong size is a RangeError', () => {
+    const ok = new Uint8Array(VOXELS);
+    expect(() => scanColumn(newSurfaceScan(), settingsWith(constNoise(0)), flatSample(), ok, ok, biomes, new Uint8Array(100))).toThrow(RangeError);
   });
 });
 
