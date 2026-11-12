@@ -1,5 +1,8 @@
 import { expect, test } from 'vitest';
-import { CARVER_CACHE_PATHS, CARVER_WINDOW_R, CAVE_FILM_KIND, CAVE_KIND, GENERATOR_VERSION } from '../../src/core/constants';
+import {
+  CARVER_CACHE_PATHS, CARVER_WINDOW_R, CAVE_BIOME, CAVE_BIOME_COLORS, CAVE_BIOME_NAMES, CAVE_FILM_KIND, CAVE_KIND, caveBiomeOf, caveKindOf,
+  GENERATOR_VERSION,
+} from '../../src/core/constants';
 import { CARVER_MAXIMA, carverReachOf, carverWindowROf } from '../harness/carverParams';
 
 test('GENERATOR_VERSION is a non-negative integer', () => {
@@ -20,6 +23,20 @@ test('CAVE_KIND\'s ten kinds and CAVE_FILM_KIND 15 fit the cave byte\'s low 4 bi
     expect(k).toBeGreaterThanOrEqual(0);
     expect(k).toBeLessThan(16);
   }
+});
+
+test('the cave byte: the kind in bits 0-3 (caveKindOf), the cave biome in bits 4-7 (caveBiomeOf; SP6b spec §1.1, §2.1)', () => {
+  expect(caveKindOf(0x35)).toBe(5);
+  expect(caveBiomeOf(0x35)).toBe(3);
+  expect([caveKindOf(0), caveBiomeOf(0), caveKindOf(0xff), caveBiomeOf(0xff), caveKindOf(0x0f), caveBiomeOf(0xf0)]).toEqual([0, 0, 15, 15, 15, 15]);
+  for (let b = 0; b < 256; b++) expect(caveKindOf(b) | (caveBiomeOf(b) << 4)).toBe(b);
+  expect(CAVE_BIOME).toEqual({ plain: 0, lush: 1, dripstone: 2, abyss: 3 });
+  expect(Object.isFrozen(CAVE_BIOME)).toBe(true);
+  // The names and colours in id order: plain, lush, dripstone, abyss.
+  expect(CAVE_BIOME_NAMES).toEqual(['plain', 'lush', 'dripstone', 'abyss']);
+  expect(CAVE_BIOME_NAMES.map((n) => CAVE_BIOME[n])).toEqual([0, 1, 2, 3]);
+  expect(CAVE_BIOME_COLORS).toEqual(['#6f86a6', '#4dff7a', '#ffb347', '#b05cff']);
+  expect([Object.isFrozen(CAVE_BIOME_NAMES), Object.isFrozen(CAVE_BIOME_COLORS)]).toEqual([true, true]);
 });
 
 test('CARVER_WINDOW_R is 11, recomputed from the carver leaves\' static maxima (SP6a spec §2.1: 16·R < 16 + L_max + r_max)', () => {

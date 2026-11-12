@@ -167,10 +167,11 @@ export const DRAFT_BUDGET = 16_777_216;
 export const REQUEST_BUDGET = 134_217_728;
 
 /**
- * The cave kinds of the store's `cave` channel (SP6a spec §3.2, D17, D20): bits 0-3 of the byte, bits 4-7 reserved
- * (0). 0 none (rock, sky and surface air, edits); the noise kinds cheese 1, spaghetti 3D 2, spaghetti 2D 3, noodle 4 and
- * entrance 5, which T writes from the density's family taps; the carver kinds worm 6, ravine 7 and underground worm 8;
- * 9 other density air (pre-cave rock opened by air that no family tap present in the tree explains); 10-14 reserved.
+ * The cave kinds of the store's `cave` channel (SP6a spec §3.2, D17, D20): bits 0-3 of the byte (`caveKindOf`); bits
+ * 4-7 the cave biome (`CAVE_BIOME`), written by T at tagged voxels (SP6b), 0 elsewhere. 0 none (rock, sky and surface
+ * air, edits); the noise kinds cheese 1, spaghetti 3D 2, spaghetti 2D 3, noodle 4 and entrance 5, which T writes from
+ * the density's family taps; the carver kinds worm 6, ravine 7 and underground worm 8; 9 other density air (pre-cave
+ * rock opened by air that no family tap present in the tree explains); 10-14 reserved.
  * Here rather than in `gen/caves/tags.ts`, which exports functions and types only (gen exports no numeric data): gen,
  * mesh, render, the UI and the metrics all read the ids.
  */
@@ -179,6 +180,26 @@ export const CAVE_KIND = Object.freeze({
 });
 /** The X-ray's surface film (SP6a spec §5.1): a kind in the X-ray pack only, never stored in the `cave` channel. */
 export const CAVE_FILM_KIND = 15;
+/**
+ * The cave biomes (SP6b spec §1.1, D2): bits 4-7 of the `cave` byte at a tagged voxel (`caveBiomeOf`); 4-15 reserved.
+ * Here beside `CAVE_KIND` for the same reason (gen exports no numeric data).
+ */
+export const CAVE_BIOME = Object.freeze({ plain: 0, lush: 1, dripstone: 2, abyss: 3 });
+/** The cave biomes' names in id order. */
+export const CAVE_BIOME_NAMES = Object.freeze(['plain', 'lush', 'dripstone', 'abyss'] as const);
+export type CaveBiomeName = (typeof CAVE_BIOME_NAMES)[number];
+/**
+ * The cave biomes' colours in id order (sRGB; SP6b spec §1.1): the one table the X-ray, the map's layer, the slice field
+ * and the Voxels mode read, so all four agree.
+ */
+export const CAVE_BIOME_COLORS: readonly string[] = Object.freeze(['#6f86a6', '#4dff7a', '#ffb347', '#b05cff']);
+/**
+ * The cave kind of a stored `cave` byte (bits 0-3; SP6b spec §2.1): the one way to read it, since bits 4-7 hold the cave
+ * biome. A comparison of the whole byte with 0 needs no mask (T writes the biome only where the kind is not 0).
+ */
+export const caveKindOf = (byte: number): number => byte & 15;
+/** The cave biome of a stored `cave` byte (bits 4-7; `CAVE_BIOME`). */
+export const caveBiomeOf = (byte: number): number => byte >> 4;
 
 /**
  * The carvers' window (SP6a spec §2.1, D21): a column reads the sources of the chunks within R of its chunk, 23 × 23 =

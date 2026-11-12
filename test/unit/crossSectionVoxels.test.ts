@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { CAVE_KIND, SEA_LEVEL } from '../../src/core/constants';
+import { CAVE_KIND, caveKindOf, SEA_LEVEL } from '../../src/core/constants';
 import { XRAY_COLORS } from '../../src/render/xrayPalette';
 import { JobCancelled, type SliceResult, type SurfaceProbeResult, type WorkerPool } from '../../src/engine/workerPool';
 import { segmentPointAt, type Segment } from '../../src/metrics/crossSection';
@@ -18,6 +18,7 @@ import {
 import { createStore } from '../../src/world/store/store';
 import { SLICE_POINTS, SLICE_SAMPLES, sliceIndex } from '../../src/workers/protocol';
 import { createSliceJob } from '../../src/workers/sliceJob';
+import { NIBBLE_REGION, nibbleOf } from '../harness/caveNibbles';
 import * as png from '../harness/png';
 import { ctxFor } from '../harness/gen';
 import { regionView } from '../harness/region';
@@ -234,7 +235,7 @@ describe('sliceRgba: one pixel per sample, row 0 at y 319', () => {
         const tag = view.tag(x, y, z);
         if (r.cave[sliceIndex(i, y)] !== tag) throw new Error(`sample (${i}, ${y}) at (${x}, ${z}): cave ${r.cave[sliceIndex(i, y)]} ≠ the store's ${tag}`);
         const dryCave = tag !== 0 && view.block(x, y, z) === AIR && view.fluid(x, y, z) === 0;
-        const want = dryCave ? caveRgb(tag) : png.voxelRgb(view.block(x, y, z), view.fluid(x, y, z), isWater ? runTop - y : 0);
+        const want = dryCave ? caveRgb(caveKindOf(tag)) : png.voxelRgb(view.block(x, y, z), view.fluid(x, y, z), isWater ? runTop - y : 0);
         if (dryCave) tinted++;
         const got = pixel(rgba, i, y);
         if (got[0] !== want[0] || got[1] !== want[1] || got[2] !== want[2]) throw new Error(`sample (${i}, ${y}) at (${x}, ${z}): ${got} ≠ ${want}`);
@@ -564,4 +565,34 @@ describe('the Voxels hover rule id (SP3c spec §6: a surfaceProbe job, the map h
     expect(rules.hover(cell(7, 8, 9))).toBe('');
     expect([probes.length, shown]).toEqual([1, []]);
   });
+});
+
+describe('the Voxels mode reads the cave kind (SP6b spec §2.1, Spec correction 15; Task 8)', () => {
+  test('a column with every nibble set gives the same kind-level outputs as with them cleared: the Voxels mode\'s colours, from the slice job\'s unmasked copy, masked at the read', () => {
+    // A cut across the nibble fixture's region (seed '42'), through the caverns' column (546, 25857).
+    const { seed, cx0, cz0, size } = NIBBLE_REGION;
+    const line: Segment = { ax: 16 * cx0 + 2.5, az: 16 * cz0 + 7.25, bx: 16 * (cx0 + size) - 2.75, bz: 16 * (cz0 + size) - 9.5 };
+    const r = createSliceJob().run(ctxFor(seed), 0, line, () => false);
+    if (r === null) throw new Error('slice stopped');
+    // The copy carries the whole byte (the Voxels mode's biome colours need it, Task 46): the nibble on every tagged sample.
+    const cave = r.cave.slice();
+    let tinted = 0;
+    for (let i = 0; i < SLICE_POINTS; i++) {
+      const [px, pz] = segmentPointAt(line, i);
+      for (let y = -64; y <= 319; y++) {
+        const k = sliceIndex(i, y);
+        if (cave[k] === 0) continue;
+        cave[k] |= nibbleOf(Math.floor(px), Math.floor(pz));
+        if (r.blocks[k] === AIR && r.fluid[k] === 0) tinted++;
+      }
+    }
+    expect(tinted).toBeGreaterThan(0);
+    expect(cave).not.toEqual(r.cave);
+    const want = sliceRgba(r);
+    const got = sliceRgba({ ...r, cave });
+    const diff: number[] = [];
+    for (let k = 0; k < SLICE_SAMPLES && diff.length < 10; k++) if (got[4 * k] !== want[4 * k] || got[4 * k + 1] !== want[4 * k + 1] || got[4 * k + 2] !== want[4 * k + 2]) diff.push(k);
+    expect(diff).toEqual([]);
+    expect(got).toEqual(want);
+  }, 120_000); // the slice job across the fixture region: about 0.3 s alone, more under load
 });

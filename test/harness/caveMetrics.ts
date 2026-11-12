@@ -73,7 +73,7 @@
  * numbers, strings, number arrays and typed arrays that each own their whole buffer, so a structured clone carries them
  * and `countsTransfer` lists the buffers to move.
  */
-import { CARVER_WINDOW_R, CAVE_KIND } from '../../src/core/constants';
+import { CARVER_WINDOW_R, CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
 import type { Params } from '../../src/core/params/schema';
 import { Xoshiro128 } from '../../src/core/rng';
@@ -2198,8 +2198,9 @@ export interface CarverRegionCounts {
 }
 
 /**
- * The voxels of the region whose store carver kind (the tag when 6-8, else 0) differs from `ref`'s, the carver-tagged
- * voxels, and with `capY` the tagged voxels at y ≥ capY and the non-air voxels at y ≥ 181.
+ * The voxels of the region whose store carver kind (the tag's kind, `caveKindOf`, when 6-8, else 0; bits 4-7 hold the
+ * cave biome, SP6b spec §2.1) differs from `ref`'s, the carver-tagged voxels, and with `capY` the tagged voxels at
+ * y ≥ capY and the non-air voxels at y ≥ 181.
  */
 export function regionCounts(view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 'store'>, ref: Uint8Array, capY: number | null): CarverRegionCounts {
   const W = 16 * view.w;
@@ -2223,7 +2224,7 @@ export function regionCounts(view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 
             const row = ((y + 64) * D + bz + lz) * W + bx;
             for (let lx = 0; lx < 16; lx++) {
               const i = ly * 256 + lz * 16 + lx;
-              const tag = typeof cave === 'number' ? cave : cave[i]!;
+              const tag = caveKindOf(typeof cave === 'number' ? cave : cave[i]!);
               const kind = tag >= 6 && tag <= 8 ? tag : 0;
               if (kind !== 0) carved++;
               const want = ref[row + lx]!;

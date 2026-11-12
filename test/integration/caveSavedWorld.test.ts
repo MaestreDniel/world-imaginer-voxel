@@ -9,7 +9,7 @@
  * placed stone from each hollow neighbour, kind its tag, and no face owned by the dug voxel (air, tag 0: not hollow).
  */
 import { expect, test } from 'vitest';
-import { CAVE_KIND } from '../../src/core/constants';
+import { CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import { colKey } from '../../src/core/coords';
 import { parseHex64 } from '../../src/core/hash';
 import { canonicalJSON } from '../../src/core/params/canonical';
@@ -95,7 +95,7 @@ function findVoxels(): { cx: number; cz: number; cheese: Voxel; rock: Voxel } {
           for (let lz = 0; lz < 16; lz++) {
             for (let lx = 0; lx < 16; lx++) {
               const at = { x: 16 * dx + lx, y, z: 16 * dz + lz };
-              if (cheese === null && v.cave(lx, y, lz) === CAVE_KIND.cheese && v.block(lx, y, lz) === AIR) cheese = at;
+              if (cheese === null && caveKindOf(v.cave(lx, y, lz)) === CAVE_KIND.cheese && v.block(lx, y, lz) === AIR) cheese = at;
               if (rock === null && y > 0 && v.block(lx, y, lz) === STONE && v.cave(lx, y, lz) === 0) rock = at;
             }
           }
@@ -143,7 +143,7 @@ test('a GV5 world with edits in what are now caves opens with the caves: today\'
       expect(p.store.blockAt(rock.x, rock.y, rock.z)).toBe(AIR);
       // The final set keeps T's tag under the edit (`replaceBlocks` kept the section's cave entry); the dug voxel: 0.
       const fin = p.store.final(cx, cz)!;
-      expect(fin.cave(cheese.x & 15, cheese.y, cheese.z & 15)).toBe(CAVE_KIND.cheese);
+      expect(caveKindOf(fin.cave(cheese.x & 15, cheese.y, cheese.z & 15))).toBe(CAVE_KIND.cheese);
       expect(fin.cave(rock.x & 15, rock.y, rock.z & 15)).toBe(0);
       expect(fin.block(cheese.x & 15, cheese.y, cheese.z & 15)).toBe(STONE);
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { CAVE_KIND, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
+import { CAVE_KIND, caveKindOf, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import type { JsonValue } from '../../src/core/params/json';
 import type { ParamsPatch } from '../../src/core/params/schema';
@@ -416,9 +416,9 @@ describe('the cave channel (SP6a spec §3.1-§3.2, D20)', () => {
       for (let sy = 0; sy < 24; sy++) {
         const want = tags.subarray(4096 * sy, 4096 * (sy + 1));
         const got = view.sectionCave(sy);
-        if (typeof got === 'number') expect(want.every((k) => k === got), `(${col[0]}, ${col[1]}) section ${sy} uniform ${got}`).toBe(true);
+        if (typeof got === 'number') expect(want.every((k) => k === caveKindOf(got)), `(${col[0]}, ${col[1]}) section ${sy} uniform ${got}`).toBe(true);
         else {
-          expect(got, `(${col[0]}, ${col[1]}) section ${sy}`).toEqual(want);
+          expect(got.map(caveKindOf), `(${col[0]}, ${col[1]}) section ${sy}`).toEqual(want);
           dense++;
         }
       }
@@ -438,7 +438,7 @@ describe('the cave channel (SP6a spec §3.1-§3.2, D20)', () => {
     for (let p = 0; p < 256; p++) {
       const lx = p & 15, lz = p >> 4, x = 16 * CAVERNS[0] + lx, z = 16 * CAVERNS[1] + lz;
       for (let y = -63; y <= 319; y++) {
-        const tag = view.cave(lx, y, lz);
+        const tag = caveKindOf(view.cave(lx, y, lz));
         const densitySolid = probe(dc, x, y, z) > 0;
         const carver = tag === CAVE_KIND.worm || tag === CAVE_KIND.ravine || tag === CAVE_KIND.undergroundWorm;
         // Carved ⇔ density-solid and air in T; then its tag is a carver kind, the one carvedAt names.
@@ -464,7 +464,7 @@ describe('the cave channel (SP6a spec §3.1-§3.2, D20)', () => {
         const lx = p & 15, lz = p >> 4;
         let top = -64;
         for (let y = 319; y > -64; y--) if (view.block(lx, y, lz) !== AIR) { top = y; break; }
-        if (view.cave(lx, top + 1, lz) !== CAVE_KIND.ravine) continue;
+        if (caveKindOf(view.cave(lx, top + 1, lz)) !== CAVE_KIND.ravine) continue;
         skyFloors++;
         expect(scan.runTop[scan.skyRun[p]!], `(${lx}, ${top}, ${lz})`).toBe(top);
         expect(REGISTRY.stateKey(view.block(lx, top, lz)), `(${lx}, ${top}, ${lz})`).toBe('grass_block');
@@ -479,7 +479,7 @@ describe('the cave channel (SP6a spec §3.1-§3.2, D20)', () => {
         let top = -64;
         for (let y = 319; y > -64; y--) if (view.block(lx, y, lz) !== AIR) { top = y; break; }
         for (let y = -63; y < top; y++) {
-          const k = view.cave(lx, y + 1, lz);
+          const k = caveKindOf(view.cave(lx, y + 1, lz));
           if (view.block(lx, y, lz) === AIR || !(k === CAVE_KIND.worm || k === CAVE_KIND.ravine || k === CAVE_KIND.undergroundWorm)) continue;
           caveFloors++;
           const b = view.block(lx, y, lz);

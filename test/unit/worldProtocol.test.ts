@@ -16,7 +16,7 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import { createLightScratch } from '../../src/light/initial';
 import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { ROW_INTS } from '../../src/mesh/column';
-import { CAVE_KIND } from '../../src/core/constants';
+import { CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import { caveTagAt } from '../../src/gen/caves/tags';
 import { createDensityContext } from '../../src/gen/density/context';
 import {
@@ -580,7 +580,7 @@ describe('the finder\'s messages (SP6a spec §7.3; ruling P45; Task 44)', () => 
     for (let sy = 0; sy < 24 && kind === 0; sy++) {
       const c = view.sectionCave(sy);
       for (let i = 0; i < 4096 && kind === 0; i++) {
-        kind = typeof c === 'number' ? c : c[i]!;
+        kind = caveKindOf(typeof c === 'number' ? c : c[i]!);
         at = 4096 * sy + i;
       }
     }

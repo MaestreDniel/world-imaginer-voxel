@@ -8,7 +8,7 @@ import { createSurfaceContext, surfaceContextOf, surfaceNoiseSource, type Surfac
 import { surfaceProbe, surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { RuleValidationError } from '../../src/gen/surface/rules';
 import { surfaceScanSettings } from '../../src/gen/surface/scan';
-import { CAVE_KIND } from '../../src/core/constants';
+import { CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import { AIR, BEDROCK, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { ColumnView } from '../../src/world/store/api';
 import { createStore } from '../../src/world/store/store';
@@ -134,7 +134,7 @@ describe('the probe\'s column rebuild (spec §3.6): the T stage\'s fill, the car
         for (let y = 319; y >= -63; y--) {
           const i = ((y + 64) << 8) | p;
           const block = view.block(lx, y, lz);
-          const k = view.cave(lx, y, lz);
+          const k = caveKindOf(view.cave(lx, y, lz));
           if (k === CAVE_KIND.worm || k === CAVE_KIND.ravine || k === CAVE_KIND.undergroundWorm) carved++;
           if ((c.solid[i] !== 0) !== (block !== AIR)) bad.push(`(${lx}, ${y}, ${lz}): rebuilt ${c.solid[i]}, block ${block}`);
           if ((c.water[i] !== 0) !== (view.fluid(lx, y, lz) !== 0)) bad.push(`(${lx}, ${y}, ${lz}): rebuilt water ${c.water[i]}`);

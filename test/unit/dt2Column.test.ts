@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fnv1a32, hash2 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { Xoshiro128 } from '../../src/core/rng';
@@ -10,16 +10,29 @@ import { probe } from '../../src/gen/density/probe';
 import type { Expr } from '../../src/gen/density/expr';
 import { createDensityReference, findTap, interpolatedNodes } from '../../src/gen/density/reference';
 import { caveTagAt } from '../../src/gen/caves/tags';
-import { CAVE_KIND } from '../../src/core/constants';
+import { CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import { terrainDensityDebug, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf } from '../../src/gen/surface/context';
 import { surfaceProbe } from '../../src/gen/surface/probe';
 import { newSurfaceScan, runAt } from '../../src/gen/surface/scan';
 import { fillColumnT } from '../../src/metrics/region';
 import { AIR } from '../../src/world/blocks/index';
-import { createStore } from '../../src/world/store/store';
+import { createStore, type VoxelStore } from '../../src/world/store/store';
+import { nibblingStore } from '../harness/caveNibbles';
 import { DT2_VOXELS_PER_COLUMN, dt2Column, dt2Setup, newDt2Acc, type Dt2Acc, type Dt2Stratum, type Dt2Voxel } from '../harness/dt2';
 import { topDownHeightmaps } from '../harness/heightmaps';
+
+// SP6b §2.1 (Task 8): DT2 generates its columns itself (`fillColumnT` on its own store), so the nibble fixture reaches its
+// stored bytes through the store `fillColumnT` writes into (`nibblingStore`) while NIB.wrap is set.
+const NIB = vi.hoisted(() => ({ wrap: null as null | ((s: VoxelStore) => VoxelStore) }));
+vi.mock('../../src/metrics/region', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/metrics/region')>();
+  return {
+    ...real,
+    fillColumnT: (...[store, ...rest]: Parameters<typeof real.fillColumnT>) => real.fillColumnT(NIB.wrap === null ? store : NIB.wrap(store), ...rest),
+  };
+});
+afterEach(() => { NIB.wrap = null; });
 
 /**
  * `dt2Column` (SP3e spec §5.1 "Extractions", D18): DT2's per-column checks moved out of `region.metric.ts`. The
@@ -352,7 +365,7 @@ describe('DT2 tagProbe and the straddle stratum (SP6a spec §10.3, D22; Task 12)
         column: (view) => {
           for (let y = -63; y < 320 && !holds; y++) {
             for (let p = 0; p < 256; p++) {
-              const k = view.cave(p & 15, y, p >> 4);
+              const k = caveKindOf(view.cave(p & 15, y, p >> 4));
               if (k === CAVE_KIND.cheese || k === CAVE_KIND.spaghetti3d || k === CAVE_KIND.spaghetti2d || k === CAVE_KIND.entrance) { holds = true; break; }
             }
           }
@@ -403,6 +416,37 @@ describe('DT2 tagProbe and the straddle stratum (SP6a spec §10.3, D22; Task 12)
     expect(acc.problems).toHaveLength(DT2_VOXELS_PER_COLUMN);
     expect(acc.problems[0]).toMatch(new RegExp(`^profile default, seed '42', column \\(${cx}, ${cz}\\): \\(-?\\d+, -?\\d+, -?\\d+\\) stored tag \\d+ ≠ caveTagAt \\d+$`));
   });
+});
+
+describe('DT2 tagProbe reads the cave kind (SP6b spec §2.1, Spec correction 4; Task 8)', () => {
+  it('a column with every nibble set gives the same kind-level outputs as with them cleared: DT2\'s tagProbe comparison count', () => {
+    const ctx = ctxOf();
+    const run = (nibbles: boolean) => {
+      NIB.wrap = nibbles ? nibblingStore : null;
+      const acc = newDt2Acc(LABEL);
+      const idx: number[][] = [];
+      let set = 0;
+      for (let n = 0; n < 4; n++) {
+        const cx = CAVERNS[0] - 1 + n, cz = CAVERNS[1];
+        idx.push(dt2Column(ctx, cx, cz, new Xoshiro128(300 + n), acc, {
+          straddle: 16,
+          column: (view) => {
+            for (let i = 256; i < 98304; i++) if (view.cave(i & 15, (i >> 8) - 64, (i >> 4) & 15) >> 4 !== 0) set++;
+          },
+        }));
+      }
+      NIB.wrap = null;
+      return { acc, idx, set };
+    };
+    const plain = run(false);
+    const nibbled = run(true);
+    expect(plain.set).toBe(0);
+    expect(nibbled.set).toBeGreaterThan(0);
+    expect(plain.acc.tagNonZero).toBeGreaterThan(0);
+    expect(plain.acc.tagProbe).toBe(0);
+    expect(nibbled.idx).toEqual(plain.idx);
+    expect(nibbled.acc).toEqual(plain.acc);
+  }, 120_000); // four DT2 columns twice: about 0.5 s alone, more under load
 });
 
 /** The DT2 stream's next u32 after the metric's first default column (seed '42') and its 16 voxels. */

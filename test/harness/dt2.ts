@@ -1,3 +1,4 @@
+import { caveKindOf } from '../../src/core/constants';
 import { fnv1a32, hash2 } from '../../src/core/hash';
 import { Xoshiro128 } from '../../src/core/rng';
 import type { GenContext } from '../../src/gen/context';
@@ -25,9 +26,10 @@ import { createStore, type VoxelStore } from '../../src/world/store/store';
  * SP3e's `DT2.presets` (spec §5.2, `test/metrics/presets.metric.ts`) passes the optional trailing `Dt2Extension`:
  * extra voxels in a y range (amplified's slide and ceiling) and observers for its non-finite, heightmap and population
  * values; without it a call draws and counts exactly as before.
- * SP6a (spec §10.3, D22; Task 12): every checked voxel also runs `tagProbe`, the stored proto tag against `caveTagAt`
- * on the setup's DensityContext; `Dt2Extension.straddle` adds the straddle stratum, voxels in cells whose cave interval
- * straddles 0 (`straddleCells`), drawn from their own stream so DT2's draws are unchanged.
+ * SP6a (spec §10.3, D22; Task 12): every checked voxel also runs `tagProbe`, the stored proto tag's kind (`caveKindOf`;
+ * bits 4-7 hold the cave biome, SP6b spec §2.1) against `caveTagAt` on the setup's DensityContext;
+ * `Dt2Extension.straddle` adds the straddle stratum, voxels in cells whose cave interval straddles 0 (`straddleCells`),
+ * drawn from their own stream so DT2's draws are unchanged.
  */
 
 export const DT2_VOXELS_PER_COLUMN = 16;
@@ -306,7 +308,7 @@ export function dt2Column(ctx: GenContext, cx: number, cz: number, r: Xoshiro128
       acc.compiledReference++;
       acc.problems.push(`${at}: (${x}, ${y}, ${z}) compiled ${value} ≠ reference ${rv}`);
     }
-    const tag = view.cave(lx, y, lz);
+    const tag = caveKindOf(view.cave(lx, y, lz));
     const tagAt = setup.tagAt(x, y, z);
     acc.tagVoxels++;
     if (tag !== 0) acc.tagNonZero++;

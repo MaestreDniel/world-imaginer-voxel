@@ -9,7 +9,7 @@
  * `referenceCarve`, the global carver reference of `C7.carverReference`: every path whose box meets a region, carved
  * into the region's box from `carverPath` directly, with no path cache and no per-column window.
  */
-import { CARVER_WINDOW_R, CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
+import { CARVER_WINDOW_R, CAVE_FILM_KIND, CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
 import { carveTest, densityTopOf, wetAt } from '../../src/gen/caves/carve';
@@ -310,8 +310,9 @@ const REF_SOURCE_MARGIN = 2;
  *   ellipsoids in index order. Restricted to one column's window this is the window's order, so a voxel takes the kind
  *   of the first source that carves it, as T's (§3.2 step 4).
  * - The pre-carve solidity, read from the region: a voxel is density-solid when its block is not air (T leaves a
- *   density-air voxel air or water and gives every density-solid voxel it keeps a block) or its tag is a carver's (6-8:
- *   the voxels T carved). Only density-solid voxels are carved.
+ *   density-air voxel air or water and gives every density-solid voxel it keeps a block) or its tag's kind
+ *   (`caveKindOf`; bits 4-7 hold the cave biome, SP6b spec §2.1) is a carver's (6-8: the voxels T carved). Only
+ *   density-solid voxels are carved.
  * - σ_w's density top per position: `densityTopOf` over that solidity with `islands.enabled`'s island rule (the carve
  *   step's own top), never the harness's `preCaveTop`, which counts tagged noise air and differs wherever an entrance
  *   breaches the top. wet′ is `wetAt` over the position's column sample (`buildColumnSample`).
@@ -331,7 +332,7 @@ export function referenceCarve(
   const p = carverParamsOf(params);
   const islands = params.islands.enabled;
   const isCarverTag = (t: number): boolean => t === CAVE_KIND.worm || t === CAVE_KIND.ravine || t === CAVE_KIND.undergroundWorm;
-  const densitySolid = (x: number, y: number, z: number): boolean => view.block(x, y, z) !== AIR || isCarverTag(view.tag(x, y, z));
+  const densitySolid = (x: number, y: number, z: number): boolean => view.block(x, y, z) !== AIR || isCarverTag(caveKindOf(view.tag(x, y, z)));
   // Per position (z − z0)·W + (x − x0): wet′ and the density top.
   const wet = new Float64Array(W * D);
   const top = new Int16Array(W * D);

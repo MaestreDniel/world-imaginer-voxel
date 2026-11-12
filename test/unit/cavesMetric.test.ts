@@ -7,16 +7,18 @@ import {
   aperiodicCounts, aperiodicity, aperiodicLags, bandCounts, bandsMin, borderPlaneRatio, c1c6Parts, C1_C6_PARTS, c7c9Parts,
   C7_C9_PARTS, caveC7C9Counts, caveComponents, caveExamples, caveRegionCounts, COMP_Y_MIN, countsTransfer, emptyCaveGrid, flatWallCounts, flatWallDetail,
   floorCounts, floorPeak, GRID_H, GRID_Y0, jensenShannon, kindCounts, landCounts, largestCounts, latticeBias, layerCounts,
-  localThickness, logSd, median, nearestEntranceDistances, openingMask, percentile, PILLAR_AREA_MAX, PILLAR_BACK, pillarTiles, PILLAR_VIEW, preCaveTops, ravineCounts,
+  localThickness, logSd, median, nearestEntranceDistances, openingMask, percentile, PILLAR_AREA_MAX, PILLAR_BACK, pillarTiles, PILLAR_VIEW, preCaveTops, ravineCounts, regionCounts,
   setCell, skyCounts, surfaceCounts, switchWall, switchWallCounts, thinnestAxes, typeMixDivergences, verticalStep, verticalStepDetail,
   voidCounts,
   wallResidues, waterWallCount, type CaveGrid,
 } from '../harness/caveMetrics';
+import { NIBBLE_REGION, nibbleRegion } from '../harness/caveNibbles';
 import { measureCaveRegion, type CaveRegionResult } from '../harness/caveRegionWorker';
 import { caveGroupOf, caveSites, measureCaveRegions } from '../harness/caveSites';
 import { components3d } from '../harness/flood';
 import { coverageErrors, findMetricCalls } from '../harness/metric';
 import { genRegion } from '../harness/region';
+import { referenceCarve } from '../harness/refs';
 
 const K = CAVE_KIND;
 
@@ -915,4 +917,17 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
     expect(() => countsTransfer({ v: new Float64Array(8).subarray(2) })).toThrow('countsTransfer: counts.v does not own its whole ArrayBuffer');
     expect(() => countsTransfer([new Int32Array(new SharedArrayBuffer(16))])).toThrow('countsTransfer: counts.0 does not own its whole ArrayBuffer');
   });
+});
+
+describe('the stored side of C7.carverReference reads the cave kind (SP6b spec §2.1, Spec correction 4; Task 8)', () => {
+  test('a column with every nibble set gives the same kind-level outputs as with them cleared: regionCounts\' carver count and mismatches against referenceCarve', () => {
+    const { ctx, plain, nibbled } = nibbleRegion();
+    const ref = referenceCarve(plain, NIBBLE_REGION.seed, ctx.params);
+    // capY 0: the cap's tagged-air count runs too (a comparison with 0, unmasked).
+    const want = regionCounts(plain, ref, 0);
+    expect(want.mismatches).toBe(0);
+    expect(want.carved).toBeGreaterThan(1000);
+    expect(want.capAir).toBeGreaterThan(0);
+    expect(regionCounts(nibbled, ref, 0)).toEqual(want);
+  }, 120_000); // the nibble fixture (a 5 × 5 region, once per file) and its readers: about 1 s alone, more under load
 });

@@ -6,7 +6,7 @@ import { hex64 } from '../../src/core/hash';
 import { seedFromInput } from '../../src/core/seed';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
 import { fillColumnT, genRegionInProcess, regionHash } from '../../src/metrics/region';
-import { CARVER_CACHE_PATHS, CAVE_FILM_KIND } from '../../src/core/constants';
+import { CARVER_CACHE_PATHS, CAVE_FILM_KIND, caveKindOf } from '../../src/core/constants';
 import { carverCacheOf, setCarverCacheCapacity } from '../../src/gen/caves/carverCache';
 import { caveTagAt } from '../../src/gen/caves/tags';
 import { createDensityContext } from '../../src/gen/density/context';
@@ -324,7 +324,7 @@ describe('the cave readings of a RegionView (SP6a spec §10.1, Spec correction 1
         for (let lx = 0; lx < 16; lx++) {
           const t = view.tag(32 + lx, y, -112 + lz);
           expect(t).toBe(col.cave(lx, y, lz));
-          if (t !== 0 && tagged++ % 97 === 0) expect(caveTagAt(dc, 32 + lx, y, -112 + lz)).toBe(t);
+          if (t !== 0 && tagged++ % 97 === 0) expect(caveTagAt(dc, 32 + lx, y, -112 + lz)).toBe(caveKindOf(t));
         }
       }
     }

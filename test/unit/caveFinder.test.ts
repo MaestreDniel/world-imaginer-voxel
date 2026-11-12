@@ -7,14 +7,16 @@
  * absent kind (`radius`), with no ring past the radius.
  */
 import { describe, expect, test } from 'vitest';
-import { CARVER_WINDOW_R, CAVE_KIND } from '../../src/core/constants';
+import { CARVER_WINDOW_R, CAVE_BIOME, CAVE_KIND } from '../../src/core/constants';
 import { carverCacheOf } from '../../src/gen/caves/carverCache';
 import type { CarverKind } from '../../src/gen/caves/carvers';
 import { caveTagAt, nearestCave, type FindOptions } from '../../src/gen/caves/tags';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import { solidAt } from '../../src/gen/density/probe';
 import type { ColumnView } from '../../src/world/store/api';
+import { NIBBLE_REGION, nibbleRegion } from '../harness/caveNibbles';
 import { ctxFor } from '../harness/gen';
+import type { RegionView } from '../harness/regionView';
 
 /**
  * L10's hover point at seed 42, where L13 starts (Task 45; Spec correction 20): the spawn (0, 0), L1's 400 blocks east,
@@ -206,4 +208,31 @@ describe('nearestCave (SP6a spec §7.3, D12, D16)', () => {
     expect(() => nearestCave(dc, 1, 524288, Y, Z, opts())).toThrow(RangeError);
     expect(() => nearestCave(dc, 1, X, Y, Z, opts({ radius: 0 }))).toThrow(RangeError);
   });
+});
+
+describe('nearestCave over stored bytes with the cave biome in bits 4-7 (SP6b spec §2.1, Task 8)', () => {
+  test('a column with every nibble set gives the same kind-level outputs as with them cleared: the finder\'s hit and yaw over loaded columns, a uniform section with a nibble included', () => {
+    const { ctx: c, plain, nibbled } = nibbleRegion();
+    const d = createDensityContext(c);
+    const { cx0, cz0, size } = NIBBLE_REGION;
+    const inRegion = (cx: number, cz: number): boolean => cx >= cx0 && cx < cx0 + size && cz >= cz0 && cz < cz0 + size;
+    const loadedOf = (v: RegionView) => (cx: number, cz: number): ColumnView | null =>
+      (inRegion(cx, cz) ? v.store.final(cx, cz) ?? v.store.proto(cx, cz) : null);
+    // From the region's centre column, the caverns' column (546, 25857) one chunk away diagonally.
+    const [sx, sy, sz] = [16 * (cx0 + 2) + 8, 0, 16 * (cz0 + 2) + 8];
+    for (const kind of [CAVE_KIND.cheese, CAVE_KIND.spaghetti3d, CAVE_KIND.entrance, CAVE_KIND.worm, CAVE_KIND.ravine]) {
+      const want = nearestCave(d, kind, sx, sy, sz, opts({ loaded: loadedOf(plain) }));
+      expect(want.reason, `kind ${kind}`).toBe('found');
+      expect(inRegion(want.hit!.x >> 4, want.hit!.z >> 4), `kind ${kind}: the hit lies in a loaded column`).toBe(true);
+      expect(nearestCave(d, kind, sx, sy, sz, opts({ loaded: loadedOf(nibbled) })), `kind ${kind}`).toEqual(want);
+    }
+    // A uniform section (y 32 … 47) of spaghetti 2D, its byte with the abyss in bits 4-7: the hit and yaw of the plain one.
+    const uniform = (b: number): ColumnView => ({
+      ...storedColumn(1275, -300, new Map()), sectionCave: (s) => (s === 6 ? b : 0), cave: (_lx, y) => (y >= 32 && y < 48 ? b : 0),
+    });
+    const at = (v: ColumnView) => nearestCave(dc, CAVE_KIND.spaghetti2d, X, 40, Z, opts({ loaded: (cx, cz) => (cx === 1275 && cz === -300 ? v : null) }));
+    const u = at(uniform(CAVE_KIND.spaghetti2d));
+    expect(u).toEqual({ hit: { x: X, y: 40, z: Z, yaw: 90 }, reason: 'found' });
+    expect(at(uniform(CAVE_KIND.spaghetti2d | (CAVE_BIOME.abyss << 4)))).toEqual(u);
+  }, 120_000); // the nibble fixture (a 5 × 5 region, once per file) and its readers: about 1 s alone, more under load
 });

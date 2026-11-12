@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { caveKindOf } from '../../src/core/constants';
 import { colKey, torusSlot } from '../../src/core/coords';
 import { CROSS_SECTION_POINTS, segmentPointAt, type Segment } from '../../src/metrics/crossSection';
 import { fillColumnT, genRegionInProcess } from '../../src/metrics/region';
@@ -118,7 +119,7 @@ describe('slice job: samples (SP3a spec §5.1)', () => {
       const t = r.cave[k]!;
       if (t === 0) continue;
       tagged++;
-      expect(t).toBeLessThanOrEqual(9);
+      expect(caveKindOf(t)).toBeLessThanOrEqual(9);
       expect(r.blocks[k]).toBe(AIR);
     }
     expect(tagged).toBeGreaterThan(0);

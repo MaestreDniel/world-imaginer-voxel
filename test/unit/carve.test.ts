@@ -20,7 +20,7 @@
  *   `referenceCarve` (`test/harness/refs.ts`, Task 30) carves over the region, and store it, at the voxels next to it.
  */
 import { describe, expect, test } from 'vitest';
-import { CARVER_CACHE_PATHS, CARVER_WINDOW_R, CAVE_KIND, HEIGHT, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
+import { CARVER_CACHE_PATHS, CARVER_WINDOW_R, CAVE_KIND, caveKindOf, HEIGHT, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
@@ -579,7 +579,7 @@ describe('carverCacheOf and carvedAt (SP6a spec §2.5, §3.4; Task 27)', () => {
           for (let lx = 0; lx < 16; lx++) {
             const x = 16 * cx + lx, z = 16 * cz + lz;
             if (!(probe(d, x, y, z) > 0)) continue;
-            const stored = view.cave(lx, y, lz);
+            const stored = caveKindOf(view.cave(lx, y, lz));
             const got = carvedAt(d, x, y, z);
             if (got !== stored) bad.push(`(${x}, ${y}, ${z}): carvedAt ${got} ≠ stored ${stored}`);
             if (got !== 0) { here++; kinds.add(got); }
@@ -757,7 +757,7 @@ describe('a worm from a source 10 chunks away, the LRU and a configure (Review F
           border++;
           // The region's T stage stored the reference's kind (a density-solid voxel's tag is its carver's, or 0).
           const want = refAt(16 * c.cx + lx, y, 16 * c.cz + lz);
-          if (view.cave(lx, y, lz) !== want) expect(view.cave(lx, y, lz), `stored tag at (${16 * c.cx + lx}, ${y}, ${16 * c.cz + lz})`).toBe(want);
+          if (caveKindOf(view.cave(lx, y, lz)) !== want) expect(caveKindOf(view.cave(lx, y, lz)), `stored tag at (${16 * c.cx + lx}, ${y}, ${16 * c.cz + lz})`).toBe(want);
           if (without.solid[v] !== got.solid[v]) fromSource[k]!++;
         }
       }

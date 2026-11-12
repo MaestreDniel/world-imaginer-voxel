@@ -7,7 +7,7 @@
  * D22; Tasks 12, 27) against the stored tag and solidity, carved voxels included. `unit (heavy)`.
  */
 import { describe, expect, test } from 'vitest';
-import { CAVE_KIND } from '../../src/core/constants';
+import { CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import type { JsonValue } from '../../src/core/params/json';
 import { fillDensityColumn } from '../../src/gen/density/bounds';
@@ -21,7 +21,9 @@ import { probe, solidAt } from '../../src/gen/density/probe';
 import { terrainStage } from '../../src/gen/pipeline/terrainStage';
 import { AIR } from '../../src/world/blocks/index';
 import { createStore } from '../../src/world/store/store';
+import { NIBBLE_REGION, nibbleOf, nibbleRegion } from '../harness/caveNibbles';
 import { ctxFor } from '../harness/gen';
+import { crossingPairs } from '../harness/windowScans';
 
 const NEVER = (): boolean => false;
 const MiB = 1 << 20;
@@ -105,7 +107,7 @@ function storedEqualsRule(c: GenContext, cx: number, cz: number): Map<number, nu
   for (let y = -64; y < 320; y++) {
     for (let lz = 0; lz < 16; lz++) {
       for (let lx = 0; lx < 16; lx++) {
-        const got = view.cave(lx, y, lz);
+        const got = caveKindOf(view.cave(lx, y, lz));
         const want = ruleAt(dc, threshold, lx, y, lz, [cx, cz]);
         if (got !== want) throw new Error(`(${cx}, ${cz}) voxel (${lx}, ${y}, ${lz}): stored ${got} ≠ rule ${want}`);
         kinds.set(got, (kinds.get(got) ?? 0) + 1);
@@ -378,7 +380,7 @@ function probesEqualStored(c: GenContext, cx: number, cz: number): number[] {
     for (let lz = 0; lz < 16; lz++) {
       for (let lx = 0; lx < 16; lx++) {
         const x = 16 * cx + lx, z = 16 * cz + lz;
-        const want = view.cave(lx, y, lz);
+        const want = caveKindOf(view.cave(lx, y, lz));
         const got = caveTagAt(dc, x, y, z);
         if (got !== want) throw new Error(`(${x}, ${y}, ${z}): caveTagAt ${got} ≠ stored ${want}`);
         const solid = view.block(lx, y, lz) !== AIR;
@@ -434,4 +436,34 @@ describe('caveTagAt and solidAt (SP6a spec §3.4, D22; Task 12)', () => {
       expect(() => solidAt(dc, x, y, z), `solidAt (${x}, ${y}, ${z})`).toThrow(RangeError);
     }
   });
+});
+
+describe('the cave byte\'s high nibble (SP6b spec §2.1, Task 8)', () => {
+  test('the nibble fixture: every tagged byte keeps its kind in bits 0-3 and holds the biome (x + z) & 3 in bits 4-7, untagged bytes 0; the region holds cheese, a worm, entrances and a ravine', () => {
+    const { plain, nibbled } = nibbleRegion();
+    const { cx0, cz0, size } = NIBBLE_REGION;
+    const kinds = new Array<number>(16).fill(0);
+    let set = 0;
+    for (let z = 16 * cz0; z < 16 * (cz0 + size); z++) {
+      for (let x = 16 * cx0; x < 16 * (cx0 + size); x++) {
+        for (let y = -64; y < 320; y++) {
+          const p = plain.tag(x, y, z), n = nibbled.tag(x, y, z);
+          if (n !== (p === 0 ? 0 : p | nibbleOf(x, z))) throw new Error(`(${x}, ${y}, ${z}): nibbled ${n}, plain ${p}`);
+          kinds[p]!++;
+          if (n >> 4 !== 0) set++;
+        }
+      }
+    }
+    for (const k of [CAVE_KIND.cheese, CAVE_KIND.worm, CAVE_KIND.entrance, CAVE_KIND.ravine]) expect(kinds[k], `kind ${k}`).toBeGreaterThan(1000);
+    expect(set).toBeGreaterThan(0);
+  }, 120_000); // the nibble fixture (a 5 × 5 region, once per file) and its readers: about 1 s alone, more under load
+
+  test('a column with every nibble set gives the same kind-level outputs as with them cleared: crossingPairs (R1\'s cave region)', () => {
+    const { plain, nibbled } = nibbleRegion();
+    const r = NIBBLE_REGION;
+    const want = crossingPairs((x, y, z) => plain.tag(x, y, z), r);
+    expect(want.entrance).toBeGreaterThan(0);
+    expect(want.ravine).toBeGreaterThan(0);
+    expect(crossingPairs((x, y, z) => nibbled.tag(x, y, z), r)).toEqual(want);
+  }, 120_000); // the nibble fixture (a 5 × 5 region, once per file) and its readers: about 1 s alone, more under load
 });

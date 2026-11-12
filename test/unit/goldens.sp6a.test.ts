@@ -24,7 +24,7 @@ import {
   densityScaledExpr, densityScaledPoints, densityScaledSource, densityScaledValues, sp6aGoldenKeys,
 } from '../../src/metrics/sp6aGoldens';
 import { regionHash } from '../../src/metrics/region';
-import { CAVE_KIND } from '../../src/core/constants';
+import { CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { carverParamsOf, carverPath } from '../../src/gen/caves/carvers';
 import { expectGolden } from '../harness/goldens';
@@ -172,8 +172,8 @@ describe('sp6a.region.T.caves (§12.3, §10.8)', () => {
         expect(v, `column (${cx}, ${cz}) has a proto set`).not.toBeNull();
         for (let sy = 0; sy < 24; sy++) {
           const c = v!.sectionCave(sy);
-          if (typeof c === 'number') counts[c]! += 4096;
-          else for (let i = 0; i < 4096; i++) counts[c[i]!]!++;
+          if (typeof c === 'number') counts[caveKindOf(c)]! += 4096;
+          else for (let i = 0; i < 4096; i++) counts[caveKindOf(c[i]!)]!++;
         }
       }
     }

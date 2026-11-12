@@ -34,7 +34,7 @@
  * clock, its stop and its loaded columns injected.
  * Follows the gen determinism rules.
  */
-import { CARVER_WINDOW_R, CAVE_KIND, CAVE_SLICE_SOLID } from '../../core/constants';
+import { CARVER_WINDOW_R, CAVE_KIND, CAVE_SLICE_SOLID, caveKindOf } from '../../core/constants';
 import { inWindow } from '../../core/coords';
 import type { ColumnView } from '../../world/store/api';
 import type { DensityBounds } from '../density/bounds';
@@ -47,6 +47,7 @@ import { carverCacheOf } from './carverCache';
 import type { CarverKind } from './carvers';
 
 const KIND = CAVE_KIND;
+const KIND_OF = caveKindOf;
 const K_CHEESE: number = KIND.cheese;
 const K_SPAG3D: number = KIND.spaghetti3d;
 const K_SPAG2D: number = KIND.spaghetti2d;
@@ -432,8 +433,8 @@ function ringOf(d2: number): number {
  * Caves tab's finder (SP6a spec §7.3, D12, D16). It searches outward in rings of 64 blocks of horizontal distance (ring
  * k holds the voxels whose horizontal distance d from (x, z), d² = (vx − x)² + (vz − z)², lies in [64k, 64k + 64), the
  * last ring cut at `radius`), and in each ring:
- * 1. the ring's loaded columns (`loaded`): their stored tags (`sectionCave`; a uniform section of the kind holds it at
- *    every voxel);
+ * 1. the ring's loaded columns (`loaded`): their stored tags (`sectionCave`, the kind read through `caveKindOf`: bits
+ *    4-7 hold the cave biome, SP6b spec §2.1; a uniform section of the kind holds it at every voxel);
  * 2. for a carver kind (worm, ravine, underground worm), candidates from the paths of the path cache with no density
  *    over the ring: the ellipsoid centres (each floored to its voxel) of the sources whose paths can reach the ring
  *    (the sources within `CARVER_WINDOW_R` chunks of the ring's chunks, visited once each, in shells around (x, z)'s
@@ -531,10 +532,10 @@ export function nearestCave(dc: DensityContext, kind: number, x: number, y: numb
         const dyMin = y < y0 ? y0 - y : y > y0 + 15 ? y - y0 - 15 : 0;
         if (dMin + dyMin * dyMin >= bestD2) continue;
         const sec = v.sectionCave(sy);
-        if (typeof sec === 'number' && sec !== kind) continue;
+        if (typeof sec === 'number' && KIND_OF(sec) !== kind) continue;
         const arr = typeof sec === 'number' ? null : sec;
         for (let i = sy === 0 ? 256 : 0; i < 4096; i++) {
-          if (arr !== null && arr[i] !== kind) continue;
+          if (arr !== null && KIND_OF(arr[i]!) !== kind) continue;
           const vx = 16 * cx + (i & 15), vz = 16 * cz + ((i >> 4) & 15), vy = y0 + (i >> 8);
           const dx = vx - x, dz = vz - z;
           const dh2 = dx * dx + dz * dz;
@@ -606,8 +607,9 @@ export function nearestCave(dc: DensityContext, kind: number, x: number, y: numb
 
 /**
  * The finder's yaw at hit (x, y, z) of kind `kind` (`nearestCave`): the runs of the same kind from the hit along ±x and
- * ±z inside its column (read from `view`, the column's stored view, else through `caveTagAt`), the axis with the longer
- * total run (x on a tie), facing its longer side (the positive one on a tie): +x 90, −x 270, +z 180, −z 0.
+ * ±z inside its column (read from `view`, the column's stored view, through `caveKindOf`, else through `caveTagAt`), the
+ * axis with the longer total run (x on a tie), facing its longer side (the positive one on a tie): +x 90, −x 270, +z
+ * 180, −z 0.
  */
 function yawAt(dc: DensityContext, kind: number, x: number, y: number, z: number, view: ColumnView | null): number {
   const cx = x >> 4, cz = z >> 4;
@@ -616,7 +618,7 @@ function yawAt(dc: DensityContext, kind: number, x: number, y: number, z: number
     for (let s = 1; s < 16; s++) {
       const px = x + s * sx, pz = z + s * sz;
       if (px >> 4 !== cx || pz >> 4 !== cz) break;
-      const k = view !== null ? view.cave(px & 15, y, pz & 15) : caveTagAt(dc, px, y, pz);
+      const k = view !== null ? KIND_OF(view.cave(px & 15, y, pz & 15)) : caveTagAt(dc, px, y, pz);
       if (k !== kind) break;
       n++;
     }

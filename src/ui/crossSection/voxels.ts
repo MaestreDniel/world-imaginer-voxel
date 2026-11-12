@@ -12,7 +12,7 @@
  * - the hover rule id (SP3c spec §6): one `surfaceProbe` job at a time for the hovered voxel, the latest hovered voxel
  *   wins, and the readout's ` · rule …` suffix becomes ` · rule <leaf id>` or ` · rule none` when the probe answers.
  */
-import { CAVE_KIND, MIN_Y, SEA_LEVEL } from '../../core/constants';
+import { CAVE_KIND, caveKindOf, MIN_Y, SEA_LEVEL } from '../../core/constants';
 import { MAX_Y } from '../../core/coords';
 import { JobCancelled, type SliceResult, type SurfaceProbeResult } from '../../engine/workerPool';
 import { segmentLength, segmentPointAt, type Segment } from '../../metrics/crossSection';
@@ -164,7 +164,8 @@ export function caveRgb(kind: number): Rgb {
  * counts from the top of its run of water in the sample column (the voxel under air or a block), which equals the
  * harness's `worldSurfaceWG − 1 − y` except under an overhang (SP3b's T fills air under stone near the water line) and in
  * a flooded cave under the water's floor (SP6a). Dry air (no fluid) whose cave byte is a kind (≠ 0) takes the kind's
- * colour (`caveRgb`, SP6a spec §7.4: the cave air of the slice's proto set, as T tagged it); other air stays sky.
+ * colour (`caveRgb(caveKindOf(byte))`, SP6a spec §7.4: the cave air of the slice's proto set, as T tagged it; the slice
+ * job copies the whole byte, whose bits 4-7 hold the cave biome, SP6b spec §2.1); other air stays sky.
  */
 export function sliceRgba(s: SliceResult): Uint8ClampedArray<ArrayBuffer> {
   const out = new Uint8ClampedArray(4 * SLICE_SAMPLES);
@@ -179,7 +180,7 @@ export function sliceRgba(s: SliceResult): Uint8ClampedArray<ArrayBuffer> {
       const water = isWater(state, fluid);
       if (water && !wet) surface = y;
       wet = water;
-      const kind = s.cave[k]!;
+      const kind = caveKindOf(s.cave[k]!);
       const c = kind !== 0 && state === AIR && fluidType(fluid) === FLUID_NONE ? caveRgb(kind) : voxelRgb(state, fluid, water ? surface - y : 0);
       out[4 * k] = c[0];
       out[4 * k + 1] = c[1];

@@ -10,7 +10,7 @@
  *   differently it gives the density top's answer.
  */
 import { describe, expect, test } from 'vitest';
-import { CARVER_CACHE_PATHS, CARVER_WINDOW_R, CAVE_KIND } from '../../src/core/constants';
+import { CARVER_CACHE_PATHS, CARVER_WINDOW_R, CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { carveColumn, carvedKind, carveTest, densityTopColumn, densityTopOf, wetAt } from '../../src/gen/caves/carve';
@@ -19,6 +19,7 @@ import { carverParamsOf, carverPath, type CarverKind } from '../../src/gen/caves
 import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
 import { createGenContext } from '../../src/gen/context';
 import { AIR, BEDROCK, STONE } from '../../src/world/blocks/index';
+import { NIBBLE_REGION, nibbleRegion } from '../harness/caveNibbles';
 import { referenceCarve } from '../harness/refs';
 import { genRegion, type RegionResult, type RegionView } from '../harness/region';
 
@@ -46,7 +47,7 @@ describe('referenceCarve (SP6a spec §10.1, C7.carverReference)', () => {
     for (let y = -64; y < 320; y++) {
       for (let z = 0; z < 64; z++) {
         for (let x = 0; x < 64; x++) {
-          const t = view.tag(x, y, z);
+          const t = caveKindOf(view.tag(x, y, z));
           const kind = isCarver(t) ? t : 0;
           if (kind !== 0) carved++;
           const r = ref[refIndex(view, x, y, z)]!;
@@ -65,7 +66,7 @@ describe('referenceCarve (SP6a spec §10.1, C7.carverReference)', () => {
     const p = carverParamsOf(PARAMS);
     const x0 = 16 * REGION.cx0, z0 = 16 * REGION.cz0, x1 = x0 + 63, z1 = z0 + 63;
     // wet′ and the density top per position, from the region's density-solid voxels (as the stage's carve reads them).
-    const solidAt = (x: number, y: number, z: number): boolean => view.block(x, y, z) !== AIR || isCarver(view.tag(x, y, z));
+    const solidAt = (x: number, y: number, z: number): boolean => view.block(x, y, z) !== AIR || isCarver(caveKindOf(view.tag(x, y, z)));
     const wet = new Float64Array(64 * 64);
     const top = new Int16Array(64 * 64);
     const s = newColumnSample();
@@ -106,7 +107,7 @@ describe('referenceCarve (SP6a spec §10.1, C7.carverReference)', () => {
                   if (!solidAt(x, y, z) || carveTest(p, path, e, x, y, z, wet[q]!, top[q]!) !== 1) continue;
                   inside++;
                   // The stage carved it (by this source or an earlier one), and the reference agrees.
-                  const t = view.tag(x, y, z);
+                  const t = caveKindOf(view.tag(x, y, z));
                   if (!isCarver(t) || ref[refIndex(view, x, y, z)] !== t) {
                     if (bad.length < 10) bad.push(`${kind} (${sx}, ${sz}) at (${x}, ${y}, ${z}): stored ${t}, reference ${ref[refIndex(view, x, y, z)]}`);
                   }
@@ -185,4 +186,21 @@ describe('referenceCarve (SP6a spec §10.1, C7.carverReference)', () => {
     expect(ref[idx(x, y, z)]).toBe(dense);
     expect(ref[idx(x, y, z)]).not.toBe(preCave);
   });
+});
+
+describe('referenceCarve reads the cave kind (SP6b spec §2.1, Task 8)', () => {
+  test('a column with every nibble set gives the same kind-level outputs as with them cleared: referenceCarve\'s carved voxels (its density-solid voxels read through isCarverTag)', () => {
+    const { ctx, plain, nibbled } = nibbleRegion();
+    const want = referenceCarve(plain, NIBBLE_REGION.seed, ctx.params);
+    const got = referenceCarve(nibbled, NIBBLE_REGION.seed, ctx.params);
+    let carved = 0;
+    const diff: number[] = [];
+    for (let i = 0; i < want.length; i++) {
+      if (want[i] !== 0) carved++;
+      if (got[i] !== want[i] && diff.length < 10) diff.push(i);
+    }
+    expect(carved).toBeGreaterThan(1000);
+    expect(diff).toEqual([]);
+    expect(got).toEqual(want);
+  }, 120_000); // the nibble fixture (a 5 × 5 region, once per file) and its readers: about 1 s alone, more under load
 });

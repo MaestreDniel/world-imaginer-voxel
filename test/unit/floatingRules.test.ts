@@ -18,7 +18,7 @@
  *   and the ground's top under the islands equals the default world's (Z3's `shadowDiff` ≈ 0).
  */
 import { describe, expect, test } from 'vitest';
-import { CAVE_KIND, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
+import { CAVE_KIND, caveKindOf, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
 import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
 import { DEFAULTS } from '../../src/core/params/defaults';
@@ -375,7 +375,7 @@ describe('islands.enabled on trees that do not match it (amplified\'s window, se
       for (let y = -64; y <= 319; y++) {
         blocks[at(p, y)] = view.block(p & 15, y, p >> 4);
         fluid[at(p, y)] = view.fluid(p & 15, y, p >> 4);
-        cave[at(p, y)] = view.cave(p & 15, y, p >> 4);
+        cave[at(p, y)] = caveKindOf(view.cave(p & 15, y, p >> 4));
       }
     }
     store.freeColumn(cx, cz);

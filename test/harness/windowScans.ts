@@ -1,4 +1,4 @@
-import { CAVE_KIND, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
+import { CAVE_KIND, caveKindOf, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { columnPoint } from '../../src/gen/column/columnPoint';
@@ -44,8 +44,8 @@ export const caveRegionAt = (a: number, b: number): WindowRegion => ({ cx0: 4 * 
 
 /**
  * The cave region's predicate over a region's interior: the pairs of face-adjacent voxels on the two sides of a chunk
- * border inside the interior (x and z borders, every y) whose tags (`tag`, the store's `CAVE_KIND`) are both entrance,
- * and both ravine.
+ * border inside the interior (x and z borders, every y) whose tags (`tag`, the store's cave byte, read through
+ * `caveKindOf`: bits 4-7 hold the cave biome, SP6b spec §2.1) are both entrance, and both ravine.
  */
 export function crossingPairs(tag: VoxelAt, r: WindowRegion): { entrance: number; ravine: number } {
   let entrance = 0;
@@ -53,8 +53,9 @@ export function crossingPairs(tag: VoxelAt, r: WindowRegion): { entrance: number
   const n = r.size - 2;
   const x0 = 16 * (r.cx0 + 1);
   const z0 = 16 * (r.cz0 + 1);
-  const pair = (t1: number, t2: number): void => {
-    if (t1 !== t2) return;
+  const pair = (b1: number, b2: number): void => {
+    const t1 = caveKindOf(b1);
+    if (t1 !== caveKindOf(b2)) return;
     if (t1 === CAVE_KIND.entrance) entrance++;
     else if (t1 === CAVE_KIND.ravine) ravine++;
   };
