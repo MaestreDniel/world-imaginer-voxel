@@ -1,7 +1,10 @@
 // The shard tool CI's shard tables share (SP4b spec §1.1): a table names heavy files in their own shards and one
 // catch-all shard (`null`), which excludes every named file, so a file added later runs in the catch-all without
 // touching the table. The shard names are CI's matrix (`matrix`), so a shard added to a table always runs; `check`
-// fails the job unless the shards list the project's files exactly once each. Each table is a CLI:
+// fails the job unless the shards list the project's files exactly once each. A shard is its files, or its files with
+// the env its run sets (SP6b spec §13: a shard is named by (file, env)); a file may sit in several shards whose envs
+// partition it (the same variables, distinct values), each run reading its part of the file from its env. Each table
+// is a CLI:
 //
 //   node .github/scripts/<table>.mjs matrix            the shard names as a JSON array
 //   node .github/scripts/<table>.mjs check             fails unless the shards list the project's files once each
@@ -12,19 +15,43 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const named = (shards) => Object.values(shards).filter((f) => f !== null).flat();
+/** A shard's files (null for the catch-all): a plain list, or an env shard's `files`. */
+const filesOf = (shard) => (shard === null || Array.isArray(shard) ? shard : shard.files);
+/** A shard's env: an env shard's `env`, else null. */
+const envOf = (shard) => (shard === null || Array.isArray(shard) ? null : shard.env);
+/** Every named file once, in table order. */
+const named = (shards) => [...new Set(Object.values(shards).map(filesOf).filter((f) => f !== null).flat())];
+
+function known(shards, name) {
+  if (!Object.hasOwn(shards, name)) throw new Error(`unknown shard ${name}; shards: ${Object.keys(shards).join(', ')}`);
+}
 
 /** The vitest arguments selecting a shard's files (after `--project`). */
 export function shardArgs(shards, name) {
-  if (!Object.hasOwn(shards, name)) throw new Error(`unknown shard ${name}; shards: ${Object.keys(shards).join(', ')}`);
-  const files = shards[name];
+  known(shards, name);
+  const files = filesOf(shards[name]);
   return files === null ? named(shards).flatMap((f) => ['--exclude', f]) : files;
+}
+
+/** The env a shard's run sets (none for a plain shard or the catch-all). */
+export function shardEnv(shards, name) {
+  known(shards, name);
+  return { ...(envOf(shards[name]) ?? {}) };
+}
+
+/** Whether two shards' envs partition a file they both name: both set, the same variables, a value differing. */
+function partitions(a, b) {
+  if (a === null || b === null) return false;
+  const keys = Object.keys(a).sort();
+  if (JSON.stringify(keys) !== JSON.stringify(Object.keys(b).sort())) return false;
+  return keys.some((k) => a[k] !== b[k]);
 }
 
 /**
  * Every rule of `check`, as messages (none when the table is sound): exactly one catch-all; every on-disk file in the
  * project; every named file in the project; each named shard lists exactly its files; no shard empty; no file in two
- * shards; none dropped; none outside the project. `all` is the project's listing, `listed` each shard's.
+ * shards, unless their envs partition it (the same variables, distinct values); none dropped; none outside the
+ * project. `all` is the project's listing, `listed` each shard's.
  */
 export function coverageProblems({ project, shards, all, onDisk, listed }) {
   const errors = [];
@@ -36,12 +63,15 @@ export function coverageProblems({ project, shards, all, onDisk, listed }) {
   for (const name of Object.keys(shards)) {
     const files = [...(listed[name] ?? [])].sort();
     if (files.length === 0) errors.push(`shard ${name} has no files`);
-    if (shards[name] !== null && JSON.stringify(files) !== JSON.stringify([...shards[name]].sort())) {
-      errors.push(`shard ${name} lists ${files.join(', ')}, not its named files ${shards[name].join(', ')}`);
+    const own = filesOf(shards[name]);
+    if (own !== null && JSON.stringify(files) !== JSON.stringify([...own].sort())) {
+      errors.push(`shard ${name} lists ${files.join(', ')}, not its named files ${own.join(', ')}`);
     }
     for (const f of files) {
-      if (seen.has(f)) errors.push(`${f} is in shards ${seen.get(f)} and ${name}`);
-      else seen.set(f, name);
+      const before = seen.get(f) ?? [];
+      const clash = before.find((b) => !partitions(envOf(shards[b]), envOf(shards[name])));
+      if (clash !== undefined) errors.push(`${f} is in shards ${clash} and ${name}`);
+      else seen.set(f, [...before, name]);
     }
   }
   const dropped = all.filter((f) => !seen.has(f));
@@ -88,8 +118,9 @@ export function shardTool({ project, dir, suffix, shards }) {
     run(name, report) {
       const args = ['vitest', 'run', '--project', project, ...shardArgs(shards, name),
         '--reporter=default', '--reporter=json', `--outputFile.json=${report}`];
-      console.log(`npx ${args.join(' ')}`);
-      const r = spawnSync(npx, args, { stdio: 'inherit' });
+      const env = shardEnv(shards, name);
+      console.log(`${Object.entries(env).map(([k, v]) => `${k}=${v} `).join('')}npx ${args.join(' ')}`);
+      const r = spawnSync(npx, args, { stdio: 'inherit', env: { ...process.env, ...env } });
       process.exit(r.status ?? 1);
     },
   };

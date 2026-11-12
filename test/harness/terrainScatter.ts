@@ -1,7 +1,13 @@
 import { Worker } from 'node:worker_threads';
 import { expect } from 'vitest';
+import { fnv1a32 } from '../../src/core/hash';
+import { resolveProfile } from '../../src/core/params/profiles';
 import type { Params } from '../../src/core/params/schema';
+import { Xoshiro128 } from '../../src/core/rng';
+import { seedFromInput } from '../../src/core/seed';
 import { biomeFamily, biomeId, type BiomeFamily } from '../../src/gen/biomes/registry';
+import { columnPoint } from '../../src/gen/column/columnPoint';
+import { createGenContext } from '../../src/gen/context';
 import { AIR } from '../../src/world/blocks/index';
 import type { DensityContext } from '../../src/gen/density/context';
 import { probe } from '../../src/gen/density/probe';
@@ -33,6 +39,91 @@ const T5_LOCAL = [2, 6, 10, 14];
 const T3_FAMILY: BiomeFamily = 'lowland';
 const FLOAT_MAX_HEIGHT = 6;
 const FLOAT_MIN_GAP = 3;
+
+/** T1-T5's profiles in their draw order (terrain.metric.ts' header; surface.metric.ts draws the same columns). */
+export const SCATTER_PROFILES = ['default', 'large_biomes'] as const;
+export type ScatterProfile = (typeof SCATTER_PROFILES)[number];
+
+/**
+ * The profiles a terrain or surface metric run measures (SP6b spec §13 L2, L3; read once per file): `METRICS_PROFILES`'
+ * comma-separated names, in draw order; absent, both. An unknown (or empty) name throws.
+ */
+export function metricsProfiles(raw: string | undefined): readonly ScatterProfile[] {
+  if (raw === undefined) return SCATTER_PROFILES;
+  const names = raw.split(',').map((n) => n.trim());
+  for (const n of names) {
+    if (!(SCATTER_PROFILES as readonly string[]).includes(n)) throw new Error(`METRICS_PROFILES '${raw}': unknown profile '${n}' (default, large_biomes)`);
+  }
+  return SCATTER_PROFILES.filter((p) => names.includes(p));
+}
+
+/**
+ * T1-T5's scattered columns (terrain.metric.ts' header, SP3b spec §8.1; S1-S3's too): per profile and seed,
+ * `columns[profile]` chunk columns drawn by one `Xoshiro128(fnv1a32('T1-T5'))`, profile by profile in
+ * `SCATTER_PROFILES`' order, then seed, then column, uniformly over ±`range[profile]` chunks. Every profile's draws are
+ * made and only `active`'s lists kept (ruling P1), so a run filtered by `METRICS_PROFILES` measures the unsplit run's
+ * columns. Each kept profile's lists are indexed as `seeds`.
+ */
+export function scatterColumns(
+  active: readonly ScatterProfile[],
+  seeds: readonly string[],
+  columns: Readonly<Record<ScatterProfile, number>>,
+  range: Readonly<Record<ScatterProfile, number>>,
+): Partial<Record<ScatterProfile, Array<Array<[number, number]>>>> {
+  const r = new Xoshiro128(fnv1a32('T1-T5'));
+  const out: Partial<Record<ScatterProfile, Array<Array<[number, number]>>>> = {};
+  for (const profile of SCATTER_PROFILES) {
+    const R = range[profile];
+    const perSeed = seeds.map(() => {
+      const cols: Array<[number, number]> = [];
+      for (let n = 0; n < columns[profile]; n++) cols.push([-R + r.nextInt(2 * R), -R + r.nextInt(2 * R)]);
+      return cols;
+    });
+    if (active.includes(profile)) out[profile] = perSeed;
+  }
+  return out;
+}
+
+/** A T4 region: its seed and its 16 × 16 chunks' origin. */
+export interface T4Site { readonly seed: string; readonly cx0: number; readonly cz0: number }
+
+/**
+ * T4's regions (terrain.metric.ts' header): per profile and seed, `regions` 16 × 16-chunk origins drawn by one
+ * `Xoshiro128(fnv1a32('T4'))`, profile by profile in `SCATTER_PROFILES`' order, then seed, each rejection-drawn over
+ * ±`range[profile]` until the region centre's 2D `offset` (`columnPoint` on that profile's and seed's GenContext) is
+ * < 40. Every profile's draws, its rejections included, are made and only `active`'s sites kept (ruling P1); `draws`
+ * counts a kept profile's draws, rejections included.
+ */
+export function t4Sites(
+  active: readonly ScatterProfile[],
+  seeds: readonly string[],
+  regions: number,
+  range: Readonly<Record<ScatterProfile, number>>,
+): Partial<Record<ScatterProfile, { sites: T4Site[]; draws: number }>> {
+  const r = new Xoshiro128(fnv1a32('T4'));
+  const out: Partial<Record<ScatterProfile, { sites: T4Site[]; draws: number }>> = {};
+  for (const profile of SCATTER_PROFILES) {
+    const params = resolveProfile(profile);
+    const R = range[profile];
+    const sites: T4Site[] = [];
+    let draws = 0;
+    for (const seed of seeds) {
+      const ctx = createGenContext(seedFromInput(seed), params);
+      for (let n = 0; n < regions; n++) {
+        let cx0: number;
+        let cz0: number;
+        do {
+          cx0 = -R + r.nextInt(2 * R - 16);
+          cz0 = -R + r.nextInt(2 * R - 16);
+          draws++;
+        } while (columnPoint(ctx, 16 * (cx0 + 8), 16 * (cz0 + 8)).offset >= 40);
+        sites.push({ seed, cx0, cz0 });
+      }
+    }
+    if (active.includes(profile)) out[profile] = { sites, draws };
+  }
+  return out;
+}
 
 /** Fails the running metric test (soft) when a population is below its minimum. */
 export function requireSample(what: string, n: number, min: number): void {

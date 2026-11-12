@@ -12,7 +12,9 @@ import { metricTest } from '../harness/metric';
 import { cavesMuted } from '../harness/sp5cTrees';
 import { analyseColumnsThreaded, MIN_SURFACE_POPULATION, s1Values, s2Values, s3Values, surfaceCommonValues } from '../harness/surfaceAnalysis';
 import { newSurfaceAcc, SURFACE_STATES, type SurfaceAcc } from '../harness/surfaceScatter';
-import { forEachColumnThreaded, type PopulationMode } from '../harness/terrainScatter';
+import {
+  forEachColumnThreaded, metricsProfiles, scatterColumns, type PopulationMode, type ScatterProfile,
+} from '../harness/terrainScatter';
 import { branchHoldsAtTop, columnStates, positionColumn, solidRuns } from '../harness/zMetrics';
 
 /**
@@ -28,7 +30,13 @@ import { branchHoldsAtTop, columnStates, positionColumn, solidRuns } from '../ha
  * order-independent; `ymod16`'s position choice depends only on the seed and (cx, cz)). S1-S3's values per profile
  * are the part bodies of `surfaceAnalysis.ts` (`s1Values` …, `'enforce'` mode); B4 and B2 stay here.
  * Vitest isolates metric files, so this file draws and generates the columns again rather than sharing
- * terrain.metric.ts's pass.
+ * terrain.metric.ts's pass (the same draws, `scatterColumns`).
+ *
+ * By profile (SP6b spec §13 L3; `METRICS_PROFILES`, read once: `default`, `large_biomes` or both comma-separated;
+ * absent, both; an unknown name throws): CI runs each profile in a job of its own, `islandBranchOnGround` with the
+ * default profile. Every profile's columns are drawn and only the run's kept (ruling P1), so each profile's columns
+ * are the unsplit run's; every gated part is the worse profile or a sum with max 0, so the worst over the jobs is the
+ * unsplit value.
  *
  * Readouts (§5.2): each column's ColumnSample is rebuilt in the worker (`buildColumnSample`, as the stage builds it)
  * and its voxels re-scanned with the stage's SurfaceContext settings (`scanColumn` over the stored solidity, the stored
@@ -82,8 +90,9 @@ type Tier = 'fast' | 'quick' | 'full';
 const TIER = (process.env.METRICS_TIER ?? 'fast') as Tier;
 const pick = <T>(fast: T, quick: T, full: T): T => (TIER === 'full' ? full : TIER === 'quick' ? quick : fast);
 
-const PROFILES = ['default', 'large_biomes'] as const;
-type Profile = (typeof PROFILES)[number];
+/** The run's profiles (`METRICS_PROFILES`; absent, both), in draw order. */
+const PROFILES = metricsProfiles(process.env.METRICS_PROFILES);
+type Profile = ScatterProfile;
 const SEEDS: readonly string[] = pick(['42'], ['42'], ['42', '1', '2', '3']);
 const RANGE: Readonly<Record<Profile, number>> = { default: 1024, large_biomes: 4096 };
 /** T1-T5's columns per (profile, seed) (§5.1). */
@@ -113,18 +122,13 @@ function scattered(): Promise<Record<Profile, Acc>> {
 }
 
 async function scatter(): Promise<Record<Profile, Acc>> {
-  const r = new Xoshiro128(fnv1a32('T1-T5'));
+  const columns = scatterColumns(PROFILES, SEEDS, COLUMNS, RANGE);
   const out = {} as Record<Profile, Acc>;
   for (const profile of PROFILES) {
     const t0 = performance.now();
     const a = newSurfaceAcc();
-    const R = RANGE[profile];
     const params = resolveProfile(profile);
-    for (const seed of SEEDS) {
-      const cols: Array<[number, number]> = [];
-      for (let n = 0; n < COLUMNS[profile]; n++) cols.push([-R + r.nextInt(2 * R), -R + r.nextInt(2 * R)]);
-      await analyseColumnsThreaded(SCATTER_WORKER_DIR, seed, params, cols, a);
-    }
+    for (const [k, seed] of SEEDS.entries()) await analyseColumnsThreaded(SCATTER_WORKER_DIR, seed, params, columns[profile]![k]!, a);
     a.seconds = Math.round(performance.now() - t0) / 1000;
     out[profile] = a;
   }
@@ -168,7 +172,7 @@ async function sMetric(body: Body, steps: readonly Step[]): Promise<Record<strin
   const sc = await scattered();
   const v = Object.fromEntries(PROFILES.map((p) => [p, body(sc[p], 'enforce', p)])) as Record<Profile, Record<string, number>>;
   const rec: Record<string, number> = {};
-  const placed = new Set(Object.keys(surfaceCommonValues(sc[PROFILES[0]])));
+  const placed = new Set(Object.keys(surfaceCommonValues(sc[PROFILES[0]!])));
   for (const s of steps) {
     if (s[0] === 'part') perProfile(rec, s[1], byProfile((p) => v[p][s[1]]!), s[2]);
     else for (const p of PROFILES) rec[`${s[1]}.n.${p}`] = v[p][`${s[1]}.n`]!;
@@ -304,32 +308,35 @@ async function branchCounts(params: Params): Promise<BranchCounts> {
   return c;
 }
 
-metricTest('S1', [], async () => {
-  const t0 = performance.now();
-  const after = await branchCounts(resolveProfile('floating_islands'));
-  const before = await branchCounts(floatingBeforeCaves());
-  let added = 0;
-  let removed = 0;
-  for (const [k, a] of after.fired) {
-    const b = before.fired.get(k)!;
-    for (let p = 0; p < 256; p++) {
-      if (a[p] === 1 && b[p] === 0) added++;
-      if (a[p] === 0 && b[p] === 1) removed++;
+// islandBranchOnGround runs with the default profile (its own floating_islands columns, SP6b spec §13 L3).
+if (PROFILES.includes('default')) {
+  metricTest('S1', [], async () => {
+    const t0 = performance.now();
+    const after = await branchCounts(resolveProfile('floating_islands'));
+    const before = await branchCounts(floatingBeforeCaves());
+    let added = 0;
+    let removed = 0;
+    for (const [k, a] of after.fired) {
+      const b = before.fired.get(k)!;
+      for (let p = 0; p < 256; p++) {
+        if (a[p] === 1 && b[p] === 0) added++;
+        if (a[p] === 0 && b[p] === 1) removed++;
+      }
     }
-  }
-  const share = (n: number, d: number): number => (d === 0 ? NaN : n / d);
-  const rec: Record<string, number> = {};
-  for (const [name, c] of [['after', after], ['before', before]] as const) {
-    rec[`islandBranchOnGround.${name}`] = share(c.fires, c.positions);
-    rec[`firingPositions.${name}`] = c.fires;
-    rec[`summitPositions.${name}`] = c.summits;
-    rec[`firingShareOfSummits.${name}`] = share(c.fires, c.summits);
-    rec[`firingGrassTops.${name}`] = c.grass;
-  }
-  rec.added = added;
-  rec.removed = removed;
-  rec.positions = after.positions;
-  rec.columns = after.fired.size;
-  rec.seconds = Math.round(performance.now() - t0) / 1000;
-  return rec;
-}, 1_800_000, { outName: 'S.islandBranchOnGround' });
+    const share = (n: number, d: number): number => (d === 0 ? NaN : n / d);
+    const rec: Record<string, number> = {};
+    for (const [name, c] of [['after', after], ['before', before]] as const) {
+      rec[`islandBranchOnGround.${name}`] = share(c.fires, c.positions);
+      rec[`firingPositions.${name}`] = c.fires;
+      rec[`summitPositions.${name}`] = c.summits;
+      rec[`firingShareOfSummits.${name}`] = share(c.fires, c.summits);
+      rec[`firingGrassTops.${name}`] = c.grass;
+    }
+    rec.added = added;
+    rec.removed = removed;
+    rec.positions = after.positions;
+    rec.columns = after.fired.size;
+    rec.seconds = Math.round(performance.now() - t0) / 1000;
+    return rec;
+  }, 1_800_000, { outName: 'S.islandBranchOnGround' });
+}

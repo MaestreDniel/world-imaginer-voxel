@@ -10,8 +10,8 @@ import { CARVERS_OFF } from '../harness/carverParams';
 import { ctxFor } from '../harness/gen';
 import { cavesMuted } from '../harness/sp5cTrees';
 import {
-  analyseColumn, newScatterScratch, newScattered, preCaveSolidity, presetRecord, solidity, t1Values, t2Values, t3Values, t5Values,
-  transitions, type ScatterColumn, type Scattered,
+  analyseColumn, metricsProfiles, newScatterScratch, newScattered, preCaveSolidity, presetRecord, SCATTER_PROFILES, scatterColumns,
+  solidity, t1Values, t2Values, t3Values, t4Sites, t5Values, transitions, type ScatterColumn, type Scattered,
 } from '../harness/terrainScatter';
 
 /**
@@ -365,4 +365,48 @@ describe('the presets\' full-tier records and Z1 (SP3e spec §5.3, §5.5)', () =
     expect(() => presetRecord({ band: 0 }, 'default')).toThrow(RangeError);
     expect(() => presetRecord({ band: 0 }, 'toString')).toThrow('presetRecord: toString is not a draft preset');
   });
+});
+
+describe('the profile split (SP6b spec §13 L2, L3; ruling P1): a filtered run draws every profile and keeps its own', () => {
+  const SEEDS = ['42', '1'];
+  const COLUMNS = { default: 4096, large_biomes: 16384 };
+  const RANGE = { default: 1024, large_biomes: 4096 };
+
+  test('metricsProfiles: absent is both profiles in draw order; a name or a list is read in draw order; an unknown name throws', () => {
+    expect(metricsProfiles(undefined)).toEqual(['default', 'large_biomes']);
+    expect(metricsProfiles(undefined)).toEqual(SCATTER_PROFILES);
+    expect(metricsProfiles('default')).toEqual(['default']);
+    expect(metricsProfiles('large_biomes')).toEqual(['large_biomes']);
+    expect(metricsProfiles('large_biomes,default')).toEqual(['default', 'large_biomes']);
+    expect(() => metricsProfiles('amplified')).toThrow("METRICS_PROFILES 'amplified': unknown profile 'amplified' (default, large_biomes)");
+    expect(() => metricsProfiles('')).toThrow("METRICS_PROFILES '': unknown profile '' (default, large_biomes)");
+  });
+
+  test('scatterColumns: the active profile\'s columns per seed equal the unsplit run\'s, whichever profile is filtered out', () => {
+    const both = scatterColumns(SCATTER_PROFILES, SEEDS, COLUMNS, RANGE);
+    expect(both.default!.map((c) => c.length)).toEqual([4096, 4096]);
+    expect(both.large_biomes!.map((c) => c.length)).toEqual([16384, 16384]);
+    const large = scatterColumns(['large_biomes'], SEEDS, COLUMNS, RANGE);
+    expect(Object.keys(large)).toEqual(['large_biomes']);
+    expect(large.large_biomes).toEqual(both.large_biomes);
+    const def = scatterColumns(['default'], SEEDS, COLUMNS, RANGE);
+    expect(Object.keys(def)).toEqual(['default']);
+    expect(def.default).toEqual(both.default);
+    // The draws are one sequence: large_biomes' columns are not a fresh generator's (skipping default's draws would move them).
+    const fresh = scatterColumns(['large_biomes'], SEEDS, { default: 0, large_biomes: 16384 }, RANGE);
+    expect(fresh.large_biomes).not.toEqual(both.large_biomes);
+    for (const [cx, cz] of both.large_biomes!.flat()) expect(Math.abs(cx) <= 4096 && Math.abs(cz) <= 4096).toBe(true);
+  });
+
+  test('t4Sites: the active profile\'s sites and draws equal the unsplit run\'s; the skipped profile\'s rejection draws are still made', () => {
+    const both = t4Sites(SCATTER_PROFILES, ['42'], 4, RANGE);
+    expect(both.default!.sites).toHaveLength(4);
+    expect(both.large_biomes!.sites).toHaveLength(4);
+    expect(both.default!.draws).toBeGreaterThanOrEqual(4);
+    const large = t4Sites(['large_biomes'], ['42'], 4, RANGE);
+    expect(Object.keys(large)).toEqual(['large_biomes']);
+    expect(large.large_biomes).toEqual(both.large_biomes);
+    expect(t4Sites(['default'], ['42'], 4, RANGE).default).toEqual(both.default);
+    for (const s of both.large_biomes!.sites) expect(s.seed).toBe('42');
+  }, 60_000);
 });

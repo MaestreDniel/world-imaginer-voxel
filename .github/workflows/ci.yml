@@ -122,7 +122,10 @@ jobs:
       # covers everything a dump's srcKey hashes; no restore-keys, so a code change starts cold instead of restoring
       # dumps that can never hit. Each metrics job (every metrics-fast shard, every metrics-quick shard) has its own key
       # suffix, so each restores and saves only the dumps of its own tier and files.
+      # The terrain and surface shards never save a dump (T4's regions run with `cache: false`, the scatters column by
+      # column), so they skip the cache step (SP6b spec §13).
       - uses: actions/cache@v6
+        if: ${{ !startsWith(matrix.shard, 'terrain') && !startsWith(matrix.shard, 'surface') }}
         with:
           path: test/.cache/regions
           key: regions-${{ runner.os }}-metrics-fast-${{ matrix.shard }}-${{ hashFiles('src/**', 'test/harness/**', 'package-lock.json') }}
@@ -130,13 +133,14 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
       - if: ${{ !cancelled() }}
-        run: node .github/scripts/slowest.mjs --title "Slowest test files (metrics-fast $SHARD)" "$RUNNER_TEMP/vitest.json"
+        run: node .github/scripts/slowest.mjs --tests --title "Slowest test files (metrics-fast $SHARD)" "$RUNNER_TEMP/vitest.json"
         env:
           SHARD: ${{ matrix.shard }}
 
-  # metrics-quick split by .github/scripts/metricShards.mjs: named heavy files in their own shards plus a catch-all
-  # shard that excludes them, so a new metric file always runs; its `check` fails the job unless the shards cover the
-  # project's files exactly once.
+  # metrics-quick split by .github/scripts/metricShards.mjs: named heavy files in their own shards (a shard is named by
+  # (file, env): T1-T5 and S1-S3 by profile, the caves by group, SP6b spec §13) plus a catch-all shard that excludes
+  # them, so a new metric file always runs; its `check` fails the job unless the shards cover the project's files
+  # exactly once (a file in several shards only when their envs partition it).
   metrics-quick:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
@@ -154,8 +158,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node .github/scripts/metricShards.mjs check
-      # The region cache: see metrics-fast (dumps only, no restore-keys, a key per job).
+      # The region cache: see metrics-fast (dumps only, no restore-keys, a key per job; none for the terrain and
+      # surface shards, which never save a dump).
       - uses: actions/cache@v6
+        if: ${{ !startsWith(matrix.shard, 'terrain') && !startsWith(matrix.shard, 'surface') }}
         with:
           path: test/.cache/regions
           key: regions-${{ runner.os }}-metrics-quick-${{ matrix.shard }}-${{ hashFiles('src/**', 'test/harness/**', 'package-lock.json') }}
@@ -163,7 +169,7 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
       - if: ${{ !cancelled() }}
-        run: node .github/scripts/slowest.mjs --title "Slowest test files (metrics-quick $SHARD)" "$RUNNER_TEMP/vitest.json"
+        run: node .github/scripts/slowest.mjs --tests --title "Slowest test files (metrics-quick $SHARD)" "$RUNNER_TEMP/vitest.json"
         env:
           SHARD: ${{ matrix.shard }}
 

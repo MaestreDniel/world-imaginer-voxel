@@ -1,22 +1,27 @@
 #!/usr/bin/env node
 // Appends the slowest test files of vitest JSON reports (`--reporter=json --outputFile.json=…`) to the job summary
-// ($GITHUB_STEP_SUMMARY; stdout without it). Dependency-free; a missing or unreadable report is a note, not a failure.
+// ($GITHUB_STEP_SUMMARY; stdout without it), and with `--tests` the slowest tests (rows from each file's
+// `assertionResults`: the metric jobs, whose few files hold many long tests, SP6b spec §13). Dependency-free; a missing
+// or unreadable report is a note, not a failure.
 //
-//   node .github/scripts/slowest.mjs [--title T] [--top N] report.json [more.json …]
+//   node .github/scripts/slowest.mjs [--title T] [--top N] [--tests] report.json [more.json …]
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { relative } from 'node:path';
 
 const args = process.argv.slice(2);
 let title = 'Slowest test files';
 let top = 10;
+let perTest = false;
 const reports = [];
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--title') title = args[++i];
   else if (args[i] === '--top') top = Number(args[++i]);
+  else if (args[i] === '--tests') perTest = true;
   else reports.push(args[i]);
 }
 
 const rows = [];
+const testRows = [];
 const notes = [];
 for (const path of reports) {
   if (!existsSync(path)) { notes.push(`no report at \`${path}\` (the run stopped before writing it)`); continue; }
@@ -27,10 +32,13 @@ for (const path of reports) {
     const sum = tests.reduce((s, t) => s + (t.duration ?? 0), 0);
     // A file's wall time (collection, setup and its tests); the summed test durations when the times are missing.
     const wall = f.endTime > 0 && f.startTime > 0 ? f.endTime - f.startTime : sum;
-    rows.push({ file: relative(process.cwd(), f.name), wall, tests: tests.length, status: f.status });
+    const file = relative(process.cwd(), f.name);
+    rows.push({ file, wall, tests: tests.length, status: f.status });
+    for (const t of tests) testRows.push({ file, name: t.fullName ?? t.title ?? '', ms: t.duration ?? 0, status: t.status });
   }
 }
 rows.sort((a, b) => b.wall - a.wall);
+testRows.sort((a, b) => b.ms - a.ms);
 
 const s = (ms) => (ms / 1000).toFixed(1);
 const total = rows.reduce((t, r) => t + r.wall, 0);
@@ -39,6 +47,11 @@ if (rows.length > 0) {
   md += `${rows.length} file(s), ${s(total)} s summed (files run in parallel, so the sum exceeds the wall time).\n\n`;
   md += '| # | file | s | tests | status |\n|---:|---|---:|---:|---|\n';
   rows.slice(0, top).forEach((r, i) => { md += `| ${i + 1} | \`${r.file}\` | ${s(r.wall)} | ${r.tests} | ${r.status} |\n`; });
+}
+if (perTest && testRows.length > 0) {
+  md += `\n${testRows.length} test(s); the slowest (a test's own duration: a memoised measurement counts in the first test that asks for it).\n\n`;
+  md += '| # | test | file | s | status |\n|---:|---|---|---:|---|\n';
+  testRows.slice(0, top).forEach((r, i) => { md += `| ${i + 1} | ${r.name.replaceAll('|', '\\|')} | \`${r.file}\` | ${s(r.ms)} | ${r.status} |\n`; });
 }
 for (const n of notes) md += `\n_${n}_\n`;
 md += '\n';

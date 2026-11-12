@@ -1,16 +1,13 @@
-import { fnv1a32 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
-import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
-import { columnPoint } from '../../src/gen/column/columnPoint';
 import { surfaceEst3 } from '../../src/gen/column/surfaceEstimate';
 import { createGenContext } from '../../src/gen/context';
 import { createDensityContext } from '../../src/gen/density/context';
 import { metricTest } from '../harness/metric';
 import { genRegion } from '../harness/region';
 import {
-  analyseColumn, forEachColumnThreaded, newGrid, newScatterScratch, newScattered, preCaveTop, putColumn, t1Values, t2Values,
-  t3Values, t5Values, waterWalls, type Scattered,
+  analyseColumn, forEachColumnThreaded, metricsProfiles, newGrid, newScatterScratch, newScattered, preCaveTop, putColumn,
+  scatterColumns, t1Values, t2Values, t3Values, t4Sites, t5Values, waterWalls, type Scattered, type ScatterProfile,
 } from '../harness/terrainScatter';
 
 /**
@@ -19,13 +16,18 @@ import {
  *
  * Sampling (§8.1), per profile (default, large_biomes) and tier seed ('42'; full '42', '1', '2', '3'):
  * - Scattered columns (T1, T2, T3, T5): `COLUMNS` per (profile, seed), drawn by one `Xoshiro128(fnv1a32('T1-T5'))`
- *   uniformly over ±1024 chunks (default) or ±4096 (large_biomes), i.e. ±16384 / ±65536 blocks, generated on 4 region
- *   workers (`regionWorker.ts`) and read on this thread (every accumulator is order-independent), through
- *   `test/harness/terrainScatter.ts` (`forEachColumnThreaded`, `analyseColumn` and the part bodies in `'enforce'` mode,
- *   SP3e spec §5.1). The four metrics read the same columns (one pass, memoised).
+ *   (`scatterColumns`) uniformly over ±1024 chunks (default) or ±4096 (large_biomes), i.e. ±16384 / ±65536 blocks,
+ *   generated on 4 region workers (`regionWorker.ts`) and read on this thread (every accumulator is
+ *   order-independent), through `test/harness/terrainScatter.ts` (`forEachColumnThreaded`, `analyseColumn` and the
+ *   part bodies in `'enforce'` mode, SP3e spec §5.1). The four metrics read the same columns (one pass, memoised).
  * - T4 regions through the harness (`genRegion`, 4 threads, `cache: false`: each region is generated once per run):
  *   16 × 16 columns at sites whose 2D `offset` at the region's centre is < 40 (fast 4, quick 4, full 16 per
- *   (profile, seed); `Xoshiro128(fnv1a32('T4'))`, rejection-drawn over the same squares).
+ *   (profile, seed); `Xoshiro128(fnv1a32('T4'))`, rejection-drawn over the same squares, `t4Sites`).
+ * - By profile (SP6b spec §13 L2; `METRICS_PROFILES`, read once: `default`, `large_biomes` or both comma-separated;
+ *   absent, both; an unknown name throws): CI runs each profile in a job of its own. Every profile's draws are made in
+ *   the order above (T4's rejections included) and only the run's profiles kept (ruling P1), so each profile's columns
+ *   and regions are the unsplit run's; every gated part is the worse profile or a sum with max 0, so the worst over
+ *   the jobs is the unsplit value (`siteDraws` counts the run's profiles' draws).
  *
  * Definitions (§8.2): solid = any block but air (stone; bedrock at y −64); a position is land when no water voxel lies
  * above its highest stone (`WORLD_SURFACE_WG === OCEAN_FLOOR_WG`), and its true top is `WORLD_SURFACE_WG − 1`; under
@@ -68,8 +70,9 @@ type Tier = 'fast' | 'quick' | 'full';
 const TIER = (process.env.METRICS_TIER ?? 'fast') as Tier;
 const pick = <T>(fast: T, quick: T, full: T): T => (TIER === 'full' ? full : TIER === 'quick' ? quick : fast);
 
-const PROFILES = ['default', 'large_biomes'] as const;
-type Profile = (typeof PROFILES)[number];
+/** The run's profiles (`METRICS_PROFILES`; absent, both), in draw order. */
+const PROFILES = metricsProfiles(process.env.METRICS_PROFILES);
+type Profile = ScatterProfile;
 const SEEDS: readonly string[] = pick(['42'], ['42'], ['42', '1', '2', '3']);
 const RANGE: Readonly<Record<Profile, number>> = { default: 1024, large_biomes: 4096 };
 /**
@@ -95,20 +98,18 @@ function scattered(): Promise<Record<Profile, Scattered>> {
 }
 
 async function scatter(): Promise<Record<Profile, Scattered>> {
-  const r = new Xoshiro128(fnv1a32('T1-T5'));
+  const columns = scatterColumns(PROFILES, SEEDS, COLUMNS, RANGE);
   const scratch = newScatterScratch();
   const out = {} as Record<Profile, Scattered>;
   for (const profile of PROFILES) {
     const t0 = performance.now();
     const s = newScattered();
-    const R = RANGE[profile];
     const params = resolveProfile(profile);
-    for (const seed of SEEDS) {
+    for (const [k, seed] of SEEDS.entries()) {
       const dc = createDensityContext(createGenContext(seedFromInput(seed), params));
       const est = (x: number, z: number): number => surfaceEst3(dc, x, z);
       const pre = (x: number, z: number, top: number): number => preCaveTop(dc, x, z, top);
-      const cols: Array<[number, number]> = [];
-      for (let n = 0; n < COLUMNS[profile]; n++) cols.push([-R + r.nextInt(2 * R), -R + r.nextInt(2 * R)]);
+      const cols = columns[profile]![k]!;
       await forEachColumnThreaded(SCATTER_WORKER_DIR, seed, params, cols, (view, cx, cz) => analyseColumn(s, view, cx, cz, est, scratch, pre));
     }
     s.seconds = Math.round(performance.now() - t0) / 1000;
@@ -178,7 +179,7 @@ metricTest('T5', ['median', 'p90', 'p99'], async () => {
 
 metricTest('T4', ['floorSd', 'exposedBedrock', 'deepFloor'], async () => {
   const t0 = performance.now();
-  const r = new Xoshiro128(fnv1a32('T4'));
+  const drawn = t4Sites(PROFILES, SEEDS, T4_REGIONS, RANGE);
   const rec: Record<string, number> = {};
   const sd = byProfile(() => 0);
   const bedrock = byProfile(() => 0);
@@ -188,48 +189,38 @@ metricTest('T4', ['floorSd', 'exposedBedrock', 'deepFloor'], async () => {
   let draws = 0;
   for (const profile of PROFILES) {
     const params = resolveProfile(profile);
-    const R = RANGE[profile];
     let sdSum = 0;
     let regions = 0;
     let wet = 0;
     let minFloor = Infinity;
-    for (const seed of SEEDS) {
-      const ctx = createGenContext(seedFromInput(seed), params);
-      for (let n = 0; n < T4_REGIONS; n++) {
-        let cx0: number;
-        let cz0: number;
-        do {
-          cx0 = -R + r.nextInt(2 * R - 16);
-          cz0 = -R + r.nextInt(2 * R - 16);
-          draws++;
-        } while (columnPoint(ctx, 16 * (cx0 + 8), 16 * (cz0 + 8)).offset >= 40);
-        const res = await genRegion({
-          seed, params, cx0, cz0, w: 16, h: 16, upTo: 'T', order: 'spiral', threads: 4, cache: false, workerDir: WORKER_DIR,
-        });
-        const g = newGrid(256, 256);
-        for (let cz = cz0; cz < cz0 + 16; cz++) {
-          for (let cx = cx0; cx < cx0 + 16; cx++) putColumn(g, res.view.store.proto(cx, cz)!.aux()!, 16 * (cx - cx0), 16 * (cz - cz0));
-        }
-        const [wl, wt] = waterWalls(g);
-        walls += wl;
-        water += wt;
-        let n0 = 0;
-        let s1 = 0;
-        let s2 = 0;
-        for (let k = 0; k < g.n * g.m; k++) {
-          if (g.land[k] === 1) continue;
-          const f = g.top[k]!;
-          n0++;
-          s1 += f;
-          s2 += f * f;
-          if (f === -64) bedrock[profile]++;
-          if (f <= -50) deep[profile]++;
-          if (f < minFloor) minFloor = f;
-        }
-        wet += n0;
-        regions++;
-        sdSum += n0 < 2 ? 0 : Math.sqrt(Math.max(0, (s2 - (s1 * s1) / n0) / (n0 - 1)));
+    draws += drawn[profile]!.draws;
+    for (const { seed, cx0, cz0 } of drawn[profile]!.sites) {
+      const res = await genRegion({
+        seed, params, cx0, cz0, w: 16, h: 16, upTo: 'T', order: 'spiral', threads: 4, cache: false, workerDir: WORKER_DIR,
+      });
+      const g = newGrid(256, 256);
+      for (let cz = cz0; cz < cz0 + 16; cz++) {
+        for (let cx = cx0; cx < cx0 + 16; cx++) putColumn(g, res.view.store.proto(cx, cz)!.aux()!, 16 * (cx - cx0), 16 * (cz - cz0));
       }
+      const [wl, wt] = waterWalls(g);
+      walls += wl;
+      water += wt;
+      let n0 = 0;
+      let s1 = 0;
+      let s2 = 0;
+      for (let k = 0; k < g.n * g.m; k++) {
+        if (g.land[k] === 1) continue;
+        const f = g.top[k]!;
+        n0++;
+        s1 += f;
+        s2 += f * f;
+        if (f === -64) bedrock[profile]++;
+        if (f <= -50) deep[profile]++;
+        if (f < minFloor) minFloor = f;
+      }
+      wet += n0;
+      regions++;
+      sdSum += n0 < 2 ? 0 : Math.sqrt(Math.max(0, (s2 - (s1 * s1) / n0) / (n0 - 1)));
     }
     sd[profile] = sdSum / regions;
     rec[`wetPositions.${profile}`] = wet;
@@ -238,8 +229,8 @@ metricTest('T4', ['floorSd', 'exposedBedrock', 'deepFloor'], async () => {
   }
   perProfile(rec, 'floorSd', sd, 'min');
   for (const p of PROFILES) { rec[`exposedBedrock.${p}`] = bedrock[p]; rec[`deepFloor.${p}`] = deep[p]; }
-  rec.exposedBedrock = bedrock.default + bedrock.large_biomes;
-  rec.deepFloor = deep.default + deep.large_biomes;
+  rec.exposedBedrock = PROFILES.reduce((a, p) => a + bedrock[p], 0);
+  rec.deepFloor = PROFILES.reduce((a, p) => a + deep[p], 0);
   rec.siteDraws = draws;
   rec.waterWallVoxels = walls;
   rec.waterVoxels = water;

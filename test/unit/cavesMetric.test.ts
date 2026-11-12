@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { CAVE_KIND } from '../../src/core/constants';
 import type { CarverPath } from '../../src/gen/caves/carvers';
@@ -10,7 +11,9 @@ import {
   voidCounts,
   wallResidues, waterWallCount, type CaveGrid,
 } from '../harness/caveMetrics';
+import { caveGroupOf, caveSites } from '../harness/caveSites';
 import { components3d } from '../harness/flood';
+import { coverageErrors, findMetricCalls } from '../harness/metric';
 
 const K = CAVE_KIND;
 
@@ -786,3 +789,56 @@ describe('the caves instruments on fixtures (SP6a §10.1, C7-C9)', () => {
   });
 });
 
+
+describe('the caves metric by group (SP6b spec §13 L4: `METRICS_CAVE_GROUPS`)', () => {
+  const label = (s: { label: string }): string => s.label;
+
+  test('caveSites: default holds the six default-group regions, presets the three preset regions, null all nine; fast has no preset region', () => {
+    const def = caveSites('quick', 'default');
+    expect(def.map(label)).toEqual([
+      "seed '42' default (-16, -16)", "seed '42' default (16, -16)", "seed '42' large_biomes (-16, -16)",
+      "seed '1' default (-16, -16)", "seed '1' default (16, -16)", "seed '1' large_biomes (-16, -16)",
+    ]);
+    expect(def.every((s) => s.size === 32 && (s.profile === 'default' || s.profile === 'large_biomes'))).toBe(true);
+    const presets = caveSites('quick', 'presets');
+    expect(presets.map(label)).toEqual([
+      "seed '42' archipelago R(1, -2)", "seed '42' amplified R(-5, -1)", "seed '42' floating_islands R(-2, -1)",
+    ]);
+    expect(presets.map((s) => [s.profile, s.cx0, s.cz0, s.size])).toEqual([
+      ['archipelago', -8, -32, 32], ['amplified', -56, -24, 32], ['floating_islands', -32, -24, 32],
+    ]);
+    expect(caveSites('quick', null)).toEqual([...def, ...presets]);
+    expect(caveSites('fast', 'presets')).toEqual([]);
+    expect(caveSites('fast', null).map(label)).toEqual(["seed '42' default (-8, -8)", "seed '42' default (8, -8)"]);
+    expect(caveSites('fast', null)).toEqual(caveSites('fast', 'default'));
+  });
+
+  test('caveGroupOf: absent is every group (null); default and presets are read; an unknown name throws', () => {
+    expect(caveGroupOf(undefined)).toBeNull();
+    expect(caveGroupOf('default')).toBe('default');
+    expect(caveGroupOf('presets')).toBe('presets');
+    expect(() => caveGroupOf('biome')).toThrow("METRICS_CAVE_GROUPS 'biome' (default or presets)");
+    expect(() => caveGroupOf('')).toThrow("METRICS_CAVE_GROUPS '' (default or presets)");
+  });
+
+  test('caves.metric.ts splits its calls into disjoint literal part lists with distinct .out names; the coverage scan stays clean', () => {
+    const root = fileURLToPath(new URL('../../', import.meta.url));
+    const calls = findMetricCalls(root);
+    expect(calls.filter((c) => c.file === 'test/metrics/caves.metric.ts').map((c) => `${c.id}:${c.parts.join('|')}:${c.outName}`)).toEqual([
+      'C7:carverReference:C7',
+      'C7:reachOverflow|endTaper|islandCapAir:C7.construction',
+      'C1:voidShareMin|voidShareMax:C1',
+      'C2:skyComponents|skyShare:C2',
+      'C3:cheeseShare|spaghettiShare|noodleShare|carverShare|entranceShare|pillars|ravines|ravinesSky|maxShare:C3',
+      'C4:bands|floorPeak:C4',
+      'C5:largest|landCarved|thinnest|thinnestByKind:C5',
+      'C6:latticeBias:C6',
+      'C7:verticalStep|flatWallShare|waterWall:C7.tuning',
+      'C9:nearestEntrance|holedSurface:C9',
+      'C7:borderPlaneRatio|switchWall:C7.default',
+      'C8:aperiodicity|typeMixVariation|sizeSpread:C8',
+      'C9:entrancesMax|thinRoof:C9.default',
+    ]);
+    expect(coverageErrors(calls)).toEqual([]);
+  });
+});

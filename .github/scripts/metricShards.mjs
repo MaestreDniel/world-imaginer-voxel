@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// The metrics-quick shards of CI: named heavy files in their own shards, and the catch-all shard `rest`, which
-// excludes every named file, so a metric file added later runs in `rest` without touching this script. The shard
-// names are CI's matrix (`matrix`), so a shard added here always runs. Rebalance by the job summaries' durations.
-// The commands live in `shardLib.mjs`, which the unit table (`unitShards.mjs`) shares.
+// The metrics-quick shards of CI: named heavy files in their own shards (a file split by an env in several, SP6b spec
+// §13), and the catch-all shard `rest`, which excludes every named file, so a metric file added later runs in `rest`
+// without touching this script. The shard names are CI's matrix (`matrix`), so a shard added here always runs.
+// Rebalance by the job summaries' durations. The commands live in `shardLib.mjs`, which the unit table
+// (`unitShards.mjs`) shares.
 //
 //   node .github/scripts/metricShards.mjs matrix            the shard names as a JSON array
 //   node .github/scripts/metricShards.mjs check             fails unless the shards list the project's files once each
@@ -12,13 +13,24 @@ import { cli, shardTool } from './shardLib.mjs';
 const DIR = 'test/metrics';
 
 /**
- * Shard name → its files; `rest` is the catch-all. Measured 2026-10-20 (cold region cache, alone on 4 CPUs of an
- * i7-12700H): terrain 167 s (T1), surface 167 s (S1), noise 108 s, the other seven files 80 s together; noise in `rest`.
+ * Shard name → its files, or its files and the env its run sets (SP6b spec §13: a shard is named by (file, env));
+ * `rest` is the catch-all. Measured 2026-10-20 (cold region cache, alone on 4 CPUs of an i7-12700H): terrain 167 s
+ * (T1), surface 167 s (S1), noise 108 s, the other seven files 80 s together; noise in `rest`. SP6b's split (§13
+ * L1-L4) measured 2026-11-12 on the laptop (each shard alone through `run`, the caves on a warm region cache; CI's
+ * cold times are SP6b Task 5's): see each.
  */
 export const SHARDS = {
-  // SP4c spec §8.1, §9: R7's Apply part (`apply.metric.ts`, planned 25-35 s at RD 6) joins the shard with the most room.
-  terrain: [`${DIR}/terrain.metric.ts`, `${DIR}/apply.metric.ts`],
-  surface: [`${DIR}/surface.metric.ts`],
+  // SP6b spec §13 L1, L2: T1-T5 by profile (`METRICS_PROFILES`; terrain.metric.ts draws every profile's columns and
+  // keeps its own, ruling P1), R7's Apply part (`apply.metric.ts`, SP4c spec §8.1) with the default profile's 8,192
+  // columns and T4 regions; large_biomes' 32,768 columns alone. 75 s.
+  'terrain-default': { files: [`${DIR}/terrain.metric.ts`, `${DIR}/apply.metric.ts`], env: { METRICS_PROFILES: 'default' } },
+  // 216 s.
+  'terrain-large': { files: [`${DIR}/terrain.metric.ts`], env: { METRICS_PROFILES: 'large_biomes' } },
+  // SP6b spec §13 L3: S1-S3, B4 and B2 by profile, as T1-T5 (`islandBranchOnGround` with the default profile).
+  // 57 s.
+  'surface-default': { files: [`${DIR}/surface.metric.ts`], env: { METRICS_PROFILES: 'default' } },
+  // 209 s.
+  'surface-large': { files: [`${DIR}/surface.metric.ts`], env: { METRICS_PROFILES: 'large_biomes' } },
   // SP4a spec §10 (D28): the renderer's and the light's metric files (R1, R2, R4, R5; L1, L2, DT1.light, S1.light),
   // with their cold region caches, and G1's static cells (a JSON read; ruling P53). SP4b spec §8.1, §9: R7's streaming
   // flight (`stream.metric.ts`: planned 20-30 s; measured 38 s in CI's first sharded run, run 40077412950, and about
@@ -36,10 +48,13 @@ export const SHARDS = {
   // 10 × 10 region on every tier, the leave and the buried-house cases), which `rest` (the long pole) cannot take, so it
   // runs in a shard of its own, as SP5a's and SP5b's files ended (prototype: 41 s on quick, 35 s on fast).
   clipboard: [`${DIR}/clipboard.metric.ts`],
-  // SP6a spec §10.1, §11 (D26): the caves' metrics (`caves.metric.ts`: C7's construction parts, later C1-C9), planned at
-  // 80-160 s on quick plus setup (nine 32 × 32 regions up to T with the global carver reference), which no shard has
-  // room for, so it runs in a shard of its own (Task 30: 106 s alone, cold region cache).
-  caves: [`${DIR}/caves.metric.ts`],
+  // SP6a spec §10.1, §11 (D26): the caves' metrics (`caves.metric.ts`), in shards of their own (SP6a Task 30: 106 s
+  // alone, cold region cache, before C1-C9). SP6b spec §13 L4: by group (`METRICS_CAVE_GROUPS`): the six default-group
+  // regions (C1-C6, the default group's C7-C9 and their `carverReference`). 171 s.
+  caves: { files: [`${DIR}/caves.metric.ts`], env: { METRICS_CAVE_GROUPS: 'default' } },
+  // The three preset regions (their C7-C9 groups and `carverReference`, `islandCapAir`) and the pure parts
+  // (`reachOverflow`, `endTaper`). 56 s.
+  'caves-presets': { files: [`${DIR}/caves.metric.ts`], env: { METRICS_CAVE_GROUPS: 'presets' } },
   rest: null,
 };
 

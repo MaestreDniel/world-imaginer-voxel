@@ -1,2 +1,4 @@
 // Types for metricShards.mjs (the test tsconfig has no allowJs).
-export const SHARDS: Record<string, string[] | null>;
+import type { Shards } from './shardLib.mjs';
+
+export const SHARDS: Shards;

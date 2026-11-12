@@ -4,13 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { CARVER_WINDOW_R } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
-import { resolveProfile, type ProfileId } from '../../src/core/params/profiles';
+import { resolveProfile } from '../../src/core/params/profiles';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
 import { carverPath, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
-import { columnPoint } from '../../src/gen/column/columnPoint';
-import { createGenContext } from '../../src/gen/context';
-import { ringCandidates } from '../../src/metrics/sp3eGoldens';
 import { AIR } from '../../src/world/blocks/index';
 import {
   aperiodicRatios, bandDetail, borderPlaneRatio, C1_C6_PARTS, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, caveC7C9Counts,
@@ -19,33 +16,30 @@ import {
   type C1C6Part, type C7C9Part, type CaveC7C9Counts, type CavePose, type CaveRegionCounts, type ExampleId,
 } from '../harness/caveMetrics';
 import { CARVER_DEFAULTS, CARVER_MAXIMA } from '../harness/carverParams';
+import { caveGroupOf, caveSites, type Site } from '../harness/caveSites';
 import { metricTest } from '../harness/metric';
 import { referenceCarve } from '../harness/refs';
 import { genRegion, type RegionView } from '../harness/region';
 
 /**
  * The caves' metrics (SP6a spec §10.1, D26), over harness regions up to 'T' with the tag read from the store
- * (`RegionView.tag`). The regions:
- * - fast: 2 regions 16 × 16 of seed '42', profile default;
- * - quick: per seed '42' and '1', 2 regions 32 × 32 of the default profile and 1 of large_biomes; and one 32 × 32 region
- *   of seed '42' on each of archipelago (a coast and sea floor), amplified (summits and deep columns) and
- *   floating_islands (the island cap), found by the scan below and fixed here;
- * - full: the quick set over seeds '42', '1', '2', '3': per seed 2 default regions, 1 of large_biomes and one per preset,
- *   the preset regions of seeds '1', '2' and '3' found by the same scan when the tier runs.
- * The preset regions' scan (seed '42' run once: `PRESET_REGIONS` holds what it found, and the metric re-checks that each
- * still satisfies its predicate): candidate R(a, b) is the 32 × 32 chunks centred on block (128a, 128b), chunk origin
- * (8a − 16, 8b − 16), in the rings of `sp3eGoldens.ts`' window search (r = 0, 1, …; within a ring a then b ascending);
- * its 256 lattice points are the block centres (x0 + 32i + 16, z0 + 32j + 16), i, j in 0 … 15, read through
- * `columnPoint` on the preset's context; the first candidate whose predicate holds is the preset's region (at seed '42'):
- * - archipelago: 64 … 192 of the points have offset0 < 63 (a coast and its sea floor): R(1, −2), 68 points at sea;
- * - amplified: the largest offset0 ≥ 200 (summits) and ≥ 64 points with offset0 ≥ 180 (deep columns of rock):
- *   R(−5, −1), 65 points ≥ 180, the largest 209;
- * - floating_islands: ≥ 64 points with islandMask ≥ 0.9 (islands overhead, under the cap): R(−2, −1), 81 points.
+ * (`RegionView.tag`). The regions per tier, and the preset regions' scan, are `test/harness/caveSites.ts`' (its
+ * header).
+ *
+ * By group (SP6b spec §13 L4; `METRICS_CAVE_GROUPS`, read once: `default` or `presets`, one per CI job; absent, every
+ * group in this one process, ruling P2; an unknown name throws). Each part keeps one literal `metricTest` call; a call
+ * is registered when a group it reads runs:
+ * - the default group (the default and large_biomes regions): C1-C6, and the default-only parts of C7-C9
+ *   (`C7.default`: borderPlaneRatio, switchWall; C8; `C9.default`: entrancesMax, thinRoof), with the review poses;
+ * - the presets group (the three preset regions): the pure parts and `islandCapAir` (`C7.construction`);
+ * - both: `carverReference` (max 0 per region, so the sum over the jobs is the unsplit value), and the per-group parts
+ *   of C7-C9 (`C7.tuning`: verticalStep, flatWallShare, waterWall; `C9`: nearestEntrance, holedSurface), each the
+ *   worst of the groups the job measures (`c7c9Parts`), so the worst over the jobs is the unsplit value.
  *
  * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
- * - `carverReference`: over every region of the tier (the preset regions included), the voxels of the region whose
- *   carver kind in the store (the tag when it is a carver's, 6-8, else 0) differs from `referenceCarve`'s, the global
- *   reference that carves every path whose box meets the region with no per-column window. The reference has no border
+ * - `carverReference`: over every region of the run's groups (the preset regions included), the voxels of the region
+ *   whose carver kind in the store (the tag when it is a carver's, 6-8, else 0) differs from `referenceCarve`'s, the
+ *   global reference that carves every path whose box meets the region with no per-column window. The reference has no border
  *   (it reads only the region's own columns), so every voxel of the region is interior and counted;
  * - `reachOverflow`: pure, no terrain. 100,000 source chunks per kind, drawn by `Xoshiro128(fnv1a32('C7.sources'))` in
  *   [−65,536, 65,536)², each source's path (the chance leaves at 1: the roll is a source's first draw, so a path does
@@ -69,107 +63,29 @@ import { genRegion, type RegionView } from '../harness/region';
  * C1-C6 (D26: tuning parts, gated from Task 38 at their bounds, `test/thresholds.ts`): the tests 'C1' … 'C6' below,
  * over the default regions only (`defaultSites`), with the instruments of `test/harness/caveMetrics.ts`.
  *
- * C7's tuning parts, C8 and C9 (D26: gated from Task 38): the second 'C7' test (its record `.out/C7.tuning.json`, beside
- * the construction parts' `.out/C7.json`), 'C8' and 'C9', over every region of the tier (the default group: default
- * and large_biomes; and each preset's), with the definitions as built in `caveMetrics.ts`; their measurement also
- * writes `.out/caves.examples.json`, the review poses at seed '42' (§10.1, §10.10, D16). `C8.largeShare` is recorded,
- * not gated (ruling R21). Each region is measured once for every test (`measure`: one grid, one set of components),
- * and each group of parts once (`c1c6`, `c7c9`: the first test to ask takes it).
+ * C7's tuning parts, C8 and C9 (D26: gated from Task 38): the 'C7' tests `C7.tuning` and `C7.default`, 'C8', and the
+ * 'C9' tests `C9` and `C9.default`, over every region of the run's groups (the default group: default and
+ * large_biomes; and each preset's), with the definitions as built in `caveMetrics.ts`; with the default group their
+ * measurement also writes `.out/caves.examples.json`, the review poses at seed '42' (§10.1, §10.10, D16).
+ * `C8.largeShare` is recorded, not gated (ruling R21). Each region is measured once for every test (`measure`: one
+ * grid, one set of components), and each group of parts once (`c1c6`, `c7c9`: the first test to ask takes it).
  */
 type Tier = 'fast' | 'quick' | 'full';
 const TIER = (process.env.METRICS_TIER ?? 'fast') as Tier;
 const pick = <T>(fast: T, quick: T, full: T): T => (TIER === 'full' ? full : TIER === 'quick' ? quick : fast);
 
-/** A region of the tier: a seed, a profile and R's rectangle. */
-interface Site {
-  readonly label: string;
-  readonly seed: string;
-  readonly profile: ProfileId;
-  readonly cx0: number;
-  readonly cz0: number;
-  readonly size: number;
-}
+/** The run's group (`METRICS_CAVE_GROUPS`; null: every group, ruling P2), read once. */
+const GROUP = caveGroupOf(process.env.METRICS_CAVE_GROUPS);
+/** Whether the run measures the default group (C1-C6, the default-only parts and the poses). */
+const DEFAULT_GROUP = GROUP === null || GROUP === 'default';
+/** Whether the run measures the presets group (the pure parts and `islandCapAir`). */
+const PRESETS_GROUP = GROUP === null || GROUP === 'presets';
 
-type PresetId = 'archipelago' | 'amplified' | 'floating_islands';
-
-/** The preset regions' scan candidates R(a, b) as found at seed '42' (see the header). */
-const PRESET_REGIONS: ReadonlyArray<readonly [PresetId, a: number, b: number]> = [
-  ['archipelago', 1, -2],
-  ['amplified', -5, -1],
-  ['floating_islands', -2, -1],
-];
-
-/** The scan's predicate on R(a, b) of `preset` at world seed `seed` (see the header). */
-function presetRegionHolds(preset: PresetId, seed: string, a: number, b: number): boolean {
-  const ctx = createGenContext(seedFromInput(seed), resolveProfile(preset));
-  const x0 = 128 * a - 256;
-  const z0 = 128 * b - 256;
-  let sea = 0;
-  let deep = 0;
-  let highest = -Infinity;
-  let islands = 0;
-  for (let j = 0; j < 16; j++) {
-    for (let i = 0; i < 16; i++) {
-      const p = columnPoint(ctx, x0 + 32 * i + 16, z0 + 32 * j + 16);
-      if (p.offset0 < 63) sea++;
-      if (p.offset0 >= 180) deep++;
-      highest = Math.max(highest, p.offset0);
-      if (p.islandMask >= 0.9) islands++;
-    }
-  }
-  if (preset === 'archipelago') return sea >= 64 && sea <= 192;
-  if (preset === 'amplified') return highest >= 200 && deep >= 64;
-  return islands >= 64;
-}
-
-/** The scan (see the header): the first candidate R(a, b), rings 0 … 64, whose predicate holds at `seed`. */
-function findPresetRegion(preset: PresetId, seed: string): readonly [a: number, b: number] {
-  for (let r = 0; r <= 64; r++) {
-    for (const [a, b] of ringCandidates(r)) if (presetRegionHolds(preset, seed, a, b)) return [a, b];
-  }
-  throw new Error(`caves.metric: no ${preset} region at seed '${seed}' within ring 64`);
-}
-
-const DEFAULT_SEEDS: readonly string[] = pick(['42'], ['42', '1'], ['42', '1', '2', '3']);
-/** The seeds of the preset regions: '42' (fixed) on quick, and the full tier's other seeds (scanned). */
-const PRESET_SEEDS: readonly string[] = pick([], ['42'], ['42', '1', '2', '3']);
-
-/** A preset's region at `seed`: the fixed one at seed '42', which still holds its predicate, else the scan's. */
-function presetRegion(preset: PresetId, seed: string): readonly [a: number, b: number] {
-  if (seed !== '42') return findPresetRegion(preset, seed);
-  const [, a, b] = PRESET_REGIONS.find(([p]) => p === preset)!;
-  expect(presetRegionHolds(preset, seed, a, b), `${preset}'s region R(${a}, ${b}) no longer holds its scan's predicate`).toBe(true);
-  return [a, b];
-}
-
+let sitesMemo: Site[] | null = null;
+/** Every region of the run's groups: the default regions, then the preset regions. */
+const sites = (): Site[] => (sitesMemo ??= caveSites(TIER, GROUP));
 /** The tier's default regions (the default and large_biomes profiles), where the default parts (C1-C6) run. */
-function defaultSites(): Site[] {
-  if (TIER === 'fast') {
-    return [
-      { label: "seed '42' default (-8, -8)", seed: '42', profile: 'default', cx0: -8, cz0: -8, size: 16 },
-      { label: "seed '42' default (8, -8)", seed: '42', profile: 'default', cx0: 8, cz0: -8, size: 16 },
-    ];
-  }
-  const out: Site[] = [];
-  for (const seed of DEFAULT_SEEDS) {
-    out.push({ label: `seed '${seed}' default (-16, -16)`, seed, profile: 'default', cx0: -16, cz0: -16, size: 32 });
-    out.push({ label: `seed '${seed}' default (16, -16)`, seed, profile: 'default', cx0: 16, cz0: -16, size: 32 });
-    out.push({ label: `seed '${seed}' large_biomes (-16, -16)`, seed, profile: 'large_biomes', cx0: -16, cz0: -16, size: 32 });
-  }
-  return out;
-}
-
-/** Every region of the tier: the default regions, then the preset regions. */
-function sites(): Site[] {
-  const out = defaultSites();
-  for (const seed of PRESET_SEEDS) {
-    for (const [preset] of PRESET_REGIONS) {
-      const [a, b] = presetRegion(preset, seed);
-      out.push({ label: `seed '${seed}' ${preset} R(${a}, ${b})`, seed, profile: preset, cx0: 8 * a - 16, cz0: 8 * b - 16, size: 32 });
-    }
-  }
-  return out;
-}
+const defaultSites = (): Site[] => sites().filter((s) => s.profile === 'default' || s.profile === 'large_biomes');
 
 // ---------------------------------------------------------------- the pure parts
 
@@ -387,20 +303,10 @@ function regionCounts(view: RegionView, ref: Uint8Array, capY: number | null): {
 /** The y from which the floating_islands region holds no cave air (§10.1's `islandCapAir`). */
 const CAP_AIR_Y = 176;
 
-metricTest('C7', ['carverReference', 'reachOverflow', 'endTaper', 'islandCapAir'], async () => {
-  const src = sourceChunks();
-  const reach = reachOverflow(src);
-  expect(reach.examples, 'C7.reachOverflow').toEqual([]);
-  // Every source of the three cases has its path (the chances at 1): 3 cases × 3 kinds × 100,000.
-  expect(reach.paths).toBe(9 * SOURCES);
-  // The straightest paths reach into the window's outermost ring of chunks, so a window of R − 1 would fail.
-  expect(reach.deepest).toBeGreaterThan(16 * CARVER_WINDOW_R);
-  const taper = endTaper(src);
-  expect(taper.examples, 'C7.endTaper').toEqual([]);
-  // The defaults' room and branch chances (0.25 each) put rooms and branches among the worms' 200,000 paths.
-  expect(taper.rooms).toBeGreaterThan(20_000);
-  expect(taper.branched).toBeGreaterThan(20_000);
+/** The region parts of C7's construction over the run's regions: `carverReference`'s counts and the island cap's. */
+interface CarverCounts { readonly regions: number; readonly mismatches: number; readonly carved: number; readonly capAir: number; readonly islandVoxels: number }
 
+async function measureCarvers(): Promise<CarverCounts> {
   let mismatches = 0;
   let carved = 0;
   let capAir = Number.NaN;
@@ -426,12 +332,42 @@ metricTest('C7', ['carverReference', 'reachOverflow', 'endTaper', 'islandCapAir'
       expect(c.islandVoxels, `the floating_islands region at ${s.label} holds no island voxels`).toBeGreaterThan(0);
     }
   }
-  return {
-    carverReference: mismatches, reachOverflow: reach.overflow, endTaper: taper.bad, islandCapAir: capAir,
-    regions: all.length, carverVoxels: carved, reachPaths: reach.paths, reachDeepest: reach.deepest,
-    taperEnds: taper.ends, taperRooms: taper.rooms, taperBranched: taper.branched, islandVoxels,
-  };
+  return { regions: all.length, mismatches, carved, capAir, islandVoxels };
+}
+
+let carverRun: Promise<CarverCounts> | null = null;
+/** The region parts of C7's construction, measured once (the first test to ask). */
+const carvers = (): Promise<CarverCounts> => (carverRun ??= measureCarvers());
+
+// `carverReference` over the run's regions (every group: max 0 per region, so the jobs' sum is the unsplit value).
+metricTest('C7', ['carverReference'], async () => {
+  const c = await carvers();
+  return { carverReference: c.mismatches, regions: c.regions, carverVoxels: c.carved };
 });
+
+// The pure parts and the island cap, with the presets group (or every group).
+if (PRESETS_GROUP) {
+  metricTest('C7', ['reachOverflow', 'endTaper', 'islandCapAir'], async () => {
+    const src = sourceChunks();
+    const reach = reachOverflow(src);
+    expect(reach.examples, 'C7.reachOverflow').toEqual([]);
+    // Every source of the three cases has its path (the chances at 1): 3 cases × 3 kinds × 100,000.
+    expect(reach.paths).toBe(9 * SOURCES);
+    // The straightest paths reach into the window's outermost ring of chunks, so a window of R − 1 would fail.
+    expect(reach.deepest).toBeGreaterThan(16 * CARVER_WINDOW_R);
+    const taper = endTaper(src);
+    expect(taper.examples, 'C7.endTaper').toEqual([]);
+    // The defaults' room and branch chances (0.25 each) put rooms and branches among the worms' 200,000 paths.
+    expect(taper.rooms).toBeGreaterThan(20_000);
+    expect(taper.branched).toBeGreaterThan(20_000);
+    const c = await carvers();
+    return {
+      reachOverflow: reach.overflow, endTaper: taper.bad, islandCapAir: c.capAir,
+      reachPaths: reach.paths, reachDeepest: reach.deepest, taperEnds: taper.ends, taperRooms: taper.rooms,
+      taperBranched: taper.branched, islandVoxels: c.islandVoxels,
+    };
+  }, 600_000, { outName: 'C7.construction' });
+}
 
 // ---------------------------------------------------------------- C1-C9, the tuning parts (D26)
 
@@ -567,13 +503,21 @@ const c1c6 = (): Promise<Record<C1C6Part, number>> => (c16Run ??= measureC1C6())
  */
 const C79_NAN_ON_FAST: readonly string[] = ['C8.aperiodicity', 'C8.sizeSpread', 'C8.largeShare'];
 
+/** C7's and C9's per-group parts (each the worst of the groups measured, `c7c9Parts`), gated in every group's job. */
+const PER_GROUP_C7: readonly string[] = ['verticalStep', 'flatWallShare', 'waterWall'];
+const PER_GROUP_C9: readonly string[] = ['nearestEntrance', 'holedSurface'];
+/** The C7-C9 parts this run gates: every one with the default group, else the per-group parts alone. */
+const C79_GATED: readonly C7C9Part[] = C7_C9_PARTS.filter((p) => DEFAULT_GROUP
+  || PER_GROUP_C7.map((k) => `C7.${k}`).includes(p) || PER_GROUP_C9.map((k) => `C9.${k}`).includes(p));
+
 /**
- * C7's tuning parts, C8 and C9 (SP6a spec §10.1, D26: gated from Task 38): measured over every region of the tier by
- * `caveC7C9Counts` (definitions as built in `test/harness/caveMetrics.ts`) and written to `.out/caves.C7-C9.json` (the
- * parts, the per-group values of the "default and presets" parts, each part's detail, and per region its counts'
- * summary). The review poses at seed '42' (§10.1, §10.10, D16) go to `.out/caves.examples.json`: per pose, the first of
- * the tier's seed '42' default regions (in `defaultSites`' order) holding one. Every part is finite (fast: or listed in
- * `C79_NAN_ON_FAST`), and every pose found.
+ * C7's tuning parts, C8 and C9 (SP6a spec §10.1, D26: gated from Task 38): measured over every region of the run's
+ * groups by `caveC7C9Counts` (definitions as built in `test/harness/caveMetrics.ts`) and written to
+ * `.out/caves.C7-C9.json` (the parts, the per-group values of the "default and presets" parts, each part's detail, and
+ * per region its counts' summary). With the default group, the review poses at seed '42' (§10.1, §10.10, D16) go to
+ * `.out/caves.examples.json`: per pose, the first of the tier's seed '42' default regions (in `defaultSites`' order)
+ * holding one. Every part the run gates (`C79_GATED`) is finite (fast: or listed in `C79_NAN_ON_FAST`), and with the
+ * default group every pose found.
  */
 async function measureC7C9(): Promise<Record<C7C9Part, number>> {
   const measured: Measured[] = [];
@@ -639,21 +583,23 @@ async function measureC7C9(): Promise<Record<C7C9Part, number>> {
     id: 'C7-C9', tier: process.env.METRICS_TIER ?? null, values: parts, nanParts: nan, groups: c7c9Groups(regions), detail,
     regions: perRegion,
   }));
-  // The review poses: per id the first seed '42' default region holding one.
-  const poses: Record<string, (CavePose & { region: string }) | null> = {};
-  for (const id of EXAMPLE_IDS) {
-    const m = measured.find((r) => r.examples !== null && r.examples[id] !== null);
-    poses[id] = m === undefined ? null : { ...m.examples![id]!, region: m.site.label };
-  }
-  writeFileSync(join(OUT_DIR, 'caves.examples.json'), json({
-    id: 'caves.examples', tier: process.env.METRICS_TIER ?? null, seed: '42', profile: 'default', poses,
-  }));
-  for (const p of C7_C9_PARTS) {
+  for (const p of C79_GATED) {
     const v = parts[p];
     if (TIER === 'fast' && Number.isNaN(v)) expect(C79_NAN_ON_FAST, `${p} is NaN on fast`).toContain(p);
     else expect(Number.isFinite(v), `${p} = ${v} is not finite`).toBe(true);
   }
-  for (const id of EXAMPLE_IDS) expect(poses[id], `the ${id} pose`).not.toBeNull();
+  if (DEFAULT_GROUP) {
+    // The review poses: per id the first seed '42' default region holding one.
+    const poses: Record<string, (CavePose & { region: string }) | null> = {};
+    for (const id of EXAMPLE_IDS) {
+      const m = measured.find((r) => r.examples !== null && r.examples[id] !== null);
+      poses[id] = m === undefined ? null : { ...m.examples![id]!, region: m.site.label };
+    }
+    writeFileSync(join(OUT_DIR, 'caves.examples.json'), json({
+      id: 'caves.examples', tier: process.env.METRICS_TIER ?? null, seed: '42', profile: 'default', poses,
+    }));
+    for (const id of EXAMPLE_IDS) expect(poses[id], `the ${id} pose`).not.toBeNull();
+  }
   return parts;
 }
 
@@ -661,26 +607,38 @@ let c79Run: Promise<Record<C7C9Part, number>> | null = null;
 /** C7's tuning parts, C8 and C9, measured once (the first test to ask). */
 const c7c9 = (): Promise<Record<C7C9Part, number>> => (c79Run ??= measureC7C9());
 
-/** The parts of metric `id` among `parts` ('C3.pillars' → 'pillars'). */
-function partsOf(parts: Readonly<Record<string, number>>, id: string): Record<string, number> {
+/** The parts of metric `id` among `parts` ('C3.pillars' → 'pillars'), or only `names` of them. */
+function partsOf(parts: Readonly<Record<string, number>>, id: string, names?: readonly string[]): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const [k, v] of Object.entries(parts)) if (k.startsWith(`${id}.`)) out[k.slice(id.length + 1)] = v;
+  for (const [k, v] of Object.entries(parts)) {
+    if (k.startsWith(`${id}.`) && (names === undefined || names.includes(k.slice(id.length + 1)))) out[k.slice(id.length + 1)] = v;
+  }
   return out;
 }
 
 // The rows (SP6a spec §10.1, Task 38, ruling R21): each id's parts at their bounds in `test/thresholds.ts`. The first
 // test of each group measures it (its timeout covers the regions); the others read the same values.
-metricTest('C1', ['voidShareMin', 'voidShareMax'], async () => partsOf(await c1c6(), 'C1'), 900_000);
-metricTest('C2', ['skyComponents', 'skyShare'], async () => partsOf(await c1c6(), 'C2'));
-metricTest('C3', ['cheeseShare', 'spaghettiShare', 'noodleShare', 'carverShare', 'entranceShare', 'pillars', 'ravines', 'ravinesSky', 'maxShare'],
-  async () => partsOf(await c1c6(), 'C3'));
-metricTest('C4', ['bands', 'floorPeak'], async () => partsOf(await c1c6(), 'C4'));
-// C5.largest is gated on quick and full (ruling R21 (e): fast's 16 × 16 regions read it high by their size).
-metricTest('C5', ['largest', 'landCarved', 'thinnest', 'thinnestByKind'], async () => partsOf(await c1c6(), 'C5'));
-metricTest('C6', ['latticeBias'], async () => partsOf(await c1c6(), 'C6'));
-metricTest('C7', ['borderPlaneRatio', 'verticalStep', 'flatWallShare', 'switchWall', 'waterWall'], async () => partsOf(await c7c9(), 'C7'), 900_000,
+if (DEFAULT_GROUP) {
+  metricTest('C1', ['voidShareMin', 'voidShareMax'], async () => partsOf(await c1c6(), 'C1'), 900_000);
+  metricTest('C2', ['skyComponents', 'skyShare'], async () => partsOf(await c1c6(), 'C2'));
+  metricTest('C3', ['cheeseShare', 'spaghettiShare', 'noodleShare', 'carverShare', 'entranceShare', 'pillars', 'ravines', 'ravinesSky', 'maxShare'],
+    async () => partsOf(await c1c6(), 'C3'));
+  metricTest('C4', ['bands', 'floorPeak'], async () => partsOf(await c1c6(), 'C4'));
+  // C5.largest is gated on quick and full (ruling R21 (e): fast's 16 × 16 regions read it high by their size).
+  metricTest('C5', ['largest', 'landCarved', 'thinnest', 'thinnestByKind'], async () => partsOf(await c1c6(), 'C5'));
+  metricTest('C6', ['latticeBias'], async () => partsOf(await c1c6(), 'C6'));
+}
+// The per-group parts (SP6b spec §13 L4), in every group: each job gates the worst of its own groups.
+metricTest('C7', ['verticalStep', 'flatWallShare', 'waterWall'], async () => partsOf(await c7c9(), 'C7', PER_GROUP_C7), 900_000,
   { outName: 'C7.tuning' });
-// C8.largeShare is returned and recorded in `.out/C8.json`, not gated (ruling R21 (c)); aperiodicity and sizeSpread
-// are gated on quick and full (NaN on fast, ruling P32).
-metricTest('C8', ['aperiodicity', 'typeMixVariation', 'sizeSpread'], async () => partsOf(await c7c9(), 'C8'));
-metricTest('C9', ['nearestEntrance', 'entrancesMax', 'holedSurface', 'thinRoof'], async () => partsOf(await c7c9(), 'C9'));
+metricTest('C9', ['nearestEntrance', 'holedSurface'], async () => partsOf(await c7c9(), 'C9', PER_GROUP_C9));
+// The default-only parts, with the default group.
+if (DEFAULT_GROUP) {
+  metricTest('C7', ['borderPlaneRatio', 'switchWall'], async () => partsOf(await c7c9(), 'C7', ['borderPlaneRatio', 'switchWall']), 900_000,
+    { outName: 'C7.default' });
+  // C8.largeShare is returned and recorded in `.out/C8.json`, not gated (ruling R21 (c)); aperiodicity and sizeSpread
+  // are gated on quick and full (NaN on fast, ruling P32).
+  metricTest('C8', ['aperiodicity', 'typeMixVariation', 'sizeSpread'], async () => partsOf(await c7c9(), 'C8'));
+  metricTest('C9', ['entrancesMax', 'thinRoof'], async () => partsOf(await c7c9(), 'C9', ['entrancesMax', 'thinRoof']), 600_000,
+    { outName: 'C9.default' });
+}
