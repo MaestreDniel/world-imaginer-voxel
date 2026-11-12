@@ -185,6 +185,34 @@ export function readField(s: ColumnSample, field: SampleField, x: number, z: num
 }
 
 /**
+ * Bilinear readout of a continuous field at world (x, z) within the sample's halo (SP6b §1.2): cells −1 … 4, so x and z
+ * may lie up to 4 blocks outside the column, [16·c − 4, 16·c + 20); a RangeError beyond. Same corner and lerp order as
+ * `readField`, so it equals `readField` bit for bit at the column's own blocks, and two columns reading a shared
+ * position use the same corners and fractions, so they agree bit for bit (no seam at a chunk border).
+ */
+export function readFieldHalo(s: ColumnSample, field: SampleField, x: number, z: number): number {
+  const u = (x - 16 * s.cx) / 4;
+  const v = (z - 16 * s.cz) / 4;
+  if (!(u >= -1 && u < 5 && v >= -1 && v < 5)) {
+    throw new RangeError(`readFieldHalo: (${x}, ${z}) lies outside column (${s.cx}, ${s.cz})'s halo`);
+  }
+  const a = s.f[field];
+  // In range, ⌊u⌋ and ⌊v⌋ already lie in −1 … 4, the cells whose corners the 7 × 7 lattice holds: no clamp.
+  const i = Math.floor(u);
+  const j = Math.floor(v);
+  const fx = u - i;
+  const fz = v - j;
+  const k = latticeIndex(i, j);
+  const v00 = a[k]!;
+  const v10 = a[k + 1]!;
+  const v01 = a[k + 7]!;
+  const v11 = a[k + 8]!;
+  const top = v00 + (v10 - v00) * fx;
+  const bottom = v01 + (v11 - v01) * fx;
+  return top + (bottom - top) * fz;
+}
+
+/**
  * The lattice index of world (x, z)'s nearest quart corner inside the sample's column (ties to the lower corner): the
  * corner `readLevel` reads, so water v0, the surface rules' `lake` and the metrics name the same corner.
  */
