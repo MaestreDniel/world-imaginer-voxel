@@ -1,13 +1,9 @@
 import { resolveProfile } from '../../src/core/params/profiles';
-import { seedFromInput } from '../../src/core/seed';
-import { surfaceEst3 } from '../../src/gen/column/surfaceEstimate';
-import { createGenContext } from '../../src/gen/context';
-import { createDensityContext } from '../../src/gen/density/context';
 import { metricTest } from '../harness/metric';
 import { genRegion } from '../harness/region';
 import {
-  analyseColumn, forEachColumnThreaded, metricsProfiles, newGrid, newScatterScratch, newScattered, preCaveTop, putColumn,
-  scatterColumns, t1Values, t2Values, t3Values, t4Sites, t5Values, waterWalls, type Scattered, type ScatterProfile,
+  mergeScattered, metricsProfiles, newGrid, newScattered, putColumn, scatterColumns, scatterColumnsThreaded, t1Values, t2Values,
+  t3Values, t4Sites, t5Values, waterWalls, type Scattered, type ScatterProfile,
 } from '../harness/terrainScatter';
 
 /**
@@ -17,9 +13,10 @@ import {
  * Sampling (§8.1), per profile (default, large_biomes) and tier seed ('42'; full '42', '1', '2', '3'):
  * - Scattered columns (T1, T2, T3, T5): `COLUMNS` per (profile, seed), drawn by one `Xoshiro128(fnv1a32('T1-T5'))`
  *   (`scatterColumns`) uniformly over ±1024 chunks (default) or ±4096 (large_biomes), i.e. ±16384 / ±65536 blocks,
- *   generated on 4 region workers (`regionWorker.ts`) and read on this thread (every accumulator is
- *   order-independent), through `test/harness/terrainScatter.ts` (`forEachColumnThreaded`, `analyseColumn` and the
- *   part bodies in `'enforce'` mode, SP3e spec §5.1). The four metrics read the same columns (one pass, memoised).
+ *   generated and analysed on 4 region workers (`regionWorker.ts`; SP6b spec §13 L5): each worker analyses its share
+ *   in place and this thread sums the workers' accumulators (every one is order-independent; the T5 list is sorted),
+ *   through `test/harness/terrainScatter.ts` (`scatterColumnsThreaded`, `analyseColumn` and the part bodies in
+ *   `'enforce'` mode, SP3e spec §5.1). The four metrics read the same columns (one pass, memoised).
  * - T4 regions through the harness (`genRegion`, 4 threads, `cache: false`: each region is generated once per run):
  *   16 × 16 columns at sites whose 2D `offset` at the region's centre is < 40 (fast 4, quick 4, full 16 per
  *   (profile, seed); `Xoshiro128(fnv1a32('T4'))`, rejection-drawn over the same squares, `t4Sites`).
@@ -99,18 +96,13 @@ function scattered(): Promise<Record<Profile, Scattered>> {
 
 async function scatter(): Promise<Record<Profile, Scattered>> {
   const columns = scatterColumns(PROFILES, SEEDS, COLUMNS, RANGE);
-  const scratch = newScatterScratch();
   const out = {} as Record<Profile, Scattered>;
   for (const profile of PROFILES) {
     const t0 = performance.now();
     const s = newScattered();
     const params = resolveProfile(profile);
     for (const [k, seed] of SEEDS.entries()) {
-      const dc = createDensityContext(createGenContext(seedFromInput(seed), params));
-      const est = (x: number, z: number): number => surfaceEst3(dc, x, z);
-      const pre = (x: number, z: number, top: number): number => preCaveTop(dc, x, z, top);
-      const cols = columns[profile]![k]!;
-      await forEachColumnThreaded(SCATTER_WORKER_DIR, seed, params, cols, (view, cx, cz) => analyseColumn(s, view, cx, cz, est, scratch, pre));
+      mergeScattered(s, await scatterColumnsThreaded(SCATTER_WORKER_DIR, seed, params, columns[profile]![k]!));
     }
     s.seconds = Math.round(performance.now() - t0) / 1000;
     out[profile] = s;

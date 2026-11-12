@@ -5,22 +5,27 @@ import { resolveProfile } from '../../src/core/params/profiles';
 import type { Params } from '../../src/core/params/schema';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
-import { biomeFamily, biomeId, type BiomeFamily } from '../../src/gen/biomes/registry';
+import { biomeFamily, type BiomeFamily } from '../../src/gen/biomes/registry';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import { createGenContext } from '../../src/gen/context';
-import { AIR } from '../../src/world/blocks/index';
-import type { DensityContext } from '../../src/gen/density/context';
-import { probe } from '../../src/gen/density/probe';
-import type { AuxView, ColumnView } from '../../src/world/store/api';
+import type { ColumnView } from '../../src/world/store/api';
 import { createStore } from '../../src/world/store/store';
 import { ask, buildNodeTaskWorker } from './nodeWorker';
-import type { RegionAttachMsg, RegionColumnMsg, RegionWorkerReply } from './regionWorker';
+import type { RegionAttachMsg, RegionColumnMsg, RegionScatterMsg, RegionWorkerReply } from './regionWorker';
+import { newScattered, type Scattered } from './terrainAnalysis';
+
+export {
+  analyseColumn, newGrid, newScatterScratch, newScattered, preCaveSolidity, preCaveTop, putColumn, solidity, transitions,
+  waterWalls, type Grid, type ScatterColumn, type ScatterScratch, type Scattered,
+} from './terrainAnalysis';
 
 /**
  * T1-T5's threaded column scatter and per-column analysis (SP3e spec §5.1 "Extractions", D18), moved out of
  * `test/metrics/terrain.metric.ts` and parameterised: the worker dir, seed, params and columns are arguments, and
  * the part bodies take a population `mode`. terrain.metric.ts calls them in `'enforce'` mode with its own constants
  * (its outputs are unchanged, spec §5.7); the presets' full-tier records call them in `'record'` mode (§5.5).
+ * The per-column analysis lives in `terrainAnalysis.ts` (re-exported here), which the region worker bundles for
+ * `scatterColumnsThreaded` (SP6b spec §13 L5).
  * Definitions: terrain.metric.ts' header (SP3b spec §8.2).
  */
 
@@ -34,11 +39,7 @@ export const MIN_PEAK_COLUMNS = 20;
 export const MIN_T5_POSITIONS = 1000;
 export const MIN_T3_PAIRS = 2000;
 
-const PEAKS = new Set(['windswept_hills', 'snowy_slopes', 'stony_peaks', 'jagged_peaks', 'frozen_peaks'].map((n) => biomeId(n as Parameters<typeof biomeId>[0])));
-const T5_LOCAL = [2, 6, 10, 14];
 const T3_FAMILY: BiomeFamily = 'lowland';
-const FLOAT_MAX_HEIGHT = 6;
-const FLOAT_MIN_GAP = 3;
 
 /** T1-T5's profiles in their draw order (terrain.metric.ts' header; surface.metric.ts draws the same columns). */
 export const SCATTER_PROFILES = ['default', 'large_biomes'] as const;
@@ -130,261 +131,23 @@ export function requireSample(what: string, n: number, min: number): void {
   expect.soft(n, `${what}: insufficient sample (${n} < ${min})`).toBeGreaterThanOrEqual(min);
 }
 
-/** What the per-column analysis reads of a column: its blocks, its cave tags and aux A (a `ColumnView` is one). */
-export interface ScatterColumn {
-  sectionBlocks(sy: number): Uint16Array | number;
-  /** The cave tag per voxel (SP6a spec §3.2-§3.3), or its uniform byte. */
-  sectionCave(sy: number): Uint8Array | number;
-  aux(): Pick<AuxView, 'worldSurfaceWG' | 'oceanFloorWG' | 'surfaceBiome'> | null;
-}
-
-/** Column solidity, index ((y + 64) << 8) | (lz << 4) | lx, from the proto sections (also Z1's, SP3e spec §5.3). */
-export function solidity(view: ScatterColumn, out: Uint8Array): Uint8Array {
-  for (let sy = 0; sy < 24; sy++) {
-    const b = view.sectionBlocks(sy);
-    const base = sy << 12;
-    if (typeof b === 'number') out.fill(b === AIR ? 0 : 1, base, base + 4096);
-    else for (let i = 0; i < 4096; i++) out[base + i] = b[i] === AIR ? 0 : 1;
-  }
-  return out;
-}
-
-/**
- * The column's pre-cave solidity (SP6a spec §10.4: T2 reads it), index as `solidity`: 1 where the block is not air or
- * the voxel carries a cave tag (§3.2: tagged air is air the caves made of pre-cave rock), else 0. With every family tap
- * present (the built-in trees) it is the solidity with the caves muted and the carvers off.
- */
-export function preCaveSolidity(view: ScatterColumn, out: Uint8Array): Uint8Array {
-  solidity(view, out);
-  for (let sy = 0; sy < 24; sy++) {
-    const c = view.sectionCave(sy);
-    const base = sy << 12;
-    if (typeof c === 'number') { if (c !== 0) out.fill(1, base, base + 4096); }
-    else for (let i = 0; i < 4096; i++) if (c[i] !== 0) out[base + i] = 1;
-  }
-  return out;
-}
-
-/** Solid→air transitions at y ∈ [y0, y1] (y0 ≥ −64) of position p (T2's and Z1's overhang count). */
-export function transitions(solid: Uint8Array, p: number, y0: number, y1: number): number {
-  let n = 0;
-  for (let y = Math.max(-64, y0); y <= y1; y++) {
-    if (solid[((y + 64) << 8) | p] === 1 && (y === 319 || solid[((y + 65) << 8) | p] === 0)) n++;
-  }
-  return n;
-}
-
-/** Voxels of position p in solid runs of height ≤ 6 resting on an air gap of ≥ 3 blocks, at y ∈ [−56, top]. */
-function floatingVoxels(solid: Uint8Array, p: number, top: number): number {
-  let voxels = 0;
-  let gap = 0;
-  let run = 0;
-  let runGap = 0;
-  for (let y = -56; y <= top + 1; y++) {
-    const s = y <= 319 && solid[((y + 64) << 8) | p] === 1;
-    if (s) {
-      if (run === 0) runGap = gap;
-      run++;
-      gap = 0;
-    } else {
-      if (run > 0 && run <= FLOAT_MAX_HEIGHT && runGap >= FLOAT_MIN_GAP) voxels += run;
-      run = 0;
-      gap++;
-    }
-  }
-  return voxels;
-}
-
 /** Nearest-rank quantile of a sorted array; NaN for an empty one (a record-mode population of 0). */
 const nearestRank = (sorted: ArrayLike<number>, q: number): number =>
   sorted.length === 0 ? NaN : sorted[Math.max(0, Math.ceil(q * sorted.length) - 1)]!;
 
-/** Per-position land flag, floor/top, surface and biome of a 16w × 16h block grid, row-major. */
-export interface Grid { n: number; m: number; top: Int16Array; ws: Int16Array; land: Uint8Array; biome: Uint8Array }
-
-export const newGrid = (n: number, m: number): Grid =>
-  ({ n, m, top: new Int16Array(n * m), ws: new Int16Array(n * m), land: new Uint8Array(n * m), biome: new Uint8Array(n * m) });
-
-/** Copies one column's aux A into the grid at block offset (ox, oz). */
-export function putColumn(g: Grid, a: Pick<AuxView, 'worldSurfaceWG' | 'oceanFloorWG' | 'surfaceBiome'>, ox: number, oz: number): void {
-  for (let p = 0; p < 256; p++) {
-    const k = (oz + (p >> 4)) * g.n + ox + (p & 15);
-    const ws = a.worldSurfaceWG[p]!;
-    const of = a.oceanFloorWG[p]!;
-    g.ws[k] = ws;
-    g.top[k] = of - 1;
-    g.land[k] = ws === of ? 1 : 0;
-    g.biome[k] = a.surfaceBiome[p]!;
-  }
-}
-
-/** Water-wall diagnostic over a grid: [wall voxels, water voxels above tops]. */
-export function waterWalls(g: Grid): [number, number] {
-  let walls = 0;
-  let water = 0;
-  for (let j = 0; j < g.m; j++) {
-    for (let i = 0; i < g.n; i++) {
-      const k = j * g.n + i;
-      const ws = g.ws[k]!;
-      const top = g.top[k]!;
-      if (ws - 1 <= top) continue;
-      water += ws - 1 - top;
-      let minWs = Infinity;
-      if (i > 0) minWs = Math.min(minWs, g.ws[k - 1]!);
-      if (i < g.n - 1) minWs = Math.min(minWs, g.ws[k + 1]!);
-      if (j > 0) minWs = Math.min(minWs, g.ws[k - g.n]!);
-      if (j < g.m - 1) minWs = Math.min(minWs, g.ws[k + g.n]!);
-      walls += Math.max(0, ws - Math.max(minWs, top + 1));
-    }
-  }
-  return [walls, water];
-}
-
-/** The accumulators of one population of scattered columns (order-independent sums). */
-export interface Scattered {
-  hist: Float64Array; // land tops, index top + 64
-  land: number;
-  over: number;
-  peakLand: number;
-  peakOver: number;
-  peakColumns: number;
-  floatPositions: number;
-  floatVoxels: number;
-  peakFloatPositions: number;
-  t5: number[];
-  t5Land: number;
-  t5Multi: number;
-  /** T5 positions whose pre-cave top lies above the true top (a cave opens the surface there; SP6a spec §10.4). */
-  t5Raised: number;
-  /** T3: per biome, inside pairs and their steep count; per same-family biome pair `(min << 8) | max`, the same. */
-  inside: Float64Array;
-  insideSteep: Float64Array;
-  borderPairs: Float64Array;
-  borderSteep: Float64Array;
-  landPairs: number;
-  crossFamilyPairs: number;
-  walls: number;
-  water: number;
-  columns: number;
-  waterPositions: number;
-  /** Wall time of the population, set by the caller (a timing key: never compared). */
-  seconds: number;
-}
-
-export const newScattered = (): Scattered => ({
-  hist: new Float64Array(384), land: 0, over: 0, peakLand: 0, peakOver: 0, peakColumns: 0,
-  floatPositions: 0, floatVoxels: 0, peakFloatPositions: 0, t5: [], t5Land: 0, t5Multi: 0, t5Raised: 0,
-  inside: new Float64Array(256), insideSteep: new Float64Array(256),
-  borderPairs: new Float64Array(65536), borderSteep: new Float64Array(65536), landPairs: 0, crossFamilyPairs: 0,
-  walls: 0, water: 0, columns: 0, waterPositions: 0, seconds: 0,
-});
-
-/** Reusable buffers of `analyseColumn` (one per caller thread): the true and the pre-cave solidity, the grid. */
-export interface ScatterScratch { solid: Uint8Array; pre: Uint8Array; g: Grid }
-
-export const newScatterScratch = (): ScatterScratch => ({ solid: new Uint8Array(98304), pre: new Uint8Array(98304), g: newGrid(16, 16) });
-
-/** The true top (no caves to look through): `analyseColumn`'s default `preCaveTop`. */
-const TRUE_TOP = (_x: number, _z: number, top: number): number => top;
-
-/**
- * The pre-cave top over a land position's true top (SP6a spec §10.4: T5 reads the pre-cave terrain, which
- * `surfaceEst3` estimates by design): the top of the run of `precave` tap > 0 (`probe`) that continues the true top
- * upward, so a cave that opens the surface is looked through. `dc`'s tree must have a `precave` tap.
- */
-export function preCaveTop(dc: DensityContext, x: number, z: number, top: number): number {
-  let y = top;
-  while (y < 319 && probe(dc, x, y + 1, z, 'precave') > 0) y++;
-  return y;
-}
-
-/**
- * Adds one generated column (chunk column cx, cz) to `s`: T1's land tops, T2's overhangs and floating rocks, T5's
- * |surfaceEst − pre-cave top| at its 16 positions (`surfaceEst(x, z)` is `surfaceEst3` on the population's density
- * context; `preTop(x, z, top)` the pre-cave top over the true top, `preCaveTop` on that context, SP6a spec §10.4;
- * the population stays the single-surface land positions of the generated voxels), T3's in-column neighbour pairs and
- * the water-wall diagnostic.
- * T2 reads the pre-cave solidity (SP6a spec §10.4, the master's row: "pre-cave"; `preCaveSolidity`: solid or tagged),
- * over the pre-cave run that holds the land position's true top (climbed through the tagged voxels above it, so an
- * entrance that opens the surface is looked through): cave transitions would inflate it. T1, T3, T5's single-surface
- * test and the water walls read the generated voxels as before.
- */
-export function analyseColumn(
-  s: Scattered,
-  view: ScatterColumn,
-  cx: number,
-  cz: number,
-  surfaceEst: (x: number, z: number) => number,
-  scratch: ScatterScratch,
-  preTop: (x: number, z: number, top: number) => number = TRUE_TOP,
-): void {
-  const { solid, pre, g } = scratch;
-  const aux = view.aux()!;
-  solidity(view, solid);
-  preCaveSolidity(view, pre);
-  s.columns++;
-  let peakHere = false;
-  for (let p = 0; p < 256; p++) {
-    const ws = aux.worldSurfaceWG[p]!;
-    if (ws !== aux.oceanFloorWG[p]!) { s.waterPositions++; continue; }
-    const top = ws - 1;
-    s.land++;
-    s.hist[top + 64]!++;
-    let preTop = top;
-    while (preTop < 319 && pre[((preTop + 65) << 8) | p] === 1) preTop++;
-    const over = transitions(pre, p, preTop - 30, preTop) >= 2;
-    if (over) s.over++;
-    const fv = floatingVoxels(pre, p, preTop);
-    if (fv > 0) { s.floatPositions++; s.floatVoxels += fv; }
-    if (PEAKS.has(aux.surfaceBiome[p]!)) {
-      s.peakLand++;
-      peakHere = true;
-      if (over) s.peakOver++;
-      if (fv > 0) s.peakFloatPositions++;
-    }
-  }
-  if (peakHere) s.peakColumns++;
-  for (const lz of T5_LOCAL) {
-    for (const lx of T5_LOCAL) {
-      const p = (lz << 4) | lx;
-      const ws = aux.worldSurfaceWG[p]!;
-      if (ws !== aux.oceanFloorWG[p]!) continue;
-      s.t5Land++;
-      const top = ws - 1;
-      if (transitions(solid, p, -56, top) !== 1) { s.t5Multi++; continue; }
-      const x = 16 * cx + lx, z = 16 * cz + lz;
-      const pre = preTop(x, z, top);
-      if (pre !== top) s.t5Raised++;
-      s.t5.push(Math.abs(surfaceEst(x, z) - pre));
-    }
-  }
-  putColumn(g, aux, 0, 0);
-  const [wl, wt] = waterWalls(g);
-  s.walls += wl;
-  s.water += wt;
-  const pair = (k: number, q: number): void => {
-    if (g.land[k] !== 1 || g.land[q] !== 1) return;
-    s.landPairs++;
-    const steep = Math.abs(g.top[k]! - g.top[q]!) >= 4 ? 1 : 0;
-    const a = g.biome[k]!;
-    const b = g.biome[q]!;
-    if (a === b) {
-      s.inside[a]!++;
-      s.insideSteep[a]! += steep;
-    } else if (biomeFamily(a) === biomeFamily(b)) {
-      const e = a < b ? (a << 8) | b : (b << 8) | a;
-      s.borderPairs[e]!++;
-      s.borderSteep[e]! += steep;
-    } else s.crossFamilyPairs++;
-  };
-  for (let k = 0; k < 256; k++) {
-    if ((k & 15) < 15) pair(k, k + 1);
-    if (k < 240) pair(k, k + 16);
-  }
-}
-
 const scatterScripts = new Map<string, Promise<string>>();
-const askRegion = (w: Worker, msg: RegionAttachMsg | RegionColumnMsg): Promise<RegionWorkerReply> => ask<RegionWorkerReply>(w, msg);
+const askRegion = (w: Worker, msg: RegionAttachMsg | RegionColumnMsg | RegionScatterMsg): Promise<RegionWorkerReply> =>
+  ask<RegionWorkerReply>(w, msg);
+
+/** The region worker's script for `workerDir`, bundled once per dir (`forEachColumnThreaded`, `scatterColumnsThreaded`). */
+function regionWorkerScript(workerDir: string): Promise<string> {
+  let built = scatterScripts.get(workerDir);
+  if (built === undefined) {
+    built = buildNodeTaskWorker(workerDir, { entry: 'test/harness/regionWorker.ts' });
+    scatterScripts.set(workerDir, built);
+  }
+  return built;
+}
 
 /**
  * Generates scattered (possibly repeated) columns up to the T stage on 4 region workers (`regionWorker.ts`, bundled
@@ -401,12 +164,7 @@ export async function forEachColumnThreaded(
   cols: ReadonlyArray<readonly [number, number]>,
   visit: (view: ColumnView, cx: number, cz: number) => void,
 ): Promise<void> {
-  let built = scatterScripts.get(workerDir);
-  if (built === undefined) {
-    built = buildNodeTaskWorker(workerDir, { entry: 'test/harness/regionWorker.ts' });
-    scatterScripts.set(workerDir, built);
-  }
-  const script = await built;
+  const script = await regionWorkerScript(workerDir);
   const stores = Array.from({ length: 4 }, () => createStore({ shared: true, maxBlockBytes: 8 << 20, maxByteBytes: 8 << 20 }));
   const workers = stores.map(() => new Worker(script));
   try {
@@ -426,6 +184,70 @@ export async function forEachColumnThreaded(
       }
     };
     await Promise.all(workers.map((_, t) => drain(t)));
+  } finally {
+    await Promise.all(workers.map((w) => w.terminate()));
+  }
+}
+
+/**
+ * Adds every accumulator of `part` into `into` (numbers summed, Float64Arrays element by element, the T5 list
+ * appended); the T5 list's order is the caller's to fix (`scatterColumnsThreaded` sorts it after its merges). Every
+ * other accumulator is an integer count, so the merged record does not depend on the order of the parts. Throws when
+ * `part` is not a record of `into`'s shape (a missing or extra field, another kind or array length), so a worker built
+ * from another version of `terrainAnalysis.ts` cannot be merged silently.
+ */
+export function mergeScattered(into: Scattered, part: Scattered): void {
+  const a = into as unknown as Record<string, number | Float64Array | number[]>;
+  const b = part as unknown as Record<string, unknown>;
+  for (const k of Object.keys(b)) if (!(k in a)) throw new Error(`mergeScattered: unknown field '${k}'`);
+  for (const k of Object.keys(a)) {
+    const x = a[k]!;
+    const y = b[k];
+    if (typeof x === 'number') {
+      if (typeof y !== 'number') throw new Error(`mergeScattered: field '${k}' is not a number`);
+      a[k] = x + y;
+    } else if (Array.isArray(x)) {
+      if (!Array.isArray(y)) throw new Error(`mergeScattered: field '${k}' is not an array`);
+      for (const v of y as number[]) x.push(v);
+    } else {
+      if (!(y instanceof Float64Array) || y.length !== x.length) throw new Error(`mergeScattered: field '${k}' is not a Float64Array(${x.length})`);
+      for (let i = 0; i < x.length; i++) x[i]! += y[i]!;
+    }
+  }
+}
+
+/**
+ * T1-T5's analysis of scattered (possibly repeated) columns on `opts.workers` region workers (default 4; SP6b spec
+ * §13 L5, ruling P5): the columns are dealt out in turn (column i to worker i mod n), and each worker generates its
+ * share up to the T stage, analyses each column in place (`analyseColumn` with `surfaceEst3` and `preCaveTop` on a
+ * DensityContext of its own, built once) and frees it, then answers one `Scattered` for its share. This thread merges
+ * the parts (`mergeScattered`) and sorts the T5 list, so the result equals the serial `analyseColumn` loop's for any
+ * worker count (`seconds` aside: 0, the caller's to set). `workerDir` as `forEachColumnThreaded`'s.
+ */
+export async function scatterColumnsThreaded(
+  workerDir: string,
+  seed: string,
+  params: Params,
+  cols: ReadonlyArray<readonly [number, number]>,
+  opts: { workers?: number } = {},
+): Promise<Scattered> {
+  const n = opts.workers ?? 4;
+  if (!Number.isInteger(n) || n < 1) throw new RangeError(`scatterColumnsThreaded: workers ${n} (an integer ≥ 1)`);
+  const script = await regionWorkerScript(workerDir);
+  const stores = Array.from({ length: n }, () => createStore({ shared: true, maxBlockBytes: 8 << 20, maxByteBytes: 8 << 20 }));
+  const workers = stores.map(() => new Worker(script));
+  try {
+    const ready = await Promise.all(workers.map((w, t) => askRegion(w, { type: 'attach', handles: stores[t]!.handles(), seedText: seed, params })));
+    for (const r of ready) if (r.type !== 'ready') throw new Error(`region worker: ${r.type === 'error' ? r.message : r.type}`);
+    const parts = await Promise.all(workers.map(async (w, t) => {
+      const r = await askRegion(w, { type: 'scatter', cols: cols.filter((_, i) => i % n === t) });
+      if (r.type !== 'scattered') throw new Error(`region worker ${t}, scatter: ${r.type === 'error' ? r.message : r.type}`);
+      return r.scattered;
+    }));
+    const s = newScattered();
+    for (const part of parts) mergeScattered(s, part);
+    s.t5.sort((x, y) => x - y);
+    return s;
   } finally {
     await Promise.all(workers.map((w) => w.terminate()));
   }

@@ -1,7 +1,12 @@
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import type { JsonValue } from '../../src/core/params/json';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { seedFromInput } from '../../src/core/seed';
 import { biomeId } from '../../src/gen/biomes/registry';
+import { surfaceEst3 } from '../../src/gen/column/surfaceEstimate';
+import { createGenContext } from '../../src/gen/context';
+import { createDensityContext } from '../../src/gen/density/context';
 import { fillColumnT } from '../../src/metrics/region';
 import { AIR } from '../../src/world/blocks/index';
 import type { ColumnView } from '../../src/world/store/api';
@@ -10,8 +15,9 @@ import { CARVERS_OFF } from '../harness/carverParams';
 import { ctxFor } from '../harness/gen';
 import { cavesMuted } from '../harness/sp5cTrees';
 import {
-  analyseColumn, metricsProfiles, newScatterScratch, newScattered, preCaveSolidity, presetRecord, SCATTER_PROFILES, scatterColumns,
-  solidity, t1Values, t2Values, t3Values, t4Sites, t5Values, transitions, type ScatterColumn, type Scattered,
+  analyseColumn, metricsProfiles, newScatterScratch, newScattered, preCaveSolidity, preCaveTop, presetRecord, SCATTER_PROFILES,
+  scatterColumns, scatterColumnsThreaded, solidity, t1Values, t2Values, t3Values, t4Sites, t5Values, transitions, type ScatterColumn,
+  type Scattered,
 } from '../harness/terrainScatter';
 
 /**
@@ -409,4 +415,39 @@ describe('the profile split (SP6b spec §13 L2, L3; ruling P1): a filtered run d
     expect(t4Sites(['default'], ['42'], 4, RANGE).default).toEqual(both.default);
     for (const s of both.large_biomes!.sites) expect(s.seed).toBe('42');
   }, 60_000);
+});
+
+describe("T1's analysis in the region workers (SP6b spec §13 L5; ruling P5): sliced-and-summed equals serial", () => {
+  const SEED = '42';
+  const params = resolveProfile('default');
+  // A fast-size sample: 512 default columns of seed '42', drawn as the metric draws them (`scatterColumns`).
+  const cols = scatterColumns(['default'], [SEED], { default: 512, large_biomes: 0 }, { default: 1024, large_biomes: 4096 }).default![0]!;
+  /** Every accumulator but `seconds` (a timing key), the T5 list sorted (the threaded one is, after its merge). */
+  const comparable = (s: Scattered): Omit<Scattered, 'seconds'> => {
+    const { seconds, ...rest } = s;
+    void seconds;
+    return { ...rest, t5: [...s.t5].sort((a, b) => a - b) };
+  };
+  // The serial analyseColumn loop over the sample, in process (the metric's own surfaceEst3 and pre-cave top).
+  const serial = newScattered();
+  beforeAll(() => {
+    const ctx = createGenContext(seedFromInput(SEED), params);
+    const dc = createDensityContext(createGenContext(seedFromInput(SEED), params));
+    const store = createStore({ shared: false, maxBlockBytes: 8 << 20, maxByteBytes: 8 << 20 });
+    const scratch = newScatterScratch();
+    for (const [cx, cz] of cols) {
+      if (!fillColumnT(store, ctx, cx, cz, () => false)) throw new Error(`column (${cx}, ${cz}) not filled`);
+      analyseColumn(serial, store.proto(cx, cz)!, cx, cz, (x, z) => surfaceEst3(dc, x, z), scratch, (x, z, top) => preCaveTop(dc, x, z, top));
+      store.freeColumn(cx, cz);
+    }
+  }, 300_000);
+
+  test.each([1, 2, 4])("%i worker(s): every accumulator equals the serial loop's (toEqual, the sorted T5 list included)", async (workers) => {
+    expect(serial.columns).toBe(512);
+    expect(serial.land).toBeGreaterThan(0);
+    expect(serial.t5.length).toBeGreaterThan(1000);
+    const threaded = await scatterColumnsThreaded('terrainScatterTest', SEED, params, cols, { workers });
+    expect(threaded.t5).toEqual([...threaded.t5].sort((a, b) => a - b));
+    expect(comparable(threaded)).toEqual(comparable(serial));
+  }, 300_000);
 });
