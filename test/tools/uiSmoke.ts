@@ -775,8 +775,8 @@ export const SMOKE_STATE = { air: 0, stone: 1, torch: 32 } as const;
 export const SMOKE_WATER_SOURCE = 16;
 /** The hit faces (`FACE_*` in `src/world/blocks/kinds.ts`; a unit test keeps them equal). */
 export const SMOKE_FACE = { north: 0, east: 1, south: 2, west: 3, up: 4, down: 5 } as const;
-/** The palette's swatches: every `PLACEABLE` type (48) and the 3 buckets (a unit test counts them). */
-export const PALETTE_SWATCHES = 51;
+/** The palette's swatches: every `PLACEABLE` type (55 with SP6b's 7) and the 3 buckets (a unit test counts them). */
+export const PALETTE_SWATCHES = 58;
 /**
  * The least block light beside a torch: it emits 14, and the voxel beside it reads one step less (a unit test keeps it
  * the registry's emission − 1). The spot reads below it before the torch.

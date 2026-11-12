@@ -30,11 +30,32 @@ describe('the flat-colour table (SP4a spec §6.3, D14)', () => {
   });
 
   test('every registry block type except air has an entry, and nothing else does', () => {
-    expect(BLOCK_NAMES).toHaveLength(49);
+    expect(BLOCK_NAMES).toHaveLength(56);
     expect([...FLAT_COLORS.keys()].sort()).toEqual([...BLOCK_NAMES].sort());
     expect(FLAT_COLORS.has('air')).toBe(false);
     // Lava is no type (air plus a fluid byte): its colour lives outside the table (SP5a spec §1.3).
     expect(FLAT_COLORS.has('lava')).toBe(false);
+  });
+
+  test('SP6b\'s seven colours are §4\'s, each ≥ 24 from every other type, the sky, water, lava and unknown (SP6b spec §4)', () => {
+    const sp6b: [string, Rgb][] = [
+      ['moss_block', [78, 112, 52]], ['dripstone_block', [150, 120, 96]], ['abyss_stone', [36, 34, 44]],
+      ['abyss_stone_veined', [58, 48, 74]], ['cracked_abyss_stone', [50, 44, 46]], ['abyss_shale', [70, 64, 48]],
+      ['abyss_ash', [92, 88, 86]],
+    ];
+    for (const [name, c] of sp6b) expect(FLAT_COLORS.get(name), name).toEqual(c);
+    expect([...FLAT_COLORS.keys()].slice(-7)).toEqual(sp6b.map(([n]) => n));
+    const others: [string, Rgb][] = [
+      ...FLAT_COLORS, ['sky', VOXEL_COLORS.sky], ['water', VOXEL_COLORS.water], ['lava', LAVA_COLOR], ['unknown', VOXEL_COLORS.unknown],
+    ];
+    for (const [name, c] of sp6b) {
+      for (const [other, o] of others) if (other !== name) expect(dist(c, o), `${name} / ${other}`).toBeGreaterThanOrEqual(24);
+    }
+    // The abyss's rock stays darker than deepslate (the brief's "very dark stone").
+    const deepslate = Math.max(...FLAT_COLORS.get('deepslate')!);
+    for (const name of ['abyss_stone', 'abyss_stone_veined', 'cracked_abyss_stone', 'abyss_shale']) {
+      expect(Math.max(...FLAT_COLORS.get(name)!), name).toBeLessThan(deepslate);
+    }
   });
 
   test('the Voxels palette reads every block colour from FLAT_COLORS', () => {
@@ -73,12 +94,12 @@ describe('the flat-colour texture array (SP4a spec §6.3, D14)', () => {
     expect(Array.from(data.subarray(0, 4 * REGISTRY.stateCount))).toEqual(Array.from(flatColorLayers(NAME_OF_STATE)));
   });
 
-  test('the array has 60 layers; layer 58\'s colour is the log end\'s, layer 59 lava\'s (SP5a spec §1.3)', () => {
+  test('the array has 67 layers; layer 65\'s colour is the log end\'s, layer 66 lava\'s (SP5a spec §1.3, SP6b spec §4)', () => {
     const t = createFlatColorArray();
-    expect(t.image.depth).toBe(60);
-    expect([LOG_END_LAYER, LAVA_LAYER]).toEqual([58, 59]);
+    expect(t.image.depth).toBe(67);
+    expect([LOG_END_LAYER, LAVA_LAYER]).toEqual([65, 66]);
     const data = t.image.data as Uint8Array;
-    expect(data.length).toBe(4 * 60);
+    expect(data.length).toBe(4 * 67);
     expect(layer(data, LOG_END_LAYER)).toEqual([...LOG_END_COLOR, 255]);
     expect(layer(data, LAVA_LAYER)).toEqual([...LAVA_COLOR, 255]);
   });

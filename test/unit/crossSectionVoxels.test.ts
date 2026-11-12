@@ -69,8 +69,8 @@ describe('the Voxels palette (SP3a spec §5.2)', () => {
   test('every registry state takes its type\'s colour; the non-air types are ≥ 24 apart from each other, sky, water, lava and unknown (SP3c spec §8, SP5a spec §1.3)', () => {
     const dist = (a: Rgb, b: Rgb): number => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]);
     const colors = VOXEL_COLORS as Readonly<Record<string, Rgb>>;
-    expect(REGISTRY.stateCount).toBe(58);
-    expect(REGISTRY.typeCount).toBe(50);
+    expect(REGISTRY.stateCount).toBe(65);
+    expect(REGISTRY.typeCount).toBe(57);
     const named: [string, Rgb][] = [
       ['sky (air)', VOXEL_COLORS.sky], ['water', VOXEL_COLORS.water], ['lava', VOXEL_COLORS.lava], ['unknown', VOXEL_COLORS.unknown],
     ];
@@ -85,7 +85,7 @@ describe('the Voxels palette (SP3a spec §5.2)', () => {
       const name = REGISTRY.typeName(t);
       if (name !== 'air') named.push([name, colors[name]!]);
     }
-    expect(named).toHaveLength(4 + 49);
+    expect(named).toHaveLength(4 + 56);
     const close: string[] = [];
     for (let i = 0; i < named.length; i++) {
       for (let j = i + 1; j < named.length; j++) {
@@ -121,8 +121,10 @@ describe('the Voxels palette (SP3a spec §5.2)', () => {
       'ladder[facing=north]', 'ladder[facing=east]', 'ladder[facing=south]', 'ladder[facing=west]', 'ice',
       'white_wool', 'orange_wool', 'magenta_wool', 'light_blue_wool', 'yellow_wool', 'lime_wool', 'pink_wool', 'gray_wool',
       'light_gray_wool', 'cyan_wool', 'purple_wool', 'blue_wool', 'brown_wool', 'green_wool', 'red_wool', 'black_wool',
+      // SP6b's appended types (SP6b spec §4): 7 states at 58 … 64.
+      'moss_block', 'dripstone_block', 'abyss_stone', 'abyss_stone_veined', 'cracked_abyss_stone', 'abyss_shale', 'abyss_ash',
     ]);
-    expect(legend).toHaveLength(58);
+    expect(legend).toHaveLength(65);
     for (const k of legend) expect(k.rgb).toEqual(voxelRgb(k.state, 0, 0));
     expect(legend[0]!.rgb).toEqual(VOXEL_COLORS.sky);
   });

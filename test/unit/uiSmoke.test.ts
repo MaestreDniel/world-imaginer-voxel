@@ -224,9 +224,9 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
   test('the Voxels legend\'s labels: every state of the state-id lock in id order, as the page writes them, then water and the sea line', () => {
     const labels = voxelLegendLabels(readFileSync(new URL('../stateIds.lock.json', import.meta.url), 'utf8'));
     expect(labels).toEqual([...voxelLegend().map((k) => k.label), 'water, darker with depth', 'sea level 63']);
-    expect(labels).toHaveLength(60);
+    expect(labels).toHaveLength(67);
     expect(labels.slice(0, 4)).toEqual(['air', 'stone', 'bedrock', 'grass_block']);
-    // The 58 state keys (SP5a's 33 appended), then the two fluid and sea keys.
+    // The 65 state keys (SP5a's 33 appended, then SP6b's 7), then the two fluid and sea keys.
     expect(labels.slice(56, 58)).toEqual(['red_wool', 'black_wool']);
     expect(() => voxelLegendLabels('{"stone":1,"air":0,"bedrock":3}')).toThrow(/state ids/);
   });
@@ -1177,11 +1177,11 @@ describe('UI smoke test: the build and walk steps (SP5a spec §6.4)', () => {
     expect(z).toBeCloseTo(-1, 12);
   });
 
-  test('the palette lists 51 swatches: PLACEABLE\'s 48 types and the 3 buckets', () => {
+  test('the palette lists 58 swatches: PLACEABLE\'s 55 types (SP6b\'s 7 among them) and the 3 buckets', () => {
     const placeable = PLACEABLE.reduce((n, v) => n + v, 0);
-    expect(placeable).toBe(48);
+    expect(placeable).toBe(55);
     expect(PALETTE_SWATCHES).toBe(placeable + 3);
-    expect(PALETTE_SWATCHES).toBe(51);
+    expect(PALETTE_SWATCHES).toBe(58);
     expect(paletteGroups('').reduce((n, g) => n + g.items.length, 0)).toBe(PALETTE_SWATCHES);
   });
 

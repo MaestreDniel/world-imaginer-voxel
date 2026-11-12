@@ -96,6 +96,14 @@ export const VOXEL_COLORS = {
   green_wool: flat('green_wool'),
   red_wool: flat('red_wool'),
   black_wool: flat('black_wool'),
+  // SP6b's cave-biome types (SP6b spec §4), in state order.
+  moss_block: flat('moss_block'),
+  dripstone_block: flat('dripstone_block'),
+  abyss_stone: flat('abyss_stone'),
+  abyss_stone_veined: flat('abyss_stone_veined'),
+  cracked_abyss_stone: flat('cracked_abyss_stone'),
+  abyss_shale: flat('abyss_shale'),
+  abyss_ash: flat('abyss_ash'),
 } as const satisfies Record<string, Rgb>;
 
 const COLOR_OF_TYPE: Readonly<Record<string, Rgb | undefined>> = VOXEL_COLORS;

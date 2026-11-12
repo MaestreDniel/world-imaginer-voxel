@@ -152,7 +152,10 @@
  * describe that reads text SP6b rewords moves there with the commit that rewords it. The first commit (Task 1) lands
  * item 1's header, `**SP6b — Cave biomes** (XL; SP6a). Spec: …` (the size the user chose, "XL completa"), and moves the
  * SP6a describe's header pin. §1 names each SP6b module in its entry, which exists (`SP6B_MODULES`, its first rows
- * added with the picker); the exit adds the completeness test over §15's items.
+ * added with the picker); the exit adds the completeness test over §15's items. The seven blocks (Task 7) land item 7
+ * (§2.2's terrain palette names them, ids 58-64, with their sounds), item 13 (§3.12's abyss line names the abyss
+ * palette; the SP6a describe's pin of that line moved here) and item 6's two lines for `sp6bGoldens.ts` (§1's metrics
+ * entry and "Banned APIs", which must equal `DET_FILES`; the SP6a describe's pins of that list's end moved here).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1996,7 +1999,7 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(line('- Caching on the quart lattice comes with its first consumer')).toContain('(aquifers, structures: SP7-SP9; spawn and teleport query one point each and need none, SP4c)');
     expect(line('**Conditions:**')).toContain('`caveBiome` stays SP6b\'s');
     expect(line('**Default rules**')).toContain('SP6b inserts rule 4 before rule 2');
-    expect(line('- abyss:')).toContain('are decided in the SP6b spec;');
+    // §3.12's abyss line moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 13 rewords it).
     expect(line('**Greedy meshing.**')).toContain('R2 is re-baselined at SP6a (caves) and SP8b');
     expect(line('- Editable boxes')).toContain('the 3 cave biomes arrive in SP6b.');
     // Moved from the SP4b describe (§5.8's bench route).
@@ -2039,8 +2042,8 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(existsSync(`${ROOT_DIR}src/metrics/sp6aGoldens.ts`), 'src/metrics/sp6aGoldens.ts does not exist').toBe(true);
     expect(DET_FILES.has('metrics/sp6aGoldens.ts')).toBe(true);
     const line = text.split('\n').find((l) => l.includes('(`DET_FILES` in `test/arch/rules/banned.ts`:'));
-    expect(line).toContain('and the SP6a goldens, `metrics/sp6aGoldens.ts`):');
-    expect(line).toContain('(amended by SP1, SP2a, SP2b, SP3a, SP3c, SP3e and SP6a)');
+    // The list's end and its "amended by" moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 6 appends sp6bGoldens.ts).
+    expect(line).toContain('and the SP6a goldens, `metrics/sp6aGoldens.ts`');
   });
 
   test('§5.1\'s Terrain scope names caves (`caves.*`) among its examples (SP6a spec §13 item 16)', () => {
@@ -2506,5 +2509,43 @@ describe('master spec amendments (SP6b §15)', () => {
   test('§10\'s SP6b header names the size and the spec (SP6b spec §15 item 1)', () => {
     const sp6b = spEntry('SP6b', 'SP7');
     expect(sp6b.startsWith('**SP6b — Cave biomes** (XL; SP6a). Spec: `2026-11-12-sp6b-cave-biomes-design.md`.'), 'the SP6b header').toBe(true);
+  });
+
+  test('§1\'s metrics entry and "Banned APIs" name sp6bGoldens.ts (the sp6b.* goldens), which exists (SP6b spec §15 item 6)', () => {
+    const entry = layoutEntry(/^\s+metrics\/\*\.ts\s/);
+    expect(entry).toContain('SP6a: sp6aGoldens.ts, the sp6a.* goldens;');
+    expect(entry).toContain('SP6b: sp6bGoldens.ts, the sp6b.* goldens)');
+    expect(existsSync(`${ROOT_DIR}src/metrics/sp6bGoldens.ts`), 'src/metrics/sp6bGoldens.ts does not exist').toBe(true);
+    expect(DET_FILES.has('metrics/sp6bGoldens.ts')).toBe(true);
+    const line = text.split('\n').find((l) => l.includes('(`DET_FILES` in `test/arch/rules/banned.ts`:'));
+    expect(line).toContain('`metrics/sp6bGoldens.ts`');
+    // Moved from the SP6a describe: the list's end and its "amended by".
+    expect(line).toContain('and the SP6a goldens, `metrics/sp6aGoldens.ts`, and the SP6b goldens, `metrics/sp6bGoldens.ts`):');
+    expect(line).toContain('(amended by SP1, SP2a, SP2b, SP3a, SP3c, SP3e, SP6a and SP6b)');
+  });
+
+  test('§2.2\'s terrain palette gains SP6b\'s seven types (SP6b spec §15 item 7)', () => {
+    const para = text.split('\n').find((l) => l.startsWith('**Terrain palette**'));
+    expect(para, 'no Terrain palette paragraph in §2.2').toBeDefined();
+    const from = para!.indexOf('SP6b appends');
+    expect(from, 'no SP6b sentence in the Terrain palette paragraph').toBeGreaterThan(0);
+    const sp6b = para!.slice(from);
+    const seven = ['moss_block', 'dripstone_block', 'abyss_stone', 'abyss_stone_veined', 'cracked_abyss_stone', 'abyss_shale', 'abyss_ash'];
+    expect(seven.map((_, i) => REGISTRY.stateKey(58 + i)), 'the registry\'s states 58 … 64').toEqual(seven);
+    expect(sp6b).toContain('ids 58-64, property-less full cubes, carvable');
+    // The seven named in id order.
+    expect(sp6b).toContain(`in this order: ${seven.map((n) => `\`${n}\``).join(', ')};`);
+    expect(sp6b).toContain('`SOUND` grass (`moss_block`), stone (`dripstone_block`) and abyss (the five abyss types)');
+    expect(sp6b).toContain('`EMIT` 0');
+    expect(sp6b).toContain('the `sp6b.registry` golden hashes states 58 … 64 (amended by SP6b).');
+  });
+
+  test('§3.12 names the abyss surface-palette blocks (SP6b spec §15 item 13)', () => {
+    const abyss = text.split('\n').find((l) => l.startsWith('- abyss:'));
+    expect(abyss, 'no `- abyss:` line in §3.12').toBeDefined();
+    // Moved from the SP6a describe ("are decided in the SP6b spec;"), as SP6b words it.
+    expect(abyss).toContain('The abyss surface-palette blocks are abyss_stone, abyss_stone_veined, cracked_abyss_stone, abyss_shale and abyss_ash (SP6b);');
+    expect(abyss).not.toContain('are decided in the SP6b spec;');
+    expect(abyss).toContain('the decoration blocks (crystals, dead roots, fossils, the exclusive mineral) in the SP8b spec;');
   });
 });

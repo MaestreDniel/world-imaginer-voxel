@@ -1,7 +1,7 @@
 /**
- * SP6a golden digests (SP6a spec §12.3, D28), chained last into `allGoldenKeys`/`computeAnyGolden` (`sp2aGoldens.ts`),
- * so the unit tests, `?selftest=1` and `test/tools/goldensJsc.ts` all check them. Push A adds `sp6a.density.ops`; push B
- * appends `sp6a.carver.paths` (Task 27) and `sp6a.region.T.caves` (Task 39).
+ * SP6a golden digests (SP6a spec §12.3, D28), chained into `allGoldenKeys`/`computeAnyGolden` (`sp2aGoldens.ts`)
+ * before SP6b's, so the unit tests, `?selftest=1` and `test/tools/goldensJsc.ts` all check them. Push A adds
+ * `sp6a.density.ops`; push B appends `sp6a.carver.paths` (Task 27) and `sp6a.region.T.caves` (Task 39).
  * - `sp6a.density.ops`: the `noiseScaled` op (D18, spec §1.5) at fixed points, world seed '42', default profile. The
  *   fixture is a density source tree that uses `noiseScaled` inside and outside `interpolated`, with literal scales and a
  *   `{param}` scale (`density.noises.detail.clampSigma`, static range [1, 8]: before the cave parameters only the

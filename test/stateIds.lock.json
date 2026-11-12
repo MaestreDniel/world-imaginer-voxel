@@ -56,5 +56,12 @@
   "brown_wool": 54,
   "green_wool": 55,
   "red_wool": 56,
-  "black_wool": 57
+  "black_wool": 57,
+  "moss_block": 58,
+  "dripstone_block": 59,
+  "abyss_stone": 60,
+  "abyss_stone_veined": 61,
+  "cracked_abyss_stone": 62,
+  "abyss_shale": 63,
+  "abyss_ash": 64
 }

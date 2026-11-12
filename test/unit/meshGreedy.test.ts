@@ -423,9 +423,9 @@ describe('meshSolid', () => {
     expect(allUnitFaces(mesh(pair(GLASS, LADDER)).passes[1])).toContain('8,8,8,1');
   });
 
-  test('an axis-x log\'s ±x faces carry layer 58, its other faces its state; two logs of different axes never merge', () => {
+  test('an axis-x log\'s ±x faces carry layer 65, its other faces its state; two logs of different axes never merge', () => {
     expect(LOG_END_LAYER).toBe(REGISTRY.stateCount);
-    expect(LOG_END_LAYER).toBe(58);
+    expect(LOG_END_LAYER).toBe(65);
     // Each axis: the two faces along it (east/west for x, up/down for y, north/south for z) take the log-end layer.
     const ends: Record<string, readonly number[]> = { x: [1, 3], y: [4, 5], z: [0, 2] };
     for (const axis of ['x', 'y', 'z'] as const) {

@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import {
   ALL_FACES, COLLIDE_CUBE, COLLIDE_NONE, FLUID_MODE_BLOCK, FLUID_MODE_DISPLACE, FLUID_MODE_HOLD, PASS_CUTOUT, PASS_NONE,
-  PASS_OPAQUE, SHAPE_BOX, SHAPE_CUBE, SHAPE_NONE, SOUND_DIRT, SOUND_GLASS, SOUND_GRASS, SOUND_GRAVEL, SOUND_NONE,
-  SOUND_SAND, SOUND_SNOW, SOUND_STONE, SOUND_WOOD, SOUND_WOOL, TINT_GRASS, TINT_NONE,
+  PASS_OPAQUE, SHAPE_BOX, SHAPE_CUBE, SHAPE_NONE, SOUND_ABYSS, SOUND_DIRT, SOUND_GLASS, SOUND_GRASS, SOUND_GRAVEL,
+  SOUND_NONE, SOUND_SAND, SOUND_SNOW, SOUND_STONE, SOUND_WOOD, SOUND_WOOL, TINT_GRASS, TINT_NONE,
 } from '../../src/world/blocks/kinds';
 import { BLOCK_DEFS } from '../../src/world/blocks/defs';
 import {
@@ -43,7 +43,9 @@ const WOOL_NAMES = [
 ];
 /** SP5a's appended types (SP5a spec §1.1), in order after `light_gray_terracotta`. */
 const SP5A_NAMES = ['oak_planks', 'oak_log', 'cobblestone', 'bricks', 'glass', 'torch', 'wall_torch', 'ladder', 'ice', ...WOOL_NAMES];
-const TYPES = [...ALL_NAMES, ...SP5A_NAMES];
+/** SP6b's appended types (SP6b spec §4, D36), in order after `black_wool`: one state each, ids 58 … 64. */
+const SP6B_NAMES = ['moss_block', 'dripstone_block', 'abyss_stone', 'abyss_stone_veined', 'cracked_abyss_stone', 'abyss_shale', 'abyss_ash'];
+const TYPES = [...ALL_NAMES, ...SP5A_NAMES, ...SP6B_NAMES];
 const WOOLS = [
   WHITE_WOOL, ORANGE_WOOL, MAGENTA_WOOL, LIGHT_BLUE_WOOL, YELLOW_WOOL, LIME_WOOL, PINK_WOOL, GRAY_WOOL, LIGHT_GRAY_WOOL,
   CYAN_WOOL, PURPLE_WOOL, BLUE_WOOL, BROWN_WOOL, GREEN_WOOL, RED_WOOL, BLACK_WOOL,
@@ -65,19 +67,19 @@ const row = (s: number): number[] => [
   FLUID_MODE[s]!, TINT[s]!, SOUND[s]!,
 ];
 
-describe('the real registry: SP3a initial list (SP3a spec §2.2), SP3c terrain palette (SP3c spec §2.1), SP5a\'s appended types (SP5a spec §1.1)', () => {
-  test('50 types, 58 states; the 25 SP3a/SP3c types keep ids 0 … 24; the appended types at 25 … 57 in spec §1.1\'s order', () => {
+describe('the real registry: SP3a initial list (SP3a spec §2.2), SP3c terrain palette (SP3c spec §2.1), SP5a\'s appended types (SP5a spec §1.1), SP6b\'s (SP6b spec §4)', () => {
+  test('57 types, 65 states; the 25 SP3a/SP3c types keep ids 0 … 24; SP5a\'s appended types at 25 … 57 in spec §1.1\'s order, SP6b\'s at 58 … 64', () => {
     expect(COUNT).toBe(25);
     expect(SP5A_NAMES).toHaveLength(25);
     expect(BLOCK_DEFS.map((d) => d.name)).toEqual(TYPES);
     expect(Object.isFrozen(BLOCK_DEFS)).toBe(true);
-    expect(R.typeCount).toBe(50);
-    expect(R.stateCount).toBe(58);
+    expect(R.typeCount).toBe(57);
+    expect(R.stateCount).toBe(65);
     expect(TYPE_NAMES).toEqual(TYPES);
     // The SP3a and SP3c types: air 0, stone 1, bedrock 2, the 22 palette types at 3 … 24, one state each.
     expect([AIR, STONE, BEDROCK]).toEqual([0, 1, 2]);
     expect(PALETTE_STATES).toEqual(ids(22).map((i) => i + 3));
-    expect(TYPES.map((n) => R.typeId(n))).toEqual(ids(50));
+    expect(TYPES.map((n) => R.typeId(n))).toEqual(ids(57));
     expect(Array.from(DEFAULT_STATE.subarray(0, COUNT))).toEqual(ids(COUNT));
     expect(Array.from(STATE_TYPE.subarray(0, COUNT))).toEqual(ids(COUNT));
     for (let t = 0; t < COUNT; t++) expect(R.typeProperties(t)).toEqual([]);
@@ -85,7 +87,9 @@ describe('the real registry: SP3a initial list (SP3a spec §2.2), SP3c terrain p
     // The appended types: oak_log 3 states, wall_torch and ladder 4 each, the rest one; 33 states at 25 … 57.
     expect([OAK_PLANKS, OAK_LOG, COBBLESTONE, BRICKS, GLASS, TORCH, WALL_TORCH, LADDER, ICE]).toEqual([25, 26, 29, 30, 31, 32, 33, 37, 41]);
     expect(WOOLS).toEqual(ids(16).map((i) => i + 42));
-    expect(Array.from(DEFAULT_STATE.subarray(COUNT))).toEqual([25, 26, 29, 30, 31, 32, 33, 37, 41, ...WOOLS]);
+    expect(Array.from(DEFAULT_STATE.subarray(COUNT, 50))).toEqual([25, 26, 29, 30, 31, 32, 33, 37, 41, ...WOOLS]);
+    // SP6b's seven, one state each at 58 … 64.
+    expect(Array.from(DEFAULT_STATE.subarray(50))).toEqual(ids(7).map((i) => i + 58));
     expect(ids(58).slice(COUNT).map((s) => R.stateKey(s))).toEqual(SP5A_KEYS);
     expect(SP5A_KEYS.map((k) => R.parseStateKey(k))).toEqual(ids(58).slice(COUNT));
     expect(Array.from(STATE_TYPE.subarray(COUNT, 58)).map((t) => TYPE_NAMES[t])).toEqual(SP5A_KEYS.map((k) => k.replace(/\[.*$/, '')));
@@ -114,10 +118,10 @@ describe('the real registry: SP3a initial list (SP3a spec §2.2), SP3c terrain p
     expect(() => R.parseStateKey('deepslate[axis=y]')).toThrow();
   });
 
-  test('test/stateIds.lock.json holds the 25 bare keys with their ids, the 22 palette keys appended after bedrock, then SP5a\'s 33 states at 25 … 57', () => {
+  test('test/stateIds.lock.json holds the 25 bare keys with their ids, the 22 palette keys appended after bedrock, then SP5a\'s 33 states at 25 … 57, then SP6b\'s 7 at 58 … 64', () => {
     const lock = readStateLock() ?? {};
-    expect(Object.keys(lock)).toEqual([...ALL_NAMES, ...SP5A_KEYS]);
-    expect(Object.values(lock)).toEqual(ids(58));
+    expect(Object.keys(lock)).toEqual([...ALL_NAMES, ...SP5A_KEYS, ...SP6B_NAMES]);
+    expect(Object.values(lock)).toEqual(ids(65));
   });
 
   test('the SP3a §2.2 table values, as §2.1 codes', () => {
@@ -200,6 +204,31 @@ describe('the real registry: SP3a initial list (SP3a spec §2.2), SP3c terrain p
       }
     }
     expect(states).toBe(33);
+  });
+
+  test('SP6b\'s seven types (§4, D36): ids 58 … 64, property-less opaque full cubes, carvable, tint none, EMIT 0, sound grass, stone or abyss', () => {
+    const sound: Record<string, number> = {
+      moss_block: SOUND_GRASS, dripstone_block: SOUND_STONE, abyss_stone: SOUND_ABYSS, abyss_stone_veined: SOUND_ABYSS,
+      cracked_abyss_stone: SOUND_ABYSS, abyss_shale: SOUND_ABYSS, abyss_ash: SOUND_ABYSS,
+    };
+    expect(Object.keys(sound)).toEqual(SP6B_NAMES);
+    expect(BLOCK_DEFS.slice(50).map((d) => d.name)).toEqual(SP6B_NAMES);
+    SP6B_NAMES.forEach((name, i) => {
+      const s = R.parseStateKey(name);
+      expect(s, name).toBe(58 + i);
+      expect(R.typeId(name), name).toBe(50 + i);
+      expect(statesOf(name), name).toEqual([s]);
+      expect(R.stateKey(s)).toBe(name);
+      expect(BLOCK_DEFS[50 + i]!.props, name).toBeUndefined();
+      expect(R.typeProperties(R.typeId(name)), name).toEqual([]);
+      expect(R.propsOf(s), name).toEqual({});
+      //                         OPACITY PASS     SHAPE       FULL_FACES EMIT CARV REPL COLLIDE       FLUID_MODE        TINT       SOUND
+      expect(row(s), name).toEqual([15, PASS_OPAQUE, SHAPE_CUBE, ALL_FACES, 0, 1, 0, COLLIDE_CUBE, FLUID_MODE_BLOCK, TINT_NONE, sound[name]!]);
+      expect(FULL_FACES[s], name).toBe(63);
+      // The abyss stays dark (SP6b spec §4; recon-obligations R21): no new state emits.
+      expect(EMIT[s], name).toBe(0);
+      expect(Array.from(FACE_TEX.subarray(s * 6, s * 6 + 6)), name).toEqual([0, 0, 0, 0, 0, 0]);
+    });
   });
 
   test('every EMIT in the registry is 0 or 14', () => {

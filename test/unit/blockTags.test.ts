@@ -18,6 +18,8 @@ const SP3C = [
   'clay', 'calcite', 'snow_block', 'packed_ice', 'deepslate', 'terracotta', 'white_terracotta', 'orange_terracotta',
   'yellow_terracotta', 'brown_terracotta', 'red_terracotta', 'light_gray_terracotta',
 ];
+/** SP6b's seven types (SP6b spec §4, D36), in id order. */
+const SP6B = ['moss_block', 'dripstone_block', 'abyss_stone', 'abyss_stone_veined', 'cracked_abyss_stone', 'abyss_shale', 'abyss_ash'];
 
 describe('block tags, per type (SP5a spec §1.1)', () => {
   test('every table holds one entry per type id', () => {
@@ -29,19 +31,30 @@ describe('block tags, per type (SP5a spec §1.1)', () => {
 
   test('PLACEABLE is false only for air and wall_torch', () => {
     expect(named(PLACEABLE, 0)).toEqual(['air', 'wall_torch']);
-    expect(named(PLACEABLE)).toHaveLength(48);
+    expect(named(PLACEABLE)).toHaveLength(55);
   });
 
-  test('CATEGORY: building the 7 of spec §1.1, wool the 16, terrain stone, bedrock, ice and the 22 SP3c types, none air and wall_torch', () => {
+  test('CATEGORY: building the 7 of spec §1.1, wool the 16, terrain stone, bedrock, ice, the 22 SP3c types and SP6b\'s 7, none air and wall_torch', () => {
     expect(CATEGORY_VALUES).toEqual(['none', 'building', 'wool', 'terrain']);
     expect([CATEGORY_NONE, CATEGORY_BUILDING, CATEGORY_WOOL, CATEGORY_TERRAIN]).toEqual([0, 1, 2, 3]);
     expect(CATEGORY_ORDER).toEqual(['building', 'wool', 'terrain']);
     expect(named(CATEGORY, CATEGORY_BUILDING)).toEqual(['oak_planks', 'oak_log', 'cobblestone', 'bricks', 'glass', 'torch', 'ladder']);
     expect(named(CATEGORY, CATEGORY_WOOL)).toEqual(WOOLS);
-    expect(named(CATEGORY, CATEGORY_TERRAIN).sort()).toEqual(['stone', 'bedrock', 'ice', ...SP3C].sort());
+    expect(named(CATEGORY, CATEGORY_TERRAIN).sort()).toEqual(['stone', 'bedrock', 'ice', ...SP3C, ...SP6B].sort());
     expect(named(CATEGORY, CATEGORY_NONE)).toEqual(['air', 'wall_torch']);
     // A placeable type has a category, and a category other than none holds only placeable types.
     for (let t = 0; t < REGISTRY.typeCount; t++) expect(CATEGORY[t] !== CATEGORY_NONE, TYPE_NAMES[t]).toBe(PLACEABLE[t] === 1);
+  });
+
+  test('SP6b\'s seven types are placeable and land in the creative palette\'s terrain category, after the older terrain types (SP6b spec D36)', () => {
+    for (const name of SP6B) {
+      const t = REGISTRY.typeId(name);
+      expect(PLACEABLE[t], name).toBe(1);
+      expect(CATEGORY[t], name).toBe(CATEGORY_TERRAIN);
+      expect([SLIPPERY[t], CLIMBABLE[t]], name).toEqual([0, 0]);
+    }
+    expect(named(CATEGORY, CATEGORY_TERRAIN).slice(-7)).toEqual(SP6B);
+    expect(displayName(REGISTRY.typeId('cracked_abyss_stone'))).toBe('Cracked abyss stone');
   });
 
   test('SLIPPERY is ice and packed_ice; CLIMBABLE is ladder', () => {

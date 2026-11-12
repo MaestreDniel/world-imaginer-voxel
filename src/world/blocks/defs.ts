@@ -4,7 +4,8 @@
  * properties or default. SP3c appends the terrain palette (SP3c spec §2.1): 22 types without properties, state ids
  * 3 … 24, all opaque full cubes, carvable except `packed_ice`. SP5a appends 25 building and terrain types (SP5a spec
  * §1.1): 33 states, ids 25 … 57, none carvable or replaceable, with their full property sets (a locked type never
- * gains one).
+ * gains one). SP6b appends its cave-biome types (SP6b spec §4, D36): 7 terrain types without properties, state ids
+ * 58 … 64, opaque full cubes, carvable, `EMIT` 0.
  *
  * Texture ids are 0 until SP8a; `SOUND` none is air's only (never played).
  */
@@ -122,4 +123,12 @@ export const BLOCK_DEFS: readonly BlockDef[] = Object.freeze([
   cube('green_wool', 'wool'),
   cube('red_wool', 'wool'),
   cube('black_wool', 'wool'),
+  // SP6b's cave-biome types (SP6b spec §4, D36), state ids 58 … 64: lush and dripstone caves, then the abyss palette.
+  terrain('moss_block', 'grass', 'none'),
+  terrain('dripstone_block', 'stone', 'none'),
+  terrain('abyss_stone', 'abyss', 'none'),
+  terrain('abyss_stone_veined', 'abyss', 'none'),
+  terrain('cracked_abyss_stone', 'abyss', 'none'),
+  terrain('abyss_shale', 'abyss', 'none'),
+  terrain('abyss_ash', 'abyss', 'none'),
 ]);

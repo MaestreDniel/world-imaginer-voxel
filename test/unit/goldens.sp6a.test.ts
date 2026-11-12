@@ -1,6 +1,6 @@
 /**
  * The SP6a goldens (SP6a spec §12.3, D28): `sp6a.density.ops`, `sp6a.carver.paths` (push B, Task 27) and
- * `sp6a.region.T.caves` (push B, Task 39), chained last into `allGoldenKeys`. `sp6a.density.ops`' fixture is a density source tree
+ * `sp6a.region.T.caves` (push B, Task 39), chained into `allGoldenKeys` before SP6b's. `sp6a.density.ops`' fixture is a density source tree
  * that uses `noiseScaled` (D18, §1.5) inside and outside `interpolated`, with literal scales and a `{param}` scale; the
  * values are the compiled corners and voxels of column (0, 0), equal to the reference. `sp6a.carver.paths` digests the
  * paths of 64 fixed sources per kind at seed 42 and the defaults (the first 64 per kind whose roll passes, in a spiral
@@ -43,13 +43,13 @@ function nodesOf(root: Expr): Array<{ readonly node: Expr; readonly inside: bool
   return out;
 }
 
-test('3 SP6a keys, chained last into allGoldenKeys after SP3e\'s: 62 goldens', () => {
+test('3 SP6a keys, chained into allGoldenKeys after SP3e\'s (SP6b\'s 1 follows): 63 goldens', () => {
   const keys = ['sp6a.density.ops', 'sp6a.carver.paths', 'sp6a.region.T.caves'];
   expect(sp6aGoldenKeys()).toEqual(keys);
-  expect(allGoldenKeys().slice(-3)).toEqual(keys);
-  expect(allGoldenKeys().slice(-4, -3)).toEqual(['sp3e.column.point.floating_islands']);
-  expect(allGoldenKeys()).toHaveLength(62);
-  expect(new Set(allGoldenKeys()).size).toBe(62);
+  expect(allGoldenKeys().slice(-4, -1)).toEqual(keys);
+  expect(allGoldenKeys().slice(-5, -4)).toEqual(['sp3e.column.point.floating_islands']);
+  expect(allGoldenKeys()).toHaveLength(63);
+  expect(new Set(allGoldenKeys()).size).toBe(63);
   for (const bad of [
     'sp6a.density', 'sp6a.density.ops.x', 'sp6a.carver', 'sp6a.carver.paths.x', 'sp6a.region.T', 'sp6a.region.T.caves.x',
     'sp6a.region.T.default', 'sp6a.nope',

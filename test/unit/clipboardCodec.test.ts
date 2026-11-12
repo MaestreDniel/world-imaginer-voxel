@@ -160,6 +160,30 @@ describe('ClipboardV1 (SP5c §4.1, D24)', () => {
     }
   });
 
+  test('SP6b\'s seven states (SP6b spec D36) round-trip by state key, in either key order; rotateState and mirrorState map each to itself', () => {
+    const keys = ['moss_block', 'dripstone_block', 'abyss_stone', 'abyss_stone_veined', 'cracked_abyss_stone', 'abyss_shale', 'abyss_ash'];
+    const states = keys.map((k) => REGISTRY.parseStateKey(k));
+    expect(states).toEqual([58, 59, 60, 61, 62, 63, 64]);
+    // 7 × 1 × 2: each state once dry, then each again in reverse order.
+    const values = Uint32Array.from([...states, ...[...states].reverse()], (st) => (st << 8) >>> 0);
+    const c = encodeClipboard(7, 1, 2, values);
+    expect(c.keys).toEqual(keys);
+    expect(Array.from(c.states)).toEqual([0, 1, 2, 3, 4, 5, 6, 6, 5, 4, 3, 2, 1, 0]);
+    const out = decodeClipboard(c);
+    expect(out.ok).toBe(true);
+    if (out.ok) expect([out.values, out.unknown]).toEqual([values, 0]);
+    // The key table reversed, each cell's index following its key: every cell equal by state key.
+    const reversed = decodeClipboard({ ...c, keys: [...keys].reverse(), states: c.states.map((i) => 6 - i) });
+    expect(reversed.ok).toBe(true);
+    if (reversed.ok) expect([reversed.values, reversed.unknown]).toEqual([values, 0]);
+    // No new state rotates or mirrors.
+    for (const st of states) {
+      for (const q of [-1, 0, 1, 2, 3, 5]) expect(REGISTRY.rotateState(st, q), `${REGISTRY.stateKey(st)} q ${q}`).toBe(st);
+      expect(REGISTRY.mirrorState(st, 'x')).toBe(st);
+      expect(REGISTRY.mirrorState(st, 'z')).toBe(st);
+    }
+  });
+
   test('a 64³ clipboard\'s arrays are 3 B per cell (768 KiB)', () => {
     const values = new Uint32Array(64 ** 3).fill(((STONE << 8) | 0) >>> 0);
     const c = encodeClipboard(64, 64, 64, values);

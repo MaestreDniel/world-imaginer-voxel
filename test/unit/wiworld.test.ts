@@ -318,9 +318,9 @@ describe('.wiworld refusals and repairs (SP5b spec §2.4, D15, §2.1)', () => {
     }
   });
 
-  test('Review Focus 3: a file whose header\'s `stateTable` is today\'s 58 keys permuted and cut to 55 plus one unknown key `nope[x=1]`, with a stored genKey of another generator: imports with every voxel equal by state key, the unknown key\'s 3 voxels air, the record\'s `stateTable` today\'s, its records re-encoded under today\'s ids, and `olderGenerator` true; a file whose `version` is 2 is refused with nothing written', async () => {
+  test('Review Focus 3: a file whose header\'s `stateTable` is today\'s 65 keys permuted and cut to 55 plus one unknown key `nope[x=1]`, with a stored genKey of another generator: imports with every voxel equal by state key, the unknown key\'s 3 voxels air, the record\'s `stateTable` today\'s, its records re-encoded under today\'s ids, and `olderGenerator` true; a file whose `version` is 2 is refused with nothing written', async () => {
     const today = todayStateTable();
-    expect(today.length).toBe(58);
+    expect(today.length).toBe(65);
     const table = [...[...today].reverse().slice(0, 55), 'nope[x=1]'];
     const unknownId = table.indexOf('nope[x=1]');
     const src = sourceDump();

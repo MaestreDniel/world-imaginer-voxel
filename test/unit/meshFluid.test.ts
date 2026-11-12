@@ -249,9 +249,9 @@ describe('still lava (SP5a spec §1.3)', () => {
   const one = new Set([padIndex(8, 8, 8)]);
   const lavaDepth = depthFrom((x, y, z) => (x === 8 && y === 8 && z === 8 ? 1 : 0));
 
-  test('a lava source beside air: 6 faces in pass 0 at layer 59, full height; lava beside lava: none', () => {
+  test('a lava source beside air: 6 faces in pass 0 at layer 66, full height; lava beside lava: none', () => {
     expect(LAVA_LAYER).toBe(REGISTRY.stateCount + 1);
-    expect(LAVA_LAYER).toBe(59);
+    expect(LAVA_LAYER).toBe(66);
     const { passes } = mesh(lavaAt(one), lavaDepth);
     expect(passes[1]).toHaveLength(0);
     expect(passes[2]).toHaveLength(0);

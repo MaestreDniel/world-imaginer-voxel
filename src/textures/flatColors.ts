@@ -6,8 +6,9 @@
  * 25 types (SP5a spec §1.3): Minecraft's average colours, each ≥ 24 from every other type, the sky, water, lava and
  * unknown; where a candidate clashed with an older colour, the new one moved (cobblestone from stone, bricks from
  * terracotta, ladder from dirt, oak_log from coarse_dirt, gray_wool from mud, light_gray_wool from gravel, black_wool
- * from bedrock). SP8a replaces the flat colours with painted textures; this table stays as the average colour (SP11's
- * LOD).
+ * from bedrock). SP6b appends its 7 cave-biome types (SP6b spec §4), each ≥ 24 from every other type, the sky, water,
+ * lava and unknown; the abyss's rock stays darker than deepslate. SP8a replaces the flat colours with painted textures;
+ * this table stays as the average colour (SP11's LOD).
  */
 
 /** An sRGB colour, 0-255 per channel. */
@@ -66,6 +67,14 @@ const ENTRIES: readonly (readonly [string, FlatColor])[] = [
   ['green_wool', [85, 110, 28]],
   ['red_wool', [161, 39, 35]],
   ['black_wool', [16, 16, 20]],
+  // SP6b's cave-biome types (SP6b spec §4), in state order.
+  ['moss_block', [78, 112, 52]],
+  ['dripstone_block', [150, 120, 96]],
+  ['abyss_stone', [36, 34, 44]],
+  ['abyss_stone_veined', [58, 48, 74]],
+  ['cracked_abyss_stone', [50, 44, 46]],
+  ['abyss_shale', [70, 64, 48]],
+  ['abyss_ash', [92, 88, 86]],
 ];
 
 /** The flat colour of each block type, by type name (every registry type but air). */
