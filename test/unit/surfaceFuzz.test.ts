@@ -4,9 +4,11 @@ import {
   CONDITION_KINDS, RULE_KINDS, ruleLeaves, validateRules, type Condition, type Rule, type RuleLeaf,
 } from '../../src/gen/surface/rules';
 import { newSurfaceScan, scanColumn } from '../../src/gen/surface/scan';
+import { CAVE_BIOME_NAMES } from '../../src/core/constants';
+import { caveBiomeOfPass } from '../../src/gen/biomes/cavePicker';
 import {
   randomSurfaceColumn, randomSurfaceParams, randomSurfaceRules, SURFACE_FUZZ_BIOMES, SURFACE_FUZZ_NOISES, surfaceFuzzNoiseSource,
-  surfaceFuzzSettings, type SurfaceFuzzStyle,
+  surfaceFuzzSettings, withCaveBiomes, type SurfaceFuzzStyle,
 } from '../harness/surfaceFuzz';
 import { testRng } from '../harness/stats';
 
@@ -138,6 +140,76 @@ describe('surfaceFuzz: random rule trees and hand-built columns (SP3c spec §3.4
     expect(yOnPath).toBeGreaterThan(100);
     expect(yBandlands).toBeGreaterThan(50);
     expect(dbBandlands).toBeGreaterThan(50);
+  });
+
+  test('caveBiome (SP6b spec §3.2): every side, lists of 1-4 distinct cave biomes, every length and every name, in fastPath trees too', () => {
+    const sides = new Set<string>(), lengths = new Set<number>(), names = new Set<string>(), firsts = new Set<string>();
+    let inFastPath = 0;
+    for (const style of ['free', 'fastPath'] as const) {
+      for (const t of trees(28, 400, style)) {
+        for (const { node } of nodes(t)) {
+          if (node.kind !== 'caveBiome') continue;
+          if (style === 'fastPath') inFastPath++;
+          sides.add(node.side);
+          lengths.add(node.biomes.length);
+          firsts.add(node.biomes[0]!);
+          for (const b of node.biomes) names.add(b);
+          expect(new Set(node.biomes).size).toBe(node.biomes.length);
+        }
+      }
+    }
+    expect([...sides].sort()).toEqual(['ceiling', 'floor', 'here']);
+    expect([...lengths].sort()).toEqual([1, 2, 3, 4]);
+    expect([...names].sort()).toEqual([...CAVE_BIOME_NAMES].sort());
+    expect([...firsts].sort()).toEqual([...CAVE_BIOME_NAMES].sort());
+    expect(inFastPath).toBeGreaterThan(50);
+  });
+
+  test('withCaveBiomes: reproducible from its seed, the column untouched; tags only in air; every biome on each side and in the rock', () => {
+    const base = randomSurfaceColumn(testRng(29));
+    const a = withCaveBiomes(base, 4), b = withCaveBiomes(randomSurfaceColumn(testRng(29)), 4);
+    expect(Buffer.from(a.tags).equals(Buffer.from(b.tags))).toBe(true);
+    expect(Array.from(a.cave.pass.y0)).toEqual(Array.from(b.cave.pass.y0));
+    expect(a.cave.inputs.settings).toEqual(b.cave.inputs.settings);
+    const fresh = randomSurfaceColumn(testRng(29));
+    expect([a.solid, a.water, a.biomes, a.sample]).toEqual([fresh.solid, fresh.water, fresh.biomes, fresh.sample]);
+    expect(Buffer.from(withCaveBiomes(base, 5).tags).equals(Buffer.from(a.tags))).toBe(false);
+
+    const set = surfaceFuzzSettings();
+    const scan = newSurfaceScan();
+    const floors = new Set<number>(), ceilings = new Set<number>(), rock = new Set<number>(), jitters = new Set<number>();
+    let pickerNibbles = 0, otherNibbles = 0, untaggedNibbles = 0, overlaps = 0;
+    const next = testRng(30);
+    for (let k = 0; k < 40; k++) {
+      const col = withCaveBiomes(randomSurfaceColumn(next), 300 + k);
+      const { inputs, pass } = col.cave;
+      jitters.add(pass.j);
+      if (inputs.settings.lush.depthMax > 0.9) overlaps++;
+      expect([pass.cx, pass.cz]).toEqual([col.sample.cx, col.sample.cz]);
+      for (let i = 0; i < 98304; i++) {
+        const t = col.tags[i]!;
+        if (t === 0) continue;
+        expect(col.solid[i]).toBe(0);
+        const p = i & 255, y = (i >> 8) - 64;
+        if ((t & 15) === 0) { untaggedNibbles++; continue; }
+        if (t >> 4 === caveBiomeOfPass(inputs, pass, 16 * col.sample.cx + (p & 15), y, 16 * col.sample.cz + (p >> 4))) pickerNibbles++;
+        else otherNibbles++;
+      }
+      scanColumn(scan, set, col.sample, col.solid, col.water, col.biomes, col.tags, col.cave);
+      for (let r = 0; r < scan.runFirst[256]!; r++) { floors.add(scan.runFloorBiome[r]!); ceilings.add(scan.runCeilBiome[r]!); }
+      for (let p = 0; p < 256; p += 5) {
+        for (let y = -63; y <= 319; y += 2) {
+          if (col.solid[at(p, y)] !== 0) rock.add(caveBiomeOfPass(inputs, pass, 16 * col.sample.cx + (p & 15), y, 16 * col.sample.cz + (p >> 4)));
+        }
+      }
+    }
+    for (const s of [floors, ceilings]) expect([...s].sort()).toEqual([-1, 0, 1, 2, 3]);
+    expect([...rock].sort()).toEqual([0, 1, 2, 3]);
+    expect([...jitters].sort()).toEqual([0, 1, 2, 3, 4]);
+    expect(overlaps).toBeGreaterThan(3);
+    expect(pickerNibbles).toBeGreaterThan(otherNibbles);
+    expect(otherNibbles).toBeGreaterThan(1000);
+    expect(untaggedNibbles).toBeGreaterThan(100);
   });
 
   test('nearMiss trees: at least one leaf is neither depth-bounded nor Y-only', () => {

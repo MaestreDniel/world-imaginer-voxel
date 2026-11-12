@@ -2,7 +2,8 @@
  * Random valid surface-rule trees and random hand-built columns for the compile / reference / fast-path fuzz (SP3c
  * spec §3.4, §8).
  *
- * Trees (`randomSurfaceRules`) use every rule kind (one leaf in 8 is a `bandlands`) and condition kind of §3.1 with
+ * Trees (`randomSurfaceRules`) use every rule kind (one leaf in 8 is a `bandlands`) and condition kind of §3.1 (and
+ * SP6b's `caveBiome`, every side and any list of 1-4 distinct cave biomes, SP6b spec §3.2) with
  * values aimed at the columns below
  * (y bounds over the whole height and its edges, gradients with and without a dither interval, offsets around the
  * skin depths, thresholds inside the noises' ranges and at their clamps); they are valid by construction (no −0,
@@ -18,19 +19,27 @@
  * with solidity and water in the T stage's order: ground resting on the bedrock at a per-column height regime (deep
  * floors below y 0, the 1 … 7 dither band, sea level, mountains, the world top), empty positions, floating runs,
  * cave pockets (runs without sky close under their top, sometimes flooded), water directly above, above a gap and in
- * two segments. Everything is drawn from a u32 stream (`testRng`), so a seed reproduces it.
+ * two segments. Everything is drawn from a u32 stream (`testRng`), so a seed reproduces it. `withCaveBiomes` gives a
+ * column a cave channel and a cave picker (SP6b spec §3.1-§3.2) from a stream of its own: tagged cave air (any kind,
+ * the nibble the picker's or another biome, now and then a kind-0 byte with a nibble), cave entrances above some tops,
+ * and a hand-filled column pass whose climate regimes and depth origins make every cave biome occur at the column's
+ * heights. `caveBiomeHandColumn` is the fixed column of the D18 cases (a plain cave over lush rock, a bedrock-resting
+ * run).
  */
+import { CAVE_BIOME_NAMES, type CaveBiomeName } from '../../src/core/constants';
 import { NormalNoise } from '../../src/core/noise/normal';
 import { completeNoiseDef, type NoiseDef } from '../../src/core/noise/types';
 import type { Seed64 } from '../../src/core/hash';
 import { LEVEL_FIELDS, newColumnSample, SAMPLE_FIELDS, type ColumnSample } from '../../src/gen/column/columnStage';
 import { SURFACE_BIOMES, type SurfaceBiome } from '../../src/gen/biomes/registry';
+import type { CaveBiomeSettings } from '../../src/gen/biomes/caveRegistry';
+import { caveBiomeOfPass, newCaveColumnPass, type CaveColumnPass, type CavePickerInputs } from '../../src/gen/biomes/cavePicker';
 import { ruleLeaves, type Condition, type Rule, type SurfaceNoise, type SurfaceNoiseSource } from '../../src/gen/surface/rules';
 import { surfaceScanSettings, type SurfaceScanParams, type SurfaceScanSettings } from '../../src/gen/surface/scan';
 import { SCHEMA } from '../../src/core/params/schema';
 import { COLLIDE, REGISTRY } from '../../src/world/blocks/index';
 import { COLLIDE_NONE } from '../../src/world/blocks/kinds';
-import { testFloat } from './stats';
+import { testFloat, testRng } from './stats';
 
 export interface SurfaceFuzzNoiseSpec { readonly id: string; readonly def: NoiseDef }
 
@@ -85,12 +94,23 @@ export function surfaceFuzzSettings(
 /** The biomes trees and columns draw from by default: a few of each family, so biome conditions hit both ways. */
 export const SURFACE_FUZZ_BIOMES: readonly SurfaceBiome[] = ['ocean', 'beach', 'river', 'plains', 'desert', 'badlands', 'frozen_peaks'];
 
-/** A hand-built column: its sample, solidity and water (98,304 entries, `256·(y + 64) + p`) and its 256 surface biome ids. */
+/** A column's cave picker and its filled pass, as `scanColumn` takes them (SP6b spec §3.2). */
+export interface SurfaceFuzzCave {
+  readonly inputs: CavePickerInputs;
+  readonly pass: CaveColumnPass;
+}
+
+/**
+ * A hand-built column: its sample, solidity and water (98,304 entries, `256·(y + 64) + p`) and its 256 surface biome
+ * ids; with cave biomes (`withCaveBiomes`), its cave channel (kind in bits 0-3, cave biome in bits 4-7) and picker.
+ */
 export interface SurfaceFuzzColumn {
   readonly sample: ColumnSample;
   readonly solid: Uint8Array;
   readonly water: Uint8Array;
   readonly biomes: Uint8Array;
+  readonly tags?: Uint8Array;
+  readonly cave?: SurfaceFuzzCave;
 }
 
 export interface SurfaceColumnOptions {
@@ -197,6 +217,7 @@ const THRESHOLDS: readonly number[] = [-8, -3, -2, -0.55, 0, 0.55, 1.5, 2, 3, 8]
 /** The keys of every registered state that collides (not air, torches or ladders), in state order. */
 const SOLID_KEYS: readonly string[] = Array.from({ length: REGISTRY.stateCount }, (_, s) => s)
   .filter((s) => COLLIDE[s] !== COLLIDE_NONE).map((s) => REGISTRY.stateKey(s));
+const CAVE_SIDES = ['floor', 'ceiling', 'here'] as const;
 /** +0 for a zero (a product or a difference can give −0, which validateRules rejects). */
 const plus0 = (v: number): number => (v === 0 ? 0 : v);
 
@@ -221,11 +242,18 @@ export function randomSurfaceRules(next: () => number, opts: SurfaceRulesOptions
     return { kind: 'verticalGradient', trueAtAndBelow: lo, falseAtAndAbove: lo + 1 + (next() % 12) };
   };
   const floorDepth = (): Condition => ({ kind: 'stoneDepth', side: 'floor', offset: next() % 4 === 0 ? (next() % 21) - 2 : next() % 6, addSurfaceDepth: bool() });
+  /** A `caveBiome` of any side over 1-4 distinct cave biomes in any order. */
+  const caveBiome = (): Condition => {
+    const pool = [...CAVE_BIOME_NAMES];
+    const list: CaveBiomeName[] = [];
+    for (let n = 1 + (next() % pool.length); n > 0; n--) list.push(pool.splice(next() % pool.length, 1)[0]!);
+    return { kind: 'caveBiome', side: CAVE_SIDES[next() % CAVE_SIDES.length]!, biomes: list };
+  };
 
   /** A condition at nesting depth `depth`, any kind (no skyOpen, also inside a not, when `noSky`). */
   const condition = (depth: number, noSky = false): Condition => {
     for (;;) {
-      switch (next() % 11) {
+      switch (next() % 12) {
         case 0: {
           const n = 1 + (next() % 3);
           return { kind: 'biome', biomes: Array.from({ length: n }, () => pick(biomes)) };
@@ -242,6 +270,7 @@ export function randomSurfaceRules(next: () => number, opts: SurfaceRulesOptions
         case 7: return { kind: 'temperatureBelow', t: plus0(Math.round((testFloat(next) - 0.5) * 240) / 100) };
         case 8: if (!noSky) return { kind: 'skyOpen' }; break;
         case 9: return { kind: 'lake' };
+        case 10: return caveBiome();
         default: if (depth < maxDepth) return { kind: 'not', if: condition(depth + 1, noSky) }; break;
       }
     }
@@ -312,6 +341,142 @@ export function randomSurfaceRules(next: () => number, opts: SurfaceRulesOptions
   if (branches.length === depthCount) branches.splice(next() % (branches.length + 1), 0, yBranch());
   if (style === 'nearMiss') branches.splice(next() % (branches.length + 1), 0, offPath());
   return { kind: 'sequence', rules: branches };
+}
+
+/** §6.1's cave-biome defaults (the boxes, depthScale 128, edgeJitter 2), as `params.caves.biomes` minus its noises. */
+export const SURFACE_FUZZ_CAVE_SETTINGS: CaveBiomeSettings = Object.freeze({
+  lush: { hMin: 0.4, depthMin: 0.2, depthMax: 0.9 },
+  dripstone: { cMin: 0.6, depthMin: 0.2, depthMax: 0.9 },
+  abyss: { eMax: -0.5, cMin: -0.1, depthMin: 1.0 },
+  depthScale: 128,
+  borderWarp: 0.05,
+  depthWarp: 10,
+  edgeJitter: 2,
+});
+
+/** A 2D noise that is never read: a hand-filled pass already holds the perturbed fields. */
+const UNREAD_NOISE = Object.freeze({ z2: (): number => 0, clamp: 1 });
+
+/** Picker inputs over `settings` for a hand-filled pass (`handCavePass`): only the boxes, D and the jitter seed are read. */
+export function fuzzCavePicker(settings: CaveBiomeSettings = SURFACE_FUZZ_CAVE_SETTINGS, jitterSeed = 0x2c4b5eed): CavePickerInputs {
+  return { settings, borderC: UNREAD_NOISE, borderE: UNREAD_NOISE, borderH: UNREAD_NOISE, depth: UNREAD_NOISE, jitterSeed };
+}
+
+/** One position of a hand-filled pass: the perturbed climate C′, E′, H′ and the depth origin Y0. */
+export interface CaveFields { readonly c: number; readonly e: number; readonly h: number; readonly y0: number }
+
+/**
+ * A column pass for column (cx, cz) filled with jitter j: entry (x, z), for every x, z within 4 of the column (the 24 ×
+ * 24 layout), takes `fields(x, z)`.
+ */
+export function handCavePass(cx: number, cz: number, j: number, fields: (x: number, z: number) => CaveFields): CaveColumnPass {
+  const pass = newCaveColumnPass();
+  pass.cx = cx;
+  pass.cz = cz;
+  pass.j = j;
+  for (let k = 0; k < 576; k++) {
+    const f = fields(16 * cx - 4 + (k % 24), 16 * cz - 4 + Math.floor(k / 24));
+    pass.c[k] = f.c;
+    pass.e[k] = f.e;
+    pass.h[k] = f.h;
+    pass.y0[k] = f.y0;
+  }
+  return pass;
+}
+
+/** The highest solid y of position p (the stage's bedrock −64 when nothing else is solid). */
+function topOf(solid: Uint8Array, p: number): number {
+  let y = 319;
+  while (y > -64 && solid[at(p, y)] === 0) y--;
+  return y;
+}
+
+/**
+ * `col` with a cave channel and a cave picker drawn from `testRng(seed)` (the column's own stream is not touched): the
+ * default boxes, sometimes overlapping, D 16 … 128 and edgeJitter 0 … 4; a pass whose 4 × 4 cells each hold a climate
+ * regime (plain, lush, dripstone, abyss, or one inside every box, where the margin decides), lightly speckled, with the
+ * depth origin a cell offset above the position's top; three cave-air segments in four tagged (kind 1 … 9; the nibble
+ * the picker's at the voxel or any biome, one in two), one position in eight with a tagged entrance 1 … 3 voxels above
+ * its top, and one air voxel in sixteen written as a kind-0 byte with a nibble (untagged).
+ */
+export function withCaveBiomes(col: SurfaceFuzzColumn, seed: number): SurfaceFuzzColumn & { readonly tags: Uint8Array; readonly cave: SurfaceFuzzCave } {
+  const next = testRng(seed);
+  const d = SURFACE_FUZZ_CAVE_SETTINGS;
+  const overlap = next() % 4 === 0;
+  const settings: CaveBiomeSettings = {
+    ...d,
+    lush: overlap ? { ...d.lush, depthMax: 1.3 } : d.lush,
+    dripstone: overlap ? { ...d.dripstone, cMin: 0.3 } : d.dripstone,
+    depthScale: 16 + (next() % 113),
+    edgeJitter: next() % 5,
+  };
+  const inputs = fuzzCavePicker(settings, next());
+  const { cx, cz } = col.sample;
+  const regimes: number[] = [], offsets: number[] = [];
+  for (let k = 0; k < 36; k++) {
+    regimes.push(next() % 5);
+    offsets.push((next() % 25) - 4);
+  }
+  const speckle = (): number => (testFloat(next) - 0.5) * 0.1;
+  const pass = handCavePass(cx, cz, settings.edgeJitter, (x, z) => {
+    const i = z - 16 * cz + 4, jx = x - 16 * cx + 4;
+    const cell = (i >> 2) * 6 + (jx >> 2);
+    const p = Math.min(15, Math.max(0, i - 4)) * 16 + Math.min(15, Math.max(0, jx - 4));
+    const f = testFloat(next);
+    let c = speckle(), e = speckle(), h = speckle();
+    switch (regimes[cell]) {
+      case 1: h += 0.5 + 0.4 * f; break;
+      case 2: c += 0.7 + 0.3 * f; break;
+      case 3: e += -0.6 - 0.4 * f; c += 0.3 * f; break;
+      case 4: h += 0.45 + 0.3 * f; c += 0.65 + 0.3 * f; e += -0.55 - 0.3 * f; break;
+      default: break;
+    }
+    return { c, e, h, y0: topOf(col.solid, p) + offsets[cell]! };
+  });
+  const tags = new Uint8Array(VOXELS);
+  for (let p = 0; p < 256; p++) {
+    const top = topOf(col.solid, p);
+    const x = 16 * cx + (p & 15), z = 16 * cz + (p >> 4);
+    const entrance = next() % 8 === 0 ? 1 + (next() % 3) : 0;
+    let segment = false, tagged = false;
+    for (let y = -63; y <= Math.min(319, top + entrance); y++) {
+      if (col.solid[at(p, y)] !== 0) { segment = false; continue; }
+      // A new air segment (cave air under the top, or the entrance above it): tagged three times in four.
+      if (!segment) { segment = true; tagged = y > top || next() % 4 !== 0; }
+      if (next() % 16 === 0) { tags[at(p, y)] = (next() % 4) << 4; continue; }
+      if (!tagged) continue;
+      const biome = next() % 2 === 0 ? caveBiomeOfPass(inputs, pass, x, y, z) : next() % 4;
+      tags[at(p, y)] = (1 + (next() % 9)) | (biome << 4);
+    }
+  }
+  return { ...col, tags, cave: { inputs, pass } };
+}
+
+/**
+ * The fixed column of the D18 cases (SP6b spec §3.2, §10), every position with the stage's bedrock at y −64, the picker
+ * lush in the rock at y −15 … 74 everywhere (H′ 0.5, Y0 100, D 128, no jitter) and plain above and below:
+ * - p 0: ground −63 … 40 (resting on the bedrock) under plain cave air (`1 | 0 << 4`) at 41 … 45: lush rock under a
+ *   plain cave;
+ * - p 1: ground −63 … 40 under lush cave air (`1 | 1 << 4`) at 41 … 49, an overhang 50 … 60 above it;
+ * - p 2: ground −63 … 40 under untagged air.
+ * Every other position: ground −63 … 40.
+ */
+export function caveBiomeHandColumn(): SurfaceFuzzColumn & { readonly tags: Uint8Array; readonly cave: SurfaceFuzzCave } {
+  const col = randomSurfaceColumn(testRng(1));
+  col.solid.fill(0);
+  col.water.fill(0);
+  col.sample.f.lakeLevel.fill(-Infinity);
+  const tags = new Uint8Array(VOXELS);
+  for (let p = 0; p < 256; p++) {
+    col.solid[at(p, -64)] = 1;
+    for (let y = -63; y <= 40; y++) col.solid[at(p, y)] = 1;
+  }
+  for (let y = 41; y <= 45; y++) tags[at(0, y)] = 1;
+  for (let y = 41; y <= 49; y++) tags[at(1, y)] = 1 | (1 << 4);
+  for (let y = 50; y <= 60; y++) col.solid[at(1, y)] = 1;
+  const settings = { ...SURFACE_FUZZ_CAVE_SETTINGS, edgeJitter: 0 };
+  const pass = handCavePass(col.sample.cx, col.sample.cz, 0, () => ({ c: 0, e: 0, h: 0.5, y0: 100 }));
+  return { ...col, tags, cave: { inputs: fuzzCavePicker(settings), pass } };
 }
 
 /** `key` when it is a registered canonical state key, else `standIn`. */

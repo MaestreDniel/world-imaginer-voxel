@@ -1,10 +1,14 @@
 import { describe, expect, test } from 'vitest';
 import { deriveSeed, hash3, type Seed64 } from '../../src/core/hash';
 import { biomeId } from '../../src/gen/biomes/registry';
+import { caveBiomeOfPass } from '../../src/gen/biomes/cavePicker';
 import {
-  biomeHolds, biomeMask, gradientSeed, lakeHolds, noiseThresholdHolds, skyOpenHolds, steepHolds, stoneDepthHolds,
-  temperatureBelowHolds, verticalGradientHolds, waterHolds, yAboveHolds,
+  biomeHolds, biomeMask, caveBiomeHere, caveBiomeHolds, caveBiomeMask, gradientSeed, lakeHolds, noiseThresholdHolds, skyOpenHolds,
+  steepHolds, stoneDepthHolds, temperatureBelowHolds, verticalGradientHolds, waterHolds, yAboveHolds,
 } from '../../src/gen/surface/conditions';
+import { newSurfaceScan, scanColumn } from '../../src/gen/surface/scan';
+import { caveBiomeHandColumn, randomSurfaceColumn, surfaceFuzzSettings, withCaveBiomes } from '../harness/surfaceFuzz';
+import { testRng } from '../harness/stats';
 
 const SEED: Seed64 = [42, 0];
 
@@ -117,5 +121,66 @@ describe('condition helpers (SP3c spec §3.1, §3.2)', () => {
     expect(lakeHolds(NaN)).toBe(false);
     expect(lakeHolds(71)).toBe(true);
     expect(lakeHolds(-3.5)).toBe(true);
+  });
+});
+
+describe('caveBiome (SP6b spec §3.2, D18)', () => {
+  const ALL = caveBiomeMask(['plain', 'lush', 'dripstone', 'abyss']);
+
+  test('caveBiomeHolds: the side\'s cave biome is in the set; none (−1) never is', () => {
+    const m = caveBiomeMask(['abyss', 'lush']);
+    expect([0, 1, 2, 3].map((b) => caveBiomeHolds(m, b))).toEqual([false, true, false, true]);
+    expect(caveBiomeHolds(m, -1)).toBe(false);
+    expect([-1, 0, 1, 2, 3].map((b) => caveBiomeHolds(ALL, b))).toEqual([false, true, true, true, true]);
+    // A reserved id (4-15) is in no list.
+    for (let b = 4; b < 16; b++) expect(caveBiomeHolds(ALL, b)).toBe(false);
+    expect(() => caveBiomeMask(['moss'])).toThrow(/moss/);
+  });
+
+  test('caveBiomeHere: the picker at the voxel (caveBiomeOfPass), −1 without a picker or a pass', () => {
+    const col = withCaveBiomes(randomSurfaceColumn(testRng(31)), 31);
+    const { inputs, pass } = col.cave;
+    const next = testRng(32);
+    for (let k = 0; k < 500; k++) {
+      const x = 16 * col.sample.cx + (next() % 16), z = 16 * col.sample.cz + (next() % 16), y = -63 + (next() % 383);
+      expect(caveBiomeHere(inputs, pass, x, y, z)).toBe(caveBiomeOfPass(inputs, pass, x, y, z));
+    }
+    expect(caveBiomeHere(null, pass, 16 * col.sample.cx, 0, 16 * col.sample.cz)).toBe(-1);
+    expect(caveBiomeHere(inputs, null, 16 * col.sample.cx, 0, 16 * col.sample.cz)).toBe(-1);
+  });
+
+  describe('on the hand-built column (caveBiomeHandColumn)', () => {
+    const col = caveBiomeHandColumn();
+    const scan = scanColumn(newSurfaceScan(), surfaceFuzzSettings(SEED), col.sample, col.solid, col.water, col.biomes, col.tags, col.cave);
+    const x = (p: number): number => 16 * col.sample.cx + (p & 15);
+    const z = (p: number): number => 16 * col.sample.cz + (p >> 4);
+    const here = (p: number, y: number): number => caveBiomeHere(scan.cavePicker, scan.cavePass, x(p), y, z(p));
+
+    test('a moss carpet never lies under a plain cave over lush rock', () => {
+      const lush = caveBiomeMask(['lush']);
+      const r = scan.runFirst[0]!;
+      expect([scan.runTop[r], scan.runBottom[r]]).toEqual([40, -63]);
+      // floor reads the cave air above the run's top (plain, `1 | 0 << 4`); here the rock's own biome (lush).
+      expect(caveBiomeHolds(lush, scan.runFloorBiome[r]!)).toBe(false);
+      expect(caveBiomeHolds(caveBiomeMask(['plain']), scan.runFloorBiome[r]!)).toBe(true);
+      expect(caveBiomeHolds(lush, here(0, 40))).toBe(true);
+      // Under lush cave air (p 1's ground run) the floor side holds; under untagged air (p 2) no list holds.
+      expect(caveBiomeHolds(lush, scan.runFloorBiome[scan.runFirst[1]! + 1]!)).toBe(true);
+      expect(caveBiomeHolds(ALL, scan.runFloorBiome[scan.runFirst[2]!]!)).toBe(false);
+      // The picker: lush in the rock at y −15 … 74 (depth 0.2 … 0.9 below Y0 100, D 128), plain elsewhere.
+      expect([-16, -15, 74, 75].map((y) => here(0, y))).toEqual([0, 1, 1, 0]);
+    });
+
+    test('a ceiling rule never fires on a bedrock-resting run', () => {
+      for (let p = 0; p < 256; p++) {
+        const ground = scan.runFirst[p + 1]! - 1;
+        expect(scan.runBottom[ground]).toBe(-63);
+        expect(caveBiomeHolds(ALL, scan.runCeilBiome[ground]!)).toBe(false);
+      }
+      // p 1's overhang (50 … 60) rests on lush cave air: its ceiling side holds.
+      const overhang = scan.runFirst[1]!;
+      expect([scan.runTop[overhang], scan.runBottom[overhang]]).toEqual([60, 50]);
+      expect(caveBiomeHolds(caveBiomeMask(['lush']), scan.runCeilBiome[overhang]!)).toBe(true);
+    });
   });
 });

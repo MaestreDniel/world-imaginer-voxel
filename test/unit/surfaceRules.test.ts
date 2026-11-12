@@ -33,6 +33,7 @@ const EVERY_CONDITION: readonly Condition[] = [
   { kind: 'skyOpen' },
   { kind: 'lake' },
   { kind: 'not', if: { kind: 'stoneDepth', side: 'ceiling', offset: 3, addSurfaceDepth: false } },
+  { kind: 'caveBiome', side: 'floor', biomes: ['lush', 'dripstone'] },
 ];
 const EVERY_KIND: Rule = seq(...EVERY_CONDITION.map((c, k) => cond(c, block(k % 2 === 0 ? 'stone' : 'bedrock'))), { kind: 'bandlands' }, block('stone'));
 
@@ -48,6 +49,7 @@ describe('rule model (SP3c spec §3.1)', () => {
     expect([...RULE_KINDS]).toEqual(['sequence', 'condition', 'block', 'bandlands']);
     expect([...CONDITION_KINDS]).toEqual([
       'biome', 'stoneDepth', 'water', 'yAbove', 'verticalGradient', 'steep', 'noiseThreshold', 'temperatureBelow', 'skyOpen', 'lake', 'not',
+      'caveBiome',
     ]);
   });
 
@@ -167,6 +169,25 @@ describe('validateRules (SP3c spec §3.1)', () => {
     expect(issues(c({ kind: 'water', offset: 0, runTop: 1 }))).toEqual(['root.if.runTop: NOT_BOOLEAN']);
     expect(issues(c({ kind: 'stoneDepth', side: 'floor', offset: 0, addSurfaceDepth: 'yes' }))).toEqual(['root.if.addSurfaceDepth: NOT_BOOLEAN']);
     expect(issues(c({ kind: 'stoneDepth', side: 'roof', offset: 0, addSurfaceDepth: false }))).toEqual(['root.if.side: BAD_SIDE']);
+  });
+
+  test('caveBiome (SP6b spec §3.2): side floor, ceiling or here; 1-4 distinct cave biome names', () => {
+    const c = (x: object): Rule => cond(x as Condition, block('stone'));
+    expect(issues(c({ kind: 'caveBiome', side: 'floor', biomes: ['lush'] }))).toEqual([]);
+    expect(issues(c({ kind: 'caveBiome', side: 'ceiling', biomes: ['abyss', 'plain'] }))).toEqual([]);
+    expect(issues(c({ kind: 'caveBiome', side: 'here', biomes: ['plain', 'lush', 'dripstone', 'abyss'] }))).toEqual([]);
+    expect(issues(c({ kind: 'caveBiome', side: 'wall', biomes: ['lush'] }))).toEqual(['root.if.side: CAVE_BIOME_SIDE']);
+    expect(validateRules(c({ kind: 'caveBiome', side: 'wall', biomes: ['lush'] }), LOOKUP)[0]!.message).toBe('caveBiome side must be floor, ceiling or here');
+    for (const biomes of [[], ['lush', 'lush'], ['moss'], 'lush', [1], ['plain', 'lush', 'dripstone', 'abyss', 'plain']]) {
+      expect([biomes, issues(c({ kind: 'caveBiome', side: 'floor', biomes }))]).toEqual([biomes, ['root.if.biomes: CAVE_BIOME_LIST']]);
+    }
+    expect(validateRules(c({ kind: 'caveBiome', side: 'floor', biomes: [] }), LOOKUP)[0]!.message).toBe('caveBiome needs 1-4 distinct cave biome names');
+    // Both at once, in field order; a missing field is the kind's missing-field error (no list check).
+    expect(issues(c({ kind: 'caveBiome', side: 'roof', biomes: ['moss'] }))).toEqual(['root.if.side: CAVE_BIOME_SIDE', 'root.if.biomes: CAVE_BIOME_LIST']);
+    expect(issues(c({ kind: 'caveBiome', side: 'floor' }))).toEqual(['root.if.biomes: MISSING_FIELD']);
+    expect(issues(c({ kind: 'caveBiome', biomes: ['lush'] }))).toEqual(['root.if.side: MISSING_FIELD']);
+    expect(issues(c({ kind: 'caveBiome', side: 'here', biomes: ['lush'], offset: 1 }))).toEqual(['root.if.offset: UNKNOWN_FIELD']);
+    expect(issues(c({ kind: 'not', if: { kind: 'caveBiome', side: 'here', biomes: ['lush'] } }))).toEqual([]);
   });
 
   test('order checks: noiseThreshold min > max, verticalGradient trueAtAndBelow ≥ falseAtAndAbove', () => {

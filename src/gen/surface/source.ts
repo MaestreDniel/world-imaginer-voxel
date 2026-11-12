@@ -2,7 +2,8 @@
  * The source model of the `surface.rules` leaf (SP3d spec §1.3, §1.7, §1.8): a rule tree as SP3c §3.1 encodes it, whose
  * nine numeric fields (`stoneDepth.offset`, `water.offset`, `yAbove.minY`, `verticalGradient.trueAtAndBelow` and
  * `.falseAtAndAbove`, `steep.min`, `noiseThreshold.min` and `.max`, `temperatureBelow.t`) may hold a parameter ref
- * `{param: <path>}` or `{param: <path>, neg: true}` instead of a number.
+ * `{param: <path>}` or `{param: <path>, neg: true}` instead of a number. Every other field is a literal: `caveBiome`'s
+ * side and its list of cave biomes (SP6b spec §3.2) take no ref (a ref there is CAVE_BIOME_SIDE or CAVE_BIOME_LIST).
  *
  * `validateRulesSource` is tier 2 for the leaf: `validateRules` in its source mode over the schema's surface noises and
  * the ref targets below (every check over the targets' static ranges, so a slider move never invalidates a stored tree),

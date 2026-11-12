@@ -155,6 +155,7 @@ describe('replace kind (rules)', () => {
       { kind: 'skyOpen' },
       { kind: 'lake' },
       { kind: 'not', if: { kind: 'skyOpen' } },
+      { kind: 'caveBiome', side: 'floor', biomes: ['lush'] },
     ]);
   });
 });
@@ -416,6 +417,35 @@ describe('the fields of a node', () => {
     expect((valueOf(setField(b, R('root.if'), 'biomes', ['desert', 'beach'])) as { if: unknown }).if).toEqual({ kind: 'biome', biomes: ['desert', 'beach'] });
     expect(() => setField(p0, R('root.if'), 'offset', 'x')).toThrow(RangeError);
     expect((valueOf(setField(DEFAULTS, D('root.b'), 'name', 'isles')) as { root: { b: { name: string } } }).root.b.name).toBe('isles');
+  });
+});
+
+describe('caveBiome (SP6b spec §3.2)', () => {
+  const p = withRules(iff({ kind: 'caveBiome', side: 'floor', biomes: ['lush'] }, block('moss_block')));
+  test('the form: side a select of floor, ceiling and here; biomes a list of the cave biomes', () => {
+    expect(formFields(p, R('root.if'))).toEqual([
+      { type: 'select', key: 'side', value: 'floor', options: ['floor', 'ceiling', 'here'] },
+      { type: 'biomes', key: 'biomes', value: ['lush'], options: ['plain', 'lush', 'dripstone', 'abyss'] },
+    ]);
+    // stoneDepth's side keeps its two options.
+    const sd = withRules(iff({ kind: 'stoneDepth', side: 'floor', offset: 0, addSurfaceDepth: false }, block('dirt')));
+    expect(formFields(sd, R('root.if'))[0]).toEqual({ type: 'select', key: 'side', value: 'floor', options: ['floor', 'ceiling'] });
+  });
+
+  test('editing side and biomes; an empty or unknown list is refused at commit (CAVE_BIOME_LIST), nothing sent', () => {
+    expect((valueOf(setField(p, R('root.if'), 'side', 'here')) as { if: unknown }).if).toEqual({ kind: 'caveBiome', side: 'here', biomes: ['lush'] });
+    expect((valueOf(setField(p, R('root.if'), 'biomes', ['abyss', 'plain'])) as { if: unknown }).if)
+      .toEqual({ kind: 'caveBiome', side: 'floor', biomes: ['abyss', 'plain'] });
+    const s = session();
+    const ok = commitFormEdit(s, setField(withRules(valueOf(setField(p, R('root.if'), 'side', 'ceiling')), s.state.params), R('root.if'), 'biomes', ['dripstone']));
+    expect(ok.ok).toBe(true);
+    expect(s.state.params.surface.rules).toEqual(iff({ kind: 'caveBiome', side: 'ceiling', biomes: ['dripstone'] }, block('moss_block')));
+    const before = s.state.params;
+    for (const biomes of [[], ['moss']]) {
+      const bad = commitFormEdit(s, setField(s.state.params, R('root.if'), 'biomes', biomes));
+      expect(bad.ok ? [] : bad.issues.map((i) => `${i.path}: ${i.code}`)).toEqual(['root.if.biomes: CAVE_BIOME_LIST']);
+      expect(s.state.params).toBe(before);
+    }
   });
 });
 

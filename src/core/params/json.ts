@@ -34,7 +34,7 @@ export type TreeIssueCode =
   // validateRules (gen/surface/rules.ts)
   | 'NOT_ARRAY' | 'UNKNOWN_KIND' | 'UNKNOWN_FIELD' | 'MISSING_FIELD' | 'UNKNOWN_BLOCK' | 'UNKNOWN_BIOME' | 'NOT_INTEGER'
   | 'OUT_OF_RANGE' | 'NEGATIVE_ZERO' | 'NOT_BOOLEAN' | 'BAD_SIDE' | 'GRADIENT_ORDER' | 'TOO_DEEP' | 'TOO_MANY_NODES'
-  | 'NO_BAND_NOISE'
+  | 'NO_BAND_NOISE' | 'CAVE_BIOME_SIDE' | 'CAVE_BIOME_LIST'
   // SP3d tier 2: parameter refs, recip, literal and value ranges, slide slopes and knot counts, counts, depth and cost bounds, solidity
   | 'UNKNOWN_PARAM' | 'PARAM_KIND' | 'RECIP_OPERAND' | 'RECIP_ZERO' | 'LITERAL_RANGE' | 'SLIDE_SLOPE' | 'TOO_MANY_KNOTS'
   | 'TOO_MANY_DEFS' | 'EXPANDED_TOO_DEEP' | 'TOO_COSTLY' | 'VALUE_RANGE' | 'COLUMN_COST' | 'TOO_MANY_BIOMES' | 'NOT_SOLID' | 'TOO_MANY_ISSUES';

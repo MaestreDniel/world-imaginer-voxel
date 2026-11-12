@@ -4,13 +4,20 @@
  * negation of its inner condition and has no helper. Compile-time preparation (a biome set as a mask, a gradient's
  * derived seed) is here as well, so both evaluators prepare alike.
  */
+import { CAVE_BIOME_NAMES } from '../../core/constants';
 import { deriveSeed, hash3, type Seed64 } from '../../core/hash';
+import { caveBiomeOfPass, type CaveColumnPass, type CavePickerInputs } from '../biomes/cavePicker';
 import { SURFACE_BIOMES } from '../biomes/registry';
 
 const DERIVE = deriveSeed;
 const HASH3 = hash3;
 const BIOMES = SURFACE_BIOMES;
 const BIOME_INDEX = new Map<string, number>(BIOMES.map((n, i) => [n, i]));
+const CAVE_NAMES = CAVE_BIOME_NAMES;
+const CAVE_BIOME_INDEX = new Map<string, number>(CAVE_NAMES.map((n, i) => [n, i]));
+const CAVE_BIOME_AT = caveBiomeOfPass;
+/** Cave biome ids are the `cave` byte's high nibble: 0 … 15 (4-15 reserved). */
+const CAVE_BIOME_IDS = 16;
 /** 2^−32: a u32 hash times this lies in [0, 1). */
 const INV_U32 = 1 / 4294967296;
 
@@ -91,4 +98,32 @@ export function skyOpenHolds(runIsSkyOpen: boolean): boolean {
 /** `lake`: the lakeLevel at the position's nearest quart corner (`readLevel`'s rounding) is finite. */
 export function lakeHolds(lakeLevel: number): boolean {
   return Number.isFinite(lakeLevel);
+}
+
+/** A cave-biome set as a mask over the nibble's ids 0 … 15 (1 = in the set). Throws on an unknown cave biome name. */
+export function caveBiomeMask(biomes: readonly string[]): Uint8Array {
+  const m = new Uint8Array(CAVE_BIOME_IDS);
+  for (const b of biomes) {
+    const id = CAVE_BIOME_INDEX.get(b);
+    if (id === undefined) throw new Error(`caveBiomeMask: unknown cave biome ${JSON.stringify(b)}`);
+    m[id] = 1;
+  }
+  return m;
+}
+
+/**
+ * `caveBiome` (SP6b spec §3.2, D18): the side's cave biome is in the set. `biome` is the run's floor biome (side floor),
+ * its ceiling biome (side ceiling) or `caveBiomeHere` at the voxel (side here); −1 (none: untagged air, a run resting on
+ * the bedrock, no picker) is in no set.
+ */
+export function caveBiomeHolds(mask: Uint8Array, biome: number): boolean {
+  return biome >= 0 && mask[biome] === 1;
+}
+
+/**
+ * The `here` side's cave biome at the voxel (x, y, z): the picker's (`caveBiomeOfPass` over the column's filled pass), or
+ * −1 when the scan has no picker or no pass.
+ */
+export function caveBiomeHere(picker: CavePickerInputs | null, pass: CaveColumnPass | null, x: number, y: number, z: number): number {
+  return picker === null || pass === null ? -1 : CAVE_BIOME_AT(picker, pass, x, y, z);
 }

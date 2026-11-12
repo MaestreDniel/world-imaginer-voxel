@@ -20,7 +20,8 @@ import { validateParamTrees } from '../../src/gen/trees';
 import { randomDensityExpr, SCHEMA_DENSITY_NOISES } from '../harness/densityFuzz';
 import { ctxFor } from '../harness/gen';
 import { testRng } from '../harness/stats';
-import { SCHEMA_SURFACE_NOISES, SURFACE_FUZZ_NOISES } from '../harness/surfaceFuzz';
+import { randomSurfaceColumn, SCHEMA_SURFACE_NOISES, SURFACE_FUZZ_NOISES, withCaveBiomes } from '../harness/surfaceFuzz';
+import { scanColumn } from '../../src/gen/surface/scan';
 import {
   BREAKING_MUTATIONS, cloneTree, mutateTree, mutationBase, mutationsOf, PRESERVING_MUTATIONS, type MutationName,
 } from '../harness/treeMutator';
@@ -368,6 +369,76 @@ describe('treeMutator: the mutator', () => {
       expect(valid, format).toBe(200 - defaults);
     }
   });
+});
+
+describe('treeMutator: caveBiome (SP6b spec §3.2, §3.5)', () => {
+  /** The caveBiome nodes of a value (any JSON), by side as written. */
+  const caveBiomes = (v: unknown): Array<Record<string, unknown>> => {
+    const out: Array<Record<string, unknown>> = [];
+    const stack: unknown[] = [v];
+    while (stack.length > 0) {
+      const x = stack.pop();
+      if (typeof x !== 'object' || x === null) continue;
+      if (!Array.isArray(x) && (x as Record<string, unknown>)['kind'] === 'caveBiome') out.push(x as Record<string, unknown>);
+      for (const y of Object.values(x)) stack.push(y);
+    }
+    return out;
+  };
+
+  test('the mutator emits caveBiome of every side (accepted), and bad sides and lists (refused with their paths)', () => {
+    const next = testRng(1603);
+    const accepted = new Set<string>(), refusedCodes = new Set<string>();
+    for (let i = 0; i < 1000; i++) {
+      const m = mutateTree(next, mutationBase(next, 'surfaceRules'), 'surfaceRules', { count: 1 + (next() % 2) });
+      const nodes = caveBiomes(m.value);
+      if (nodes.length === 0) continue;
+      const j = judge(m.value, 'surfaceRules');
+      if (j.params !== null) for (const n of nodes) accepted.add(String(n['side']));
+      else for (const x of j.issues) if (x.code.startsWith('CAVE_BIOME_')) refusedCodes.add(x.code);
+    }
+    expect([...accepted].sort()).toEqual(['ceiling', 'floor', 'here']);
+    expect([...refusedCodes].sort()).toEqual(['CAVE_BIOME_LIST', 'CAVE_BIOME_SIDE']);
+  });
+
+  test('compiled == reference, and the fast path == full evaluation, on 200 accepted mutated trees holding caveBiome', () => {
+    // Two columns holding every cave biome, scanned with the real context's settings (the trees name the schema noises).
+    const cols = [41, 42].map((k) => withCaveBiomes(randomSurfaceColumn(testRng(k)), k));
+    const scans = cols.map((col) => scanColumn(newSurfaceScan(), SC.settings, col.sample, col.solid, col.water, col.biomes, col.tags, col.cave));
+    const next = testRng(1604);
+    let trees = 0, fastTrees = 0, checked = 0;
+    for (let i = 0; trees < 200; i++) {
+      expect(i, 'too few accepted trees with caveBiome').toBeLessThan(5000);
+      const m = mutateTree(next, mutationBase(next, 'surfaceRules'), 'surfaceRules', { count: 1 + (next() % 2) });
+      if (caveBiomes(m.value).length === 0) continue;
+      const j = judge(m.value, 'surfaceRules');
+      if (j.params === null) continue;
+      trees++;
+      const rules = resolveRules(j.params.surface.rules, j.params);
+      const compiled = compileSurfaceRules(CTX.seed, rules, SC.noises, SC.settings, SC.bands);
+      const reference = createSurfaceReference(CTX.seed, rules, SC.noises, SC.bands);
+      if (compiled.fastPath !== null) fastTrees++;
+      for (const [n, scan] of scans.entries()) {
+        FULL.fill(0);
+        compiled.fillColumn(scan, FULL, false);
+        if (compiled.fastPath !== null) {
+          FAST.fill(0);
+          compiled.fillColumn(scan, FAST, true);
+          for (let v = 0; v < 98304; v++) if (FAST[v] !== FULL[v]) throw new Error(`value ${i} column ${n}: fast path ≠ full at ${v}`);
+        }
+        for (let p = (i + n) % 9; p < 256; p += 9) {
+          for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
+            for (let y = scan.runTop[r]!; y >= scan.runBottom[r]!; y--) {
+              const want = reference.state(scan, SC.settings, p, y);
+              if (FULL[((y + 64) << 8) | p] !== want) throw new Error(`value ${i} column ${n} (${p}, ${y}): compiled ${FULL[((y + 64) << 8) | p]}, reference ${want}`);
+              checked++;
+            }
+          }
+        }
+      }
+    }
+    expect(fastTrees).toBeGreaterThan(10);
+    expect(checked).toBeGreaterThan(200_000);
+  }, 120_000);
 });
 
 describe('the fuzz harness options for json leaves (SP3d spec §10)', () => {

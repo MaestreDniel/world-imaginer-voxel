@@ -9,10 +9,11 @@
  * Every condition is decided by its helper in conditions.ts on the scan's readouts (§3.2): floorDepth = runTop − y and
  * ceilDepth = y − runBottom of the voxel's run (`runAt`), yTop = runTop, `waterAbove` / `waterTop` of the run, the
  * run is sky-open when it is its position's sky-open run (the scan's `skyRun`: the first run, or under islands the highest
- * run reaching below y 181, SP3e spec §4.5), and T_eff(y) from the position's T and the settings' lapse.
+ * run reaching below y 181, SP3e spec §4.5), T_eff(y) from the position's T and the settings' lapse, and `caveBiome`'s
+ * biome: the run's `runFloorBiome` / `runCeilBiome`, or `caveBiomeHere` at the voxel from the scan's picker (SP6b §3.2).
  * Noises sample unscaled world block coordinates (x, z) = (16·cx + lx, 16·cz + lz). The per-node preparation (a
- * biome mask, a gradient's derived seed, a block's state id, a noise, the band table and the band offset noise) is done
- * once at creation. Follows the gen determinism rules.
+ * biome mask or a cave-biome mask, a gradient's derived seed, a block's state id, a noise, the band table and the band
+ * offset noise) is done once at creation. Follows the gen determinism rules.
  *
  * For the slice viewer's `rule` field (SP3d spec §4.1): `nodeAt(id)` finds a rule or condition of the tree by its id
  * (`root`, `.rules[k]`, `.then`, then `.if` for a condition rule's condition and for each `not`'s operand), and
@@ -22,8 +23,8 @@ import type { Seed64 } from '../../core/hash';
 import { REGISTRY, STONE } from '../../world/blocks/index';
 import { BAND_OFFSET_NOISE, bandlandsOffset, bandlandsState, bandlandsTable, isBandlandsTable } from './bands';
 import {
-  biomeHolds, biomeMask, gradientSeed, lakeHolds, noiseThresholdHolds, skyOpenHolds, steepHolds, stoneDepthHolds,
-  temperatureBelowHolds, verticalGradientHolds, waterHolds, yAboveHolds,
+  biomeHolds, biomeMask, caveBiomeHere, caveBiomeHolds, caveBiomeMask, gradientSeed, lakeHolds, noiseThresholdHolds, skyOpenHolds,
+  steepHolds, stoneDepthHolds, temperatureBelowHolds, verticalGradientHolds, waterHolds, yAboveHolds,
 } from './conditions';
 import {
   conditionThenId, requireValidRules, ROOT_RULE_ID, ruleLeaves, sequenceChildId, type BlockRule, type Condition, type Rule,
@@ -51,6 +52,9 @@ const NOISE_OK = noiseThresholdHolds;
 const TEMP_OK = temperatureBelowHolds;
 const SKY_OK = skyOpenHolds;
 const LAKE_OK = lakeHolds;
+const CAVE_MASK = caveBiomeMask;
+const CAVE_OK = caveBiomeHolds;
+const CAVE_HERE = caveBiomeHere;
 const LEAVES = ruleLeaves;
 const BAND_NOISE = BAND_OFFSET_NOISE;
 const BAND_TABLE = bandlandsTable;
@@ -170,6 +174,7 @@ export function createSurfaceReference(seed: Seed64, rules: unknown, noises: Sur
       case 'verticalGradient': seeds.set(c, G_SEED(seed, c.trueAtAndBelow, c.falseAtAndAbove)); break;
       case 'noiseThreshold': noiseOf.set(c, noises(c.noise)!); break;
       case 'not': prepCondition(c.if); break;
+      case 'caveBiome': masks.set(c, CAVE_MASK(c.biomes)); break;
       default: break;
     }
   };
@@ -200,6 +205,11 @@ export function createSurfaceReference(seed: Seed64, rules: unknown, noises: Sur
       case 'skyOpen': return SKY_OK(r === scan.skyRun[p]);
       case 'lake': return LAKE_OK(scan.lakeLevel[p]!);
       case 'not': return !holds(c.if, v);
+      case 'caveBiome': {
+        const b = c.side === 'floor' ? scan.runFloorBiome[r]! : c.side === 'ceiling' ? scan.runCeilBiome[r]!
+          : CAVE_HERE(scan.cavePicker, scan.cavePass, v.x, y, v.z);
+        return CAVE_OK(masks.get(c)!, b);
+      }
     }
   };
 

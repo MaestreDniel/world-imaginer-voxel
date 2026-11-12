@@ -3,16 +3,17 @@
  * order) and **Surface rules** (`root`), whose rows are built from the session's current values: a row is a node (an
  * object carrying the format's `op` / `kind`) with its path tail, its op or kind, a short summary (`const 0.5`,
  * `param density.detailAmpLo = 0.6`, `slide 4 knots`, `tap terrain`, `if biome(desert, beach, …) → sand`,
- * `if stoneDepth floor 0+sd`, `sequence 3`, …) and its full path as the title; a rule's conditions are rows of their
- * rule (`.if`, a `not`'s `.if.if`) before its `.then`. A tap row carries the mute toggle; a muted tap shows its value and
- * its subtree is dimmed. Expansion is three levels at first (levels 0 and 1 open) with explicit overrides, "Expand to
- * selection" opens the selected node's ancestors, and the indentation is 8 px per level capped at 12 levels. The DOM
- * re-renders only when a key string changes. The selection is (root, node path); after an undo, a reset or a renumbering
- * edit it follows the longest prefix of its path that still names a node (`followNode`). The JSON editor's caret selects
- * the innermost node holding it only while the buffer is clean or parses and only when the path exists in the session's
- * tree (a buffer-only path moves the editor's highlight, not the selection). Every lookup keyed by tree content reads
- * own properties only (`constructor`, `toString`, … are valid names). The tab's layout by drawer width (§3.1: the four
- * columns from 1,200 px, the Slice/JSON sub-tabs below, "Slice" first, stacked below 900 px) is here too. Pure; no DOM.
+ * `if stoneDepth floor 0+sd`, `caveBiome floor [lush, dripstone]`, `sequence 3`, …) and its full path as the title; a
+ * rule's conditions are rows of their rule (`.if`, a `not`'s `.if.if`) before its `.then`. A tap row carries the mute
+ * toggle; a muted tap shows its value and its subtree is dimmed. Expansion is three levels at first (levels 0 and 1
+ * open) with explicit overrides, "Expand to selection" opens the selected node's ancestors, and the indentation is 8 px
+ * per level capped at 12 levels. The DOM re-renders only when a key string changes. The selection is (root, node path);
+ * after an undo, a reset or a renumbering edit it follows the longest prefix of its path that still names a node
+ * (`followNode`). The JSON editor's caret selects the innermost node holding it only while the buffer is clean or
+ * parses and only when the path exists in the session's tree (a buffer-only path moves the editor's highlight, not the
+ * selection). Every lookup keyed by tree content reads own properties only (`constructor`, `toString`, … are valid
+ * names). The tab's layout by drawer width (§3.1: the four columns from 1,200 px, the Slice/JSON sub-tabs below,
+ * "Slice" first, stacked below 900 px) is here too. Pure; no DOM.
  */
 import type { JsonFormat } from '../../core/params/json';
 import type { Params } from '../../core/params/schema';
@@ -337,6 +338,10 @@ function conditionSummary(c: TreeNode): string {
       return `noiseThreshold ${short} ${field(own(c, 'min'))} … ${field(own(c, 'max'))}`;
     }
     case 'temperatureBelow': return `temperatureBelow ${field(own(c, 't'))}`;
+    case 'caveBiome': {
+      const list = own(c, 'biomes');
+      return `caveBiome ${String(own(c, 'side'))} [${Array.isArray(list) ? list.map(String).join(', ') : ''}]`;
+    }
     default: return kind;
   }
 }

@@ -5,18 +5,20 @@
  * invalid tree is never sent, and a refusal comes back as issue lines). Node paths are never session paths.
  *
  * Operations: the fields of the selected node (`formFields`: one per scalar, with the select options of noises, sample
- * fields, defs, block states, biomes and sides); parameter refs on every numeric field (`setNumber`: on `const.v` a
- * target replaces the node by `{op: 'param', path}` and "literal" turns a `param` node back into `const(<its current
- * value>)`; elsewhere the ref form `{param, neg?}` and "literal" writes the current resolved value; an int field lists
- * only int targets, `refOptions`); replace op / kind with children kept by position in `SOURCE_CHILD_KEYS` order, the
- * per-kind defaults below and the options that cannot validate disabled (`opOptions`, `replaceOp`); wrap (`wrapNode`),
- * delete (`deleteNode`; a referenced def's deletion is refused by tier 2's `UNKNOWN_REF`), add def and add rule,
- * rename def with every ref to it (`renameDef`), the mute toggle with the neutral value of the tap's parent
- * (`muteValue`, `toggleMute`), and slide knots sorted by y on every commit (`setKnots`). `treeLints` gives the two tree
- * warnings ("no fast path", "density cost ≈ N × the default"), never refusals. The per-kind defaults live here (gen may
- * not export numbers). Every lookup keyed by tree content reads own properties only, and keys are written with
- * `Object.defineProperty`, so a typed `__proto__` def name reaches tier 1 as `BAD_KEY`. Pure; no DOM.
+ * fields, defs, block states, biomes and sides, `caveBiome`'s three sides and four cave biomes); parameter refs on every
+ * numeric field (`setNumber`: on `const.v` a target replaces the node by `{op: 'param', path}` and "literal" turns a
+ * `param` node back into `const(<its current value>)`; elsewhere the ref form `{param, neg?}` and "literal" writes the
+ * current resolved value; an int field lists only int targets, `refOptions`); replace op / kind with children kept by
+ * position in `SOURCE_CHILD_KEYS` order, the per-kind defaults below and the options that cannot validate disabled
+ * (`opOptions`, `replaceOp`); wrap (`wrapNode`), delete (`deleteNode`; a referenced def's deletion is refused by tier
+ * 2's `UNKNOWN_REF`), add def and add rule, rename def with every ref to it (`renameDef`), the mute toggle with the
+ * neutral value of the tap's parent (`muteValue`, `toggleMute`), and slide knots sorted by y on every commit
+ * (`setKnots`). `treeLints` gives the two tree warnings ("no fast path", "density cost ≈ N × the default"), never
+ * refusals. The per-kind defaults live here (gen may not export numbers). Every lookup keyed by tree content reads own
+ * properties only, and keys are written with `Object.defineProperty`, so a typed `__proto__` def name reaches tier 1 as
+ * `BAD_KEY`. Pure; no DOM.
  */
+import { CAVE_BIOME_NAMES } from '../../core/constants';
 import { DEFAULT_DENSITY_TREE } from '../../core/params/defaultTrees';
 import type { JsonFormat, JsonValue } from '../../core/params/json';
 import { getPath } from '../../core/params/kit';
@@ -122,6 +124,9 @@ export const BLOCK_STATE_OPTIONS: readonly string[] = Object.freeze((() => {
 export const BIOME_OPTIONS: readonly string[] = Object.freeze([...SURFACE_BIOMES]);
 export const COL_FIELD_OPTIONS: readonly string[] = Object.freeze([...SAMPLE_FIELDS]);
 export const SIDE_OPTIONS: readonly string[] = Object.freeze(['floor', 'ceiling']);
+/** `caveBiome`'s sides and the cave biomes its list takes (SP6b spec §3.2). */
+export const CAVE_SIDE_OPTIONS: readonly string[] = Object.freeze(['floor', 'ceiling', 'here']);
+export const CAVE_BIOME_OPTIONS: readonly string[] = Object.freeze([...CAVE_BIOME_NAMES]);
 
 /** The schema's noise leaves under `prefix` of dims `dims`, as their names after the prefix (density) or paths (rules). */
 function schemaNoises(prefix: string, dims: 2 | 3, strip: boolean): readonly string[] {
@@ -280,6 +285,7 @@ function defaultCondition(kind: string, old: TreeNode): Rec {
     case 'noiseThreshold': return k([['noise', 'surface.noises.patch'], ['min', 0], ['max', 8]]);
     case 'temperatureBelow': return k([['t', 0]]);
     case 'not': return k([['if', old]]);
+    case 'caveBiome': return k([['side', 'floor'], ['biomes', ['lush']]]);
     default: return k([]);
   }
 }
@@ -571,14 +577,18 @@ export function formFields(params: Params, sel: Selection): FormField[] {
     return out;
   }
   const kind = n['kind'] as string;
+  const cave = kind === 'caveBiome';
   const fields = Object.hasOwn(FIELDS, kind) ? (FIELDS as Readonly<Record<string, readonly string[]>>)[kind]! : [];
   return fields.filter((f) => !RULE_CHILD_FIELDS.has(f)).map((f): FormField => {
     if (RULE_NUMBERS.has(f)) return num(f, RULE_NUMBERS.get(f)!);
     if (typeof own(n, f) === 'boolean') return { type: 'boolean', key: f, value: own(n, f) as boolean };
     switch (f) {
-      case 'biomes': return { type: 'biomes', key: 'biomes', value: own(n, f) as readonly string[], options: BIOME_OPTIONS };
+      case 'biomes': {
+        const options = cave ? CAVE_BIOME_OPTIONS : BIOME_OPTIONS;
+        return { type: 'biomes', key: 'biomes', value: own(n, f) as readonly string[], options };
+      }
       case 'state': return sel1('state', BLOCK_STATE_OPTIONS);
-      case 'side': return sel1('side', SIDE_OPTIONS);
+      case 'side': return sel1('side', cave ? CAVE_SIDE_OPTIONS : SIDE_OPTIONS);
       case 'noise': return sel1('noise', SURFACE_NOISE_OPTIONS);
       default: return { type: 'boolean', key: f, value: own(n, f) === true };
     }

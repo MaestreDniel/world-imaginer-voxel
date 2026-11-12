@@ -5,12 +5,13 @@
  *
  * - Bases (`mutationBase`): the default tree of the format (`DEFAULT_DENSITY_TREE`, `DEFAULT_SURFACE_RULES`) or a
  *   valid-by-construction fuzz tree drawn over the schema's noises (`randomDensityExpr` with `SCHEMA_DENSITY_NOISES` and
- *   `negativeZero: false`; `randomSurfaceRules` with `SCHEMA_SURFACE_NOISES`, any style), so tier 2 does not refuse a
- *   base for its noise ids alone.
+ *   `negativeZero: false`; `randomSurfaceRules` with `SCHEMA_SURFACE_NOISES`, any style, so `caveBiome` of every side
+ *   and list, SP6b), so tier 2 does not refuse a base for its noise ids alone.
  * - Breaking mutations (`BREAKING_MUTATIONS`): delete or add keys, swap ops and kinds, numbers set to −0, NaN, ±∞,
  *   ±1e308, ±(1e9 + 1) and huge or tiny exponents, very deep and very wide nesting, arrays, strings and other
  *   primitives in node slots, def, tap, biome, block, noise and field names empty, dotted, `__proto__` (an own key, as
- *   `JSON.parse` makes it), `constructor`, `toString` and over-long, param paths of the same names and to missing or
+ *   `JSON.parse` makes it), `constructor`, `toString` and over-long (also as a `caveBiome` side or cave biome, beside
+ *   an empty or repeated `caveBiome` list, SP6b), param paths of the same names and to missing or
  *   non-numeric targets, refs to missing defs, ref cycles, knots with overflowing slopes, long knot lists (64 knots,
  *   the most tier 2 accepts, or 65, 200 and 1,024), air and unknown blocks,
  *   oversized values (too many values, too long arrays and strings, too large a text).
@@ -407,6 +408,8 @@ class Mutator {
             { kind: 'noiseThreshold', noise: bad, min: 0, max: 1 },
             { kind: 'stoneDepth', side: bad, offset: 0, addSurfaceDepth: false },
             { kind: 'steep', min: { param: bad } },
+            { kind: 'caveBiome', side: bad, biomes: ['lush'] },
+            { kind: 'caveBiome', side: this.pick(['floor', 'ceiling', 'here']), biomes: this.pick([[bad], ['abyss', bad], [], ['lush', 'lush']]) },
           ]));
         } else {
           setSlot(slot, { kind: 'block', state: bad });

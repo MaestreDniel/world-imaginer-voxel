@@ -1,14 +1,17 @@
 import { describe, expect, test } from 'vitest';
+import { CAVE_BIOME_NAMES } from '../../src/core/constants';
 import { deriveSeed, hash2, hash3, type Seed64 } from '../../src/core/hash';
 import { Xoshiro128 } from '../../src/core/rng';
 import { readField, readLevel } from '../../src/gen/column/columnStage';
 import { SURFACE_BIOMES } from '../../src/gen/biomes/registry';
+import { pickCaveBiome } from '../../src/gen/biomes/caveRegistry';
 import { createSurfaceReference } from '../../src/gen/surface/reference';
 import { RuleValidationError, ruleLeaves, type Condition, type Rule } from '../../src/gen/surface/rules';
 import { newSurfaceScan, scanColumn, type SurfaceScan, type SurfaceScanSettings } from '../../src/gen/surface/scan';
 import { BEDROCK, REGISTRY, STONE } from '../../src/world/blocks/index';
 import {
-  randomSurfaceColumn, randomSurfaceParams, randomSurfaceRules, surfaceFuzzNoiseSource, surfaceFuzzSettings, type SurfaceFuzzColumn,
+  caveBiomeHandColumn, randomSurfaceColumn, randomSurfaceParams, randomSurfaceRules, surfaceFuzzNoiseSource, surfaceFuzzSettings,
+  withCaveBiomes, type SurfaceFuzzColumn,
 } from '../harness/surfaceFuzz';
 import { testRng } from '../harness/stats';
 
@@ -70,6 +73,26 @@ function oracleHolds(c: Condition, col: SurfaceFuzzColumn, set: SurfaceScanSetti
     }
     case 'lake': return Number.isFinite(readLevel(s, 'lakeLevel', x, z));
     case 'not': return !oracleHolds(c.if, col, set, seed, v);
+    case 'caveBiome': {
+      // floor: the tagged (kind ≠ 0) voxel above the run's top; ceiling: the one below its bottom, none on the bedrock;
+      // here: §1.3's box choice at §1.4's jittered position, recomputed from the pass.
+      const tag = (yy: number): number => {
+        const t = col.tags === undefined ? 0 : col.tags[at(p, yy)]!;
+        return (t & 15) === 0 ? -1 : t >> 4;
+      };
+      let b = -1;
+      if (c.side === 'floor') b = yTop < 319 ? tag(yTop + 1) : -1;
+      else if (c.side === 'ceiling') b = yBottom > -63 ? tag(yBottom - 1) : -1;
+      else if (col.cave !== undefined) {
+        const { inputs, pass } = col.cave;
+        const h = hash3(inputs.jitterSeed, x, y, z) >>> 0;
+        const off = (f: number): number => ((f * (2 * pass.j + 1)) >>> 10) - pass.j;
+        const jx = off(h & 1023), jy = off((h >>> 10) & 1023), jz = off((h >>> 20) & 1023);
+        const k = (z + jz - 16 * pass.cz + 4) * 24 + (x + jx - 16 * pass.cx + 4);
+        b = pickCaveBiome(inputs.settings, pass.c[k]!, pass.e[k]!, pass.h[k]!, (pass.y0[k]! - (y + jy)) / inputs.settings.depthScale);
+      }
+      return c.biomes.some((n) => CAVE_BIOME_NAMES.indexOf(n) === b);
+    }
   }
 }
 
@@ -111,7 +134,7 @@ function oracle(tree: Rule, col: SurfaceFuzzColumn, set: SurfaceScanSettings, se
 }
 
 function scanOf(col: SurfaceFuzzColumn, set: SurfaceScanSettings): SurfaceScan {
-  return scanColumn(newSurfaceScan(), set, col.sample, col.solid, col.water, col.biomes);
+  return scanColumn(newSurfaceScan(), set, col.sample, col.solid, col.water, col.biomes, col.tags ?? null, col.cave ?? null);
 }
 
 /** Solid voxels to check per position: every voxel within 16 of a run's top or bottom, plus a few random ones. */
@@ -266,7 +289,7 @@ describe('surface reference evaluator (SP3c spec §3.4)', () => {
     const next = testRng(6101);
     const seen = new Map<string, [number, number]>();
     const note = (c: Condition, v: boolean) => {
-      const k = c.kind === 'stoneDepth' ? `stoneDepth.${c.side}` : c.kind;
+      const k = c.kind === 'stoneDepth' || c.kind === 'caveBiome' ? `${c.kind}.${c.side}` : c.kind;
       const e = seen.get(k) ?? [0, 0];
       e[v ? 0 : 1]++;
       seen.set(k, e);
@@ -276,7 +299,8 @@ describe('surface reference evaluator (SP3c spec §3.4)', () => {
       const seed: Seed64 = [next(), next()];
       const noises = surfaceFuzzNoiseSource(SEED);
       const rset = surfaceFuzzSettings(seed, round % 2 === 0 ? randomSurfaceParams(next) : undefined, noises);
-      const col = randomSurfaceColumn(next);
+      // Cave biomes from a stream of their own (the column's and the trees' draws are those of SP3c's fuzz).
+      const col = withCaveBiomes(randomSurfaceColumn(next), 6101 + round);
       const scan = scanOf(col, rset);
       const styles = ['free', 'fastPath', 'nearMiss'] as const;
       for (let t = 0; t < 6; t++) {
@@ -304,9 +328,53 @@ describe('surface reference evaluator (SP3c spec §3.4)', () => {
     expect(banded).toBeGreaterThan(1_000);
     expect(matched / checked).toBeGreaterThan(0.2);
     expect(matched / checked).toBeLessThan(0.95);
-    for (const k of ['biome', 'stoneDepth.floor', 'stoneDepth.ceiling', 'water', 'yAbove', 'verticalGradient', 'steep', 'noiseThreshold', 'temperatureBelow', 'skyOpen', 'lake', 'not']) {
+    for (const k of [
+      'biome', 'stoneDepth.floor', 'stoneDepth.ceiling', 'water', 'yAbove', 'verticalGradient', 'steep', 'noiseThreshold', 'temperatureBelow', 'skyOpen',
+      'lake', 'not', 'caveBiome.floor', 'caveBiome.ceiling', 'caveBiome.here',
+    ]) {
       const [t, f] = seen.get(k) ?? [0, 0];
       expect([k, t > 50, f > 50]).toEqual([k, true, true]);
     }
+  });
+});
+
+describe('caveBiome (SP6b spec §3.2, D18) on the hand-built column (caveBiomeHandColumn)', () => {
+  const set = surfaceFuzzSettings(SEED);
+  const col = caveBiomeHandColumn();
+  const scan = scanOf(col, set);
+  const CB = (side: 'floor' | 'ceiling' | 'here', ...biomes: Array<'plain' | 'lush' | 'dripstone' | 'abyss'>): Condition => ({ kind: 'caveBiome', side, biomes });
+  const MOSS = REGISTRY.parseStateKey('moss_block'), CLAY = REGISTRY.parseStateKey('clay');
+
+  test('a moss carpet never lies under a plain cave over lush rock', () => {
+    const ref = createSurfaceReference(SEED, SEQ(IF(CB('floor', 'lush'), B('moss_block')), IF(CB('here', 'lush'), B('clay'))), NOISES);
+    // p 0: the run's top rock is lush (here) but the air above it is plain (`1 | 0 << 4`).
+    expect(ref.conditionHolds('root.rules[0].if', scan, set, 0, 40)).toBe(false);
+    expect(ref.conditionHolds('root.rules[1].if', scan, set, 0, 40)).toBe(true);
+    expect(ref.evaluate(scan, set, 0, 40)).toEqual({ state: CLAY, path: ['root', 'root.rules[1]', 'root.rules[1].then'] });
+    // p 1: lush cave air above the ground run: the carpet; p 2: untagged air above, lush rock: clay.
+    expect(ref.state(scan, set, 1, 40)).toBe(MOSS);
+    expect(ref.state(scan, set, 2, 40)).toBe(CLAY);
+    // here follows the picker: plain rock at y 75 and above, at y −16 and below.
+    expect(ref.conditionHolds('root.rules[1].if', scan, set, 0, -16)).toBe(false);
+    expect(ref.conditionHolds('root.rules[1].if', scan, set, 0, -15)).toBe(true);
+  });
+
+  test('a ceiling rule never fires on a bedrock-resting run', () => {
+    const ref = createSurfaceReference(SEED, IF(CB('ceiling', 'lush', 'dripstone', 'abyss', 'plain'), B('moss_block')), NOISES);
+    for (let p = 0; p < 256; p++) {
+      for (let y = -63; y <= 40; y++) {
+        expect(ref.conditionHolds('root.if', scan, set, p, y)).toBe(false);
+        expect(ref.state(scan, set, p, y)).toBe(STONE);
+      }
+    }
+    // p 1's overhang rests on lush cave air: every voxel of it takes the ceiling branch.
+    for (let y = 50; y <= 60; y++) expect(ref.state(scan, set, 1, y)).toBe(MOSS);
+  });
+
+  test('here without a picker (a scan without one) holds for no list', () => {
+    const bare = scanColumn(newSurfaceScan(), set, col.sample, col.solid, col.water, col.biomes, col.tags);
+    const ref = createSurfaceReference(SEED, IF(CB('here', 'lush', 'dripstone', 'abyss', 'plain'), B('moss_block')), NOISES);
+    for (const y of [-63, 0, 40]) expect(ref.conditionHolds('root.if', bare, set, 0, y)).toBe(false);
+    expect(ref.conditionHolds('root.if', scan, set, 0, 40)).toBe(true);
   });
 });

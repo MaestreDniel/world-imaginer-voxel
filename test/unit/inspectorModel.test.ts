@@ -202,6 +202,27 @@ describe('rows and summaries', () => {
     expect(rows.filter((r) => r.tap).map((r) => r.path)).toEqual(['root.b', 'defs.alpha']);
   });
 
+  test('a caveBiome row reads caveBiome <side> [<biomes>] (SP6b spec §3.2)', () => {
+    const tree = {
+      kind: 'sequence', rules: [
+        { kind: 'condition', if: { kind: 'caveBiome', side: 'floor', biomes: ['lush', 'dripstone'] }, then: { kind: 'block', state: 'moss_block' } },
+        { kind: 'condition', if: { kind: 'not', if: { kind: 'caveBiome', side: 'here', biomes: ['abyss'] } }, then: { kind: 'sequence', rules: [] } },
+      ],
+    };
+    const p = withRules(tree);
+    const rows = rowsOf(inspectorTree(p, expandAll(p), null), 'surface.rules');
+    expect(rows.map((r) => `${r.path} | ${r.summary}`)).toEqual([
+      'root | sequence 2',
+      'root.rules[0] | if caveBiome floor [lush, dripstone] → moss_block',
+      'root.rules[0].if | caveBiome floor [lush, dripstone]',
+      'root.rules[0].then | block moss_block',
+      'root.rules[1] | if not',
+      'root.rules[1].if | not',
+      'root.rules[1].if.if | caveBiome here [abyss]',
+      'root.rules[1].then | sequence 0',
+    ]);
+  });
+
   test('a noiseScaled row reads noiseScaled <id> /<s>, s a literal or a ref (SP6a §1.5)', () => {
     const tree = { root: { op: 'add', a: { op: 'noiseScaled', id: 'detail', s: 0.75 }, b: { op: 'noiseScaled', id: 'overhang', s: { param: 'density.noises.detail.clampSigma' } } }, defs: {} };
     const p = withDensity(tree);

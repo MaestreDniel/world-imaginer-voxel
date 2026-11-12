@@ -9,13 +9,18 @@
  * `validateRules` also has the source mode of SP3d (spec §1.3, §1.7) that `validateRulesSource` (source.ts) runs on an
  * edited tree: parameter refs in the numeric fields, every check over their static ranges, literal ranges, the biome
  * list length and solid block states.
+ * SP6b (its spec §3.2, D18) adds `caveBiome{side, biomes}`: the cave biome of the run's floor (the tagged voxel above its
+ * top), of its ceiling (the tagged voxel below its bottom) or at the voxel (the picker), in a list of 1-4 distinct
+ * `CAVE_BIOME_NAMES`.
  */
+import { CAVE_BIOME_NAMES, type CaveBiomeName } from '../../core/constants';
 import { SURFACE_BIOMES, type SurfaceBiome } from '../biomes/registry';
 import { COLLIDE, REGISTRY } from '../../world/blocks/index';
 import { COLLIDE_NONE } from '../../world/blocks/kinds';
 import { BAND_OFFSET_NOISE } from './bands';
 
 const BIOMES = SURFACE_BIOMES;
+const CAVE_BIOMES = CAVE_BIOME_NAMES;
 const BLOCKS = REGISTRY;
 const BAND_NOISE = BAND_OFFSET_NOISE;
 const COLLIDES = COLLIDE;
@@ -49,16 +54,25 @@ export interface TemperatureBelowCondition { readonly kind: 'temperatureBelow'; 
 export interface SkyOpenCondition { readonly kind: 'skyOpen' }
 export interface LakeCondition { readonly kind: 'lake' }
 export interface NotCondition { readonly kind: 'not'; readonly if: Condition }
+/**
+ * The cave biome of the run's floor (`floor`: the tagged voxel above its top), of its ceiling (`ceiling`: the tagged
+ * voxel below its bottom; none for a run resting on the bedrock) or at the voxel (`here`: the picker) is in `biomes`
+ * (SP6b spec §3.2, D18).
+ */
+export interface CaveBiomeCondition {
+  readonly kind: 'caveBiome'; readonly side: 'floor' | 'ceiling' | 'here'; readonly biomes: readonly CaveBiomeName[];
+}
 export type Condition =
   | BiomeCondition | StoneDepthCondition | WaterCondition | YAboveCondition | VerticalGradientCondition | SteepCondition
-  | NoiseThresholdCondition | TemperatureBelowCondition | SkyOpenCondition | LakeCondition | NotCondition;
+  | NoiseThresholdCondition | TemperatureBelowCondition | SkyOpenCondition | LakeCondition | NotCondition | CaveBiomeCondition;
 export type ConditionKind = Condition['kind'];
 
 /** The rule kinds of §3.1's first table, in its order. */
 export const RULE_KINDS: readonly RuleKind[] = ['sequence', 'condition', 'block', 'bandlands'];
-/** The condition kinds of §3.1's second table, in its order. */
+/** The condition kinds of §3.1's second table, in its order; SP6b appends `caveBiome`. */
 export const CONDITION_KINDS: readonly ConditionKind[] = [
   'biome', 'stoneDepth', 'water', 'yAbove', 'verticalGradient', 'steep', 'noiseThreshold', 'temperatureBelow', 'skyOpen', 'lake', 'not',
+  'caveBiome',
 ];
 
 /** What validation needs to know about a surface noise. */
@@ -119,7 +133,8 @@ export function ruleLeaves(root: Rule): RuleLeaf[] {
 export type RuleErrorCode =
   | 'NOT_OBJECT' | 'NOT_ARRAY' | 'UNKNOWN_KIND' | 'UNKNOWN_FIELD' | 'MISSING_FIELD' | 'UNKNOWN_BLOCK' | 'UNKNOWN_BIOME'
   | 'UNKNOWN_NOISE' | 'NOISE_DIMS' | 'NOISE_REMAP' | 'NOT_FINITE' | 'NOT_INTEGER' | 'OUT_OF_RANGE' | 'NEGATIVE_ZERO'
-  | 'NOT_BOOLEAN' | 'BAD_SIDE' | 'RANGE_ORDER' | 'GRADIENT_ORDER' | 'TOO_DEEP' | 'TOO_MANY_NODES' | 'NO_BAND_NOISE';
+  | 'NOT_BOOLEAN' | 'BAD_SIDE' | 'RANGE_ORDER' | 'GRADIENT_ORDER' | 'TOO_DEEP' | 'TOO_MANY_NODES' | 'NO_BAND_NOISE'
+  | 'CAVE_BIOME_SIDE' | 'CAVE_BIOME_LIST';
 
 export interface RuleIssue {
   /** The node path: a rule's id (`root.rules[1].then`), `.if` / `.if.if` for conditions, then the field (`.offset`, `.biomes[2]`). */
@@ -182,11 +197,14 @@ export const FIELDS: { readonly [K in RuleKind | ConditionKind]: readonly string
   biome: Object.freeze(['biomes']), stoneDepth: Object.freeze(['side', 'offset', 'addSurfaceDepth']), water: Object.freeze(['offset', 'runTop']),
   yAbove: Object.freeze(['minY', 'runTop']), verticalGradient: Object.freeze(['trueAtAndBelow', 'falseAtAndAbove']), steep: Object.freeze(['min']),
   noiseThreshold: Object.freeze(['noise', 'min', 'max']), temperatureBelow: Object.freeze(['t']), skyOpen: Object.freeze([]), lake: Object.freeze([]),
-  not: Object.freeze(['if']),
+  not: Object.freeze(['if']), caveBiome: Object.freeze(['side', 'biomes']),
 });
 const RULE_SET = new Set<string>(RULE_KINDS);
 const CONDITION_SET = new Set<string>(CONDITION_KINDS);
 const BIOME_SET = new Set<string>(BIOMES);
+const CAVE_BIOME_SET = new Set<string>(CAVE_BIOMES);
+/** A `caveBiome` list holds 1 … CAVE_BIOME_LIST_MAX distinct names (every cave biome at most once). */
+const CAVE_BIOME_LIST_MAX = CAVE_BIOMES.length;
 /** Integer fields lie in [−INT_LIMIT, INT_LIMIT] (§3.1). */
 const INT_LIMIT = 384;
 /** Nesting depth limit (the root is at depth 1; rules and conditions count) and node-count limit (§3.1). */
@@ -221,6 +239,8 @@ function isBlockKey(v: unknown): boolean {
  * [−384, 384], finite numbers, booleans, `side`, `min ≤ max`, `trueAtAndBelow < falseAtAndAbove`, −0 anywhere, a
  * `bandlands` leaf without a dims-2, remap-'none' `surface.noises.bandOffset` in `noises` (NO_BAND_NOISE when the leaf
  * is absent, §9's cut line), a
+ * `caveBiome` side that is not floor, ceiling or here (CAVE_BIOME_SIDE) and a `caveBiome` list that is not 1-4
+ * distinct cave biome names (CAVE_BIOME_LIST, at `.biomes`; a literal list in the source mode too), a
  * nesting depth above 32 (each node past it is reported and not entered) and more than 4096 nodes (reported once, at
  * `root`; the walk stops there).
  *
@@ -378,6 +398,18 @@ export function validateRules(value: unknown, noises: SurfaceNoiseLookup, source
       }
       case 'skyOpen': case 'lake': break;
       case 'not': condition(node['if'], `${path}.if`, depth + 1); break;
+      case 'caveBiome': {
+        const side = node['side'];
+        if (side !== 'floor' && side !== 'ceiling' && side !== 'here') {
+          push(`${path}.side`, 'CAVE_BIOME_SIDE', 'caveBiome side must be floor, ceiling or here');
+        }
+        const list = node['biomes'];
+        if (!Array.isArray(list) || list.length < 1 || list.length > CAVE_BIOME_LIST_MAX
+          || list.some((b: unknown) => typeof b !== 'string' || !CAVE_BIOME_SET.has(b)) || new Set(list).size !== list.length) {
+          push(`${path}.biomes`, 'CAVE_BIOME_LIST', 'caveBiome needs 1-4 distinct cave biome names');
+        }
+        break;
+      }
     }
   };
 

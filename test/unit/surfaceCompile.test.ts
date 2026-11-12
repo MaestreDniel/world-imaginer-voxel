@@ -6,9 +6,10 @@ import { createSurfaceReference } from '../../src/gen/surface/reference';
 import { RuleValidationError, ruleLeaves, type Condition, type Rule, type SurfaceNoiseSource } from '../../src/gen/surface/rules';
 import { newSurfaceScan, scanColumn, surfaceScanSettings, type SurfaceScan, type SurfaceScanSettings } from '../../src/gen/surface/scan';
 import { AIR, BEDROCK, REGISTRY, STONE } from '../../src/world/blocks/index';
+import { caveBiomeHere } from '../../src/gen/surface/conditions';
 import {
   randomSurfaceColumn, randomSurfaceParams, randomSurfaceRules, SURFACE_FUZZ_PARAMS, surfaceFuzzNoiseSource, surfaceFuzzSettings,
-  type SurfaceFuzzColumn, type SurfaceFuzzStyle,
+  withCaveBiomes, type SurfaceFuzzColumn, type SurfaceFuzzStyle,
 } from '../harness/surfaceFuzz';
 import { testRng } from '../harness/stats';
 
@@ -78,7 +79,7 @@ function handColumn(top: (p: number) => number): SurfaceFuzzColumn {
 }
 
 const scanOf = (col: SurfaceFuzzColumn, set: SurfaceScanSettings): SurfaceScan =>
-  scanColumn(newSurfaceScan(), set, col.sample, col.solid, col.water, col.biomes);
+  scanColumn(newSurfaceScan(), set, col.sample, col.solid, col.water, col.biomes, col.tags ?? null, col.cave ?? null);
 
 function fill(c: CompiledSurfaceRules, scan: SurfaceScan, fast: boolean): { out: Uint16Array; evaluated: number } {
   const out = new Uint16Array(98304).fill(UNTOUCHED);
@@ -291,7 +292,8 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
       const seed: Seed64 = [next(), next()];
       const noises = surfaceFuzzNoiseSource(SEED);
       const rset = surfaceFuzzSettings(seed, round % 2 === 0 ? randomSurfaceParams(next) : undefined, noises);
-      const col = randomSurfaceColumn(next);
+      // Cave biomes from a stream of their own (the column's and the trees' draws are those of SP3c's fuzz).
+      const col = withCaveBiomes(randomSurfaceColumn(next), 7101 + round);
       const scan = scanOf(col, rset);
       for (const [style, skyGated] of cases) {
         const tree = randomSurfaceRules(next, { style, skyGated });
@@ -350,6 +352,63 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     expect(tally.yAfter).toBeGreaterThan(30);
     // Fast-path trees with a band a Y-only bandlands leaf decides (evaluated, state −1).
     expect(tally.bandlandsBands).toBeGreaterThan(10);
+  });
+
+  test('caveBiome (SP6b spec §3.2): compiled == reference on every solid voxel of four columns holding every biome, each side', () => {
+    const CB = (side: 'floor' | 'ceiling' | 'here', ...biomes: Array<'plain' | 'lush' | 'dripstone' | 'abyss'>): Condition => ({ kind: 'caveBiome', side, biomes });
+    const columns = [3, 5, 8, 13].map((k) => withCaveBiomes(randomSurfaceColumn(testRng(k)), k));
+    const scans = columns.map((col) => scanOf(col, set));
+    // Each column holds every cave biome on the floor side, the ceiling side and at its solid voxels (here).
+    for (const [i, scan] of scans.entries()) {
+      const floors = new Set<number>(), ceilings = new Set<number>(), here = new Set<number>();
+      const col = columns[i]!;
+      for (let r = 0; r < scan.runFirst[256]!; r++) { floors.add(scan.runFloorBiome[r]!); ceilings.add(scan.runCeilBiome[r]!); }
+      for (let p = 0; p < 256; p++) {
+        for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
+          for (let y = scan.runTop[r]!; y >= scan.runBottom[r]!; y -= 3) {
+            here.add(caveBiomeHere(col.cave.inputs, col.cave.pass, 16 * col.sample.cx + (p & 15), y, 16 * col.sample.cz + (p >> 4)));
+          }
+        }
+      }
+      for (const s of [floors, ceilings, here]) expect([i, [0, 1, 2, 3].every((b) => s.has(b))]).toEqual([i, true]);
+    }
+    for (const side of ['floor', 'ceiling', 'here'] as const) {
+      const trees: Rule[] = [
+        SEQ(
+          IF(CB(side, 'lush'), B('moss_block')),
+          IF(CB(side, 'dripstone', 'abyss'), SEQ(IF(TOP, B('dripstone_block')), B('abyss_stone'))),
+          IF(NOT(CB(side, 'plain')), B('clay')),
+          IFS([TOP, CB(side, 'abyss', 'plain', 'lush')], B('abyss_ash')),
+        ),
+        // Under a floor gate (a depth-bounded path: the fast path stays, SP6b's rulings P11).
+        SEQ(IFS([floor(1, false), CB(side, 'lush', 'abyss')], B('moss_block')), IFS([TOP, CB(side, 'dripstone')], B('dripstone_block')), IF(grad(0, 8), B('bedrock'))),
+      ];
+      for (const tree of trees) {
+        const c = compileSurfaceRules(SEED, tree, NOISES, set);
+        const ref = createSurfaceReference(SEED, tree, NOISES);
+        const states = new Set<number>();
+        for (const [i, scan] of scans.entries()) {
+          const slow = fill(c, scan, false), fast = fill(c, scan, true);
+          expect(Buffer.from(fast.out).equals(Buffer.from(slow.out))).toBe(true);
+          for (let p = 0; p < 256; p++) {
+            for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
+              for (let y = scan.runTop[r]!; y >= scan.runBottom[r]!; y--) {
+                const want = ref.state(scan, set, p, y);
+                if (slow.out[at(p, y)] !== want || c.state(scan, p, y) !== want) {
+                  throw new Error(`${side} column ${i}: compiled ${slow.out[at(p, y)]} / ${c.state(scan, p, y)} ≠ reference ${want} at p ${p} y ${y}`);
+                }
+                states.add(want);
+              }
+            }
+          }
+        }
+        // Every branch yields somewhere, but clay on the here side: a voxel always has a biome there (none, −1, only on
+        // the floor and ceiling sides), so not(plain) is left only to biomes the earlier branches took.
+        expect([side, states.size]).toEqual([side, tree !== trees[0] ? 4 : side === 'here' ? 5 : 6]);
+      }
+      expect(compileSurfaceRules(SEED, trees[0]!, NOISES, set).fastPath).toBeNull();
+      expect(compileSurfaceRules(SEED, trees[1]!, NOISES, set).fastPath).toMatchObject({ maxSurfaceDepth: 1 });
+    }
   });
 
   test('the biome masks and every condition compile alike for every surface biome', () => {

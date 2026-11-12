@@ -1997,7 +1997,7 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(line('- **`col`**')).toContain('SP6a\'s wet roof reads `wetMask` (1 where `surfaceWaterLevel` is finite), so no level-field rule is needed (amended by SP6a)');
     // Moved from the SP4c describe (§3.7's caching line).
     expect(line('- Caching on the quart lattice comes with its first consumer')).toContain('(aquifers, structures: SP7-SP9; spawn and teleport query one point each and need none, SP4c)');
-    expect(line('**Conditions:**')).toContain('`caveBiome` stays SP6b\'s');
+    // §3.11's Conditions line moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 12 rewords it).
     expect(line('**Default rules**')).toContain('SP6b inserts rule 4 before rule 2');
     // §3.12's abyss line moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 13 rewords it).
     expect(line('**Greedy meshing.**')).toContain('R2 is re-baselined at SP6a (caves) and SP8b');
@@ -2554,6 +2554,15 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(sp6b).toContain('`SOUND` grass (`moss_block`), stone (`dripstone_block`) and abyss (the five abyss types)');
     expect(sp6b).toContain('`EMIT` 0');
     expect(sp6b).toContain('the `sp6b.registry` golden hashes states 58 … 64 (amended by SP6b).');
+  });
+
+  test('§3.11\'s Conditions: caveBiome delivered, secondaryDepthRange to SP8b (SP6b spec §15 item 12)', () => {
+    const conditions = text.split('\n').find((l) => l.startsWith('**Conditions:**'));
+    expect(conditions, 'no **Conditions:** line in §3.11').toBeDefined();
+    expect(conditions).toContain('`caveBiome{floor | ceiling | here, biomes}` (SP6b)');
+    expect(conditions).toContain('deferred to SP8b (amended by SP6b)');
+    // Moved from the SP6a describe, which pinned the line before SP6b.
+    expect(conditions).not.toContain('`caveBiome` stays SP6b\'s');
   });
 
   test('§3.12 names the abyss surface-palette blocks (SP6b spec §15 item 13)', () => {

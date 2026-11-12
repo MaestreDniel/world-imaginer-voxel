@@ -6,7 +6,8 @@
  * Evaluation order is the tree's (a `sequence` yields its first child that yields, a `condition` evaluates `if` then
  * `then`); every condition is decided by its helper in conditions.ts on the same readouts the reference evaluator
  * uses (floorDepth = runTop − y, ceilDepth = y − runBottom, yTop = runTop, `waterAbove` / `waterTop` of the run, the
- * run is sky-open when it is the scan's `skyRun` of its position, T_eff(y) from the position's T and the settings' lapse), so the
+ * run is sky-open when it is the scan's `skyRun` of its position, T_eff(y) from the position's T and the settings' lapse,
+ * `caveBiome`'s floor and ceiling biome of the run and the picker's biome at the voxel, SP6b), so the
  * compiled tree equals the reference on every voxel. Nothing yielded leaves the voxel stone.
  *
  * Fast path (`surfaceFastPath`, compile time, general and conservative). Every leaf (`block` or `bandlands`) is classed
@@ -14,7 +15,9 @@
  * - depth-bounded: a path `if` is `stoneDepth{side floor}` (not under a `not`); its bound is the smallest, over those
  *   gates, of offset + (addSurfaceDepth ? SD_MAX : 0);
  * - Y-only: every path `if` is a `verticalGradient`, a `yAbove{runTop false}` or a `not` of these.
- * With any other leaf there is no fast path. Otherwise maxSurfaceDepth is the largest bound (−1 when there is no
+ * With any other leaf there is no fast path (a `caveBiome` is neither class: on a depth-bounded path it is harmless, any
+ * condition there is, and with no floor gate its leaf turns the fast path off, as `rulesCost` decides; SP6b §3.5's
+ * extensions come later). Otherwise maxSurfaceDepth is the largest bound (−1 when there is no
  * depth-bounded leaf: floorDepth ≥ 0 exceeds it everywhere); the tree is sky-gated when every depth-bounded path also
  * holds a `skyOpen` `if`. The y range −63 … 319 is cut only by the Y-only leaves' conditions: at each such
  * `yAbove{runTop false}`'s minY and at each such gradient's ends; a gradient's dither interval
@@ -27,10 +30,11 @@
  */
 import type { Seed64 } from '../../core/hash';
 import { REGISTRY, STONE } from '../../world/blocks/index';
+import type { CaveColumnPass, CavePickerInputs } from '../biomes/cavePicker';
 import { BAND_OFFSET_NOISE, bandlandsOffset, bandlandsState, bandlandsTable, isBandlandsTable } from './bands';
 import {
-  biomeHolds, biomeMask, gradientSeed, lakeHolds, noiseThresholdHolds, skyOpenHolds, steepHolds, stoneDepthHolds,
-  temperatureBelowHolds, verticalGradientHolds, waterHolds, yAboveHolds,
+  biomeHolds, biomeMask, caveBiomeHere, caveBiomeHolds, caveBiomeMask, gradientSeed, lakeHolds, noiseThresholdHolds, skyOpenHolds,
+  steepHolds, stoneDepthHolds, temperatureBelowHolds, verticalGradientHolds, waterHolds, yAboveHolds,
 } from './conditions';
 import { requireValidRules, ruleLeaves, type Condition, type Rule, type SurfaceNoiseSource } from './rules';
 import { runAt, tEff, type SurfaceScan, type SurfaceScanSettings } from './scan';
@@ -53,6 +57,9 @@ const NOISE_OK = noiseThresholdHolds;
 const TEMP_OK = temperatureBelowHolds;
 const SKY_OK = skyOpenHolds;
 const LAKE_OK = lakeHolds;
+const CAVE_MASK = caveBiomeMask;
+const CAVE_OK = caveBiomeHolds;
+const CAVE_HERE = caveBiomeHere;
 const BAND_NOISE = BAND_OFFSET_NOISE;
 const BAND_TABLE = bandlandsTable;
 const IS_BAND_TABLE = isBandlandsTable;
@@ -210,6 +217,12 @@ interface Cursor {
   sky: boolean;
   waterAbove: boolean;
   waterTop: number;
+  /** The run's floor and ceiling cave biomes (−1 none). */
+  floorBiome: number;
+  ceilBiome: number;
+  /** The scan's cave picker and pass (`caveBiome{here}`), null when it has none. */
+  picker: CavePickerInputs | null;
+  pass: CaveColumnPass | null;
   y: number;
 }
 
@@ -232,7 +245,8 @@ export function compileSurfaceRules(
   const lapse = set.lapse;
   const lapseBase = set.lapseBase;
   const cur: Cursor = {
-    stamp: 0, x: 0, z: 0, biome: 0, steep: 0, T: 0, lake: 0, sd: 0, top: 0, bottom: 0, sky: false, waterAbove: false, waterTop: 0, y: 0,
+    stamp: 0, x: 0, z: 0, biome: 0, steep: 0, T: 0, lake: 0, sd: 0, top: 0, bottom: 0, sky: false, waterAbove: false, waterTop: 0,
+    floorBiome: -1, ceilBiome: -1, picker: null, pass: null, y: 0,
   };
 
   const cond = (c: Condition): CondFn => {
@@ -285,6 +299,14 @@ export function compileSurfaceRules(
       case 'not': {
         const inner = cond(c.if);
         return () => !inner();
+      }
+      case 'caveBiome': {
+        const m = CAVE_MASK(c.biomes);
+        switch (c.side) {
+          case 'floor': return () => CAVE_OK(m, cur.floorBiome);
+          case 'ceiling': return () => CAVE_OK(m, cur.ceilBiome);
+          case 'here': return () => CAVE_OK(m, CAVE_HERE(cur.picker, cur.pass, cur.x, cur.y, cur.z));
+        }
       }
     }
   };
@@ -347,6 +369,8 @@ export function compileSurfaceRules(
     cur.T = scan.T[p]!;
     cur.lake = scan.lakeLevel[p]!;
     cur.sd = scan.surfaceDepth[p]!;
+    cur.picker = scan.cavePicker;
+    cur.pass = scan.cavePass;
   };
   const setRun = (scan: SurfaceScan, r: number, sky: boolean): void => {
     cur.top = scan.runTop[r]!;
@@ -354,6 +378,8 @@ export function compileSurfaceRules(
     cur.sky = sky;
     cur.waterAbove = scan.runWaterAbove[r] === 1;
     cur.waterTop = scan.runWaterTop[r]!;
+    cur.floorBiome = scan.runFloorBiome[r]!;
+    cur.ceilBiome = scan.runCeilBiome[r]!;
   };
 
   return {
