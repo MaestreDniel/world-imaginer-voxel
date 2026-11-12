@@ -24,8 +24,8 @@ describe('toolbar texts (SP2b spec §2.6, §3.1, §6.4)', () => {
     expect(profileSwitchText('default', 3)).toBe('Switching to default clears 3 modified parameters');
   });
 
-  test('the profile select lists the ready profiles in PROFILE_IDS order: every one but cave_heavy from SP3e (SP3e spec §11)', () => {
-    expect(profileOptions()).toEqual(['default', 'large_biomes', 'archipelago', 'amplified', 'floating_islands']);
+  test('the profile select lists the ready profiles in PROFILE_IDS order: every one from SP6b (SP3e spec §11; SP6b spec §14.1)', () => {
+    expect(profileOptions()).toEqual(['default', 'large_biomes', 'archipelago', 'amplified', 'floating_islands', 'cave_heavy']);
   });
 
   test('every table value shows its own position without "≈"', () => {

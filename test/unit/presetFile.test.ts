@@ -163,18 +163,17 @@ describe('readPresetText', () => {
     ['reserved name', doc({ name: 'default' }), ['name: RESERVED_NAME — "default" is a built-in profile name']],
     ['unknown profile', doc({ profile: 'nope' }), ['profile: UNKNOWN_PROFILE — unknown profile "nope"']],
     ['newer schema version', doc({ schemaVersion: 5 }), ['schemaVersion: NEWER_SCHEMA_VERSION — schemaVersion 5 is newer than this build (4)']],
-    ['a profile that is not ready', doc({ profile: 'cave_heavy' }), ['profile cave_heavy arrives in SP6b']],
-    ['a profile that is not ready, with invalid params: import issues first', doc({ profile: 'cave_heavy', params: { climate: { scaleMull: 4 } } }), [
+    ['cave_heavy with an invalid parameter', doc({ profile: 'cave_heavy', params: { climate: { scaleMull: 4 } } }), [
       'params.climate.scaleMull: UNKNOWN_KEY — unknown key "scaleMull"',
     ]],
   ])('%s', (_name, text, issues) => {
     expect(readPresetText(text)).toEqual({ ok: false, issues });
   });
-  test('every unready profile names the sub-project it arrives in', () => {
-    expect(UNREADY.length).toBeGreaterThan(0);
-    for (const profile of UNREADY) {
-      expect(readPresetText(presetText('Later', profile, resolveProfile(profile)))).toEqual({ ok: false, issues: [`profile ${profile} arrives in ${PROFILES[profile].readyFrom}`] });
-    }
+  test('from SP6b every profile is ready, so a cave_heavy file imports (SP6b spec §14.1)', () => {
+    expect(UNREADY).toEqual([]);
+    expect(PROFILES.cave_heavy.readyFrom).toBe('SP6b');
+    expect(readPresetText(doc({ profile: 'cave_heavy' }))).toEqual({ ok: true, name: 'My world', profile: 'cave_heavy', patch: {} });
+    expect(readPresetText(presetText('Heavy', 'cave_heavy', resolveProfile('cave_heavy')))).toEqual({ ok: true, name: 'Heavy', profile: 'cave_heavy', patch: {} });
   });
 });
 
@@ -252,6 +251,15 @@ describe('presets tab logic', () => {
     expect(loadedNotice('Saved')).toBe('loaded preset Saved');
   });
 
+  test('a cave_heavy file loads as one step over cave_heavy (ready from SP6b, its spec §14.1)', () => {
+    const s = edited();
+    const seen = watch(s);
+    expect(loadPresetText(s, doc({ profile: 'cave_heavy' }))).toEqual({ ok: true, name: 'My world', changed: true });
+    expect(seen).toEqual(['load urgent']);
+    expect([s.state.profile, s.state.patch]).toEqual(['cave_heavy', {}]);
+    expect(canonicalJSON(s.state.params)).toBe(canonicalJSON(resolveProfile('cave_heavy')));
+  });
+
   test('importing the draft\'s own export changes nothing and records nothing', () => {
     const s = edited();
     const text = textOf(exportDraft('Same', s));
@@ -269,7 +277,6 @@ describe('presets tab logic', () => {
     ['not JSON', '{"format":', [/^file is not JSON: ./]],
     ['an invalid parameter', doc({ params: { rivers: { widthMin: 999 } } }), ['params.rivers.widthMin: OUT_OF_RANGE — 999 outside [1, 64]']],
     ['an unknown key', doc({ extra: true }), ['extra: UNKNOWN_KEY — unknown key "extra"']],
-    ['a profile that is not ready', doc({ profile: 'cave_heavy' }), ['profile cave_heavy arrives in SP6b']],
   ])('a refused file (%s) lists its issues and leaves the session alone', (_name, text, issues) => {
     const s = edited();
     const state = s.state;

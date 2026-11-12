@@ -22,9 +22,10 @@ export const SUB_PROJECTS: readonly SubProjectId[] = [
  * The sub-project this build belongs to; hides profiles whose readyFrom comes later (SP2a spec §4.4).
  * It is the last SP of the longest prefix of SUB_PROJECTS whose members have all started (SP3a spec §9),
  * so an SP running alongside an earlier unstarted one (SP4a before SP3c, SP3d or SP3e) does not advance it.
- * SP6a (the shape of the caves) started on 2026-11-02 and is the current SP (SP6a spec §12).
+ * SP6a (the shape of the caves) started on 2026-11-02 (SP6a spec §12). SP6b (cave biomes) started on 2026-11-12 and is
+ * the current SP (SP6b spec §14.1).
  */
-export const CURRENT_SP: SubProjectId = 'SP6a';
+export const CURRENT_SP: SubProjectId = 'SP6b';
 
 /** Every metric id of master spec §6.4 (E1-E7 expanded; C7-C9 are SP6a's, its spec §10.1, §13 item 18). */
 export type MetricId =

@@ -21,6 +21,10 @@ describe('map URL state', () => {
     expect(back.error).toBeNull();
     expect(back.state).toEqual({ ...s, seed: '7', view: { ...s.view, x: 0 } });
   });
+  test('a cave_heavy state is accepted (ready from SP6b, its spec §14.1)', () => {
+    const s: MapState = { ...DEFAULT_MAP_STATE, profile: 'cave_heavy' };
+    expect(decodeMapState(enc(s))).toEqual({ state: s, error: null });
+  });
   test('an empty hash is the default without a notice', () => {
     expect(decodeMapState('')).toEqual({ state: DEFAULT_MAP_STATE, error: null });
   });
@@ -32,7 +36,6 @@ describe('map URL state', () => {
     ['empty seed', enc({ ...DEFAULT_MAP_STATE, seed: ' ' })],
     ['seed with a line break', enc({ ...DEFAULT_MAP_STATE, seed: 'a\nb' })],
     ['unknown profile', enc({ ...DEFAULT_MAP_STATE, profile: 'nope' })],
-    ['profile not ready', enc({ ...DEFAULT_MAP_STATE, profile: 'cave_heavy' })],
     ['invalid patch', enc({ ...DEFAULT_MAP_STATE, patch: { rivers: { widthMin: 999 } } })],
     ['view outside the window', enc({ ...DEFAULT_MAP_STATE, view: { ...DEFAULT_MAP_STATE.view, x: 1e7 } })],
     ['zoom out of range', enc({ ...DEFAULT_MAP_STATE, view: { ...DEFAULT_MAP_STATE.view, bpp: 1000 } })],
@@ -98,7 +101,7 @@ describe('hashchange (SP2b spec §1.4)', () => {
   test('an invalid hash returns the SP2a notice and changes nothing', () => {
     const { session, changes, views, setView } = start();
     const before = session.state;
-    for (const hash of ['#***', enc({ ...DEFAULT_MAP_STATE, profile: 'cave_heavy' }), enc({ ...DEFAULT_MAP_STATE, patch: { rivers: { widthMin: 999 } } })]) {
+    for (const hash of ['#***', enc({ ...DEFAULT_MAP_STATE, profile: 'nope' }), enc({ ...DEFAULT_MAP_STATE, patch: { rivers: { widthMin: 999 } } })]) {
       expect(applyMapHash(hash, session, setView)).toMatch(/^map URL ignored: /);
     }
     expect(views).toEqual([]);

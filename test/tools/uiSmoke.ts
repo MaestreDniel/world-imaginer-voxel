@@ -350,8 +350,8 @@ export const START: MapUrlState = { v: 1, seed: '42', profile: 'default', patch:
 export const SMOKE_PRESETS = ['archipelago', 'amplified', 'floating_islands'] as const;
 export type SmokePreset = (typeof SMOKE_PRESETS)[number];
 
-/** The profile select's options at SP3e: every ready profile in `PROFILE_IDS` order (`profileOptions()`; a unit test keeps them equal). */
-export const READY_PROFILES = ['default', 'large_biomes', 'archipelago', 'amplified', 'floating_islands'] as const;
+/** The profile select's options from SP6b: every ready profile in `PROFILE_IDS` order (`profileOptions()`; a unit test keeps them equal). */
+export const READY_PROFILES = ['default', 'large_biomes', 'archipelago', 'amplified', 'floating_islands', 'cave_heavy'] as const;
 
 /**
  * Each draft preset's golden window centre block on seed 42 (`sp3eWindow(p).centreX`, `.centreZ` of
@@ -2815,7 +2815,7 @@ async function openPresetMap(p: Page, preset: SmokePreset, layer: string): Promi
 
 /**
  * The `preset profiles` step (SP3e spec §8): each draft preset opened by URL with its profile on its line — the select
- * shows it among the five ready profiles, the World tab and the URL name it, the Voxels summary holds what the preset
+ * shows it among the ready profiles, the World tab and the URL name it, the Voxels summary holds what the preset
  * promises (`presetSummaryOk`), and no page error; floating_islands' line holds an island over ground whose top voxel
  * takes a surface rule (D21 (b)) and its `islandMask` layer draws ≥ 2 colours; archipelago's `biome` layer around its
  * window holds ocean and land.

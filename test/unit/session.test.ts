@@ -41,10 +41,12 @@ describe('WorldSession', () => {
     expect(w.state.params.climate.scaleMul).toBe(2);
     const r = w.setProfile('large_biomes');
     expect(r.ok && [r.state.profile, r.state.patch, r.state.params.climate.scaleMul, r.state.epoch]).toEqual(['large_biomes', {}, 4, 1]);
-    const bad = w.setProfile('cave_heavy');
-    expect(issuesOf(bad)).toEqual(['profile BAD_ENUM']);
     expect(issuesOf(w.setProfile('nope' as never))).toEqual(['profile BAD_ENUM']);
     expect(w.state.profile).toBe('large_biomes');
+    // cave_heavy is ready from SP6b (its spec §14.1).
+    const heavy = w.setProfile('cave_heavy');
+    expect(heavy.ok && [heavy.state.profile, heavy.state.patch, heavy.state.epoch]).toEqual(['cave_heavy', {}, 2]);
+    expect(canonicalJSON(w.state.params)).toBe(canonicalJSON(resolveProfile('cave_heavy')));
   });
   test.each(['archipelago', 'amplified', 'floating_islands'] as const)('setProfile accepts the SP3e draft %s (SP3e spec §11)', (id) => {
     const w = new WorldSession(random, { seedText: '1', patch: { rivers: { widthMin: 6 } } });
@@ -221,14 +223,16 @@ describe('load', () => {
     const r = w.load({ profile: 'large_biomes', patch: {} });
     expect(r.ok && [r.state.profile, r.state.patch, r.state.epoch]).toEqual(['large_biomes', {}, 1]);
   });
-  test('an unready profile or an invalid patch changes nothing', () => {
+  test('an unknown profile or an invalid patch changes nothing; cave_heavy loads (ready from SP6b)', () => {
     const w = session();
     w.set('rivers.widthMin', 6);
     const before = w.state;
-    expect(issuesOf(w.load({ seedText: '5', profile: 'cave_heavy', patch: {} }))).toEqual(['profile BAD_ENUM']);
+    expect(issuesOf(w.load({ seedText: '5', profile: 'nope' as never, patch: {} }))).toEqual(['profile BAD_ENUM']);
     expect(issuesOf(w.load({ seedText: '5', profile: 'default', patch: { climate: { scaleMul: 99 } } }))).toEqual(['climate.scaleMul OUT_OF_RANGE']);
     expect(issuesOf(w.load({ profile: 'default', patch: null }))).toEqual([' NOT_OBJECT']);
     expect(w.state).toBe(before);
+    const r = w.load({ seedText: '5', profile: 'cave_heavy', patch: {} });
+    expect(r.ok && [r.state.profile, r.state.patch, r.state.seedText]).toEqual(['cave_heavy', {}, '5']);
   });
   test('−0 in a loaded patch is stored as 0', () => {
     const w = session();
@@ -242,10 +246,10 @@ describe('initial state', () => {
     const w = new WorldSession(random, { seedText: '1', profile: 'large_biomes', patch: JSON.parse('{"climate":{"scaleMul":4},"rivers":{"coastFadeLo":-0}}') });
     expect([w.state.profile, canonicalJSON(w.state.patch), w.initNotice]).toEqual(['large_biomes', '{"rivers":{"coastFadeLo":0}}', null]);
   });
-  test('an unready profile falls back to default and {} with a notice', () => {
+  test('cave_heavy is kept with its patch and no notice (ready from SP6b, its spec §14.1)', () => {
     const w = new WorldSession(random, { seedText: 'x', profile: 'cave_heavy', patch: { rivers: { widthMin: 6 } } });
-    expect([w.state.profile, w.state.patch, w.state.seedText]).toEqual(['default', {}, 'x']);
-    expect(w.initNotice).toBe('profile cave_heavy is not available yet; opened the default profile with no changes');
+    expect([w.state.profile, canonicalJSON(w.state.patch), w.state.seedText]).toEqual(['cave_heavy', '{"rivers":{"widthMin":6}}', 'x']);
+    expect(w.initNotice).toBeNull();
   });
   test('an invalid patch over a ready non-default profile falls back to default and {} with a notice (SP2a minor 8)', () => {
     const w = new WorldSession(random, { seedText: 'x', profile: 'large_biomes', patch: { nope: 1 } });
@@ -343,7 +347,7 @@ describe('gestures and notifications', () => {
     w.setSeedText(' 2 ');
     w.newSeed();
     w.setProfile('large_biomes');
-    w.setProfile('cave_heavy');
+    w.setProfile('nope' as never);
     w.load({ profile: 'default', patch: {} });
     w.undo();
     w.redo();

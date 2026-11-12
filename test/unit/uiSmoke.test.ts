@@ -566,10 +566,11 @@ const islandColumn = (ground: number, island: readonly [number, number] | null) 
 };
 
 describe('UI smoke test: the preset profiles step and the preset shots (SP3e spec §8)', () => {
-  test('the presets are the three drafts in PROFILE_IDS order, and the select lists the five ready profiles', () => {
+  test('the presets are the three drafts in PROFILE_IDS order, and the select lists the six ready profiles (cave_heavy from SP6b)', () => {
     expect(SMOKE_PRESETS).toEqual(WINDOW_PRESETS);
     expect(SMOKE_PRESETS).toEqual(DRAFT_PRESETS);
     expect(READY_PROFILES).toEqual(profileOptions());
+    expect(READY_PROFILES).toEqual(['default', 'large_biomes', 'archipelago', 'amplified', 'floating_islands', 'cave_heavy']);
   });
 
   test('each line is 1,024 blocks along x centred on the golden window\'s centre, drawn at 2 blocks/px; the review slice is its middle half', () => {
@@ -601,8 +602,9 @@ describe('UI smoke test: the preset profiles step and the preset shots (SP3e spe
         expect(decodeMapState(mapHash(s))).toEqual({ state: s, error: null });
       }
     }
-    // An unready profile is refused by the page (it would open the default instead).
-    expect(decodeMapState(mapHash(presetState('cave_heavy', START.view))).error).toMatch(/not available yet/);
+    // cave_heavy is ready from SP6b (its spec §14.1): the page opens it.
+    const heavy = presetState('cave_heavy', START.view);
+    expect(decodeMapState(mapHash(heavy))).toEqual({ state: heavy, error: null });
   });
 
   test('the maps cover 4096 × 4096 blocks at 16 blocks/px; the five preset shots in the order they are taken', () => {

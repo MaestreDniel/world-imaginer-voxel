@@ -69,10 +69,21 @@ export interface MetricEnv {
 }
 
 /**
+ * `METRICS_TIMEOUT_SCALE` (SP6b spec §12.9, D33; default 1): the factor every `metricTest` timeout is multiplied by, so
+ * the throttled machine's full-tier runs (the plan sets 3) do not time out. A harness setting, not a gate.
+ */
+function metricsTimeoutScale(): number {
+  const raw = process.env.METRICS_TIMEOUT_SCALE ?? '1';
+  const scale = Number(raw);
+  if (!Number.isFinite(scale) || scale <= 0) throw new Error(`METRICS_TIMEOUT_SCALE '${raw}' (a positive finite number)`);
+  return scale;
+}
+
+/**
  * Registers one metric test. Inactive parts, and parts gated on other tiers only, still run and record their value;
  * the test is skipped when no part is gated on this run, unless it has already failed: a skip would replace the
  * result and drop the errors `expect.soft` recorded (an "insufficient sample", SP3b spec §8.1), so a failed test
- * stays failed.
+ * stays failed. The registered timeout is `timeoutMs` × `METRICS_TIMEOUT_SCALE`.
  */
 export function metricTest(
   id: MetricId,
@@ -82,6 +93,7 @@ export function metricTest(
   env: MetricEnv = {},
 ): void {
   const { register = test, table = THRESHOLDS, started = STARTED_SPS, outDir = OUT_DIR, outName = id } = env;
+  const timeout = timeoutMs * metricsTimeoutScale();
   register(id, async (ctx) => {
     const values = await run();
     mkdirSync(outDir, { recursive: true });
@@ -95,7 +107,7 @@ export function metricTest(
       ];
       ctx.skip(true, `${why.join('; ')} (value recorded)`);
     }
-  }, timeoutMs);
+  }, timeout);
 }
 
 export interface MetricCall {

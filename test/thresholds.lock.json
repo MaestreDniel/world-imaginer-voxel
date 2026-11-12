@@ -1,5 +1,5 @@
 {
-  "sha256": "7924ad8e94d03e6baea238618baf139a9dc8943709f11ca3f3fef2400009289a",
+  "sha256": "6260dcb890fbc5b0a7cba2ff957e442e444e8d0027f22027ff27d87261bba7ca",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -17,7 +17,8 @@
       "SP5a",
       "SP5b",
       "SP5c",
-      "SP6a"
+      "SP6a",
+      "SP6b"
     ],
     "thresholds": {
       "B1": {

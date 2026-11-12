@@ -15,10 +15,10 @@ describe('started sub-projects', () => {
     expect(CURRENT_SP).toBe(currentSpOf(STARTED_SPS));
   });
 
-  test('SP6a has started and is the current SP (SP6a spec §12)', () => {
-    expect(STARTED_SPS).toEqual(['SP0', 'SP1', 'SP2a', 'SP2b', 'SP3a', 'SP3b', 'SP3c', 'SP3d', 'SP3e', 'SP4a', 'SP4b', 'SP4c', 'SP5a', 'SP5b', 'SP5c', 'SP6a']);
-    expect(CURRENT_SP).toBe('SP6a');
-    expect(currentSpOf(STARTED_SPS)).toBe('SP6a');
+  test('SP6b has started and is the current SP (SP6b spec §14.1)', () => {
+    expect(STARTED_SPS).toEqual(['SP0', 'SP1', 'SP2a', 'SP2b', 'SP3a', 'SP3b', 'SP3c', 'SP3d', 'SP3e', 'SP4a', 'SP4b', 'SP4c', 'SP5a', 'SP5b', 'SP5c', 'SP6a', 'SP6b']);
+    expect(CURRENT_SP).toBe('SP6b');
+    expect(currentSpOf(STARTED_SPS)).toBe('SP6b');
   });
 
   test('currentSpOf stops at the first unstarted SP (SP4a alongside SP3c, SP3d and SP3e)', () => {

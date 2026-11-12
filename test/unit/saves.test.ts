@@ -109,12 +109,12 @@ describe('loadParams (D33)', () => {
     if (!r.ok) expect(r.issues.map((i) => i.code)).toContain('MIGRATION_FAILED');
   });
 
-  test('an unknown or unready profile → an issue', () => {
-    for (const profile of ['nope', 'cave_heavy'] as const) {
-      const r = loadParams({ ...fixture(), profile: profile as 'default' });
-      expect(r.ok, profile).toBe(false);
-      if (!r.ok) expect(r.issues[0]!.path).toBe('profile');
-    }
+  test('an unknown profile → an issue; cave_heavy loads over its own values (ready from SP6b, its spec §14.1)', () => {
+    const r = loadParams({ ...fixture(), profile: 'nope' as 'default' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.issues[0]!.path).toBe('profile');
+    const heavy = loadParams({ ...fixture(), profile: 'cave_heavy' as 'default', params: {} });
+    expect(heavy.ok && heavy.value.caves.cheese.offset).toBe(resolveProfile('cave_heavy').caves.cheese.offset);
   });
 });
 

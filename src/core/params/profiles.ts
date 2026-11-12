@@ -35,7 +35,16 @@ export const PROFILES: Readonly<Record<ProfileId, Profile>> = {
     overlay: { islands: { enabled: true }, density: { defs: FLOATING_DENSITY_TREE }, surface: { rules: FLOATING_SURFACE_RULES }, caves: { limits: { capTop: 180 } } },
     readyFrom: 'SP3e',
   },
-  cave_heavy: { overlay: {}, readyFrom: 'SP6b' },
+  // SP6b spec §6.2: the cheese offset stays 0.43 until SP6b's tuning; the other five are its table's values.
+  cave_heavy: {
+    overlay: {
+      caves: {
+        cheese: { offset: 0.43 }, entrances: { offset: 0.3 }, noodles: { maxY: 96 },
+        worms: { chance: 0.225 }, undergroundWorms: { chance: 0.105 }, ravines: { chance: 0.0225 },
+      },
+    },
+    readyFrom: 'SP6b',
+  },
 };
 
 /** A profile is selectable once its readyFrom is at or before `current` in master §10 order. */

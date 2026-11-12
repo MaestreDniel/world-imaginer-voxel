@@ -104,6 +104,31 @@ describe('MetricEnv.outName (SP3c spec §5.2): two calls for one id write their 
   });
 });
 
+describe('METRICS_TIMEOUT_SCALE (SP6b spec §12.9, D33)', () => {
+  /** The timeouts metricTest registers with the variable at `scale` (unset when undefined): the default, then 900,000. */
+  const timeouts = (scale: string | undefined): Array<number | undefined> => {
+    const saved = process.env['METRICS_TIMEOUT_SCALE'];
+    if (scale === undefined) delete process.env['METRICS_TIMEOUT_SCALE'];
+    else process.env['METRICS_TIMEOUT_SCALE'] = scale;
+    try {
+      const got: Array<number | undefined> = [];
+      const register: MetricEnv['register'] = (_name, _fn, timeout) => { got.push(timeout); };
+      metricTest('C1', ['default'], () => ({ default: 0.1 }), undefined, { register, table });
+      metricTest('C1', ['default'], () => ({ default: 0.1 }), 900_000, { register, table });
+      return got;
+    } finally {
+      if (saved === undefined) delete process.env['METRICS_TIMEOUT_SCALE'];
+      else process.env['METRICS_TIMEOUT_SCALE'] = saved;
+    }
+  };
+
+  test('METRICS_TIMEOUT_SCALE multiplies metricTest\'s timeout', () => {
+    expect(timeouts('3')).toEqual([1_800_000, 2_700_000]);
+    expect(timeouts(undefined)).toEqual([600_000, 900_000]);
+    for (const bad of ['0', 'x']) expect(() => timeouts(bad), bad).toThrow(/METRICS_TIMEOUT_SCALE/);
+  });
+});
+
 describe('coverageErrors', () => {
   test('every active part needs exactly one registering call', () => {
     expect(coverageErrors([], table, ['SP6a'])).toEqual(['C1.default is active but no metricTest covers it']);

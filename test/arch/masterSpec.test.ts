@@ -147,6 +147,12 @@
  * "(delivered: …)", pinned with `toBe`; SP6b's line gains the SP6a spec §14's exit hand-overs; §5.9 drops the unbound
  * 'L (slice)'; §4.3 names the idle shrink; G1's target cell records the map's first open (ruling R27). The user's check
  * (ruling R33): SP6b's entry gains "Received from SP6a's user check", the flat bedrock floor in wide caves.
+ * SP6b (its spec §14, §15): §15's amendments land in the commit that makes each true (its Spec correction 1), pinned in
+ * the new 'master spec amendments (SP6b §15)' describe, each test title naming its "§15 item n"; a pin of the SP6a
+ * describe that reads text SP6b rewords moves there with the commit that rewords it. The first commit (Task 1) lands
+ * item 1's header, `**SP6b — Cave biomes** (XL; SP6a). Spec: …` (the size the user chose, "XL completa"), and moves the
+ * SP6a describe's header pin. §1 names each SP6b module in its entry, which exists (`SP6B_MODULES`, its first rows
+ * added with the picker); the exit adds the completeness test over §15's items.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1923,7 +1929,7 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(cut!.endsWith('Each is cut whole. It was not taken: the Find buttons, the spaghetti-2D rarity bands and the underground-only carver shipped in SP6a, so nothing moved.'), 'the Cut line as taken').toBe(true);
     // Item 2: the SP6b entry.
     const sp6b = spEntry('SP6b', 'SP7');
-    expect(sp6b.startsWith('**SP6b — Cave biomes** (size set by the SP6b spec; SP6a).'), 'the SP6b header').toBe(true);
+    // The SP6b header's pin moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 1 rewords it).
     expect(sp6b).toContain('- 3D quart cave-biome picker (lush, dripstone, **abyss**) with cave floor and ceiling surface rules; the abyss surface-palette blocks (decided in the SP6b spec); the X-ray coloured by cave biome; the map cave-biome layer; the `cave_heavy` preset; cave culling (§4.15) with R3.');
     expect(sp6b).toContain('**Deliverable:** cave biomes recognised by their blocks.');
     const sp6bReceived = sp6b.split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
@@ -2493,5 +2499,12 @@ describe('master spec amendments (SP6a §13)', () => {
     const missing = items.filter((i) => !pinned.has(i));
     expect(missing, 'the SP6a spec §13 items with no test naming them in this describe').toEqual([]);
     expect([...pinned].filter((i) => !items.includes(i)), 'tests naming a §13 item the spec does not have').toEqual([]);
+  });
+});
+
+describe('master spec amendments (SP6b §15)', () => {
+  test('§10\'s SP6b header names the size and the spec (SP6b spec §15 item 1)', () => {
+    const sp6b = spEntry('SP6b', 'SP7');
+    expect(sp6b.startsWith('**SP6b — Cave biomes** (XL; SP6a). Spec: `2026-11-12-sp6b-cave-biomes-design.md`.'), 'the SP6b header').toBe(true);
   });
 });

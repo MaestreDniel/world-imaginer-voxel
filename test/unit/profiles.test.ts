@@ -26,10 +26,10 @@ describe('profiles', () => {
     expect(resolveProfile('archipelago').climate.C.wavelength).toBe(840);
     expect(resolveProfile('default')).toBe(DEFAULTS);
   });
-  test('readiness follows CURRENT_SP: from SP3e every profile but cave_heavy is ready (SP3e spec §11; SP4a spec §12)', () => {
-    expect(CURRENT_SP).toBe('SP6a');
-    expect(PROFILE_IDS.filter((id) => isProfileReady(id))).toEqual(['default', 'large_biomes', 'archipelago', 'amplified', 'floating_islands']);
-    expect(isProfileReady('cave_heavy')).toBe(false);
+  test('readiness follows CURRENT_SP: from SP6b every profile is ready (SP3e spec §11; SP4a spec §12; SP6b spec §14.1)', () => {
+    expect(CURRENT_SP).toBe('SP6b');
+    expect(PROFILE_IDS.filter((id) => isProfileReady(id))).toEqual(['default', 'large_biomes', 'archipelago', 'amplified', 'floating_islands', 'cave_heavy']);
+    expect(isProfileReady('cave_heavy')).toBe(true);
     expect(isProfileReady('cave_heavy', 'SP6b')).toBe(true);
     expect(isProfileReady('cave_heavy', 'SP6a')).toBe(false);
     expect(isProfileReady('archipelago', 'SP3e')).toBe(true);
@@ -37,6 +37,25 @@ describe('profiles', () => {
     expect(isProfileReady('archipelago', 'SP3c')).toBe(false);
     expect(isProfileReady('archipelago', 'SP3b')).toBe(false);
     expect(isProfileReady('large_biomes', 'SP1')).toBe(false);
+  });
+  test('cave_heavy is ready from SP6b with §6.2\'s overlay (SP6b spec §6.2, §14.1; Spec correction 14)', () => {
+    expect(PROFILES.cave_heavy.readyFrom).toBe('SP6b');
+    expect(isProfileReady('cave_heavy')).toBe(true);
+    expect(isProfileReady('cave_heavy', 'SP6a')).toBe(false);
+    expect(PROFILES.cave_heavy.overlay).toEqual({
+      caves: {
+        cheese: { offset: 0.43 }, entrances: { offset: 0.3 }, noodles: { maxY: 96 },
+        worms: { chance: 0.225 }, undergroundWorms: { chance: 0.105 }, ravines: { chance: 0.0225 },
+      },
+    });
+    const p = resolveProfile('cave_heavy');
+    expect([
+      p.caves.cheese.offset, p.caves.entrances.offset, p.caves.noodles.maxY,
+      p.caves.worms.chance, p.caves.undergroundWorms.chance, p.caves.ravines.chance,
+    ]).toEqual([0.43, 0.3, 96, 0.225, 0.105, 0.0225]);
+    // An overlay under `caves` dirties terrain and every stage that reads it, as amplified's density overlay does; the
+    // badge scope is terrain (the first dirty stage).
+    expect(dirtyStages(stageHashes(DEFAULTS), stageHashes(p))).toEqual(['terrain', 'decorate', 'light', 'mesh']);
   });
   test('switching profile dirties exactly what its overlay touches (SP3e spec §1.1: per profile, from the overlay\'s top-level keys and the registry)', () => {
     const base = stageHashes(DEFAULTS);
@@ -52,7 +71,7 @@ describe('profiles', () => {
     const all = STAGES.map((s) => s.id);
     const butClimate = all.filter((st) => st !== 'climate');
     const table: Record<(typeof PROFILE_IDS)[number], readonly string[]> = {
-      default: [], large_biomes: all, archipelago: all, amplified: ['terrain', 'decorate', 'light', 'mesh'], floating_islands: butClimate, cave_heavy: [],
+      default: [], large_biomes: all, archipelago: all, amplified: ['terrain', 'decorate', 'light', 'mesh'], floating_islands: butClimate, cave_heavy: ['terrain', 'decorate', 'light', 'mesh'],
     };
     for (const id of PROFILE_IDS) {
       const h = stageHashes(resolveProfile(id));

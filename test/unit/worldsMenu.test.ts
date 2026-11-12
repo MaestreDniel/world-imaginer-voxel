@@ -250,10 +250,10 @@ describe('mountWorldsMenu: the start screen and New world (SP5b spec §1.1, §1.
     expect(worlds(kv).find((w) => w.id === 'w1')?.name).toBe('New world 2');
   });
 
-  test('the preset select lists the five ready profiles in code order', () => {
+  test('the preset select lists the six ready profiles in code order (cave_heavy from SP6b, its spec §14.1)', () => {
     mount();
     const opts = dom.el('new-preset').options.map((o) => o.value);
-    expect(opts).toEqual(['default', 'large_biomes', 'archipelago', 'amplified', 'floating_islands']);
+    expect(opts).toEqual(['default', 'large_biomes', 'archipelago', 'amplified', 'floating_islands', 'cave_heavy']);
     expect(opts).toEqual(profileOptions());
   });
 
