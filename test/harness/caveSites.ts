@@ -1,8 +1,12 @@
+import { Worker } from 'node:worker_threads';
 import { resolveProfile, type ProfileId } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import { createGenContext } from '../../src/gen/context';
 import { ringCandidates } from '../../src/metrics/sp3eGoldens';
+import type { CaveRegionMsg, CaveRegionReply, CaveRegionResult } from './caveRegionWorker';
+import { ask, buildNodeTaskWorker } from './nodeWorker';
+import { genRegion } from './region';
 
 /**
  * The caves metric's regions per tier and group (SP6a spec §10.1; SP6b spec §13 L4), moved out of
@@ -26,6 +30,10 @@ import { ringCandidates } from '../../src/metrics/sp3eGoldens';
  * - amplified: the largest offset0 ≥ 200 (summits) and ≥ 64 points with offset0 ≥ 180 (deep columns of rock):
  *   R(−5, −1), 65 points ≥ 180, the largest 209;
  * - floating_islands: ≥ 64 points with islandMask ≥ 0.9 (islands overhead, under the cap): R(−2, −1), 81 points.
+ *
+ * The regions' measurement (SP6b spec §13 L6, ruling P6; `measureCaveRegions`): per region in worker threads
+ * (`caveRegionWorker.ts`), each region generated (or read from its cached dump) by `genRegion` on this thread; the
+ * metric pools the results. Here rather than in the metric file, so a unit test drives it with 1 and 4 workers.
  */
 export type CaveTier = 'fast' | 'quick' | 'full';
 
@@ -137,4 +145,83 @@ export function caveGroupOf(raw: string | undefined): CaveGroup | null {
   if (raw === undefined) return null;
   if (raw === 'default' || raw === 'presets') return raw;
   throw new Error(`METRICS_CAVE_GROUPS '${raw}' (default or presets)`);
+}
+
+/** What `measureCaveRegions` needs beside the regions. */
+export interface CaveRegionsOptions {
+  /** C7.switchWall's chunk stride (the metric's `SWITCH_STRIDE`). */
+  readonly stride: number;
+  /** `genRegion`'s 4-thread worker bundle directory, under test/.cache/ (one per tier and test file). */
+  readonly regionWorkerDir: string;
+  /** `caveRegionWorker.ts`' bundle directory, under test/.cache/ (one per tier and test file). */
+  readonly workerDir: string;
+  /** The worker threads (an integer ≥ 1; default 4, plan); never more than the regions. */
+  readonly workers?: number;
+  /** `genRegion`'s cache directory (default `test/.cache/regions/`). */
+  readonly cacheDir?: string;
+}
+
+const caveWorkerScripts = new Map<string, Promise<string>>();
+
+function caveRegionWorkerScript(dir: string): Promise<string> {
+  let p = caveWorkerScripts.get(dir);
+  if (p === undefined) {
+    p = buildNodeTaskWorker(dir, { entry: 'test/harness/caveRegionWorker.ts' });
+    caveWorkerScripts.set(dir, p);
+  }
+  return p;
+}
+
+/**
+ * Every region of `sites` measured by `measureCaveRegion` in worker threads (SP6b spec §13 L6), the results in `sites`'
+ * order. A worker that is idle takes the next region of the list: this thread generates it up to 'T' through the
+ * region cache (`genRegion`, 4 threads, a shared store; one region at a time, in the list's order) and hands the
+ * worker the store's handles, so at most one store per worker, and the one being generated, are alive. Throws on a
+ * worker's error, after terminating every worker.
+ */
+export async function measureCaveRegions(sites: readonly Site[], o: CaveRegionsOptions): Promise<CaveRegionResult[]> {
+  const n = o.workers ?? 4;
+  if (!Number.isInteger(n) || n < 1) throw new RangeError(`measureCaveRegions: workers ${n} (an integer ≥ 1)`);
+  const out: Array<CaveRegionResult | undefined> = sites.map(() => undefined);
+  if (sites.length === 0) return [];
+  const script = await caveRegionWorkerScript(o.workerDir);
+  const workers = Array.from({ length: Math.min(n, sites.length) }, () => new Worker(script));
+  let next = 0;
+  let failed = false;
+  // The regions are generated one after the other (each `genRegion` runs its own 4 threads).
+  let generating: Promise<unknown> = Promise.resolve();
+  const generate = (s: Site, params: CaveRegionMsg['params']) => {
+    const p = generating.then(() => genRegion({
+      seed: s.seed, params, cx0: s.cx0, cz0: s.cz0, w: s.size, h: s.size, upTo: 'T', order: 'spiral', threads: 4,
+      cache: true, workerDir: o.regionWorkerDir, ...(o.cacheDir === undefined ? {} : { cacheDir: o.cacheDir }),
+    }));
+    generating = p.catch(() => undefined);
+    return p;
+  };
+  const run = async (w: Worker): Promise<void> => {
+    try {
+      while (!failed && next < sites.length) {
+        const k = next++;
+        const site = sites[k]!;
+        const params = resolveProfile(site.profile);
+        const { view } = await generate(site, params);
+        const msg: CaveRegionMsg = { type: 'region', handles: view.store.handles(), site, params, stride: o.stride };
+        const reply = await ask<CaveRegionReply>(w, msg);
+        if (reply.type !== 'measured') throw new Error(`cave region worker, ${site.label}: ${reply.type === 'error' ? reply.message : String((reply as { type: unknown }).type)}`);
+        if (reply.label !== site.label) throw new Error(`cave region worker: asked ${site.label}, answered ${reply.label}`);
+        out[k] = reply.result;
+      }
+    } catch (e) {
+      failed = true;
+      throw e;
+    }
+  };
+  try {
+    await Promise.all(workers.map(run));
+  } finally {
+    await Promise.all(workers.map((w) => w.terminate()));
+  }
+  const missing = out.findIndex((r) => r === undefined);
+  if (missing >= 0) throw new Error(`measureCaveRegions: ${sites[missing]!.label} not measured`);
+  return out as CaveRegionResult[];
 }

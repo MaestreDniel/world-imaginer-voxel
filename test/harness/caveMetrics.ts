@@ -35,7 +35,8 @@
  *   over the band's rate; the maximum over residues and the bands whose rate is > 0.
  * The region parts pool their counts over the regions (C1 per profile); the per-km² parts divide by the regions' area.
  *
- * C7-C9 (the tuning parts; C7's construction parts live in `caves.metric.ts`):
+ * C7-C9 (the tuning parts; C7's construction parts live in `caves.metric.ts`, but for the stored side of
+ *   `carverReference` and `islandCapAir`, `regionCounts`, which is here, ruling P4):
  * - A cave wall: a face of a cave voxel (tagged, not solid) whose face neighbour in the grid is solid (a non-air block);
  *   a neighbour beyond the grid is not seen.
  * - C7.borderPlaneRatio: the walls facing along x counted at the cave voxel's x mod 16 (a cut on the chunk border shows
@@ -66,6 +67,11 @@
  * - The groups: 'default' (the default and large_biomes regions) and each preset. The parts the spec marks "default and
  *   presets" (verticalStep, nearestEntrance, holedSurface) and "default and archipelago" (flatWallShare, waterWall) are
  *   the worst of those groups; the others read the default group.
+ *
+ * A region's counts cross threads (SP6b spec §13 L6: `caveRegionWorker.ts` measures each region in a worker thread and
+ * the metric pools): `CaveRegionCounts`, `CaveC7C9Counts`, `CarverRegionCounts` and the poses are plain objects of
+ * numbers, strings, number arrays and typed arrays that each own their whole buffer, so a structured clone carries them
+ * and `countsTransfer` lists the buffers to move.
  */
 import { CARVER_WINDOW_R, CAVE_KIND } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
@@ -2171,4 +2177,97 @@ export function caveExamples(
     if (out.pillars !== null) break;
   }
   return out;
+}
+
+// ---------------------------------------------------------------- C7's construction: the stored side (ruling P4)
+
+/** A column's set in the view: its final set at Decorated or above, else its proto set. */
+export function columnOf(view: Pick<RegionView, 'store'>, cx: number, cz: number) {
+  const c = view.store.final(cx, cz) ?? view.store.proto(cx, cz);
+  if (c === null) throw new Error(`columnOf: column (${cx}, ${cz}) has no set`);
+  return c;
+}
+
+/** One region's counts for `carverReference` and the island cap (`regionCounts`). */
+export interface CarverRegionCounts {
+  readonly mismatches: number;
+  readonly carved: number;
+  readonly capAir: number;
+  readonly islandVoxels: number;
+  readonly examples: string[];
+}
+
+/**
+ * The voxels of the region whose store carver kind (the tag when 6-8, else 0) differs from `ref`'s, the carver-tagged
+ * voxels, and with `capY` the tagged voxels at y ≥ capY and the non-air voxels at y ≥ 181.
+ */
+export function regionCounts(view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 'store'>, ref: Uint8Array, capY: number | null): CarverRegionCounts {
+  const W = 16 * view.w;
+  const D = 16 * view.h;
+  let mismatches = 0;
+  let carved = 0;
+  let capAir = 0;
+  let islandVoxels = 0;
+  const examples: string[] = [];
+  for (let cz = view.cz0; cz < view.cz0 + view.h; cz++) {
+    for (let cx = view.cx0; cx < view.cx0 + view.w; cx++) {
+      const col = columnOf(view, cx, cz);
+      const bx = 16 * (cx - view.cx0);
+      const bz = 16 * (cz - view.cz0);
+      for (let sy = 0; sy < 24; sy++) {
+        const cave = col.sectionCave(sy);
+        const blocks = col.sectionBlocks(sy);
+        for (let ly = 0; ly < 16; ly++) {
+          const y = 16 * sy - 64 + ly;
+          for (let lz = 0; lz < 16; lz++) {
+            const row = ((y + 64) * D + bz + lz) * W + bx;
+            for (let lx = 0; lx < 16; lx++) {
+              const i = ly * 256 + lz * 16 + lx;
+              const tag = typeof cave === 'number' ? cave : cave[i]!;
+              const kind = tag >= 6 && tag <= 8 ? tag : 0;
+              if (kind !== 0) carved++;
+              const want = ref[row + lx]!;
+              if (kind !== want) {
+                mismatches++;
+                if (examples.length < 10) examples.push(`(${16 * cx + lx}, ${y}, ${16 * cz + lz}) stored ${tag}, reference ${want}`);
+              }
+              if (capY !== null) {
+                if (y >= capY && tag !== 0) capAir++;
+                const block = typeof blocks === 'number' ? blocks : blocks[i]!;
+                if (y >= 181 && block !== AIR) islandVoxels++;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return { mismatches, carved, capAir, islandVoxels, examples };
+}
+
+/** The y from which the floating_islands region holds no cave air (§10.1's `islandCapAir`). */
+export const CAP_AIR_Y = 176;
+
+// ---------------------------------------------------------------- across threads (SP6b spec §13 L6)
+
+/**
+ * The buffers of the typed arrays that `counts` (a region's counts, or an object or array of them) holds, once each,
+ * for a worker's transfer list. Throws when a typed array is a view on part of its buffer (moving the buffer would take
+ * more than the counts) or on a SharedArrayBuffer (which is shared, never moved).
+ */
+export function countsTransfer(counts: unknown): ArrayBuffer[] {
+  const out = new Set<ArrayBuffer>();
+  const walk = (v: unknown, path: string): void => {
+    if (v === null || typeof v !== 'object') return;
+    if (ArrayBuffer.isView(v)) {
+      if (!(v.buffer instanceof ArrayBuffer) || v.byteOffset !== 0 || v.byteLength !== v.buffer.byteLength) {
+        throw new Error(`countsTransfer: ${path} does not own its whole ArrayBuffer`);
+      }
+      out.add(v.buffer);
+      return;
+    }
+    for (const [k, x] of Object.entries(v)) walk(x, `${path}.${k}`);
+  };
+  walk(counts, 'counts');
+  return [...out];
 }

@@ -1,19 +1,22 @@
 import { fileURLToPath } from 'node:url';
-import { describe, expect, test } from 'vitest';
+import { beforeAll, describe, expect, test } from 'vitest';
 import { CAVE_KIND } from '../../src/core/constants';
+import { resolveProfile } from '../../src/core/params/profiles';
 import type { CarverPath } from '../../src/gen/caves/carvers';
 import {
   aperiodicCounts, aperiodicity, aperiodicLags, bandCounts, bandsMin, borderPlaneRatio, c1c6Parts, C1_C6_PARTS, c7c9Parts,
-  C7_C9_PARTS, caveC7C9Counts, caveComponents, caveExamples, caveRegionCounts, COMP_Y_MIN, emptyCaveGrid, flatWallCounts, flatWallDetail,
+  C7_C9_PARTS, caveC7C9Counts, caveComponents, caveExamples, caveRegionCounts, COMP_Y_MIN, countsTransfer, emptyCaveGrid, flatWallCounts, flatWallDetail,
   floorCounts, floorPeak, GRID_H, GRID_Y0, jensenShannon, kindCounts, landCounts, largestCounts, latticeBias, layerCounts,
   localThickness, logSd, median, nearestEntranceDistances, openingMask, percentile, PILLAR_AREA_MAX, PILLAR_BACK, pillarTiles, PILLAR_VIEW, preCaveTops, ravineCounts,
   setCell, skyCounts, surfaceCounts, switchWall, switchWallCounts, thinnestAxes, typeMixDivergences, verticalStep, verticalStepDetail,
   voidCounts,
   wallResidues, waterWallCount, type CaveGrid,
 } from '../harness/caveMetrics';
-import { caveGroupOf, caveSites } from '../harness/caveSites';
+import { measureCaveRegion, type CaveRegionResult } from '../harness/caveRegionWorker';
+import { caveGroupOf, caveSites, measureCaveRegions } from '../harness/caveSites';
 import { components3d } from '../harness/flood';
 import { coverageErrors, findMetricCalls } from '../harness/metric';
+import { genRegion } from '../harness/region';
 
 const K = CAVE_KIND;
 
@@ -840,5 +843,76 @@ describe('the caves metric by group (SP6b spec §13 L4: `METRICS_CAVE_GROUPS`)',
       'C9:entrancesMax|thinRoof:C9.default',
     ]);
     expect(coverageErrors(calls)).toEqual([]);
+  });
+});
+
+describe("the caves metric's regions in worker threads (SP6b spec §13 L6, ruling P6)", () => {
+  /** The two fast regions (seed '42', default, 16 × 16). */
+  const SITES = caveSites('fast', null);
+  /** C7.switchWall's stride on fast (`caves.metric.ts`' SWITCH_STRIDE). */
+  const STRIDE = 2;
+  const OPTS = { stride: STRIDE, regionWorkerDir: 'cavesMetricRegionWorker', workerDir: 'cavesMetricMeasureWorker' };
+  const inProcess: CaveRegionResult[] = [];
+  let one: CaveRegionResult[] = [];
+  let four: CaveRegionResult[] = [];
+
+  beforeAll(async () => {
+    for (const s of SITES) {
+      const params = resolveProfile(s.profile);
+      const { view } = await genRegion({
+        seed: s.seed, params, cx0: s.cx0, cz0: s.cz0, w: s.size, h: s.size, upTo: 'T', order: 'spiral', threads: 4,
+        cache: true, workerDir: OPTS.regionWorkerDir, debugTags: true,
+      });
+      inProcess.push(measureCaveRegion(view, s, params, STRIDE));
+    }
+    one = await measureCaveRegions(SITES, { ...OPTS, workers: 1 });
+    four = await measureCaveRegions(SITES, { ...OPTS, workers: 4 });
+  }, 900_000);
+
+  test('per-region counts in a worker equal the in-process ones: CaveRegionCounts, CaveC7C9Counts, the poses and referenceCarve\'s counts', () => {
+    expect(SITES.map((s) => `${s.profile} ${s.size}`)).toEqual(['default 16', 'default 16']);
+    for (const [k, s] of SITES.entries()) {
+      const ref = inProcess[k]!;
+      // Not vacuous: a default region has C1-C6's counts and the poses, carved voxels, and no carver mismatch.
+      expect(ref.c16, s.label).not.toBeNull();
+      expect(ref.examples, s.label).not.toBeNull();
+      expect(ref.carver.carved, s.label).toBeGreaterThan(0);
+      expect(ref.carver.examples, s.label).toEqual([]);
+      for (const [n, got] of [[1, one[k]!], [4, four[k]!]] as const) {
+        expect(got.c16, `${s.label}, ${n} worker(s)`).toEqual(ref.c16);
+        expect(got.c79, `${s.label}, ${n} worker(s)`).toEqual(ref.c79);
+        expect(got.examples, `${s.label}, ${n} worker(s)`).toEqual(ref.examples);
+        expect(got.carver, `${s.label}, ${n} worker(s)`).toEqual(ref.carver);
+        // The timings differ by run; their fields do not.
+        expect(Object.keys(got.ms)).toEqual(Object.keys(ref.ms));
+        for (const v of Object.values(got.ms)) expect(Number.isFinite(v) && v >= 0).toBe(true);
+      }
+    }
+  });
+
+  test('pooled C1-C9 values are equal with 1 and 4 workers (and in process)', () => {
+    const pooled = (rs: readonly CaveRegionResult[]) => ({
+      c16: c1c6Parts(rs.map((r, k) => ({ profile: SITES[k]!.profile, counts: r.c16! }))),
+      c79: c7c9Parts(rs.map((r, k) => ({ group: 'default', full: SITES[k]!.size === 32, counts: r.c79 }))),
+    });
+    const ref = pooled(inProcess);
+    // Fast's two regions give every C1-C6 part a value (caves.metric.ts' NAN_ON_FAST is empty).
+    for (const p of C1_C6_PARTS) expect(Number.isFinite(ref.c16[p]), p).toBe(true);
+    expect(pooled(one)).toEqual(ref);
+    expect(pooled(four)).toEqual(ref);
+  });
+
+  test('measureCaveRegions takes an integer ≥ 1 of workers', async () => {
+    await expect(measureCaveRegions(SITES, { ...OPTS, workers: 0 })).rejects.toThrow('measureCaveRegions: workers 0 (an integer ≥ 1)');
+    await expect(measureCaveRegions(SITES, { ...OPTS, workers: 1.5 })).rejects.toThrow(RangeError);
+    await expect(measureCaveRegions([], OPTS)).resolves.toEqual([]);
+  });
+
+  test('countsTransfer lists each typed array\'s buffer once and refuses a view on part of a buffer', () => {
+    const a = new Float64Array(4);
+    const b = new Uint8Array(3);
+    expect(countsTransfer({ x: 1, a, nested: { list: [a, b], s: 'x' }, none: null })).toEqual([a.buffer, b.buffer]);
+    expect(() => countsTransfer({ v: new Float64Array(8).subarray(2) })).toThrow('countsTransfer: counts.v does not own its whole ArrayBuffer');
+    expect(() => countsTransfer([new Int32Array(new SharedArrayBuffer(16))])).toThrow('countsTransfer: counts.0 does not own its whole ArrayBuffer');
   });
 });

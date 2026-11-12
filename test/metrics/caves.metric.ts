@@ -4,22 +4,18 @@ import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { CARVER_WINDOW_R } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
-import { resolveProfile } from '../../src/core/params/profiles';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
 import { carverPath, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
-import { AIR } from '../../src/world/blocks/index';
 import {
-  aperiodicRatios, bandDetail, borderPlaneRatio, C1_C6_PARTS, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, caveC7C9Counts,
-  caveComponents, caveExamples, caveGridOf, caveRegionCounts, emptyBandCounts, emptyLayerCounts, emptyWallResidues, EXAMPLE_IDS,
-  GRID_H, GRID_Y0, landMask, localThickness, preCaveTops, ravinePathsOf, riverMaskOf, verticalStepDetail, wetMask,
-  type C1C6Part, type C7C9Part, type CaveC7C9Counts, type CavePose, type CaveRegionCounts, type ExampleId,
+  aperiodicRatios, bandDetail, borderPlaneRatio, C1_C6_PARTS, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, emptyBandCounts,
+  emptyLayerCounts, emptyWallResidues, EXAMPLE_IDS, GRID_H, GRID_Y0, verticalStepDetail,
+  type C1C6Part, type C7C9Part, type CaveC7C9Counts, type CavePose, type CaveRegionCounts,
 } from '../harness/caveMetrics';
+import type { CaveRegionResult } from '../harness/caveRegionWorker';
 import { CARVER_DEFAULTS, CARVER_MAXIMA } from '../harness/carverParams';
-import { caveGroupOf, caveSites, type Site } from '../harness/caveSites';
+import { caveGroupOf, caveSites, measureCaveRegions, type Site } from '../harness/caveSites';
 import { metricTest } from '../harness/metric';
-import { referenceCarve } from '../harness/refs';
-import { genRegion, type RegionView } from '../harness/region';
 
 /**
  * The caves' metrics (SP6a spec §10.1, D26), over harness regions up to 'T' with the tag read from the store
@@ -61,14 +57,17 @@ import { genRegion, type RegionView } from '../harness/region';
  * the floating_islands region's island voxels (non-air at y ≥ 181, so the cap has islands to protect).
  *
  * C1-C6 (D26: tuning parts, gated from Task 38 at their bounds, `test/thresholds.ts`): the tests 'C1' … 'C6' below,
- * over the default regions only (`defaultSites`), with the instruments of `test/harness/caveMetrics.ts`.
+ * over the default regions only (the default and large_biomes profiles), with the instruments of
+ * `test/harness/caveMetrics.ts`.
  *
  * C7's tuning parts, C8 and C9 (D26: gated from Task 38): the 'C7' tests `C7.tuning` and `C7.default`, 'C8', and the
  * 'C9' tests `C9` and `C9.default`, over every region of the run's groups (the default group: default and
  * large_biomes; and each preset's), with the definitions as built in `caveMetrics.ts`; with the default group their
  * measurement also writes `.out/caves.examples.json`, the review poses at seed '42' (§10.1, §10.10, D16).
- * `C8.largeShare` is recorded, not gated (ruling R21). Each region is measured once for every test (`measure`: one
- * grid, one set of components), and each group of parts once (`c1c6`, `c7c9`: the first test to ask takes it).
+ * `C8.largeShare` is recorded, not gated (ruling R21). Each region is measured once for every test, C7's construction
+ * counts included (`measureRegions`: one grid, one set of components; SP6b spec §13 L6: per region in 4 worker threads,
+ * `test/harness/caveRegionWorker.ts`, with `regionCounts` against `referenceCarve` there, ruling P6), and this thread
+ * pools each group of parts once (`carvers`, `c1c6`, `c7c9`: the first test to ask takes it).
  */
 type Tier = 'fast' | 'quick' | 'full';
 const TIER = (process.env.METRICS_TIER ?? 'fast') as Tier;
@@ -84,8 +83,6 @@ const PRESETS_GROUP = GROUP === null || GROUP === 'presets';
 let sitesMemo: Site[] | null = null;
 /** Every region of the run's groups: the default regions, then the preset regions. */
 const sites = (): Site[] => (sitesMemo ??= caveSites(TIER, GROUP));
-/** The tier's default regions (the default and large_biomes profiles), where the default parts (C1-C6) run. */
-const defaultSites = (): Site[] => sites().filter((s) => s.profile === 'default' || s.profile === 'large_biomes');
 
 // ---------------------------------------------------------------- the pure parts
 
@@ -245,64 +242,6 @@ function endTaper(src: Int32Array): { bad: number; ends: number; rooms: number; 
 
 // ---------------------------------------------------------------- the region parts
 
-/** A column's set in the view: its final set at Decorated or above, else its proto set. */
-function columnOf(view: RegionView, cx: number, cz: number) {
-  const c = view.store.final(cx, cz) ?? view.store.proto(cx, cz);
-  if (c === null) throw new Error(`caves.metric: column (${cx}, ${cz}) has no set`);
-  return c;
-}
-
-/**
- * The voxels of the region whose store carver kind (the tag when 6-8, else 0) differs from `ref`'s, the carver-tagged
- * voxels, and with `capY` the tagged voxels at y ≥ capY and the non-air voxels at y ≥ 181.
- */
-function regionCounts(view: RegionView, ref: Uint8Array, capY: number | null): { mismatches: number; carved: number; capAir: number; islandVoxels: number; examples: string[] } {
-  const W = 16 * view.w;
-  const D = 16 * view.h;
-  let mismatches = 0;
-  let carved = 0;
-  let capAir = 0;
-  let islandVoxels = 0;
-  const examples: string[] = [];
-  for (let cz = view.cz0; cz < view.cz0 + view.h; cz++) {
-    for (let cx = view.cx0; cx < view.cx0 + view.w; cx++) {
-      const col = columnOf(view, cx, cz);
-      const bx = 16 * (cx - view.cx0);
-      const bz = 16 * (cz - view.cz0);
-      for (let sy = 0; sy < 24; sy++) {
-        const cave = col.sectionCave(sy);
-        const blocks = col.sectionBlocks(sy);
-        for (let ly = 0; ly < 16; ly++) {
-          const y = 16 * sy - 64 + ly;
-          for (let lz = 0; lz < 16; lz++) {
-            const row = ((y + 64) * D + bz + lz) * W + bx;
-            for (let lx = 0; lx < 16; lx++) {
-              const i = ly * 256 + lz * 16 + lx;
-              const tag = typeof cave === 'number' ? cave : cave[i]!;
-              const kind = tag >= 6 && tag <= 8 ? tag : 0;
-              if (kind !== 0) carved++;
-              const want = ref[row + lx]!;
-              if (kind !== want) {
-                mismatches++;
-                if (examples.length < 10) examples.push(`(${16 * cx + lx}, ${y}, ${16 * cz + lz}) stored ${tag}, reference ${want}`);
-              }
-              if (capY !== null) {
-                if (y >= capY && tag !== 0) capAir++;
-                const block = typeof blocks === 'number' ? blocks : blocks[i]!;
-                if (y >= 181 && block !== AIR) islandVoxels++;
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  return { mismatches, carved, capAir, islandVoxels, examples };
-}
-
-/** The y from which the floating_islands region holds no cave air (§10.1's `islandCapAir`). */
-const CAP_AIR_Y = 176;
-
 /** The region parts of C7's construction over the run's regions: `carverReference`'s counts and the island cap's. */
 interface CarverCounts { readonly regions: number; readonly mismatches: number; readonly carved: number; readonly capAir: number; readonly islandVoxels: number }
 
@@ -311,15 +250,9 @@ async function measureCarvers(): Promise<CarverCounts> {
   let carved = 0;
   let capAir = Number.NaN;
   let islandVoxels = Number.NaN;
-  const all = sites();
-  for (const s of all) {
-    const params = resolveProfile(s.profile);
-    const { view } = await genRegion({
-      seed: s.seed, params, cx0: s.cx0, cz0: s.cz0, w: s.size, h: s.size, upTo: 'T', order: 'spiral', threads: 4,
-      cache: true, workerDir: `cavesRegionWorker-${TIER}`,
-    });
+  const all = await measuredRegions();
+  for (const { site: s, carver: c } of all) {
     const island = s.profile === 'floating_islands';
-    const c = regionCounts(view, referenceCarve(view, s.seed, params), island ? CAP_AIR_Y : null);
     expect(c.examples, `C7.carverReference at ${s.label}`).toEqual([]);
     // Each region holds carved voxels, so the comparison is not vacuous.
     expect(c.carved, `carver-tagged voxels at ${s.label}`).toBeGreaterThan(0);
@@ -339,11 +272,12 @@ let carverRun: Promise<CarverCounts> | null = null;
 /** The region parts of C7's construction, measured once (the first test to ask). */
 const carvers = (): Promise<CarverCounts> => (carverRun ??= measureCarvers());
 
-// `carverReference` over the run's regions (every group: max 0 per region, so the jobs' sum is the unsplit value).
+// `carverReference` over the run's regions (every group: max 0 per region, so the jobs' sum is the unsplit value). The
+// first test: it measures every region (its timeout covers them).
 metricTest('C7', ['carverReference'], async () => {
   const c = await carvers();
   return { carverReference: c.mismatches, regions: c.regions, carverVoxels: c.carved };
-});
+}, 900_000);
 
 // The pure parts and the island cap, with the presets group (or every group).
 if (PRESETS_GROUP) {
@@ -376,57 +310,33 @@ const OUT_DIR = fileURLToPath(new URL('./.out/', import.meta.url));
 /** C7.switchWall's chunk stride: the T of every 2nd chunk's columns in x and z on fast, every 4th on quick and full. */
 const SWITCH_STRIDE = pick(2, 4, 4);
 
-/** One region's measurements: C1-C6 (the default group only), C7-C9, and at seed '42' default the review poses. */
-interface Measured {
+/**
+ * One region's measurements (`caveRegionWorker.ts`' `CaveRegionResult`): C1-C6 (the default group only), C7-C9, at
+ * seed '42' default the review poses, and C7's construction counts.
+ */
+interface Measured extends CaveRegionResult {
   readonly site: Site;
-  readonly c16: CaveRegionCounts | null;
-  readonly c79: CaveC7C9Counts;
-  readonly examples: Record<ExampleId, CavePose | null> | null;
-  /** The ms of the shared grid and components, of C1-C6 (with the thickness), of C7-C9, of the poses. */
-  readonly ms: { shared: number; c16: number; c79: number; examples: number };
 }
-
-/** The measured regions by label: each region is measured once, by whichever test asks first. */
-const MEASURED = new Map<string, Measured>();
 
 /** The group of C7-C9's "default and presets": 'default' for the default and large_biomes profiles, else the preset. */
 const groupOf = (s: Site): string => (s.profile === 'default' || s.profile === 'large_biomes' ? 'default' : s.profile);
 
-async function measure(s: Site): Promise<Measured> {
-  const done = MEASURED.get(s.label);
-  if (done !== undefined) return done;
-  const params = resolveProfile(s.profile);
-  const { view } = await genRegion({
-    seed: s.seed, params, cx0: s.cx0, cz0: s.cz0, w: s.size, h: s.size, upTo: 'T', order: 'spiral', threads: 4,
-    cache: true, workerDir: `cavesRegionWorker-${TIER}`, debugTags: true,
+/**
+ * Every region of the run's groups measured once (SP6b spec §13 L6): per region in 4 worker threads
+ * (`measureCaveRegions`, `test/harness/caveSites.ts`), each reading the store this thread filled from the region's
+ * cached dump (or generated and dumped); this thread pools (`measureCarvers`, `measureC1C6`, `measureC7C9`).
+ */
+async function measureRegions(): Promise<Measured[]> {
+  const all = sites();
+  const results = await measureCaveRegions(all, {
+    stride: SWITCH_STRIDE, regionWorkerDir: `cavesRegionWorker-${TIER}`, workerDir: `cavesMeasureWorker-${TIER}`,
   });
-  const isDefault = groupOf(s) === 'default';
-  const t0 = performance.now();
-  const grid = caveGridOf(view);
-  const tops = preCaveTops(grid);
-  const c = caveComponents(grid, tops);
-  const t1 = performance.now();
-  const pillar = (x: number, y: number, z: number): boolean => view.pillar(x, y, z);
-  const thick = isDefault ? localThickness(c, grid.w, grid.d) : null;
-  const c16 = isDefault ? caveRegionCounts(grid, pillar, ravinePathsOf(grid, s.seed, params), 128, { tops, c, thick }) : null;
-  const t2 = performance.now();
-  const land = landMask(grid);
-  const river = riverMaskOf(grid, s.seed, params);
-  const eligible = land.map((v, p) => (v === 1 && river[p] === 0 ? 1 : 0));
-  const c79 = caveC7C9Counts(grid, tops, c, {
-    T: isDefault ? (x, y, z) => view.terrainT(x, y, z) : null, stride: SWITCH_STRIDE, eligible,
-    seaFloor: s.profile === 'archipelago' ? wetMask(grid) : null,
-  });
-  const t3 = performance.now();
-  const examples = s.seed === '42' && s.profile === 'default' ? caveExamples(grid, tops, c, thick, pillar) : null;
-  const t4 = performance.now();
-  const m: Measured = {
-    site: s, c16, c79, examples,
-    ms: { shared: Math.round(t1 - t0), c16: Math.round(t2 - t1), c79: Math.round(t3 - t2), examples: Math.round(t4 - t3) },
-  };
-  MEASURED.set(s.label, m);
-  return m;
+  return all.map((site, k) => ({ site, ...results[k]! }));
 }
+
+let measuredRun: Promise<Measured[]> | null = null;
+/** The run's regions, measured once (the first test to ask). */
+const measuredRegions = (): Promise<Measured[]> => (measuredRun ??= measureRegions());
 
 /** JSON with every non-finite number written as its string ("NaN"). */
 const json = (v: unknown): string => `${JSON.stringify(v, (_, x: unknown) => (typeof x === 'number' && !Number.isFinite(x) ? String(x) : x), 2)}\n`;
@@ -445,11 +355,9 @@ const NAN_ON_FAST: readonly string[] = [];
  * region its counts' summary. Every part is finite (fast: or listed in `NAN_ON_FAST`).
  */
 async function measureC1C6(): Promise<Record<C1C6Part, number>> {
-  const measured: Array<{ site: Site; counts: CaveRegionCounts; ms: number }> = [];
-  for (const s of defaultSites()) {
-    const m = await measure(s);
-    measured.push({ site: s, counts: m.c16!, ms: m.ms.shared + m.ms.c16 });
-  }
+  const measured: Array<{ site: Site; counts: CaveRegionCounts; ms: number }> = (await measuredRegions())
+    .filter((m) => groupOf(m.site) === 'default')
+    .map((m) => ({ site: m.site, counts: m.c16!, ms: m.ms.shared + m.ms.c16 }));
   const parts = c1c6Parts(measured.map((m) => ({ profile: m.site.profile, counts: m.counts })));
   const profiles = [...new Set(measured.map((m) => m.site.profile))];
   const perProfile = Object.fromEntries(profiles.map((p) => [p, c1c6Parts(measured.filter((m) => m.site.profile === p).map((m) => ({ profile: p, counts: m.counts })))]));
@@ -520,8 +428,7 @@ const C79_GATED: readonly C7C9Part[] = C7_C9_PARTS.filter((p) => DEFAULT_GROUP
  * default group every pose found.
  */
 async function measureC7C9(): Promise<Record<C7C9Part, number>> {
-  const measured: Measured[] = [];
-  for (const s of sites()) measured.push(await measure(s));
+  const measured = await measuredRegions();
   const regions = measured.map((m) => ({ group: groupOf(m.site), full: m.site.size === 32, counts: m.c79 }));
   const parts = c7c9Parts(regions);
   const nan = C7_C9_PARTS.filter((p) => Number.isNaN(parts[p]));
