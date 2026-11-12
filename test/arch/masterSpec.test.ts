@@ -2511,6 +2511,22 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(sp6b.startsWith('**SP6b — Cave biomes** (XL; SP6a). Spec: `2026-11-12-sp6b-cave-biomes-design.md`.'), 'the SP6b header').toBe(true);
   });
 
+  /** [§1 entry head, the token its entry holds, the file on disk]; each later task that creates a module appends its row. */
+  const SP6B_MODULES: Array<[head: RegExp, token: string, file: string]> = [
+    [/^\s+biomes\/registry\.ts /, 'caveRegistry.ts cavePicker.ts (SP6b)', 'src/gen/biomes/caveRegistry.ts'],
+    [/^\s+biomes\/registry\.ts /, 'cavePicker.ts', 'src/gen/biomes/cavePicker.ts'],
+  ];
+
+  test('§1 names each SP6b module in its entry, which exists (SP6b spec §15 item 6)', () => {
+    expect(SP6B_MODULES.length, 'SP6B_MODULES has no rows').toBeGreaterThan(0);
+    for (const [head, token, file] of SP6B_MODULES) {
+      const entry = layoutEntry(head);
+      expect(entry, `§1 has no entry matching ${head}`).not.toBe('');
+      expect(entry, `§1's ${head} entry does not name ${token}`).toContain(token);
+      expect(existsSync(`${ROOT_DIR}${file}`), `${file} does not exist`).toBe(true);
+    }
+  });
+
   test('§1\'s metrics entry and "Banned APIs" name sp6bGoldens.ts (the sp6b.* goldens), which exists (SP6b spec §15 item 6)', () => {
     const entry = layoutEntry(/^\s+metrics\/\*\.ts\s/);
     expect(entry).toContain('SP6a: sp6aGoldens.ts, the sp6a.* goldens;');

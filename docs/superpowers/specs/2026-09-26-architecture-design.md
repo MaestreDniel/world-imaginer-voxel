@@ -130,7 +130,7 @@ world-imaginer-voxel/          (repository root)
                                 the slice sample geometry (the vertical points injected from metrics/crossSection.ts's
                                 segmentPointAt), the horizontal planes' corner samples (columnStage.ts's buildCornerSample) and
                                 their per-part memo
-      biomes/registry.ts picker.ts zoom.ts
+      biomes/registry.ts picker.ts zoom.ts caveRegistry.ts cavePicker.ts (SP6b)
       surface/rules.ts conditions.ts compile.ts reference.ts scan.ts bands.ts pass.ts context.ts probe.ts source.ts
                                 (SP3c: the rule model and validateRules, the per-condition helpers shared by the compiler and the
                                 reference evaluator, the badlands band table, surfacePass (the T stage's and the bench's code path),
