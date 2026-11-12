@@ -781,6 +781,49 @@ Ids are recon-obligations' (§1a E, §1b R, §1c U, §2 M, §3 A, §5 K); "→ X
 
 (Filled during and at the exit: the CI work item's runs (job tables, walls, runner minutes) per step; D25's generator checkpoint — B3 per window and band, the abyss's air with and without the floor, `terrain.real` and `terrain.islands` p50/p99, `caveBiome.column`, C1, C4's lowest band, C5's thinnest, the cave channel's shared memory, the levers applied; D25's culling checkpoint — `R3.culledUnderground`, the walk's cost, the lever if applied; the golden diff of the generator push against its base; `cave_heavy`'s cheese offset and its C1, C2, C9; the bench; L13 and L14 in Chrome and the user's Firefox run; the review links and screenshots; the production check; the user's check.)
 
+### The CI work item (Tasks 2-6)
+
+**Done at Stage 1 (Task 5; §13's rule): two consecutive green cold runs at 5:10 and 5:17, both ≤ 5 min 30 s, so Stage 2 does not join the work item (Task 6 skipped).** Every run is on `sp6b/cave-biomes`. L1-L4 are at 596796b (Task 2). L5 is at 7b00c74 (Task 3), pushed with L6 at 27d50c9 (Task 4), whose run 43277407950 is cold runs 1 and 2. A cold run is one whose `regions-*` caches miss, as each caves job's log names (`Cache not found for input keys: regions-Linux-metrics-quick-caves-09fc3bde…`). Each attempt's wall runs from its start (creation for #1) to its last job's end. Runner minutes are the sum of the job times.
+
+- **596796b, run 43258036521 #1** (cold: L1-L4 change `test/harness/**`): 16:22:58 → 16:29:00Z, wall 6:02, green. Long pole `metrics-quick (surface-large)` 5:43.
+- **596796b, run 43258036521 #2** (warm re-run): 5:01, green. Long pole `unit (rest)` 4:41.
+- **27d50c9, run 43277407950 #1: cold run 1** (L5 and L6 change `test/harness/**`, so every `regions-*` key missed): 18:12:27 → 18:17:37Z, wall **5:10**, green. Long pole `metrics-quick (rest)` 4:52.
+- **27d50c9, run 43277407950 #2** (warm re-run, every saved `regions-*` cache hit): 18:24:42 → 18:30:40Z, wall 5:58, green. Long pole `unit (rest)` 5:39.
+- **27d50c9, run 43277407950 #3: cold run 2** (made cold by deleting the run's six `regions-*` caches, key hash `09fc3bde…`: `metrics-fast-{caves,rest}`, `metrics-quick-{caves,caves-presets,render,rest}`, then `gh run rerun`; every key missed again): 18:31:32 → 18:36:49Z, wall **5:17**, green. Long pole `metrics-quick (rest)` 4:58.
+- **27d50c9, run 43277407950 #4** (warm re-run): 18:37:42 → 18:43:45Z, wall 6:03, green. Long pole `unit (rest)` 5:44.
+
+| job | §13 expected | 43258036521 #1 (cold) | #2 (warm) | 43277407950 #1 (cold 1) | #2 (warm) | #3 (cold 2) | #4 (warm) |
+|---|---|---|---|---|---|---|---|
+| wall | ≤ 5:30 cold | **6:02** | 5:01 | **5:10** | 5:58 | **5:17** | 6:03 |
+| runner minutes | 54-59 | 56.2 | 51.0 | 50.6 | 51.7 | 50.2 | 49.3 |
+| `metrics-quick (terrain-large)` | 2:50-5:00 | 4:28 | 4:32 | 4:06 | 4:04 | 4:09 | 4:14 |
+| `metrics-quick (terrain-default)` | 2:50-4:15 | 1:57 | 2:03 | 2:22 | 2:23 | 2:29 | 2:02 |
+| `metrics-quick (surface-large)` | 2:50-4:55 | 5:43 | 3:33 | 4:21 | 5:25 | 3:07 | 3:24 |
+| `metrics-quick (surface-default)` | 1:15-2:15 | 1:12 | 1:26 | 1:34 | 1:04 | 1:52 | 1:04 |
+| `metrics-quick (caves)` | cold 3:00-3:35 | 3:05 | 3:46 | 2:16 | 1:07 | 2:13 | 1:48 |
+| `metrics-quick (caves-presets)` | cold 2:20-3:55 | 1:39 | 1:50 | 1:46 | 0:58 | 1:38 | 1:08 |
+| `metrics-quick (rest)` | up to ~4:35 | 5:04 | 3:41 | 4:52 | 4:34 | 4:58 | 3:20 |
+| `metrics-quick (render)` | up to ~4:35 | 2:42 | 2:16 | 1:43 | 1:18 | 2:19 | 2:18 |
+| `metrics-quick (edit)` | up to ~4:35 | 1:54 | 1:47 | 1:49 | 1:45 | 2:17 | 2:12 |
+| `metrics-quick (persist)` | up to ~4:35 | 3:01 | 2:57 | 2:24 | 2:22 | 2:29 | 2:25 |
+| `metrics-quick (clipboard)` | up to ~4:35 | 1:40 | 1:36 | 1:20 | 2:11 | 2:11 | 1:16 |
+| `metrics-fast (terrain)` | up to ~4:35 | 3:47 | 3:35 | 2:15 | 3:57 | 3:51 | 3:42 |
+| `metrics-fast (surface)` | up to ~4:35 | 3:39 | 2:00 | 3:28 | 3:31 | 1:59 | 3:40 |
+| `metrics-fast (caves)` | up to ~4:35 | 1:16 | 0:44 | 0:56 | 0:50 | 1:05 | 0:39 |
+| `metrics-fast (rest)` | up to ~4:35 | 2:31 | 2:38 | 4:29 | 3:19 | 2:35 | 3:22 |
+| `unit (heavy)` | up to ~4:35 | 4:17 | 4:09 | 4:08 | 4:15 | 3:45 | 3:13 |
+| `unit (rest)` | up to ~4:35 | 4:24 | 4:41 | 3:06 | 5:39 | 3:30 | 5:44 |
+| `check` | up to ~4:35 | 3:41 | 3:38 | 3:33 | 2:51 | 3:36 | 3:37 |
+| `changes` | | 0:08 | 0:08 | 0:07 | 0:06 | 0:07 | 0:06 |
+| `ci-ok` | | 0:03 | 0:02 | 0:03 | 0:02 | 0:03 | 0:02 |
+
+- **Against §13's expectations.** After L6 the caves jobs run cold at 2:13-2:16 (`caves`) and 1:38-1:46 (`caves-presets`), below the expected cold ranges. `terrain-default` (1:57-2:29) runs below its range. `terrain-large`, `surface-large` and `surface-default` fall inside theirs on both cold runs after L6. Runner minutes are 50.2-50.6 against the expected 54-59. Above "the unchanged jobs up to about 4:35":
+  - `metrics-quick (rest)` (4:52 and 4:58 cold) is now the cold long pole.
+  - `unit (rest)` reaches 5:39 and 5:44 on the two warm re-runs, and the unit jobs restore no region cache. #3 and #4 ran the same 289 files and 5,626 tests, with vitest's duration at 199 s in #3 and 328 s in #4. Each of the nine files over 10 s in both ran 1.5-1.9 × slower in #4, so the runner was slower (±45 %, §13). `cavesMetric.test.ts` (Task 4's worker test, which generates the two fast regions itself) took 61 s in #3 and 105 s in #4. This bears on the 6:00 exit bound (Task 58), not on this rule.
+- **Cache misses.** Runs #1 and #3 missed every `regions-*` key (the caves, caves-presets, render and rest jobs of both tiers saved theirs). Runs #2 and #4 hit those six. `edit`, `persist` and `clipboard` miss on every run because they save no cache, as before. The terrain and surface jobs no longer run a region-cache step (L1-L4's cleanup).
+- **The account.** `gh api user --jq .plan` reads null: the plan needs the `user` scope, and the CLI token holds `gist`, `read:org` and `repo`. The repository is public. In all six attempts the 18 test jobs (`check`, 2 unit, 4 metrics-fast, 11 metrics-quick) started within 1 s of each other, so the concurrent limit is at least 18. 18 ≤ 20, the Free plan's limit, which is the lowest one.
+- **C4 and C7 before-values** (ruling P21; Task 4's local quick run at 27d50c9, `METRICS_TIER=quick METRICS_CAVE_GROUPS=<group>`, which are also the push base's values since no output has changed): C4's lowest band (y0 −56) carve rate 0.0849682 on default and 0.0886095 on large_biomes; C4.bands 0.0788569; C4.floorPeak 0.0138940; C7.flatWallShare 0.0305727 on default, 0.0248378 on archipelago, 0.0297897 on amplified and 0.0278583 on floating_islands.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
