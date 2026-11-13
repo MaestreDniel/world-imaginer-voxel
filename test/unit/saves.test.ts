@@ -513,7 +513,11 @@ describe('GV7 worlds (schema 3) and the user\'s check\'s migration (R31, R32; SP
   test.each(KINDS)('the %s world holding SP6a\'s built-in tree opens with today\'s tree and today\'s noodles (0.22, 48, threshold 1)', (kind) => {
     const p = loadParams(gv7(kind, sp6aTrees()[kind]));
     if (!p.ok) throw new Error(JSON.stringify(p.issues));
-    expect(canonicalJSON(p.value)).toBe(canonicalJSON(resolveProfile(kind)));
+    // SP6b ruling R10 (Task 19): the stored noodle minY −60 stays (no remap in 4 → 5); it generates the same world as
+    // today's −55, which the rock floor shadows.
+    const want = JSON.parse(canonicalJSON(resolveProfile(kind))) as Record<string, any>;
+    want['caves'].noodles.minY = -60;
+    expect(canonicalJSON(p.value)).toBe(canonicalJSON(want));
   });
 
   test.each(KINDS)('the %s world holding an edited tree keeps it and its stored SP6a noodles (0.11, 64), the threshold the profile\'s 1', (kind) => {

@@ -82,7 +82,21 @@ const waterDepth = (): JsonValue => param('caves.limits.waterDepth');
 /** capTop = `caves.limits.capTop` (180 … 344; the default 344, above the world's top y 319, has no effect while bandSpan ≤ 16). */
 const capTop = (): JsonValue => param('caves.limits.capTop');
 /**
- * cap_f = G_f·min(1, g_f + g_w + g_i) + 128·min(1, h_f + h_i) (SP6a §1.4, D2, D7, D8), for the family whose depth band
+ * floorY = `caves.floor.y` + `caves.floor.amp`·|clamp(Nf, −3, 3)| (SP6b §5.2, D6): the rock floor's height, Nf the z2 of
+ * `caves.noises.floor` (COLUMN class: a slot reads it at its corners, the voxel level at the position), so floorY lies in
+ * y … y + 3·amp over every leaf value (−58 … −43 at the defaults).
+ */
+const floorY = (): JsonValue => add(param('caves.floor.y'), mul(param('caves.floor.amp'), abs(clamp(noise2('floor'), -3, 3))));
+/** s_b = `caves.floor.span`, the floor's gentle span (1 … 32 blocks). */
+const floorSpan = (): JsonValue => param('caves.floor.span');
+/**
+ * g_b = clamp((floorY + 8 + s_b − y)·(1/s_b), 0, 1), the rock floor's gentle part (SP6b §5.2, D6), written once as
+ * `defs.floorGentle` (ruling R11): the four slot caps read it at their corners (the reference's corner memo evaluates it
+ * once per corner, not once per cap) and the noodle's voxel-level cap at the voxel; the same doubles as written inline.
+ */
+const floorGentle = (): JsonValue => clamp(mul(add(add(add(floorY(), c(8)), floorSpan()), neg(y())), recip(floorSpan())), 0, 1);
+/**
+ * cap_f = G_f·min(1, g_f + g_w + g_i + g_b) + 128·min(1, h_f + h_i) (SP6a §1.4, D2, D7, D8; SP6b §5.2), for the family whose depth band
  * is `caves.<family>.minY` … `.maxY`, `d()` the depth below the terrain's own surface (`ref body` at a slot's corner,
  * `interpolated(ref body)` in the noodle's voxel-level cap):
  * - the depth band: g_f = clamp((minY − y)·(1/s), 0, 1) + clamp((y − maxY)·(1/s), 0, 1) rises from 0 to 1 over the s
@@ -90,10 +104,13 @@ const capTop = (): JsonValue => param('caves.limits.capTop');
  *   0, 1) over the next 8 (it closes: wherever h_f ≥ 1/2 the slot is ≥ −48 + 64 > 0 over every leaf value, the floor
  *   `fl` bounding the family below);
  * - the wet roof's gentle part: g_w = wet′·clamp((waterDepth + 8 + s − d)·(1/s), 0, 1) (D7); its steep part 128·h_w is
- *   added at voxel level, outside the slots (`wetSteep`);
+ *   added at voxel level, outside the slots (S_w in `steep`);
  * - the island cap: g_i = clamp((y − capTop + 8 + s)·(1/s), 0, 1), h_i = clamp((y − capTop + 8)·(1/8), 0, 1), so with
  *   capTop 180 (floating_islands) the families narrow over y 156 … 172 and every corner at y ≥ 176 has h_i ≥ 1/2: no
- *   noise cave air at y ≥ 176, below ISLAND_RUN_MIN_BOTTOM (D8). At the default 344 both are 0 at every corner (y ≤ 320) while bandSpan ≤ 16.
+ *   noise cave air at y ≥ 176, below ISLAND_RUN_MIN_BOTTOM (D8). At the default 344 both are 0 at every corner (y ≤ 320) while bandSpan ≤ 16;
+ * - the rock floor's gentle part (SP6b §5.2, D6): g_b = clamp((floorY + 8 + s_b − y)·(1/s_b), 0, 1) rises from 0 at
+ *   floorY + 8 + s_b to 1 at floorY + 8 (the family narrows), `ref floorGentle`; its steep part S_b is added at voxel
+ *   level (`steep`).
  * Written with `recip(param …)` and `y`, not `slide` knots: a knot's y is a literal or one ref and the knots must
  * increase over the refs' static ranges, which the overlapping minY / maxY ranges break.
  */
@@ -109,16 +126,20 @@ const cap = (family: keyof typeof CAP_GENTLE, d: () => JsonValue): JsonValue => 
   const gw = mul(wet(), clamp(mul(add(add(add(waterDepth(), c(8)), bandSpan()), neg(d())), recip(bandSpan())), 0, 1));
   const gi = clamp(mul(add(add(add(y(), neg(capTop())), c(8)), bandSpan()), recip(bandSpan())), 0, 1);
   const hi = clamp(mul(add(add(y(), neg(capTop())), c(8)), c(0.125)), 0, 1);
-  return add(mul(c(CAP_GENTLE[family]), min(c(1), add(add(g, gw), gi))), mul(c(128), min(c(1), add(h, hi))));
+  return add(mul(c(CAP_GENTLE[family]), min(c(1), add(add(add(g, gw), gi), ref('floorGentle')))), mul(c(128), min(c(1), add(h, hi))));
 };
 /**
- * S_w = 128·h_w, h_w = wet′·clamp((waterDepth + 8 − d)·(1/8), 0, 1), d = interpolated(ref body) (SP6a §1.4, D7): the wet
- * roof's steep part, at voxel level with wet′ read at the position, written once as `defs.wetSteep` and added to the caves
- * slot and to the noodle. S_w ≥ 0, so a voxel open with it is open without it. Wherever wet′ = 1 and d ≤ waterDepth + 4,
- * S_w ≥ 64 and both are > 0 (each is ≥ −48 below it).
+ * steep = S_w + S_b, the steep parts at voxel level, written once as `defs.steep` and added to the caves slot and to the
+ * noodle (SP6a §1.4, D7; SP6b §5.2, D6: `defs.wetSteep` became `defs.steep`, so the root's paths stay):
+ * - S_w = 128·h_w, h_w = wet′·clamp((waterDepth + 8 − d)·(1/8), 0, 1), d = interpolated(ref body): the wet roof's steep
+ *   part, with wet′ read at the position. Wherever wet′ = 1 and d ≤ waterDepth + 4, S_w ≥ 64;
+ * - S_b = 128·clamp((floorY + 8 − y)·(1/8), 0, 1): the rock floor's, with floorY read at the position. At y ≤ floorY + 4,
+ *   S_b ≥ 64 > F = 48, so no noise-family air lies there and none below `caves.floor.y` + 5 (floorY ≥ `caves.floor.y`).
+ * Both are ≥ 0, so a voxel open with them is open without them; where either is ≥ 64 both sums are > 0 (each is ≥ −48 below it).
  */
-const wetSteep = (): JsonValue =>
-  mul(c(128), mul(wet(), clamp(mul(add(add(waterDepth(), c(8)), neg(interpolated(body()))), c(0.125)), 0, 1)));
+const steep = (): JsonValue => add(
+  mul(c(128), mul(wet(), clamp(mul(add(add(waterDepth(), c(8)), neg(interpolated(body()))), c(0.125)), 0, 1))),
+  mul(c(128), clamp(mul(add(add(floorY(), c(8)), neg(y())), c(0.125)), 0, 1)));
 /** rough = (−0.05 − 0.05·Nrm)·(−0.4 + |Nr|). */
 const rough = (): JsonValue => mul(add(c(-0.05), mul(c(-0.05), noise('roughnessMod'))), add(c(-0.4), abs(noise('roughness'))));
 
@@ -247,12 +268,12 @@ const caves = (): JsonValue => max(min(min(min(entrances(), cheese()), spag3d())
  * written order (IEEE addition is not associative). `SLIDE`, the floor and ceiling terms and `islands` = −1e6 are data.
  *
  * The root (SP6a §1.1, D17) is `max(min(min(tap precave(add(tap terrain(interpolated(ref body)), detailG)), add(caves,
- * ref wetSteep)), add(noodle, ref wetSteep)), tap islands(−1e6))`: `root.a.a.a` is the `precave` tap (the pre-cave
+ * ref steep)), add(noodle, ref steep)), tap islands(−1e6))`: `root.a.a.a` is the `precave` tap (the pre-cave
  * density T + detailG that the cave tag reads, SP6a §3.2), `root.a.a.a.x.a` the `terrain` tap, `root.a.a.a.x.b` detailG
  * (the detail term is its `inside`), `root.a.a.b.a` the caves slot max(min(E, C, S3, S2), keep) (the taps `entrances`
  * `root.a.a.b.a.a.a.a.a`, `cheese` `root.a.a.b.a.a.a.a.b`, `spag3d` `root.a.a.b.a.a.a.b`, `spag2d` `root.a.a.b.a.a.b`),
- * `root.a.b.a` the `noodle` tap, `root.a.a.b.b` and `root.a.b.b` the two `ref wetSteep` (the wet roof's steep part S_w,
- * `defs.wetSteep`) and `root.b` the islands tap.
+ * `root.a.b.a` the `noodle` tap, `root.a.a.b.b` and `root.a.b.b` the two `ref steep` (the wet roof's and the rock floor's
+ * steep parts S_w + S_b, `defs.steep`; SP6b §5.2) and `root.b` the islands tap.
  */
 export const DEFAULT_DENSITY_TREE: JsonValue = registeredTree(
   {
@@ -286,15 +307,16 @@ export const DEFAULT_DENSITY_TREE: JsonValue = registeredTree(
               }, c(0)),
             },
           },
-          b: add(caves(), ref('wetSteep')),
+          b: add(caves(), ref('steep')),
         },
-        b: add(noodle(), ref('wetSteep')),
+        b: add(noodle(), ref('steep')),
       },
       b: { op: 'tap', name: 'islands', x: { op: 'const', v: -1000000 } },
     },
     defs: {
       pillars: pillars(),
-      wetSteep: wetSteep(),
+      steep: steep(),
+      floorGentle: floorGentle(),
       body: { op: 'add',
         a: { op: 'add',
           a: { op: 'add',

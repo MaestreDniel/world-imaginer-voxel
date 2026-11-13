@@ -71,7 +71,7 @@ describe('rows and summaries', () => {
     const t = inspectorTree(DEFAULTS, NO_EXPANSION, null);
     expect(t.groups.map((g) => [g.leaf, g.label])).toEqual([['density.defs', 'Density'], ['surface.rules', 'Surface rules']]);
     expect(rowsOf(t, 'density.defs').map(brief)).toEqual([
-      // SP6a §1.1: max(min(min(tap precave(…), add(caves slot, S_w)), add(tap noodle, S_w)), tap islands), then the def body.
+      // SP6a §1.1: max(min(min(tap precave(…), add(caves slot, steep)), add(tap noodle, steep)), tap islands), then the def body.
       '0 root | root | max [-]',
       '1 root.a | a | min [-]',
       '2 root.a.a | a | min [+]',
@@ -84,16 +84,25 @@ describe('rows and summaries', () => {
       '2 defs.body.a.b | b | mul [+]',
       '1 defs.body.b | b | neg [-]',
       '2 defs.body.b.x | x | mul [+]',
+      // SP6b's rock floor's gentle part g_b = clamp((floorY + 8 + s_b − y)·recip(s_b), 0, 1), read by the five caps (Task
+      // 19, ruling R11).
+      '0 defs.floorGentle | defs.floorGentle | clamp 0 … 1 [-]',
+      '1 defs.floorGentle.x | x | mul [-]',
+      '2 defs.floorGentle.x.a | a | add [+]',
+      '2 defs.floorGentle.x.b | b | recip [+]',
       // SP6a's pillars def (the caves slot reads it twice).
       '0 defs.pillars | defs.pillars | tap pillars [-]',
       '1 defs.pillars.x | x | interpolated [-]',
       '2 defs.pillars.x.x | x | mul [+]',
-      // SP6a Task 9's wet roof: S_w = 128·(wet′·clamp(…)) (the caves slot and the noodle read it).
-      '0 defs.wetSteep | defs.wetSteep | mul [-]',
-      '1 defs.wetSteep.a | a | const 128',
-      '1 defs.wetSteep.b | b | mul [-]',
-      '2 defs.wetSteep.b.a | a | clamp 0 … 1 [+]',
-      '2 defs.wetSteep.b.b | b | clamp 0 … 1 [+]',
+      // SP6a Task 9's wet roof S_w = 128·(wet′·clamp(…)) and SP6b's rock floor S_b = 128·clamp(…) (Task 19): `defs.steep`
+      // = S_w + S_b (the caves slot and the noodle read it).
+      '0 defs.steep | defs.steep | add [-]',
+      '1 defs.steep.a | a | mul [-]',
+      '2 defs.steep.a.a | a | const 128',
+      '2 defs.steep.a.b | b | mul [+]',
+      '1 defs.steep.b | b | mul [-]',
+      '2 defs.steep.b.a | a | const 128',
+      '2 defs.steep.b.b | b | clamp 0 … 1 [+]',
     ]);
     expect(rowsOf(t, 'surface.rules').map(brief)).toEqual([
       '0 root | root | sequence 3 [-]',
@@ -134,19 +143,26 @@ describe('rows and summaries', () => {
     expect(sum.get('root.a.a.a.x.b.inside.b.b.b.x.b')).toBe('const 0.5');
     // SP6a's cave terms: detailG, the family taps, a cave param, keep's ref bound.
     expect(sum.get('root.a.a.a.x.b')).toBe('rangeChoice -1000000000 … 16');
-    // (Task 9's wet roof: the caves slot is `root.a.a.b.a` and the noodle `root.a.b.a`, under add(…, ref wetSteep).)
+    // (Task 9's wet roof: the caves slot is `root.a.a.b.a` and the noodle `root.a.b.a`, under add(…, ref steep).)
     expect(sum.get('root.a.a.b.a.a.a.a.a')).toBe('tap entrances');
     expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.a.a.b.a.a.b')).toBe('param caves.entrances.offset = 0.37');
-    // Task 8: the entrances' cap after the floor, reading its band leaves (Task 9: its gentle sum is add(add(g_f, g_w), g_i)).
-    expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.b.a.b.b.a.a.a.x.a.a')).toBe('param caves.entrances.minY = -64');
+    // Task 8: the entrances' cap after the floor, reading its band leaves (Task 9: its gentle sum is add(add(g_f, g_w),
+    // g_i); SP6b Task 19: add(add(add(g_f, g_w), g_i), g_b)).
+    // SP6b ruling R10: entrances' minY −64 → −54.
+    expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.b.a.b.b.a.a.a.a.x.a.a')).toBe('param caves.entrances.minY = -54');
     // Task 9: the island cap's g_i reads capTop; the wet roof's g_w reads waterDepth and wetMask.
-    expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.b.a.b.b.b.x.a.a.a.b.x')).toBe('param caves.limits.capTop = 344');
-    expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.b.a.b.b.a.b.b.x.a.a.a.a')).toBe('param caves.limits.waterDepth = 16');
-    expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.b.a.b.b.a.b.a.x.b')).toBe('col wetMask');
+    expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.b.a.b.b.a.b.x.a.a.a.b.x')).toBe('param caves.limits.capTop = 344');
+    expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.b.a.b.b.a.a.b.b.x.a.a.a.a')).toBe('param caves.limits.waterDepth = 16');
+    expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.b.a.b.b.a.a.b.a.x.b')).toBe('col wetMask');
+    // SP6b Task 19: the rock floor's g_b, `ref floorGentle` (ruling R11), reads floorY = add(param caves.floor.y, mul(param
+    // amp, abs(clamp(noise2 floor)))).
+    expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.b.a.b.b.b')).toBe('ref floorGentle');
+    expect(sum.get('defs.floorGentle.x.a.a.a.a.a')).toBe('param caves.floor.y = -58');
+    expect(sum.get('defs.floorGentle.x.a.a.a.a.b.b.x.x')).toBe('noise2 floor');
     expect(sum.get('root.a.a.b.a.a.a.b')).toBe('tap spag3d');
     expect(sum.get('root.a.a.b.a.a.b')).toBe('tap spag2d');
     expect(sum.get('root.a.b.a')).toBe('tap noodle');
-    expect([sum.get('root.a.a.b.b'), sum.get('root.a.b.b')]).toEqual(['ref wetSteep', 'ref wetSteep']);
+    expect([sum.get('root.a.a.b.b'), sum.get('root.a.b.b')]).toEqual(['ref steep', 'ref steep']);
     const rules = new Map(r.map((x) => [x.path, x.summary]));
     const sky = 'root.rules[1].then.rules';
     expect(rules.get(`${sky}[0]`)).toBe('if not');
@@ -276,7 +292,8 @@ describe('expansion, expand to selection and the indentation cap', () => {
     const rootRows = (e: Expansion): string[] => rowsOf(inspectorTree(DEFAULTS, e, null), 'density.defs').map((r) => r.path).filter((p) => p.startsWith('root'));
     let e = toggleExpansion(NO_EXPANSION, 'density.defs', 'root', 0);
     expect(rootRows(e)).toEqual(['root']);
-    expect(rowsOf(inspectorTree(DEFAULTS, e, null), 'density.defs').filter((r) => r.path.startsWith('defs.'))).toHaveLength(14);
+    // SP6b Task 19: `defs.steep` (S_w + S_b) shows 7 rows where `defs.wetSteep` showed 5, and `defs.floorGentle` 4.
+    expect(rowsOf(inspectorTree(DEFAULTS, e, null), 'density.defs').filter((r) => r.path.startsWith('defs.'))).toHaveLength(20);
     expect(rowsOf(inspectorTree(DEFAULTS, e, null), 'surface.rules')).toHaveLength(10);
     e = toggleExpansion(e, 'density.defs', 'root.a.a', 2);
     expect(rootRows(e)).toEqual(['root']);

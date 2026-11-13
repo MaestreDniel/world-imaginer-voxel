@@ -21,6 +21,7 @@ import { SPAGHETTI_BANDS, type SpaghettiBands } from '../../src/core/constants';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import type { ParamsPatch } from '../../src/core/params/schema';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
+import { createDensityReference } from '../../src/gen/density/reference';
 import { ctxFor } from '../harness/gen';
 
 type Family = 'entrances' | 'cheese' | 'spaghetti3d' | 'spaghetti2d' | 'noodles';
@@ -314,4 +315,79 @@ describe('the closure distance of each cap (SP6a spec §1.4; ruling P6)', () => 
       expect(closure(f, end).span).toBeGreaterThanOrEqual(4);
     },
   );
+});
+
+/**
+ * SP6b Task 19 (spec §5.2, D6): the rock floor closes the cave air above floorY + 4. Around both class columns (the 32
+ * chunks of CAVERNS' and TUNNELS' 4 × 4), at each height d = ⌊y − floorY(x, z)⌋ (0 … 24), the share of a baseline
+ * tree's cave air (the pre-cave density > 0, the root ≤ 0) that the default tree keeps, pooled over every position:
+ * - against the tree without the steep part S_b (`defs.steep.b` replaced by 0; g_b kept), the steep part closes the air
+ *   over 8 blocks: the kept share falls from 90 % to 10 % within d 4 … 12 (S_b is 0 from floorY + 8, ≥ 64 at floorY + 4);
+ * - against the floorless tree (every floorY replaced by −1000, so g_b and S_b are 0), the whole floor (its gentle part
+ *   narrowing the families over the 8 blocks above floorY + 8 first) falls from 90 % to 10 % over at most 8 blocks;
+ * both keep nothing at d ≤ 4 (no air at y ≤ floorY + 4). Each figure is printed for D25's record.
+ */
+describe('the rock floor\'s closure (SP6b spec §5.2, D6)', () => {
+  const D = 24;
+  const withFloor = dcOf({});
+  const floorJson = JSON.stringify((withFloor.expr.defs['steep'] as unknown as { b: { b: { x: { a: { a: { a: unknown } } } } } }).b.b.x.a.a.a);
+  const sbJson = JSON.stringify((withFloor.expr.defs['steep'] as unknown as { b: unknown }).b);
+  /** `withFloor.expr` with every subtree equal to `json` replaced by `by`, and how many were replaced. */
+  const replaced = (json: string, by: unknown): { readonly dc: DensityContext; readonly n: number } => {
+    let n = 0;
+    const sub = (x: unknown): unknown => {
+      if (Array.isArray(x)) return x.map(sub);
+      if (typeof x !== 'object' || x === null) return x;
+      if (JSON.stringify(x) === json) { n++; return by; }
+      return Object.fromEntries(Object.entries(x).map(([k, v]) => [k, sub(v)]));
+    };
+    const e = sub(withFloor.expr) as typeof withFloor.expr;
+    return { dc: createDensityContext(ctxFor('42'), e), n };
+  };
+  interface Closure { readonly open: Float64Array; readonly kept: Float64Array; readonly ratio: readonly number[]; readonly d90: number; readonly d10: number }
+  /** The default tree's kept share of `base`'s cave air at each height d above floorY (0 … D). */
+  const closure = (label: string, base: DensityContext): Closure => {
+    const ref = createDensityReference(withFloor.expr, withFloor.noises);
+    const floorNode = JSON.parse(floorJson) as never;
+    const open = new Float64Array(D + 1), kept = new Float64Array(D + 1);
+    for (const [cx, cz] of [...chunksOf(CAVERNS), ...chunksOf(TUNNELS)]) {
+      const sample = withFloor.column(cx, cz);
+      base.column(cx, cz);
+      for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
+        const floorY = ref.voxel(sample, 16 * cx + lx, 0, 16 * cz + lz, floorNode);
+        for (let y = Math.max(-63, Math.ceil(floorY)); y < floorY + D + 1; y++) {
+          const d = Math.floor(y - floorY);
+          if (!(withFloor.compiled.tapFn('precave', lx, y, lz) > 0) || !(base.compiled.voxelFn(lx, y, lz) <= 0)) continue;
+          open[d]++;
+          if (withFloor.compiled.voxelFn(lx, y, lz) <= 0) kept[d]++;
+        }
+      }
+    }
+    const ratio = Array.from(open, (n, d) => (n > 0 ? kept[d]! / n : NaN));
+    // Scanning down from d 24: the first height whose kept share is ≤ 90 %, then ≤ 10 %.
+    const firstDown = (q: number): number => { for (let d = D; d >= 0; d--) if (ratio[d]! <= q) return d; return -1; };
+    const c: Closure = { open, kept, ratio, d90: firstDown(0.9), d10: firstDown(0.1) };
+    console.log(`the rock floor's closure (SP6b §5.2, D25), ${label}: base air per height ${Math.min(...open)} … ${Math.max(...open)}; 90 % at d ${c.d90}, 10 % at d ${c.d10}; `
+      + `kept share by d 0 … ${D}: ${ratio.map((r) => (Number.isNaN(r) ? '-' : r.toFixed(2))).join(' ')}`);
+    return c;
+  };
+
+  test('the steep part closes over 8 blocks: the kept share of the air without S_b falls from 90 % to 10 % within the 8 blocks above floorY + 4', () => {
+    const { dc, n } = replaced(sbJson, { op: 'const', v: 0 });
+    expect(n).toBe(1);
+    const c = closure('the steep part (against the tree without S_b)', dc);
+    for (let d = 0; d <= 4; d++) expect([d, c.kept[d]]).toEqual([d, 0]);
+    expect(Math.min(...c.open.subarray(5))).toBeGreaterThan(100);
+    expect([c.d10 >= 4, c.d90 <= 12]).toEqual([true, true]);
+  }, 300_000);
+
+  test('the whole floor (gentle and steep) falls from 90 % to 10 % of the floorless air over at most 8 blocks, nothing kept at y ≤ floorY + 4', () => {
+    // One floorY in g_b, `defs.floorGentle` (the five caps read it; ruling R11), and one in S_b.
+    const { dc, n } = replaced(floorJson, { op: 'const', v: -1000 });
+    expect(n).toBe(2);
+    const c = closure('the whole floor (against the floorless tree)', dc);
+    for (let d = 0; d <= 4; d++) expect([d, c.kept[d]]).toEqual([d, 0]);
+    expect(Math.min(...c.open)).toBeGreaterThan(100);
+    expect([c.d10 >= 4, c.d90 - c.d10 <= 8]).toEqual([true, true]);
+  }, 300_000);
 });

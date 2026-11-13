@@ -13,7 +13,7 @@ const copy = (v: unknown): Tree => JSON.parse(JSON.stringify(v)) as Tree;
 /**
  * The default density tree (a mutable copy). Its terrain tap is `root.a.a.a.x.a` (inside the `precave` tap, SP6a §1.1),
  * `detailG` `root.a.a.a.x.b` (the detail term is its `inside`, `root.a.a.a.x.b.inside`), the caves slot `root.a.a.b.a`
- * and the noodle tap `root.a.b.a` under the wet roof's `add(…, ref wetSteep)` (`root.a.a.b`, `root.a.b`), its islands tap
+ * and the noodle tap `root.a.b.a` under the steep parts' `add(…, ref steep)` (`root.a.a.b`, `root.a.b`), its islands tap
  * `root.b`.
  */
 export const densityTree = (): Tree => copy(DEFAULT_DENSITY_TREE);
@@ -36,8 +36,8 @@ export function terrainMuted(mute = 0): Tree {
 
 /**
  * The default tree without SP6a's cave terms (its root slots kept, §1.1): detailG replaced by its detail term, the caves
- * slot and the noodle slot with the wet roof's steep part (`root.a.a.b`, `root.a.b`) by `const 1e6`, `defs.pillars` and
- * `defs.wetSteep` dropped; the SP5c world's values, work cost 574.
+ * slot and the noodle slot with the steep parts (`root.a.a.b`, `root.a.b`) by `const 1e6`, `defs.pillars` and
+ * `defs.steep` dropped; the SP5c world's values, work cost 574.
  */
 export function caveFreeTree(): Tree {
   const t = densityTree();
@@ -45,7 +45,7 @@ export function caveFreeTree(): Tree {
   t['root'].a.a.b = { op: 'const', v: 1000000 };
   t['root'].a.b = { op: 'const', v: 1000000 };
   delete t['defs'].pillars;
-  delete t['defs'].wetSteep;
+  delete t['defs'].steep;
   return t;
 }
 

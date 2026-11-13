@@ -40,7 +40,10 @@
  * biome's border meets cave air, so they are left out of the slots' acceptance too: each is tried on the class columns,
  * then, dead there, decided on a bounded biome witness search (`biomeWitness`): stream columns whose tagged air holds a
  * cave biome the leaf reads (its own box's biome; any of lush, dripstone and abyss for the border leaves and noises),
- * the first whose T column a step changes.
+ * the first whose T column a step changes. The rock floor's leaves (`caves.noises.floor`, `caves.floor.*`; SP6b §12.7,
+ * Task 19) act only where cave air reaches the bottom of a column (y ≤ floorY + 8 + span), so they are left out of the
+ * slots' acceptance (no land column of the first 4096 draws accepts them with the caverns' leaves) and decided on the
+ * class columns, the cave columns first: the default base's cave class columns, at their bottom.
  */
 import { CAVE_BIOME, SEA_LEVEL, SPAGHETTI_BANDS } from '../core/constants';
 import { fnv1a32, hash4, hashF64, hex64 } from '../core/hash';
@@ -313,6 +316,8 @@ const BIOME_GRID = 2;
 /** Above Y0 + J every depth is below 0 and every box's depthMin is ≥ 0 (§6.1): the grid stops 4 blocks past the highest Y0. */
 const BIOME_REACH = 4;
 const isBiomeLeaf = (path: string): boolean => BIOME_LEAF.test(path);
+/** SP6b spec §5.2, §12.7 (Task 19): the rock floor's leaves, left out of the slots' acceptance, decided on the class columns. */
+const isFloorLeaf = (path: string): boolean => path === 'caves.noises.floor' || path.startsWith('caves.floor.');
 
 /** The cave class column's scan slots (SP6a spec §4): the caverns' families, then the tunnels'. */
 export type CaveSlot = 'caverns' | 'tunnels';
@@ -974,13 +979,13 @@ export function caveLeaves(): readonly LeafInfo[] {
  * The leaves a cave class column's slot must accept (SP6a spec §4), in schema order: the tunnels' leaves for `tunnels`,
  * every other `caves.*` leaf for `caverns`; never a spaghetti scale leaf (ruling P5), a depth-band leaf (`minY`,
  * `maxY`; Task 8), a carver leaf (Task 27, ruling P18), a cave-biome leaf (SP6b Task 17) or `caves.limits.capTop`
- * (Task 9), each decided on its bounded witness search when the class columns leave it dead, and never
- * `caves.limits.waterDepth` (Task 9), the wet roof's
+ * (Task 9), each decided on its bounded witness search when the class columns leave it dead, never a rock-floor leaf
+ * (SP6b Task 19), decided on the class columns, and never `caves.limits.waterDepth` (Task 9), the wet roof's
  * depth, decided on the coast class column (it acts under water only, and the cave columns are land columns).
  */
 export function caveSlotLeaves(slot: CaveSlot): readonly LeafInfo[] {
   return caveLeaves().filter((l) => !isScaleLeaf(l.path) && !isBandLeaf(l.path) && !isCarverLeaf(l.path) && !isBiomeLeaf(l.path)
-    && l.path !== CAP_TOP_PATH && l.path !== WATER_DEPTH_PATH && TUNNEL_LEAF.test(l.path) === (slot === 'tunnels'));
+    && !isFloorLeaf(l.path) && l.path !== CAP_TOP_PATH && l.path !== WATER_DEPTH_PATH && TUNNEL_LEAF.test(l.path) === (slot === 'tunnels'));
 }
 
 /** How often each cave family acts on a column (SP6a spec §4's cave class column), at the corner-lattice voxels. */

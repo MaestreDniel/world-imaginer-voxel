@@ -2642,8 +2642,9 @@ describe('master spec amendments (SP6b §15)', () => {
     const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
     expect(u2, 'no U2 row in §6.4').toBeDefined();
     const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
-    expect(n).toBe(187);
-    expect(u2).toContain(`; SP6b: the caves.biomes.* leaves are decided on a bounded biome witness (stream columns whose tagged air holds a cave biome the leaf reads, where a step changes the T column) where the class columns leave them dead; U2 covers ${n} leaves (amended by SP6b)`);
+    // 187 with the 15 caves.biomes.* leaves (Task 17), 191 with the rock floor's four (Task 19).
+    expect(n).toBe(191);
+    expect(u2).toContain(`; SP6b: the caves.biomes.* leaves are decided on a bounded biome witness (stream columns whose tagged air holds a cave biome the leaf reads, where a step changes the T column) where the class columns leave them dead, the rock floor's leaves (\`caves.noises.floor\`, \`caves.floor.*\`) on the default base's cave class columns, at the bottom; U2 covers ${n} leaves (amended by SP6b)`);
   });
 
   test('§6.4\'s DT2 row gains caveBiomeProbe (SP6b spec §15 item 20)', () => {

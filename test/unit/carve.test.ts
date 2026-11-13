@@ -430,7 +430,8 @@ test('carveColumn keeps a tag that is already set', () => {
 
 describe('wet′ (SP6a spec §1.4, D19; ruling R8)', () => {
   test('carve.ts\' wet′ equals the default tree\'s wet′ subtree through the reference, bit for bit, at 10,000 positions', () => {
-    const wetNode = ((dc.expr.defs['wetSteep'] as unknown as { b: { a: Expr } }).b.a);
+    // S_w's wet′ in `defs.steep` = S_w + S_b (SP6b §5.2: `defs.wetSteep` became `defs.steep`).
+    const wetNode = ((dc.expr.defs['steep'] as unknown as { a: { b: { a: Expr } } }).a.b.a);
     expect(wetNode).toEqual({ op: 'clamp', lo: 0, hi: 1, x: { op: 'mul', a: { op: 'const', v: 4 }, b: { op: 'col', field: 'wetMask' } } });
     const ref = createDensityReference(dc.expr, dc.noises);
     const rng = new Xoshiro128(0x5ca1ab1e);

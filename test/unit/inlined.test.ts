@@ -89,8 +89,9 @@ describe('the hand-inlined default expression (SP6a §10.5, the kill criterion)'
   test('the compiled default tree has the slots and min chains the comparator mirrors', () => {
     const c = createDensityContext(createGenContext(seedFromInput('42'), DEFAULTS)).compiled;
     expect(c.interpolatedSlotCount).toBe(INLINED_SLOTS.length);
-    expect(c.columnSlotCount).toBe(7);
-    expect(c.positionSlotCount).toBe(3);
+    // The column slots: inlinedNoisesOf's `cols` (SP6b's rock floor: (floorY + 8) + span, g_b's, Task 19).
+    expect(c.columnSlotCount).toBe(8);
+    expect(c.positionSlotCount).toBe(5);
     expect(c.minSlotCount).toBe(INLINED_MIN_SLOTS.count);
     // Each tap's interpolated slot is its INLINED_SLOTS entry (the noodle's four slots sit under the noodle tap).
     const slotOfTap = (name: string): number => {
@@ -98,7 +99,7 @@ describe('the hand-inlined default expression (SP6a §10.5, the kill criterion)'
       return c.nodes[tap.kids[0]!]!.interpSlot;
     };
     for (const name of ['terrain', 'entrances', 'cheese', 'spag3d', 'spag2d', 'pillars'] as const) expect([name, slotOfTap(name)]).toEqual([name, INLINED_SLOTS.indexOf(name)]);
-    // The min chains from the root: max(min(min(precave, add(caves, S_w)), add(noodle, S_w)), islands).
+    // The min chains from the root: max(min(min(precave, add(caves, steep)), add(noodle, steep)), islands).
     const node = (id: number) => c.nodes[id]!;
     const root = node(c.root);
     const m6 = node(root.kids[0]!), m5 = node(m6.kids[0]!);
@@ -128,7 +129,7 @@ describe('the hand-inlined default expression (SP6a §10.5, the kill criterion)'
     expect(skipped).toBeGreaterThan(0);
   });
 
-  test('moved leaves (a narrower band span, other offsets, thicknesses, scales and depths): bit for bit on the cave column', () => {
+  test('moved leaves (a narrower band span, other offsets, thicknesses, scales and depths, the rock floor\'s): bit for bit on the cave column', () => {
     const params = paramsWith({
       density: { detailAmpLo: 0.5, detailAmpHi: 1.25 },
       caves: {
@@ -139,6 +140,8 @@ describe('the hand-inlined default expression (SP6a §10.5, the kill criterion)'
         spaghetti3d: { thickness: 0.09, thicknessVar: 0.02, regional: 0.07, minY: -48, maxY: 150, scales: { s0: 0.8, s1: 1.1, s2: 1.4, s3: 1.9 } },
         spaghetti2d: { thickness: 0.9, layerAmp: 6, minY: -60, maxY: 160, scales: { s0: 0.6, s1: 0.8, s2: 1.1, s3: 1.8, s4: 2.5 } },
         noodles: { thickness: 0.06, ridgeMul: 1.4, regional: 0.12, threshold: 0.4, minY: -50, maxY: 40 },
+        // SP6b's rock floor (Task 19): higher, more relief, a wider gentle part.
+        floor: { y: -40, amp: 7, span: 12 },
       },
     });
     const r = check(params, COLUMNS.cave[0], COLUMNS.cave[1]);

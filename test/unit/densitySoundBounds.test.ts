@@ -393,14 +393,16 @@ describe('the default world is unchanged (SP3d spec §1.9 D: proven, not only cl
     // cheese 3 octaves, entrance 2): 'eb36083e7b0f2a7a 588160 984869'; with Task 38's tuned defaults (an isotropic layer
     // noise, wider spaghetti 3D and noodles, fewer caverns, surfaceDepth 10): 'f30720d232d0399d 526848 965608'; with the
     // user's check's noodles (R31, R32: a third of them, twice as thick, the band's top at 48):
-    expect(hashed(createDensityContext(ctxFor('42')))).toBe('60f0c3d6ec016667 405632 965020');
+    // '60f0c3d6ec016667 405632 965020'; with SP6b's rock floor (Task 19: no cave air below floorY + 5, so more voxels
+    // solid and more cells there decided solid without corners):
+    expect(hashed(createDensityContext(ctxFor('42')))).toBe('bec6d3f17a1db8cd 379136 980174');
   });
 
   test('… and with the sub-blocks (SP6a ruling R13): the same solid voxels, fewer evaluated', () => {
     const c = ctxFor('42');
     for (const [dc, solids] of [
       [createDensityContext(c, resolveDensity(cavesMuted(DEFAULT_DENSITY_TREE), c.params)), 1040924],
-      [createDensityContext(ctxFor('42')), 965020],
+      [createDensityContext(ctxFor('42')), 980174],
     ] as const) {
       const [, masked, solid] = hashed(dc, true).split(' ').map(Number);
       expect(solid).toBe(solids);

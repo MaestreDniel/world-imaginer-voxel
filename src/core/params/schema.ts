@@ -198,7 +198,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       regional: num(0.1, { ...TERRAIN, label: 'Regional swing', doc: 'Lowers the offset by this × the regional noise Nra (λ 1536), so some regions hold larger caverns.', min: 0, max: 0.4, step: 0.01 }),
       layerAmp: num(4, { ...TERRAIN, label: 'Layer amplitude', doc: 'Weight of the squared layer noise L², which closes caverns between flat layers.', min: 0, max: 8, step: 0.05 }),
       roofDepth: num(12, { ...TERRAIN, label: 'Roof depth', doc: 'Caverns close within about this depth below the terrain surface: + clamp((roofDepth − T) / 24, 0, 0.5).', unit: 'blocks', min: 0, max: 48, step: 1 }),
-      minY: bandY(-56, 'minY', 'Caverns'),
+      minY: bandY(-55, 'minY', 'Caverns'),
       maxY: bandY(320, 'maxY', 'Caverns'),
     }),
     spaghetti3d: group('Spaghetti 3D', 'Winding tunnels: 16·(rough + clamp(max(rm·|S1(p/rm)|, rm·|S2(p/rm)|) − thickness − thicknessVar·thk − regional·Nrb, −1, 1)), carved where it is below 0; rm is the scale of the rarity band (SP6a spec §1.2-§1.3).', {
@@ -211,7 +211,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
         s2: scale(1.5, 'Scale, 0 ≤ r < 0.5', 'The tunnel scale where the rarity noise is in 0 … 0.5.'),
         s3: scale(2, 'Scale, r ≥ 0.5', 'The tunnel scale where the rarity noise is 0.5 or above.'),
       }),
-      minY: bandY(-56, 'minY', 'The 3D tunnels'),
+      minY: bandY(-55, 'minY', 'The 3D tunnels'),
       maxY: bandY(320, 'maxY', 'The 3D tunnels'),
     }),
     spaghetti2d: group('Spaghetti 2D', 'Flat winding tunnels along a sloping layer: 16·clamp(max(rm·|S2d(p/rm)| + 0.083·tm, (|layerAmp·Nel + yGrad| + tm)³), −1, 1), tm = −thickness − 0.35·Nthk; rm is the scale of the rarity band (SP6a spec §1.2-§1.3).', {
@@ -224,7 +224,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
         s3: scale(2, 'Scale, 0.5 ≤ r < 0.75', 'The tunnel scale where the rarity noise is in 0.5 … 0.75.'),
         s4: scale(3, 'Scale, r ≥ 0.75', 'The tunnel scale where the rarity noise is 0.75 or above.'),
       }),
-      minY: bandY(-64, 'minY', 'The flat tunnels'),
+      minY: bandY(-55, 'minY', 'The flat tunnels'),
       // 215, not 320 (SP6a spec §1.4, §4): the layer is never open above y 208, so any maxY from 208 to 244 changes no
       // generated output, and 215 is the highest of those whose U2 lower step (183) has a band witness.
       maxY: bandY(215, 'maxY', 'The flat tunnels'),
@@ -235,7 +235,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       ridgeMul: num(1.5, { ...TERRAIN, label: 'Ridge multiplier', doc: 'Times the ridge noises max(|An|, |Bn|): higher → thinner noodles.', min: 0.5, max: 4, step: 0.05 }),
       regional: num(0.1, { ...TERRAIN, label: 'Regional swing', doc: 'Lowers the toggle noise by this × the regional noise Nrb (λ 1024), so noodles close together where Nrb is high.', min: 0, max: 0.4, step: 0.01 }),
       threshold: num(1, { ...TERRAIN, label: 'Frequency threshold', doc: 'Noodles open only where the toggle noise minus regional·Nrb is above this: higher → fewer noodles (Nn is unit-sd: 0.5 keeps about 62 %, 1 about 32 %)', min: -1, max: 2, step: 0.01 }),
-      minY: bandY(-60, 'minY', 'Noodles'),
+      minY: bandY(-55, 'minY', 'Noodles'),
       maxY: bandY(48, 'maxY', 'Noodles'),
     }),
     pillars: group('Pillars', 'Rock pillars kept inside caverns: P = 16·(2·Np − 1 − rare)·(0.55 + 0.55·thickness)³.', {
@@ -244,7 +244,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     entrances: group('Entrances', 'Openings that reach the surface: 16·min(Ne·(1/6) + offset + yGrad, rough + clamp(max(|E1|, |E2|) − threshold, −1, 1)), not depth-ramped.', {
       offset: num(0.37, { ...TERRAIN, label: 'Offset', doc: 'Added to the scaled entrance noise Ne·(1/6): lower → more entrances.', min: -0.5, max: 1, step: 0.01 }),
       threshold: num(0.08, { ...TERRAIN, label: 'Threshold', doc: 'Width of the entrance tunnels: carved where max(|E1|, |E2|) is below about this.', min: 0, max: 0.5, step: 0.005 }),
-      minY: bandY(-64, 'minY', 'Entrances'),
+      minY: bandY(-54, 'minY', 'Entrances'),
       maxY: bandY(320, 'maxY', 'Entrances'),
     }),
     // SP6a spec §2, §4 (Task 27): the carvers' leaves, read by `carverParamsOf` and the carve step in T. Where §4 gives
@@ -325,6 +325,16 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       noodleThickness: caveNoise('Noodle thickness noise', 'Kn of the noodles, times 0.025.', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
       noodleRidgeA: caveNoise('Noodle ridge noise A', 'An of the noodle ridges max(|An|, |Bn|).', { dims: 3, wavelength: 18, octaves: 1 }, 3, CAVE_WAVELENGTH),
       noodleRidgeB: caveNoise('Noodle ridge noise B', 'Bn of the noodle ridges max(|An|, |Bn|).', { dims: 3, wavelength: 18, octaves: 1 }, 3, CAVE_WAVELENGTH),
+      // SP6b spec §5.2, §6.1 (Task 19): Nf of the rock floor, last, so no earlier draw moves.
+      floor: caveNoise('Floor noise', 'Nf (2D) of the rock floor: floorY = Floor y + Floor relief·|Nf|, mounds where |Nf| is high, gullies where it crosses 0.', { dims: 2, wavelength: 48, octaves: 3 }, 3, CAVE_WAVELENGTH),
+    }),
+    // SP6b spec §5.2, §6.1 (Task 19): the rock floor's leaves, between `noises` and `biomes`. floorY(x, z) = y + amp·|Nf|
+    // (Nf clamped to ±3); every cave family closes above it, so no cave air lies below y + 5 (y ≥ −62 keeps two rock
+    // voxels above rule 1's bedrock dither over the whole range).
+    floor: group('Floor', 'The rock floor above the bedrock (SP6b spec §5.2): floorY = y + amp·|Nf|; the noise families narrow over the softness above floorY + 8 and close from floorY + 4 down, so wide caves end on rolling rock, never on the bedrock.', {
+      y: int(-58, { ...TERRAIN, label: 'Floor y', doc: 'The floor\'s lowest height (its gullies, where Nf crosses 0): no cave air lies below this y + 5.', unit: 'y', min: -62, max: -16 }),
+      amp: num(5, { ...TERRAIN, label: 'Floor relief', doc: 'Times |Nf|: the floor\'s mounds rise up to 3·amp blocks above Floor y.', unit: 'blocks', min: 0, max: 12, step: 0.05 }),
+      span: int(8, { ...TERRAIN, label: 'Floor softness', doc: 'The noise families narrow over this many blocks above floorY + 8 (the gentle part), then close by floorY + 4 (the steep part).', unit: 'blocks', min: 1, max: 32 }),
     }),
     // SP6b spec §1, §6.1 (Task 17): the cave-biome picker's leaves, appended after `noises`, so randomParams and
     // randomPatch draw every earlier caves leaf as before. The boxes as the master's registry (§3.10), the four border

@@ -125,14 +125,15 @@ const stall = (ms: number) => { Atomics.wait(new Int32Array(new SharedArrayBuffe
 const configure = (epoch: number, params: Params, epochs: SharedArrayBuffer | null) => ({ type: 'configure', epoch, seedText: '42', params, epochs });
 
 describe('a configure stops an in-flight fieldSlice part within 50 ms (SP3d spec §4.5, §10)', () => {
-  // A part as large as the work bound allows: the default tree's 128² vertical part of k = 30 sample columns under the
-  // corner memo's bound (SP6a §7.4, Task 13: 8,161,920 units of 272,064 each since D25's lever 5, 97.3 % of PART_BUDGET
-  // (8,232,480 of 274,416, 98 %, before it); 3 of 2,278,784 without the memo, at Tasks 9-12; 78 of 106,240 before SP6a),
+  // A part as large as the work bound allows: the default tree's 128² vertical part of k = 28 sample columns under the
+  // corner memo's bound (SP6a §7.4, Task 13: 8,116,192 units of 289,864 each since SP6b's rock floor, Task 19, with
+  // `defs.floorGentle`, ruling R11, 96.8 % of PART_BUDGET; 30 of 272,064, 97.3 %, from D25's lever 5 until then; 8,232,480
+  // of 274,416, 98 %, before it; 3 of 2,278,784 without the memo, at Tasks 9-12; 78 of 106,240 before SP6a),
   // and partWorst's one 32-sample column (330 leaves: 8,376,324 units, 99.9 %; one sample ≈ 2 ms). Since SP6a ruling R14
   // the vertical `density` field runs the T stage's compile (such a part takes about 26 ms and 2 ms), so the stop is
   // measured on the `node` field at `root`: the same expression, by the reference with its memo, under the same bound.
   const CASES: Array<[string, Params, FieldSliceSpec, number, number]> = [
-    ['the default tree, a 128² vertical part of 30 sample columns', DEFAULTS, vReq(MOUNTAIN, 'node', 'root', 128), 30, 0.97],
+    ['the default tree, a 128² vertical part of 28 sample columns', DEFAULTS, vReq(MOUNTAIN, 'node', 'root', 128), 28, 0.96],
     ['partWorst\'s tree at the part bound, one 32-sample column', partWorstParams(), vReq(MOUNTAIN, 'node', 'root', 32), 1, 0.99],
   ];
 

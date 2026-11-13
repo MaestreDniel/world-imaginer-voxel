@@ -16,6 +16,7 @@ import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
 import { AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE, FLOATING_SURFACE_RULES } from '../../src/core/params/presetTrees';
 import { fnv1a64, hex64 } from '../../src/core/hash';
+import { MIGRATIONS, type JsonObject } from '../../src/core/params/migrate';
 import { validateDensitySource } from '../../src/gen/density/source';
 import { validateRulesSource } from '../../src/gen/surface/source';
 import { gv8DensityTrees, gv8SurfaceTrees, type Gv8DensityKind, type Gv8SurfaceKind } from '../harness/gv8Trees';
@@ -76,6 +77,14 @@ describe('the GV8 built-in trees fixtures (SP6b D29, spec §14.4)', () => {
 
   test.each(SURFACE_KINDS)('the %s surface tree passes tier 2', (k) => {
     expect(validateRulesSource(gv8SurfaceTrees()[k])).toEqual([]);
+  });
+
+  test('the GV8 default density tree differs from DEFAULT_DENSITY_TREE since the rock floor (SP6b Task 19), and MIGRATIONS[3] maps it there', () => {
+    const gv8 = gv8DensityTrees().default;
+    expect(hashOf(gv8)).not.toBe(hashOf(DEFAULT_DENSITY_TREE));
+    const doc = { density: { defs: gv8 } } as unknown as JsonObject;
+    const out = MIGRATIONS[3]!(doc);
+    expect((out['density'] as JsonObject)['defs']).toBe(DEFAULT_DENSITY_TREE);
   });
 
   test('five distinct hashes, none an SP6a or SP5c tree\'s (the GV8 trees are their own)', () => {

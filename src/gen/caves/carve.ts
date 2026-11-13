@@ -16,7 +16,7 @@
  *   σ_i = clamp((y − capTop + 8 + bandSpan)·(1/bandSpan), 0, 1) (the island cap: 1 from y 172 when capTop is 180);
  *   σ_u = clamp((y − maxY + 16)·(1/16), 0, 1) for underground worms only (nothing from maxY, full size below maxY − 16).
  * - **wet′** = clamp(4·wetMask, 0, 1) with `wetMask` the column sample's bilinear readout at the voxel's (x, z), in the
- *   default tree's operation order (`defs.wetSteep`'s wet′, `core/params/defaultTrees.ts`; a unit test pins them equal).
+ *   default tree's operation order (S_w's wet′ in `defs.steep`, `core/params/defaultTrees.ts`; a unit test pins them equal).
  * - **The density top** (`densityTopOf`) of a position: its highest solid voxel after the density fill, before carving
  *   (y −64, the bedrock, never counts; −65 when there is none); with `islands.enabled` the top of its highest maximal
  *   solid run whose bottom lies below `ISLAND_RUN_MIN_BOTTOM` (water v0's base rule, `columnWaterV0`), so σ_w sees the

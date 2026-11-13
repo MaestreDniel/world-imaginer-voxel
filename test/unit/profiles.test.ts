@@ -277,8 +277,12 @@ describe('migrations', () => {
       expect(r.ok).toBe(true);
       if (!r.ok) return;
       expect(r.value.params.density.defs).toBe(DEFAULTS.density.defs);
-      expect(r.value.params.caves.noodles).toEqual(DEFAULTS.caves.noodles);
-      expect(canonicalJSON(r.value.params)).toBe(canonicalJSON(DEFAULTS));
+      // SP6b ruling R10 (Task 19): the stored noodle minY −60 stays (no remap in 4 → 5); it generates the same world as
+      // today's −55, which the rock floor shadows.
+      expect(r.value.params.caves.noodles).toEqual({ ...DEFAULTS.caves.noodles, minY: -60 });
+      const want = JSON.parse(JSON.stringify(DEFAULTS)) as Record<string, any>;
+      want.caves.noodles.minY = -60;
+      expect(canonicalJSON(r.value.params)).toBe(canonicalJSON(want));
       const v2 = JSON.parse(JSON.stringify(DEFAULTS)) as Record<string, any>;
       v2.density.defs = sp5cTrees().default;
       delete v2.caves;

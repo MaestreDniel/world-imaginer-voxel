@@ -148,18 +148,19 @@ describe('resolveDensity (§1.6)', () => {
     expect(at(e, 'root.a.a.a.x.b.inside.b.a')).toEqual({ op: 'const', v: P.density.detailAmpLo });
     expect(at(e, 'root.a.a.a.x.b.inside.b.b.a')).toEqual({ op: 'const', v: P.density.detailAmpHi - P.density.detailAmpLo });
     // SP6a's cave terms: a param leaf becomes its value, recip(const 24) its reciprocal; a ref bound its value.
-    // (Task 9's wet roof: the caves slot is `root.a.a.b.a`, under add(caves, ref wetSteep).)
+    // (Task 9's wet roof: the caves slot is `root.a.a.b.a`, under add(caves, ref steep).)
     expect(at(e, 'root.a.a.b.a.a.a.a.b.x.x.outside.a.a.a.b.a.b.x.a.b')).toEqual({ op: 'const', v: P.caves.cheese.offset });
     expect(at(e, 'root.a.a.b.a.a.a.a.b.x.x.outside.a.a.a.b.b.x.b')).toEqual({ op: 'const', v: 1 / 24 });
     // SP6a Task 8: the cheese cap's clamp((minY − y)·recip(bandSpan)): the leaves become their values, recip its 1 / 16
-    // (Task 9: the cap's gentle sum is add(add(g_f, g_w), g_i), so g_f's first clamp is `.a.b.b.a.a.a`).
-    const capG0 = 'root.a.a.b.a.a.a.a.b.x.x.outside.b.a.b.b.a.a.a.x';
+    // (Task 9: the cap's gentle sum is add(add(g_f, g_w), g_i); SP6b Task 19: add(add(add(g_f, g_w), g_i), g_b), so g_f's
+    // first clamp is `.a.b.b.a.a.a.a`).
+    const capG0 = 'root.a.a.b.a.a.a.a.b.x.x.outside.b.a.b.b.a.a.a.a.x';
     expect(at(DEFAULT_DENSITY_TREE, `${capG0}.b`)).toEqual({ op: 'recip', x: { op: 'param', path: 'caves.limits.bandSpan' } });
     expect(at(e, `${capG0}.a.a`)).toEqual({ op: 'const', v: P.caves.cheese.minY });
     expect(at(e, `${capG0}.b`)).toEqual({ op: 'const', v: 1 / P.caves.limits.bandSpan });
     expect(at(e, 'root.a.a.b.a.b')['hi']).toBe(P.caves.pillars.threshold);
     // Task 9: the wet roof's g_w in the cheese cap: (waterDepth + 8 + bandSpan) − d folds to one constant, recip 1 / 16.
-    const gw = 'root.a.a.b.a.a.a.a.b.x.x.outside.b.a.b.b.a.b';
+    const gw = 'root.a.a.b.a.a.a.a.b.x.x.outside.b.a.b.b.a.a.b';
     expect(at(DEFAULT_DENSITY_TREE, `${gw}.b.x.a.a.a.a`)).toEqual({ op: 'param', path: 'caves.limits.waterDepth' });
     expect(at(e, `${gw}.b.x.a.a`)).toEqual({ op: 'const', v: P.caves.limits.waterDepth + 8 + P.caves.limits.bandSpan });
     expect(at(e, `${gw}.b.x.b`)).toEqual({ op: 'const', v: 1 / P.caves.limits.bandSpan });
@@ -248,8 +249,11 @@ function checkCompiled(seedText: string, patch: ParamsPatch, what: string, voxel
   // body)` shares the terrain's slot), a third position slot and a seventh column slot (wet′ = clamp(4·wetMask) at the
   // voxel's position and at the corner columns). Task 14's G_f rule: 492 (the caps' gentle rises 0.4, 5.8, 0.5, 0.3 and
   // 0.4 are four distinct constants where 16 and 2.4 were two). Task 38's tuned defaults: 491 (the cheese offset 0.5
-  // folds to the constant 0.5 that spaghetti 3D's gentle rise already holds).
-  if (seedText === '42' && Object.keys(patch).length === 0) expect([shape(a), shape(b)]).toEqual([[491, 3, 7, 10], [51, 2, 2, 1]]);
+  // folds to the constant 0.5 that spaghetti 3D's gentle rise already holds). SP6b's rock floor (Task 19): 524 nodes
+  // (floorY CSE-shared, once at the corner columns and once at the voxel's position; g_b the same nodes in the four
+  // slots, once more at the noodle's voxel level; S_b once; their adds), two more position slots and an eighth column
+  // slot (the COLUMN-class floor terms at the voxel's position and at the corner columns).
+  if (seedText === '42' && Object.keys(patch).length === 0) expect([shape(a), shape(b)]).toEqual([[524, 5, 8, 10], [51, 2, 2, 1]]);
   const terrainSlot = a.compiled.interpolatedSlot((a.expr.root as unknown as { a: { a: { a: { x: { a: { x: InterpolatedExpr } } } } } }).a.a.a.x.a.x);
   expect(terrainSlot, what).toBeGreaterThanOrEqual(0);
   for (const [cx, cz] of COLUMNS) {

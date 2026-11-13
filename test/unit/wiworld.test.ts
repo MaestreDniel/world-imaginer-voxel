@@ -300,7 +300,8 @@ describe('.wiworld refusals and repairs (SP5b spec §2.4, D15, §2.1)', () => {
     const edited = sp6aTrees().amplified as { root: { b: { x: Record<string, any> } } };
     edited.root.b.x['v'] = -10;
     for (const [defs, noodles] of [
-      [sp6aTrees().amplified, resolveProfile('amplified').caves.noodles],
+      // SP6b ruling R10 (Task 19): the stored noodle minY −60 stays (no remap in 4 → 5; the same world as today's −55).
+      [sp6aTrees().amplified, { ...resolveProfile('amplified').caves.noodles, minY: -60 }],
       [edited, { ...sp6aNoodles, threshold: 1 }],
     ] as const) {
       const params = JSON.parse(canonicalJSON(src.world.params)) as Record<string, any>;

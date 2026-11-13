@@ -78,6 +78,8 @@ describe('the source model (SP3d spec §1.3, §1.4)', () => {
       'caves.noises.spag2dElevation.clampSigma', 'caves.noises.spag2dThickness.clampSigma', 'caves.noises.spag2dRarity.clampSigma',
       'caves.noises.noodleToggle.clampSigma', 'caves.noises.noodleThickness.clampSigma', 'caves.noises.noodleRidgeA.clampSigma',
       'caves.noises.noodleRidgeB.clampSigma',
+      // SP6b Task 19: the rock floor's noise (last in caves.noises) and its three leaves, before the cave biomes.
+      'caves.noises.floor.clampSigma', 'caves.floor.y', 'caves.floor.amp', 'caves.floor.span',
       // SP6b Task 17: the cave-biome number and int leaves, after the cave noises (their noises' clampSigma is no target).
       'caves.biomes.lush.hMin', 'caves.biomes.lush.depthMin', 'caves.biomes.lush.depthMax',
       'caves.biomes.dripstone.cMin', 'caves.biomes.dripstone.depthMin', 'caves.biomes.dripstone.depthMax',
@@ -88,6 +90,8 @@ describe('the source model (SP3d spec §1.3, §1.4)', () => {
     expect(ALLOWED_REF_TARGETS.get('caves.noodles.maxY')).toEqual({ kind: 'int', lo: -64, hi: 320 });
     // recip(param caves.limits.bandSpan) is valid: its static range 1 … 32 excludes 0.
     expect(ALLOWED_REF_TARGETS.get('caves.limits.bandSpan')).toEqual({ kind: 'int', lo: 1, hi: 32 });
+    // recip(param caves.floor.span) too (SP6b Task 19, g_b): 1 … 32.
+    expect(ALLOWED_REF_TARGETS.get('caves.floor.span')).toEqual({ kind: 'int', lo: 1, hi: 32 });
     expect(ALLOWED_REF_TARGETS.get('caves.limits.capTop')).toEqual({ kind: 'int', lo: 180, hi: 344 });
     expect(ALLOWED_REF_TARGETS.get('caves.limits.waterDepth')).toEqual({ kind: 'int', lo: 8, hi: 48 });
     // A band scale's whole static range lies inside noiseScaled's [1/16, 16] (SP6a §1.5), so `s: {param}` validates.

@@ -71,7 +71,7 @@ describe('panel tree', () => {
     expect(caves.sections.map((s) => [s.path, s.label])).toEqual([
       ['caves.cheese', 'Cheese'], ['caves.spaghetti3d', 'Spaghetti 3D'], ['caves.spaghetti2d', 'Spaghetti 2D'], ['caves.noodles', 'Noodles'],
       ['caves.pillars', 'Pillars'], ['caves.entrances', 'Entrances'], ['caves.worms', 'Worms'], ['caves.undergroundWorms', 'Underground worms'],
-      ['caves.ravines', 'Ravines'], ['caves.limits', 'Limits'], ['caves.noises', 'Cave noises'], ['caves.biomes', 'Cave biomes'],
+      ['caves.ravines', 'Ravines'], ['caves.limits', 'Limits'], ['caves.noises', 'Cave noises'], ['caves.floor', 'Floor'], ['caves.biomes', 'Cave biomes'],
     ]);
     // Each family's depth band (minY, maxY; Task 8) after its sizes.
     expect(caves.sections[0]!.controls.map((c) => c.path)).toEqual(['caves.cheese.offset', 'caves.cheese.regional', 'caves.cheese.layerAmp', 'caves.cheese.roofDepth', 'caves.cheese.minY', 'caves.cheese.maxY']);
@@ -93,9 +93,13 @@ describe('panel tree', () => {
     expect(caves.sections[7]!.controls.map((c) => c.path.split('.').at(-1))).toEqual(['chance', 'startYMin', 'startYMax', 'maxY']);
     expect(caves.sections[8]!.controls.length).toBe(10);
     expect(caves.sections[9]!.controls.map((c) => c.path)).toEqual(['caves.limits.surfaceDepth', 'caves.limits.waterDepth', 'caves.limits.bandSpan', 'caves.limits.capTop']);
-    // SP6b spec §6.1 (Task 17; Spec correction 12, ruling P18): the Caves section ends Cave noises, Cave biomes; Cave
-    // biomes shows its four leaves first (a section's own controls precede its sub-sections), then Lush, Dripstone,
-    // Abyss and Noises.
+    // SP6b spec §6.1 (Task 17; Spec correction 12, ruling P18; Task 19): the Caves section ends Cave noises (the floor
+    // noise last), Floor (Floor y, Floor relief, Floor softness), Cave biomes; Cave biomes shows its four leaves first (a
+    // section's own controls precede its sub-sections), then Lush, Dripstone, Abyss and Noises.
+    expect(caves.sections.at(-3)!.controls.at(-1)!.path).toBe('caves.noises.floor');
+    const floor = caves.sections.at(-2)!;
+    expect(floor.controls.map((c) => [c.path, c.label])).toEqual([['caves.floor.y', 'Floor y'], ['caves.floor.amp', 'Floor relief'], ['caves.floor.span', 'Floor softness']]);
+    expect(floor.sections).toEqual([]);
     const biomes = caves.sections.at(-1)!;
     expect(biomes.controls.map((c) => c.path)).toEqual(['caves.biomes.depthScale', 'caves.biomes.borderWarp', 'caves.biomes.depthWarp', 'caves.biomes.edgeJitter']);
     expect(biomes.sections.map((s) => [s.path, s.label, s.controls.map((c) => c.path.split('.').at(-1))])).toEqual([
@@ -136,9 +140,13 @@ describe('panel tree', () => {
     expect(log.sort()).toEqual([
       // The cave-biome noises (SP6b Task 17).
       'caves.biomes.noises.border', 'caves.biomes.noises.depth',
+      // The floor's softness, 1 … 32 blocks (SP6b Task 19).
+      'caves.floor.span',
       // The band span, 1 … 32 blocks (SP6a Task 8).
       'caves.limits.bandSpan',
       'caves.noises.cheese', 'caves.noises.cheeseRegional', 'caves.noises.entrance', 'caves.noises.entranceA', 'caves.noises.entranceB',
+      // The floor noise (SP6b Task 19).
+      'caves.noises.floor',
       'caves.noises.layer', 'caves.noises.noodleRidgeA', 'caves.noises.noodleRidgeB', 'caves.noises.noodleThickness', 'caves.noises.noodleToggle',
       'caves.noises.pillar', 'caves.noises.pillarRare', 'caves.noises.pillarThickness', 'caves.noises.roughness', 'caves.noises.roughnessMod',
       'caves.noises.spag2d', 'caves.noises.spag2dElevation', 'caves.noises.spag2dRarity', 'caves.noises.spag2dThickness', 'caves.noises.spag3dA',
@@ -518,8 +526,9 @@ describe('panel controls (Task 17): kinds, slider positions, typed values, issue
     // caves number leaves (Task 6), + its 8 linear spaghetti and noodle leaves (Task 7; the band scales are log), + the 10
     // band ends minY and maxY (Task 8; the band span 1 … 32 is log), + capTop and waterDepth (Task 9), + 32 of the 36
     // carver leaves (Task 27; the worms' radius and height factors are log), + the noodles' threshold (the user's check),
-    // + SP6b's 13 cave-biome number and int leaves (Task 17: the 9 box bounds and the four border leaves).
-    expect(linear.length).toBe(117);
+    // + SP6b's 13 cave-biome number and int leaves (Task 17: the 9 box bounds and the four border leaves), + the floor's
+    // y and amp (Task 19; its span 1 … 32 is log).
+    expect(linear.length).toBe(119);
     for (const c of linear) {
       const n = sliderPositions(c);
       expect(n).toBe(Math.round((c.max! - c.min!) / c.step!));

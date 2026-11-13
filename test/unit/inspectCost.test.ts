@@ -62,7 +62,7 @@ function oracle(e: unknown, defs: Readonly<Record<string, unknown>>, mode: 'stru
 }
 
 describe('structural and work costs (SP3d spec §1.7, §5.2)', () => {
-  test('the default root costs 12,204 as source and 11,444 resolved (SP6a: the SP5c tree\'s 333 and the legacy-built 322, plus the cave terms)', () => {
+  test('the default root costs 12,867 as source and 12,074 resolved (SP6a: the SP5c tree\'s 333 and the legacy-built 322, plus the cave terms; SP6b: the rock floor)', () => {
     // SP6a §1.1: the body moved into defs.body (a ref costs its def), the root gained the precave tap, two mins and two
     // slots (338 and 327 before the cave terms), and the cave terms: E, C, keep with defs.pillars, detailG (Task 6: 2,522
     // and 2,455), then spaghetti 3D and 2D with their rarity blends and the noodle's four slots (Task 7: 7,025 and 6,893),
@@ -77,24 +77,30 @@ describe('structural and work costs (SP3d spec §1.7, §5.2)', () => {
     // the root's two adds; and S_w read through its two `ref wetSteep`, 16 nodes and its `interpolated(ref body)` each
     // (14 resolved): +32·(17 + 39) + (18 + 8·39) + 2 + 2·(16 + 8·39) = +2,780, +32·(12 + 38) + (13 + 8·38) + 2 +
     // 2·(14 + 8·38) = +2,555 (12,180 and 11,428); then the user's check (R31): the noodle toggle slot's
-    // `add(…, neg(param threshold))`, 3 nodes as source and 2 resolved (the neg folds to a constant), × 8: +24, +16.
-    expect(structuralCost(src.root, src.defs)).toBe(12204);
+    // `add(…, neg(param threshold))`, 3 nodes as source and 2 resolved (the neg folds to a constant), × 8: +24, +16
+    // (12,204 and 11,444). SP6b's rock floor (Task 19, §5.2): g_b and its add, 19 nodes as source with its floorY (7:
+    // add(param, mul(param, abs(clamp(noise2 floor))))), 18 resolved (the recip folds to a constant), × 8 in the four
+    // slots and once at the noodle's voxel level; S_b and its add in `defs.steep`, 18 nodes (floorY's params fold to
+    // constants, which keeps the count), through its two `ref steep`: +4·19·8 + 19 + 2·18 = +663, +4·18·8 + 18 + 2·18 = +630.
+    expect(structuralCost(src.root, src.defs)).toBe(12867);
     expect([structuralCost((src.defs as Record<string, unknown>)['body'], src.defs), structuralCost(resolveDensity(DEFAULT_DENSITY_TREE, DEFAULTS).defs['body'])]).toEqual([39, 38]);
     expect(7025 + 4 * 48 * 8 + 48 + 4 * 8 + 4 * 23 * 8 + 23).toBe(9400);
     expect(9400 + 32 * (17 + 39) + (18 + 8 * 39) + 2 + 2 * (16 + 8 * 39) + 3 * 8).toBe(12204);
+    expect(12204 + 4 * 19 * 8 + 19 + 2 * 18).toBe(12867);
     const resolved = resolveDensity(DEFAULT_DENSITY_TREE, DEFAULTS);
-    expect(structuralCost(resolved.root, resolved.defs)).toBe(11444);
+    expect(structuralCost(resolved.root, resolved.defs)).toBe(12074);
     expect(6893 + 4 * 40 * 8 + 40 + 4 * 20 * 8 + 20).toBe(8873);
     expect(8873 + 32 * (12 + 38) + (13 + 8 * 38) + 2 + 2 * (14 + 8 * 38) + 2 * 8).toBe(11444);
+    expect(11444 + 4 * 18 * 8 + 18 + 2 * 18).toBe(12074);
     const legacy = legacyDefaultDensityExpr(DEFAULTS.density);
     expect(structuralCost(legacy.root, legacy.defs)).toBe(322);
     const sp5c = sp5cTrees().default as { root: unknown; defs: unknown };
     expect(structuralCost(sp5c.root, sp5c.defs)).toBe(333);
   });
 
-  test('the default work cost is 17,467 at DEFAULTS: 11,444 units, 865 of them noises (the body\'s jag and overhang at 16 corner reads)', () => {
+  test('the default work cost is 18,482 at DEFAULTS: SP6a\'s 17,467 (11,444 units, 865 of them noises: the body\'s jag and overhang at 16 corner reads) plus the rock floor\'s 1,015', () => {
     const resolved = resolveDensity(DEFAULT_DENSITY_TREE, DEFAULTS);
-    expect(workCost(resolved, DEFAULTS)).toBe(17467);
+    expect(workCost(resolved, DEFAULTS)).toBe(18482);
     // SP5c's 574: 327 units, 17 of them noises (8 jag, 8 overhang corners, 1 detail).
     expect(327 - 17 + 8 * 16 + 8 * 16 + 8).toBe(574);
     // SP6a: `ref body` is read at the corners by the terrain tap, detailG, cheese's sky, roof and ramp and each spaghetti
@@ -120,11 +126,14 @@ describe('structural and work costs (SP3d spec §1.7, §5.2)', () => {
     expect(17547 - lever5Units).toBe(17451);
     // The user's check (R31): the toggle slot's threshold add and its folded constant, 2 units × 8 corners.
     expect(17451 + 2 * 8).toBe(17467);
+    // SP6b's rock floor (Task 19, §5.2): its 630 resolved units, 35 of them reads of the floor noise (3 octaves, single:
+    // 12 each), at the four slots' 8 corners, the noodle cap's voxel and S_b's two refs.
+    expect(17467 + 630 + 35 * (12 - 1)).toBe(18482);
     // The legacy-built tree (SP5c's values without the root's slots) stays at 569.
     expect(workCost(legacyDefaultDensityExpr(DEFAULTS.density), DEFAULTS)).toBe(569);
     // The configured leaf: 3 octaves of a single-stack jag weigh 12 each.
     const p = paramsWith({ density: { noises: { jag: { octaves: 3, double: false } } } });
-    expect(workCost(resolveDensity(DEFAULT_DENSITY_TREE, p), p)).toBe(17467 - 128 * 16 + 128 * 12);
+    expect(workCost(resolveDensity(DEFAULT_DENSITY_TREE, p), p)).toBe(18482 - 128 * 16 + 128 * 12);
   });
 
   test('a ref costs its def; interpolated 1 + 8 × child; a muted tap counts its child; mutes ignored', () => {
@@ -228,16 +237,20 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
    * `interpolated`, 18; S_w's 16 through each of its two refs; the root's two adds) and 2,119 more corner units (each slot
    * cap's g_w and add, 17, and seven more reads of the body's 293 corner units: the four slots', the noodle cap's and
    * S_w's two) (50,389,342), then the user's check (R31): the toggle slot's `add(…, neg(param threshold))`, 3 more
-   * corner units.
+   * corner units (50,393,017), then SP6b's rock floor (Task 19, §5.2): 436 more voxel-level units (the noodle cap's g_b
+   * and its add, 19; S_b and its add, 18, through each of `defs.steep`'s two refs; each of those three floorY reads its
+   * `noise2 floor` at the value-independent noise weight 128, 127 more than a node) and 584 more corner units (each slot
+   * cap's g_b and its add, 19, with its noise read at 128).
    */
-  const DENSITY_DEFAULT = 50_393_017;
+  const DENSITY_DEFAULT = 93_968_961;
   /** The SP3d default tree's column cost, which `DENSITY_COLUMN_COST_MAX` stays pinned to (SP6a D24). */
   const SP3D_DENSITY_DEFAULT = 14_907_917;
   const RULES_DEFAULT = 163 * 256 * (1 + 4 + SD_MAX_STATIC);
 
-  test('the default density column cost: 323 units × 98,304 outside interpolated, 15,217 × 1,225 inside', () => {
+  test('the default density column cost: 759 units × 98,304 outside interpolated, 15,801 × 1,225 inside', () => {
     expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBe(DENSITY_DEFAULT);
-    expect(323 * VOXELS + 15217 * CORNERS).toBe(DENSITY_DEFAULT);
+    expect(759 * VOXELS + 15801 * CORNERS).toBe(DENSITY_DEFAULT);
+    expect([759 - 323, 15801 - 15217]).toEqual([19 + 2 * 18 + 3 * 127, 4 * (19 + 127)]);
     expect(13003 - 12807).toBe(4 * 48 + 4);
     expect([271 - 248, 13095 - 13003]).toEqual([23, 4 * 23]);
     expect([323 - 271, 15217 - 13095]).toEqual([18 + 2 * 16 + 2, 4 * 17 + 7 * 293 + 3]);
@@ -281,10 +294,11 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
     expect(rulesColumnCost(gradient)).toBe(RULES_DEFAULT);
     // SP6a D24, §10.5: the muted and islands variants and the amplified and floating_islands trees with caves fit the cap.
     for (const t of [muted, islands, AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE]) expect(densityColumnCost(t)).toBeLessThanOrEqual(DENSITY_COLUMN_COST_MAX);
-    // For the record: the default with the cave terms, caps, island cap and wet roof is 18.9 × below the cap (D24
-    // estimated about 35 × before the caps; 22.4 × before the wet roof), amplified's and floating_islands' 18.8 × and 18.9 ×.
-    expect(Math.round((10 * DENSITY_COLUMN_COST_MAX) / DENSITY_DEFAULT) / 10).toBe(18.9);
-    expect([AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE].map((t) => Math.round((10 * DENSITY_COLUMN_COST_MAX) / densityColumnCost(t)) / 10)).toEqual([18.8, 18.9]);
+    // For the record: the default with the cave terms, caps, island cap, wet roof and rock floor is 10.2 × below the cap
+    // (D24 estimated about 35 × before the caps; 22.4 × before the wet roof, 18.9 × before SP6b's floor, whose three
+    // voxel-level floor-noise reads weigh 128 each), amplified's and floating_islands' 10.1 × each.
+    expect(Math.round((10 * DENSITY_COLUMN_COST_MAX) / DENSITY_DEFAULT) / 10).toBe(10.2);
+    expect([AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE].map((t) => Math.round((10 * DENSITY_COLUMN_COST_MAX) / densityColumnCost(t)) / 10)).toEqual([10.1, 10.1]);
     expect(rulesColumnCost(gradient)).toBeLessThanOrEqual(RULES_COLUMN_COST_MAX);
   });
 

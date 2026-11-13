@@ -181,7 +181,7 @@ describe('min chains (SP6a §1.6 lever (4))', () => {
     const on = dcOn.bounds, off = createDensityBounds(dcOff.compiled, dcOff.noises, false);
     expect([on.minSkip, off.minSkip]).toEqual([true, false]);
     const c = dcOn.compiled;
-    // Operand labels: the family taps, the precave tap, and the two `add(…, ref wetSteep)` (caves, noodle).
+    // Operand labels: the family taps, the precave tap, and the two `add(…, ref steep)` (caves, noodle).
     const label = (id: number): string => {
       const n = c.nodes[id]!;
       if (n.op === 'tap') return (n.expr as { name: string }).name;

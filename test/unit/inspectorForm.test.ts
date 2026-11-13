@@ -351,6 +351,8 @@ describe('ref ↔ literal on every numeric field, and neg', () => {
       'caves.ravines.lengthMin', 'caves.ravines.lengthMax', 'caves.ravines.widthSmoothness', 'caves.ravines.startYMin',
       'caves.ravines.startYMax',
       'caves.limits.waterDepth', 'caves.limits.bandSpan', 'caves.limits.capTop',
+      // SP6b Task 19: the rock floor's y and span.
+      'caves.floor.y', 'caves.floor.span',
       // SP6b Task 17: the cave biomes' edge jitter.
       'caves.biomes.edgeJitter',
     ]);
@@ -383,7 +385,7 @@ describe('the fields of a node', () => {
     // The 3D density noises, then the 3D cave noises (SP6a §1.5): the Density tab's noise select offers them.
     expect(formFields(q, D('root.a'))).toEqual([{ type: 'select', key: 'id', value: 'overhang', options: NOISES_3D }]);
     const q2 = withDensity(tree({ op: 'noise2', id: 'cheeseRegional' }));
-    expect(formFields(q2, D('root'))).toEqual([{ type: 'select', key: 'id', value: 'cheeseRegional', options: ['jag', 'cheeseRegional', 'spagRegional', 'spag2dElevation'] }]);
+    expect(formFields(q2, D('root'))).toEqual([{ type: 'select', key: 'id', value: 'cheeseRegional', options: ['jag', 'cheeseRegional', 'spagRegional', 'spag2dElevation', 'floor'] }]);
     expect(formFields(q, D('root.b'))).toEqual([{ type: 'select', key: 'name', value: 'd', options: ['d'] }]);
     expect(keys(withDensity((toggleMute(DEFAULTS, D('root.b')) as { value: unknown }).value), 'root.b')).toEqual(['name:name', 'number:mute']);
     expect(keys(DEFAULTS, 'root.a')).toEqual([]);
@@ -546,22 +548,23 @@ describe('the two lints (§3.3)', () => {
     expect(treeLints(withRules(seq(iff({ kind: 'biome', biomes: ['plains'] }, block('stone')))))).toEqual([LINT_NO_FAST_PATH]);
     expect(treeLints(withRules(seq(block('stone'))))).toEqual([]);
   });
-  test('density cost above 4 × the default root’s work cost (17,467 at the defaults with SP6a\'s cave terms, caps, island cap, wet roof, lever 5 and the noodle threshold)', () => {
+  test('density cost above 4 × the default root’s work cost (18,482 at the defaults with SP6a\'s cave terms, caps, island cap, wet roof, lever 5, the noodle threshold and SP6b\'s rock floor)', () => {
     // interpolated(add of k overhang noises): 1 + 8 × (16k + k − 1) (SP5c's default, 574: the lint fired from k = 17).
     expect(treeLints(withDensity(tree(noises(16))))).toEqual([]);
     expect(densityCostLint(2713 / 574)).toBe('density cost ≈ 4.7 × the default');
     // With the cave terms, their caps, the island cap and the wet roof the default costs 17,547 (4,366 with Task 6's, where
     // 80 `cheese` noises fired; 11,332 with Task 7's; 12,652 with Task 8's caps; 13,312 with the island cap), 17,451 after
-    // D25's lever 5 (cheese 3 octaves, entrance 2), 17,467 with the user's check's noodle threshold (R31), so neither 126
-    // overhang noises (the expanded depth's limit) nor 126 `cheese` (3 octaves, double: 24; 1 + 8 × (25k − 1) = 25,193)
-    // reach 4 × it. The `detail` noise at 16 octaves, double (128 units; the default reads it once, at 8 → 17,587) gives
-    // interpolated(add of k detail) 1 + 8 × (129k − 1): no lint at k = 68 (70,169 ≤ 70,348), the lint at k = 69 (71,201;
-    // with the island cap's 13,432 it fired from k = 53).
+    // D25's lever 5 (cheese 3 octaves, entrance 2), 17,467 with the user's check's noodle threshold (R31), 18,482 with
+    // SP6b's rock floor (Task 19), so neither 126 overhang noises (the expanded depth's limit) nor 126 `cheese` (3
+    // octaves, double: 24; 1 + 8 × (25k − 1) = 25,193) reach 4 × it. The `detail` noise at 16 octaves, double (128 units;
+    // the default reads it once, at 8 → 18,602) gives interpolated(add of k detail) 1 + 8 × (129k − 1): no lint at k = 72
+    // (74,297 ≤ 74,408), the lint at k = 73 (75,329; before the floor, at 17,587, it fired from k = 69, with the island
+    // cap's 13,432 from k = 53).
     expect(treeLints(withDensity(tree(noises(126))))).toEqual([]);
     expect(treeLints(withDensity(tree(noises(126, 'cheese'))))).toEqual([]);
     const heavy = { ...DEFAULTS, density: { ...DEFAULTS.density, noises: { ...DEFAULTS.density.noises, detail: { ...DEFAULTS.density.noises.detail, octaves: 16, double: true } } } } as Params;
-    expect(treeLints(withDensity(tree(noises(68, 'detail')), heavy))).toEqual([]);
-    expect(treeLints(withDensity(tree(noises(69, 'detail')), heavy))).toEqual([densityCostLint(71201 / 17587)]);
-    expect(densityCostLint(71201 / 17587)).toBe('density cost ≈ 4 × the default');
+    expect(treeLints(withDensity(tree(noises(72, 'detail')), heavy))).toEqual([]);
+    expect(treeLints(withDensity(tree(noises(73, 'detail')), heavy))).toEqual([densityCostLint(75329 / 18602)]);
+    expect(densityCostLint(75329 / 18602)).toBe('density cost ≈ 4 × the default');
   });
 });

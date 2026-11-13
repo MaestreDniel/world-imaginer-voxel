@@ -19,7 +19,9 @@
  * cheese's and spaghetti 3D's band ends at the defaults, are computed apart), a `rangeChoice` evaluating only its chosen
  * branch, and at
  * voxels the min chains' per-cell skips (`minSkips`, decided by the bounds, not by the closures). Not mirrored: the plane
- * cache (an `interpolated` read is the plain `trilerp`, the same double, SP6a ruling R13).
+ * cache (an `interpolated` read is the plain `trilerp`, the same double, SP6a ruling R13). The rock floor (SP6b §5.2,
+ * Task 19): floorY = `caves.floor.y` + amp·|clamp(Nf, −3, 3)| at the corner columns and the positions, its gentle part
+ * g_b (`defs.floorGentle`) in every cap's gentle sum and its steep part S_b in `defs.steep` beside S_w.
  *
  * The leaves are read from `InlinedLeaves` (any params with the default tree's shape); the tree's own literals (the caps'
  * G_f, the floor −48, the 16 and 32 of the slots, the band zones, the slide knots, the noodle's 40) are mirrored here, so
@@ -83,6 +85,12 @@ export interface InlinedLeaves {
   readonly gwConst: number;
   /** waterDepth + 8: its steep part. */
   readonly steepConst: number;
+  /** caves.floor.y and caves.floor.amp: floorY's (SP6b §5.2). */
+  readonly floorY: number;
+  readonly floorAmp: number;
+  /** caves.floor.span and 1 / caves.floor.span: the floor's gentle part g_b. */
+  readonly floorSpan: number;
+  readonly recipFloorSpan: number;
   readonly eOffset: number;
   readonly eNegThreshold: number;
   readonly cLayerAmp: number;
@@ -133,13 +141,17 @@ export interface InlinedNoises {
   readonly spagRegional: NormalNoise;
   readonly spag2d: NormalNoise; readonly spag2dElevation: NormalNoise; readonly spag2dThickness: NormalNoise; readonly spag2dRarity: NormalNoise;
   readonly noodleToggle: NormalNoise; readonly noodleThickness: NormalNoise; readonly noodleRidgeA: NormalNoise; readonly noodleRidgeB: NormalNoise;
+  readonly floor: NormalNoise;
   /**
    * The column slots at the corner columns, `cols[slot·25 + j·5 + i]`: 0 offset + jag·(1 − |jag₂/σ|)², 1 sigma, 2 wet′,
    * 3 −(regional·cheeseRegional), 4 −(regional·spagRegional) (spaghetti 3D), 5 layerAmp·spag2dElevation, 6
-   * −(regional·spagRegional) (the noodle).
+   * −(regional·spagRegional) (the noodle), 7 (floorY + 8) + span (g_b's).
    */
   readonly cols: Float64Array;
-  /** The position slots, `pos[slot·256 + lz·16 + lx]`: 0 the detail amplitude, 1 wet′. */
+  /**
+   * The position slots, `pos[slot·256 + lz·16 + lx]`: 0 the detail amplitude, 1 wet′, 2 (floorY + 8) + span (the noodle
+   * cap's g_b), 3 floorY + 8 (S_b's).
+   */
   readonly pos: Float64Array;
 }
 
@@ -170,6 +182,7 @@ export function inlinedLeavesOf(params: Params): InlinedLeaves {
     recipSpan: rS,
     gwConst: (lim.waterDepth + 8) + s,
     steepConst: lim.waterDepth + 8,
+    floorY: cv.floor.y, floorAmp: cv.floor.amp, floorSpan: cv.floor.span, recipFloorSpan: 1 / cv.floor.span,
     eOffset: e.offset, eNegThreshold: -e.threshold,
     cLayerAmp: c.layerAmp, cOffset: c.offset, cRegional: c.regional, cRoofDepth: c.roofDepth,
     pThreshold: cv.pillars.threshold,
@@ -204,8 +217,9 @@ export function inlinedNoisesOf(ctx: GenContext): InlinedNoises {
     spagRegional: c('spagRegional'),
     spag2d: c('spag2d'), spag2dElevation: c('spag2dElevation'), spag2dThickness: c('spag2dThickness'), spag2dRarity: c('spag2dRarity'),
     noodleToggle: c('noodleToggle'), noodleThickness: c('noodleThickness'), noodleRidgeA: c('noodleRidgeA'), noodleRidgeB: c('noodleRidgeB'),
-    cols: new Float64Array(7 * 25),
-    pos: new Float64Array(2 * 256),
+    floor: c('floor'),
+    cols: new Float64Array(8 * 25),
+    pos: new Float64Array(4 * 256),
   };
 }
 
@@ -224,6 +238,7 @@ export function inlinedColumn(s: ColumnSample, p: InlinedLeaves, n: InlinedNoise
       cols[100 + cc] = -(p.s3Regional * sr);
       cols[125 + cc] = p.s2LayerAmp * n.spag2dElevation.z2(x, z);
       cols[150 + cc] = -(p.nRegional * sr);
+      cols[175 + cc] = ((p.floorY + p.floorAmp * ABS(clamp(n.floor.z2(x, z), -3, 3))) + 8) + p.floorSpan;
     }
   }
   for (let lz = 0; lz < 16; lz++) {
@@ -231,6 +246,9 @@ export function inlinedColumn(s: ColumnSample, p: InlinedLeaves, n: InlinedNoise
       const x = x0 + lx, z = z0 + lz, q = lz * 16 + lx;
       pos[q] = p.detailLo + p.detailSpan * clamp((READ_FIELD(s, 'E', x, z) + 1) * 0.5, 0, 1);
       pos[256 + q] = clamp(4 * READ_FIELD(s, 'wetMask', x, z), 0, 1);
+      const fy8 = (p.floorY + p.floorAmp * ABS(clamp(n.floor.z2(x, z), -3, 3))) + 8;
+      pos[512 + q] = fy8 + p.floorSpan;
+      pos[768 + q] = fy8;
     }
   }
 }
@@ -252,13 +270,15 @@ export function inlinedCorner(s: ColumnSample, p: InlinedLeaves, n: InlinedNoise
   const wet = cols[50 + cc]!;
   const gw = wet * clamp((p.gwConst + negT) * p.recipSpan, 0, 1);
   const gi = p.kGi[k]!;
+  // g_b, the rock floor's gentle part (`defs.floorGentle`, once per corner).
+  const gb = clamp((cols[175 + cc]! + p.kNegY[k]!) * p.recipFloorSpan, 0, 1);
   const rough = (-0.05 + -0.05 * n.roughnessMod.z3(x, y, z)) * (-0.4 + ABS(n.roughness.z3(x, y, z)));
   // E, the entrances (no sky test, no ramp).
   {
     const a = ((n.entrance.z3(x, y, z) * SIXTH) + p.eOffset) + 1 * SLIDE(KNOTS_ENTRANCE, y);
     const ea = ABS(n.entranceA.z3(x, y, z)), eb = ABS(n.entranceB.z3(x, y, z));
     const b = rough + clamp((eb > ea ? eb : ea) + p.eNegThreshold, -1, 1);
-    out[1225 + idx] = fl(16 * (b < a ? b : a)) + (0.4 * min1((p.kEG[k]! + gw) + gi) + p.kEH[k]!);
+    out[1225 + idx] = fl(16 * (b < a ? b : a)) + (0.4 * min1(((p.kEG[k]! + gw) + gi) + gb) + p.kEH[k]!);
   }
   // sky(v) = rangeChoice(T, −1e9, −8, 32, v) and ramp = clamp((surfaceDepth − T)·2, 0, 32), shared by C, S3 and S2.
   const sky = -1e9 <= T && T < -8;
@@ -269,7 +289,7 @@ export function inlinedCorner(s: ColumnSample, p: InlinedLeaves, n: InlinedNoise
     const l = n.layer.z3(x, y, z);
     const body = ((p.cLayerAmp * (l * l)) + clamp((n.cheese.z3(x, y, z) + p.cOffset) + cols[75 + cc]!, -1, 1))
       + clamp((p.cRoofDepth + negT) * TWENTYFOURTH, 0, 0.5);
-    out[2450 + idx] = (fl(16 * body) + ramp) + (5.8 * min1((p.kCG[k]! + gw) + gi) + p.kCH[k]!);
+    out[2450 + idx] = (fl(16 * body) + ramp) + (5.8 * min1(((p.kCG[k]! + gw) + gi) + gb) + p.kCH[k]!);
   }
   // S3, spaghetti 3D: max(rmS(A), rmS(B)), the band terms under their rangeChoice.
   if (sky) out[3675 + idx] = 32;
@@ -294,7 +314,7 @@ export function inlinedCorner(s: ColumnSample, p: InlinedLeaves, n: InlinedNoise
     }
     const ra = ((a0 + a1) + a2) + a3, rb = ((b0 + b1) + b2) + b3;
     const pre = (((rb > ra ? rb : ra) + p.s3NegThickness) + -(p.s3ThicknessVar * n.spag3dThickness.z3(x, y, z))) + cols[100 + cc]!;
-    out[3675 + idx] = (fl(16 * (rough + clamp(pre, -1, 1))) + ramp) + (0.5 * min1((p.kS3G[k]! + gw) + gi) + p.kS3H[k]!);
+    out[3675 + idx] = (fl(16 * (rough + clamp(pre, -1, 1))) + ramp) + (0.5 * min1(((p.kS3G[k]! + gw) + gi) + gb) + p.kS3H[k]!);
   }
   // S2, spaghetti 2D: max(rmS2(S2d) + 0.083·tm, (|layerAmp·Nel + yGrad| + tm)³).
   if (sky) out[4900 + idx] = 32;
@@ -310,7 +330,7 @@ export function inlinedCorner(s: ColumnSample, p: InlinedLeaves, n: InlinedNoise
     const a = ((((t0 + t1) + t2) + t3) + t4) + 0.083 * tm;
     const q = ABS(cols[125 + cc]! + 1 * SLIDE(KNOTS_SPAG2D, y)) + tm;
     const cube = (q * q) * q;
-    out[4900 + idx] = (fl(16 * clamp(cube > a ? cube : a, -1, 1)) + ramp) + (0.3 * min1((p.kS2G[k]! + gw) + gi) + p.kS2H[k]!);
+    out[4900 + idx] = (fl(16 * clamp(cube > a ? cube : a, -1, 1)) + ramp) + (0.3 * min1(((p.kS2G[k]! + gw) + gi) + gb) + p.kS2H[k]!);
   }
   // P, the pillars.
   {
@@ -370,7 +390,7 @@ function cavesAt(
 /** The noodle at a voxel: fl(16·(−thickness − 0.025·Kn + ridgeMul·max(|An|, |Bn|) + 4·max(0, −Nn))) + cap_n. */
 function noodleAt(
   slots: Float64Array, p: InlinedLeaves, c: number, tx: number, ty: number, tz: number, y: number, wet: number, negT: number,
-  skips: Uint8Array, skipBase: number,
+  gb: number, skips: Uint8Array, skipBase: number,
 ): number {
   const kn = tri(slots, 6, c, tx, ty, tz);
   const ra = ABS(tri(slots, 7, c, tx, ty, tz)), rb = ABS(tri(slots, 8, c, tx, ty, tz));
@@ -378,7 +398,7 @@ function noodleAt(
   const body = ((p.nNegThickness + -0.025 * kn) + p.nRidgeMul * (rb > ra ? rb : ra)) + 4 * (nt > 0 ? nt : 0);
   const yi = y + 64;
   const m3 = skipBase >= 0 ? skips[skipBase + 3]! : 0;
-  const x = (p.vNG[yi]! + wet * clamp((p.gwConst + negT) * p.recipSpan, 0, 1)) + p.vGi[yi]!;
+  const x = ((p.vNG[yi]! + wet * clamp((p.gwConst + negT) * p.recipSpan, 0, 1)) + p.vGi[yi]!) + gb;
   const gentle = m3 === 1 ? x : m3 === 2 ? 1 : x < 1 ? x : 1;
   return fl(16 * body) + (0.4 * gentle + p.vNH[yi]!);
 }
@@ -401,11 +421,14 @@ export function inlinedVoxel(
   const negT = -T;
   const wet = n.pos[256 + q]!;
   const m6 = skipBase >= 0 ? skips[skipBase + 6]! : 0, m5 = skipBase >= 0 ? skips[skipBase + 5]! : 0;
-  // S_w, the wet roof's steep part, once per voxel where caves + S_w or noodle + S_w is read.
-  const sw = m6 === 2 && m5 === 2 ? 0 : 128 * (wet * clamp((p.steepConst + negT) * 0.125, 0, 1));
-  // The root chain: min(min(precave, caves + S_w), noodle + S_w), then max(·, islands −1e6).
+  // steep = S_w + S_b, the wet roof's and the rock floor's steep parts, once per voxel where caves + steep or
+  // noodle + steep is read; g_b at the position for the noodle's cap.
+  const sw = m6 === 2 && m5 === 2 ? 0
+    : 128 * (wet * clamp((p.steepConst + negT) * 0.125, 0, 1)) + 128 * clamp((n.pos[768 + q]! + -y) * 0.125, 0, 1);
+  const gb = m6 === 2 ? 0 : clamp((n.pos[512 + q]! + -y) * p.recipFloorSpan, 0, 1);
+  // The root chain: min(min(precave, caves + steep), noodle + steep), then max(·, islands −1e6).
   let v: number;
-  if (m6 === 1) v = noodleAt(slots, p, c, tx, ty, tz, y, wet, negT, skips, skipBase) + sw;
+  if (m6 === 1) v = noodleAt(slots, p, c, tx, ty, tz, y, wet, negT, gb, skips, skipBase) + sw;
   else {
     let v5: number;
     if (m5 === 1) v5 = cavesAt(slots, c, tx, ty, tz, skips, skipBase, p.pThreshold) + sw;
@@ -415,7 +438,7 @@ export function inlinedVoxel(
       else { const b = cavesAt(slots, c, tx, ty, tz, skips, skipBase, p.pThreshold) + sw; v5 = b < a ? b : a; }
     }
     if (m6 === 2) v = v5;
-    else { const b = noodleAt(slots, p, c, tx, ty, tz, y, wet, negT, skips, skipBase) + sw; v = b < v5 ? b : v5; }
+    else { const b = noodleAt(slots, p, c, tx, ty, tz, y, wet, negT, gb, skips, skipBase) + sw; v = b < v5 ? b : v5; }
   }
   return -1e6 > v ? -1e6 : v;
 }

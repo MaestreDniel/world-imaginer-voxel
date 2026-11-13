@@ -25,8 +25,8 @@ import { samplePoints } from '../../src/metrics/noiseStats';
 type Rec = Record<string, unknown>;
 const at = (v: unknown, path: string): unknown => path.split('.').reduce<unknown>((n, k) => (n as Rec)[k], v);
 
-/** wet′ in the default tree: `defs.wetSteep` = mul(128, mul(wet′, clamp(…))) (SP6a §1.4). */
-const WET_PATH = 'defs.wetSteep.b.a';
+/** wet′ in the default tree: S_w = `defs.steep.a` = mul(128, mul(wet′, clamp(…))) (SP6a §1.4; `defs.steep` = S_w + S_b, SP6b §5.2). */
+const WET_PATH = 'defs.steep.a.b.a';
 const SHORE_COLUMNS = 98;
 const DRAWS = 65536;
 

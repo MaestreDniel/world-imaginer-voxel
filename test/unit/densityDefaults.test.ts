@@ -43,16 +43,17 @@ describe('the default expression (SP3b spec §3.1; SP3d spec §2.1: the resolved
   test('it validates against the schema density noises', () => {
     const e = defaultExpr();
     expect(validateExpr(e, densityNoiseSource(CTX))).toEqual([]);
-    // SP6a Task 9: the wet roof's steep part S_w, `defs.wetSteep`.
-    expect(Object.keys(e.defs)).toEqual(['body', 'pillars', 'wetSteep']);
+    // SP6a Task 9: the wet roof's steep part S_w, `defs.wetSteep`; SP6b Task 19: with the rock floor's S_b, `defs.steep`.
+    expect(Object.keys(e.defs)).toEqual(['body', 'floorGentle', 'pillars', 'steep']);
     const noiseIds = ops(e).flatMap((n) => (n.op === 'noise2' || n.op === 'noise' || n.op === 'noiseScaled' ? [`${n.op}:${n.id}`] : []));
     const times = (id: string, n: number): string[] => Array.from({ length: n }, () => id);
     // SP6a's cave terms read the caves.noises ids (pillarThickness twice: the cube is square(x)·x). Task 7: rough is read
     // by the entrances and spaghetti 3D; each spaghetti rarity blend reads its rarity noise once per band's rangeChoice and
     // once per step of its weights (3D: 10 per blend, two blends; 2D: 13) and noiseScaled once per band; S2 reads tm three
-    // times (0.083·tm and the cube's two copies) and Nel twice; Nrb is read by spaghetti 3D and the noodle.
+    // times (0.083·tm and the cube's two copies) and Nel twice; Nrb is read by spaghetti 3D and the noodle. SP6b's rock
+    // floor (Task 19) reads Nf in g_b, written once as `defs.floorGentle` (ruling R11), and in S_b.
     expect(noiseIds.sort()).toEqual([
-      'noise2:cheeseRegional', 'noise2:jag', ...times('noise2:spag2dElevation', 2), ...times('noise2:spagRegional', 2),
+      'noise2:cheeseRegional', ...times('noise2:floor', 2), 'noise2:jag', ...times('noise2:spag2dElevation', 2), ...times('noise2:spagRegional', 2),
       'noise:cheese', 'noise:detail', 'noise:entrance', 'noise:entranceA', 'noise:entranceB', 'noise:layer',
       'noise:noodleRidgeA', 'noise:noodleRidgeB', 'noise:noodleThickness', 'noise:noodleToggle',
       'noise:overhang', 'noise:pillar', 'noise:pillarRare', 'noise:pillarThickness', 'noise:pillarThickness',
@@ -166,6 +167,16 @@ function byHand(s: ColumnSample, i: number, k: number, j: number): { terrain: nu
   return { terrain: t, final: v > -1e6 ? v : -1e6 };
 }
 
+/**
+ * The rock floor's steep part S_b at (x, y, z) by hand, in the tree's operation order (SP6b §5.2): 128·clamp((floorY + 8 −
+ * y)·0.125, 0, 1), floorY = `caves.floor.y` + `caves.floor.amp`·|clamp(Nf, −3, 3)|, added to S_w (0 on the dry columns).
+ */
+function floorSteep(dc: DensityContext, x: number, y: number, z: number): number {
+  const nf = Math.min(3, Math.max(-3, dc.noises('floor')!.z2(x, z)));
+  const floorY = DEFAULTS.caves.floor.y + DEFAULTS.caves.floor.amp * Math.abs(nf);
+  return 0 + 128 * Math.min(1, Math.max(0, (floorY + 8 + -y) * 0.125));
+}
+
 describe('probe (spec §2.3)', () => {
   test('hand-checked values at lattice-aligned voxels: final, the terrain tap and the islands tap', () => {
     const dc = createDensityContext(CTX);
@@ -183,7 +194,9 @@ describe('probe (spec §2.3)', () => {
           const keep = P * 0.0625 < DEFAULTS.caves.pillars.threshold ? -1e6 : P;
           const fam = (name: string): number => probe(dc, x, y, z, name);
           const caves = Math.max(Math.min(Math.min(Math.min(fam('entrances'), fam('cheese')), fam('spag3d')), fam('spag2d')), keep);
-          expect(probe(dc, x, y, z), `(${x}, ${y}, ${z})`).toBe(Math.max(Math.min(Math.min(h.final, caves), fam('noodle')), -1e6));
+          // `defs.steep` = S_w + S_b added to both (SP6a §1.4; SP6b §5.2): S_w is 0 on these dry columns.
+          const sb = floorSteep(dc, x, y, z);
+          expect(probe(dc, x, y, z), `(${x}, ${y}, ${z})`).toBe(Math.max(Math.min(Math.min(h.final, caves + sb), fam('noodle') + sb), -1e6));
           expect(probe(dc, x, y, z, 'terrain'), `terrain (${x}, ${y}, ${z})`).toBe(h.terrain);
           expect(probe(dc, x, y, z, 'islands')).toBe(-1e6);
           checked++;
@@ -266,7 +279,9 @@ describe('early-outs of the default expression (spec §3.2) and the driver on it
                     const keep = P * 0.0625 < DEFAULTS.caves.pillars.threshold ? -1e6 : P;
                     const fam = (name: string): number => probe(dc, x, y, z, name);
                     const caves = Math.max(Math.min(Math.min(Math.min(fam('entrances'), fam('cheese')), fam('spag3d')), fam('spag2d')), keep);
-                    if (Math.min(caves, fam('noodle')) > 0) rock++;
+                    // Each under `defs.steep` (S_w 0 on these dry columns, the rock floor's S_b; SP6b §5.2).
+                    const sb = floorSteep(dc, x, y, z);
+                    if (Math.min(caves + sb, fam('noodle') + sb) > 0) rock++;
                   }
                 }
               }

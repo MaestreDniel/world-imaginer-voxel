@@ -4,7 +4,9 @@
  * `detailG` in place of the detail term. SP6a Task 7 (spec §1.1-§1.3): spaghetti 3D (S3) and 2D (S2) with their
  * continuous rarity blends, and the noodle with its four slots and `nb`. SP6a Task 8 (spec §1.4, §4): each family's
  * depth band (`minY`, `maxY`, `caves.limits.bandSpan`) and its cap, a gentle part then a steep part. SP6a Task 9 (spec
- * §1.4, D8): the island cap `caves.limits.capTop` in every family's cap.
+ * §1.4, D8): the island cap `caves.limits.capTop` in every family's cap. SP6b Task 19 (spec §5.2, D6): the rock floor,
+ * floorY = `caves.floor.y` + `caves.floor.amp`·|clamp(Nf, −3, 3)|, its gentle part g_b in every cap and its steep part
+ * S_b beside the wet roof's S_w in `defs.steep`.
  */
 import { describe, expect, test } from 'vitest';
 import { SPAGHETTI_BANDS, type SpaghettiBands } from '../../src/core/constants';
@@ -62,7 +64,8 @@ const FAMILY_TAPS = ['entrances', 'cheese', 'spag3d', 'spag2d', 'noodle', 'pilla
 
 /**
  * The paths of the cave terms in the default source tree (SP6a §1.1): the caves slot max(min(min(min(E, C), S3), S2),
- * keep), under `add(caves, ref wetSteep)` since the wet roof (Task 9), as the noodle tap under `add(noodle, ref wetSteep)`.
+ * keep), under `add(caves, ref steep)` since the wet roof (Task 9; `defs.steep` = S_w + S_b since SP6b's floor), as the
+ * noodle tap under `add(noodle, ref steep)`.
  */
 const P = {
   detailG: 'root.a.a.a.x.b',
@@ -100,16 +103,20 @@ const BANDS = {
 describe('the caves group (SP6a spec §4)', () => {
   test('the leaves of this task, sizes first, every one Terrain-scoped on the terrain stage, with spec §4\'s defaults and ranges', () => {
     // The carver leaves (Task 27, between the entrances and the limits) are pinned in test/unit/carverPaths.test.ts, the
-    // cave-biome leaves (SP6b Task 17, after the noises) in test/unit/cavePicker.test.ts.
+    // cave-biome leaves (SP6b Task 17, after the noises) in test/unit/cavePicker.test.ts, the floor's (SP6b Task 19,
+    // between the noises and the cave biomes) in 'the rock floor' below.
     const carver = /^caves\.(worms|undergroundWorms|ravines)\./;
-    const leaves = SCHEMA.leaves.filter((l) => l.path.startsWith('caves.') && !l.path.startsWith('caves.noises.') && !l.path.startsWith('caves.biomes.') && !carver.test(l.path));
+    const leaves = SCHEMA.leaves.filter((l) => l.path.startsWith('caves.') && !l.path.startsWith('caves.noises.') && !l.path.startsWith('caves.biomes.') && !l.path.startsWith('caves.floor.') && !carver.test(l.path));
     expect(leaves.map((l) => [l.path, l.leaf.def, l.leaf.min, l.leaf.max])).toEqual([
       // Task 38's tuning (spec §1.2): offset 0.27 → 0.5, spaghetti 3D 0.0765 → 0.13, noodles 0.075 → 0.11, surfaceDepth 8 → 10.
+      // SP6b ruling R10 (Task 19): each family's minY raised to the floor's shadow, the least move that gives a U2 step a
+      // witness without changing the world (cheese −56, spaghetti 3D −56, spaghetti 2D −64, noodles −60 → −55; entrances
+      // −64 → −54).
       ['caves.cheese.offset', 0.5, -0.5, 1],
       ['caves.cheese.regional', 0.1, 0, 0.4],
       ['caves.cheese.layerAmp', 4, 0, 8],
       ['caves.cheese.roofDepth', 12, 0, 48],
-      ['caves.cheese.minY', -56, -64, 320],
+      ['caves.cheese.minY', -55, -64, 320],
       ['caves.cheese.maxY', 320, -64, 320],
       ['caves.spaghetti3d.thickness', 0.13, 0, 0.3],
       ['caves.spaghetti3d.thicknessVar', 0.0115, 0, 0.1],
@@ -118,7 +125,7 @@ describe('the caves group (SP6a spec §4)', () => {
       ['caves.spaghetti3d.scales.s1', 1, 1 / 16, 16],
       ['caves.spaghetti3d.scales.s2', 1.5, 1 / 16, 16],
       ['caves.spaghetti3d.scales.s3', 2, 1 / 16, 16],
-      ['caves.spaghetti3d.minY', -56, -64, 320],
+      ['caves.spaghetti3d.minY', -55, -64, 320],
       ['caves.spaghetti3d.maxY', 320, -64, 320],
       ['caves.spaghetti2d.thickness', 0.95, 0.5, 1.5],
       ['caves.spaghetti2d.layerAmp', 8, 0, 32],
@@ -127,7 +134,7 @@ describe('the caves group (SP6a spec §4)', () => {
       ['caves.spaghetti2d.scales.s2', 1, 1 / 16, 16],
       ['caves.spaghetti2d.scales.s3', 2, 1 / 16, 16],
       ['caves.spaghetti2d.scales.s4', 3, 1 / 16, 16],
-      ['caves.spaghetti2d.minY', -64, -64, 320],
+      ['caves.spaghetti2d.minY', -55, -64, 320],
       // 215, not 320: the highest default from 208 to 244 (no generated output moves) whose U2 step has a witness (spec §4).
       ['caves.spaghetti2d.maxY', 215, -64, 320],
       // The user's check (R31, R32): thickness 0.11 → 0.22, the toggle's threshold 1 (new), maxY 64 → 48.
@@ -135,12 +142,12 @@ describe('the caves group (SP6a spec §4)', () => {
       ['caves.noodles.ridgeMul', 1.5, 0.5, 4],
       ['caves.noodles.regional', 0.1, 0, 0.4],
       ['caves.noodles.threshold', 1, -1, 2],
-      ['caves.noodles.minY', -60, -64, 320],
+      ['caves.noodles.minY', -55, -64, 320],
       ['caves.noodles.maxY', 48, -64, 320],
       ['caves.pillars.threshold', 0.03, 0, 0.5],
       ['caves.entrances.offset', 0.37, -0.5, 1],
       ['caves.entrances.threshold', 0.08, 0, 0.5],
-      ['caves.entrances.minY', -64, -64, 320],
+      ['caves.entrances.minY', -54, -64, 320],
       ['caves.entrances.maxY', 320, -64, 320],
       ['caves.limits.surfaceDepth', 10, 0, 32],
       // Task 9: the wet roof's depth d_w (closed within d_w + 4 of the bed, open from d_w + 8 + bandSpan).
@@ -198,6 +205,8 @@ describe('the caves group (SP6a spec §4)', () => {
       ['noodleThickness', 3, 64, 64, 1, false, null],
       ['noodleRidgeA', 3, 18, 18, 1, false, null],
       ['noodleRidgeB', 3, 18, 18, 1, false, null],
+      // SP6b Task 19 (spec §5.2, §6.1): Nf of the rock floor, last.
+      ['floor', 2, 48, 48, 3, false, null],
     ]);
     for (const [id, d] of Object.entries(n)) {
       expect([id, d.clampSigma, d.remap]).toEqual([id, 3, 'none']);
@@ -225,9 +234,10 @@ describe('the cave terms of the default tree (SP6a spec §1.1-§1.2)', () => {
     for (const name of FAMILY_TAPS) expect(at(DEFAULT_DENSITY_TREE, P[name])).toMatchObject({ op: 'tap', name });
     // The caves slot: max(min(min(min(E, C), S3), S2), keep), its mins left-nested in that order.
     expect(['root.a.a.b.a', 'root.a.a.b.a.a', 'root.a.a.b.a.a.a', 'root.a.a.b.a.a.a.a'].map((p) => (at(DEFAULT_DENSITY_TREE, p) as Rec)['op'])).toEqual(['max', 'min', 'min', 'min']);
-    // The wet roof's steep part S_w (Task 9, Spec correction 14): added at voxel level to the caves slot and the noodle.
-    expect(at(DEFAULT_DENSITY_TREE, 'root.a.a.b')).toMatchObject({ op: 'add', b: { op: 'ref', name: 'wetSteep' } });
-    expect(at(DEFAULT_DENSITY_TREE, 'root.a.b')).toMatchObject({ op: 'add', b: { op: 'ref', name: 'wetSteep' } });
+    // The wet roof's steep part S_w (Task 9, Spec correction 14) and the floor's S_b (SP6b §5.2), `defs.steep`: added at
+    // voxel level to the caves slot and the noodle.
+    expect(at(DEFAULT_DENSITY_TREE, 'root.a.a.b')).toMatchObject({ op: 'add', b: { op: 'ref', name: 'steep' } });
+    expect(at(DEFAULT_DENSITY_TREE, 'root.a.b')).toMatchObject({ op: 'add', b: { op: 'ref', name: 'steep' } });
     // The spaghetti slots are interpolated under the tap; the noodle is combined at voxel level from four slots.
     for (const name of ['spag3d', 'spag2d'] as const) expect(at(DEFAULT_DENSITY_TREE, `${P[name]}.x`)).toMatchObject({ op: 'interpolated' });
     expect(at(DEFAULT_DENSITY_TREE, `${P.noodle}.x`)).toMatchObject({ op: 'add', a: { op: 'max', b: { op: 'const', v: -48 } } });
@@ -648,8 +658,8 @@ describe('the noodle (SP6a spec §1.1, §1.3)', () => {
     }
   });
 
-  test('the noodle noises are not evaluated at corners more than 40 blocks outside the band y −60 … 48 (a counting stub)', () => {
-    expect([DEFAULTS.caves.noodles.minY, DEFAULTS.caves.noodles.maxY]).toEqual([-60, 48]);
+  test('the noodle noises are not evaluated at corners more than 40 blocks outside the band y −55 … 48 (a counting stub)', () => {
+    expect([DEFAULTS.caves.noodles.minY, DEFAULTS.caves.noodles.maxY]).toEqual([-55, 48]);
     const { source, calls } = countingNoises(dc.noises, NOODLE_NOISES);
     const c = compileDensity(dc.expr, source);
     const constants: number[] = [];
@@ -660,7 +670,7 @@ describe('the noodle (SP6a spec §1.1, §1.3)', () => {
       c.positionFn(s);
       for (let k = 0; k <= 48; k++) {
         const y = -64 + 8 * k;
-        const near = y - 48 < 40 && -60 - y < 40;
+        const near = y - 48 < 40 && -55 - y < 40;
         for (let j = 0; j <= 4; j++) {
           for (let i = 0; i <= 4; i++) {
             const before = NOODLE_NOISES.map((id) => calls.get(id)!);
@@ -691,10 +701,18 @@ const WET = { op: 'clamp', lo: 0, hi: 1, x: { op: 'mul', a: { op: 'const', v: 4 
 /** The depth d of the wet roof (SP6a §1.4): `ref body` at a slot's corner, `interpolated(ref body)` at the noodle's voxel. */
 const D_SLOT = { op: 'ref', name: 'body' } as const;
 const D_NOODLE = { op: 'interpolated', x: D_SLOT } as const;
+/** floorY of SP6b §5.2 as data: `caves.floor.y` + `caves.floor.amp`·|clamp(Nf, −3, 3)|, Nf = `noise2 floor` (COLUMN class). */
+const FLOOR_Y = {
+  op: 'add', a: { op: 'param', path: 'caves.floor.y' },
+  b: { op: 'mul', a: { op: 'param', path: 'caves.floor.amp' }, b: { op: 'abs', x: { op: 'clamp', x: { op: 'noise2', id: 'floor' }, lo: -3, hi: 3 } } },
+} as const;
+/** floorY's node in the source tree and in a resolved one: S_b's (`defs.steep.b` = 128·clamp((floorY + 8 − y)·0.125, 0, 1)). */
+const FLOOR_Y_PATH = 'defs.steep.b.b.x.a.a.a';
 /**
- * cap_f of SP6a §1.4 as data, written from the spec: G·min(1, g + g_w + g_i) + 128·min(1, h + h_i) over the family's
+ * cap_f of SP6a §1.4 as data, written from the spec: G·min(1, g + g_w + g_i + g_b) + 128·min(1, h + h_i) over the family's
  * band leaves, `bandSpan`, the wet roof's gentle part g_w = wet′·clamp((waterDepth + 8 + s − d)·(1/s), 0, 1) (its
- * steep part is S_w, at voxel level) and `capTop` (the island cap, D8).
+ * steep part is S_w, at voxel level), `capTop` (the island cap, D8) and the rock floor's gentle part g_b =
+ * clamp((floorY + 8 + s_b − y)·(1/s_b), 0, 1), s_b = `caves.floor.span` (SP6b §5.2; its steep part S_b is at voxel level).
  */
 function capExpr(group: string, gentle: number, d: unknown): unknown {
   const p = (path: string) => ({ op: 'param', path });
@@ -710,15 +728,18 @@ function capExpr(group: string, gentle: number, d: unknown): unknown {
   const top = p('caves.limits.capTop');
   const gi = clamp01(mul(add(add(add(y, neg(top)), { op: 'const', v: 8 }), s), { op: 'recip', x: s }));
   const hi = clamp01(mul(add(add(y, neg(top)), { op: 'const', v: 8 }), { op: 'const', v: 0.125 }));
-  return add(mul({ op: 'const', v: gentle }, { op: 'min', a: { op: 'const', v: 1 }, b: add(add(g, gw), gi) }), mul({ op: 'const', v: 128 }, { op: 'min', a: { op: 'const', v: 1 }, b: add(h, hi) }));
+  // g_b is `defs.floorGentle` (ruling R11), pinned in the test below.
+  const gb = { op: 'ref', name: 'floorGentle' };
+  return add(mul({ op: 'const', v: gentle }, { op: 'min', a: { op: 'const', v: 1 }, b: add(add(add(g, gw), gi), gb) }), mul({ op: 'const', v: 128 }, { op: 'min', a: { op: 'const', v: 1 }, b: add(h, hi) }));
 }
 /**
- * The cap of §1.4 in numbers: G·min(1, g + g_w + g_i) + 128·min(1, h + h_i) at y (capTop 344 by default: no island cap;
- * g_w from wet′ and d at the voxel, the defaults' waterDepth 16).
+ * The cap of §1.4 in numbers: G·min(1, g + g_w + g_i + g_b) + 128·min(1, h + h_i) at y (capTop 344 by default: no island
+ * cap; g_w from wet′ and d at the voxel, the defaults' waterDepth 16; g_b from floorY at the position, −∞ by default: no
+ * floor, and the defaults' floor span 8).
  */
-function capAt(gentle: number, minY: number, maxY: number, s: number, y: number, capTop = 344, wet = 0, d = 0): number {
+function capAt(gentle: number, minY: number, maxY: number, s: number, y: number, capTop = 344, wet = 0, d = 0, floorY = -Infinity): number {
   const c01 = (v: number) => Math.min(1, Math.max(0, v));
-  const g = c01((minY - y) / s) + c01((y - maxY) / s) + wet * c01((16 + 8 + s - d) / s) + c01((y - capTop + 8 + s) / s);
+  const g = c01((minY - y) / s) + c01((y - maxY) / s) + wet * c01((16 + 8 + s - d) / s) + c01((y - capTop + 8 + s) / s) + c01((floorY + 8 + 8 - y) / 8);
   const h = c01((minY - s - y) / 8) + c01((y - maxY - s) / 8) + c01((y - capTop + 8) / 8);
   return gentle * Math.min(1, g) + 128 * Math.min(1, h);
 }
@@ -733,11 +754,17 @@ const bandPatch = (name: CapFamily, minY: number, maxY: number, extra: ParamsPat
   ({ ...extra, caves: { ...extra.caves, [BANDS[name][0]]: { ...(extra.caves as Record<string, object> | undefined)?.[BANDS[name][0]], minY, maxY } } }) as ParamsPatch;
 
 describe('the depth bands and their caps (SP6a spec §1.4)', () => {
-  test('each family\'s cap is G_f·min(1, g_f + g_w + g_i) + 128·min(1, h_f + h_i) over its minY, maxY, bandSpan, waterDepth and capTop, after the floor (and the ramp)', () => {
+  test('each family\'s cap is G_f·min(1, g_f + g_w + g_i + g_b) + 128·min(1, h_f + h_i) over its minY, maxY, bandSpan, waterDepth, capTop and the rock floor, after the floor (and the ramp)', () => {
     for (const name of CAPPED) {
       const [group, gentle] = BANDS[name];
       expect([name, at(DEFAULT_DENSITY_TREE, CAP[name])]).toEqual([name, capExpr(group, gentle, name === 'noodle' ? D_NOODLE : D_SLOT)]);
     }
+    // g_b, written once (ruling R11): clamp((floorY + 8 + s_b − y)·(1/s_b), 0, 1).
+    const sb = { op: 'param', path: 'caves.floor.span' }, cst = (v: number) => ({ op: 'const', v });
+    expect(at(DEFAULT_DENSITY_TREE, 'defs.floorGentle')).toEqual({
+      op: 'clamp', lo: 0, hi: 1,
+      x: { op: 'mul', a: { op: 'add', a: { op: 'add', a: { op: 'add', a: FLOOR_Y, b: cst(8) }, b: sb }, b: { op: 'neg', x: { op: 'y' } } }, b: { op: 'recip', x: sb } },
+    });
     // Entrances: interpolated(fl(…) + cap); the deep families: interpolated(sky(fl(…) + ramp + cap)); the noodle: fl(…) + cap.
     expect(at(DEFAULT_DENSITY_TREE, `${P.entrances}.x.x.a`)).toMatchObject({ op: 'max', b: { op: 'const', v: -48 } });
     for (const name of ['cheese', 'spag3d', 'spag2d'] as const) {
@@ -761,15 +788,17 @@ describe('the depth bands and their caps (SP6a spec §1.4)', () => {
           const e = resolveDensity(params.density.defs, params);
           const dc = createDensityContext(ctxFor('42', full), e);
           const capNode = at(e, CAP[name]) as Expr;
+          const floorNode = at(e, FLOOR_Y_PATH) as Expr;
           const ref = createDensityReference(dc.expr, dc.noises);
           for (const [cx, cz] of [[0, 0], WET_COLUMNS.sea] as const) {
             const sample = dc.column(cx, cz);
             const x = 16 * cx + 5, z = 16 * cz + 9;
             const wet = ref.voxel(sample, x, 0, z, WET as Expr);
             expect([cx, cz, wet]).toEqual([cx, cz, cx === 0 ? 0 : 1]);
+            const floorY = ref.voxel(sample, x, 0, z, floorNode);
             for (let y = -64; y < 320; y++) {
               const d = ref.voxel(sample, x, y, z, (name === 'noodle' ? D_NOODLE : D_SLOT) as Expr);
-              const got = ref.voxel(sample, x, y, z, capNode), want = capAt(gentle, minY, maxY, s, y, top, wet, d);
+              const got = ref.voxel(sample, x, y, z, capNode), want = capAt(gentle, minY, maxY, s, y, top, wet, d, floorY);
               if (Math.abs(got - want) > 1e-9) throw new Error(`${name} [${minY}, ${maxY}] s ${s} (${cx}, ${cz}) y ${y}: cap ${got}, §1.4 ${want}`);
             }
           }
@@ -880,10 +909,10 @@ describe('the depth bands and their caps (SP6a spec §1.4)', () => {
   });
 });
 
-/** g_i and h_i in a cap node (`add(mul(G, min(1, add(g_f, g_i))), mul(128, min(1, add(h_f, h_i))))`). */
+/** g_i and h_i in a cap node (`add(mul(G, min(1, add(add(add(g_f, g_w), g_i), g_b))), mul(128, min(1, add(h_f, h_i))))`). */
 const islandTerms = (capNode: Expr): readonly [Expr, Expr] => {
-  const c = capNode as unknown as { a: { b: { b: { b: Expr } } }; b: { b: { b: { b: Expr } } } };
-  return [c.a.b.b.b, c.b.b.b.b];
+  const c = capNode as unknown as { a: { b: { b: { a: { b: Expr } } } }; b: { b: { b: { b: Expr } } } };
+  return [c.a.b.b.a.b, c.b.b.b.b];
 };
 
 describe('the island cap (SP6a spec §1.4, D8)', () => {
@@ -998,7 +1027,7 @@ describe('the wet roof (SP6a spec §1.4, D7)', () => {
 
   /** The no-roof tree: `dc.expr` with every wet′ node (the cap's g_w factor and S_w's) replaced by the constant 0. */
   function noRoof(expr: DensityExpr): DensityExpr {
-    const wetJson = JSON.stringify(at(expr, 'defs.wetSteep.b.a'));
+    const wetJson = JSON.stringify(at(expr, 'defs.steep.a.b.a'));
     expect(JSON.parse(wetJson)).toEqual(WET);
     let replaced = 0;
     const sub = (x: unknown): unknown => {
@@ -1036,7 +1065,8 @@ describe('the wet roof (SP6a spec §1.4, D7)', () => {
       const dn = createDensityContext(ctx, noRoof(dc.expr));
       const ref = createDensityReference(dc.expr, dc.noises);
       const body = dc.expr.defs['body']!;
-      const wetSteep = dc.expr.defs['wetSteep']!;
+      // S_w, the wet roof's part of `defs.steep` (S_w + S_b since SP6b §5.2; the no-roof tree keeps S_b).
+      const wetSteep = at(dc.expr, 'defs.steep.a') as Expr;
       for (const kind of ['lake', 'river', 'sea'] as const) {
         const [cx, cz] = WET_COLUMNS[kind];
         const sample = dc.column(cx, cz);
@@ -1098,4 +1128,94 @@ describe('the wet roof (SP6a spec §1.4, D7)', () => {
     console.log(`the wet roof (bed-relative block depths):\n${lines.join('\n')}`);
     expect(openedWithoutRoof).toBeGreaterThan(0);
   }, 120_000);
+});
+
+/**
+ * SP6b Task 19 (spec §5.2, D6): the rock floor. floorY(x, z) = `caves.floor.y` + `caves.floor.amp`·|clamp(Nf, −3, 3)|,
+ * Nf the z2 of `caves.noises.floor` (COLUMN class); each family's cap gains g_b (above), and `defs.steep` = S_w + S_b,
+ * S_b = 128·clamp((floorY + 8 − y)·0.125, 0, 1), is added at voxel level to the caves slot and the noodle, so with the
+ * family floor F = 48 no noise-family air lies at y ≤ floorY + 4 (S_b ≥ 64 there).
+ */
+describe('the rock floor (SP6b spec §5.2, D6)', () => {
+  test('the floor leaves: caves.noises.floor last in caves.noises, then caves.floor (y, amp, span) before caves.biomes, with §6.1\'s defaults and ranges', () => {
+    const paths = SCHEMA.leaves.filter((l) => l.path.startsWith('caves.')).map((l) => l.path);
+    expect(paths.filter((p) => p.startsWith('caves.noises.')).at(-1)).toBe('caves.noises.floor');
+    const at0 = paths.indexOf('caves.noises.floor');
+    expect(paths.slice(at0, at0 + 5)).toEqual(['caves.noises.floor', 'caves.floor.y', 'caves.floor.amp', 'caves.floor.span', 'caves.biomes.lush.hMin']);
+    const leaf = (p: string) => SCHEMA.leaves.find((l) => l.path === p)!;
+    expect(['y', 'amp', 'span'].map((k) => { const l = leaf(`caves.floor.${k}`); return [k, l.leaf.kind, l.leaf.def, l.leaf.min, l.leaf.max, l.meta.label]; })).toEqual([
+      ['y', 'int', -58, -62, -16, 'Floor y'],
+      ['amp', 'number', 5, 0, 12, 'Floor relief'],
+      ['span', 'int', 8, 1, 32, 'Floor softness'],
+    ]);
+    expect(DEFAULTS.caves.floor).toEqual({ y: -58, amp: 5, span: 8 });
+    expect((SCHEMA.byPath.get('caves.floor') as { label: string }).label).toBe('Floor');
+    expect(leaf('caves.noises.floor').leaf.dims).toBe(2);
+  });
+
+  test('floorY, g_b and S_b as §5.2 writes them: defs.steep = add(S_w, S_b), the root\'s two refs read ref steep', () => {
+    const p = (path: string) => ({ op: 'param', path });
+    const sw = { op: 'mul', a: { op: 'const', v: 128 }, b: { op: 'mul', a: WET, b: { op: 'clamp', lo: 0, hi: 1, x: { op: 'mul', a: { op: 'add', a: { op: 'add', a: p('caves.limits.waterDepth'), b: { op: 'const', v: 8 } }, b: { op: 'neg', x: D_NOODLE } }, b: { op: 'const', v: 0.125 } } } } };
+    const sb = { op: 'mul', a: { op: 'const', v: 128 }, b: { op: 'clamp', lo: 0, hi: 1, x: { op: 'mul', a: { op: 'add', a: { op: 'add', a: FLOOR_Y, b: { op: 'const', v: 8 } }, b: { op: 'neg', x: { op: 'y' } } }, b: { op: 'const', v: 0.125 } } } };
+    expect(at(DEFAULT_DENSITY_TREE, 'defs.steep')).toEqual({ op: 'add', a: sw, b: sb });
+    expect(at(DEFAULT_DENSITY_TREE, FLOOR_Y_PATH)).toEqual(FLOOR_Y);
+    expect([at(DEFAULT_DENSITY_TREE, 'root.a.a.b.b'), at(DEFAULT_DENSITY_TREE, 'root.a.b.b')]).toEqual([{ op: 'ref', name: 'steep' }, { op: 'ref', name: 'steep' }]);
+    expect(Object.keys((DEFAULT_DENSITY_TREE as Rec)['defs'] as Rec)).not.toContain('wetSteep');
+  });
+
+  test('floorY is caves.floor.y where Nf is 0 and caves.floor.y + 3·amp where |Nf| ≥ 3 (a constant floor noise)', () => {
+    const { y, amp } = DEFAULTS.caves.floor;
+    const dc = createDensityContext(CTX);
+    const floorNode = at(dc.expr, FLOOR_Y_PATH) as Expr;
+    const sample = dc.column(0, 0);
+    const floorYAt = (nf: number): number => {
+      const noises: DensityNoiseSource = (id) => (id === 'floor' ? { dims: 2, remap: 'none', clampSigma: 8, z2: () => nf, z3: () => nf } : dc.noises(id));
+      return createDensityReference(dc.expr, noises).voxel(sample, 5, 0, 9, floorNode);
+    };
+    expect([floorYAt(0), floorYAt(3), floorYAt(-3), floorYAt(5.5), floorYAt(-8)]).toEqual([y, y + 3 * amp, y + 3 * amp, y + 3 * amp, y + 3 * amp]);
+    expect([y, y + 3 * amp]).toEqual([-58, -43]);
+    expect(floorYAt(1)).toBe(y + amp);
+  });
+
+  /**
+   * Over 64 chunk columns of seed 42 (`samplePoints('sp6b.caveTerms.floor', 64)`), at the defaults and at the floor leaves'
+   * range ends (`caves.floor.y` −62 and −16, `amp` 0 and 12, `span` 1 and 32; with the cheese opened by offset 1 so the
+   * bottom holds air): no cave air (final density ≤ 0 where the pre-cave density is > 0: the caves slot's and the
+   * noodle's air) lies at y ≤ floorY(x, z) + 4, so none below `caves.floor.y` + 5 (−53 at the defaults).
+   */
+  test('the floor closes every noise family (§5.2): no cave air at y ≤ floorY + 4, none below caves.floor.y + 5, at the defaults and the leaves\' range ends', () => {
+    const pts = samplePoints('sp6b.caveTerms.floor', 64);
+    const cols = Array.from({ length: 64 }, (_, n) => [Math.floor(pts.x[n]! / 16), Math.floor(pts.z[n]! / 16)] as const);
+    const cases: Array<readonly [string, ParamsPatch]> = [['defaults', {}]];
+    for (const fy of [-62, -16]) for (const amp of [0, 12]) for (const span of [1, 32]) {
+      cases.push([`y ${fy} amp ${amp} span ${span}`, { caves: { floor: { y: fy, amp, span }, cheese: { offset: 1 } } }]);
+    }
+    expect(DEFAULTS.caves.floor.y + 5).toBe(-53);
+    const lines: string[] = [];
+    for (const [label, patch] of cases) {
+      const ctx = ctxFor('42', patch);
+      const dc = createDensityContext(ctx);
+      const ref = createDensityReference(dc.expr, dc.noises);
+      const floorNode = at(dc.expr, FLOOR_Y_PATH) as Expr;
+      const fy = ctx.params.caves.floor.y, amp = ctx.params.caves.floor.amp;
+      let lowest = Infinity, near = 0;
+      for (const [cx, cz] of cols) {
+        const sample = dc.column(cx, cz);
+        for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
+          const floorY = ref.voxel(sample, 16 * cx + lx, 0, 16 * cz + lz, floorNode);
+          if (!(floorY >= fy && floorY <= fy + 3 * amp)) throw new Error(`${label} (${cx}, ${cz}) ${lx} ${lz}: floorY ${floorY}`);
+          for (let y = -63; y <= floorY + 12; y++) {
+            if (!(dc.compiled.voxelFn(lx, y, lz) <= 0) || !(dc.compiled.tapFn('precave', lx, y, lz) > 0)) continue;
+            if (y <= floorY + 4) throw new Error(`${label} (${cx}, ${cz}) ${lx} ${y} ${lz}: cave air at floorY ${floorY} + ${y - floorY}`);
+            lowest = Math.min(lowest, y);
+            near++;
+          }
+        }
+      }
+      lines.push(`${label}: lowest cave air y ${lowest}, ${near} cave-air voxels within floorY + 12`);
+      expect([label, lowest >= fy + 5]).toEqual([label, true]);
+      expect([label, near > 0]).toEqual([label, true]);
+    }
+    console.log(`the rock floor's closure (SP6b §5.2):\n${lines.join('\n')}`);
+  }, 300_000);
 });

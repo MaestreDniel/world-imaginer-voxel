@@ -63,8 +63,8 @@ export function columnDiff(a: DensityContext, b: DensityContext, cx: number, cz:
 /**
  * A plain copy of the source tree `tree` (one with SP6a's cave terms, §1.1) with the carving family taps muted to 1e6:
  * `entrances`, `cheese`, `spag3d` and `spag2d` in the caves slot max(min(min(min(E, C), S3), S2), keep)
- * (`root.a.a.b.a`, under the wet roof's `add(caves, ref wetSteep)`), which is then 1e6 (keep is −1e6 or P, far below; S_w
- * ≤ 128 adds to it), and the `noodle` tap (`root.a.b.a`, under `add(noodle, ref wetSteep)`), so the root is the
+ * (`root.a.a.b.a`, under the steep parts' `add(caves, ref steep)`), which is then 1e6 (keep is −1e6 or P, far below; S_w +
+ * S_b ≤ 256 adds to it), and the `noodle` tap (`root.a.b.a`, under `add(noodle, ref steep)`), so the root is the
  * pre-cave density's.
  */
 export function cavesMuted(tree: unknown): unknown {
