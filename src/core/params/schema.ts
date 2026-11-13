@@ -73,6 +73,17 @@ const carverY = (def: number, label: string, doc: string) => int(def, { ...TERRA
 const shapeNum = (def: number, label: string, doc: string, max: number) =>
   num(def, { ...TERRAIN, label, doc, min: 0, max, step: 0.05 });
 
+/** A cave-biome box bound (SP6b spec §1.3, §6.1): a uniform climate value (−1 … 1) or a depth (0 … 2). */
+const biomeNum = (def: number, label: string, doc: string, min: number, max: number) =>
+  num(def, { ...TERRAIN, label, doc, min, max, step: 0.01 });
+/**
+ * A cave-biome noise (SP6b spec §1.2, §6.1): a schema noise leaf under `caves.biomes.noises.*`, 2D, remap 'none', read
+ * by the picker (`cavePickerOf`) as z2 / clampSigma clamped to [−1, 1]; the border leaf is sampled as three named
+ * instances (Spec correction 11), so its schema instance is unused.
+ */
+const caveBiomeNoise = (label: string, doc: string, def: { readonly wavelength: number; readonly octaves: number }) =>
+  noise(def, { ...TERRAIN, label, doc, wavelength: CAVE_WAVELENGTH, dims: 2, remapNone: true });
+
 /** A surface noise (SP3c spec §3.5): 2D, sampled at unscaled world block coordinates; remap 'none' (validateRules refuses another). */
 const surfaceNoise = (label: string, doc: string, def: { readonly wavelength: number; readonly octaves: number }, wavelength: { readonly min: number; readonly max: number }) =>
   noise(def, { ...TERRAIN, label, doc, wavelength, dims: 2, remapNone: true });
@@ -314,6 +325,35 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       noodleThickness: caveNoise('Noodle thickness noise', 'Kn of the noodles, times 0.025.', { dims: 3, wavelength: 64, octaves: 1 }, 3, CAVE_WAVELENGTH),
       noodleRidgeA: caveNoise('Noodle ridge noise A', 'An of the noodle ridges max(|An|, |Bn|).', { dims: 3, wavelength: 18, octaves: 1 }, 3, CAVE_WAVELENGTH),
       noodleRidgeB: caveNoise('Noodle ridge noise B', 'Bn of the noodle ridges max(|An|, |Bn|).', { dims: 3, wavelength: 18, octaves: 1 }, 3, CAVE_WAVELENGTH),
+    }),
+    // SP6b spec §1, §6.1 (Task 17): the cave-biome picker's leaves, appended after `noises`, so randomParams and
+    // randomPatch draw every earlier caves leaf as before. The boxes as the master's registry (§3.10), the four border
+    // leaves (shown first in the section: a section's own leaves precede its sub-groups; Spec correction 12, ruling
+    // P18), then the border and depth noises.
+    biomes: group('Cave biomes', 'The cave-biome picker (SP6b spec §1): each cave voxel is lush, dripstone, abyss or plain by its perturbed climate (C′, E′, H′) and its depth (Y0 − y) / depthScale, at a position and height jittered by ±edgeJitter blocks.', {
+      lush: group('Lush', 'Lush caves: H′ ≥ hMin and depthMin ≤ depth ≤ depthMax (margin H′ − hMin).', {
+        hMin: biomeNum(0.4, 'Lowest humidity', 'Lush where the perturbed humidity H′ is at least this.', -1, 1),
+        depthMin: biomeNum(0.2, 'Shallowest depth', 'Lush from this depth down (depth = (Y0 − y) / depthScale).', 0, 2),
+        depthMax: biomeNum(0.9, 'Deepest depth', 'Lush down to this depth.', 0, 2),
+      }),
+      dripstone: group('Dripstone', 'Dripstone caves: C′ ≥ cMin and depthMin ≤ depth ≤ depthMax (margin C′ − cMin).', {
+        cMin: biomeNum(0.6, 'Lowest continentalness', 'Dripstone where the perturbed continentalness C′ is at least this (far inland).', -1, 1),
+        depthMin: biomeNum(0.2, 'Shallowest depth', 'Dripstone from this depth down (depth = (Y0 − y) / depthScale).', 0, 2),
+        depthMax: biomeNum(0.9, 'Deepest depth', 'Dripstone down to this depth.', 0, 2),
+      }),
+      abyss: group('Abyss', 'The abyss: E′ ≤ eMax, C′ > cMin and depth ≥ depthMin (margin min(eMax − E′, C′ − cMin)); under mountains and uplands, never under the sea.', {
+        eMax: biomeNum(-0.5, 'Highest erosion', 'The abyss where the perturbed erosion E′ is at most this (low E is high ground).', -1, 1),
+        cMin: biomeNum(-0.1, 'Lowest continentalness', 'The abyss where the perturbed continentalness C′ is above this.', -1, 1),
+        depthMin: biomeNum(1, 'Shallowest depth', 'The abyss from this depth down (depth = (Y0 − y) / depthScale).', 0, 2),
+      }),
+      depthScale: num(128, { ...TERRAIN, label: 'Depth scale', doc: 'Blocks per unit of depth: depth = (Y0 − y) / depthScale.', unit: 'blocks', min: 32, max: 256, step: 1 }),
+      borderWarp: num(0.05, { ...TERRAIN, label: 'Border warp', doc: 'Times the border noises, added to C, E and H: how far a cave-biome border wanders (0.05: up to about ±50 blocks).', min: 0, max: 0.2, step: 0.005 }),
+      depthWarp: num(10, { ...TERRAIN, label: 'Depth warp', doc: 'Times the depth noise, added to the surface estimate: Y0 = surfaceEst + depthWarp · Nd.', unit: 'blocks', min: 0, max: 32, step: 1 }),
+      edgeJitter: int(2, { ...TERRAIN, label: 'Edge jitter', doc: 'Each voxel picks its biome at a position and height moved by up to this many blocks, so borders become a speckle 2·edgeJitter + 1 blocks wide (0: off; 4 is the column halo\'s limit).', unit: 'blocks', min: 0, max: 4 }),
+      noises: group('Noises', 'The cave-biome picker\'s noises, 2D, at unscaled world block coordinates, each read as z2 / clampSigma clamped to [−1, 1].', {
+        border: caveBiomeNoise('Border noise', 'Nb, sampled as three instances (caveBiome.C, .E, .H) that shift C, E and H by borderWarp · Nb.', { wavelength: 64, octaves: 2 }),
+        depth: caveBiomeNoise('Depth noise', 'Nd: shifts the surface estimate the depth is measured from by depthWarp · Nd.', { wavelength: 96, octaves: 2 }),
+      }),
     }),
   }),
 });

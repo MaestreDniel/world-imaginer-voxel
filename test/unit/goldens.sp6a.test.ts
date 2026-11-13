@@ -43,13 +43,13 @@ function nodesOf(root: Expr): Array<{ readonly node: Expr; readonly inside: bool
   return out;
 }
 
-test('3 SP6a keys, chained into allGoldenKeys after SP3e\'s (SP6b\'s 1 follows): 63 goldens', () => {
+test('3 SP6a keys, chained into allGoldenKeys after SP3e\'s (SP6b\'s 2 follow): 64 goldens', () => {
   const keys = ['sp6a.density.ops', 'sp6a.carver.paths', 'sp6a.region.T.caves'];
   expect(sp6aGoldenKeys()).toEqual(keys);
-  expect(allGoldenKeys().slice(-4, -1)).toEqual(keys);
-  expect(allGoldenKeys().slice(-5, -4)).toEqual(['sp3e.column.point.floating_islands']);
-  expect(allGoldenKeys()).toHaveLength(63);
-  expect(new Set(allGoldenKeys()).size).toBe(63);
+  expect(allGoldenKeys().slice(-5, -2)).toEqual(keys);
+  expect(allGoldenKeys().slice(-6, -5)).toEqual(['sp3e.column.point.floating_islands']);
+  expect(allGoldenKeys()).toHaveLength(64);
+  expect(new Set(allGoldenKeys()).size).toBe(64);
   for (const bad of [
     'sp6a.density', 'sp6a.density.ops.x', 'sp6a.carver', 'sp6a.carver.paths.x', 'sp6a.region.T', 'sp6a.region.T.caves.x',
     'sp6a.region.T.default', 'sp6a.nope',

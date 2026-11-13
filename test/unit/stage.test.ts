@@ -15,13 +15,15 @@ describe('registry', () => {
   test('the SP2a schema and stage list satisfy every invariant', () => {
     expect(checkRegistry(SCHEMA, STAGES)).toEqual([]);
     expect(ALL).toEqual(['climate', 'shape', 'surfaceEst', 'biome2d', 'terrain', 'decorate', 'light', 'mesh', 'lod', 'map']);
-    expect(STAGES.map((s) => `${s.id}@${s.version}`)).toEqual(['climate@1', 'shape@2', 'surfaceEst@2', 'biome2d@2', 'terrain@4', 'decorate@1', 'light@1', 'mesh@1', 'lod@1', 'map@2']);
+    expect(STAGES.map((s) => `${s.id}@${s.version}`)).toEqual(['climate@1', 'shape@2', 'surfaceEst@2', 'biome2d@2', 'terrain@5', 'decorate@1', 'light@1', 'mesh@1', 'lod@1', 'map@2']);
   });
-  test('SP6a (its spec §4, §12.3): terrain is version 4 and hashes the caves group; every caves.* leaf\'s badge is Terrain', () => {
+  test('SP6b (its spec §14.3, D28): terrain is version 5 and hashes the caves group (SP6a); every caves.* leaf\'s badge is Terrain, the caves.biomes.* leaves\' among them', () => {
     const terrain = STAGES.find((s) => s.id === 'terrain')!;
-    expect([terrain.version, terrain.params]).toEqual([4, ['density', 'surface', 'caves']]);
+    expect([terrain.version, terrain.params]).toEqual([5, ['density', 'surface', 'caves']]);
     const caves = SCHEMA.leaves.filter((l) => l.path.startsWith('caves.'));
     expect(caves.length).toBeGreaterThan(0);
+    // SP6b spec §6.1: the 15 cave-biome leaves sit under caves, never under biomes.* (biome2d's, the 2D map's).
+    expect(caves.filter((l) => l.path.startsWith('caves.biomes.')).length).toBe(15);
     for (const { path, meta } of caves) {
       const first = STAGES.find((s) => s.params.some((p) => prefixCovers(p, path)));
       expect([path, first?.id, meta.scope, SCOPE_OF_STAGE[first!.id]]).toEqual([path, 'terrain', 'terrain', 'terrain']);

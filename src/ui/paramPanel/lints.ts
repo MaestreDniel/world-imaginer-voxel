@@ -2,7 +2,8 @@
  * Cross-field lints of the parameter panel (SP2b spec §3.2). They are warnings, not validation: the
  * generator tolerates every inverted pair (a step instead of a fade, no lakes), so the draft stays valid. SP6a spec §4
  * adds the caves pairs (each depth band, each carver range) and two lints of their own (worm length, the island cap, D8);
- * Task 52 adds the detail reach that detailG's switch at T = 16 assumes (§1.3).
+ * Task 52 adds the detail reach that detailG's switch at T = 16 assumes (§1.3). SP6b spec §6.1 adds the cave biomes'
+ * depth ranges (lush, dripstone).
  */
 import { ISLAND_RUN_MIN_BOTTOM } from '../../core/constants';
 import type { NoiseDef } from '../../core/noise/types';
@@ -19,9 +20,12 @@ export interface ParamLint {
 const INVERTED_BAND = 'the range is inverted: the family narrows across it';
 /** A carver's drawn range past its inversion (SP6a spec §2.2, §2.3, §4). */
 const EMPTY_RANGE = 'the range is empty';
+/** A cave biome's depth range past its inversion (SP6b spec §6.1): its box holds no depth. */
+const NEVER_OCCURS = 'the biome never occurs';
 
 const band = (family: string) => [`caves.${family}.minY`, `caves.${family}.maxY`, INVERTED_BAND] as const;
 const range = (group: string, leaf: string) => [`caves.${group}.${leaf}Min`, `caves.${group}.${leaf}Max`, EMPTY_RANGE] as const;
+const depths = (biome: string) => [`caves.biomes.${biome}.depthMin`, `caves.biomes.${biome}.depthMax`, NEVER_OCCURS] as const;
 
 /** Leaf pairs that should satisfy lo < hi, with what the generator does when they do not. */
 const ORDERED: ReadonlyArray<readonly [lo: string, hi: string, effect: string]> = [
@@ -33,6 +37,8 @@ const ORDERED: ReadonlyArray<readonly [lo: string, hi: string, effect: string]> 
   range('worms', 'radius'), range('worms', 'vRatio'), range('worms', 'floor'), range('worms', 'roomYScale'), range('worms', 'startY'),
   range('undergroundWorms', 'startY'),
   range('ravines', 'length'), range('ravines', 'startY'),
+  // SP6b spec §6.1: lush's and dripstone's depth ranges.
+  depths('lush'), depths('dripstone'),
 ];
 
 /** The detail noise of the density tree, whose clampSigma bounds |detail| with the two amplitudes (SP6a spec §1.3). */

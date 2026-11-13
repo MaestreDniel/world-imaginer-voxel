@@ -71,7 +71,7 @@ describe('panel tree', () => {
     expect(caves.sections.map((s) => [s.path, s.label])).toEqual([
       ['caves.cheese', 'Cheese'], ['caves.spaghetti3d', 'Spaghetti 3D'], ['caves.spaghetti2d', 'Spaghetti 2D'], ['caves.noodles', 'Noodles'],
       ['caves.pillars', 'Pillars'], ['caves.entrances', 'Entrances'], ['caves.worms', 'Worms'], ['caves.undergroundWorms', 'Underground worms'],
-      ['caves.ravines', 'Ravines'], ['caves.limits', 'Limits'], ['caves.noises', 'Cave noises'],
+      ['caves.ravines', 'Ravines'], ['caves.limits', 'Limits'], ['caves.noises', 'Cave noises'], ['caves.biomes', 'Cave biomes'],
     ]);
     // Each family's depth band (minY, maxY; Task 8) after its sizes.
     expect(caves.sections[0]!.controls.map((c) => c.path)).toEqual(['caves.cheese.offset', 'caves.cheese.regional', 'caves.cheese.layerAmp', 'caves.cheese.roofDepth', 'caves.cheese.minY', 'caves.cheese.maxY']);
@@ -93,6 +93,17 @@ describe('panel tree', () => {
     expect(caves.sections[7]!.controls.map((c) => c.path.split('.').at(-1))).toEqual(['chance', 'startYMin', 'startYMax', 'maxY']);
     expect(caves.sections[8]!.controls.length).toBe(10);
     expect(caves.sections[9]!.controls.map((c) => c.path)).toEqual(['caves.limits.surfaceDepth', 'caves.limits.waterDepth', 'caves.limits.bandSpan', 'caves.limits.capTop']);
+    // SP6b spec §6.1 (Task 17; Spec correction 12, ruling P18): the Caves section ends Cave noises, Cave biomes; Cave
+    // biomes shows its four leaves first (a section's own controls precede its sub-sections), then Lush, Dripstone,
+    // Abyss and Noises.
+    const biomes = caves.sections.at(-1)!;
+    expect(biomes.controls.map((c) => c.path)).toEqual(['caves.biomes.depthScale', 'caves.biomes.borderWarp', 'caves.biomes.depthWarp', 'caves.biomes.edgeJitter']);
+    expect(biomes.sections.map((s) => [s.path, s.label, s.controls.map((c) => c.path.split('.').at(-1))])).toEqual([
+      ['caves.biomes.lush', 'Lush', ['hMin', 'depthMin', 'depthMax']],
+      ['caves.biomes.dripstone', 'Dripstone', ['cMin', 'depthMin', 'depthMax']],
+      ['caves.biomes.abyss', 'Abyss', ['eMax', 'cMin', 'depthMin']],
+      ['caves.biomes.noises', 'Noises', ['border', 'depth']],
+    ]);
     for (const c of controlsOf(caves)) expect([c.path, c.scope]).toEqual([c.path, 'terrain']);
     // Every caves.* control's badge reads Terrain (the terrain stage reads `caves`, SP6a spec §4).
     for (const c of controlsOf(caves)) expect([c.path, scopeBadge(c.scope).label]).toEqual([c.path, 'Terrain']);
@@ -123,6 +134,8 @@ describe('panel tree', () => {
   test('scale: log when min > 0 and max / min ≥ 20, and for every noise wavelength; linear otherwise', () => {
     const log = controlsOf(panelTree()).filter((c) => c.scale === 'log').map((c) => c.path);
     expect(log.sort()).toEqual([
+      // The cave-biome noises (SP6b Task 17).
+      'caves.biomes.noises.border', 'caves.biomes.noises.depth',
       // The band span, 1 … 32 blocks (SP6a Task 8).
       'caves.limits.bandSpan',
       'caves.noises.cheese', 'caves.noises.cheeseRegional', 'caves.noises.entrance', 'caves.noises.entranceA', 'caves.noises.entranceB',
@@ -356,14 +369,19 @@ describe('cross-field lints', () => {
   });
 });
 
-/** SP6a spec §4's caves pairs, in the schema's order: every family's depth band, then every carver's drawn range. */
+/**
+ * SP6a spec §4's caves pairs, in the schema's order: every family's depth band, then every carver's drawn range; then
+ * SP6b's (its spec §6.1, Task 17): lush's and dripstone's depth range.
+ */
 const INVERTED = 'the range is inverted: the family narrows across it';
 const EMPTY = 'the range is empty';
+const NEVER_OCCURS = 'the biome never occurs';
 const CAVE_PAIRS: ReadonlyArray<readonly [lo: string, hi: string, effect: string]> = [
   ...['cheese', 'spaghetti3d', 'spaghetti2d', 'noodles', 'entrances'].map((f) => [`caves.${f}.minY`, `caves.${f}.maxY`, INVERTED] as const),
   ...['radius', 'vRatio', 'floor', 'roomYScale', 'startY'].map((l) => [`caves.worms.${l}Min`, `caves.worms.${l}Max`, EMPTY] as const),
   ['caves.undergroundWorms.startYMin', 'caves.undergroundWorms.startYMax', EMPTY],
   ...['length', 'startY'].map((l) => [`caves.ravines.${l}Min`, `caves.ravines.${l}Max`, EMPTY] as const),
+  ...['lush', 'dripstone'].map((b) => [`caves.biomes.${b}.depthMin`, `caves.biomes.${b}.depthMax`, NEVER_OCCURS] as const),
 ];
 /** A patch setting the leaf at `path` to `v`. */
 const at = (path: string, v: unknown): unknown => patchAt(path, v);
@@ -384,7 +402,7 @@ describe('cross-field lints of the caves (SP6a spec §4, D8)', () => {
       else if (/[a-zA-Z]Min$/.test(p) && paths.has(`${p.slice(0, -3)}Max`)) pairs.push(p);
     }
     expect(pairs.sort()).toEqual(CAVE_PAIRS.map(([lo]) => lo).sort());
-    expect(CAVE_PAIRS).toHaveLength(13);
+    expect(CAVE_PAIRS).toHaveLength(15);
   });
 
   test.each(CAVE_PAIRS)('%s ≥ %s gives one lint, "%s"; one below clears it', (lo, hi, effect) => {
@@ -405,6 +423,11 @@ describe('cross-field lints of the caves (SP6a spec §4, D8)', () => {
     expect(paramLints(params({ caves: { ravines: { lengthMin: 120 } } }))).toEqual([{
       paths: ['caves.ravines.lengthMin', 'caves.ravines.lengthMax'],
       message: 'Shortest (120) should be below Longest (112): the range is empty.',
+    }]);
+    // SP6b spec §6.1: lush's depthMin 0.9 with its depthMax 0.9.
+    expect(paramLints(params({ caves: { biomes: { lush: { depthMin: 0.9 } } } }))).toEqual([{
+      paths: ['caves.biomes.lush.depthMin', 'caves.biomes.lush.depthMax'],
+      message: 'Shallowest depth (0.9) should be below Deepest depth (0.9): the biome never occurs.',
     }]);
   });
 
@@ -494,8 +517,9 @@ describe('panel controls (Task 17): kinds, slider positions, typed values, issue
     // 34 before SP3c, + the 7 number and int leaves of the surface group, + islands.lo and islands.hi (SP3e), + SP6a's 8
     // caves number leaves (Task 6), + its 8 linear spaghetti and noodle leaves (Task 7; the band scales are log), + the 10
     // band ends minY and maxY (Task 8; the band span 1 … 32 is log), + capTop and waterDepth (Task 9), + 32 of the 36
-    // carver leaves (Task 27; the worms' radius and height factors are log), + the noodles' threshold (the user's check).
-    expect(linear.length).toBe(104);
+    // carver leaves (Task 27; the worms' radius and height factors are log), + the noodles' threshold (the user's check),
+    // + SP6b's 13 cave-biome number and int leaves (Task 17: the 9 box bounds and the four border leaves).
+    expect(linear.length).toBe(117);
     for (const c of linear) {
       const n = sliderPositions(c);
       expect(n).toBe(Math.round((c.max! - c.min!) / c.step!));

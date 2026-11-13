@@ -10,6 +10,10 @@
  * - The cave tag (SP6a spec §3.1-§3.2): `tagColumn` right after the carve, from the fill's per-cell record of the cells
  *   whose corners (or voxels) it evaluated, through the compiled tap readers, into the tag scratch at the density air
  *   the carve did not tag (the noise kinds and 9; 0 for rock, sky and surface air).
+ * - The cave biome (SP6b spec §1, §2.1, D16-D17): right after the tag, the column's picker pass (`fillCaveColumnPass` on
+ *   `cavePickerOf(ctx)`, its (16 + 2J)² positions), then at every tagged voxel (kind ≠ 0) the byte becomes
+ *   `kind | caveBiomeOfPass(…) << 4`; untagged voxels keep 0. Water v0 runs after it, so a tagged voxel that holds water
+ *   keeps its biome.
  * - Water v0, the biomes and the surface pass see the carved solidity, so the scan skins the carved column: a ravine
  *   floor open to the sky is the sky run (the biome's top), a cave floor a lower run (stone or deepslate, never grass).
  * - Water v0: `top` is the y of the highest solid voxel per position (−64 when there is none above bedrock); air with
@@ -27,7 +31,8 @@
  *   true `stop()` in any phase the stage returns false at once, without aux.
  * - Aux A: `worldSurfaceWG`, `oceanFloorWG` (SP3a §3.4 predicates) and `surfaceBiome` (the step's biome buffer).
  * - Aux B: `surfaceBiomeQ[qz·4 + qx]` is the 2D biome of lattice point (qx, qz), qx, qz ∈ 0 … 3, before the zoom;
- *   `caveBiomeQ[(qy·4 + qz)·4 + qx]` stays 0 (none) until SP6b.
+ *   `caveBiomeQ[(qy·4 + qz)·4 + qx]`, qy = (y + 64) >> 2, is 0 for a quart with no tagged voxel, else 1 + the cave
+ *   biome most of its tagged voxels carry, a tie to the lower id (SP6b spec §2.2; wet tagged voxels count).
  * The stage uses the SurfaceContext of its GenContext (`surfaceContextOf`, memoised), which holds the DensityContext.
  * Follows the gen determinism rules.
  * `terrainDensityDebug` is a test hook (SP3b §2.3, DT2): the same density phase, recording the bulk-evaluated values.
@@ -38,6 +43,7 @@ import { ISLAND_RUN_MIN_BOTTOM, MIN_Y } from '../../core/constants';
 import { WATER_SOURCE } from '../../world/blocks/fluid';
 import { AIR, BEDROCK } from '../../world/blocks/index';
 import type { TerrainWriter } from '../../world/store/api';
+import { caveBiomeOfPass, cavePickerOf, fillCaveColumnPass, newCaveColumnPass } from '../biomes/cavePicker';
 import { carveColumn, densityTopColumn } from '../caves/carve';
 import { carverCacheOf } from '../caves/carverCache';
 import { caveReadersOf, tagColumn } from '../caves/tags';
@@ -66,6 +72,10 @@ const TAG_COLUMN = tagColumn;
 const CARVE = carveColumn;
 const DENSITY_TOPS = densityTopColumn;
 const CARVER_CACHE = carverCacheOf;
+const PICKER_OF = cavePickerOf;
+const FILL_PASS = fillCaveColumnPass;
+const BIOME_OF_PASS = caveBiomeOfPass;
+const NEW_PASS = newCaveColumnPass;
 
 /** Highest y of the world (MIN_Y + 384 − 1); water tops are clamped to [Y0 − 1, TOP_Y], which changes no comparison. */
 const TOP_Y = Y0 + 383;
@@ -92,6 +102,10 @@ const TOP = new Int32Array(256);
 const WATER_TOP = new Int32Array(256);
 /** columnWaterV0's water base per column index under `skipIslandRuns` (SP3e spec §3.5); stale between calls. */
 const BASE = new Int32Array(256);
+/** The column's cave-biome pass (SP6b spec §1.2): C′, E′, H′ and Y0 at the positions within J of it. */
+const PASS = NEW_PASS();
+/** Tagged voxels per quart and nibble (`caveBiomeQuarts`): entry `16·q + biome`, q = (qy·4 + qz)·4 + qx (≤ 64 each). */
+const QUART_BIOMES = new Uint8Array(16 * 1536);
 const BLOCKS = new Uint16Array(4096);
 const FLUID = new Uint8Array(4096);
 const CAVE = new Uint8Array(4096);
@@ -169,6 +183,47 @@ function carve(ctx: GenContext, s: ColumnSample, cx: number, cz: number): void {
 }
 
 /**
+ * The cave-biome step (SP6b spec §2.1): fills `PASS` for s's column, then writes `kind | biome << 4` into `TAG` at every
+ * tagged voxel (kind ≠ 0, `caveBiomeOfPass`); untagged voxels keep 0.
+ */
+function caveBiomes(ctx: GenContext, s: ColumnSample, cx: number, cz: number): void {
+  const inp = PICKER_OF(ctx);
+  FILL_PASS(inp, s, PASS);
+  const x0 = 16 * cx;
+  const z0 = 16 * cz;
+  for (let j = 0; j < 98304; j++) {
+    const t = TAG[j]!;
+    if (t === 0) continue;
+    TAG[j] = t | (BIOME_OF_PASS(inp, PASS, x0 + (j & 15), (j >> 8) + Y0, z0 + ((j >> 4) & 15)) << 4);
+  }
+}
+
+/**
+ * `caveBiomeQ` of a column (SP6b spec §2.2) from its cave bytes `tags` (98,304 entries, index `((y + 64)·16 + lz)·16 +
+ * lx`, the kind in bits 0-3 and the biome in bits 4-7) into `out[(qy·4 + qz)·4 + qx]` (1,536 entries), qy = (y + 64) >> 2:
+ * 0 for a quart with no tagged voxel (kind ≠ 0), else 1 + the biome most of its tagged voxels carry, a tie to the lower
+ * id. The fluid is not read: tagged voxels holding water count like dry ones. Throws a RangeError on other sizes.
+ */
+export function caveBiomeQuarts(tags: Uint8Array, out: Uint8Array): void {
+  if (tags.length !== 98304 || out.length !== 1536) throw new RangeError('caveBiomeQuarts: tags needs 98,304 entries, out 1,536');
+  QUART_BIOMES.fill(0);
+  for (let j = 0; j < 98304; j++) {
+    const t = tags[j]!;
+    if ((t & 15) === 0) continue;
+    QUART_BIOMES[16 * ((((j >> 10) << 2) + ((j >> 6) & 3)) * 4 + ((j >> 2) & 3)) + (t >> 4)]!++;
+  }
+  for (let k = 0; k < 1536; k++) {
+    let best = -1;
+    let most = 0;
+    for (let b = 0; b < 16; b++) {
+      const n = QUART_BIOMES[16 * k + b]!;
+      if (n > most) { most = n; best = b; }
+    }
+    out[k] = best + 1;
+  }
+}
+
+/**
  * Writes column (cx, cz)'s proto sections, aux A and aux B through `w`; false (nothing more written) as soon as
  * `stop()` returns true. Never commits: the caller does (`fillColumnT`, `metrics/region.ts`).
  */
@@ -183,6 +238,7 @@ export function terrainStage(ctx: GenContext, cx: number, cz: number, w: Terrain
   carve(ctx, s, cx, cz);
   const c = bounds.compiled;
   TAG_COLUMN(c, READERS(c), ctx.params.caves.pillars.threshold, SOLID, CELLS, TAG, bounds, true);
+  caveBiomes(ctx, s, cx, cz);
   columnWaterV0(s, SOLID, TOP, WATER_TOP, WATER_V, islands);
   SURFACE_BIOMES(s, ctx, BIOMES);
   if (stop()) return false;
@@ -218,10 +274,12 @@ export function terrainStage(ctx: GenContext, cx: number, cz: number, w: Terrain
     aux.worldSurfaceWG[p] = Math.max(top, WATER_TOP[p]!) + 1;
     aux.surfaceBiome[p] = BIOMES[p]!;
   }
-  const q = w.auxB().surfaceBiomeQ;
+  const auxB = w.auxB();
+  const q = auxB.surfaceBiomeQ;
   for (let qz = 0; qz < 4; qz++) {
     for (let qx = 0; qx < 4; qx++) q[qz * 4 + qx] = s.biome[LATTICE(qx, qz)]!;
   }
+  caveBiomeQuarts(TAG, auxB.caveBiomeQ);
   return true;
 }
 

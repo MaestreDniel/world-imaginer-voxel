@@ -10,7 +10,7 @@ import { fnv1a32, hex64 } from '../../src/core/hash';
 import { latticeIndex } from '../../src/gen/column/columnStage';
 import { biomeName } from '../../src/gen/biomes/registry';
 import {
-  amplifiedBandWitness, bandWindow, bandWitness, capTopWitness, carverWitness, CAVE_SLOTS, caveColumn, caveFamilyCounts, caveLeaves, caveSlotLeaves, cellProbe, findWitness, intendedClass, islandColumn, islandLeaves, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
+  amplifiedBandWitness, bandWindow, bandWitness, biomeWitness, capTopWitness, carverWitness, CAVE_SLOTS, caveColumn, caveFamilyCounts, caveLeaves, caveSlotLeaves, cellProbe, findWitness, intendedClass, islandColumn, islandLeaves, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
   scaleBandCarves, scaleWitness, SURFACE_CLASSES, surfacePrefilter, surfaceSlotLeaves, u2Leaves,
   type CaveSlot,
   type LivenessClass,
@@ -47,9 +47,17 @@ const TUNNELS_VIA = 'cave column (-16103, 13714)';
 /**
  * The leaves of SP6a Tasks 6, 7, 8, 9 and 27 (the caves group): U2 covers 73 + 19 + 30 + 11 + 1 + 1 + 36 = 171 leaves
  * (Task 9: the island cap's capTop, then the wet roof's waterDepth; Task 27: the 36 carver leaves), and the user's check's
- * `caves.noodles.threshold` (R31): 172.
+ * `caves.noodles.threshold` (R31): 172; SP6b Task 17's 15 `caves.biomes.*` leaves (Spec correction 5): 187.
  */
-const U2_LEAVES = 172;
+const U2_LEAVES = 187;
+/** The cave-biome leaves (SP6b Task 17), decided on the class columns or on their bounded biome witness. */
+const BIOME_LEAVES = [
+  'caves.biomes.lush.hMin', 'caves.biomes.lush.depthMin', 'caves.biomes.lush.depthMax',
+  'caves.biomes.dripstone.cMin', 'caves.biomes.dripstone.depthMin', 'caves.biomes.dripstone.depthMax',
+  'caves.biomes.abyss.eMax', 'caves.biomes.abyss.cMin', 'caves.biomes.abyss.depthMin',
+  'caves.biomes.depthScale', 'caves.biomes.borderWarp', 'caves.biomes.depthWarp', 'caves.biomes.edgeJitter',
+  'caves.biomes.noises.border', 'caves.biomes.noises.depth',
+] as const;
 /** The carver leaves (SP6a Task 27), decided on the class columns or on their bounded carver witness (ruling P18). */
 const CARVER_LEAVES = SCHEMA.leaves.filter((l) => /^caves\.(worms|undergroundWorms|ravines)\./.test(l.path)).map((l) => l.path);
 /** The spaghetti scale leaves (SP6a Task 7), decided on the class columns or on their bounded witness search (ruling P5). */
@@ -618,7 +626,7 @@ describe('the cave class columns (SP6a spec §4)', () => {
 
   test('the caves leaves are the caves.* group, in schema order, after the islands leaves; the slots share them but the scale leaves', () => {
     expect(caveLeaves().map((l) => l.path)).toEqual(SCHEMA.leaves.filter((l) => l.path.startsWith('caves.')).map((l) => l.path));
-    expect(caveLeaves().length).toBe(99);
+    expect(caveLeaves().length).toBe(114);
     expect(CAVE_SLOTS).toEqual(['caverns', 'tunnels']);
     const tunnels = caveSlotLeaves('tunnels').map((l) => l.path);
     expect(tunnels).toEqual([
@@ -634,10 +642,10 @@ describe('the cave class columns (SP6a spec §4)', () => {
     expect(caveSlotLeaves('caverns').length).toBe(20);
     expect(caveSlotLeaves('caverns').map((l) => l.path)).toContain('caves.limits.bandSpan');
     const slotted = new Set([...caveSlotLeaves('caverns'), ...caveSlotLeaves('tunnels')].map((l) => l.path));
-    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES, ...CARVER_LEAVES, CAP_TOP, WATER_DEPTH];
+    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES, ...CARVER_LEAVES, CAP_TOP, WATER_DEPTH, ...BIOME_LEAVES];
     expect(caveLeaves().map((l) => l.path).filter((p) => !slotted.has(p))).toEqual(caveLeaves().map((l) => l.path).filter((p) => apart.includes(p)));
     expect(CARVER_LEAVES.length).toBe(36);
-    expect(apart.length).toBe(57);
+    expect(apart.length).toBe(72);
   });
 
   test('each slot\'s column: the first land column of sp6a.liveness.caves where its families act and every leaf of its slot changes the T column', () => {
@@ -662,9 +670,9 @@ describe('the cave class columns (SP6a spec §4)', () => {
     expect(caveColumn(CTX, 'tunnels', [...caveSlotLeaves('caverns'), ...caveSlotLeaves('tunnels')], CAVE_PINS.tunnels[1] + 1)).toBeNull();
   });
 
-  test('every caves leaf but the scale, band and carver leaves, capTop and waterDepth is live on a cave column (the class it is meant for), and only through the T stage', () => {
+  test('every caves leaf but the scale, band, carver and cave-biome leaves, capTop and waterDepth is live on a cave column (the class it is meant for), and only through the T stage', () => {
     const cs = caves();
-    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES, ...CARVER_LEAVES, CAP_TOP, WATER_DEPTH];
+    const apart: readonly string[] = [...SCALE_LEAVES, ...BAND_LEAVES, ...CARVER_LEAVES, CAP_TOP, WATER_DEPTH, ...BIOME_LEAVES];
     for (const l of caveLeaves().filter((x) => !apart.includes(x.path))) {
       expect(intendedClass(l.path)).toBe('cave');
       const r = leafLiveness(CTX, l.path, [...columns(), ...cs]);
@@ -730,6 +738,70 @@ describe('the cave class columns (SP6a spec §4)', () => {
     expect(caveColumn(CTX, 'caverns', caveSlotLeaves('caverns'), 0)).toBeNull();
     expect(() => scaleWitness(CTX, 'caves.noodles.regional')).toThrow('not a spaghetti scale leaf');
   });
+});
+
+describe('the cave-biome leaves (SP6b Task 17; spec §12.7, Spec correction 5)', () => {
+  /**
+   * Each cave-biome leaf's U2 verdict at seed 42: tried on the class columns, the cave columns first (the class it is
+   * meant for), then on its bounded biome witness; lush's hMin and the abyss's cMin are dead on every class column.
+   */
+  const BIOME_PINS: Readonly<Record<(typeof BIOME_LEAVES)[number], string>> = {
+    'caves.biomes.lush.hMin': 'biome witness column (-18559, -12761)',
+    'caves.biomes.lush.depthMin': 'land column (-25833, 16792)',
+    'caves.biomes.lush.depthMax': TUNNELS_VIA,
+    'caves.biomes.dripstone.cMin': TUNNELS_VIA,
+    'caves.biomes.dripstone.depthMin': 'land column (-25833, 16792)',
+    'caves.biomes.dripstone.depthMax': CAVERNS_VIA,
+    'caves.biomes.abyss.eMax': CAVERNS_VIA,
+    'caves.biomes.abyss.cMin': 'biome witness column (-25157, -32169)',
+    'caves.biomes.abyss.depthMin': CAVERNS_VIA,
+    'caves.biomes.depthScale': CAVERNS_VIA,
+    'caves.biomes.borderWarp': CAVERNS_VIA,
+    'caves.biomes.depthWarp': 'land column (-25833, 16792)',
+    'caves.biomes.edgeJitter': CAVERNS_VIA,
+    'caves.biomes.noises.border': CAVERNS_VIA,
+    'caves.biomes.noises.depth': CAVERNS_VIA,
+  };
+  /** The cave biomes each leaf reads: its box's own; any of lush, dripstone and abyss for the border leaves and noises. */
+  const reads = (path: string): number[] => path.includes('.lush.') ? [1] : path.includes('.dripstone.') ? [2] : path.includes('.abyss.') ? [3] : [1, 2, 3];
+  /** The cave biomes the tagged air of `ctx`'s T column (cx, cz) holds. */
+  const biomesIn = (cx: number, cz: number): Set<number> => {
+    const store = createStore({ shared: false, maxBlockBytes: 1 << 20, maxByteBytes: 1 << 20 });
+    expect(fillColumnT(store, CTX, cx, cz, () => false)).toBe(true);
+    const v = store.proto(cx, cz)!;
+    const out = new Set<number>();
+    for (let y = -63; y <= 319; y++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
+      const b = v.cave(lx, y, lz);
+      if ((b & 15) !== 0) out.add(b >> 4);
+    }
+    return out;
+  };
+
+  test('the 15 caves.biomes.* leaves are U2 leaves of the T stage, meant for the cave class', () => {
+    expect(SCHEMA.leaves.filter((l) => l.path.startsWith('caves.biomes.')).map((l) => l.path)).toEqual([...BIOME_LEAVES]);
+    for (const p of BIOME_LEAVES) {
+      expect(u2Leaves().map((l) => l.path)).toContain(p);
+      expect([p, leaf(p).meta.stage, intendedClass(p)]).toEqual([p, 'terrain', 'cave']);
+    }
+  });
+
+  test('each is decided: live on a class column (the cave columns first) or on its bounded biome witness, whose T column holds a biome it reads; its own witness search finds a column too', () => {
+    const all = [...columns(), ...CAVE_SLOTS.map((slot) => caveColumn(CTX, slot)!)];
+    for (const p of BIOME_LEAVES) {
+      const r = leafLiveness(CTX, p, all);
+      expect([p, r.live, r.via]).toEqual([p, true, BIOME_PINS[p]]);
+      const w = biomeWitness(CTX, p, all);
+      expect(w.via, p).toMatch(/^biome witness column \(-?\d+, -?\d+\)$/);
+      if (r.cls === null) expect(w.via, p).toBe(r.via);
+      expect(w.checks, p).toBeLessThanOrEqual(64);
+      expect(w.examined, p).toBeLessThanOrEqual(256);
+      expect(w.draws, p).toBeLessThanOrEqual(8192);
+      const [cx, cz] = w.via!.slice('biome witness column ('.length, -1).split(', ').map(Number) as [number, number];
+      const held = biomesIn(cx, cz);
+      expect(reads(p).some((b) => held.has(b)), `${p}: (${cx}, ${cz}) holds ${[...held]}`).toBe(true);
+    }
+    expect(() => biomeWitness(CTX, 'caves.noodles.regional')).toThrow('not a cave-biome leaf');
+  }, 300_000);
 });
 
 describe('the depth-band leaves (SP6a Task 8; rulings P3, P4, R5)', () => {

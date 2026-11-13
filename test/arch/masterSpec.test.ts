@@ -1991,7 +1991,7 @@ describe('master spec amendments (SP6a §13)', () => {
       return l!;
     };
     expect(line('| meta |')).toContain('SP6b decides whether the meta holds it');
-    expect(line('**Aux slot B:**')).toContain('leaves `caveBiomeQ` 0 until SP6b');
+    // §2.3's aux B line moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 8 rewords it).
     expect(line('- **Ops.**')).toContain('caves add their ops on the same base in SP6a.');
     // Item 11's early-out line (Task 9) and item 7's D19 sentence as ruling R8 words it (the wet roof reads `wetMask`).
     expect(line('- **Interval rules.**')).toContain('(SP6a: the cave taps\' intervals come from their noises\' ±clampSigma, so underground cells need their corners)');
@@ -2002,7 +2002,7 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(line('**Default rules**')).toContain('SP6b inserts rule 4 before rule 2');
     // §3.12's abyss line moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 13 rewords it).
     expect(line('**Greedy meshing.**')).toContain('R2 is re-baselined at SP6a (caves) and SP8b');
-    expect(line('- Editable boxes')).toContain('the 3 cave biomes arrive in SP6b.');
+    // §5.4's cave-biome sentence moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 18 rewords it).
     // Moved from the SP4b describe (§5.8's bench route).
     expect(line('**Bench route `?bench=<preset>`')).toContain('SP6a adds the cave scenario, SP7 the flood)');
     expect(line('| S1 |')).toContain('gated from SP6a (amended by SP4a)');
@@ -2073,11 +2073,10 @@ describe('master spec amendments (SP6a §13)', () => {
     // Moved from the SP3e describe; Tasks 6, 7, 8, 9 and 27 rewrite n (SP6a Spec correction 12), and the user's check's threshold leaf (R31).
     const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
     expect(u2, 'no U2 row in §6.4').toBeDefined();
-    const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
-    expect(n).toBe(172);
     // Task 8: the two scan slots (Task 7) and the amplified base of three maxY leaves (ruling P3); Task 9: capTop's
     // floating_islands base and waterDepth's coast class column; Task 27: the carver leaves' bounded witness (ruling P18).
-    expect(u2).toContain(`; SP6a: the caves.* leaves are decided on the cave class columns (two scan slots) or a bounded witness, the maxY leaves of cheese, spaghetti 3D and the entrances on an amplified base, the island cap's \`caves.limits.capTop\` on a floating_islands base, the wet roof's \`caves.limits.waterDepth\` on the coast class column, the carver leaves (\`caves.worms.*\`, \`caves.undergroundWorms.*\`, \`caves.ravines.*\`) on a bounded carver witness where the class columns leave them dead; U2 covers ${n} leaves (amended by SP6a)`);
+    // The schema's count moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 20: SP6b adds leaves); SP6a's 172 stays.
+    expect(u2).toContain('; SP6a: the caves.* leaves are decided on the cave class columns (two scan slots) or a bounded witness, the maxY leaves of cheese, spaghetti 3D and the entrances on an amplified base, the island cap\'s `caves.limits.capTop` on a floating_islands base, the wet roof\'s `caves.limits.waterDepth` on the coast class column, the carver leaves (`caves.worms.*`, `caves.undergroundWorms.*`, `caves.ravines.*`) on a bounded carver witness where the class columns leave them dead; U2 covers 172 leaves (amended by SP6a)');
   });
 
   test('§3.6 holds the default expression as built, with the schema defaults of DEFAULTS.caves; §2.4 names wetMask (SP6a spec §13 items 7 and 11)', () => {
@@ -2134,7 +2133,8 @@ describe('master spec amendments (SP6a §13)', () => {
     const to = lines.findIndex((l, i) => i > from && l.startsWith('### 2.4 '));
     expect(from, 'no §2.3').toBeGreaterThanOrEqual(0);
     const block = lines.slice(from, to).join('\n');
-    expect(block).toContain('`cave` (u8 per voxel: the cave kind in bits 0-3, bits 4-7 reserved; written by T, shared from the proto set, never persisted; SP6a)');
+    // The `cave` entry's bits 4-7 moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 8 writes the cave biome there).
+    expect(block).toContain('`cave` (u8 per voxel: the cave kind in bits 0-3;');
     expect(block).toContain('**Final section descriptor**, 5 × int32 per section (the `cave` entry amended by SP6a):');
     expect(block).toContain('**Proto section descriptor**, 3 × int32: blocks, fluid and `cave` (amended by SP6a).');
     expect(block).toContain('**Column record** (208 × int32 = 832 B; the 64² torus is about 3.4 MB; amended by SP6a):');
@@ -2574,6 +2574,76 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(conditions).toContain('(SP6b spec §3.3, D19)');
     // The rule kinds the line names are RULE_KINDS.
     for (const k of RULE_KINDS) expect(conditions).toContain(`\`${k}\``);
+  });
+
+  test('§2.3\'s cave byte and aux B lines name the cave biome (SP6b spec §15 item 8)', () => {
+    const lines = text.split('\n');
+    const from = lines.findIndex((l) => l.startsWith('### 2.3 '));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('### 2.4 '));
+    expect(from, 'no §2.3').toBeGreaterThanOrEqual(0);
+    const block = lines.slice(from, to).join('\n');
+    const cave = block.split('\n').find((l) => l.startsWith('| cave |'));
+    expect(cave, 'no `| cave |` row in §2.3').toBeDefined();
+    // Moved from the SP6a describe (its "bits 4-7 reserved"), with the new wording.
+    expect(cave).toContain('`cave` (u8 per voxel: the cave kind in bits 0-3; bits 4-7: the cave biome (`CAVE_BIOME`), written by T at tagged voxels (SP6b); written by T, shared from the proto set, never persisted; SP6a; amended by SP6b)');
+    expect(cave).not.toContain('bits 4-7 reserved');
+    const auxB = lines.find((l) => l.startsWith('**Aux slot B:**'));
+    expect(auxB, 'no **Aux slot B:** line').toBeDefined();
+    expect(auxB).toContain('`caveBiomeQ`: 0 for a quart with no tagged voxel, else 1 + the biome most of its tagged voxels carry; written by T (SP6b)');
+    expect(auxB).toContain('A tie goes to the lower id, and tagged voxels holding water count like dry ones (amended by SP6b).');
+    // Moved from the SP6a describe ("leaves `caveBiomeQ` 0 until SP6b").
+    expect(auxB).not.toContain('leaves `caveBiomeQ` 0 until SP6b');
+  });
+
+  test('§3.2\'s depth axis as built (SP6b spec §15 item 9)', () => {
+    const depth = text.split('\n').find((l) => l.startsWith('- The depth axis for cave biomes is'));
+    expect(depth, 'no depth-axis line in §3.2').toBeDefined();
+    expect(depth).toContain('`depth = (surfaceEst − y)/128` (SP6b: `surfaceEst` the 2D mean height read per position, perturbed by `caves.biomes.depthWarp`; the scale is `caves.biomes.depthScale`)');
+    expect(DEFAULTS.caves.biomes.depthScale).toBe(128);
+  });
+
+  /** A box value as the master writes it: a Unicode minus, one decimal for an integer (1.0). */
+  const box = (v: number): string => `${v < 0 ? '−' : ''}${Number.isInteger(v) ? Math.abs(v).toFixed(1) : String(Math.abs(v))}`;
+
+  test('§3.9\'s abyss box (SP6b spec §15 item 10)', () => {
+    const a = DEFAULTS.caves.biomes.abyss;
+    const abyss = text.split('\n').find((l) => l.startsWith('**Abyss.**'));
+    expect(abyss, 'no **Abyss.** paragraph in §3.9').toBeDefined();
+    expect(abyss).toContain('the Abyss holds no water and stays dark; lava may appear there (SP7)');
+    expect(abyss).not.toContain('the Abyss stays dry and dark');
+    // The box as built, with the defaults of DEFAULTS.caves.biomes.abyss, widened by 0.1 depth for the aquifers.
+    expect(abyss).toContain(`E′ ≤ \`caves.biomes.abyss.eMax\` ${box(a.eMax)}, C′ > \`caves.biomes.abyss.cMin\` ${box(a.cMin)} and depth ≥ \`caves.biomes.abyss.depthMin\` ${box(a.depthMin)}`);
+    expect(abyss).toContain(`Aquifers are disabled where E′ ≤ ${box(a.eMax)}, C′ > ${box(a.cMin)} and depth > ${box(a.depthMin - 0.1)}`);
+  });
+
+  test('§3.10\'s registry and per-block evaluation (SP6b spec §15 item 11)', () => {
+    const b = DEFAULTS.caves.biomes;
+    const lines = text.split('\n');
+    expect(lines).toContain('- Cave biomes per block: per-position climate and depth perturbed by two 2D border noises, chosen at a position and height jittered by ±`edgeJitter` blocks per voxel (SP6b, D16); `caveBiomeQ` summarises them per quart (amended by SP6b).');
+    expect(text).not.toContain('Cave biomes per 3D quart, only for quarts that contain air');
+    expect(lines.some((l) => l.startsWith('**Cave registry (3; as built by SP6b, the boxes are the `caves.biomes.*` defaults'))).toBe(true);
+    // The box values equal DEFAULTS.caves.biomes.
+    expect(lines).toContain(`- lush: H′ ≥ ${box(b.lush.hMin)} and depth ${box(b.lush.depthMin)}-${box(b.lush.depthMax)};`);
+    expect(lines).toContain(`- dripstone: C′ ≥ ${box(b.dripstone.cMin)} and depth ${box(b.dripstone.depthMin)}-${box(b.dripstone.depthMax)};`);
+    expect(lines).toContain(`- abyss (D14): E′ ≤ ${box(b.abyss.eMax)}, C′ > ${box(b.abyss.cMin)} and depth ≥ ${box(b.abyss.depthMin)}, so never under oceans.`);
+    expect(lines).toContain('Where boxes overlap, the largest margin wins (lush H′ − `hMin`, dripstone C′ − `cMin`, abyss min(`eMax` − E′, C′ − `cMin`)), a tie to the lower id; anything else is plain cave (SP6b).');
+  });
+
+  test('§5.4: the cave biomes arrived as leaves (SP6b spec §15 item 18)', () => {
+    const boxes = text.split('\n').find((l) => l.startsWith('- Editable boxes'));
+    expect(boxes, 'no `- Editable boxes` line in §5.4').toBeDefined();
+    // Moved from the SP6a describe ("the 3 cave biomes arrive in SP6b."), as SP6b words it.
+    expect(boxes).toContain('the 3 cave biomes arrived in SP6b as `caves.biomes.*` leaves on the parameter panel, not as biome-table rows (SP6b, D15)');
+    expect(boxes).not.toContain('the 3 cave biomes arrive in SP6b.');
+  });
+
+  test('§6.4\'s U2 row covers the schema\'s U2 leaves (SP6b spec §15 item 20)', () => {
+    // Moved from the SP6a describe (the schema's count); SP6b's leaves join it.
+    const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
+    expect(u2, 'no U2 row in §6.4').toBeDefined();
+    const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
+    expect(n).toBe(187);
+    expect(u2).toContain(`; SP6b: the caves.biomes.* leaves are decided on a bounded biome witness (stream columns whose tagged air holds a cave biome the leaf reads, where a step changes the T column) where the class columns leave them dead; U2 covers ${n} leaves (amended by SP6b)`);
   });
 
   test('§3.12 names the abyss surface-palette blocks (SP6b spec §15 item 13)', () => {

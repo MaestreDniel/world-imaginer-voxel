@@ -36,8 +36,13 @@
  * (`carverWitness`): the source chunks of the kinds that read the leaf, in a square spiral from (0, 0), whose path a
  * step of the leaf changes (or makes pass or fail its roll), each giving the column of its middle ellipsoid (a column
  * its path box meets); up to 64 such columns hashed, the first whose T column a step changes.
+ * SP6b (its spec §12.7, Task 17; Spec correction 5): the cave-biome leaves (`caves.biomes.*`) act only where a cave
+ * biome's border meets cave air, so they are left out of the slots' acceptance too: each is tried on the class columns,
+ * then, dead there, decided on a bounded biome witness search (`biomeWitness`): stream columns whose tagged air holds a
+ * cave biome the leaf reads (its own box's biome; any of lush, dripstone and abyss for the border leaves and noises),
+ * the first whose T column a step changes.
  */
-import { SEA_LEVEL, SPAGHETTI_BANDS } from '../core/constants';
+import { CAVE_BIOME, SEA_LEVEL, SPAGHETTI_BANDS } from '../core/constants';
 import { fnv1a32, hash4, hashF64, hex64 } from '../core/hash';
 import type { NoiseDef } from '../core/noise/types';
 import { canonicalJSON, q15 } from '../core/params/canonical';
@@ -47,6 +52,7 @@ import { SCHEMA, type LakeParams, type Params } from '../core/params/schema';
 import { Xoshiro128 } from '../core/rng';
 import { seedFromInput } from '../core/seed';
 import type { NestedSpline } from '../core/spline/types';
+import { caveBiomeOfPass, cavePickerOf, fillCaveColumnPass, newCaveColumnPass, type CaveColumnPass, type CavePickerInputs } from '../gen/biomes/cavePicker';
 import { carverParamsOf, carverPath, type CarverKind, type CarverPath } from '../gen/caves/carvers';
 import { createGenContext, noiseFor, type GenContext } from '../gen/context';
 import { newClimate, sampleClimate } from '../gen/column/climate';
@@ -115,6 +121,11 @@ const SCAN_COLUMN = scanColumn;
 const CREATE_DENSITY = createDensityContext;
 const CARVER_PARAMS_OF = carverParamsOf;
 const CARVER_PATH = carverPath;
+const CB = CAVE_BIOME;
+const PICKER_OF = cavePickerOf;
+const FILL_PASS = fillCaveColumnPass;
+const BIOME_OF_PASS = caveBiomeOfPass;
+const NEW_PASS = newCaveColumnPass;
 
 /** SP3c's surface class slots (SP3c spec §3.5), in the order a third-pass column is offered to them. */
 export const SURFACE_CLASSES = ['cliffY', 'cliffSteep', 'snowline', 'patch', 'badlands'] as const;
@@ -283,6 +294,25 @@ const CARVER_CHECKS = 64;
 const isCarverLeaf = (path: string): boolean => CARVER_LEAF.test(path);
 /** The worm leaves that only worms read (underground worms have their own); the other worm leaves are both kinds'. */
 const WORM_ONLY: ReadonlySet<string> = new Set(['caves.worms.chance', 'caves.worms.startYMin', 'caves.worms.startYMax']);
+
+/**
+ * SP6b spec §12.7 (Task 17; Spec correction 5): the cave-biome leaves, left out of the slots' acceptance and, dead on the
+ * class columns, decided on a bounded biome witness search (`biomeWitness`): up to `BIOME_DRAWS` draws of
+ * `samplePoints('sp6b.liveness.caveBiomes', …)`; a column passes the prefilter when a step's picker changes the pick at
+ * one of its voxels on a grid (every `BIOME_GRID` blocks across, every `BIOME_GRID` up from y −63 to its highest Y0 + 4);
+ * up to `BIOME_EXAMINED` such columns examined (T generated: its tagged voxels and their stored biomes) and
+ * `BIOME_CHECKS` T columns hashed; the witness is the first examined column whose tagged air holds a biome the leaf reads
+ * (`biomesOf`), where a step changes the pick at a tagged voxel, and whose T column the step changes.
+ */
+const BIOME_LEAF = /^caves\.biomes\./;
+const BIOME_STREAM = 'sp6b.liveness.caveBiomes';
+const BIOME_DRAWS = 8192;
+const BIOME_EXAMINED = 256;
+const BIOME_CHECKS = 64;
+const BIOME_GRID = 2;
+/** Above Y0 + J every depth is below 0 and every box's depthMin is ≥ 0 (§6.1): the grid stops 4 blocks past the highest Y0. */
+const BIOME_REACH = 4;
+const isBiomeLeaf = (path: string): boolean => BIOME_LEAF.test(path);
 
 /** The cave class column's scan slots (SP6a spec §4): the caverns' families, then the tunnels'. */
 export type CaveSlot = 'caverns' | 'tunnels';
@@ -943,13 +973,14 @@ export function caveLeaves(): readonly LeafInfo[] {
 /**
  * The leaves a cave class column's slot must accept (SP6a spec §4), in schema order: the tunnels' leaves for `tunnels`,
  * every other `caves.*` leaf for `caverns`; never a spaghetti scale leaf (ruling P5), a depth-band leaf (`minY`,
- * `maxY`; Task 8), a carver leaf (Task 27, ruling P18) or `caves.limits.capTop` (Task 9), each decided on its bounded
- * witness search when the class columns leave it dead, and never `caves.limits.waterDepth` (Task 9), the wet roof's
+ * `maxY`; Task 8), a carver leaf (Task 27, ruling P18), a cave-biome leaf (SP6b Task 17) or `caves.limits.capTop`
+ * (Task 9), each decided on its bounded witness search when the class columns leave it dead, and never
+ * `caves.limits.waterDepth` (Task 9), the wet roof's
  * depth, decided on the coast class column (it acts under water only, and the cave columns are land columns).
  */
 export function caveSlotLeaves(slot: CaveSlot): readonly LeafInfo[] {
-  return caveLeaves().filter((l) => !isScaleLeaf(l.path) && !isBandLeaf(l.path) && !isCarverLeaf(l.path) && l.path !== CAP_TOP_PATH
-    && l.path !== WATER_DEPTH_PATH && TUNNEL_LEAF.test(l.path) === (slot === 'tunnels'));
+  return caveLeaves().filter((l) => !isScaleLeaf(l.path) && !isBandLeaf(l.path) && !isCarverLeaf(l.path) && !isBiomeLeaf(l.path)
+    && l.path !== CAP_TOP_PATH && l.path !== WATER_DEPTH_PATH && TUNNEL_LEAF.test(l.path) === (slot === 'tunnels'));
 }
 
 /** How often each cave family acts on a column (SP6a spec §4's cave class column), at the corner-lattice voxels. */
@@ -1143,6 +1174,127 @@ export function carverWitness(base: GenContext, path: string, skip: readonly Liv
   const info = leafInfo(path);
   if (!isCarverLeaf(path)) throw new Error(`${path} is not a carver leaf`);
   return carverWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
+}
+
+// ---------------------------------------------------------------- the cave-biome leaves' witness (SP6b Task 17)
+
+/** The cave biomes a cave-biome leaf reads: its own box's; every non-plain one for the border leaves and the noises. */
+function biomesOf(path: string): readonly number[] {
+  if (path.startsWith('caves.biomes.lush.')) return [CB.lush];
+  if (path.startsWith('caves.biomes.dripstone.')) return [CB.dripstone];
+  if (path.startsWith('caves.biomes.abyss.')) return [CB.abyss];
+  return [CB.lush, CB.dripstone, CB.abyss];
+}
+
+/** A base T column's tagged voxels (kind ≠ 0): index `((y + 64)·16 + lz)·16 + lx`, stored biome, and a mask of the biomes present. */
+interface TaggedColumn { readonly at: Int32Array; readonly biome: Uint8Array; readonly mask: number }
+
+/** Tagged columns by chunk key, per base (shared by the leaves of one U2 run). */
+const TAGGED_MEMO = new WeakMap<GenContext, Map<number, TaggedColumn>>();
+
+/** The tagged voxels of `base`'s T column (cx, cz), generated as `terrainHash` does (memoised per base). */
+function taggedColumn(base: GenContext, cx: number, cz: number): TaggedColumn {
+  let byBase = TAGGED_MEMO.get(base);
+  if (byBase === undefined) { byBase = new Map(); TAGGED_MEMO.set(base, byBase); }
+  const key = (cx + 32768) * 65536 + (cz + 32768);
+  const hit = byBase.get(key);
+  if (hit !== undefined) return hit;
+  const store = CREATE_STORE({ shared: false, maxBlockBytes: STORE_BYTES, maxByteBytes: STORE_BYTES });
+  if (!FILL_T(store, base, cx, cz, NEVER)) throw new Error(`U2: column (${cx}, ${cz}) was not generated`);
+  const view = store.proto(cx, cz)!;
+  const at: number[] = [];
+  const biome: number[] = [];
+  let mask = 0;
+  for (let sy = 0; sy < 24; sy++) {
+    const cave = view.sectionCave(sy);
+    for (let i = 0; i < 4096; i++) {
+      const byte = typeof cave === 'number' ? cave : cave[i]!;
+      if ((byte & 15) === 0) continue;
+      at.push(4096 * sy + i);
+      biome.push(byte >> 4);
+      mask |= 1 << (byte >> 4);
+    }
+  }
+  const t: TaggedColumn = { at: Int32Array.from(at), biome: Uint8Array.from(biome), mask };
+  byBase.set(key, t);
+  return t;
+}
+
+const BIOME_SAMPLE: ColumnSample = NEW_SAMPLE();
+const BASE_PASS: CaveColumnPass = NEW_PASS();
+const STEP_PASS: CaveColumnPass = NEW_PASS();
+
+/** Whether `step`'s pick (on `pass`) differs from `inp`'s (on `BASE_PASS`) at a voxel of the column's grid. */
+function gridDiffers(inp: CavePickerInputs, step: CavePickerInputs, pass: CaveColumnPass, cx: number, cz: number): boolean {
+  let y0 = -Infinity;
+  for (let lz = 0; lz < 16; lz++) {
+    for (let lx = 0; lx < 16; lx++) {
+      const k = (lz + 4) * 24 + lx + 4;
+      y0 = Math.max(y0, BASE_PASS.y0[k]!, pass.y0[k]!);
+    }
+  }
+  const top = Math.min(FILL_HI, Math.floor(y0) + BIOME_REACH);
+  for (let y = FILL_LO; y <= top; y += BIOME_GRID) {
+    for (let lz = 0; lz < 16; lz += BIOME_GRID) {
+      for (let lx = 0; lx < 16; lx += BIOME_GRID) {
+        const x = 16 * cx + lx, z = 16 * cz + lz;
+        if (BIOME_OF_PASS(inp, BASE_PASS, x, y, z) !== BIOME_OF_PASS(step, pass, x, y, z)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Whether `step`'s pick (on `pass`) differs from the stored biome at one of the column's tagged voxels. */
+function taggedDiffers(step: CavePickerInputs, pass: CaveColumnPass, t: TaggedColumn, cx: number, cz: number): boolean {
+  for (let k = 0; k < t.at.length; k++) {
+    const j = t.at[k]!;
+    if (BIOME_OF_PASS(step, pass, 16 * cx + (j & 15), (j >> 8) - 64, 16 * cz + ((j >> 4) & 15)) !== t.biome[k]) return true;
+  }
+  return false;
+}
+
+/** The figures of a cave-biome leaf's witness search: the deciding column, the draws taken, the columns examined and hashed. */
+export interface BiomeWitnessScan { readonly via: string | null; readonly draws: number; readonly examined: number; readonly checks: number }
+
+function biomeWitnessOf(base: GenContext, info: LeafInfo, variants: readonly GenContext[], skip: readonly LivenessColumn[], baseHash: BaseHash): BiomeWitnessScan {
+  const stage = stageOf(info);
+  const want = biomesOf(info.path).reduce((m, b) => m | (1 << b), 0);
+  const inp = PICKER_OF(base);
+  const steps = variants.map((v) => PICKER_OF(v));
+  const pts = POINTS(BIOME_STREAM, BIOME_DRAWS);
+  const seen = new Set<number>(skip.map((c) => (c.cx + 32768) * 65536 + (c.cz + 32768)));
+  let examined = 0, checks = 0, n = 0;
+  for (; n < BIOME_DRAWS && examined < BIOME_EXAMINED && checks < BIOME_CHECKS; n++) {
+    const cx = Math.floor(pts.x[n]! / 16);
+    const cz = Math.floor(pts.z[n]! / 16);
+    const key = (cx + 32768) * 65536 + (cz + 32768);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // The cave-biome leaves move no ColumnSample (they are hashed by the T stage only): one sample serves every step.
+    const s = BUILD(base, cx, cz, BIOME_SAMPLE);
+    FILL_PASS(inp, s, BASE_PASS);
+    const moved = steps.filter((st) => gridDiffers(inp, st, FILL_PASS(st, s, STEP_PASS), cx, cz));
+    if (moved.length === 0) continue;
+    examined++;
+    const t = taggedColumn(base, cx, cz);
+    if ((t.mask & want) === 0) continue;
+    if (!moved.some((st) => taggedDiffers(st, FILL_PASS(st, s, STEP_PASS), t, cx, cz))) continue;
+    checks++;
+    const h = baseHash(stage, cx, cz);
+    if (variants.some((v) => stageOutputHash(v, stage, cx, cz) !== h)) return { via: `biome witness column (${cx}, ${cz})`, draws: n + 1, examined, checks };
+  }
+  return { via: null, draws: n, examined, checks };
+}
+
+/**
+ * A cave-biome leaf's bounded biome witness search (SP6b Task 17) over the columns not in `skip`: the deciding column
+ * (`biome witness column (cx, cz)`) or null, with the draws taken and the columns examined and hashed (see `BIOME_LEAF`).
+ */
+export function biomeWitness(base: GenContext, path: string, skip: readonly LivenessColumn[] = []): BiomeWitnessScan {
+  const info = leafInfo(path);
+  if (!isBiomeLeaf(path)) throw new Error(`${path} is not a cave-biome leaf`);
+  return biomeWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
 }
 
 // ---------------------------------------------------------------- the depth-band leaves' witnesses (SP6a Task 8)
@@ -1523,7 +1675,8 @@ function decide(base: GenContext, info: LeafInfo, columns: readonly LivenessColu
     : isScaleLeaf(info.path) ? scaleWitnessOf(base, info, variants, columns, baseHash).via
       : isBandLeaf(info.path) ? bandVia(base, info, variants, columns, baseHash)
         : isCarverLeaf(info.path) ? carverWitnessOf(base, info, variants, columns, baseHash).via
-          : info.path === CAP_TOP_PATH ? capTopWitness(base).via : null;
+          : isBiomeLeaf(info.path) ? biomeWitnessOf(base, info, variants, columns, baseHash).via
+            : info.path === CAP_TOP_PATH ? capTopWitness(base).via : null;
   return w !== null ? { path: info.path, live: true, via: w, cls: null } : { path: info.path, live: false, via: null, cls: intended };
 }
 
@@ -1538,9 +1691,9 @@ function bandVia(base: GenContext, info: LeafInfo, variants: readonly GenContext
 /**
  * One leaf's U2 verdict over `columns` (the class columns of `base`): its stage output hash on the class columns (the
  * intended class first; a `terrain` leaf only on the land, coast, surface, island and cave ones), then, except for a
- * `terrain` leaf, the witness search; a spaghetti scale leaf, a depth-band leaf, a carver leaf and `caves.limits.capTop`
- * (`terrain` leaves) have their own (ruling P5; Task 8's `bandWitness`; Task 27's `carverWitness`; Task 9's
- * `capTopWitness`).
+ * `terrain` leaf, the witness search; a spaghetti scale leaf, a depth-band leaf, a carver leaf, a cave-biome leaf and
+ * `caves.limits.capTop` (`terrain` leaves) have their own (ruling P5; Task 8's `bandWitness`; Task 27's
+ * `carverWitness`; SP6b Task 17's `biomeWitness`; Task 9's `capTopWitness`).
  */
 export function leafLiveness(base: GenContext, path: string, columns: readonly LivenessColumn[]): LivenessResult {
   return decide(base, leafInfo(path), columns, baseHasher(base));
@@ -1590,8 +1743,9 @@ export function islandColumn(base: GenContext, leaves: readonly LeafInfo[] = isl
  * The cave class columns (SP6a spec §4, one per slot) join the class columns; none found for a slot with leaves: "no
  * cave column (<slot>)". The spaghetti scale leaves dead on the class columns are decided on their bounded witness
  * search (ruling P5), the depth-band leaves on their band witness, then (three maxY leaves) on the amplified base (P3),
- * the carver leaves on their carver witness (`carverWitness`, Task 27, ruling P18) and `caves.limits.capTop` on its
- * floating_islands witness (`capTopWitness`, Task 9).
+ * the carver leaves on their carver witness (`carverWitness`, Task 27, ruling P18), the cave-biome leaves on their biome
+ * witness (`biomeWitness`, SP6b Task 17) and `caves.limits.capTop` on its floating_islands witness (`capTopWitness`,
+ * Task 9).
  */
 export function u2(seedText = '42'): { readonly value: number; readonly results: readonly LivenessResult[] } {
   const base = CREATE(SEED(seedText), RESOLVE('default'));

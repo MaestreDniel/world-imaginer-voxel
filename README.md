@@ -230,6 +230,21 @@ Generated from `src/core/params/schema.ts` by `npm run docs:params`; a test fail
 | `caves.noises.noodleThickness` | noise | {"amplitudes":null,"clampSigma":3,"double":false,"lacunarity":2,"octaves":1,"persistence":0.5,"remap":"none","wavelength":64,"yScale":1} | wavelength 16 … 8192 |  | terrain | Noodle thickness noise: Kn of the noodles, times 0.025. |
 | `caves.noises.noodleRidgeA` | noise | {"amplitudes":null,"clampSigma":3,"double":false,"lacunarity":2,"octaves":1,"persistence":0.5,"remap":"none","wavelength":18,"yScale":1} | wavelength 16 … 8192 |  | terrain | Noodle ridge noise A: An of the noodle ridges max(\|An\|, \|Bn\|). |
 | `caves.noises.noodleRidgeB` | noise | {"amplitudes":null,"clampSigma":3,"double":false,"lacunarity":2,"octaves":1,"persistence":0.5,"remap":"none","wavelength":18,"yScale":1} | wavelength 16 … 8192 |  | terrain | Noodle ridge noise B: Bn of the noodle ridges max(\|An\|, \|Bn\|). |
+| `caves.biomes.lush.hMin` | number | 0.4 | -1 … 1 |  | terrain | Lowest humidity: Lush where the perturbed humidity H′ is at least this. |
+| `caves.biomes.lush.depthMin` | number | 0.2 | 0 … 2 |  | terrain | Shallowest depth: Lush from this depth down (depth = (Y0 − y) / depthScale). |
+| `caves.biomes.lush.depthMax` | number | 0.9 | 0 … 2 |  | terrain | Deepest depth: Lush down to this depth. |
+| `caves.biomes.dripstone.cMin` | number | 0.6 | -1 … 1 |  | terrain | Lowest continentalness: Dripstone where the perturbed continentalness C′ is at least this (far inland). |
+| `caves.biomes.dripstone.depthMin` | number | 0.2 | 0 … 2 |  | terrain | Shallowest depth: Dripstone from this depth down (depth = (Y0 − y) / depthScale). |
+| `caves.biomes.dripstone.depthMax` | number | 0.9 | 0 … 2 |  | terrain | Deepest depth: Dripstone down to this depth. |
+| `caves.biomes.abyss.eMax` | number | -0.5 | -1 … 1 |  | terrain | Highest erosion: The abyss where the perturbed erosion E′ is at most this (low E is high ground). |
+| `caves.biomes.abyss.cMin` | number | -0.1 | -1 … 1 |  | terrain | Lowest continentalness: The abyss where the perturbed continentalness C′ is above this. |
+| `caves.biomes.abyss.depthMin` | number | 1 | 0 … 2 |  | terrain | Shallowest depth: The abyss from this depth down (depth = (Y0 − y) / depthScale). |
+| `caves.biomes.depthScale` | number | 128 | 32 … 256 | blocks | terrain | Depth scale: Blocks per unit of depth: depth = (Y0 − y) / depthScale. |
+| `caves.biomes.borderWarp` | number | 0.05 | 0 … 0.2 |  | terrain | Border warp: Times the border noises, added to C, E and H: how far a cave-biome border wanders (0.05: up to about ±50 blocks). |
+| `caves.biomes.depthWarp` | number | 10 | 0 … 32 | blocks | terrain | Depth warp: Times the depth noise, added to the surface estimate: Y0 = surfaceEst + depthWarp · Nd. |
+| `caves.biomes.edgeJitter` | int | 2 | 0 … 4 | blocks | terrain | Edge jitter: Each voxel picks its biome at a position and height moved by up to this many blocks, so borders become a speckle 2·edgeJitter + 1 blocks wide (0: off; 4 is the column halo's limit). |
+| `caves.biomes.noises.border` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":2,"persistence":0.5,"remap":"none","wavelength":64,"yScale":1} | wavelength 16 … 8192 |  | terrain | Border noise: Nb, sampled as three instances (caveBiome.C, .E, .H) that shift C, E and H by borderWarp · Nb. |
+| `caves.biomes.noises.depth` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":2,"persistence":0.5,"remap":"none","wavelength":96,"yScale":1} | wavelength 16 … 8192 |  | terrain | Depth noise: Nd: shifts the surface estimate the depth is measured from by depthWarp · Nd. |
 <!-- params:end -->
 
 ## Requirements

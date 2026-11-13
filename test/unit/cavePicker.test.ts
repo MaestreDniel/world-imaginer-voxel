@@ -3,18 +3,20 @@ import { CAVE_BIOME } from '../../src/core/constants';
 import { deriveSeed, hash3 } from '../../src/core/hash';
 import { NormalNoise } from '../../src/core/noise/normal';
 import { completeNoiseDef } from '../../src/core/noise/types';
+import { SCHEMA } from '../../src/core/params/schema';
 import { pickCaveBiome, type CaveBiomeSettings } from '../../src/gen/biomes/caveRegistry';
 import {
   caveBiomeAtPoint, caveBiomeInputsAt, caveBiomeOfPass, caveBiomePoint, caveBiomeUnjittered, caveJitter, caveJitterOffset,
-  caveY0, fillCaveColumnPass, newCaveColumnPass, type CaveColumnPass, type CavePickerInputs,
+  cavePickerOf, caveY0, fillCaveColumnPass, newCaveColumnPass, type CaveColumnPass, type CavePickerInputs,
 } from '../../src/gen/biomes/cavePicker';
 import {
   buildColumnSample, latticeIndex, newColumnSample, readFieldHalo, type ColumnSample,
 } from '../../src/gen/column/columnStage';
+import { noiseFor } from '../../src/gen/context';
 import { ctxFor } from '../harness/gen';
 import { testRng } from '../harness/stats';
 
-/** §6.1's defaults, as `params.caves.biomes` minus its noises will hold them (Task 17). */
+/** §6.1's defaults, as `params.caves.biomes` minus its noises holds them (Task 17). */
 const SETTINGS: CaveBiomeSettings = {
   lush: { hMin: 0.4, depthMin: 0.2, depthMax: 0.9 },
   dripstone: { cMin: 0.6, depthMin: 0.2, depthMax: 0.9 },
@@ -310,5 +312,88 @@ describe('the speckle (§1.4, D3)', () => {
     expect(near).toBe(4 * 16 * 73);
     expect(nearChanged / near).toBeGreaterThanOrEqual(0.2);
     expect(farChanged).toBe(0);
+  });
+});
+
+describe('the caves.biomes.* leaves (§6.1, Task 17)', () => {
+  test('defaults and ranges as §6.1, in schema order, every one Terrain-scoped on the terrain stage', () => {
+    const leaves = SCHEMA.leaves.filter((l) => l.path.startsWith('caves.biomes.'));
+    expect(leaves.filter((l) => l.leaf.kind !== 'noise').map((l) => [l.path, l.leaf.kind, l.leaf.def, l.leaf.min, l.leaf.max])).toEqual([
+      ['caves.biomes.lush.hMin', 'number', 0.4, -1, 1],
+      ['caves.biomes.lush.depthMin', 'number', 0.2, 0, 2],
+      ['caves.biomes.lush.depthMax', 'number', 0.9, 0, 2],
+      ['caves.biomes.dripstone.cMin', 'number', 0.6, -1, 1],
+      ['caves.biomes.dripstone.depthMin', 'number', 0.2, 0, 2],
+      ['caves.biomes.dripstone.depthMax', 'number', 0.9, 0, 2],
+      ['caves.biomes.abyss.eMax', 'number', -0.5, -1, 1],
+      ['caves.biomes.abyss.cMin', 'number', -0.1, -1, 1],
+      ['caves.biomes.abyss.depthMin', 'number', 1, 0, 2],
+      ['caves.biomes.depthScale', 'number', 128, 32, 256],
+      ['caves.biomes.borderWarp', 'number', 0.05, 0, 0.2],
+      ['caves.biomes.depthWarp', 'number', 10, 0, 32],
+      ['caves.biomes.edgeJitter', 'int', 2, 0, 4],
+    ]);
+    // The noises: border λ 64, depth λ 96, 2 octaves, 2D, remap none.
+    expect(leaves.filter((l) => l.leaf.kind === 'noise').map((l) => [l.path, l.leaf.def, l.meta.dims, l.meta.remapNone])).toEqual([
+      ['caves.biomes.noises.border', BORDER, 2, true],
+      ['caves.biomes.noises.depth', DEPTH, 2, true],
+    ]);
+    for (const l of leaves) expect([l.path, l.meta.scope, l.meta.stage]).toEqual([l.path, 'terrain', 'terrain']);
+    // Appended last in the caves group, after its noises (§6.1: earlier caves leaves draw as before).
+    const caves = SCHEMA.leaves.filter((l) => l.path.startsWith('caves.')).map((l) => l.path);
+    expect(caves.slice(-15)).toEqual(leaves.map((l) => l.path));
+  });
+});
+
+describe('cavePickerOf, the per-GenContext inputs (Task 17, Spec correction 11)', () => {
+  const xz = (n: number): Array<readonly [number, number]> => {
+    const next = testRng(1717);
+    return Array.from({ length: n }, () => [(next() % 20000) - 10000 + 0.5, (next() % 20000) - 10000 + 0.25] as const);
+  };
+
+  test('settings are params.caves.biomes minus noises; one object per context (memoised)', () => {
+    const c = ctxFor('42');
+    const p = cavePickerOf(c);
+    const { noises, ...rest } = c.params.caves.biomes;
+    expect(p.settings).toEqual(rest);
+    expect(Object.keys(p.settings).sort()).toEqual(['abyss', 'borderWarp', 'depthScale', 'depthWarp', 'dripstone', 'edgeJitter', 'lush']);
+    expect(noises).toEqual({ border: BORDER, depth: DEPTH });
+    expect(p.settings).toEqual(SETTINGS);
+    expect(cavePickerOf(c)).toBe(p);
+    expect(cavePickerOf(ctxFor('42'))).not.toBe(p);
+    expect(p.jitterSeed).toBe(deriveSeed(c.seed, 'caveBiome.jitter'));
+    // An edited leaf reaches the picker of the context built over it.
+    expect(cavePickerOf(ctxFor('42', { caves: { biomes: { lush: { hMin: 0.2 } } } })).settings.lush.hMin).toBe(0.2);
+  });
+
+  test('the border noises are NormalNoise(ctx.seed, \'caveBiome.C\' | \'.E\' | \'.H\', border): two contexts of one seed give Object.is-equal z2 at 100 points, a different seed differs', () => {
+    const a = cavePickerOf(ctxFor('42'));
+    const b = cavePickerOf(ctxFor('42'));
+    const other = cavePickerOf(ctxFor('7'));
+    const c = ctxFor('42');
+    const named = (name: string) => new NormalNoise(c.seed, name, c.params.caves.biomes.noises.border);
+    const pts = xz(100);
+    const refs = { borderC: named('caveBiome.C'), borderE: named('caveBiome.E'), borderH: named('caveBiome.H') };
+    for (const k of ['borderC', 'borderE', 'borderH'] as const) {
+      expect(a[k]).not.toBe(b[k]);
+      let differs = 0;
+      for (const [x, z] of pts) {
+        expect(Object.is(a[k].z2(x, z), b[k].z2(x, z)), `${k} (${x}, ${z})`).toBe(true);
+        expect(Object.is(a[k].z2(x, z), refs[k].z2(x, z)), `${k} (${x}, ${z}) against the named instance`).toBe(true);
+        if (a[k].z2(x, z) !== other[k].z2(x, z)) differs++;
+      }
+      expect(differs, k).toBeGreaterThan(90);
+      expect(a[k].clamp).toBe(c.params.caves.biomes.noises.border.clampSigma);
+    }
+    // Three distinct instances.
+    const [x, z] = pts[0]!;
+    expect(new Set([a.borderC.z2(x, z), a.borderE.z2(x, z), a.borderH.z2(x, z)]).size).toBe(3);
+  });
+
+  test('the depth noise is the schema instance caves.biomes.noises.depth', () => {
+    const c = ctxFor('42');
+    expect(cavePickerOf(c).depth).toBe(noiseFor(c, 'caves.biomes.noises.depth'));
+    const ref = new NormalNoise(c.seed, 'caves.biomes.noises.depth', DEPTH);
+    for (const [x, z] of xz(100)) expect(Object.is(cavePickerOf(c).depth.z2(x, z), ref.z2(x, z))).toBe(true);
   });
 });

@@ -351,6 +351,8 @@ describe('ref ↔ literal on every numeric field, and neg', () => {
       'caves.ravines.lengthMin', 'caves.ravines.lengthMax', 'caves.ravines.widthSmoothness', 'caves.ravines.startYMin',
       'caves.ravines.startYMax',
       'caves.limits.waterDepth', 'caves.limits.bandSpan', 'caves.limits.capTop',
+      // SP6b Task 17: the cave biomes' edge jitter.
+      'caves.biomes.edgeJitter',
     ]);
     expect(refOptions(DEFAULTS, false).map((o) => o.path)).toEqual([...ALLOWED_REF_TARGETS.keys()]);
     // SP3e adds density.noises.islands.clampSigma after the three SP3b noises (SP3e spec §2.1).

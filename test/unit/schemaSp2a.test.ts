@@ -46,7 +46,11 @@ describe('SP2a schema groups', () => {
     const names = noiseInstances(SCHEMA, DEFAULTS).map((i) => i.seedName);
     expect(names.filter((n) => !n.startsWith('climate.') && !n.startsWith('density.') && !n.startsWith('surface.') && !n.startsWith('caves.'))).toEqual(['rivers.widthNoise', 'lakes.warpNoise.x', 'lakes.warpNoise.z', 'lakes.rimNoise', 'islands.noise']);
     // SP6a: the cave noises, seeded by their leaf paths.
-    expect(names.filter((n) => n.startsWith('caves.'))).toEqual(Object.keys(DEFAULTS.caves.noises).map((id) => `caves.noises.${id}`));
+    expect(names.filter((n) => n.startsWith('caves.'))).toEqual([
+      ...Object.keys(DEFAULTS.caves.noises).map((id) => `caves.noises.${id}`),
+      // SP6b Task 17: the cave-biome noises (the border leaf's schema instance is unused: the picker samples three named ones).
+      'caves.biomes.noises.border', 'caves.biomes.noises.depth',
+    ]);
     expect(new Set(names).size).toBe(names.length);
   });
 });

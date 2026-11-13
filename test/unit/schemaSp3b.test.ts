@@ -72,6 +72,8 @@ describe('SP3b density group (spec §3.3)', () => {
       'surface.noises.patch', 'surface.noises.bandOffset',
       // SP6a: every cave noise is a density noise (caveTerms.test.ts).
       ...Object.keys(DEFAULTS.caves.noises).map((id) => `caves.noises.${id}`),
+      // SP6b Task 17: the cave-biome noises.
+      'caves.biomes.noises.border', 'caves.biomes.noises.depth',
     ]);
     const cave = applyPatch(SCHEMA, DEFAULTS, { caves: { noises: { cheeseRegional: { remap: 'uniform', double: true } } } });
     expect(cave.ok ? [] : cave.issues.map((i) => `${i.path} ${i.code}`)).toEqual(['caves.noises.cheeseRegional.remap REMAP_NOT_ALLOWED']);

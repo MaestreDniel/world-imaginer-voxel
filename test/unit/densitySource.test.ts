@@ -78,6 +78,11 @@ describe('the source model (SP3d spec §1.3, §1.4)', () => {
       'caves.noises.spag2dElevation.clampSigma', 'caves.noises.spag2dThickness.clampSigma', 'caves.noises.spag2dRarity.clampSigma',
       'caves.noises.noodleToggle.clampSigma', 'caves.noises.noodleThickness.clampSigma', 'caves.noises.noodleRidgeA.clampSigma',
       'caves.noises.noodleRidgeB.clampSigma',
+      // SP6b Task 17: the cave-biome number and int leaves, after the cave noises (their noises' clampSigma is no target).
+      'caves.biomes.lush.hMin', 'caves.biomes.lush.depthMin', 'caves.biomes.lush.depthMax',
+      'caves.biomes.dripstone.cMin', 'caves.biomes.dripstone.depthMin', 'caves.biomes.dripstone.depthMax',
+      'caves.biomes.abyss.eMax', 'caves.biomes.abyss.cMin', 'caves.biomes.abyss.depthMin',
+      'caves.biomes.depthScale', 'caves.biomes.borderWarp', 'caves.biomes.depthWarp', 'caves.biomes.edgeJitter',
     ]);
     expect(ALLOWED_REF_TARGETS.get('caves.cheese.offset')).toEqual({ kind: 'number', lo: -0.5, hi: 1 });
     expect(ALLOWED_REF_TARGETS.get('caves.noodles.maxY')).toEqual({ kind: 'int', lo: -64, hi: 320 });

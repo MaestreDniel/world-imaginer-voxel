@@ -4,13 +4,18 @@
  * (J = `edgeJitter` ≤ 4, the ColumnSample halo's limit), each from `readFieldHalo` and the border and depth noises in
  * one fixed operation order, so two columns compute the same doubles for a shared position (DT1, the rule of
  * columnStage.ts); a voxel's biome is then O(1): §1.3's box choice at its jittered position and height. Pure: it takes
- * its values as arguments (the per-GenContext inputs from `caves.biomes.*` arrive with the leaves).
+ * its values as arguments; `cavePickerOf(ctx)` builds them from a GenContext's `caves.biomes.*` (memoised per context).
  */
-import { hash3 } from '../../core/hash';
+import { deriveSeed, hash3 } from '../../core/hash';
+import { NormalNoise } from '../../core/noise/normal';
 import { readFieldHalo, type ColumnSample } from '../column/columnStage';
+import { noiseFor, type GenContext } from '../context';
 import { pickCaveBiome, type CaveBiomeSettings } from './caveRegistry';
 
 const HASH3 = hash3;
+const DERIVE = deriveSeed;
+const Normal = NormalNoise;
+const NOISE = noiseFor;
 const READ = readFieldHalo;
 const PICK = pickCaveBiome;
 
@@ -42,6 +47,32 @@ export interface CaveColumnPass {
   readonly e: Float64Array;
   readonly h: Float64Array;
   readonly y0: Float64Array;
+}
+
+const PICKERS = new WeakMap<GenContext, CavePickerInputs>();
+
+/**
+ * The picker's inputs of a GenContext (Spec correction 11), memoised in a WeakMap (as `carverCacheOf`): `settings` is
+ * `ctx.params.caves.biomes` minus `noises`; the border noises are three named instances
+ * `new NormalNoise(ctx.seed, 'caveBiome.C' | 'caveBiome.E' | 'caveBiome.H', caves.biomes.noises.border)`; the depth
+ * noise is the schema instance `caves.biomes.noises.depth` (`noiseFor`); the jitter seed is
+ * `deriveSeed(ctx.seed, 'caveBiome.jitter')`.
+ */
+export function cavePickerOf(ctx: GenContext): CavePickerInputs {
+  let p = PICKERS.get(ctx);
+  if (p === undefined) {
+    const { noises, ...settings } = ctx.params.caves.biomes;
+    p = {
+      settings,
+      borderC: new Normal(ctx.seed, 'caveBiome.C', noises.border),
+      borderE: new Normal(ctx.seed, 'caveBiome.E', noises.border),
+      borderH: new Normal(ctx.seed, 'caveBiome.H', noises.border),
+      depth: NOISE(ctx, 'caves.biomes.noises.depth'),
+      jitterSeed: DERIVE(ctx.seed, 'caveBiome.jitter'),
+    };
+    PICKERS.set(ctx, p);
+  }
+  return p;
 }
 
 export function newCaveColumnPass(): CaveColumnPass {

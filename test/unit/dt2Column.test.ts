@@ -18,12 +18,13 @@ import { newSurfaceScan, runAt } from '../../src/gen/surface/scan';
 import { fillColumnT } from '../../src/metrics/region';
 import { AIR } from '../../src/world/blocks/index';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
-import { nibblingStore } from '../harness/caveNibbles';
+import { kindsStore, nibblingStore } from '../harness/caveNibbles';
 import { DT2_VOXELS_PER_COLUMN, dt2Column, dt2Setup, newDt2Acc, type Dt2Acc, type Dt2Stratum, type Dt2Voxel } from '../harness/dt2';
 import { topDownHeightmaps } from '../harness/heightmaps';
 
 // SP6b §2.1 (Task 8): DT2 generates its columns itself (`fillColumnT` on its own store), so the nibble fixture reaches its
-// stored bytes through the store `fillColumnT` writes into (`nibblingStore`) while NIB.wrap is set.
+// stored bytes through the store `fillColumnT` writes into (`nibblingStore`; `kindsStore` for the plain run, T writing
+// biomes since Task 17) while NIB.wrap is set.
 const NIB = vi.hoisted(() => ({ wrap: null as null | ((s: VoxelStore) => VoxelStore) }));
 vi.mock('../../src/metrics/region', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../src/metrics/region')>();
@@ -422,7 +423,7 @@ describe('DT2 tagProbe reads the cave kind (SP6b spec §2.1, Spec correction 4; 
   it('a column with every nibble set gives the same kind-level outputs as with them cleared: DT2\'s tagProbe comparison count', () => {
     const ctx = ctxOf();
     const run = (nibbles: boolean) => {
-      NIB.wrap = nibbles ? nibblingStore : null;
+      NIB.wrap = nibbles ? nibblingStore : kindsStore;
       const acc = newDt2Acc(LABEL);
       const idx: number[][] = [];
       let set = 0;

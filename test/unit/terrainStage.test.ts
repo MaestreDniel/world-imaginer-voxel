@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { CAVE_KIND, caveKindOf, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
+import { CAVE_BIOME, CAVE_KIND, caveBiomeOf, caveKindOf, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
+import { hex64 } from '../../src/core/hash';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import type { JsonValue } from '../../src/core/params/json';
 import type { ParamsPatch } from '../../src/core/params/schema';
@@ -8,12 +9,13 @@ import {
 } from '../../src/gen/column/columnStage';
 import type { GenContext } from '../../src/gen/context';
 import { carveColumn, carvedAt, densityTopColumn } from '../../src/gen/caves/carve';
+import { caveBiomeOfPass, cavePickerOf, fillCaveColumnPass, newCaveColumnPass } from '../../src/gen/biomes/cavePicker';
 import { carverCacheOf } from '../../src/gen/caves/carverCache';
-import { caveReadersOf, tagColumn } from '../../src/gen/caves/tags';
+import { caveReadersOf, caveTagAt, tagColumn } from '../../src/gen/caves/tags';
 import { fillDensityColumn } from '../../src/gen/density/bounds';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import { probe, solidAt } from '../../src/gen/density/probe';
-import { columnWaterV0, terrainDensityDebug, terrainStage, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
+import { caveBiomeQuarts, columnWaterV0, terrainDensityDebug, terrainStage, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf, type SurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbe, surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { newSurfaceScan, runAt, type SurfaceScan } from '../../src/gen/surface/scan';
@@ -23,8 +25,10 @@ import type { AuxBView, AuxView, ColumnView, ColumnWriter } from '../../src/worl
 import { protoAt, REC_AUX_B } from '../../src/world/store/columnTable';
 import { PROTO_BLOCKS, PROTO_FLUID } from '../../src/world/store/section';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
+import { genRegionInProcess, regionHash } from '../../src/metrics/region';
 import { CARVERS_OFF } from '../harness/carverParams';
-import { ctxFor } from '../harness/gen';
+import { ctxFor, paramsWith } from '../harness/gen';
+import { isolatedColumn } from '../harness/region';
 import { cavesMuted } from '../harness/sp5cTrees';
 import { topDownHeightmaps } from '../harness/heightmaps';
 
@@ -344,8 +348,35 @@ describe('aux A (SP3a §3.4, §4)', () => {
   });
 });
 
+/**
+ * `caveBiomeQ` recomputed from a view's stored cave bytes (SP6b spec §2.2), apart from the stage: per quart
+ * (qy·4 + qz)·4 + qx, qy = (y + 64) >> 2, 0 with no tagged voxel (kind ≠ 0), else 1 + the biome (bits 4-7) most of its
+ * tagged voxels carry, a tie to the lower id; wet tagged voxels count like dry ones.
+ */
+function quartMajority(view: ColumnView): Uint8Array {
+  const out = new Uint8Array(1536);
+  for (let qy = 0; qy < 96; qy++) {
+    for (let qz = 0; qz < 4; qz++) {
+      for (let qx = 0; qx < 4; qx++) {
+        const n = [0, 0, 0, 0];
+        for (let dy = 0; dy < 4; dy++) {
+          for (let dz = 0; dz < 4; dz++) {
+            for (let dx = 0; dx < 4; dx++) {
+              const byte = view.cave(4 * qx + dx, 4 * qy + dy - 64, 4 * qz + dz);
+              if (caveKindOf(byte) !== 0) n[caveBiomeOf(byte)]!++;
+            }
+          }
+        }
+        const most = Math.max(...n);
+        out[(qy * 4 + qz) * 4 + qx] = most === 0 ? 0 : 1 + n.indexOf(most);
+      }
+    }
+  }
+  return out;
+}
+
 describe('aux B (§4)', () => {
-  test('surfaceBiomeQ[qz·4 + qx] is lattice point (qx, qz)\'s 2D biome; caveBiomeQ and the rest of the slot are 0', () => {
+  test('surfaceBiomeQ[qz·4 + qx] is lattice point (qx, qz)\'s 2D biome; caveBiomeQ is the quarts\' majority (SP6b §2.2); the rest of the slot is 0', () => {
     let asymmetric = 0;
     for (const [, [cx, cz]] of FIXTURES) {
       const { store, view } = generate(ctx, cx, cz);
@@ -358,9 +389,10 @@ describe('aux B (§4)', () => {
           if (s.biome[latticeIndex(qx, qz)] !== s.biome[latticeIndex(qz, qx)]) asymmetric++;
         }
       }
+      expect(b.caveBiomeQ).toEqual(quartMajority(view));
       const slot = new Uint8Array(b.caveBiomeQ.buffer, b.caveBiomeQ.byteOffset, 4096);
       let nonZero = 0;
-      for (let i = 0; i < 4096; i++) if ((i < 1536 || i >= 1552) && slot[i] !== 0) nonZero++;
+      for (let i = 1552; i < 4096; i++) if (slot[i] !== 0) nonZero++;
       expect(nonZero).toBe(0);
     }
     // Some fixture's quarts are not symmetric, so the test pins qz·4 + qx against qx·4 + qz.
@@ -495,6 +527,137 @@ describe('the cave channel (SP6a spec §3.1-§3.2, D20)', () => {
     const { view } = generate(ctxNoCaves, ...LAND);
     for (let sy = 0; sy < 24; sy++) expect(view.sectionCave(sy), `section ${sy}`).toBe(0);
   });
+});
+
+describe('the cave biome (SP6b spec §2.1-§2.2, D17)', () => {
+  /**
+   * Columns of seed 42 found by scans with the default params: ABYSS the first of the chunks (−3000, −1500 + 53i + 11r)
+   * … whose tagged air holds more abyss than plain, LUSH the first of (200 + 41r, 400 + 67i − 13r) holding more than 500
+   * lush voxels. Their biomes are re-derived below.
+   */
+  const ABYSS = [-3000, -1182] as const;
+  const LUSH = [200, 467] as const;
+
+  test('T writes each tagged voxel\'s cave biome into bits 4-7 (§2.1): caveBiomeOfPass over the column\'s pass where the kind ≠ 0, 0 elsewhere; the kinds unchanged (caveTagAt)', () => {
+    const inp = cavePickerOf(ctx);
+    const dc = createDensityContext(ctx);
+    const seen = new Set<number>();
+    for (const [cx, cz] of [[0, 0], COAST, [40, 900], ABYSS, LUSH] as const) {
+      const { view } = generate(ctx, cx, cz);
+      const pass = fillCaveColumnPass(inp, buildColumnSample(ctx, cx, cz, newColumnSample()), newCaveColumnPass());
+      const bad: string[] = [];
+      let tagged = 0;
+      const n = [0, 0, 0, 0];
+      for (let lz = 0; lz < 16; lz++) {
+        for (let lx = 0; lx < 16; lx++) {
+          const x = 16 * cx + lx, z = 16 * cz + lz;
+          for (let y = -64; y <= 319; y++) {
+            const byte = view.cave(lx, y, lz);
+            const kind = caveKindOf(byte);
+            if (kind !== caveTagAt(dc, x, y, z)) bad.push(`(${x}, ${y}, ${z}): kind ${kind}, caveTagAt ${caveTagAt(dc, x, y, z)}`);
+            const want = kind === 0 ? 0 : caveBiomeOfPass(inp, pass, x, y, z);
+            if (caveBiomeOf(byte) !== want) bad.push(`(${x}, ${y}, ${z}): biome ${caveBiomeOf(byte)}, the pick ${want}`);
+            if (kind !== 0) { tagged++; n[want]!++; seen.add(want); }
+          }
+        }
+      }
+      expect(bad.slice(0, 10), `(${cx}, ${cz})`).toEqual([]);
+      expect(tagged, `(${cx}, ${cz}) holds cave air`).toBeGreaterThan(0);
+      if (cx === ABYSS[0] && cz === ABYSS[1]) expect(n[CAVE_BIOME.abyss]).toBeGreaterThan(n[CAVE_BIOME.plain]!);
+      if (cx === LUSH[0] && cz === LUSH[1]) expect(n[CAVE_BIOME.lush]).toBeGreaterThan(500);
+    }
+    // Every cave biome is written somewhere among the columns.
+    expect([...seen].sort()).toEqual([CAVE_BIOME.plain, CAVE_BIOME.lush, CAVE_BIOME.dripstone, CAVE_BIOME.abyss]);
+  }, 120_000);
+
+  test('caveBiomeQ is the majority (§2.2): a hand-checked quart with 3 lush, 3 dripstone and 1 plain tagged voxels reads 1 + 1 (tie to lush); a quart with no tagged voxel reads 0', () => {
+    const tags = new Uint8Array(98304);
+    const q = new Uint8Array(1536).fill(9);
+    // Quart (qx 1, qy 20, qz 2): voxels lx 4 … 7, y 16 … 19, lz 8 … 11; kinds mixed, biomes in bits 4-7.
+    const put = (lx: number, y: number, lz: number, byte: number) => { tags[vi(lx, y, lz)] = byte; };
+    put(4, 16, 8, CAVE_KIND.cheese | (CAVE_BIOME.lush << 4));
+    put(5, 17, 9, CAVE_KIND.noodle | (CAVE_BIOME.lush << 4));
+    put(7, 19, 11, CAVE_KIND.worm | (CAVE_BIOME.lush << 4));
+    put(6, 16, 8, CAVE_KIND.cheese | (CAVE_BIOME.dripstone << 4));
+    put(4, 18, 10, CAVE_KIND.spaghetti3d | (CAVE_BIOME.dripstone << 4));
+    put(7, 17, 8, CAVE_KIND.ravine | (CAVE_BIOME.dripstone << 4));
+    put(5, 19, 11, CAVE_KIND.entrance | (CAVE_BIOME.plain << 4));
+    // Quart (qx 0, qy 0, qz 0): 2 abyss against 1 plain, so 1 + 3.
+    put(0, -63, 0, CAVE_KIND.cheese | (CAVE_BIOME.abyss << 4));
+    put(1, -62, 2, CAVE_KIND.cheese | (CAVE_BIOME.abyss << 4));
+    put(3, -61, 3, CAVE_KIND.other);
+    caveBiomeQuarts(tags, q);
+    const at = (qx: number, qy: number, qz: number) => q[(qy * 4 + qz) * 4 + qx];
+    expect(at(1, 20, 2)).toBe(1 + CAVE_BIOME.lush);
+    expect(at(0, 0, 0)).toBe(1 + CAVE_BIOME.abyss);
+    // Every other quart holds no tagged voxel: 0.
+    expect(q.filter((v) => v !== 0)).toHaveLength(2);
+    // One more dripstone voxel breaks the tie.
+    put(6, 18, 9, CAVE_KIND.cheese | (CAVE_BIOME.dripstone << 4));
+    caveBiomeQuarts(tags, q);
+    expect(at(1, 20, 2)).toBe(1 + CAVE_BIOME.dripstone);
+    expect(() => caveBiomeQuarts(tags.subarray(1), q)).toThrow(RangeError);
+    expect(() => caveBiomeQuarts(tags, new Uint8Array(1535))).toThrow(RangeError);
+  });
+
+  test('caveBiomeQ: tagged voxels holding water v0\'s water count (σ 40 sea): quarts whose tagged voxels are all wet read 1 + their majority', () => {
+    let allWet = 0, wet = 0;
+    for (const col of [OVERHANG, SEA]) {
+      const { view } = generate(ctx40, col[0], col[1]);
+      const q = view.auxB()!.caveBiomeQ;
+      expect(q).toEqual(quartMajority(view));
+      for (let k = 0; k < 1536; k++) {
+        const qx = k & 3, qz = (k >> 2) & 3, qy = k >> 4;
+        let t = 0, w = 0;
+        for (let dy = 0; dy < 4; dy++) for (let dz = 0; dz < 4; dz++) for (let dx = 0; dx < 4; dx++) {
+          const lx = 4 * qx + dx, y = 4 * qy + dy - 64, lz = 4 * qz + dz;
+          if (caveKindOf(view.cave(lx, y, lz)) === 0) continue;
+          t++;
+          if (view.fluid(lx, y, lz) === WATER_SOURCE) w++;
+        }
+        wet += w;
+        if (t > 0 && w === t) {
+          allWet++;
+          expect(q[k], `(${col[0]}, ${col[1]}) quart ${k}`).toBeGreaterThan(0);
+        }
+      }
+    }
+    expect(wet).toBeGreaterThan(0);
+    expect(allWet).toBeGreaterThan(0);
+  });
+
+  test('Review Focus 4: with edgeJitter 4, columns (31, 0) and (32, 0) alone (isolatedColumn) and inside one region give the same nibbles and caveBiomeQ; within 8 blocks of x = 512 every tagged voxel\'s nibble is caveBiomeOfPass over its column\'s pass', async () => {
+    const patch = { caves: { biomes: { edgeJitter: 4 } } } as const;
+    const c4 = ctxFor('42', patch);
+    const region = createStore({ shared: false, maxBlockBytes: 64 * MiB, maxByteBytes: 64 * MiB });
+    genRegionInProcess(region, c4, 28, -2, 8, 4);
+    const inp = cavePickerOf(c4);
+    let near = 0;
+    const seen = new Set<number>();
+    for (const cx of [31, 32]) {
+      expect(hex64(await isolatedColumn({ seed: '42', params: paramsWith(patch), cx, cz: 0 })), `(${cx}, 0)`).toBe(hex64(regionHash(region, cx, 0, 1, 1)));
+      const alone = generate(ctxFor('42', patch), cx, 0).view;
+      const inside = region.proto(cx, 0)!;
+      expect(alone.auxB()!.caveBiomeQ).toEqual(inside.auxB()!.caveBiomeQ);
+      const pass = fillCaveColumnPass(inp, buildColumnSample(c4, cx, 0, newColumnSample()), newCaveColumnPass());
+      for (let lz = 0; lz < 16; lz++) {
+        for (let lx = 0; lx < 16; lx++) {
+          const x = 16 * cx + lx;
+          for (let y = -64; y <= 319; y++) {
+            const byte = inside.cave(lx, y, lz);
+            expect(alone.cave(lx, y, lz)).toBe(byte);
+            if (Math.abs(x - 511.5) > 8 || caveKindOf(byte) === 0) continue;
+            near++;
+            seen.add(caveBiomeOf(byte));
+            expect(caveBiomeOf(byte), `(${x}, ${y}, ${lz})`).toBe(caveBiomeOfPass(inp, pass, x, y, lz));
+          }
+        }
+      }
+    }
+    expect(near).toBeGreaterThan(0);
+    // The border at x = 512 crosses a biome change: more than one biome is written within 8 blocks of it.
+    expect(seen.size).toBeGreaterThan(1);
+  }, 120_000);
 });
 
 /** A writer that records the calls (no store). */
