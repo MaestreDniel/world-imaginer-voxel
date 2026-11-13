@@ -5,11 +5,15 @@
  * one fixed operation order, so two columns compute the same doubles for a shared position (DT1, the rule of
  * columnStage.ts); a voxel's biome is then O(1): §1.3's box choice at its jittered position and height. Pure: it takes
  * its values as arguments; `cavePickerOf(ctx)` builds them from a GenContext's `caves.biomes.*` (memoised per context).
+ * `caveBiomeAt(dc, x, y, z)` is the point probe (§2.3): the voxel's column pass from the DensityContext's ColumnSample,
+ * memoised for one column, then the same pick, so it equals T's stored nibble at every tagged voxel.
  */
+import { inWindow } from '../../core/coords';
 import { deriveSeed, hash3 } from '../../core/hash';
 import { NormalNoise } from '../../core/noise/normal';
 import { readFieldHalo, type ColumnSample } from '../column/columnStage';
 import { noiseFor, type GenContext } from '../context';
+import type { DensityContext } from '../density/context';
 import { pickCaveBiome, type CaveBiomeSettings } from './caveRegistry';
 
 const HASH3 = hash3;
@@ -18,6 +22,7 @@ const Normal = NormalNoise;
 const NOISE = noiseFor;
 const READ = readFieldHalo;
 const PICK = pickCaveBiome;
+const IN_WINDOW = inWindow;
 
 /** A 2D noise sampled as z2 (clamped to ±clamp); a `NormalNoise` satisfies it. */
 export interface Noise2 {
@@ -213,4 +218,30 @@ export function caveBiomeAtPoint(
   const y0 = Y0(b, surfaceEst, PT[3]!);
   const depth = (y0 - y) / b.depthScale;
   return { biome: PICK(b, c + w * PT[0]!, e + w * PT[1]!, h + w * PT[2]!, depth), depth, y0 };
+}
+
+const FILL = fillCaveColumnPass;
+const BIOME_OF_PASS = caveBiomeOfPass;
+/** `caveBiomeAt`'s one-column memo: the pass of column (cx, cz) for the picker inputs `AT_INPUTS` (null: empty). */
+const AT_PASS = newCaveColumnPass();
+let AT_INPUTS: CavePickerInputs | null = null;
+
+/**
+ * The cave biome of world voxel (x, y, z) (§2.3): `caveBiomeOfPass` over the pass of its column (cx, cz) = (x >> 4,
+ * z >> 4), filled from `dc.columns.get(cx, cz)` with `cavePickerOf(dc.ctx)` (the pass is kept for the next call in the
+ * same column and the same picker inputs; any other column refills it). The biome T writes at a tagged voxel, whatever
+ * the voxel's kind (an untagged voxel gets the pick too; T stores 0 there). Integers only, y in −64 … 319, (x, z) in the
+ * world window (a RangeError otherwise).
+ */
+export function caveBiomeAt(dc: DensityContext, x: number, y: number, z: number): number {
+  if (!Number.isInteger(x) || !Number.isInteger(z) || !IN_WINDOW(x, z)) throw new RangeError(`caveBiomeAt (x, z) = (${x}, ${z}) is not an integer position in the world window`);
+  if (!Number.isInteger(y) || y < -64 || y > 319) throw new RangeError(`caveBiomeAt y ${y} is outside [-64, 319]`);
+  const inp = cavePickerOf(dc.ctx);
+  const cx = x >> 4, cz = z >> 4;
+  if (AT_INPUTS !== inp || AT_PASS.cx !== cx || AT_PASS.cz !== cz) {
+    AT_INPUTS = null;
+    FILL(inp, dc.columns.get(cx, cz), AT_PASS);
+    AT_INPUTS = inp;
+  }
+  return BIOME_OF_PASS(inp, AT_PASS, x, y, z);
 }

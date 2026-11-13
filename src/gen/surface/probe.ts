@@ -2,18 +2,22 @@
  * The surface probe (SP3c spec §3.6, master §5.5 "surface-rule branch path"): the final state of one voxel and the
  * rule ids from `root` to the leaf that yielded it. It rebuilds the voxel's column the way the T stage does (the
  * ColumnSample, the density fill on the SurfaceContext's DensityContext, the carve (SP6a spec §3.4: `carveColumn`
- * through `carverCacheOf`, so the scan skins the carved column), water v0, the per-block surface biome buffer and the
- * §3.2 scan), reusing the SurfaceContext's one-column cache while the probes stay in one column, then walks
- * the reference evaluator, never the fast path (a fast-path voxel such as deepslate at y −30 still reports its rule).
+ * through `carverCacheOf`, so the scan skins the carved column), the cave tag and the cave-biome step (SP6b spec §2.3:
+ * `tagColumn` and `columnCaveBiomes`, so the scan reads each run's floor and ceiling cave biome and the picker's pass),
+ * water v0, the per-block surface biome buffer and the §3.2 scan), reusing the SurfaceContext's one-column cache while
+ * the probes stay in one column, then walks the reference evaluator, never the fast path (a fast-path voxel such as
+ * deepslate at y −30 still reports its rule).
  * `path` is [] for air and water (state air), at y −64 (the stage's bedrock) and for a solid voxel no rule matches
  * (stone). Follows the gen determinism rules.
  */
 import { inWindow } from '../../core/coords';
 import { AIR, BEDROCK } from '../../world/blocks/index';
+import { cavePickerOf } from '../biomes/cavePicker';
 import { carveColumn, densityTopColumn } from '../caves/carve';
 import { carverCacheOf } from '../caves/carverCache';
+import { caveReadersOf, tagColumn } from '../caves/tags';
 import { fillDensityColumn } from '../density/bounds';
-import { columnWaterV0 } from '../pipeline/terrainStage';
+import { columnCaveBiomes, columnWaterV0 } from '../pipeline/terrainStage';
 import type { SurfaceContext, SurfaceProbeColumn } from './context';
 import type { SurfaceRuleResult } from './reference';
 import { fillSurfaceBiomes, scanColumn } from './scan';
@@ -28,6 +32,10 @@ const SCAN = scanColumn;
 const CARVE = carveColumn;
 const DENSITY_TOPS = densityTopColumn;
 const CARVER_CACHE = carverCacheOf;
+const READERS = caveReadersOf;
+const TAG_COLUMN = tagColumn;
+const PICKER_OF = cavePickerOf;
+const CAVE_BIOMES = columnCaveBiomes;
 
 const NEVER = (): boolean => false;
 const TOP = new Int32Array(256);
@@ -36,10 +44,11 @@ const DENSITY_TOP = new Int16Array(256);
 const EMPTY: readonly string[] = Object.freeze([]);
 
 /**
- * Column (cx, cz) of `sc` rebuilt as the T stage builds it (density fill, the carve, water v0, the biome buffer) and scanned with
- * `sc.settings`: the SurfaceContext's one-column cache, rebuilt unless it already holds (cx, cz). With `stop`, the
- * density fill polls it (every 8 corner rows, as the T stage's) and the build returns null when it fires, leaving the
- * cache empty: a slice's `rule` part on a tree near the column-cost maximum stops within §4.5's 50 ms.
+ * Column (cx, cz) of `sc` rebuilt as the T stage builds it (density fill, the carve, the tag, the cave-biome step, water
+ * v0, the biome buffer) and scanned with `sc.settings`, the cave bytes and the picker's pass: the SurfaceContext's
+ * one-column cache, rebuilt unless it already holds (cx, cz). With `stop`, the density fill polls it (every 8 corner
+ * rows, as the T stage's) and the build returns null when it fires, leaving the cache empty: a slice's `rule` part on a
+ * tree near the column-cost maximum stops within §4.5's 50 ms.
  */
 export function surfaceProbeColumn(sc: SurfaceContext, cx: number, cz: number): SurfaceProbeColumn;
 export function surfaceProbeColumn(sc: SurfaceContext, cx: number, cz: number, stop: () => boolean): SurfaceProbeColumn | null;
@@ -48,14 +57,20 @@ export function surfaceProbeColumn(sc: SurfaceContext, cx: number, cz: number, s
   if (c.valid && c.cx === cx && c.cz === cz) return c;
   c.valid = false;
   const s = sc.density.columns.get(cx, cz);
-  if (!FILL(sc.density.bounds, s, c.solid, null, null, stop)) return null;
+  const bounds = sc.density.bounds;
+  if (!FILL(bounds, s, c.solid, null, null, stop, c.cells)) return null;
   const islands = sc.ctx.params.islands.enabled;
   DENSITY_TOPS(c.solid, islands, DENSITY_TOP);
   const cache = CARVER_CACHE(sc.ctx);
-  CARVE(cache, cache.params, s, cx, cz, c.solid, DENSITY_TOP, null);
+  c.tags.fill(0);
+  CARVE(cache, cache.params, s, cx, cz, c.solid, DENSITY_TOP, c.tags);
+  const compiled = bounds.compiled;
+  TAG_COLUMN(compiled, READERS(compiled), sc.ctx.params.caves.pillars.threshold, c.solid, c.cells, c.tags, bounds, true);
+  const inputs = PICKER_OF(sc.ctx);
+  CAVE_BIOMES(inputs, s, c.tags, c.pass);
   WATER_V0(s, c.solid, TOP, WATER_TOP, c.water, islands);
   BIOMES(s, sc.ctx, c.biomes);
-  SCAN(c.scan, sc.settings, s, c.solid, c.water, c.biomes);
+  SCAN(c.scan, sc.settings, s, c.solid, c.water, c.biomes, c.tags, { inputs, pass: c.pass });
   c.cx = cx;
   c.cz = cz;
   c.valid = true;

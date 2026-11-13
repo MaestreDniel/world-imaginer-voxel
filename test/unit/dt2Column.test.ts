@@ -17,6 +17,7 @@ import { surfaceProbe } from '../../src/gen/surface/probe';
 import { newSurfaceScan, runAt } from '../../src/gen/surface/scan';
 import { fillColumnT } from '../../src/metrics/region';
 import { AIR } from '../../src/world/blocks/index';
+import type { ColumnWriter } from '../../src/world/store/api';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { kindsStore, nibblingStore } from '../harness/caveNibbles';
 import { DT2_VOXELS_PER_COLUMN, dt2Column, dt2Setup, newDt2Acc, type Dt2Acc, type Dt2Stratum, type Dt2Voxel } from '../harness/dt2';
@@ -446,8 +447,61 @@ describe('DT2 tagProbe reads the cave kind (SP6b spec §2.1, Spec correction 4; 
     expect(plain.acc.tagNonZero).toBeGreaterThan(0);
     expect(plain.acc.tagProbe).toBe(0);
     expect(nibbled.idx).toEqual(plain.idx);
-    expect(nibbled.acc).toEqual(plain.acc);
+    // Kind level: caveBiomeProbe (Task 18) reads the nibbles themselves, so it and its texts are left out.
+    const kindLevel = (a: Dt2Acc) => ({ ...a, caveBiomeProbe: 0, problems: a.problems.filter((t) => !t.includes('caveBiome')) });
+    expect(kindLevel(nibbled.acc)).toEqual(kindLevel(plain.acc));
+    expect(kindLevel(plain.acc).problems).toEqual([]);
   }, 120_000); // four DT2 columns twice: about 0.5 s alone, more under load
+});
+
+describe('DT2 caveBiomeProbe (SP6b spec §2.3, §12.5; Task 18)', () => {
+  /** `store` whose first `setProto` holding a tagged byte gets that byte's bit 4 flipped (its cave biome changed), recorded in `at`. */
+  const flippingStore = (store: VoxelStore, at: Array<{ x: number; y: number; z: number }>): VoxelStore => {
+    let done = false;
+    return Object.assign(Object.create(store) as VoxelStore, {
+      claimColumn(cx: number, cz: number, epoch: number): ColumnWriter {
+        const w = store.claimColumn(cx, cz, epoch);
+        return Object.assign(Object.create(w) as ColumnWriter, {
+          setProto(sy: number, blocks: Uint16Array, fluid: Uint8Array, cave?: Uint8Array): void {
+            if (cave === undefined || done) return w.setProto(sy, blocks, fluid, cave);
+            const i = cave.findIndex((b) => caveKindOf(b) !== 0);
+            if (i < 0) return w.setProto(sy, blocks, fluid, cave);
+            done = true;
+            const copy = cave.slice();
+            copy[i] = copy[i]! ^ 16;
+            at.push({ x: 16 * cx + (i & 15), y: -64 + 16 * sy + (i >> 8), z: 16 * cz + ((i >> 4) & 15) });
+            w.setProto(sy, blocks, fluid, copy);
+          },
+        });
+      },
+    });
+  };
+
+  it('0 mismatches on two columns: every tagged voxel\'s nibble is caveBiomeAt\'s, every quart holding one its majority', () => {
+    const ctx = ctxOf();
+    const acc = newDt2Acc(LABEL);
+    for (let n = 0; n < 2; n++) dt2Column(ctx, CAVERNS[0] + n, CAVERNS[1], new Xoshiro128(500 + n), acc);
+    expect(acc.problems).toEqual([]);
+    expect([...failures(acc), acc.tagProbe, acc.caveBiomeProbe]).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(acc.caveBiomeVoxels).toBeGreaterThan(1000);
+    expect(acc.caveBiomeQuarts).toBeGreaterThan(20);
+    expect(acc.caveBiomeQuarts).toBeLessThan(acc.caveBiomeVoxels);
+  }, 120_000);
+
+  it('a flipped stored nibble counts one: its voxel (T\'s caveBiomeQ is unchanged, and so is the majority caveBiomeAt gives)', () => {
+    const ctx = ctxOf();
+    const at: Array<{ x: number; y: number; z: number }> = [];
+    NIB.wrap = (st) => flippingStore(st, at);
+    const acc = newDt2Acc(LABEL);
+    dt2Column(ctx, ...CAVERNS, new Xoshiro128(500), acc);
+    NIB.wrap = null;
+    expect(at).toHaveLength(1);
+    const { x, y, z } = at[0]!;
+    expect(acc.caveBiomeProbe).toBe(1);
+    expect([...failures(acc), acc.tagProbe]).toEqual([0, 0, 0, 0, 0]);
+    expect(acc.problems).toHaveLength(1);
+    expect(acc.problems[0]).toMatch(new RegExp(`^profile default, seed '42', column \\(${CAVERNS[0]}, ${CAVERNS[1]}\\): \\(${x}, ${y}, ${z}\\) stored cave biome \\d+ ≠ caveBiomeAt \\d+$`));
+  }, 120_000);
 });
 
 /** The DT2 stream's next u32 after the metric's first default column (seed '42') and its 16 voxels. */

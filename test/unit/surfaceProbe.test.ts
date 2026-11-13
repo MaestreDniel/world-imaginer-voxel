@@ -3,11 +3,12 @@ import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import type { JsonValue } from '../../src/core/params/json';
 import { noiseFor, type GenContext } from '../../src/gen/context';
-import { columnWaterV0, terrainStage } from '../../src/gen/pipeline/terrainStage';
+import { cavePickerOf } from '../../src/gen/biomes/cavePicker';
+import { columnWaterV0, terrainStage, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf, surfaceNoiseSource, type SurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbe, surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { RuleValidationError } from '../../src/gen/surface/rules';
-import { surfaceScanSettings } from '../../src/gen/surface/scan';
+import { newSurfaceScan, surfaceScanSettings, type SurfaceScan } from '../../src/gen/surface/scan';
 import { CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import { AIR, BEDROCK, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { ColumnView } from '../../src/world/store/api';
@@ -172,6 +173,48 @@ describe('the probe\'s column rebuild (spec §3.6): the T stage\'s fill, the car
     for (let p = 0; p < 256; p++) expect(c.biomes[p]).toBe(view.aux()!.surfaceBiome[p]);
     if (col !== LAND) expect(water).toBeGreaterThan(0);
   });
+
+  test('SP6b §2.3 (Task 18): the probe tags and picks as T: on 8 columns its scan equals terrainSurfaceDebug\'s (runFloorBiome, runCeilBiome and the cave pass included), its cave bytes T\'s', () => {
+    /** Every field `scanColumn` writes, the per-run arrays over the runs in use, and the cave picker's pass. */
+    const snapshot = (scan: SurfaceScan): unknown => {
+      const runs = scan.runFirst[256]!;
+      const per = (a: { subarray(b: number, e: number): ArrayLike<number> }) => Array.from(a.subarray(0, runs));
+      const pass = scan.cavePass;
+      return {
+        cx: scan.cx, cz: scan.cz, runFirst: Array.from(scan.runFirst), skyRun: Array.from(scan.skyRun),
+        runTop: per(scan.runTop), runBottom: per(scan.runBottom), runWaterAbove: per(scan.runWaterAbove), runWaterTop: per(scan.runWaterTop),
+        runFloorBiome: per(scan.runFloorBiome), runCeilBiome: per(scan.runCeilBiome),
+        steep: Array.from(scan.steep), T: Array.from(scan.T), biome: Array.from(scan.biome),
+        lakeLevel: Array.from(scan.lakeLevel), surfaceDepth: Array.from(scan.surfaceDepth),
+        pass: pass === null ? null : { cx: pass.cx, cz: pass.cz, j: pass.j, c: Array.from(pass.c), e: Array.from(pass.e), h: Array.from(pass.h), y0: Array.from(pass.y0) },
+      };
+    };
+    // The carver columns of the test above (caverns, a ravine, (0, 0)), and Task 17's abyss and lush columns.
+    const cols: ReadonlyArray<readonly [number, number]> = [[546, 25857], [547, 25857], [4, -10], [5, -9], [0, 0], [40, 900], [-3000, -1182], [200, 467]];
+    const sc = createSurfaceContext(CTX);
+    const inputs = cavePickerOf(CTX);
+    const floors = new Set<number>(), ceilings = new Set<number>();
+    for (const [cx, cz] of cols) {
+      const view = generate(CTX, cx, cz);
+      const scan = newSurfaceScan();
+      terrainSurfaceDebug(CTX, cx, cz, scan);
+      const c = surfaceProbeColumn(sc, cx, cz);
+      expect(c.scan.cavePicker, `(${cx}, ${cz})`).toBe(inputs);
+      expect(scan.cavePicker).toBe(inputs);
+      expect(c.scan.cavePass).toBe(c.pass);
+      expect(snapshot(c.scan), `(${cx}, ${cz})`).toEqual(snapshot(scan));
+      let bad = 0;
+      for (let i = 256; i < 98304; i++) if (c.tags[i] !== view.cave(i & 15, (i >> 8) - 64, (i >> 4) & 15)) bad++;
+      expect(bad, `(${cx}, ${cz}) cave bytes`).toBe(0);
+      for (let r = 0; r < c.scan.runFirst[256]!; r++) {
+        floors.add(c.scan.runFloorBiome[r]!);
+        ceilings.add(c.scan.runCeilBiome[r]!);
+      }
+    }
+    // Runs under cave air of each biome, and runs with no cave above (−1).
+    expect([...floors].sort()).toEqual([-1, 0, 1, 2, 3]);
+    expect(ceilings.size).toBeGreaterThan(2);
+  }, 120_000);
 
   test('columnWaterV0 checks its array sizes', () => {
     const s = SC.density.columns.get(0, 0);

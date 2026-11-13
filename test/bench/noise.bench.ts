@@ -17,6 +17,7 @@ import { DENSITY3D_DEF, JAG, OFFSET, SIGMA } from '../../src/metrics/sp1Fixtures
 import { seedFromInput } from '../../src/core/seed';
 import { createGenContext } from '../../src/gen/context';
 import { createDensityContext } from '../../src/gen/density/context';
+import { cavePickerOf } from '../../src/gen/biomes/cavePicker';
 import { surfaceContextOf } from '../../src/gen/surface/context';
 import { surfacePass } from '../../src/gen/surface/pass';
 import { surfaceProbeColumn } from '../../src/gen/surface/probe';
@@ -253,14 +254,16 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   });
   // SP3c §7: the surface pass alone (`surfacePass`, the function the T stage calls) over one column whose density,
   // water v0 and surface biome buffer are built once beforehand, as the stage builds them (`surfaceProbeColumn` on
-  // the stage's own SurfaceContext): column (0, 0), the density.corner column.
+  // the stage's own SurfaceContext): column (0, 0), the density.corner column. SP6b §2.3 (Task 18): with the column's
+  // cave bytes and its picker's pass, as the stage calls it.
   const sc = surfaceContextOf(gen);
   const sCol = surfaceProbeColumn(sc, 0, 0);
   const sSample = sc.density.columns.get(0, 0);
+  const sCave = { inputs: cavePickerOf(gen), pass: sCol.pass };
   const states = new Uint16Array(98304);
   let evaluated = 0;
   const surfaceRun = await measure('surface.column', 1, () => {
-    evaluated = surfacePass(sc, sSample, sCol.solid, sCol.water, sCol.biomes, states);
+    evaluated = surfacePass(sc, sSample, sCol.solid, sCol.water, sCol.biomes, states, undefined, sCol.tags, sCave);
     sink += states[98303]!;
   });
   // SP3d §9: the slice rows, one thread, in-process, 9 timed runs after one warm-up each, a fresh GenContext per slice.

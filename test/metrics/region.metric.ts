@@ -245,9 +245,13 @@ metricTest('DT1', ['mismatches', 'carverCache', 'isolated'], async () => {
  *   muted to −1e6 as `treeMutator` mutes a tap (a single muted family leaves `keep`'s interval straddling 0, so only
  *   the pair decides cells air before their corners where the pre-cave density is positive: the tag's corner branch).
  *   That tree counts 1 more when no checked voxel lies in such a cell (`mutedEarlyAirVoxels` 0: the branch untested).
- * The per-column checks of the first four parts and the default tree's `tagProbe` are `dt2Column` (`test/harness/dt2.ts`,
- * SP3e spec §5.1, D18): this file keeps the profiles, the shared `DT2` stream, `DT2_RANGE` and the edited parts and calls
- * it per column.
+ * - `caveBiomeProbe` (SP6b spec §2.3, §12.5, D26; Task 18): on every DT2 column of each profile's tree, the tagged
+ *   voxels (kind ≠ 0) whose stored cave biome (bits 4-7 of the `cave` byte) differs from `caveBiomeAt` (a DensityContext
+ *   built apart), plus the quarts holding a tagged voxel whose stored `caveBiomeQ` differs from 1 + the biome most of
+ *   their tagged voxels get from `caveBiomeAt` (ties to the lower id); every tagged voxel of the column, no draw.
+ * The per-column checks of the first four parts, the default tree's `tagProbe` and `caveBiomeProbe` are `dt2Column`
+ * (`test/harness/dt2.ts`, SP3e spec §5.1, D18): this file keeps the profiles, the shared `DT2` stream, `DT2_RANGE` and
+ * the edited parts and calls it per column.
  */
 const DT2_COLUMNS = pick(16, 256, 256);
 const DT2_RANGE: Readonly<Record<(typeof PROFILES)[number], number>> = { default: 1024, large_biomes: 4096 };
@@ -441,7 +445,7 @@ function mutedTagProbe(at: string, seed: string, params: Params, columns: readon
   }
 }
 
-metricTest('DT2', ['probeBulk', 'compiledReference', 'surfaceProbeBulk', 'surfaceReference', 'editedDensityReference', 'editedSurfaceReference', 'tagProbe'], () => {
+metricTest('DT2', ['probeBulk', 'compiledReference', 'surfaceProbeBulk', 'surfaceReference', 'editedDensityReference', 'editedSurfaceReference', 'tagProbe', 'caveBiomeProbe'], () => {
   const t0 = performance.now();
   const r = new Xoshiro128(fnv1a32('DT2'));
   const scan = newSurfaceScan();
@@ -484,6 +488,7 @@ metricTest('DT2', ['probeBulk', 'compiledReference', 'surfaceProbeBulk', 'surfac
     tagProbe: acc.tagProbe + edited.tagProbe, tagVoxels: acc.tagVoxels, tagNonZero: acc.tagNonZero, straddleVoxels: acc.straddleVoxels,
     editedTagTrees: edited.tagTrees, editedTagVoxels: edited.tagVoxels, editedTagNonZero: edited.tagNonZero,
     mutedEarlyAirVoxels: edited.mutedEarlyAirVoxels,
+    caveBiomeProbe: acc.caveBiomeProbe, caveBiomeVoxels: acc.caveBiomeVoxels, caveBiomeQuarts: acc.caveBiomeQuarts,
     seconds: Math.round(performance.now() - t0) / 1000,
   };
 });

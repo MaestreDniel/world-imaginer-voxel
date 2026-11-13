@@ -23,8 +23,9 @@
  *   With `islands.enabled` (SP3e spec §3.5) the fill's base skips island runs (bottom voxel ≥ ISLAND_RUN_MIN_BOTTOM,
  *   181), so the sea under a floating island fills as if the island were not there; `top` is unchanged.
  * - The per-block surface biome (`readBiome`), computed once into a 256-entry buffer for the surface pass and aux A.
- * - Surface pass (SP3c §3, `surfacePass`): after a `stop()` poll (the 8th), the whole-column scan and the compiled
- *   rules (fast path included) give every solid voxel at y −63 … 319 its final state in a column-wide state scratch.
+ * - Surface pass (SP3c §3, `surfacePass`): after a `stop()` poll (the 8th), the whole-column scan (with the cave bytes
+ *   and the picker's pass, SP6b spec §3.1) and the compiled rules (fast path included) give every solid voxel at
+ *   y −63 … 319 its final state in a column-wide state scratch.
  * - Fill: y = −64 bedrock; a solid voxel its surface state; anything else air (with its water).
  * - Sections 0 … 23 go to `setProto` in order with their cave tags (each channel uniform or dense), `stop()` before each
  *   (24 polls). On a
@@ -37,19 +38,21 @@
  * Follows the gen determinism rules.
  * `terrainDensityDebug` is a test hook (SP3b §2.3, DT2): the same density phase, recording the bulk-evaluated values.
  * `terrainSurfaceDebug` is another (SP3c §5.2, DT2's `surfaceReference`): the same phases up to the surface pass (the
- * carve included), which scans into the caller's scan context.
+ * carve, the tag and the cave-biome step included), which scans into the caller's scan context.
  */
 import { ISLAND_RUN_MIN_BOTTOM, MIN_Y } from '../../core/constants';
 import { WATER_SOURCE } from '../../world/blocks/fluid';
 import { AIR, BEDROCK } from '../../world/blocks/index';
 import type { TerrainWriter } from '../../world/store/api';
-import { caveBiomeOfPass, cavePickerOf, fillCaveColumnPass, newCaveColumnPass } from '../biomes/cavePicker';
+import {
+  caveBiomeOfPass, cavePickerOf, fillCaveColumnPass, newCaveColumnPass, type CaveColumnPass, type CavePickerInputs,
+} from '../biomes/cavePicker';
 import { carveColumn, densityTopColumn } from '../caves/carve';
 import { carverCacheOf } from '../caves/carverCache';
 import { caveReadersOf, tagColumn } from '../caves/tags';
 import { buildColumnSample, latticeIndex, newColumnSample, readLevel, type ColumnSample } from '../column/columnStage';
 import type { GenContext } from '../context';
-import { fillDensityColumn } from '../density/bounds';
+import { fillDensityColumn, type DensityBounds } from '../density/bounds';
 import { surfaceContextOf } from '../surface/context';
 import { surfacePass } from '../surface/pass';
 import { fillSurfaceBiomes, type SurfaceScan } from '../surface/scan';
@@ -104,6 +107,8 @@ const WATER_TOP = new Int32Array(256);
 const BASE = new Int32Array(256);
 /** The column's cave-biome pass (SP6b spec §1.2): C′, E′, H′ and Y0 at the positions within J of it. */
 const PASS = NEW_PASS();
+/** `terrainSurfaceDebug`'s own pass (its scan keeps it; a stage run never touches it). */
+const DEBUG_PASS = NEW_PASS();
 /** Tagged voxels per quart and nibble (`caveBiomeQuarts`): entry `16·q + biome`, q = (qy·4 + qz)·4 + qx (≤ 64 each). */
 const QUART_BIOMES = new Uint8Array(16 * 1536);
 const BLOCKS = new Uint16Array(4096);
@@ -183,19 +188,36 @@ function carve(ctx: GenContext, s: ColumnSample, cx: number, cz: number): void {
 }
 
 /**
- * The cave-biome step (SP6b spec §2.1): fills `PASS` for s's column, then writes `kind | biome << 4` into `TAG` at every
- * tagged voxel (kind ≠ 0, `caveBiomeOfPass`); untagged voxels keep 0.
+ * The cave-biome step (SP6b spec §2.1) of column (s.cx, s.cz): fills `pass` for it with the picker inputs `inp`, then
+ * writes `kind | biome << 4` into `tags` (98,304 entries, index `((y + 64)·16 + lz)·16 + lx`, the tag pass's output) at
+ * every tagged voxel (kind ≠ 0, `caveBiomeOfPass`); untagged voxels keep 0. The T stage and the surface probe (which
+ * rebuilds a column the way T does) share it. Throws a RangeError on other sizes.
  */
-function caveBiomes(ctx: GenContext, s: ColumnSample, cx: number, cz: number): void {
-  const inp = PICKER_OF(ctx);
-  FILL_PASS(inp, s, PASS);
-  const x0 = 16 * cx;
-  const z0 = 16 * cz;
+export function columnCaveBiomes(inp: CavePickerInputs, s: ColumnSample, tags: Uint8Array, pass: CaveColumnPass): void {
+  if (tags.length !== 98304) throw new RangeError('columnCaveBiomes: tags needs 98,304 entries');
+  FILL_PASS(inp, s, pass);
+  const x0 = 16 * s.cx;
+  const z0 = 16 * s.cz;
   for (let j = 0; j < 98304; j++) {
-    const t = TAG[j]!;
+    const t = tags[j]!;
     if (t === 0) continue;
-    TAG[j] = t | (BIOME_OF_PASS(inp, PASS, x0 + (j & 15), (j >> 8) + Y0, z0 + ((j >> 4) & 15)) << 4);
+    tags[j] = t | (BIOME_OF_PASS(inp, pass, x0 + (j & 15), (j >> 8) + Y0, z0 + ((j >> 4) & 15)) << 4);
   }
+}
+
+/** The stage's surface-pass cave argument (its picker and `PASS`): rebuilt only when the picker inputs change. */
+let caveScan: { readonly inputs: CavePickerInputs; readonly pass: CaveColumnPass } | null = null;
+
+/**
+ * The tag and the cave-biome step of s's column after its carve, as T runs them: `tagColumn` into `TAG` (from `SOLID`
+ * and the fill's `CELLS`), then `columnCaveBiomes` into `TAG` and `pass`; returns `ctx`'s picker inputs.
+ */
+function tagAndPick(ctx: GenContext, s: ColumnSample, bounds: DensityBounds, pass: CaveColumnPass): CavePickerInputs {
+  const c = bounds.compiled;
+  TAG_COLUMN(c, READERS(c), ctx.params.caves.pillars.threshold, SOLID, CELLS, TAG, bounds, true);
+  const inp = PICKER_OF(ctx);
+  columnCaveBiomes(inp, s, TAG, pass);
+  return inp;
 }
 
 /**
@@ -236,13 +258,12 @@ export function terrainStage(ctx: GenContext, cx: number, cz: number, w: Terrain
   DENSITY_TOPS(SOLID, islands, DENSITY_TOP);
   if (stop()) return false;
   carve(ctx, s, cx, cz);
-  const c = bounds.compiled;
-  TAG_COLUMN(c, READERS(c), ctx.params.caves.pillars.threshold, SOLID, CELLS, TAG, bounds, true);
-  caveBiomes(ctx, s, cx, cz);
+  const inp = tagAndPick(ctx, s, bounds, PASS);
+  if (caveScan === null || caveScan.inputs !== inp) caveScan = { inputs: inp, pass: PASS };
   columnWaterV0(s, SOLID, TOP, WATER_TOP, WATER_V, islands);
   SURFACE_BIOMES(s, ctx, BIOMES);
   if (stop()) return false;
-  SURFACE_PASS(sc, s, SOLID, WATER_V, BIOMES, STATE);
+  SURFACE_PASS(sc, s, SOLID, WATER_V, BIOMES, STATE, undefined, TAG, caveScan);
   for (let sy = 0; sy < 24; sy++) {
     if (stop()) return false;
     const base = 4096 * sy;
@@ -299,18 +320,22 @@ export function terrainDensityDebug(ctx: GenContext, cx: number, cz: number, out
 
 /**
  * Test hook (SP3c spec §5.2, DT2 `surfaceReference`): runs column (cx, cz) exactly as `terrainStage` does up to and
- * including the surface pass (its ColumnSample, the density fill, the carve, water v0, the biome buffer, then `surfacePass` on
- * `surfaceContextOf(ctx)`, never stopped), with `scan` as the pass's scan context, and writes no store. Afterwards
- * `scan` holds the stage's scan of the column, on which the stage's compiled tree and the reference evaluator can be
+ * including the surface pass (its ColumnSample, the density fill, the carve, the tag and the cave-biome step (SP6b spec
+ * §2.3), water v0, the biome buffer, then `surfacePass` on `surfaceContextOf(ctx)` with the cave bytes and the picker's
+ * pass, never stopped), with `scan` as the pass's scan context, and writes no store. Afterwards `scan` holds the
+ * stage's scan of the column (its runs' floor and ceiling cave biomes included; its `cavePass` is the hook's own pass,
+ * which only the next hook call overwrites), on which the stage's compiled tree and the reference evaluator can be
  * compared voxel by voxel. Returns the pass's evaluated-voxel count.
  */
 export function terrainSurfaceDebug(ctx: GenContext, cx: number, cz: number, scan: SurfaceScan): number {
   const sc = SURFACE_CONTEXT(ctx);
   const s = BUILD(ctx, cx, cz, SAMPLE);
-  FILL(sc.density.bounds, s, SOLID, null, null, NEVER);
+  const bounds = sc.density.bounds;
+  FILL(bounds, s, SOLID, null, null, NEVER, CELLS);
   DENSITY_TOPS(SOLID, ctx.params.islands.enabled, DENSITY_TOP);
   carve(ctx, s, cx, cz);
+  const inputs = tagAndPick(ctx, s, bounds, DEBUG_PASS);
   columnWaterV0(s, SOLID, TOP, WATER_TOP, WATER_V, ctx.params.islands.enabled);
   SURFACE_BIOMES(s, ctx, BIOMES);
-  return SURFACE_PASS(sc, s, SOLID, WATER_V, BIOMES, STATE, scan);
+  return SURFACE_PASS(sc, s, SOLID, WATER_V, BIOMES, STATE, scan, TAG, { inputs, pass: DEBUG_PASS });
 }

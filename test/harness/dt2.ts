@@ -1,6 +1,7 @@
-import { caveKindOf } from '../../src/core/constants';
+import { caveBiomeOf, caveKindOf } from '../../src/core/constants';
 import { fnv1a32, hash2 } from '../../src/core/hash';
 import { Xoshiro128 } from '../../src/core/rng';
+import { caveBiomeAt } from '../../src/gen/biomes/cavePicker';
 import type { GenContext } from '../../src/gen/context';
 import { cornerValueIndex } from '../../src/gen/density/compile';
 import { caveTagAt } from '../../src/gen/caves/tags';
@@ -30,6 +31,11 @@ import { createStore, type VoxelStore } from '../../src/world/store/store';
  * bits 4-7 hold the cave biome, SP6b spec §2.1) against `caveTagAt` on the setup's DensityContext;
  * `Dt2Extension.straddle` adds the straddle stratum, voxels in cells whose cave interval straddles 0 (`straddleCells`),
  * drawn from their own stream so DT2's draws are unchanged.
+ * SP6b (spec §2.3, §12.5; Task 18): every column also runs `caveBiomeProbe`: at every tagged voxel (kind ≠ 0) of the
+ * column, the stored cave biome (`caveBiomeOf`, bits 4-7) against `caveBiomeAt` on the setup's DensityContext, and for
+ * every quart holding a tagged voxel, the stored `caveBiomeQ` against 1 + the biome most of its tagged voxels get from
+ * `caveBiomeAt` (ties to the lower id, §2.2). No draw: DT2's streams are unchanged. At most CAVE_BIOME_TEXTS mismatch
+ * texts per column (every mismatch counts).
  */
 
 export const DT2_VOXELS_PER_COLUMN = 16;
@@ -96,13 +102,20 @@ export interface Dt2Acc {
   tagNonZero: number;
   /** The straddle stratum's voxels. */
   straddleVoxels: number;
+  /**
+   * SP6b (Task 18): tagged voxels whose stored cave biome ≠ `caveBiomeAt`, plus quarts holding a tagged voxel whose
+   * stored `caveBiomeQ` ≠ 1 + the majority of `caveBiomeAt`; the tagged voxels and those quarts checked.
+   */
+  caveBiomeProbe: number;
+  caveBiomeVoxels: number;
+  caveBiomeQuarts: number;
 }
 
 export function newDt2Acc(label = ''): Dt2Acc {
   return {
     label, problems: [], probeBulk: 0, compiledReference: 0, surfaceProbeBulk: 0, surfaceReference: 0, voxels: 0,
     maskedVoxels: 0, corners: 0, columns: 0, surfaceVoxels: 0, surfaceExtraVoxels: 0, surfaceExtraSkipped: 0,
-    tagProbe: 0, tagVoxels: 0, tagNonZero: 0, straddleVoxels: 0,
+    tagProbe: 0, tagVoxels: 0, tagNonZero: 0, straddleVoxels: 0, caveBiomeProbe: 0, caveBiomeVoxels: 0, caveBiomeQuarts: 0,
   };
 }
 
@@ -110,8 +123,8 @@ export function newDt2Acc(label = ''): Dt2Acc {
  * What `dt2Column` reads of a GenContext, built once per context (as DT2 built it once per profile and seed): a
  * DensityContext compiled apart from the stage's and its reference interpreter, the `interpolated` nodes' corner
  * slots, the stage's compiled rule tree (`surfaceContextOf(ctx).compiled`) and a SurfaceContext built apart (the
- * probe and the reference evaluator), `tagAt` (`caveTagAt` on `dc`) and the straddle stratum's `StraddleSetup`. The
- * fields are writable so a test can inject a wrong reference.
+ * probe and the reference evaluator), `tagAt` (`caveTagAt` on `dc`), `biomeAt` (`caveBiomeAt` on `dc`) and the
+ * straddle stratum's `StraddleSetup`. The fields are writable so a test can inject a wrong reference.
  */
 export interface Dt2Setup {
   dc: DensityContext;
@@ -123,6 +136,8 @@ export interface Dt2Setup {
   maxSurfaceDepth: number;
   /** The cave tag at a world voxel (`caveTagAt(dc, …)`), compared with the stored tag by `tagProbe`. */
   tagAt: (x: number, y: number, z: number) => number;
+  /** The cave biome at a world voxel (`caveBiomeAt(dc, …)`), compared with the stored nibble by `caveBiomeProbe`. */
+  biomeAt: (x: number, y: number, z: number) => number;
   straddle: StraddleSetup;
 }
 
@@ -215,7 +230,7 @@ export function dt2Setup(ctx: GenContext, label: string): Dt2Setup {
   if (compiled.fastPath === null) throw new Error(`DT2: ${label}: the default tree has no fast path`);
   setup = {
     dc, ref, interp, compiled, sc, maxSurfaceDepth: compiled.fastPath.maxSurfaceDepth,
-    tagAt: (x, y, z) => caveTagAt(dc, x, y, z), straddle: straddleSetup(dc),
+    tagAt: (x, y, z) => caveTagAt(dc, x, y, z), biomeAt: (x, y, z) => caveBiomeAt(dc, x, y, z), straddle: straddleSetup(dc),
   };
   SETUPS.set(ctx, setup);
   return setup;
@@ -228,6 +243,10 @@ const MASK = new Uint8Array(98304);
 const MASKED = new Int32Array(98304);
 const SCAN = newSurfaceScan();
 const STRADDLING = new Int32Array(768);
+/** `caveBiomeProbe`'s `caveBiomeAt` counts per quart and biome: entry `16·q + biome`, q = (qy·4 + qz)·4 + qx. */
+const QUART_PICKS = new Int32Array(16 * 1536);
+/** The mismatch texts `caveBiomeProbe` adds per column at most (every mismatch is counted). */
+const CAVE_BIOME_TEXTS = 8;
 const SURFACE_SEED = fnv1a32('DT2.surface');
 const STRADDLE_SEED = fnv1a32('DT2.straddle');
 
@@ -373,7 +392,45 @@ export function dt2Column(ctx: GenContext, cx: number, cz: number, r: Xoshiro128
     if (first < SCAN.runFirst[p + 1]! && checkSurface(p, SCAN.runTop[first]! - d, `skin voxel depth ${d}`)) acc.surfaceExtraVoxels++;
     else acc.surfaceExtraSkipped++;
   }
+  caveBiomeProbe(setup, view, at, acc);
   ext?.column?.(view);
   store.freeColumn(cx, cz);
   return indices;
+}
+
+/** `caveBiomeProbe` on a generated column (header): every tagged voxel, then every quart holding one. */
+function caveBiomeProbe(setup: Dt2Setup, view: ColumnView, at: string, acc: Dt2Acc): void {
+  const x0 = 16 * view.cx, z0 = 16 * view.cz;
+  let texts = 0;
+  QUART_PICKS.fill(0);
+  for (let sy = 0; sy < 24; sy++) {
+    // A uniform section of byte 0 holds no tagged voxel (most sections); any other is read voxel by voxel.
+    const sec = view.sectionCave(sy);
+    if (sec === 0) continue;
+    for (let i = 0; i < 4096; i++) {
+      const byte = typeof sec === 'number' ? sec : sec[i]!;
+      if (caveKindOf(byte) === 0) continue;
+      const lx = i & 15, lz = (i >> 4) & 15, y = -64 + 16 * sy + (i >> 8);
+      const x = x0 + lx, z = z0 + lz;
+      const want = setup.biomeAt(x, y, z);
+      acc.caveBiomeVoxels++;
+      QUART_PICKS[16 * ((((y + 64) >> 2) * 4 + (lz >> 2)) * 4 + (lx >> 2)) + want]!++;
+      if (caveBiomeOf(byte) === want) continue;
+      acc.caveBiomeProbe++;
+      if (texts++ < CAVE_BIOME_TEXTS) acc.problems.push(`${at}: (${x}, ${y}, ${z}) stored cave biome ${caveBiomeOf(byte)} ≠ caveBiomeAt ${want}`);
+    }
+  }
+  const q = view.auxB()!.caveBiomeQ;
+  for (let k = 0; k < 1536; k++) {
+    let best = -1, most = 0;
+    for (let b = 0; b < 16; b++) {
+      const n = QUART_PICKS[16 * k + b]!;
+      if (n > most) { most = n; best = b; }
+    }
+    if (best < 0) continue;
+    acc.caveBiomeQuarts++;
+    if (q[k] === best + 1) continue;
+    acc.caveBiomeProbe++;
+    if (texts++ < CAVE_BIOME_TEXTS) acc.problems.push(`${at}: quart (${k & 3}, ${k >> 4}, ${(k >> 2) & 3}) stored caveBiomeQ ${q[k]} ≠ 1 + the majority of caveBiomeAt ${best}`);
+  }
 }

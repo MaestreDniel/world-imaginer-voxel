@@ -831,3 +831,4 @@ Ids are recon-obligations' (§1a E, §1b R, §1c U, §2 M, §3 A, §5 K); "→ X
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
 
 - 2026-11-12 — SP6b Task 1: startedSps gains 'SP6b' (spec §14.1); no part changes.
+- 2026-11-13 — SP6b Task 18: DT2.caveBiomeProbe max 0, gated from SP6b on every tier (spec §12.5, D26; holds by construction; new part, measured 0 on fast).

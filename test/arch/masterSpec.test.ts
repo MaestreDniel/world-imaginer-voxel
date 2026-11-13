@@ -2646,6 +2646,13 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(u2).toContain(`; SP6b: the caves.biomes.* leaves are decided on a bounded biome witness (stream columns whose tagged air holds a cave biome the leaf reads, where a step changes the T column) where the class columns leave them dead; U2 covers ${n} leaves (amended by SP6b)`);
   });
 
+  test('§6.4\'s DT2 row gains caveBiomeProbe (SP6b spec §15 item 20)', () => {
+    const dt2 = text.split('\n').find((l) => l.startsWith('| DT2 |'));
+    expect(dt2, 'no DT2 row in §6.4').toBeDefined();
+    expect(dt2).toContain('SP6b: `caveBiomeProbe` counts tagged voxels whose stored cave biome (bits 4-7 of the `cave` byte) ≠ `caveBiomeAt`, and quarts holding a tagged voxel whose `caveBiomeQ` ≠ 1 + the biome most of their tagged voxels get from `caveBiomeAt` (amended by SP6b) |');
+    expect(THRESHOLDS.DT2?.caveBiomeProbe).toEqual({ max: 0, activeFrom: 'SP6b' });
+  });
+
   test('§3.12 names the abyss surface-palette blocks (SP6b spec §15 item 13)', () => {
     const abyss = text.split('\n').find((l) => l.startsWith('- abyss:'));
     expect(abyss, 'no `- abyss:` line in §3.12').toBeDefined();
