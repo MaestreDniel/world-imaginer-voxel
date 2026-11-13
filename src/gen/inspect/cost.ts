@@ -47,7 +47,7 @@ const SATURATE = 2147483648;
 /** Voxels of a chunk column (16 · 16 · 384) and quart corners of a chunk column (5 · 5 · 49). */
 const COLUMN_VOXELS = 98304;
 const COLUMN_CORNERS = 1225;
-/** Positions of a chunk column: a fast-path tree evaluates the top 1 + maxSurfaceDepth voxels of each. */
+/** Positions of a chunk column: a fast-path tree evaluates 1 + its largest depth bound voxels of each. */
 const COLUMN_POSITIONS = 256;
 /** A noise evaluation costs 4 units per octave per stack (§5.2). */
 const NOISE_UNITS_PER_OCTAVE = 4;
@@ -324,6 +324,10 @@ interface RulePath {
   readonly bound: number;
   /** A floor `stoneDepth` is on the path. */
   readonly bounded: boolean;
+  /** The smallest ceiling `stoneDepth` bound among the path's conditions (+∞ when none; SP6b §3.5). */
+  readonly ceilBound: number;
+  /** A ceiling `stoneDepth` is on the path. */
+  readonly ceilBounded: boolean;
   /** Every condition on the path is Y-only. */
   readonly yOnly: boolean;
 }
@@ -331,9 +335,10 @@ interface RulePath {
 /**
  * The rules column cost of the source root rule (§1.7 `validateRulesSource`): the rule and condition node count times
  * the voxels a column evaluates, 98,304 without a fast path, or 256 × (1 + the largest depth bound) with one (a leaf
- * bounded by its path's floor `stoneDepth` conditions: offset at its maximising end plus SD_MAX's static maximum when
- * `addSurfaceDepth`; else its conditions must all be Y-only, as `surfaceFastPath` decides), the depth bound clamped
- * to 0 … 383 so the factor never exceeds a whole column; saturating at 2^31. Tier 2 refuses it above
+ * bounded by its path's floor `stoneDepth` conditions, or with none of those by its ceiling ones (SP6b §3.5): offset
+ * at its maximising end plus SD_MAX's static maximum when `addSurfaceDepth`; else its conditions must all be Y-only, as
+ * `surfaceFastPath` decides; the largest over the floor and ceiling classes), the depth bound clamped to 0 … 383 so the
+ * factor never exceeds a whole column; saturating at 2^31. Tier 2 refuses it above
  * `RULES_COLUMN_COST_MAX`.
  */
 export function rulesColumnCost(source: unknown): number {
@@ -360,16 +365,17 @@ function rulesCost(source: unknown): { readonly nodes: number; readonly perNode:
   let nodes = 0;
   let fast = true;
   let maxBound = -1;
-  const stack: RulePath[] = [{ rule: source, bound: Infinity, bounded: false, yOnly: true }];
+  const stack: RulePath[] = [{ rule: source, bound: Infinity, bounded: false, ceilBound: Infinity, ceilBounded: false, yOnly: true }];
   while (stack.length > 0) {
-    const { rule, bound, bounded, yOnly } = stack.pop()!;
+    const path = stack.pop()!;
+    const { rule, bound, bounded, ceilBound, ceilBounded, yOnly } = path;
     if (!isRec(rule)) continue;
     nodes++;
     switch (kindOf(rule)) {
       case 'sequence': {
         const rules = field(rule, 'rules');
         if (!Array.isArray(rules)) break;
-        for (let k = rules.length - 1; k >= 0; k--) stack.push({ rule: rules[k], bound, bounded, yOnly });
+        for (let k = rules.length - 1; k >= 0; k--) stack.push({ ...path, rule: rules[k] });
         break;
       }
       case 'condition': {
@@ -377,15 +383,26 @@ function rulesCost(source: unknown): { readonly nodes: number; readonly perNode:
         for (let x = c; isRec(x); x = kindOf(x) === 'not' ? field(x, 'if') : undefined) nodes++;
         let b = bound;
         let bd = bounded;
-        if (isRec(c) && kindOf(c) === 'stoneDepth' && field(c, 'side') === 'floor') {
-          b = Math.min(b, fieldMax(field(c, 'offset')) + (field(c, 'addSurfaceDepth') === true ? SD_MAX_STATIC : 0));
-          bd = true;
+        let cb = ceilBound;
+        let cbd = ceilBounded;
+        if (isRec(c) && kindOf(c) === 'stoneDepth') {
+          const side = field(c, 'side');
+          const d = fieldMax(field(c, 'offset')) + (field(c, 'addSurfaceDepth') === true ? SD_MAX_STATIC : 0);
+          if (side === 'floor') {
+            b = Math.min(b, d);
+            bd = true;
+          } else if (side === 'ceiling') {
+            cb = Math.min(cb, d);
+            cbd = true;
+          }
         }
-        stack.push({ rule: field(rule, 'then'), bound: b, bounded: bd, yOnly: yOnly && isYOnly(c) });
+        stack.push({ rule: field(rule, 'then'), bound: b, bounded: bd, ceilBound: cb, ceilBounded: cbd, yOnly: yOnly && isYOnly(c) });
         break;
       }
       case 'block': case 'bandlands': case 'strata':
+        // A floor gate bounds the leaf whatever its ceiling gates (SP6b Spec correction 6).
         if (bounded) maxBound = Math.max(maxBound, bound);
+        else if (ceilBounded) maxBound = Math.max(maxBound, ceilBound);
         else if (!yOnly) fast = false;
         break;
       default: break;

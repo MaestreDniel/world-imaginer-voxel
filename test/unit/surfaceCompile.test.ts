@@ -13,6 +13,8 @@ import {
   withCaveBiomes, type SurfaceFuzzColumn, type SurfaceFuzzStyle,
 } from '../harness/surfaceFuzz';
 import { testRng } from '../harness/stats';
+import { legacyDefaultSurfaceRules } from '../harness/legacyTrees';
+import { DEFAULTS } from '../../src/core/params/defaults';
 
 const SEED: Seed64 = [42, 0];
 const NOISES = surfaceFuzzNoiseSource(SEED);
@@ -31,6 +33,26 @@ const grad = (lo: number, hi: number): Condition => ({ kind: 'verticalGradient',
 const yAbove = (minY: number, runTop: boolean): Condition => ({ kind: 'yAbove', minY, runTop });
 const biome = (...biomes: string[]): Condition => ({ kind: 'biome', biomes } as Condition);
 const P: Condition = { kind: 'noiseThreshold', noise: 'surface.noises.patch', min: 0.55, max: 8 };
+const ceil = (offset: number, addSurfaceDepth: boolean): Condition => ({ kind: 'stoneDepth', side: 'ceiling', offset, addSurfaceDepth });
+
+/**
+ * The voxels the SP3c fast path (before SP6b's per-class bounds) took without evaluating: solid, in a constant band,
+ * floorDepth > maxSurfaceDepth or, in a sky-gated tree, a run without sky. `fillColumn` evaluated the rest.
+ */
+function sp3cEvaluated(fp: SurfaceFastPath, scan: SurfaceScan): number {
+  const bandAt = new Int32Array(384).fill(-1);
+  for (const b of fp.bands) for (let y = b.yMin; y <= b.yMax; y++) bandAt[y + 64] = b.state;
+  let evaluated = 0;
+  for (let p = 0; p < 256; p++) {
+    for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
+      const sky = r === scan.skyRun[p];
+      for (let y = scan.runTop[r]!; y >= scan.runBottom[r]!; y--) {
+        if (!(bandAt[y + 64]! >= 0 && (scan.runTop[r]! - y > fp.maxSurfaceDepth || (fp.skyGated && !sky)))) evaluated++;
+      }
+    }
+  }
+  return evaluated;
+}
 
 /**
  * §4's default tree in shape (Decision 6's order), with this chain's three states standing in for the palette (the
@@ -87,18 +109,23 @@ function fill(c: CompiledSurfaceRules, scan: SurfaceScan, fast: boolean): { out:
   return { out, evaluated: c.fillColumn(scan, out, fast) };
 }
 
-/** The voxels §3.4 lets take their band: solid, in a constant band, floorDepth > maxSurfaceDepth or (sky-gated) no sky. */
+/**
+ * The voxels §3.4 and SP6b §3.5 (D20 1-2) let take their band: solid, in a constant band, floorDepth beyond the run's
+ * floor bound (the sky-open run's: the larger of the two floor classes'; any other run's: the non-sky class's) and
+ * ceilDepth beyond the ceiling class's bound.
+ */
 function fastVoxels(fp: SurfaceFastPath, scan: SurfaceScan): { fast: number; noSkyNearTop: number; solid: number } {
   const bandAt = new Int32Array(384).fill(-1);
   for (const b of fp.bands) for (let y = b.yMin; y <= b.yMax; y++) bandAt[y + 64] = b.state;
   let fast = 0, noSkyNearTop = 0, solid = 0;
   for (let p = 0; p < 256; p++) {
     for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
-      const sky = r === scan.runFirst[p];
+      const sky = r === scan.skyRun[p];
+      const floorBound = sky ? Math.max(fp.skyFloorBound, fp.floorBound) : fp.floorBound;
       for (let y = scan.runTop[r]!; y >= scan.runBottom[r]!; y--) {
         solid++;
         const depth = scan.runTop[r]! - y;
-        if (bandAt[y + 64]! >= 0 && (depth > fp.maxSurfaceDepth || (fp.skyGated && !sky))) {
+        if (bandAt[y + 64]! >= 0 && depth > floorBound && y - scan.runBottom[r]! > fp.ceilBound) {
           fast++;
           if (!sky && depth <= fp.maxSurfaceDepth) noSkyNearTop++;
         }
@@ -125,6 +152,9 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     expect(compileSurfaceRules(SEED, DEFAULT_SHAPE, NOISES, set).fastPath).toEqual({
       maxSurfaceDepth: 15,
       skyGated: true,
+      skyFloorBound: 15,
+      floorBound: -1,
+      ceilBound: -1,
       bands: [dither(-63, -60), band(-59, 0, BEDROCK), dither(1, 7), band(8, 319, STONE)],
     });
     // SD_MAX comes from the live settings: depthMul 0 gives 3, so 7.
@@ -133,9 +163,9 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     expect(surfaceFastPath(DEFAULT_SHAPE, set0.sdMax)?.maxSurfaceDepth).toBe(7);
   });
 
-  test('leaf classes: any leaf neither depth-bounded nor Y-only turns the fast path off', () => {
+  test('leaf classes: any leaf neither depth-bounded, ceiling-bounded (SP6b §3.5) nor Y-only turns the fast path off', () => {
     const offPaths: Condition[] = [
-      NOT(SKIN), NOT(NOT(SKIN)), { kind: 'stoneDepth', side: 'ceiling', offset: 2, addSurfaceDepth: false }, yAbove(70, true), biome('desert'),
+      NOT(SKIN), NOT(NOT(SKIN)), NOT(ceil(2, false)), yAbove(70, true), biome('desert'),
       SKY, { kind: 'water', offset: 0, runTop: false }, { kind: 'lake' }, { kind: 'steep', min: 1 }, P, { kind: 'temperatureBelow', t: 0 },
       NOT(yAbove(70, true)), NOT(SKY),
     ];
@@ -159,12 +189,97 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     expect(fp(SEQ(IF(floor(3, false), B('air')), IF(floor(-2, true), B('air')), IF(floor(20, false), IF(floor(9, false), B('air')))), 11).maxSurfaceDepth).toBe(9);
     expect(fp(SEQ(IF(floor(3, false), B('air')), IF(floor(-2, true), B('air'))), 11).maxSurfaceDepth).toBe(9);
     expect(fp(IF(floor(-3, false), B('air')), 11).maxSurfaceDepth).toBe(-1);
-    expect(fp(SEQ(), 11)).toEqual({ maxSurfaceDepth: -1, skyGated: true, bands: [band(-63, 319, STONE)] });
+    expect(fp(SEQ(), 11)).toEqual({ maxSurfaceDepth: -1, skyGated: true, skyFloorBound: -1, floorBound: -1, ceilBound: -1, bands: [band(-63, 319, STONE)] });
     expect(fp(IF(grad(0, 8), B('air')), 11).skyGated).toBe(true);
     // Sky gate: a skyOpen `if` on every depth-bounded path, not under a not; the Y-only leaves need none.
     expect(fp(SEQ(IFS([SKY, TOP], B('air')), IFS([floor(2, false), yAbove(3, true), SKY], B('air')), B('bedrock')), 11).skyGated).toBe(true);
     expect(fp(SEQ(IFS([SKY, TOP], B('air')), IF(floor(2, false), B('air'))), 11).skyGated).toBe(false);
     expect(fp(IFS([NOT(NOT(SKY)), TOP], B('air')), 11).skyGated).toBe(false);
+  });
+
+  test('per-class bounds (SP6b §3.5, D20 1-2, Spec correction 6): sky floor, other floor, ceiling; a leaf with a floor gate is floor-bounded only', () => {
+    const fp = (tree: Rule, sdMax = 11) => surfaceFastPath(tree, sdMax)!;
+    const A = B('air');
+    const bounds = (f: SurfaceFastPath) => [f.skyFloorBound, f.floorBound, f.ceilBound, f.maxSurfaceDepth, f.skyGated];
+    // A skyOpen-gated floor leaf and an ungated one: two floor classes; maxSurfaceDepth the larger.
+    expect(bounds(fp(SEQ(IFS([SKY, floor(3, false)], A), IF(floor(1, false), A))))).toEqual([3, 1, -1, 3, false]);
+    expect(bounds(fp(SEQ(IFS([SKY, floor(1, false)], A), IF(floor(3, false), A))))).toEqual([1, 3, -1, 3, false]);
+    // Ceiling-bounded: every depth gate a ceiling one; the smallest gate bound on a path (+ SD_MAX with
+    // addSurfaceDepth), the largest over leaves, −1 when every bound is negative.
+    expect(bounds(fp(IF(ceil(2, false), A)))).toEqual([-1, -1, 2, -1, false]);
+    expect(fp(IFS([ceil(5, false), ceil(1, true)], A)).ceilBound).toBe(5);
+    expect(fp(IFS([ceil(5, false), ceil(1, true)], A), 1).ceilBound).toBe(2);
+    expect(fp(SEQ(IF(ceil(0, false), A), IF(ceil(1, false), A), IF(grad(0, 8), A))).ceilBound).toBe(1);
+    expect(fp(IF(ceil(-3, false), A)).ceilBound).toBe(-1);
+    // A ceiling leaf under skyOpen is still the one ceiling class (every depth-bounded leaf sky-gated: skyGated).
+    expect(bounds(fp(IFS([SKY, ceil(2, false)], A)))).toEqual([-1, -1, 2, -1, true]);
+    // Spec correction 6: floating_islands' island leaves hold stoneDepth{ceiling, 100} under stoneDepth{floor, 4 + SD}:
+    // floor-bounded only (the floor gate already excludes every voxel beyond it), never the bottom 100 of every run.
+    expect(bounds(fp(IFS([yAbove(181, true), ceil(100, false), BAND4], SEQ(IF(TOP, A), IF(ceil(2, false), A), A))))).toEqual([-1, 15, -1, 15, false]);
+    expect(bounds(fp(IFS([ceil(0, false), SKY, TOP], A)))).toEqual([0, -1, -1, 0, true]);
+  });
+
+  test("the default tree (SP6b §3.5): bounds (15, −1, −1), and fillColumn evaluates exactly SP3c's voxels on 64 columns", () => {
+    const real = legacyDefaultSurfaceRules(DEFAULTS.surface);
+    for (const tree of [DEFAULT_SHAPE, real]) {
+      const c = compileSurfaceRules(SEED, tree, NOISES, set);
+      const fp = c.fastPath!;
+      expect([fp.skyFloorBound, fp.floorBound, fp.ceilBound, fp.maxSurfaceDepth, fp.skyGated]).toEqual([15, -1, -1, 15, true]);
+      const next = testRng(1401);
+      let evaluated = 0, solid = 0;
+      for (let k = 0; k < 64; k++) {
+        const scan = scanOf(randomSurfaceColumn(next), set);
+        const fast = fill(c, scan, true);
+        expect(fast.evaluated).toBe(sp3cEvaluated(fp, scan));
+        evaluated += fast.evaluated;
+        solid += fastVoxels(fp, scan).solid;
+        if (k % 8 === 0) expect(Buffer.from(fast.out).equals(Buffer.from(fill(c, scan, false).out))).toBe(true);
+      }
+      expect(evaluated).toBeLessThan(solid / 2);
+    }
+  });
+
+  test("rule 4's ceiling leaves without their caveBiome gates (SP6b §3.4-§3.5): ceilBound 1, each run's bottom 2 voxels plus the floor class's", () => {
+    // stoneDepth{ceiling, 0} → cavePatch → moss_block; stoneDepth{ceiling, 1} → not(cavePatch) → dripstone_block, with
+    // surface.noises.patch standing in for cavePatch (Task 22's leaf) and no floor gate; inserted at root.rules[2] of
+    // the default's shape. With the caveBiome{ceiling} gates back the tree has no fast path until extension 3 (Task 15).
+    const CEILING_LEAVES = SEQ(
+      IFS([ceil(0, false), { kind: 'noiseThreshold', noise: 'surface.noises.patch', min: -0.52, max: 8 }], B('moss_block')),
+      IFS([ceil(1, false), NOT({ kind: 'noiseThreshold', noise: 'surface.noises.patch', min: -8, max: -0.97 })], B('dripstone_block')),
+    );
+    const [rule1, sky, rule2] = (DEFAULT_SHAPE as Extract<Rule, { kind: 'sequence' }>).rules;
+    const tree = SEQ(rule1!, sky!, CEILING_LEAVES, rule2!);
+    const c = compileSurfaceRules(SEED, tree, NOISES, set);
+    const fp = c.fastPath!;
+    expect([fp.skyFloorBound, fp.floorBound, fp.ceilBound, fp.maxSurfaceDepth, fp.skyGated]).toEqual([15, -1, 1, 15, false]);
+    expect(fp.bands).toEqual(compileSurfaceRules(SEED, DEFAULT_SHAPE, NOISES, set).fastPath!.bands);
+    const ref = createSurfaceReference(SEED, tree, NOISES);
+    const next = testRng(1402);
+    let evaluated = 0, solid = 0, ceilingStates = 0;
+    for (let k = 0; k < 16; k++) {
+      const scan = scanOf(randomSurfaceColumn(next), set);
+      const slow = fill(c, scan, false), fast = fill(c, scan, true);
+      expect(Buffer.from(fast.out).equals(Buffer.from(slow.out))).toBe(true);
+      // Evaluated: the dither intervals, the sky-open run's top 16 (floorDepth ≤ 15) and every run's bottom 2.
+      let want = 0;
+      for (let p = 0; p < 256; p++) {
+        for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
+          const top = scan.runTop[r]!, bottom = scan.runBottom[r]!;
+          for (let y = top; y >= bottom; y--) {
+            solid++;
+            const dithered = (y >= -63 && y <= -60) || (y >= 1 && y <= 7);
+            if (dithered || (r === scan.skyRun[p] && top - y <= 15) || y - bottom <= 1) want++;
+            const s = slow.out[at(p, y)]!;
+            if (y - bottom <= 1 && (s === REGISTRY.parseStateKey('moss_block') || s === REGISTRY.parseStateKey('dripstone_block'))) ceilingStates++;
+            if (p % 16 === k) expect(s).toBe(ref.state(scan, set, p, y));
+          }
+        }
+      }
+      expect(fast.evaluated).toBe(want);
+      evaluated += fast.evaluated;
+    }
+    expect(ceilingStates).toBeGreaterThan(1000);
+    expect(evaluated).toBeLessThan(solid / 2);
   });
 
   test('bands are cut only by the Y-only leaves: minY of yAbove{runTop false}, gradient ends; dither intervals evaluated', () => {
@@ -179,6 +294,9 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     expect(surfaceFastPath(tree, 11)).toEqual({
       maxSurfaceDepth: 11,
       skyGated: true,
+      skyFloorBound: 11,
+      floorBound: -1,
+      ceilBound: -1,
       bands: [
         band(-63, -10, AIR), dither(-9, -6), band(-5, 19, STONE), band(20, 99, STONE), band(100, 150, BEDROCK), band(151, 300, BEDROCK),
         dither(301, 319),
@@ -197,6 +315,9 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     expect(fp).toEqual({
       maxSurfaceDepth: 0,
       skyGated: true,
+      skyFloorBound: 0,
+      floorBound: -1,
+      ceilBound: -1,
       bands: [band(-63, 0, BEDROCK), dither(1, 7), band(8, 39, STONE), { yMin: 40, yMax: 59, dither: false, state: -1 }, band(60, 319, STONE)],
     });
     const col = handColumn((p) => 70 + (p % 5));
@@ -426,7 +547,7 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     const t1 = tree(ST('surface.noises.patch', 0)), t2 = tree(ST('surface.noises.fuzzB', 0));
     // The strata leaf is Y-only: the band it decides (8 … 319) has no constant state and is evaluated.
     expect(surfaceFastPath(t1, 11)).toEqual({
-      maxSurfaceDepth: 0, skyGated: true,
+      maxSurfaceDepth: 0, skyGated: true, skyFloorBound: 0, floorBound: -1, ceilBound: -1,
       bands: [band(-63, -41, BEDROCK), band(-40, 0, BEDROCK), dither(1, 7), { yMin: 8, yMax: 319, dither: false, state: -1 }],
     });
     const col = handColumn((p) => 300 + (p % 7));

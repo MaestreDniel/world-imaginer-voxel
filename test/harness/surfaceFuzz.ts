@@ -14,8 +14,11 @@
  * - 'fastPath': a root sequence of branches whose every leaf is depth-bounded (a `stoneDepth{side floor}` not under a
  *   `not` on its path) or Y-only (only `verticalGradient`, `yAbove{runTop false}` and `not`s of these on its path), in
  *   random order, so Y-only leaves come before and after depth-bounded ones; `skyGated` true gates every depth-bounded
- *   branch with a `skyOpen`, false never does (and draws no `skyOpen` inside it), undefined decides per branch;
- * - 'nearMiss': a 'fastPath' tree plus one branch, at a random place, whose leaf is neither (the fast path must be off).
+ *   branch with a `skyOpen`, false never does (and draws no `skyOpen` inside it), undefined decides per branch; with
+ *   `ceilingGates`, a depth-bounded branch's own gate is a `stoneDepth{side ceiling}` one time in 2 (its leaves are
+ *   ceiling-bounded unless a floor gate is drawn inside it, SP6b spec §3.5);
+ * - 'nearMiss': a 'fastPath' tree plus one branch, at a random place, whose leaf is in no class: neither depth-bounded,
+ *   ceiling-bounded nor Y-only (the fast path must be off).
  *
  * Columns (`randomSurfaceColumn`) are hand-built ColumnSamples (random T and steep corners, some finite lake corners)
  * with solidity and water in the T stage's order: ground resting on the bedrock at a per-column height regime (deep
@@ -207,6 +210,11 @@ export interface SurfaceRulesOptions {
   readonly maxDepth?: number;
   /** 'fastPath' / 'nearMiss': true gates every depth-bounded branch with skyOpen, false none, undefined per branch. */
   readonly skyGated?: boolean;
+  /**
+   * 'fastPath' / 'nearMiss': a depth-bounded branch's own gate is a ceiling `stoneDepth` one time in 2 (default false,
+   * which draws nothing for it, so the trees without it are unchanged; SP6b spec §3.5).
+   */
+  readonly ceilingGates?: boolean;
   /** Biomes a `biome` condition draws from (default SURFACE_FUZZ_BIOMES). */
   readonly biomes?: readonly SurfaceBiome[];
   /** Noise schema paths a `noiseThreshold` draws from (default SURFACE_FUZZ_NOISES). */
@@ -317,9 +325,12 @@ export function randomSurfaceRules(next: () => number, opts: SurfaceRulesOptions
     for (let i = gates.length - 1; i >= 0; i--) r = { kind: 'condition', if: gates[i]!, then: r };
     return r;
   };
-  /** A branch whose every leaf is depth-bounded: a gate chain holding a floor stoneDepth (and skyOpen when sky-gated). */
+  /**
+   * A branch whose every leaf is depth-bounded: a gate chain holding a floor stoneDepth, or with `ceilingGates` one time
+   * in 2 a ceiling one (and skyOpen when sky-gated).
+   */
   const depthBounded = (): Rule => {
-    const gates: Condition[] = [floorDepth()];
+    const gates: Condition[] = [opts.ceilingGates === true && bool() ? { ...floorDepth(), side: 'ceiling' } as Condition : floorDepth()];
     const sky = opts.skyGated ?? bool();
     if (sky) gates.splice(next() % 2, 0, { kind: 'skyOpen' });
     const cond = (d: number): Condition => condition(d, !sky);
@@ -331,11 +342,11 @@ export function randomSurfaceRules(next: () => number, opts: SurfaceRulesOptions
     return chain(gates, ruleLeaves(inner).length > 0 ? inner : { kind: 'sequence', rules: [inner, block()] });
   };
   const yBranch = (): Rule => rule(2, yOnly);
-  /** A branch whose leaf is neither depth-bounded nor Y-only. */
+  /** A branch whose leaf is in no class: neither depth-bounded, ceiling-bounded (SP6b spec §3.5) nor Y-only. */
   const offPath = (): Rule => {
     const bad: Condition[] = [
       { kind: 'not', if: floorDepth() },
-      { ...floorDepth(), side: 'ceiling' } as Condition,
+      { kind: 'not', if: { ...floorDepth(), side: 'ceiling' } as Condition },
       { kind: 'yAbove', minY: yValue(), runTop: true },
       { kind: 'biome', biomes: [pick(biomes)] },
       { kind: 'skyOpen' },

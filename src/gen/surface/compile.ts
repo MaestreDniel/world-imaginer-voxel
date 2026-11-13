@@ -11,22 +11,27 @@
  * compiled tree equals the reference on every voxel. Nothing yielded leaves the voxel stone.
  *
  * Fast path (`surfaceFastPath`, compile time, general and conservative). Every leaf (`block`, `bandlands` or `strata`)
- * is classed by the `if`s on its path (sequences ignored):
- * - depth-bounded: a path `if` is `stoneDepth{side floor}` (not under a `not`); its bound is the smallest, over those
- *   gates, of offset + (addSurfaceDepth ? SD_MAX : 0);
+ * is classed by the `if`s on its path (sequences ignored), a gate counting only when not under a `not`:
+ * - floor-bounded: a path `if` is `stoneDepth{side floor}`; its bound is the smallest, over those gates, of offset +
+ *   (addSurfaceDepth ? SD_MAX : 0); it is in the sky class when a path `if` is `skyOpen`, else in the other floor class;
+ * - ceiling-bounded (SP6b §3.5, Spec correction 6): no floor gate and a path `if` is `stoneDepth{side ceiling}`; its
+ *   bound is the same smallest over its ceiling gates, counted from the run's bottom (a leaf with a floor gate is
+ *   floor-bounded only: its floor gate already excludes every voxel beyond it, whatever its ceiling gates say);
  * - Y-only: every path `if` is a `verticalGradient`, a `yAbove{runTop false}` or a `not` of these.
- * With any other leaf there is no fast path (a `caveBiome` is neither class: on a depth-bounded path it is harmless, any
- * condition there is, and with no floor gate its leaf turns the fast path off, as `rulesCost` decides; SP6b §3.5's
- * extensions come later). Otherwise maxSurfaceDepth is the largest bound (−1 when there is no
- * depth-bounded leaf: floorDepth ≥ 0 exceeds it everywhere); the tree is sky-gated when every depth-bounded path also
- * holds a `skyOpen` `if`. The y range −63 … 319 is cut only by the Y-only leaves' conditions: at each such
- * `yAbove{runTop false}`'s minY and at each such gradient's ends; a gradient's dither interval
- * [trueAtAndBelow + 1, falseAtAndAbove − 1] is always evaluated; every other interval is a constant band whose state is
- * the tree evaluated at compile time without its depth-bounded leaves (stone when nothing matches); a band whose first
- * holding Y-only leaf is a `bandlands` or a `strata` (SP6b) has no constant state (the band block varies with x, y, z)
- * and is always evaluated, like a dither interval. `fillColumn` gives
- * a solid voxel of a constant band its band's state without evaluating when floorDepth > maxSurfaceDepth or, in a
- * sky-gated tree, when its run is not sky-open; non-solid voxels are never written. Follows the gen determinism rules.
+ * With any other leaf there is no fast path (a `caveBiome` is in no class: on a depth-bounded path it is harmless, any
+ * condition there is, and with no depth gate its leaf turns the fast path off, as `rulesCost` decides; SP6b §3.5's
+ * extensions 3-4 come later). Otherwise each class's bound is the largest over its leaves (−1 when it has none: a depth
+ * ≥ 0 exceeds it everywhere); maxSurfaceDepth is the larger floor bound; the tree is sky-gated when every
+ * floor- or ceiling-bounded path also holds a `skyOpen` `if`. The y range −63 … 319 is cut only by the Y-only
+ * leaves' conditions: at each such `yAbove{runTop false}`'s minY and at each such gradient's ends; a gradient's dither
+ * interval [trueAtAndBelow + 1, falseAtAndAbove − 1] is always evaluated; every other interval is a constant band whose
+ * state is the tree evaluated at compile time without its depth-bounded leaves (stone when nothing matches); a band
+ * whose first holding Y-only leaf is a `bandlands` or a `strata` (SP6b) has no constant state (the band block varies
+ * with x, y, z) and is always evaluated, like a dither interval. `fillColumn` gives a solid voxel of a constant band
+ * its band's state without evaluating when it lies beyond every class's bound: floorDepth > the run's floor bound (the
+ * sky-open run's: the larger of the two floor classes'; any other run's: the non-sky class's, so in a sky-gated tree
+ * every depth of such a run) and ceilDepth > the ceiling bound; non-solid voxels are never written. Follows the gen
+ * determinism rules.
  */
 import type { Seed64 } from '../../core/hash';
 import { REGISTRY, STONE } from '../../world/blocks/index';
@@ -89,12 +94,21 @@ export interface SurfaceBand {
   readonly state: number;
 }
 
-/** The fast-path analysis of a tree (§3.4). */
+/** The fast-path analysis of a tree (§3.4; SP6b §3.5's per-class bounds). */
 export interface SurfaceFastPath {
-  /** The largest bound of the depth-bounded leaves, at the settings' SD_MAX; −1 when there is none. */
+  /** The largest bound of the floor-bounded leaves (both classes), at the settings' SD_MAX; −1 when there is none. */
   readonly maxSurfaceDepth: number;
-  /** Every depth-bounded leaf's path holds a `skyOpen` (not under a `not`); true when there is none. */
+  /**
+   * Every floor- or ceiling-bounded leaf's path holds a `skyOpen` (not under a `not`); true when there is none (then
+   * floorBound is −1).
+   */
   readonly skyGated: boolean;
+  /** The largest floor bound of the floor-bounded leaves whose path holds a `skyOpen`; −1 when there is none. */
+  readonly skyFloorBound: number;
+  /** The largest floor bound of the other floor-bounded leaves; −1 when there is none. */
+  readonly floorBound: number;
+  /** The largest ceiling bound (from the run's bottom) of the ceiling-bounded leaves; −1 when there is none. */
+  readonly ceilBound: number;
   /** The cut of y −63 … 319, bottom-up, contiguous: constant bands and dither intervals. */
   readonly bands: readonly SurfaceBand[];
 }
@@ -105,7 +119,7 @@ export interface CompiledSurfaceRules {
   readonly rules: Rule;
   /** The settings it was compiled for (SD_MAX for the fast path, lapse and lapseBase for T_eff). */
   readonly settings: SurfaceScanSettings;
-  /** The fast-path analysis, or null when some leaf is neither depth-bounded nor Y-only. */
+  /** The fast-path analysis, or null when some leaf is neither floor-bounded, ceiling-bounded nor Y-only. */
   readonly fastPath: SurfaceFastPath | null;
   /**
    * The final state at the solid voxel (p, y) of the column last scanned into `scan` (with these settings), every
@@ -158,23 +172,39 @@ function cutAt(c: Condition, starts: Uint8Array, dither: Uint8Array): void {
 }
 
 /**
- * The fast-path analysis of the valid tree `root` with SD_MAX `sdMax` (§3.4): null when some leaf is neither
- * depth-bounded nor Y-only. Block states are resolved with the registry (`root` must be valid).
+ * The fast-path analysis of the valid tree `root` with SD_MAX `sdMax` (§3.4, SP6b §3.5): null when some leaf is
+ * neither floor-bounded, ceiling-bounded nor Y-only. Block states are resolved with the registry (`root` must be valid).
  */
 export function surfaceFastPath(root: Rule, sdMax: number): SurfaceFastPath | null {
   const leaves = LEAVES(root);
-  let maxSurfaceDepth = -1;
+  let skyFloorBound = -1;
+  let floorBound = -1;
+  let ceilBound = -1;
   let skyGated = true;
   const yLeaves: { readonly state: number; readonly conditions: readonly Condition[] }[] = [];
   for (const leaf of leaves) {
-    let bound = Infinity;
+    let floor = Infinity;
+    let ceil = Infinity;
     let sky = false;
     for (const c of leaf.conditions) {
-      if (c.kind === 'stoneDepth' && c.side === 'floor') bound = Math.min(bound, c.offset + (c.addSurfaceDepth ? sdMax : 0));
-      else if (c.kind === 'skyOpen') sky = true;
+      if (c.kind === 'stoneDepth') {
+        const b = c.offset + (c.addSurfaceDepth ? sdMax : 0);
+        if (c.side === 'floor') floor = Math.min(floor, b);
+        else ceil = Math.min(ceil, b);
+      } else if (c.kind === 'skyOpen') {
+        sky = true;
+      }
     }
-    if (bound !== Infinity) {
-      maxSurfaceDepth = Math.max(maxSurfaceDepth, bound);
+    if (floor !== Infinity) {
+      // Floor-bounded, whatever its ceiling gates (Spec correction 6).
+      if (sky) {
+        skyFloorBound = Math.max(skyFloorBound, floor);
+      } else {
+        floorBound = Math.max(floorBound, floor);
+        skyGated = false;
+      }
+    } else if (ceil !== Infinity) {
+      ceilBound = Math.max(ceilBound, ceil);
       if (!sky) skyGated = false;
     } else if (leaf.conditions.every(isYOnly)) {
       // A bandlands or strata leaf's block varies with (x, y, z): a band it decides is evaluated (state −1).
@@ -203,7 +233,7 @@ export function surfaceFastPath(root: Rule, sdMax: number): SurfaceFastPath | nu
     bands.push({ yMin: y, yMax: end, dither: d, state });
     y = end + 1;
   }
-  return { maxSurfaceDepth, skyGated, bands };
+  return { maxSurfaceDepth: Math.max(skyFloorBound, floorBound), skyGated, skyFloorBound, floorBound, ceilBound, bands };
 }
 
 /** The scan context the closures read: the position's readouts, the voxel's run and y. */
@@ -429,8 +459,11 @@ export function compileSurfaceRules(
     fillColumn(scan, out, fast) {
       if (out.length !== COLUMN_VOXELS) throw new RangeError(`fillColumn: out has ${out.length} entries, expected ${COLUMN_VOXELS}`);
       const useFast = fast && fastPath !== null;
-      const maxSd = fastPath === null ? 0 : fastPath.maxSurfaceDepth;
-      const skyGated = fastPath !== null && fastPath.skyGated;
+      // The floor bound of the sky-open run (both floor classes) and of every other run (the non-sky class only), and
+      // the ceiling bound (SP6b §3.5).
+      const skyFloor = fastPath === null ? 0 : Math.max(fastPath.skyFloorBound, fastPath.floorBound);
+      const otherFloor = fastPath === null ? 0 : fastPath.floorBound;
+      const ceil = fastPath === null ? 0 : fastPath.ceilBound;
       const { runFirst, skyRun, runTop, runBottom } = scan;
       let evaluated = 0;
       for (let p = 0; p < 256; p++) {
@@ -442,12 +475,13 @@ export function compileSurfaceRules(
           setRun(scan, r, r === sky);
           const top = runTop[r]!;
           const bottom = runBottom[r]!;
-          // Voxels at y ≤ deep may take their band's state: floorDepth > maxSurfaceDepth, or the whole run when the
-          // tree is sky-gated and the run is not the sky-open one.
-          const deep = !useFast ? Y_MIN - 2 : skyGated && r !== sky ? top : top - maxSd - 1;
+          // Voxels at shallow ≤ y ≤ deep may take their band's state: floorDepth beyond the run's floor bound and
+          // ceilDepth beyond the ceiling bound (a bound −1 holds the whole run).
+          const deep = !useFast ? Y_MIN - 2 : top - (r === sky ? skyFloor : otherFloor) - 1;
+          const shallow = bottom + ceil + 1;
           for (let y = top; y >= bottom; y--) {
             const i = ((y + 64) << 8) | p;
-            if (y <= deep) {
+            if (y <= deep && y >= shallow) {
               const b = bandState[y + 64]!;
               if (b >= 0) {
                 out[i] = b;

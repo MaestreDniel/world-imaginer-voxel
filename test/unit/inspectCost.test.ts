@@ -289,13 +289,18 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
   });
 
   test('a default-sized rule tree without a fast path costs 384 / 52 ≈ 7.4 × the default, within 64 ×', () => {
+    // Every stoneDepth replaced by a skyOpen (one node for one): no leaf is depth-bounded, ceiling-bounded (SP6b §3.5)
+    // or Y-only, so no class bounds the tree.
     const noFast = copy(DEFAULT_SURFACE_RULES);
     const stack: unknown[] = [noFast];
     while (stack.length > 0) {
       const x = stack.pop();
       if (Array.isArray(x)) stack.push(...(x as unknown[]));
       else if (isRec(x)) {
-        if (x['kind'] === 'stoneDepth') x['side'] = 'ceiling';
+        if (x['kind'] === 'stoneDepth') {
+          for (const k of Object.keys(x)) delete x[k];
+          x['kind'] = 'skyOpen';
+        }
         stack.push(...Object.values(x));
       }
     }
@@ -324,18 +329,22 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
   });
 
   test('rulesColumnCost decides the fast path as surfaceFastPath does, on 600 random trees of the three fuzz styles', () => {
+    // SP6b §3.5: each node costs 256 × (1 + the largest bound over the floor and ceiling classes); the 'fastPath'
+    // trees draw ceiling-gated branches (the ceiling class) one time in 2.
     const next = testRng(4041);
-    let fast = 0;
+    let fast = 0, ceiling = 0;
     for (let n = 0; n < 600; n++) {
       const style = (['free', 'fastPath', 'nearMiss'] as const)[n % 3]!;
-      const rules = withRegisteredBlocks(randomSurfaceRules(next, { style })) as Rule;
+      const rules = withRegisteredBlocks(randomSurfaceRules(next, { style, ceilingGates: n % 2 === 0 })) as Rule;
       const fp = surfaceFastPath(rules, SD_MAX_STATIC);
       const nodes = countTreeNodes(rules, 'surfaceRules');
-      const perNode = fp === null ? VOXELS : Math.min(VOXELS, 256 * (1 + Math.max(0, fp.maxSurfaceDepth)));
+      const perNode = fp === null ? VOXELS : Math.min(VOXELS, 256 * (1 + Math.max(0, fp.maxSurfaceDepth, fp.ceilBound)));
       if (fp !== null) fast++;
+      if (fp !== null && fp.ceilBound > fp.maxSurfaceDepth) ceiling++;
       expect(rulesColumnCost(rules)).toBe(Math.min(2 ** 31, nodes * perNode));
     }
     expect(fast).toBeGreaterThan(100);
     expect(fast).toBeLessThan(500);
+    expect(ceiling).toBeGreaterThan(20);
   });
 });

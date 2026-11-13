@@ -5,7 +5,9 @@
  * of a position is the highest run whose bottom voxel is below `ISLAND_RUN_MIN_BOTTOM` (off: the first run):
  * - the tree: identity across `resolveProfile`, exactly the wrapper (U2's pinned `root.rules[2]` is still the
  *   deepslate gradient), 181 nodes, tier 2 [], rules column cost 2,409,472, a fast path that is not sky-gated with
- *   `maxSurfaceDepth` = 4 + SD_MAX and the default's bands;
+ *   `maxSurfaceDepth` = 4 + SD_MAX and the default's bands; SP6b §3.5's classes: both floor bounds 4 + SD_MAX, no
+ *   ceiling class (the branch's `stoneDepth{ceiling}` leaves sit under floor gates, Spec correction 6), and the
+ *   constructed column's evaluated count is SP3c's (every run's top 16 voxels outside the dither intervals);
  * - the sky-open run: the scan settings carry the flag (the SurfaceContext's from `islands.enabled`), and the scan's
  *   `skyRun` is the highest run with bottom < 181 (or none) with it, the first run without it;
  * - a constructed column on a floating_islands ColumnSample: grass tops, dirt for the position's surface depth, a
@@ -118,6 +120,9 @@ describe('FLOATING_SURFACE_RULES (SP3e spec §4.2, §4.3, §4.5, D6, D7, D21 (b)
     expect(fp).not.toBeNull();
     expect(fp!.skyGated).toBe(false);
     expect(fp!.maxSurfaceDepth).toBe(4 + sc.settings.sdMax);
+    // SP6b §3.5 (Spec correction 6): the island leaves' stoneDepth{ceiling, 100} and {ceiling, 2} sit under floor gates,
+    // so they are floor-bounded (the non-sky class, 4 + SD_MAX) and the tree has no ceiling class.
+    expect([fp!.skyFloorBound, fp!.floorBound, fp!.ceilBound]).toEqual([4 + sc.settings.sdMax, 4 + sc.settings.sdMax, -1]);
     expect(scDefault.compiled.fastPath!.skyGated).toBe(true);
     expect(fp!.bands).toEqual(scDefault.compiled.fastPath!.bands);
   });
@@ -177,6 +182,21 @@ describe('the islands branch on a constructed column (SP3e spec §4.1, §4.2, §
   const bareScan = scanColumn(newSurfaceScan(), scDefault.settings, s, bare.solid, bare.water, biomes);
   const dflt = new Uint16Array(98304);
   scDefault.compiled.fillColumn(bareScan, dflt, true);
+
+  test("SP6b §3.5: the fast path evaluates SP3c's voxels, every run's top 1 + maxSurfaceDepth outside the dither intervals", () => {
+    const fp = sc.compiled.fastPath!;
+    const bandAt = new Int32Array(384).fill(-1);
+    for (const b of fp.bands) for (let y = b.yMin; y <= b.yMax; y++) bandAt[y + 64] = b.state;
+    let want = 0;
+    for (let p = 0; p < 256; p++) {
+      for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
+        for (let y = scan.runTop[r]!; y >= scan.runBottom[r]!; y--) if (bandAt[y + 64]! < 0 || scan.runTop[r]! - y <= fp.maxSurfaceDepth) want++;
+      }
+    }
+    expect(sc.compiled.fillColumn(scan, new Uint16Array(98304), true)).toBe(want);
+    // Not the whole column: the runs' deep voxels take their bands.
+    expect(want).toBeLessThan(sc.compiled.fillColumn(scan, new Uint16Array(98304), false) / 2);
+  });
 
   test('the scan settings carry islands.enabled; the sky-open run is the highest run with bottom < 181 with it, the first without', () => {
     expect(sc.settings.islandRuns).toBe(true);

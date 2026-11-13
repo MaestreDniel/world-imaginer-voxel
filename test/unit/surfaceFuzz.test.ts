@@ -3,13 +3,20 @@ import { SURFACE_BIOMES } from '../../src/gen/biomes/registry';
 import {
   CONDITION_KINDS, RULE_KINDS, ruleLeaves, validateRules, type Condition, type Rule, type RuleLeaf,
 } from '../../src/gen/surface/rules';
-import { newSurfaceScan, scanColumn } from '../../src/gen/surface/scan';
+import { newSurfaceScan, scanColumn, type SurfaceScan } from '../../src/gen/surface/scan';
+import { compileSurfaceRules } from '../../src/gen/surface/compile';
+import { resolveRules } from '../../src/gen/surface/source';
+import { validateParamTrees } from '../../src/gen/trees';
+import { DEFAULTS } from '../../src/core/params/defaults';
+import { applyPatch } from '../../src/core/params/kit';
+import { SCHEMA } from '../../src/core/params/schema';
 import { CAVE_BIOME_NAMES } from '../../src/core/constants';
 import { caveBiomeOfPass } from '../../src/gen/biomes/cavePicker';
 import {
-  randomSurfaceColumn, randomSurfaceParams, randomSurfaceRules, SURFACE_FUZZ_BIOMES, SURFACE_FUZZ_NOISES, surfaceFuzzNoiseSource,
-  surfaceFuzzSettings, withCaveBiomes, type SurfaceFuzzStyle,
+  randomSurfaceColumn, randomSurfaceParams, randomSurfaceRules, SCHEMA_SURFACE_NOISES, SURFACE_FUZZ_BIOMES, SURFACE_FUZZ_NOISES,
+  surfaceFuzzNoiseSource, surfaceFuzzSettings, withCaveBiomes, type SurfaceFuzzStyle,
 } from '../harness/surfaceFuzz';
+import { mutateTree } from '../harness/treeMutator';
 import { testRng } from '../harness/stats';
 
 const NOISES = surfaceFuzzNoiseSource();
@@ -33,6 +40,9 @@ const isFloorGate = (c: Condition): boolean => c.kind === 'stoneDepth' && c.side
 const isYOnly = (c: Condition): boolean =>
   c.kind === 'verticalGradient' || (c.kind === 'yAbove' && !c.runTop) || (c.kind === 'not' && isYOnly(c.if));
 const depthBounded = (l: RuleLeaf): boolean => l.conditions.some(isFloorGate);
+/** SP6b spec §3.5 (Spec correction 6): a ceiling `stoneDepth` gate and no floor one. */
+const isCeilGate = (c: Condition): boolean => c.kind === 'stoneDepth' && c.side === 'ceiling';
+const ceilBounded = (l: RuleLeaf): boolean => !depthBounded(l) && l.conditions.some(isCeilGate);
 const yOnlyLeaf = (l: RuleLeaf): boolean => l.conditions.every(isYOnly);
 const skyGatedLeaf = (l: RuleLeaf): boolean => l.conditions.some((c) => c.kind === 'skyOpen');
 
@@ -212,12 +222,50 @@ describe('surfaceFuzz: random rule trees and hand-built columns (SP3c spec §3.4
     expect(untaggedNibbles).toBeGreaterThan(100);
   });
 
-  test('nearMiss trees: at least one leaf is neither depth-bounded nor Y-only', () => {
+  test('nearMiss trees: at least one leaf is in no class: neither depth-bounded, ceiling-bounded nor Y-only', () => {
     for (const t of trees(25, 300, 'nearMiss')) {
       const leaves = ruleLeaves(t);
-      expect(leaves.some((l) => !depthBounded(l) && !yOnlyLeaf(l))).toBe(true);
+      expect(leaves.some((l) => !depthBounded(l) && !ceilBounded(l) && !yOnlyLeaf(l))).toBe(true);
     }
   });
+
+  test('the fast path equals full evaluation (SP6b spec §3.5, D20 1-2): 300 treeMutator trees with ceiling gates, over 32 columns', () => {
+    // 'fastPath' trees whose depth-bounded branches are ceiling-gated one time in 2, on the schema's noises, each mutated
+    // once by a preserving mutation (a literal, a sibling swap, a ref, a wrap, a def) and accepted as a surface.rules value.
+    const next = testRng(1407);
+    const columns = Array.from({ length: 32 }, (_, k) => withCaveBiomes(randomSurfaceColumn(testRng(1408 + k)), 1408 + k));
+    const set = surfaceFuzzSettings([14, 7]);
+    const scans: SurfaceScan[] = columns.map((col) => scanColumn(newSurfaceScan(), set, col.sample, col.solid, col.water, col.biomes, col.tags, col.cave));
+    const fast = new Uint16Array(98304), full = new Uint16Array(98304);
+    let trees = 0, ceilTrees = 0, floorCeilLeaves = 0, voxels = 0, fastEvaluated = 0;
+    for (let i = 0; trees < 300; i++) {
+      expect(i, 'too few accepted trees').toBeLessThan(3000);
+      const base = randomSurfaceRules(next, { style: 'fastPath', ceilingGates: true, noises: SCHEMA_SURFACE_NOISES });
+      const m = mutateTree(next, base, 'surfaceRules', { cls: 'preserving' });
+      const r = applyPatch(SCHEMA, DEFAULTS, { surface: { rules: m.value } });
+      if (!r.ok || validateParamTrees(r.value).length > 0) continue;
+      const rules = resolveRules(r.value.surface.rules, r.value);
+      const leaves = ruleLeaves(rules);
+      if (!leaves.some(ceilBounded)) continue;
+      trees++;
+      floorCeilLeaves += leaves.filter((l) => depthBounded(l) && l.conditions.some(isCeilGate)).length;
+      const c = compileSurfaceRules([14, 7], rules, NOISES, set);
+      if (c.fastPath !== null && c.fastPath.ceilBound >= 0) ceilTrees++;
+      for (let k = 0; k < 32; k++) {
+        fast.fill(0);
+        full.fill(0);
+        fastEvaluated += c.fillColumn(scans[k]!, fast, true);
+        voxels += c.fillColumn(scans[k]!, full, false);
+        if (!Buffer.from(fast.buffer).equals(Buffer.from(full.buffer))) expect([i, k, Array.from(fast)]).toEqual([i, k, Array.from(full)]);
+      }
+    }
+    // Most trees keep a fast path with a ceiling class; some leaves hold both gates (floor-bounded only, Spec correction 6);
+    // the fast fills evaluate a minority of the solid voxels.
+    expect(ceilTrees).toBeGreaterThan(250);
+    expect(floorCeilLeaves).toBeGreaterThan(10);
+    expect(voxels).toBeGreaterThan(200_000_000);
+    expect(fastEvaluated).toBeLessThan(voxels / 2);
+  }, 120_000);
 
   test('columns: reproducible; overhangs, caves, water above / over a gap / in two segments, empty positions, every regime', () => {
     const a = randomSurfaceColumn(testRng(26)), b = randomSurfaceColumn(testRng(26));
