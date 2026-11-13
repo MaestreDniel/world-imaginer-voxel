@@ -8,7 +8,7 @@ import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
 import { carverPath, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
 import {
-  aperiodicRatios, bandDetail, borderPlaneRatio, C1_C6_PARTS, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, emptyBandCounts,
+  aperiodicRatios, bandDetail, borderPlaneRatio, C1_C6_PARTS, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, caveBottomGroups, caveBottomParts, emptyBandCounts,
   emptyLayerCounts, emptyWallResidues, EXAMPLE_IDS, floorFaceResidues, GRID_H, GRID_Y0, verticalStepDetail,
   type C1C6Part, type C7C9Part, type CaveC7C9Counts, type CavePose, type CaveRegionCounts,
 } from '../harness/caveMetrics';
@@ -29,8 +29,9 @@ import { metricTest } from '../harness/metric';
  *   (`C7.default`: borderPlaneRatio, switchWall; C8; `C9.default`: entrancesMax, thinRoof), with the review poses;
  * - the presets group (the three preset regions): the pure parts and `islandCapAir` (`C7.construction`);
  * - both: `carverReference` (max 0 per region, so the sum over the jobs is the unsplit value), and the per-group parts
- *   of C7-C9 (`C7.tuning`: verticalStep, flatWallShare, waterWall; `C9`: nearestEntrance, holedSurface), each the
- *   worst of the groups the job measures (`c7c9Parts`), so the worst over the jobs is the unsplit value.
+ *   of C7-C9 (`C7.tuning`: verticalStep, flatWallShare, waterWall; `C9`: nearestEntrance, holedSurface) and C7's
+ *   bottom part (`C7.bottomPlane`, SP6b spec §12.3), each the worst of the groups the job measures (`c7c9Parts`,
+ *   `caveBottomParts`; ruling P2), so the worst over the jobs is the unsplit value.
  *
  * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
  * - `carverReference`: over every region of the run's groups (the preset regions included), the voxels of the region
@@ -542,6 +543,30 @@ if (DEFAULT_GROUP) {
 metricTest('C7', ['verticalStep', 'flatWallShare', 'waterWall'], async () => partsOf(await c7c9(), 'C7', PER_GROUP_C7), 900_000,
   { outName: 'C7.tuning' });
 metricTest('C9', ['nearestEntrance', 'holedSurface'], async () => partsOf(await c7c9(), 'C9', PER_GROUP_C9));
+/**
+ * C7's bottom parts (SP6b spec §12.3, D6, D26; Task 20), over every region of the run's groups, per group (the default
+ * group, each preset) and the worst group's (ruling P2; each job gates its own regions): `C7.bottomPlane`, the flat
+ * floor faces on the bedrock plane (cave voxel at y −63) over all flat faces, gated from SP6b at max 0.01 (§5.2's floor
+ * holds it by construction: no cave air below `caves.floor.y` + 5); `C7.bedrockExposed`, the cave voxels face-adjacent
+ * to a bedrock voxel, recorded (Task 21 gates it at 0 once it reads 0 everywhere). Both per group, with each region's
+ * counts, in `.out/caves.bottom.json`.
+ */
+async function measureBottom(): Promise<{ bottomPlane: number; bedrockExposed: number }> {
+  const measured = await measuredRegions();
+  const regions = measured.map((m) => ({ group: groupOf(m.site), bottom: m.bottom }));
+  const parts = caveBottomParts(regions);
+  mkdirSync(OUT_DIR, { recursive: true });
+  writeFileSync(join(OUT_DIR, 'caves.bottom.json'), json({
+    id: 'caves.bottom', tier: process.env.METRICS_TIER ?? null, values: parts, groups: caveBottomGroups(regions),
+    regions: measured.map((m) => ({ label: m.site.label, group: groupOf(m.site), ms: m.ms.bottom, ...m.bottom })),
+  }));
+  expect(Number.isFinite(parts.bottomPlane), `C7.bottomPlane = ${parts.bottomPlane} is not finite`).toBe(true);
+  expect(Number.isFinite(parts.bedrockExposed), `C7.bedrockExposed = ${parts.bedrockExposed} is not finite`).toBe(true);
+  return parts;
+}
+
+// C7.bottomPlane in every group's job (each the worst of its own groups); C7.bedrockExposed recorded beside it.
+metricTest('C7', ['bottomPlane'], async () => measureBottom(), 900_000, { outName: 'C7.bottomPlane' });
 // The default-only parts, with the default group.
 if (DEFAULT_GROUP) {
   metricTest('C7', ['borderPlaneRatio', 'switchWall'], async () => partsOf(await c7c9(), 'C7', ['borderPlaneRatio', 'switchWall']), 900_000,

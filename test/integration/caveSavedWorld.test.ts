@@ -7,13 +7,20 @@
  * final set (`replaceBlocks` keeps the section's cave entry) and the dug voxel's tag is 0 (it was rock: not cave).
  * The X-ray's half (Task 17, SP6a spec §5.1): `meshXray` over the final sets' padded sections shows a wall toward the
  * placed stone from each hollow neighbour, kind its tag, and no face owned by the dug voxel (air, tag 0: not hollow).
+ *
+ * SP6b's Review Focus 2 (Task 20; spec §5.2, §14.4, D29): a GV8 world (schema 4, both built-in trees as GV8 stored them,
+ * `test/fixtures/gv8-*-trees.json`) whose diff digs (x, −60, z), which today's T leaves rock under the rock floor, and
+ * places stone at a cave voxel above it, opens with today's trees (the migration) and the older-generator flag; the dug
+ * voxel reads air with cave byte 0, the placed stone keeps its column's whole cave byte (kind and cave biome), and the
+ * X-ray shows no wall toward the dug voxel and none owned by it.
  */
 import { expect, test } from 'vitest';
 import { CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import { colKey } from '../../src/core/coords';
 import { parseHex64 } from '../../src/core/hash';
 import { canonicalJSON } from '../../src/core/params/canonical';
-import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
+import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
+import { resolveProfile } from '../../src/core/params/profiles';
 import type { JsonObject } from '../../src/core/params/migrate';
 import { terrainStage } from '../../src/gen/pipeline/terrainStage';
 import { createMeshBuilder } from '../../src/mesh/builder';
@@ -31,6 +38,7 @@ import type { NeighborhoodReader } from '../../src/world/store/api';
 import { copyPaddedSection, createPaddedSection, padIndex } from '../../src/world/store/padded';
 import { createStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
+import { gv8DensityTrees, gv8SurfaceTrees } from '../harness/gv8Trees';
 import { openPersistWorld } from '../harness/persistWorld';
 import { sp5cTrees } from '../harness/sp5cTrees';
 
@@ -172,6 +180,114 @@ test('a GV5 world with edits in what are now caves opens with the caves: today\'
       expect(dug.tagAt(rock)).toBe(0);
       expect(dug.blockAt(rock)).toBe(AIR);
       expect([...dug.faces].filter((k) => k.startsWith(`${rock.x},${rock.y},${rock.z},`))).toEqual([]);
+    } finally {
+      p.store.exitRead();
+    }
+  } finally {
+    p.dispose();
+  }
+});
+
+/**
+ * The first column of seed 42 (default, today's T) from (0, 0) outward holding a tagged air voxel at y > −60 whose cave
+ * byte carries a cave biome (high nibble ≠ 0; the first column with any tagged air voxel when none within 5 does) and a
+ * position whose voxel at y −60 T leaves solid with cave byte 0 (rock under the rock floor): that voxel at −60, and the
+ * cave voxel with its whole cave byte.
+ */
+function findFloorVoxels(): { cx: number; cz: number; dug: Voxel; cave: Voxel; caveByte: number } {
+  const ctx = ctxFor('42');
+  let fallback: { cx: number; cz: number; dug: Voxel; cave: Voxel; caveByte: number } | null = null;
+  for (let r = 0; r < 6; r++) {
+    for (let dz = (-r) | 0; dz <= r; dz++) {
+      for (let dx = (-r) | 0; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+        const store = createStore({ shared: false, maxBlockBytes: 8 * MiB, maxByteBytes: 8 * MiB });
+        const w = store.claimColumn(dx, dz, 0);
+        expect(terrainStage(ctx, dx, dz, w, () => false)).toBe(true);
+        w.commit(1);
+        const v = store.proto(dx, dz)!;
+        let dug: Voxel | null = null;
+        for (let q = 0; q < 256 && dug === null; q++) {
+          if (v.block(q & 15, -60, q >> 4) !== AIR && v.cave(q & 15, -60, q >> 4) === 0) dug = { x: 16 * dx + (q & 15), y: -60, z: 16 * dz + (q >> 4) };
+        }
+        if (dug === null) continue;
+        for (let y = -59; y < 320; y++) {
+          for (let lz = 0; lz < 16; lz++) {
+            for (let lx = 0; lx < 16; lx++) {
+              const b = v.cave(lx, y, lz);
+              if (caveKindOf(b) === 0 || v.block(lx, y, lz) !== AIR) continue;
+              const found = { cx: dx, cz: dz, dug, cave: { x: 16 * dx + lx, y, z: 16 * dz + lz }, caveByte: b };
+              if (b >> 4 !== 0) return found;
+              fallback ??= found;
+            }
+          }
+        }
+      }
+    }
+  }
+  if (fallback === null) throw new Error('no cave voxel above the rock floor within 5 columns of (0, 0)');
+  return fallback;
+}
+
+test('a GV8 world with edits where the rock floor closes opens with the floor and the cave biomes: today\'s trees, the older-generator flag, the dug voxel air with cave byte 0, the placed stone keeps its column\'s byte; the X-ray walls nothing toward the dug voxel (SP6b Review Focus 2)', async () => {
+  const { cx, cz, dug, cave, caveByte } = findFloorVoxels();
+  const kv = createMemoryKV();
+  const id = 'gv8';
+  const session = openMapSession({ ...DEFAULT_MAP_STATE, seed: '42', profile: 'default' }, () => [1, 2]);
+  const world = newWorldRecord(id, 'A GV8 world', session.state, 1_700_000_000_000);
+  const state = { ...newState(id, STATE_BOUNDS), player: { x: 16 * cx + 8.5, y: 140.25, z: 16 * cz + 7.5, yaw: 0, pitch: -10, mode: 'fly' as const, speed: 12 } };
+  expect((await createSaves(kv).create(world, state)).status).toBe('complete');
+  // The GV8 record: schema 4, the default profile's params with both built-in trees as GV8 stored them, generator
+  // version 8 and a genKey no world of today's generator has; one column of edits.
+  const params = JSON.parse(canonicalJSON(resolveProfile('default'))) as Record<string, Record<string, unknown>>;
+  params['density']!['defs'] = gv8DensityTrees().default;
+  params['surface']!['rules'] = gv8SurfaceTrees().default;
+  expect(canonicalJSON(params['density']!['defs'])).not.toBe(canonicalJSON(DEFAULT_DENSITY_TREE));
+  const entry = (v: Voxel, value: number) => ({ sy: (v.y + 64) >> 4, idx: (((v.y + 64) & 15) << 8) | ((v.z & 15) << 4) | (v.x & 15), value });
+  const entries = [entry(dug, AIR << 8), entry(cave, STONE << 8)];
+  expect((await kv.write([
+    { op: 'put', store: 'worlds', key: id, value: { ...world, params: params as unknown as JsonObject, schemaVersion: 4, generatorVersion: 8, genKey: OLD } },
+    { op: 'put', store: 'diffs', key: [id, colKey(cx, cz)], value: encodeColumnDiff({
+      sy: Uint8Array.from(entries, (e) => e.sy), idx: Uint16Array.from(entries, (e) => e.idx), value: Uint32Array.from(entries, (e) => e.value),
+    }, parseHex64(OLD)) },
+  ])).status).toBe('complete');
+
+  const p = await openPersistWorld({ kv, worldId: id, rd: 4 });
+  try {
+    expect([p.centre.cx, p.centre.cz]).toEqual([cx, cz]);
+    // Both trees are today's (MIGRATIONS[3] maps each GV8 tree to the live built-in one, D29); flagged older.
+    const loaded = loadParams(p.kept());
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(canonicalJSON(loaded.value.density.defs)).toBe(canonicalJSON(DEFAULT_DENSITY_TREE));
+    expect(canonicalJSON(loaded.value.surface.rules)).toBe(canonicalJSON(DEFAULT_SURFACE_RULES));
+    expect(p.opened.older).toBe(true);
+    expect(p.notices.filter((t) => t === OLDER_GENERATOR_NOTICE).length).toBe(1);
+    p.store.enterRead();
+    try {
+      const fin = p.store.final(cx, cz)!;
+      // The dug voxel under the floor: air, cave byte 0 (it was rock, not cave).
+      expect(p.store.blockAt(dug.x, dug.y, dug.z)).toBe(AIR);
+      expect(fin.cave(dug.x & 15, dug.y, dug.z & 15)).toBe(0);
+      // The placed stone keeps its column's whole cave byte (kind and cave biome; `replaceBlocks` keeps the cave entry).
+      expect(p.store.blockAt(cave.x, cave.y, cave.z)).toBe(STONE);
+      expect(fin.cave(cave.x & 15, cave.y, cave.z & 15)).toBe(caveByte);
+
+      // The X-ray: the dug voxel is not hollow (air, tag 0), so it owns no face, and no neighbour shows a wall toward it.
+      const sectionOf = (v: Voxel): number => (v.y + 64) >> 4;
+      const nb = p.store.neighborhood(cx, cz);
+      const own = xrayFaces(nb, cx, cz, sectionOf(dug));
+      expect(own.tagAt(dug)).toBe(0);
+      expect(own.blockAt(dug)).toBe(AIR);
+      expect([...own.faces].filter((k) => k.startsWith(`${dug.x},${dug.y},${dug.z},`))).toEqual([]);
+      for (let f = 0; f < 6; f++) {
+        const [dx, dy, dz] = NORMAL[f]!;
+        const n = { x: dug.x + dx, y: dug.y + dy, z: dug.z + dz };
+        const ncx = n.x >> 4;
+        const ncz = n.z >> 4;
+        const x = xrayFaces(ncx === cx && ncz === cz ? nb : p.store.neighborhood(ncx, ncz), ncx, ncz, sectionOf(n));
+        expect([...x.faces].filter((k) => k.startsWith(`${n.x},${n.y},${n.z},${OPPOSITE[f]},`)), `a wall from ${n.x},${n.y},${n.z} toward the dug voxel`).toEqual([]);
+      }
     } finally {
       p.store.exitRead();
     }

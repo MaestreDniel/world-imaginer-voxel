@@ -1739,7 +1739,7 @@ describe('UI smoke test: the caves step, SP6a\'s review links and its review scr
     }
   });
 
-  test('each review pose\'s `at` is a corner of its voxel: the first clear at the eye\'s row, else the first whose rock lies behind the view', () => {
+  test('each review pose\'s `at` is a corner of its voxel: the first clear at the eye\'s row, else the first whose rock lies behind the view; undergroundWorm\'s voxel, closed by SP6b\'s rock floor, pinned as closed (ruling P23)', () => {
     // `at` takes integers, so a link's eye stands on a corner of the pose's voxel (x, z). The corners in order (x, z),
     // (x + 1, z), (x, z + 1), (x + 1, z + 1); the four voxels of the eye's row touching a corner; the first corner where
     // all four are air (the generator's solidity after the carvers, `solidAt`), else the first where every solid one
@@ -1749,7 +1749,12 @@ describe('UI smoke test: the caves step, SP6a\'s review links and its review scr
     expect(Object.keys(CAVE_AT)).toEqual([...EXAMPLE_IDS]);
     const dc = createDensityContext(ctxFor('42'));
     const examples = readExamples();
-    for (const id of EXAMPLE_IDS) {
+    // SP6b's rock floor (its spec §5.2, Task 20, ruling P23) closes the SP6a poses whose voxel lies within its reach:
+    // pinned by name as expected-closed, their literals kept; the corner rule is checked on the poses still open.
+    const CLOSED_BY_FLOOR: readonly string[] = ['undergroundWorm'];
+    const closed = EXAMPLE_IDS.filter((id) => { const [vx, vy, vz] = examples.poses[id]!.voxel; return solidAt(dc, vx, vy, vz); });
+    expect(closed, 'the SP6a poses whose voxel the live generator fills').toEqual(CLOSED_BY_FLOOR);
+    for (const id of EXAMPLE_IDS.filter((i) => !CLOSED_BY_FLOOR.includes(i))) {
       const e = examples.poses[id]!;
       const [vx, vy, vz] = e.voxel;
       const [fx, , fz] = lookVector(e.yaw, 0);

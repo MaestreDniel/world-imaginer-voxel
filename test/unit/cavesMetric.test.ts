@@ -2,8 +2,10 @@ import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, test } from 'vitest';
 import { CAVE_KIND } from '../../src/core/constants';
 import { resolveProfile } from '../../src/core/params/profiles';
+import { AIR, BEDROCK, DEEPSLATE, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { CarverPath } from '../../src/gen/caves/carvers';
 import {
+  ABYSS_STATES, bedrockExposedCount, caveBottomCounts, caveBottomGroups, caveBottomParts, caveGridOf, CLS_ABYSS, CLS_BEDROCK, CLS_OTHER,
   aperiodicCounts, aperiodicity, aperiodicLags, BAND_Y0, bandCounts, bandDetail, BANDS, bandsMin, borderPlaneRatio, c1c6Parts, C1_C6_PARTS, c7c9Parts,
   C7_C9_PARTS, caveC7C9Counts, caveComponents, caveExamples, caveRegionCounts, COMP_Y_MIN, countsTransfer, emptyCaveGrid, flatWallCounts, flatWallDetail,
   emptyBandCounts, floorCounts, floorFaceLattice, floorFaceResidues, floorPeak, GRID_H, GRID_Y0, jensenShannon, kindCounts, landCounts,
@@ -858,6 +860,85 @@ describe('the caves instruments on fixtures (SP6a §10.1, C7-C9)', () => {
 });
 
 
+describe('C7\'s bottom parts and the grid\'s block class (SP6b spec §12.3, D6; Task 20)', () => {
+  test('caveGridOf fills cls from the blocks: bedrock 1, each abyss state 2, every other block 0', () => {
+    expect(ABYSS_STATES.map((st) => REGISTRY.stateKey(st))).toEqual(['abyss_stone', 'abyss_stone_veined', 'cracked_abyss_stone', 'abyss_shale', 'abyss_ash']);
+    // One proto column (section 0's first row of x holds the states under test), every other section air.
+    const states = [BEDROCK, ...ABYSS_STATES, STONE, DEEPSLATE, AIR];
+    const blocks = new Uint16Array(4096);
+    blocks.set(states);
+    const col = {
+      sectionCave: () => 0,
+      sectionBlocks: (sy: number) => (sy === 0 ? blocks : AIR),
+      sectionFluid: () => 0,
+    };
+    const store = { final: () => null, proto: () => col } as unknown as Parameters<typeof caveGridOf>[0]['store'];
+    const g = caveGridOf({ cx0: 0, cz0: 0, w: 1, h: 1, store });
+    const want = [CLS_BEDROCK, CLS_ABYSS, CLS_ABYSS, CLS_ABYSS, CLS_ABYSS, CLS_ABYSS, CLS_OTHER, CLS_OTHER, CLS_OTHER];
+    expect(Array.from(g.cls.subarray(0, states.length))).toEqual(want);
+    expect([CLS_OTHER, CLS_BEDROCK, CLS_ABYSS]).toEqual([0, 1, 2]);
+    // Every other voxel: air, class 0; the solid bit set for every non-air state, whatever its class.
+    expect(g.cls.subarray(states.length).every((v) => v === 0)).toBe(true);
+    expect(Array.from(g.cells.subarray(0, states.length), (c) => (c & 16) !== 0)).toEqual(states.map((st) => st !== AIR));
+  });
+
+  test('bedrockExposed: a cave-air voxel above a class-1 voxel counts one, above a plain solid voxel none; each voxel once', () => {
+    const g = emptyCaveGrid(0, 0, 8, 8);
+    // A floor of class-1 (bedrock) solid voxels at y −64 under x < 4, plain solid (stone) under x ≥ 4.
+    for (let z = 0; z < 8; z++) for (let x = 0; x < 8; x++) setCell(g, x, -64, z, 0, true, false, x < 4 ? CLS_BEDROCK : CLS_OTHER);
+    setCell(g, 1, -63, 1, K.cheese, false);
+    expect(bedrockExposedCount(g)).toBe(1);
+    setCell(g, 5, -63, 5, K.cheese, false);
+    expect(bedrockExposedCount(g), 'above a plain solid voxel').toBe(1);
+    // Untagged air above bedrock is not a cave voxel; a tagged solid voxel neither.
+    setCell(g, 2, -63, 2, 0, false);
+    setCell(g, 3, -63, 3, K.cheese, true);
+    expect(bedrockExposedCount(g)).toBe(1);
+    // Beside bedrock (horizontal neighbours) counts too, once per voxel however many bedrock faces it touches.
+    setCell(g, 6, -60, 6, 0, true, false, CLS_BEDROCK);
+    setCell(g, 7, -61, 6, 0, true, false, CLS_BEDROCK);
+    // (7, −60, 6) touches two bedrock voxels (west and below): one count.
+    setCell(g, 7, -60, 6, K.worm, false);
+    setCell(g, 6, -61, 6, 0, true, false, CLS_BEDROCK);
+    setCell(g, 6, -61, 7, K.worm, false);
+    setCell(g, 6, -60, 7, K.worm, false);
+    expect(bedrockExposedCount(g)).toBe(4);
+  });
+
+  test('caveBottomCounts: a cave on the bedrock plane holds flat floor faces at y −63; one above the floor holds none', () => {
+    const at = (y0: number): CaveGrid => {
+      const g = rock(24, 24, 0);
+      for (let z = 0; z < 24; z++) for (let x = 0; x < 24; x++) setCell(g, x, -64, z, 0, true, false, CLS_BEDROCK);
+      carve(g, K.cheese, 4, 13, y0, y0 + 3, 4, 13);
+      return g;
+    };
+    const low = at(-63);
+    const lowCounts = caveBottomCounts(low, flatWallDetail(low));
+    // The 10 × 10 floor on the bedrock: 100 flat floor faces at y −63, each floor voxel exposing the bedrock.
+    expect(lowCounts.flatAtBottom).toBe(100);
+    expect(lowCounts.bedrockExposed).toBe(100);
+    expect(lowCounts.flat).toBe(flatWallDetail(low).flat);
+    expect(lowCounts.flat).toBeGreaterThan(100);
+    const high = at(-50);
+    expect(caveBottomCounts(high, flatWallDetail(high))).toMatchObject({ flatAtBottom: 0, bedrockExposed: 0 });
+    expect(caveBottomCounts(high, flatWallDetail(high)).flat).toBe(lowCounts.flat);
+  });
+
+  test('caveBottomGroups pools each group\'s regions; caveBottomParts is the worst group\'s, NaN for a group with no flat face', () => {
+    const regions = [
+      { group: 'default', bottom: { flatAtBottom: 1, flat: 100, bedrockExposed: 0 } },
+      { group: 'default', bottom: { flatAtBottom: 3, flat: 100, bedrockExposed: 2 } },
+      { group: 'archipelago', bottom: { flatAtBottom: 5, flat: 50, bedrockExposed: 1 } },
+    ];
+    expect(caveBottomGroups(regions)).toEqual({
+      default: { bottomPlane: 0.02, flatAtBottom: 4, flat: 200, bedrockExposed: 2, regions: 2 },
+      archipelago: { bottomPlane: 0.1, flatAtBottom: 5, flat: 50, bedrockExposed: 1, regions: 1 },
+    });
+    expect(caveBottomParts(regions)).toEqual({ bottomPlane: 0.1, bedrockExposed: 2 });
+    expect(caveBottomParts([{ group: 'default', bottom: { flatAtBottom: 0, flat: 0, bedrockExposed: 0 } }]).bottomPlane).toBeNaN();
+  });
+});
+
 describe('the caves metric by group (SP6b spec §13 L4: `METRICS_CAVE_GROUPS`)', () => {
   const label = (s: { label: string }): string => s.label;
 
@@ -903,6 +984,7 @@ describe('the caves metric by group (SP6b spec §13 L4: `METRICS_CAVE_GROUPS`)',
       'C6:latticeBias:C6',
       'C7:verticalStep|flatWallShare|waterWall:C7.tuning',
       'C9:nearestEntrance|holedSurface:C9',
+      'C7:bottomPlane:C7.bottomPlane',
       'C7:borderPlaneRatio|switchWall:C7.default',
       'C8:aperiodicity|typeMixVariation|sizeSpread:C8',
       'C9:entrancesMax|thinRoof:C9.default',
@@ -943,9 +1025,13 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
       expect(ref.examples, s.label).not.toBeNull();
       expect(ref.carver.carved, s.label).toBeGreaterThan(0);
       expect(ref.carver.examples, s.label).toEqual([]);
+      // C7's bottom counts (Task 20): the region has flat faces, and the rock floor leaves none on the bedrock plane.
+      expect(ref.bottom.flat, s.label).toBeGreaterThan(0);
+      expect(ref.bottom.flatAtBottom, s.label).toBe(0);
       for (const [n, got] of [[1, one[k]!], [4, four[k]!]] as const) {
         expect(got.c16, `${s.label}, ${n} worker(s)`).toEqual(ref.c16);
         expect(got.c79, `${s.label}, ${n} worker(s)`).toEqual(ref.c79);
+        expect(got.bottom, `${s.label}, ${n} worker(s)`).toEqual(ref.bottom);
         expect(got.examples, `${s.label}, ${n} worker(s)`).toEqual(ref.examples);
         expect(got.carver, `${s.label}, ${n} worker(s)`).toEqual(ref.carver);
         // The timings differ by run; their fields do not.

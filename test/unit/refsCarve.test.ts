@@ -7,17 +7,19 @@
  * - at a partly wet position (0 < wet′ < 1) under an entrance that breaches the top, σ_w reads the density top (the
  *   highest density-solid voxel), not the pre-cave top the entrance's tagged air raises: on a synthetic column carved by
  *   the stage's `carveColumn`, the reference equals the stage's tags, and at a voxel whose carve the two tops decide
- *   differently it gives the density top's answer.
+ *   differently it gives the density top's answer;
+ * - the rock floor's σ_b (SP6b spec §5.2, Task 20): on a 2 × 1 region neither the stage nor the reference carves a
+ *   voxel at y ≤ floorY + 8, where the paths without the floor would carve density-solid voxels.
  */
 import { describe, expect, test } from 'vitest';
 import { CARVER_CACHE_PATHS, CARVER_WINDOW_R, CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
-import { carveColumn, carvedKind, carveTest, densityTopColumn, densityTopOf, wetAt } from '../../src/gen/caves/carve';
+import { carveColumn, carvedKind, carveTest, densityTopColumn, densityTopOf, floorYAt, wetAt } from '../../src/gen/caves/carve';
 import { createCarverCache } from '../../src/gen/caves/carverCache';
 import { carverParamsOf, carverPath, type CarverKind } from '../../src/gen/caves/carvers';
 import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
-import { createGenContext } from '../../src/gen/context';
+import { createGenContext, noiseFor } from '../../src/gen/context';
 import { AIR, BEDROCK, STONE } from '../../src/world/blocks/index';
 import { NIBBLE_REGION, nibbleRegion } from '../harness/caveNibbles';
 import { referenceCarve } from '../harness/refs';
@@ -64,6 +66,7 @@ describe('referenceCarve (SP6a spec §10.1, C7.carverReference)', () => {
     const ref = referenceCarve(view, SEED, PARAMS);
     const ctx = createGenContext(seedFromInput(SEED), PARAMS);
     const p = carverParamsOf(PARAMS);
+    const nf = noiseFor(ctx, 'caves.noises.floor');
     const x0 = 16 * REGION.cx0, z0 = 16 * REGION.cz0, x1 = x0 + 63, z1 = z0 + 63;
     // wet′ and the density top per position, from the region's density-solid voxels (as the stage's carve reads them).
     const solidAt = (x: number, y: number, z: number): boolean => view.block(x, y, z) !== AIR || isCarver(caveKindOf(view.tag(x, y, z)));
@@ -100,11 +103,11 @@ describe('referenceCarve (SP6a spec §10.1, C7.carverReference)', () => {
                   const inRegion = x >= x0 && x <= x1 && z >= z0 && z <= z1;
                   if (!inRegion) {
                     // Outside: the ellipsoid holds the voxel (dry: no σ_w).
-                    if (outside === 0 && carveTest(p, path, e, x, y, z, 0, Number.NaN) === 1) outside++;
+                    if (outside === 0 && carveTest(p, path, e, x, y, z, 0, Number.NaN, floorYAt(p, nf, x, z)) === 1) outside++;
                     continue;
                   }
                   const q = (z - z0) * 64 + (x - x0);
-                  if (!solidAt(x, y, z) || carveTest(p, path, e, x, y, z, wet[q]!, top[q]!) !== 1) continue;
+                  if (!solidAt(x, y, z) || carveTest(p, path, e, x, y, z, wet[q]!, top[q]!, floorYAt(p, nf, x, z)) !== 1) continue;
                   inside++;
                   // The stage carved it (by this source or an earlier one), and the reference agrees.
                   const t = caveKindOf(view.tag(x, y, z));
@@ -127,9 +130,70 @@ describe('referenceCarve (SP6a spec §10.1, C7.carverReference)', () => {
     expect(insideHits).toBeGreaterThan(0);
   });
 
+  test('σ_b (SP6b §5.2): neither the stage nor the reference carves at y ≤ floorY + 8, where the paths without the floor carve', async () => {
+    // Chunks (0, −3) and (1, −3) of seed '42': their windows' paths reach below floorY + 8 there (found by a scan; the
+    // 4 × 4 region above holds none so deep).
+    const box = { cx0: 0, cz0: -3, w: 2, h: 1 } as const;
+    const { view } = await genRegion({ seed: SEED, params: PARAMS, ...box, upTo: 'T', order: 'spiral', threads: 1 });
+    const ref = referenceCarve(view, SEED, PARAMS);
+    const ctx = createGenContext(seedFromInput(SEED), PARAMS);
+    const p = carverParamsOf(PARAMS);
+    const nf = noiseFor(ctx, 'caves.noises.floor');
+    const x0 = 16 * box.cx0, z0 = 16 * box.cz0, W = 16 * box.w, D = 16 * box.h;
+    const solidAt = (x: number, y: number, z: number): boolean => view.block(x, y, z) !== AIR || isCarver(caveKindOf(view.tag(x, y, z)));
+    const floor = new Float64Array(W * D);
+    for (let z = z0; z < z0 + D; z++) for (let x = x0; x < x0 + W; x++) floor[(z - z0) * W + (x - x0)] = floorYAt(p, nf, x, z);
+    // At y ≤ floorY + 8: what the stage and the reference carved (nothing), and the density-solid voxels the windows'
+    // paths carve without σ_b (the floor at y −200: σ_b 0; dry).
+    let stored = 0, reference = 0, unfloored = 0;
+    for (let z = z0; z < z0 + D; z++) {
+      for (let x = x0; x < x0 + W; x++) {
+        for (let y = -63; y <= floor[(z - z0) * W + (x - x0)]! + 8; y++) {
+          if (isCarver(caveKindOf(view.tag(x, y, z)))) stored++;
+          if (ref[refIndex(view, x, y, z)] !== 0) reference++;
+        }
+      }
+    }
+    const free = { ...p, floor: { ...p.floor, y: -200, amp: 0 } };
+    const R = CARVER_WINDOW_R;
+    for (let sz = box.cz0 - R; sz < box.cz0 + box.h + R; sz++) {
+      for (let sx = box.cx0 - R; sx < box.cx0 + box.w + R; sx++) {
+        for (const kind of KINDS) {
+          const path = carverPath(ctx.seed, kind, sx, sz, p);
+          if (path === null) continue;
+          for (let e = 0; e < path.count; e++) {
+            const [ex, ey, ez, rh, rv] = path.ell.subarray(6 * e, 6 * e + 5) as unknown as number[];
+            for (let y = Math.max(-63, Math.floor(ey! - rv!) - 1); y <= Math.min(-30, Math.ceil(ey! + rv!) + 1); y++) {
+              for (let z = Math.max(z0, Math.floor(ez! - rh!) - 1); z <= Math.min(z0 + D - 1, Math.ceil(ez! + rh!) + 1); z++) {
+                for (let x = Math.max(x0, Math.floor(ex! - rh!) - 1); x <= Math.min(x0 + W - 1, Math.ceil(ex! + rh!) + 1); x++) {
+                  if (y > floor[(z - z0) * W + (x - x0)]! + 8 || !solidAt(x, y, z)) continue;
+                  if (carveTest(free, path, e, x, y, z, 0, Number.NaN, -200) === 1) unfloored++;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    expect([stored, reference]).toEqual([0, 0]);
+    expect(unfloored, 'no path reaches below floorY + 8 in the region (the case is vacuous)').toBeGreaterThan(0);
+    // Above the floor the reference still equals the stage everywhere in the box.
+    let diffs = 0;
+    for (let y = -64; y < 320; y++) {
+      for (let z = z0; z < z0 + D; z++) {
+        for (let x = x0; x < x0 + W; x++) {
+          const t = caveKindOf(view.tag(x, y, z));
+          if (ref[refIndex(view, x, y, z)] !== (isCarver(t) ? t : 0)) diffs++;
+        }
+      }
+    }
+    expect(diffs).toBe(0);
+  });
+
   test('at a partly wet position under an entrance that breaches the top, σ_w reads the density top, not the pre-cave top', () => {
-    // Column (−20, 0) of seed '42' holds partly wet positions (0 < wet′ < 1) that carvers pass under (found by a scan).
-    const [cx, cz] = [-20, 0] as const;
+    // Column (−23, 0) of seed '42' holds partly wet positions (0 < wet′ < 1) that carvers pass under (found by a scan;
+    // rescanned for SP6b's rock floor, under which (−20, 0)'s did).
+    const [cx, cz] = [-23, 0] as const;
     const ctx = createGenContext(seedFromInput(SEED), PARAMS);
     const p = carverParamsOf(PARAMS);
     const cache = createCarverCache(ctx, p, CARVER_CACHE_PATHS);

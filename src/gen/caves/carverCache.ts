@@ -10,18 +10,24 @@
  * `carverParamsOf(ctx.params)` with the capacity `CARVER_CACHE_PATHS` (`core/constants.ts`) and memoised in a WeakMap
  * (as `surfaceContextOf`), so a `configure`, which builds a new GenContext, drops it with the old context. Follows the
  * gen determinism rules.
+ * The cache also holds the GenContext's rock-floor noise `caves.noises.floor` (SP6b spec §5.2: `noiseFor`, the density
+ * tree's `noise2 floor`), which the carve reads for σ_b's floorY (`floorYAt`, `carve.ts`).
  * `setCarverCacheCapacity(n)` (SP6a spec §10.3, `DT1.carverCache`) sets the capacity `carverCacheOf` gives the caches it
  * builds afterwards (a module-level value, default `CARVER_CACHE_PATHS`); the region harness sets it before it builds a
  * GenContext's cache and restores the default after. Only the tests call it: the page always runs at the default.
  */
 import { CARVER_CACHE_PATHS } from '../../core/constants';
-import type { GenContext } from '../context';
+import type { Noise2 } from '../biomes/cavePicker';
+import { noiseFor, type GenContext } from '../context';
 import { carverParamsOf, carverPath, type CarverKind, type CarverParams, type CarverPath } from './carvers';
 
 const CARVER_PATH = carverPath;
 const PARAMS_OF = carverParamsOf;
 const CAPACITY = CARVER_CACHE_PATHS;
 const IS_INT = Number.isInteger;
+const NOISE = noiseFor;
+/** The rock floor's noise Nf (SP6b spec §5.2), the density tree's `noise2 floor`. */
+const FLOOR_NOISE = 'caves.noises.floor';
 /** 2^20: the offset that makes sx and sz non-negative in the key. */
 const OFFSET = 1048576;
 /** 2^21: each field's span in the key. */
@@ -37,12 +43,15 @@ export interface CarverCache {
   readonly params: CarverParams;
   /** The most paths it holds. */
   readonly capacity: number;
+  /** The context's `caves.noises.floor` (Nf of the rock floor, SP6b spec §5.2), for the carve's σ_b. */
+  readonly floorNoise: Noise2;
 }
 
 /** A path cache over `ctx`'s seed and the carver leaves `p`, holding at most `capacity` (an integer ≥ 1) paths. */
 export function createCarverCache(ctx: GenContext, p: CarverParams, capacity: number): CarverCache {
   if (!IS_INT(capacity) || capacity < 1) throw new RangeError(`createCarverCache: capacity ${capacity} is not an integer ≥ 1`);
   const seed = ctx.seed;
+  const floorNoise = NOISE(ctx, FLOOR_NOISE);
   const map = new Map<number, CarverPath>();
   return {
     path(kind, sx, sz) {
@@ -63,6 +72,7 @@ export function createCarverCache(ctx: GenContext, p: CarverParams, capacity: nu
     get size() { return map.size; },
     params: p,
     capacity,
+    floorNoise,
   };
 }
 

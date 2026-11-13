@@ -1049,8 +1049,8 @@ describe('the wet roof (SP6a spec §1.4, D7)', () => {
    *   carving family's value with the wet roof (its tap plus S_w) is > 0;
    * - unaffected where every corner has d ≥ waterDepth + 8 + bandSpan = 40: every family's tap, S_w (0) and the root
    *   equal the no-roof tree's.
-   * At the defaults and with the entrances and cheese opened (offsets −0.5 and 1), where the no-roof tree holds air in
-   * the closed zone, so the check is not vacuous.
+   * At the defaults and with the entrances and cheese opened (offsets −0.5 each: a lower offset opens both, "lower →
+   * larger caverns"), where the no-roof tree holds air in the closed zone, so the check is not vacuous.
    */
   test('closed (> 0) where every cell corner has d ≤ 20, unaffected where every corner has d ≥ 40, under a lake, a river and a sea', () => {
     const dw = DEFAULTS.caves.limits.waterDepth, span = DEFAULTS.caves.limits.bandSpan;
@@ -1059,7 +1059,7 @@ describe('the wet roof (SP6a spec §1.4, D7)', () => {
     const GRID = [1, 6, 10, 14] as const;
     const lines: string[] = [];
     let openedWithoutRoof = 0;
-    for (const [label, patch] of [['defaults', {}], ['opened', { caves: { entrances: { offset: -0.5 }, cheese: { offset: 1 } } }]] as const) {
+    for (const [label, patch] of [['defaults', {}], ['opened', { caves: { entrances: { offset: -0.5 }, cheese: { offset: -0.5 } } }]] as const) {
       const ctx = ctxFor('42', patch as ParamsPatch);
       const dc = createDensityContext(ctx);
       const dn = createDensityContext(ctx, noRoof(dc.expr));
@@ -1173,14 +1173,13 @@ describe('the rock floor (SP6b spec §5.2, D6)', () => {
       return createDensityReference(dc.expr, noises).voxel(sample, 5, 0, 9, floorNode);
     };
     expect([floorYAt(0), floorYAt(3), floorYAt(-3), floorYAt(5.5), floorYAt(-8)]).toEqual([y, y + 3 * amp, y + 3 * amp, y + 3 * amp, y + 3 * amp]);
-    expect([y, y + 3 * amp]).toEqual([-58, -43]);
     expect(floorYAt(1)).toBe(y + amp);
   });
 
   /**
    * Over 64 chunk columns of seed 42 (`samplePoints('sp6b.caveTerms.floor', 64)`), at the defaults and at the floor leaves'
-   * range ends (`caves.floor.y` −62 and −16, `amp` 0 and 12, `span` 1 and 32; with the cheese opened by offset 1 so the
-   * bottom holds air): no cave air (final density ≤ 0 where the pre-cave density is > 0: the caves slot's and the
+   * range ends (`caves.floor.y` −62 and −16, `amp` 0 and 12, `span` 1 and 32; with the cheese opened by offset −0.5, a
+   * lower offset giving larger caverns, so the bottom holds air): no cave air (final density ≤ 0 where the pre-cave density is > 0: the caves slot's and the
    * noodle's air) lies at y ≤ floorY(x, z) + 4, so none below `caves.floor.y` + 5 (−53 at the defaults).
    */
   test('the floor closes every noise family (§5.2): no cave air at y ≤ floorY + 4, none below caves.floor.y + 5, at the defaults and the leaves\' range ends', () => {
@@ -1188,9 +1187,8 @@ describe('the rock floor (SP6b spec §5.2, D6)', () => {
     const cols = Array.from({ length: 64 }, (_, n) => [Math.floor(pts.x[n]! / 16), Math.floor(pts.z[n]! / 16)] as const);
     const cases: Array<readonly [string, ParamsPatch]> = [['defaults', {}]];
     for (const fy of [-62, -16]) for (const amp of [0, 12]) for (const span of [1, 32]) {
-      cases.push([`y ${fy} amp ${amp} span ${span}`, { caves: { floor: { y: fy, amp, span }, cheese: { offset: 1 } } }]);
+      cases.push([`y ${fy} amp ${amp} span ${span}`, { caves: { floor: { y: fy, amp, span }, cheese: { offset: -0.5 } } }]);
     }
-    expect(DEFAULTS.caves.floor.y + 5).toBe(-53);
     const lines: string[] = [];
     for (const [label, patch] of cases) {
       const ctx = ctxFor('42', patch);

@@ -14,6 +14,9 @@
  *   for a new context (a `configure`); `carvedAt` equals the T stage's carve on every density-solid voxel of 8 columns,
  *   an island-over-sea column of floating_islands among them; its density-top memo (ruling R18) answers as a fresh scan
  *   with probes interleaved over two contexts and two columns;
+ * - the rock floor's shrink σ_b (SP6b spec §5.2, D6; Task 20): `floorYAt` equals the density tree's floorY bit for bit;
+ *   σ_b is 1 at y ≤ floorY + 8, 0 at y ≥ floorY + 8 + span and linear between; over 64 columns no carved voxel lies at
+ *   y ≤ floorY + 8, none below `caves.floor.y` + 9, where the same carve without the floor carves;
  * - Review Focus 5 (Task 28): a column a worm carves from a source 10 chunks away hashes the same in a region, alone on a
  *   fresh store (`isolatedColumn`), after a teleport filled the 1,024-path LRU, after a configure emptied it and with an
  *   LRU of 1; the two columns either side of the worm's chunk border carve what the global carver reference
@@ -24,19 +27,21 @@ import { CARVER_CACHE_PATHS, CARVER_WINDOW_R, CAVE_KIND, caveKindOf, HEIGHT, ISL
 import { resolveProfile } from '../../src/core/params/profiles';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
-import { carveColumn, carvedAt, carvedKind, carveShrink, carveTest, densityTopColumn, densityTopOf, wetAt } from '../../src/gen/caves/carve';
+import { DEFAULTS } from '../../src/core/params/defaults';
+import { carveColumn, carvedAt, carvedKind, carveShrink, carveTest, densityTopColumn, densityTopOf, floorYAt, wetAt } from '../../src/gen/caves/carve';
 import { carverCacheOf, createCarverCache, type CarverCache } from '../../src/gen/caves/carverCache';
 import { carverParamsOf, carverPath, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
 import { probe } from '../../src/gen/density/probe';
 import { terrainStage } from '../../src/gen/pipeline/terrainStage';
 import { createStore } from '../../src/world/store/store';
 import { newColumnSample, type ColumnSample } from '../../src/gen/column/columnStage';
-import { createGenContext } from '../../src/gen/context';
+import { createGenContext, noiseFor } from '../../src/gen/context';
 import { fillDensityColumn } from '../../src/gen/density/bounds';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import type { Expr } from '../../src/gen/density/expr';
 import { createDensityReference } from '../../src/gen/density/reference';
 import { hex64 } from '../../src/core/hash';
+import { samplePoints } from '../../src/metrics/noiseStats';
 import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { CARVER_DEFAULTS } from '../harness/carverParams';
 import { ctxFor, paramsWith } from '../harness/gen';
@@ -55,6 +60,10 @@ const idx = (lx: number, y: number, lz: number): number => ((y + 64) * 16 + lz) 
 
 const ctx = ctxFor('42');
 const dc = createDensityContext(ctx);
+/** Seed 42's rock-floor noise Nf (`caves.noises.floor`), the carver cache's `floorNoise`. */
+const FLOOR_NOISE = noiseFor(ctx, 'caves.noises.floor');
+/** `p` with the rock floor out of the world (y −200, no relief): σ_b is 0 at every y ≥ −184, so the floor carves nothing away. */
+const noFloor = (p: CarverParams): CarverParams => ({ ...p, floor: { ...p.floor, y: -200, amp: 0 } });
 
 interface Filled {
   readonly cx: number;
@@ -107,7 +116,10 @@ function firstDiff(a: Uint8Array, b: Uint8Array): number {
 /** A cache that serves the given paths by source and nothing else. */
 function fakeCache(paths: readonly CarverPath[]): CarverCache {
   const m = new Map(paths.map((q) => [`${q.kind} ${q.sx} ${q.sz}`, q] as const));
-  return { path: (kind, sx, sz) => m.get(`${kind} ${sx} ${sz}`) ?? null, size: m.size, params: CARVER_DEFAULTS, capacity: Math.max(1, m.size) };
+  return {
+    path: (kind, sx, sz) => m.get(`${kind} ${sx} ${sz}`) ?? null, size: m.size, params: CARVER_DEFAULTS, capacity: Math.max(1, m.size),
+    floorNoise: FLOOR_NOISE,
+  };
 }
 
 /** A vertical stack of spheres of radius r at (x, z), one per y from y0 to y1, floor −1 (none); a ravine's f² all 1. */
@@ -165,7 +177,8 @@ function boxCarve(seed: typeof ctx.seed, p: CarverParams, cols: readonly [Filled
               for (let x = x0; x < x0 + 32; x++) {
                 const c = (x - x0) >> 4, v = idx(x & 15, y, z & 15);
                 if (cols[c]!.solid[v] !== 1) continue;
-                if (carveTest(p, path, e, x, y, z, wetAt(cols[c]!.s, x, z), cols[c]!.top[16 * (z & 15) + (x & 15)]!) !== 1) continue;
+                const top = cols[c]!.top[16 * (z & 15) + (x & 15)]!;
+                if (carveTest(p, path, e, x, y, z, wetAt(cols[c]!.s, x, z), top, floorYAt(p, FLOOR_NOISE, x, z)) !== 1) continue;
                 both[c]!++;
                 if (solid[c]![v] === 1) {
                   solid[c]![v] = 0;
@@ -260,11 +273,11 @@ describe('the shrinks (SP6a spec §2.4, D7, D8)', () => {
   test('σ_w with wet′ = 1: 1 − σ_w is 0 within 16 blocks of the density top and rises linearly to 1 at 40 below it', () => {
     const top = 100;
     for (let d = -4; d <= 60; d++) {
-      const sigma = carveShrink(p, 'worm', top - d, 1, top);
+      const sigma = carveShrink(p, 'worm', top - d, 1, top, -58);
       if (d <= 16) expect(1 - sigma, `d ${d}`).toBe(0);
       else if (d >= 40) expect(1 - sigma, `d ${d}`).toBe(1);
       else expect(1 - sigma, `d ${d}`).toBeCloseTo((d - 16) / 24, 12);
-      expect(carveShrink(p, 'worm', top - d, 0, top), `dry, d ${d}`).toBe(0);
+      expect(carveShrink(p, 'worm', top - d, 0, top, -58), `dry, d ${d}`).toBe(0);
     }
   });
 
@@ -320,12 +333,14 @@ describe('the shrinks (SP6a spec §2.4, D7, D8)', () => {
     }
   });
 
-  test('nothing is carved at y −64 (the bedrock)', () => {
+  test('nothing is carved at y −64 (the bedrock), the rock floor out of the way', () => {
     const c = synthetic(0, 100);
-    const got = layers([stack('worm', 0, 0, 8, 8, -70, -50, 5)], p, c);
+    // The rock floor (SP6b §5.2) would close everything here: below the world, so y −63 shows the bedrock rule alone.
+    const q = noFloor(p);
+    const got = layers([stack('worm', 0, 0, 8, 8, -70, -50, 5)], q, c);
     expect(got[0]).toBe(0);
     expect(got[1]).toBeGreaterThan(0);
-    for (let x = 0; x < 16; x++) for (let z = 0; z < 16; z++) expect(carveTest(p, stack('worm', 0, 0, x + 0.5, z + 0.5, -64, -64, 3), 0, x, -64, z, 0, 100)).toBe(0);
+    for (let x = 0; x < 16; x++) for (let z = 0; z < 16; z++) expect(carveTest(q, stack('worm', 0, 0, x + 0.5, z + 0.5, -64, -64, 3), 0, x, -64, z, 0, 100, -200)).toBe(0);
   });
 });
 
@@ -463,6 +478,90 @@ describe('wet′ (SP6a spec §1.4, D19; ruling R8)', () => {
     expect(one).toBeGreaterThan(0);
     expect(part).toBeGreaterThan(0);
   });
+});
+
+describe('the rock floor\'s shrink σ_b (SP6b spec §5.2, D6; Task 20)', () => {
+  /** The density tree's floorY (`defs.steep`'s S_b: floorY = `caves.floor.y` + `caves.floor.amp`·|clamp(Nf, −3, 3)|). */
+  const FLOOR_Y_PATH = ['steep', 'b', 'b', 'x', 'a', 'a', 'a'] as const;
+  const floorNode = (d: DensityContext): Expr => {
+    let n: unknown = d.expr.defs;
+    for (const k of FLOOR_Y_PATH) n = (n as Record<string, unknown>)[k];
+    return n as Expr;
+  };
+
+  test('floorYAt equals the density tree\'s floorY bit for bit at 64 positions (and at the leaves\' range ends)', () => {
+    expect(floorNode(dc)).toEqual({
+      op: 'add', a: { op: 'const', v: DEFAULTS.caves.floor.y },
+      b: { op: 'mul', a: { op: 'const', v: DEFAULTS.caves.floor.amp }, b: { op: 'abs', x: { op: 'clamp', lo: -3, hi: 3, x: { op: 'noise2', id: 'floor' } } } },
+    });
+    const pts = samplePoints('sp6b.carve.floorY', 64);
+    for (const patch of [{}, { caves: { floor: { y: -62, amp: 12 } } }, { caves: { floor: { y: -16, amp: 0.05 } } }]) {
+      const c = ctxFor('42', patch);
+      const d = createDensityContext(c);
+      const ref = createDensityReference(d.expr, d.noises);
+      const node = floorNode(d);
+      const p = carverParamsOf(c.params);
+      const nf = carverCacheOf(c).floorNoise;
+      const distinct = new Set<number>();
+      for (let n = 0; n < 64; n++) {
+        const x = Math.floor(pts.x[n]!), z = Math.floor(pts.z[n]!);
+        const want = ref.voxel(d.column(x >> 4, z >> 4), x, 0, z, node);
+        const got = floorYAt(p, nf, x, z);
+        if (!Object.is(got, want)) expect(got, `${JSON.stringify(patch)} (${x}, ${z})`).toBe(want);
+        expect(got).toBeGreaterThanOrEqual(p.floor.y);
+        expect(got).toBeLessThanOrEqual(p.floor.y + 3 * p.floor.amp);
+        distinct.add(got);
+      }
+      expect(distinct.size, 'floorY varies over the positions').toBeGreaterThan(32);
+    }
+  });
+
+  test('σ_b is 1 at y ≤ floorY + 8, 0 at y ≥ floorY + 8 + span and linear between (dry, below the cap and σ_u)', () => {
+    for (const span of [1, 8, 32]) {
+      const p: CarverParams = { ...CARVER_DEFAULTS, floor: { ...CARVER_DEFAULTS.floor, span } };
+      for (const floorY of [-58, -54.3, -43]) {
+        for (let y = -80; y <= 0; y++) {
+          for (const kind of KINDS) {
+            const sigma = carveShrink(p, kind, y, 0, 100, floorY);
+            if (y <= floorY + 8) expect(sigma, `span ${span} floorY ${floorY} y ${y}`).toBe(1);
+            else if (y >= floorY + 8 + span) expect(sigma, `span ${span} floorY ${floorY} y ${y}`).toBe(0);
+            else expect(sigma, `span ${span} floorY ${floorY} y ${y}`).toBeCloseTo((floorY + 8 + span - y) / span, 12);
+          }
+        }
+      }
+    }
+  });
+
+  test('carvers shrink to nothing at y ≤ floorY + 8 (§5.2): over 64 columns no carved voxel lies there, none below caves.floor.y + 9', () => {
+    const p = CARVER_DEFAULTS;
+    const lowest = DEFAULTS.caves.floor.y + 9;
+    const pts = samplePoints('sp6b.carve.floor', 64);
+    const cache = createCarverCache(ctx, p, 1024);
+    const free = noFloor(p);
+    const freeCache = createCarverCache(ctx, free, 1024);
+    let carvedBelow = 0, freeBelow = 0, carvedNear = 0, lowestCarved = Infinity;
+    for (let n = 0; n < 64; n++) {
+      const c = filled(dc, Math.floor(pts.x[n]! / 16), Math.floor(pts.z[n]! / 16));
+      const floored = carved(cache, p, c);
+      const unfloored = carved(freeCache, free, c);
+      for (let i = 0; i < 98304; i++) {
+        if (c.solid[i] !== 1) continue;
+        const y = (i >> 8) - 64;
+        const floorY = floorYAt(p, FLOOR_NOISE, 16 * c.cx + (i & 15), 16 * c.cz + ((i >> 4) & 15));
+        if (floored.solid[i] === 0) {
+          lowestCarved = Math.min(lowestCarved, y);
+          if (y <= floorY + 8) carvedBelow++;
+          else if (y <= floorY + 8 + p.floor.span) carvedNear++;
+        }
+        if (unfloored.solid[i] === 0 && y <= floorY + 8) freeBelow++;
+      }
+    }
+    expect(carvedBelow, 'carved voxels at y ≤ floorY + 8').toBe(0);
+    expect(lowestCarved).toBeGreaterThanOrEqual(lowest);
+    // Not vacuous: without the floor the same paths carve there, and with it they still carve within its span.
+    expect(freeBelow, 'the paths reach below floorY + 8 without the floor').toBeGreaterThan(0);
+    expect(carvedNear).toBeGreaterThan(0);
+  }, 120_000);
 });
 
 describe('carvedKind (SP6a spec §3.4; rulings P19, P22)', () => {

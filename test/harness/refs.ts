@@ -12,10 +12,10 @@
 import { CARVER_WINDOW_R, CAVE_FILM_KIND, CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
-import { carveTest, densityTopOf, wetAt } from '../../src/gen/caves/carve';
+import { carveTest, densityTopOf, floorYAt, wetAt } from '../../src/gen/caves/carve';
 import { carverParamsOf, carverPath, type CarverKind } from '../../src/gen/caves/carvers';
 import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
-import { createGenContext } from '../../src/gen/context';
+import { createGenContext, noiseFor } from '../../src/gen/context';
 import { DEFAULT_MESH_TABLES, type MeshTables } from '../../src/mesh/greedy';
 import { PACK_LAYOUT } from '../../src/mesh/packing';
 import { MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, type ColumnMeshPayload } from '../../src/mesh/column';
@@ -304,7 +304,7 @@ const REF_SOURCE_MARGIN = 2;
  * 7, underground worm 8; 0 where no carver carves) of every voxel of the view's box, x ∈ [16·cx0, 16·(cx0 + w)),
  * z ∈ [16·cz0, 16·(cz0 + h)), y ∈ [−64, 320), indexed `((y + 64)·D + (z − z0))·W + (x − x0)` with W = 16·w, D = 16·h,
  * x0 = 16·cx0, z0 = 16·cz0. It shares with the T stage only `carverPath`, the per-voxel test `carveTest` (ruling P21),
- * `densityTopOf` and `wetAt`: no path cache, no window and no per-column carve.
+ * `densityTopOf`, `wetAt` and `floorYAt`: no path cache, no window and no per-column carve.
  * - The paths: every source (kind, sx, sz) with sx in cx0 − R − 2 … cx0 + w − 1 + R + 2 (likewise sz) whose path's box
  *   meets the box, in one global order, sz then sx then the kind (worm, ravine, underground worm), each path's
  *   ellipsoids in index order. Restricted to one column's window this is the window's order, so a voxel takes the kind
@@ -316,6 +316,8 @@ const REF_SOURCE_MARGIN = 2;
  * - σ_w's density top per position: `densityTopOf` over that solidity with `islands.enabled`'s island rule (the carve
  *   step's own top), never the harness's `preCaveTop`, which counts tagged noise air and differs wherever an entrance
  *   breaches the top. wet′ is `wetAt` over the position's column sample (`buildColumnSample`).
+ * - σ_b's floorY per position (SP6b spec §5.2): `floorYAt` over the context's `caves.noises.floor` (`noiseFor`), so the
+ *   carvers shrink to nothing at y ≤ floorY + 8 here as in T.
  * Reads `cx0`, `cz0`, `w`, `h`, `block` and `tag` only, so a test may pass a synthetic view.
  */
 export function referenceCarve(
@@ -333,9 +335,11 @@ export function referenceCarve(
   const islands = params.islands.enabled;
   const isCarverTag = (t: number): boolean => t === CAVE_KIND.worm || t === CAVE_KIND.ravine || t === CAVE_KIND.undergroundWorm;
   const densitySolid = (x: number, y: number, z: number): boolean => view.block(x, y, z) !== AIR || isCarverTag(caveKindOf(view.tag(x, y, z)));
-  // Per position (z − z0)·W + (x − x0): wet′ and the density top.
+  // Per position (z − z0)·W + (x − x0): wet′, the density top and floorY.
   const wet = new Float64Array(W * D);
   const top = new Int16Array(W * D);
+  const floor = new Float64Array(W * D);
+  const floorNoise = noiseFor(ctx, 'caves.noises.floor');
   const sample = newColumnSample();
   for (let cz = cz0; cz < cz0 + h; cz++) {
     for (let cx = cx0; cx < cx0 + w; cx++) {
@@ -347,6 +351,7 @@ export function referenceCarve(
           const q = (z - z0) * W + (x - x0);
           wet[q] = wetAt(sample, x, z);
           top[q] = densityTopOf((y) => densitySolid(x, y, z), islands);
+          floor[q] = floorYAt(p, floorNoise, x, z);
         }
       }
     }
@@ -376,7 +381,7 @@ export function referenceCarve(
                 const v = ((y + 64) * D + (z - z0)) * W + (x - x0);
                 if (out[v] !== 0) continue;
                 const q = (z - z0) * W + (x - x0);
-                if (carveTest(p, path, e, x, y, z, wet[q]!, top[q]!) !== 1) continue;
+                if (carveTest(p, path, e, x, y, z, wet[q]!, top[q]!, floor[q]!) !== 1) continue;
                 out[v] = densitySolid(x, y, z) ? tag : NOT_SOLID;
               }
             }

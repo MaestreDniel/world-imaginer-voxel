@@ -1,13 +1,15 @@
 /**
- * The carver parameters as `CarverParams` literals (SP6a spec §2.2, §4), mirrors of the schema's carver leaves (Task 27
- * pins `CARVER_DEFAULTS` equal to `carverParamsOf(DEFAULTS)` and `CARVER_MAXIMA` to `carverParamsOf` of every carver
- * leaf at its schema maximum, `carverPaths.test.ts`):
+ * The carver parameters as `CarverParams` literals (SP6a spec §2.2, §4), mirrors of the schema's carver leaves and of
+ * the rock floor's `caves.floor.*`, which σ_b reads (SP6b spec §5.2) (Task 27 pins `CARVER_DEFAULTS` equal to
+ * `carverParamsOf(DEFAULTS)` and `CARVER_MAXIMA` to `carverParamsOf` of every carver leaf at its schema maximum,
+ * `carverPaths.test.ts`):
  * - `CARVER_DEFAULTS`: spec §4's defaults, with `caves.worms.shape` at §2.2's drift constants;
  * - `CARVER_MAXIMA`: every carver leaf at its static maximum, the end of its range (spec §4; where §4 gives none, the
  *   plan's ranges: `branchChance`, `roomChance` 0 … 1, `roomYScaleMin`/`Max` 0.1 … 0.9, `startYMin`/`Max` −64 … 320,
  *   `ravines.plateau` 0 … 8, `ravines.vRotation` 0 … 0.5, `worms.shape.pitchKeep`, `.yawDriftKeep` and
- *   `.pitchDriftKeep` 0 … 1 and the other four shape leaves 0 … 8 (ruling P17)); `reachOverflow`'s static-maxima case
- *   (Task 25 in `carverPaths.test.ts`, Task 30's C7) runs every path at these;
+ *   `.pitchDriftKeep` 0 … 1 and the other four shape leaves 0 … 8 (ruling P17); the floor's y −16, amp 12 and span
+ *   32, which only shrink a path); `reachOverflow`'s static-maxima case (Task 25 in `carverPaths.test.ts`, Task 30's
+ *   C7) runs every path at these;
  * - `CARVERS_OFF`: a params patch with the three carver chances at 0, so no source passes its roll and T carves
  *   nothing (the world of the density caves alone);
  * - `carverReachOf` and `carverWindowROf`: spec §2.1's L_max, r_max and window R for given leaves, which
@@ -36,6 +38,7 @@ export const CARVER_DEFAULTS: CarverParams = {
     vRotation: 0.125, startYMin: 10, startYMax: 72,
   },
   limits: { waterDepth: 16, bandSpan: 16, capTop: 344 },
+  floor: { y: -58, amp: 5, span: 8 },
 };
 
 export const CARVER_MAXIMA: CarverParams = {
@@ -51,6 +54,7 @@ export const CARVER_MAXIMA: CarverParams = {
     vRotation: 0.5, startYMin: 320, startYMax: 320,
   },
   limits: { waterDepth: 48, bandSpan: 32, capTop: 344 },
+  floor: { y: -16, amp: 12, span: 32 },
 };
 
 /** The worms' thickness t = 2·u + u (spec §2.2) stays below 3 whatever the leaves: it is not a leaf. */

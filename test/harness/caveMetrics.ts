@@ -61,6 +61,10 @@
  *   the columns of every 4th chunk in x and z on quick and full, every 2nd on fast); the shell's share of the walls (a
  *   wall in the shell when its cave voxel is) over its share of the pre-cave rock (solid or tagged voxels, y ≥ −56).
  * - C7.waterWall: a fluid voxel with a horizontal neighbour that is tagged air (tagged, neither solid nor fluid).
+ * - C7's bottom parts (SP6b spec §12.3, D6): `bottomPlane` the flat floor faces (C7.flatWallShare's 6 × 6 patches, over
+ *   every position) whose cave voxel lies at y −63, on the bedrock, over all flat faces; `bedrockExposed` the cave voxels
+ *   (tagged, not solid) face-adjacent to a bedrock voxel, read from the grid's block class `cls` (the cell byte cannot
+ *   tell bedrock from the stone rule 1 dithers it among). Each per group, the worst group's (ruling P2).
  * - C8.aperiodicity: m is the tag (1 when tagged) on the layer; the random-pair mean is the expectation 2f(1 − f) of
  *   |m(p) − m(q)| over the layer's ordered pairs (f its tagged share in the region); per (layer, axis, lag) the pooled
  *   Σ |Δm| over Σ expectation, the part the smallest.
@@ -87,12 +91,12 @@ import { fnv1a32 } from '../../src/core/hash';
 import type { Params } from '../../src/core/params/schema';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
-import { carveTest, densityTopOf, wetAt } from '../../src/gen/caves/carve';
+import { carveTest, densityTopOf, floorYAt, wetAt } from '../../src/gen/caves/carve';
 import { carverParamsOf, carverPath, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
 import { buildColumnSample, nearestCornerIndex, newColumnSample } from '../../src/gen/column/columnStage';
-import { createGenContext } from '../../src/gen/context';
+import { createGenContext, noiseFor } from '../../src/gen/context';
 import { hasFluid } from '../../src/world/blocks/fluid';
-import { AIR } from '../../src/world/blocks/index';
+import { AIR, BEDROCK, REGISTRY } from '../../src/world/blocks/index';
 import { components3d, type Components3d } from './flood';
 import type { RegionView } from './region';
 
@@ -105,8 +109,25 @@ export const SOLID_BIT = 16;
 export const FLUID_BIT = 32;
 
 /**
+ * A voxel's block class (`CaveGrid.cls`, SP6b spec §12.3): 0 any other block, 1 bedrock (`C7.bedrockExposed`), 2 abyss
+ * rock, one of the five abyss states (abyss_stone, abyss_stone_veined, cracked_abyss_stone, abyss_shale, abyss_ash;
+ * Task 28's abyss-rock parts). The cell byte cannot hold it: it says only whether the block is air, and rule 1 dithers
+ * bedrock over y −63 … −60 among solid voxels, so "solid" there is not "bedrock".
+ */
+export const CLS_OTHER = 0;
+export const CLS_BEDROCK = 1;
+export const CLS_ABYSS = 2;
+/** The five abyss states (SP6b spec §4, ids 58 … 64's last five). */
+export const ABYSS_STATES: readonly number[] = ['abyss_stone', 'abyss_stone_veined', 'cracked_abyss_stone', 'abyss_shale', 'abyss_ash']
+  .map((k) => REGISTRY.parseStateKey(k));
+/** Per state id: its block class. */
+const CLASS_OF = new Uint8Array(65536);
+CLASS_OF[BEDROCK] = CLS_BEDROCK;
+for (const st of ABYSS_STATES) CLASS_OF[st] = CLS_ABYSS;
+
+/**
  * A region's voxels for the instruments: one byte per voxel of x ∈ [x0, x0 + w), z ∈ [z0, z0 + d), y ∈ [−64, 320),
- * index `((y + 64)·d + (z − z0))·w + (x − x0)`.
+ * index `((y + 64)·d + (z − z0))·w + (x − x0)`, in `cells` (the tag, solid, fluid) and in `cls` (the block class).
  */
 export interface CaveGrid {
   readonly x0: number;
@@ -114,11 +135,13 @@ export interface CaveGrid {
   readonly w: number;
   readonly d: number;
   readonly cells: Uint8Array;
+  /** The block class per voxel (`CLS_OTHER`, `CLS_BEDROCK`, `CLS_ABYSS`), same index as `cells`. */
+  readonly cls: Uint8Array;
 }
 
-/** An empty grid: every voxel air, untagged, without fluid. */
+/** An empty grid: every voxel air, untagged, without fluid, of class 0. */
 export function emptyCaveGrid(x0: number, z0: number, w: number, d: number): CaveGrid {
-  return { x0, z0, w, d, cells: new Uint8Array(w * d * GRID_H) };
+  return { x0, z0, w, d, cells: new Uint8Array(w * d * GRID_H), cls: new Uint8Array(w * d * GRID_H) };
 }
 
 /** The cell index of world voxel (x, y, z). */
@@ -126,15 +149,20 @@ export function cellAt(g: CaveGrid, x: number, y: number, z: number): number {
   return ((y - GRID_Y0) * g.d + (z - g.z0)) * g.w + (x - g.x0);
 }
 
-/** Sets world voxel (x, y, z) of `g`: its tag, whether its block is not air, and whether it holds a fluid. */
-export function setCell(g: CaveGrid, x: number, y: number, z: number, tag: number, solid: boolean, fluid = false): void {
-  g.cells[cellAt(g, x, y, z)] = (tag & TAG_MASK) | (solid ? SOLID_BIT : 0) | (fluid ? FLUID_BIT : 0);
+/**
+ * Sets world voxel (x, y, z) of `g`: its tag, whether its block is not air, whether it holds a fluid, and its block class
+ * (`CLS_*`; a hand-built fixture's bedrock or abyss rock, 0 by default).
+ */
+export function setCell(g: CaveGrid, x: number, y: number, z: number, tag: number, solid: boolean, fluid = false, cls = CLS_OTHER): void {
+  const i = cellAt(g, x, y, z);
+  g.cells[i] = (tag & TAG_MASK) | (solid ? SOLID_BIT : 0) | (fluid ? FLUID_BIT : 0);
+  g.cls[i] = cls;
 }
 
-/** The grid of a view's region, from each column's final set (Decorated and above), else its proto set. */
+/** The grid of a view's region, from each column's final set (Decorated and above), else its proto set; `cls` from the blocks. */
 export function caveGridOf(view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 'store'>): CaveGrid {
   const g = emptyCaveGrid(16 * view.cx0, 16 * view.cz0, 16 * view.w, 16 * view.h);
-  const { w, d, cells } = g;
+  const { w, d, cells, cls } = g;
   for (let cz = view.cz0; cz < view.cz0 + view.h; cz++) {
     for (let cx = view.cx0; cx < view.cx0 + view.w; cx++) {
       const col = view.store.final(cx, cz) ?? view.store.proto(cx, cz);
@@ -154,6 +182,7 @@ export function caveGridOf(view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 's
               const block = typeof blocks === 'number' ? blocks : blocks[i]!;
               const fl = typeof fluid === 'number' ? fluid : fluid[i]!;
               cells[row + lx] = (tag & TAG_MASK) | (block !== AIR ? SOLID_BIT : 0) | (hasFluid(fl) ? FLUID_BIT : 0);
+              cls[row + lx] = CLASS_OF[block]!;
             }
           }
         }
@@ -356,8 +385,9 @@ const RAVINE_SOURCE_MARGIN = 2;
 /**
  * The ravine paths whose box meets the grid's box, sources sx in cx0 − R − 2 … cx1 + R + 2 (likewise sz) in the
  * global order (sz, then sx), and the carve test `ravineCounts` asks: `carveTest` with the voxel's wet′ (`wetAt` over
- * its column's sample) and its position's density top (`densityTopOf` over the grid's density solidity, a non-air
- * block or a carver tag, with `islands.enabled`'s rule), as `referenceCarve` reads them.
+ * its column's sample), its position's density top (`densityTopOf` over the grid's density solidity, a non-air
+ * block or a carver tag, with `islands.enabled`'s rule) and its floorY (`floorYAt`, SP6b spec §5.2), as
+ * `referenceCarve` reads them.
  */
 export function ravinePathsOf(g: CaveGrid, seed: string, params: Params): {
   paths: CarverPath[]; carves: (path: CarverPath, e: number, x: number, y: number, z: number) => boolean;
@@ -381,6 +411,8 @@ export function ravinePathsOf(g: CaveGrid, seed: string, params: Params): {
   const plane = w * d;
   const wet = new Float64Array(plane).fill(Number.NaN);
   const top = new Float64Array(plane).fill(Number.NaN);
+  const floor = new Float64Array(plane).fill(Number.NaN);
+  const floorNoise = noiseFor(ctx, 'caves.noises.floor');
   const sample = newColumnSample();
   const densitySolid = (q: number, y: number): boolean => {
     const c = cells[(y - GRID_Y0) * plane + q]!;
@@ -401,7 +433,8 @@ export function ravinePathsOf(g: CaveGrid, seed: string, params: Params): {
     }
     const wq = wet[q]!;
     if (wq > 0 && Number.isNaN(top[q]!)) top[q] = densityTopOf((yy) => densitySolid(q, yy), islands);
-    return carveTest(p, path, e, x, y, z, wq, wq > 0 ? top[q]! : Number.NaN) === 1;
+    if (Number.isNaN(floor[q]!)) floor[q] = floorYAt(p, floorNoise, x, z);
+    return carveTest(p, path, e, x, y, z, wq, wq > 0 ? top[q]! : Number.NaN, floor[q]!) === 1;
   };
   return { paths, carves };
 }
@@ -1472,6 +1505,81 @@ export function waterWallCount(g: CaveGrid): number {
     if ((x > 0 && air(cells[i - 1]!)) || (x < w - 1 && air(cells[i + 1]!)) || (z > 0 && air(cells[i - w]!)) || (z < d - 1 && air(cells[i + w]!))) count++;
   }
   return count;
+}
+
+// ---------------------------------------------------------------- C7's bottom parts (SP6b spec §12.3, D6, D26)
+
+/** The bedrock plane's cave layer: a floor face whose cave voxel lies at y −63 lies on the bedrock (y −64). */
+export const BOTTOM_PLANE_Y = -63;
+
+/**
+ * C7.bedrockExposed's count: the cave voxels (tagged, not solid: cave air, or cave fluid, through which the bedrock shows
+ * as well) with a face neighbour in the grid whose block class is bedrock (`CLS_BEDROCK`), each voxel counted once.
+ */
+export function bedrockExposedCount(g: CaveGrid): number {
+  const { w, d, cells, cls } = g;
+  const plane = w * d;
+  const n = cells.length;
+  let count = 0;
+  for (let i = 0; i < n; i++) {
+    const c = cells[i]!;
+    if ((c & TAG_MASK) === 0 || (c & SOLID_BIT) !== 0) continue;
+    const x = i % w;
+    const z = ((i - x) / w) % d;
+    if ((x > 0 && cls[i - 1] === CLS_BEDROCK) || (x < w - 1 && cls[i + 1] === CLS_BEDROCK)
+      || (z > 0 && cls[i - w] === CLS_BEDROCK) || (z < d - 1 && cls[i + w] === CLS_BEDROCK)
+      || (i >= plane && cls[i - plane] === CLS_BEDROCK) || (i + plane < n && cls[i + plane] === CLS_BEDROCK)) count++;
+  }
+  return count;
+}
+
+/** One region's counts for C7's bottom parts. */
+export interface CaveBottomCounts {
+  /** The flat floor faces (`flatWallDetail`'s 6 × 6 patches) whose cave voxel lies at y −63, on the bedrock plane. */
+  readonly flatAtBottom: number;
+  /** Every flat face of the region (every orientation, every position). */
+  readonly flat: number;
+  /** `bedrockExposedCount`. */
+  readonly bedrockExposed: number;
+}
+
+/**
+ * C7's bottom counts of one region: `flat` is `flatWallDetail` over every position of the grid (on archipelago not the
+ * sea-floor restricted detail C7.flatWallShare reads), `bedrockExposed` `bedrockExposedCount(g)`.
+ */
+export function caveBottomCounts(g: CaveGrid, flat: { readonly flat: number; readonly flatFloorsByY: Float64Array }): CaveBottomCounts {
+  return { flatAtBottom: flat.flatFloorsByY[BOTTOM_PLANE_Y - GRID_Y0]!, flat: flat.flat, bedrockExposed: bedrockExposedCount(g) };
+}
+
+/** C7's bottom parts of one group (its regions pooled): `bottomPlane` = flat floor faces at y −63 over all flat faces. */
+export interface CaveBottomGroup {
+  readonly bottomPlane: number;
+  readonly flatAtBottom: number;
+  readonly flat: number;
+  readonly bedrockExposed: number;
+  readonly regions: number;
+}
+
+/** Per group ('default' for the default and large_biomes regions, else the preset), its regions' bottom counts pooled. */
+export function caveBottomGroups(regions: ReadonlyArray<{ readonly group: string; readonly bottom: CaveBottomCounts }>): Record<string, CaveBottomGroup> {
+  const out: Record<string, CaveBottomGroup> = {};
+  for (const group of [...new Set(regions.map((r) => r.group))]) {
+    const rs = regions.filter((r) => r.group === group).map((r) => r.bottom);
+    const sum = (f: (b: CaveBottomCounts) => number): number => rs.reduce((a, b) => a + f(b), 0);
+    const flatAtBottom = sum((b) => b.flatAtBottom);
+    const flat = sum((b) => b.flat);
+    out[group] = { bottomPlane: ratio(flatAtBottom, flat), flatAtBottom, flat, bedrockExposed: sum((b) => b.bedrockExposed), regions: rs.length };
+  }
+  return out;
+}
+
+/**
+ * C7's bottom parts over the run's regions (SP6b spec §12.3; ruling P2: per group, the worst group's value):
+ * `C7.bottomPlane` (gated) and `C7.bedrockExposed` (recorded until Task 21 gates it).
+ */
+export function caveBottomParts(regions: ReadonlyArray<{ readonly group: string; readonly bottom: CaveBottomCounts }>): { bottomPlane: number; bedrockExposed: number } {
+  const groups = Object.values(caveBottomGroups(regions));
+  return { bottomPlane: maxOf(groups.map((g) => g.bottomPlane)), bedrockExposed: maxOf(groups.map((g) => g.bedrockExposed)) };
 }
 
 // ---------------------------------------------------------------- C8

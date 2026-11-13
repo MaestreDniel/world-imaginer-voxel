@@ -129,12 +129,21 @@ export interface CarverLimits {
   readonly capTop: number;
 }
 
+/** The `caves.floor.*` leaves the carve's σ_b reads (SP6b spec §5.2, D6): floorY = y + amp·|Nf|, the shrink's span. */
+export interface CarverFloor {
+  readonly y: number;
+  readonly amp: number;
+  readonly span: number;
+}
+
 /** The carver leaves (spec §4), as the carvers read them. */
 export interface CarverParams {
   readonly worms: WormParams;
   readonly undergroundWorms: UndergroundWormParams;
   readonly ravines: RavineParams;
   readonly limits: CarverLimits;
+  /** The rock floor's leaves (SP6b spec §5.2): the carvers shrink to nothing at y ≤ floorY + 8. */
+  readonly floor: CarverFloor;
 }
 
 /** One source's path (spec §2.2-§2.3). */
@@ -327,12 +336,13 @@ export function carverPath(seed: GenContext['seed'], kind: CarverKind, sx: numbe
 
 /**
  * The carver leaves of `p` as the carvers read them (spec §4): `caves.worms.*` with `caves.worms.shape.*`,
- * `caves.undergroundWorms.*`, `caves.ravines.*` and the `caves.limits.*` leaves of the carve's shrinks (§2.4). A fresh
- * object of plain numbers, so its fields read no `Params` getter in the carve's loops.
+ * `caves.undergroundWorms.*`, `caves.ravines.*`, the `caves.limits.*` leaves of the carve's shrinks (§2.4) and the
+ * `caves.floor.*` leaves of its σ_b (SP6b spec §5.2). A fresh object of plain numbers, so its fields read no `Params`
+ * getter in the carve's loops.
  */
 export function carverParamsOf(p: Params): CarverParams {
   const c = p.caves;
-  const w = c.worms, sh = w.shape, u = c.undergroundWorms, r = c.ravines, l = c.limits;
+  const w = c.worms, sh = w.shape, u = c.undergroundWorms, r = c.ravines, l = c.limits, f = c.floor;
   return {
     worms: {
       chance: w.chance, length: w.length, lengthVar: w.lengthVar, radiusMin: w.radiusMin, radiusMax: w.radiusMax,
@@ -351,5 +361,6 @@ export function carverParamsOf(p: Params): CarverParams {
       startYMax: r.startYMax,
     },
     limits: { waterDepth: l.waterDepth, bandSpan: l.bandSpan, capTop: l.capTop },
+    floor: { y: f.y, amp: f.amp, span: f.span },
   };
 }

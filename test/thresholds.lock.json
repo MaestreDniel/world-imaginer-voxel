@@ -1,5 +1,5 @@
 {
-  "sha256": "ae74fb4700c9b3b1c9a2c8f397e3b574131b751725556094122d9eb06e1679aa",
+  "sha256": "aaa7840dc6b1faff4d3b0126cf7bafaef0c73e2da8d0748d65673a95b8c8919f",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -247,6 +247,10 @@
           "activeFrom": "SP6a",
           "max": 1.1,
           "min": 0.9
+        },
+        "bottomPlane": {
+          "activeFrom": "SP6b",
+          "max": 0.01
         },
         "carverReference": {
           "activeFrom": "SP6a",

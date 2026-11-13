@@ -309,7 +309,7 @@ const WORM_ONLY: ReadonlySet<string> = new Set(['caves.worms.chance', 'caves.wor
  */
 const BIOME_LEAF = /^caves\.biomes\./;
 const BIOME_STREAM = 'sp6b.liveness.caveBiomes';
-const BIOME_DRAWS = 8192;
+const BIOME_DRAWS = 32768;
 const BIOME_EXAMINED = 256;
 const BIOME_CHECKS = 64;
 const BIOME_GRID = 2;

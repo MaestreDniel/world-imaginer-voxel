@@ -2107,9 +2107,7 @@ describe('master spec amendments (SP6a §13)', () => {
       `entr      = min(Ne·(1/6) + ${c.entrances.offset} + yGrad(−10→0.3, 30→0), rough + clamp(max(|E1|,|E2|) − ${c.entrances.threshold}, −1, 1))   Ne ${lam('entrance')}, amps [0.5,1.0]; E1, E2 ${lam('entranceA')}`,
       `P         = tap('pillars', interpolated( 16·pillars ))      keep = rangeChoice(P·(1/16), −1e9, ${c.pillars.threshold}, −1e6, P)`,
       'caves     = max( min(E, C, S3, S2), keep )',
-      'cap_f     = G_f·min(1, g_f + g_w + g_i) + 128·min(1, h_f + h_i)                        G_f 0.4 (entrances), 5.8 (cheese), 0.5 (spaghetti 3D), 0.3 (spaghetti 2D), 0.4 (noodle)',
-      'S_w       = 128·h_w                                                                     (the wet roof\'s steep part, VOXEL)',
-      'final     = max( min( min( tap(\'precave\', T + detailG), caves + S_w ), N + S_w ), islands ) + beard',
+      // cap_f, the steep parts and final: the SP6b describe's §3.6 test (SP6b spec §15 item 15, the rock floor).
     ];
     for (const w of want) expect(block, `§3.6 lacks: ${w}`).toContain(w);
     expect([n.spag3dA.wavelength, n.entranceA.wavelength, n.noodleRidgeA.wavelength, n.pillarRare.wavelength]).toEqual([n.spag3dB.wavelength, n.entranceB.wavelength, n.noodleRidgeB.wavelength, n.pillarThickness.wavelength]);
@@ -2117,7 +2115,6 @@ describe('master spec amendments (SP6a §13)', () => {
     const s = c.limits.bandSpan, dw = c.limits.waterDepth;
     expect(block).toContain(`With s = \`caves.limits.bandSpan\` ${s}, a family's depth band`);
     expect(block).toContain(`the bands are cheese ${c.cheese.minY} … ${c.cheese.maxY}, spaghetti 3D ${c.spaghetti3d.minY} … ${c.spaghetti3d.maxY}, spaghetti 2D ${c.spaghetti2d.minY} … ${c.spaghetti2d.maxY}, noodle ${c.noodles.minY} … ${c.noodles.maxY}, entrances ${c.entrances.minY} … ${c.entrances.maxY}.`.replace(/-(\d)/g, '−$1'));
-    expect(block).toContain(`wet′ = clamp(4·col.wetMask, 0, 1), g_w = wet′·clamp((${dw} + 8 + s − T)/s, 0, 1) in each cap and h_w = wet′·clamp((${dw} + 8 − T)/8, 0, 1) in S_w`);
     expect(block).toContain(`with ${dw} = \`caves.limits.waterDepth\`. Under a lake, a river or a sea caves are closed within ${dw + 4} blocks of the bed, narrow over the ${s} below and are fully open from ${dw + 8 + s}`);
     expect(block).toContain(`capTop = \`caves.limits.capTop\` ${c.limits.capTop}, which has no effect while s ≤ 16; floating_islands sets ${resolveProfile('floating_islands').caves.limits.capTop}`);
     expect(block).toContain('- **Continuity (§1.3 of the SP6a spec).** The master\'s five hard switches are continuous');
@@ -2373,7 +2370,8 @@ describe('master spec amendments (SP6a §13)', () => {
         expect(THRESHOLDS[id]?.[part], `THRESHOLDS.${id}.${part}`).toEqual({ ...bound, activeFrom: 'SP6a' });
       }
       // THRESHOLDS holds no other tuning part of the id (C7's construction parts come first, pinned above).
-      const tuning = Object.keys(THRESHOLDS[id] ?? {}).slice(id === 'C7' ? 4 : 0);
+      // SP6a's parts only: SP6b appends its own (C7.bottomPlane, …), which its describe pins (SP6b rulings P16, P27).
+      const tuning = Object.keys(THRESHOLDS[id] ?? {}).filter((p) => THRESHOLDS[id]?.[p]?.activeFrom === 'SP6a').slice(id === 'C7' ? 4 : 0);
       expect(tuning, `${id}'s tuning parts`).toEqual(parts.map(([p]) => p));
       // Each row says where its parts gated on quick and full are gated, as THRESHOLDS does.
       if (parts.some(([, b]) => b.tiers !== undefined)) expect(cells[1], `${id}'s row`).toContain('gated on quick and full');
@@ -2635,6 +2633,42 @@ describe('master spec amendments (SP6b §15)', () => {
     // Moved from the SP6a describe ("the 3 cave biomes arrive in SP6b."), as SP6b words it.
     expect(boxes).toContain('the 3 cave biomes arrived in SP6b as `caves.biomes.*` leaves on the parameter panel, not as biome-table rows (SP6b, D15)');
     expect(boxes).not.toContain('the 3 cave biomes arrive in SP6b.');
+  });
+
+  test('§3.6 and §3.8: the floor as built, DEFAULTS.caves cross-checked (SP6b spec §15 item 15)', () => {
+    const c = DEFAULTS.caves;
+    const f = c.floor;
+    const m = (v: number): string => String(v).replace(/^-/, '−');
+    const lines = text.split('\n');
+    const from = lines.findIndex((l) => l.startsWith('**Default expression (the `density.defs` leaf\'s default since SP3d'));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('**As built by SP3b**'));
+    expect(from, 'no default expression in §3.6').toBeGreaterThanOrEqual(0);
+    const block = lines.slice(from, to).join('\n');
+    expect(lines[from]).toContain('the rock floor as built by SP6b, its spec §5.2, amended by SP6b');
+    // The formulas (moved from the SP6a describe's §3.6 test, MST:2101-2103 and :2111, rewritten with g_b, S_b and defs.steep).
+    for (const w of [
+      `floorY(x, z) = caves.floor.y + caves.floor.amp·|Nf|                                   Nf = clamp(noise2('floor'), −3, 3), 2D λ ${c.noises.floor.wavelength}, ${c.noises.floor.octaves} oct (the rock floor, SP6b)`,
+      'cap_f     = G_f·min(1, g_f + g_w + g_i + g_b) + 128·min(1, h_f + h_i)                  G_f 0.4 (entrances), 5.8 (cheese), 0.5 (spaghetti 3D), 0.3 (spaghetti 2D), 0.4 (noodle)',
+      'steep     = S_w + S_b      S_w = 128·h_w, S_b = 128·clamp((floorY + 8 − y)/8, 0, 1)    (defs.steep: the wet roof\'s and the rock floor\'s steep parts, VOXEL)',
+      'final     = max( min( min( tap(\'precave\', T + detailG), caves + steep ), N + steep ), islands ) + beard',
+    ]) expect(block, `§3.6 lacks: ${w}`).toContain(w);
+    const s = c.limits.bandSpan, dw = c.limits.waterDepth;
+    expect(block).toContain(`wet′ = clamp(4·col.wetMask, 0, 1), g_w = wet′·clamp((${dw} + 8 + s − T)/s, 0, 1) in each cap and h_w = wet′·clamp((${dw} + 8 − T)/8, 0, 1) in S_w, S_w part of \`defs.steep\` with S_b`);
+    // The floor's bullet, with DEFAULTS.caves.floor's values.
+    const floor = block.split('\n').find((l) => l.startsWith('- **The rock floor (D6 of the SP6b spec, its §5.2; amended by SP6b).**'));
+    expect(floor, 'no rock floor bullet in §3.6').toBeDefined();
+    for (const w of [
+      `floorY(x, z) = \`caves.floor.y\` ${m(f.y)} + \`caves.floor.amp\` ${f.amp}·|Nf|`,
+      `so floorY runs from ${m(f.y)} (the gullies, where Nf crosses 0) to ${m(f.y + 3 * f.amp)} (the mounds' tops)`,
+      `g_b = clamp((floorY + 8 + s_b − y)/s_b, 0, 1) with s_b = \`caves.floor.span\` ${f.span}, written once as \`defs.floorGentle\``,
+      'S_b = 128·clamp((floorY + 8 − y)/8, 0, 1) is added at voxel level to the caves slot and the noodle through `defs.steep` = S_w + S_b',
+      `none below \`caves.floor.y\` + 5 (${m(f.y + 5)})`,
+    ]) expect(floor, `§3.6's rock floor bullet lacks: ${w}`).toContain(w);
+    // §3.8: σ_b in the carvers' σ, with the defaults.
+    const s38 = text.slice(text.indexOf('### 3.8 Carvers'), text.indexOf('### 3.9 '));
+    expect(s38).toContain('σ = max(σ_w, σ_i, σ_u, σ_b), each linear in [0, 1] (SP6a; σ_b SP6b).');
+    expect(s38).toContain(`σ_b = clamp((floorY + 8 + s_b − y)/s_b, 0, 1) with §3.6's floorY (the same noise, \`caves.noises.floor\`, read once per position) and s_b = \`caves.floor.span\` ${f.span}, so carvers shrink to nothing at y ≤ floorY + 8 (none below \`caves.floor.y\` + 9, ${m(f.y + 9)}) and are full size from floorY + ${8 + f.span}`);
+    expect(SCHEMA.leaves.find((l) => l.path === 'caves.noises.floor')?.leaf.dims, 'Nf is 2D, as the line says').toBe(2);
   });
 
   test('§6.4\'s U2 row covers the schema\'s U2 leaves (SP6b spec §15 item 20)', () => {

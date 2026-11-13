@@ -82,7 +82,7 @@ export const THRESHOLDS: ThresholdTable = {
   // SP6a spec §10.1 (D26): the caves' tuning parts (`caves.metric.ts`), gated from Task 38 at §10.1's bounds but as
   // ruling R21 sets them (the user's, 2026-11-08; the SP6a spec's Threshold log): C6.latticeBias max 1.25 (the
   // master's 1.1 pending; from SP6b Task 19 each y residue is read over its W9 lattice-neutral local mean, ruling U1,
-  // the user's: a measurement correction, the bound unchanged and re-judged at Task 20, SP6a's reading recorded as
+  // the user's: a measurement correction, the bound unchanged and kept at Task 20 with σ_b (W9 1.116 fast, 1.111 quick), SP6a's reading recorded as
   // C6.latticeBiasAsDefined beside C6.floorFaceLattice, neither gated, the SP6b spec §12.3); this spec's missed proposals as regression guards at the measured worst × 1.15 (max) or
   // × 0.85 (min): C7.verticalStep, flatWallShare, waterWall, C8.aperiodicity, typeMixVariation (C8.largeShare is
   // recorded, not gated). The parts that read 32 × 32 regions or depend on the region's size, on quick and full only
@@ -108,6 +108,9 @@ export const THRESHOLDS: ThresholdTable = {
     islandCapAir: { max: 0, activeFrom: 'SP6a', tiers: ['quick', 'full'] },
     borderPlaneRatio: { min: 0.9, max: 1.1, activeFrom: 'SP6a' }, verticalStep: { max: 8.1, activeFrom: 'SP6a' },
     flatWallShare: { max: 0.037, activeFrom: 'SP6a' }, switchWall: { max: 2, activeFrom: 'SP6a' }, waterWall: { max: 3.3, activeFrom: 'SP6a' },
+    // SP6b spec §12.3 (D6, D26; Task 20): the flat floor faces on the bedrock plane (y −63) over all flat faces, per group
+    // and the worst group's (`.out/C7.bottomPlane.json`); 15.7-34.5 % before the rock floor, which holds it by construction.
+    bottomPlane: { max: 0.01, activeFrom: 'SP6b' },
   },
   C8: {
     aperiodicity: { min: 0.63, activeFrom: 'SP6a', tiers: ['quick', 'full'] }, typeMixVariation: { min: 0.021, activeFrom: 'SP6a' },

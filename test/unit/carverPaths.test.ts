@@ -259,11 +259,13 @@ describe('the carver leaves (SP6a spec §4; Task 27, ruling P17)', () => {
     expect(carverParamsOf(DEFAULTS)).toEqual(CARVER_DEFAULTS);
   });
 
-  test('every carver leaf at its schema maximum (the limits leaves too) gives the harness maxima (CARVER_MAXIMA), so Task 25\'s reach holds for the leaves', () => {
+  test('every carver leaf at its schema maximum (the limits and floor leaves too) gives the harness maxima (CARVER_MAXIMA), so Task 25\'s reach holds for the leaves', () => {
     const leaves = carverLeaves();
     expect(leaves.length).toBe(36);
     let p: Params = DEFAULTS;
-    for (const l of [...leaves, ...SCHEMA.leaves.filter((x) => ['caves.limits.waterDepth', 'caves.limits.bandSpan', 'caves.limits.capTop'].includes(x.path))]) {
+    // The shrinks' leaves: the limits (SP6a §2.4) and the rock floor's σ_b (SP6b §5.2).
+    const shrinks = ['caves.limits.waterDepth', 'caves.limits.bandSpan', 'caves.limits.capTop', 'caves.floor.y', 'caves.floor.amp', 'caves.floor.span'];
+    for (const l of [...leaves, ...SCHEMA.leaves.filter((x) => shrinks.includes(x.path))]) {
       expect(Number.isFinite(l.leaf.max), l.path).toBe(true);
       const r = applyPatch(SCHEMA, p, patchAt(l.path, l.leaf.max));
       if (!r.ok) throw new Error(`${l.path}: ${JSON.stringify(r.issues)}`);

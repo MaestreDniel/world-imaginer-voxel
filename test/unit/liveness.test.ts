@@ -112,8 +112,8 @@ const ONE_STEP = [
  * Each carver leaf's U2 verdict at seed 42 (Task 27, ruling P18; re-pinned at Task 38's tuned defaults, at the user's
  * check's cave columns and at SP6b's rock floor, Task 19, which moved the caverns' column): most worm leaves on the
  * caverns' cave column, the worms' floorMin and the ravines' widthSmoothness on the tunnels', the worms' chance on the
- * snowline class column, their floorMax on a land class column, the underground worms' start range on the patch class
- * column, the ravine leaves but widthSmoothness on their carver witness (5, 1) (the ravines' chance on (0, −3)), the
+ * snowline class column, their floorMax on a land class column, the underground worms' startYMin on the patch class
+ * column (their startYMax too until SP6b Task 20's σ_b closed the low start there; now on its carver witness), the ravine leaves but widthSmoothness on their carver witness (5, 1) (the ravines' chance on (0, −3)), the
  * rest on their carver witness (the spiral's first source whose path a step changes; for `undergroundWorms.maxY` the
  * first reaching its shrink's band). Before the floor the worms' start range was decided on the tunnels' column and the
  * underground worms' start range and the ravine leaves on the caverns' (19524, −7785).
@@ -127,7 +127,7 @@ const CARVER_PINS: Readonly<Record<string, string>> = {
   'caves.worms.roomYScaleMax': 'carver witness column (-3, -5)',
   'caves.undergroundWorms.chance': 'carver witness column (3, -6)',
   'caves.undergroundWorms.startYMin': 'patch column (-20548, -22882)',
-  'caves.undergroundWorms.startYMax': 'patch column (-20548, -22882)',
+  'caves.undergroundWorms.startYMax': 'carver witness column (-3, -5)',
   'caves.undergroundWorms.maxY': 'carver witness column (-2, -2)',
   'caves.ravines.chance': 'carver witness column (0, -3)',
   'caves.ravines.widthSmoothness': TUNNELS_VIA,
@@ -809,7 +809,9 @@ describe('the cave-biome leaves (SP6b Task 17; spec §12.7, Spec correction 5)',
    * Each cave-biome leaf's U2 verdict at seed 42: tried on the class columns, the cave columns first (the class it is
    * meant for), then on its bounded biome witness; lush's hMin, the abyss's eMax, cMin and depthMin, the border warp
    * and the border noise are dead on every class column (since SP6b Task 19's rock floor moved the caverns' column to
-   * (18487, −15384); before it only lush's hMin and the abyss's cMin were).
+   * (18487, −15384); before it only lush's hMin and the abyss's cMin were). SP6b Task 20's σ_b closed the abyss's cMin
+   * witness (−24350, −30565) and every other column of the first 8,192 draws: its witness lies at draw 21,291, so the
+   * search draws up to 32,768 (`BIOME_DRAWS`).
    */
   const BIOME_PINS: Readonly<Record<(typeof BIOME_LEAVES)[number], string>> = {
     'caves.biomes.lush.hMin': 'biome witness column (-18559, -12761)',
@@ -819,7 +821,7 @@ describe('the cave-biome leaves (SP6b Task 17; spec §12.7, Spec correction 5)',
     'caves.biomes.dripstone.depthMin': CAVERNS_VIA,
     'caves.biomes.dripstone.depthMax': TUNNELS_VIA,
     'caves.biomes.abyss.eMax': 'biome witness column (22687, -5288)',
-    'caves.biomes.abyss.cMin': 'biome witness column (-24350, -30565)',
+    'caves.biomes.abyss.cMin': 'biome witness column (-7705, 14078)',
     'caves.biomes.abyss.depthMin': 'biome witness column (-1893, -974)',
     'caves.biomes.depthScale': CAVERNS_VIA,
     'caves.biomes.borderWarp': 'biome witness column (32115, -14419)',
@@ -861,7 +863,7 @@ describe('the cave-biome leaves (SP6b Task 17; spec §12.7, Spec correction 5)',
       if (r.cls === null) expect(w.via, p).toBe(r.via);
       expect(w.checks, p).toBeLessThanOrEqual(64);
       expect(w.examined, p).toBeLessThanOrEqual(256);
-      expect(w.draws, p).toBeLessThanOrEqual(8192);
+      expect(w.draws, p).toBeLessThanOrEqual(32768);
       const [cx, cz] = w.via!.slice('biome witness column ('.length, -1).split(', ').map(Number) as [number, number];
       const held = biomesIn(cx, cz);
       expect(reads(p).some((b) => held.has(b)), `${p}: (${cx}, ${cz}) holds ${[...held]}`).toBe(true);

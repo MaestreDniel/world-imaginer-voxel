@@ -10,11 +10,16 @@
  *   dz = (z + 0.5 − cz)/rh, dy = (y + 0.5 − cy)/rv, w = 1 for worms and the ravine's f² at the voxel's y, in that
  *   operation order (world coordinates, so two columns compute the same doubles for one voxel); the voxel is carved when
  *   y > −64 (the bedrock stays), `d < 1 − σ`, and for worms `dy > floor`.
- * - **The shrink** σ = max(σ_w, σ_i, σ_u), each linear in [0, 1], so a carver narrows to nothing over a span:
+ * - **The shrink** σ = max(σ_w, σ_i, σ_u, σ_b), each linear in [0, 1], so a carver narrows to nothing over a span:
  *   σ_w = wet′·clamp((waterDepth + 8 + bandSpan − (densityTop − y))·(1/(8 + bandSpan)), 0, 1) (the wet roof: nothing
  *   within 16 blocks of a wet position's density top, full size from 40 below it at the defaults);
  *   σ_i = clamp((y − capTop + 8 + bandSpan)·(1/bandSpan), 0, 1) (the island cap: 1 from y 172 when capTop is 180);
- *   σ_u = clamp((y − maxY + 16)·(1/16), 0, 1) for underground worms only (nothing from maxY, full size below maxY − 16).
+ *   σ_u = clamp((y − maxY + 16)·(1/16), 0, 1) for underground worms only (nothing from maxY, full size below maxY − 16);
+ *   σ_b = clamp((floorY + 8 + span − y)·(1/span), 0, 1) (the rock floor, SP6b spec §5.2, D6: nothing at y ≤ floorY + 8,
+ *   full size from floorY + 8 + span, span = `caves.floor.span`).
+ * - **floorY** (`floorYAt`) = `caves.floor.y` + `caves.floor.amp`·|clamp(Nf, −3, 3)|, Nf the z2 of `caves.noises.floor`
+ *   at the voxel's (x, z), in the default tree's operation order (its `floorY` at voxel level; a unit test pins them
+ *   equal), computed once per position by `carveColumn` and once per call by `carvedKind`.
  * - **wet′** = clamp(4·wetMask, 0, 1) with `wetMask` the column sample's bilinear readout at the voxel's (x, z), in the
  *   default tree's operation order (S_w's wet′ in `defs.steep`, `core/params/defaultTrees.ts`; a unit test pins them equal).
  * - **The density top** (`densityTopOf`) of a position: its highest solid voxel after the density fill, before carving
@@ -38,6 +43,7 @@ import { CARVABLE, STONE } from '../../world/blocks/index';
 import { readField, type ColumnSample } from '../column/columnStage';
 import type { DensityContext } from '../density/context';
 import { valClamp } from '../density/nodes';
+import type { Noise2 } from '../biomes/cavePicker';
 import { carverCacheOf, type CarverCache } from './carverCache';
 import type { CarverKind, CarverParams, CarverPath } from './carvers';
 
@@ -55,6 +61,7 @@ const K_UNDER: number = KIND.undergroundWorm;
 const CARVABLE_ = CARVABLE;
 const STONE_ = STONE;
 const CACHE_OF = carverCacheOf;
+const ABS = Math.abs;
 /** The window's kinds, in its order. */
 const KINDS: readonly CarverKind[] = ['worm', 'ravine', 'undergroundWorm'];
 /** No density top: the position holds no solid voxel above the bedrock (or, with islands, no ground run). */
@@ -71,6 +78,8 @@ const CARVES = new Uint8Array(256);
 CARVES[1] = CARVABLE_[STONE_]!;
 /** `carveColumn`'s wet′ per column position `lz·16 + lx`. */
 const WET = new Float64Array(256);
+/** `carveColumn`'s floorY per column position `lz·16 + lx`. */
+const FLOOR = new Float64Array(256);
 
 /** The carver kind's tag (`CAVE_KIND`). */
 function tagOf(kind: CarverKind): number {
@@ -82,13 +91,26 @@ export function wetAt(s: ColumnSample, x: number, z: number): number {
   return CLAMP(4 * READ_FIELD(s, 'wetMask', x, z), 0, 1);
 }
 
-/** max(σ_i, σ_u) at y for a path of `kind` (σ_u for underground worms only). */
-function shrinkIU(p: CarverParams, kind: CarverKind, y: number): number {
+/**
+ * The rock floor's height at world (x, z) (SP6b spec §5.2, D6): `caves.floor.y` + `caves.floor.amp`·|clamp(Nf, −3, 3)|,
+ * Nf = `n.z2(x, z)` (`caves.noises.floor`, the cache's `floorNoise`), in the default tree's operation order, so it equals
+ * the tree's floorY read at the position bit for bit.
+ */
+export function floorYAt(p: CarverParams, n: Noise2, x: number, z: number): number {
+  const f = p.floor;
+  return f.y + f.amp * ABS(CLAMP(n.z2(x, z), -3, 3));
+}
+
+/** max(σ_i, σ_u, σ_b) at y for a path of `kind` (σ_u for underground worms only), floorY `floorY`. */
+function shrinkIUB(p: CarverParams, kind: CarverKind, y: number, floorY: number): number {
   const lim = p.limits;
+  const span = p.floor.span;
   const si = CLAMP((y - lim.capTop + 8 + lim.bandSpan) * (1 / lim.bandSpan), 0, 1);
-  if (kind !== 'undergroundWorm') return si;
+  const sb = CLAMP((floorY + 8 + span - y) * (1 / span), 0, 1);
+  const sib = sb > si ? sb : si;
+  if (kind !== 'undergroundWorm') return sib;
   const su = CLAMP((y - p.undergroundWorms.maxY + UNDER_SPAN) * (1 / UNDER_SPAN), 0, 1);
-  return su > si ? su : si;
+  return su > sib ? su : sib;
 }
 
 /** σ_w at y, for wet′ `wet` and the position's density top `densityTop`. */
@@ -98,23 +120,24 @@ function shrinkW(p: CarverParams, y: number, wet: number, densityTop: number): n
 }
 
 /**
- * The shrink σ = max(σ_w, σ_i, σ_u) (spec §2.4) at y for a path of `kind`, with wet′ `wet` at the voxel's (x, z) and
- * its position's density top `densityTop`: the carve test is `d < 1 − σ`.
+ * The shrink σ = max(σ_w, σ_i, σ_u, σ_b) (spec §2.4; SP6b spec §5.2) at y for a path of `kind`, with wet′ `wet` at the
+ * voxel's (x, z), its position's density top `densityTop` and floorY `floorY` (`floorYAt`): the carve test is
+ * `d < 1 − σ`.
  */
-export function carveShrink(p: CarverParams, kind: CarverKind, y: number, wet: number, densityTop: number): number {
-  const siu = shrinkIU(p, kind, y);
+export function carveShrink(p: CarverParams, kind: CarverKind, y: number, wet: number, densityTop: number, floorY: number): number {
+  const siu = shrinkIUB(p, kind, y, floorY);
   const sw = shrinkW(p, y, wet, densityTop);
   return sw > siu ? sw : siu;
 }
 
 /**
  * The per-voxel carve test (spec §2.4): 1 when ellipsoid `e` of `path` carves voxel (x, y, z), else 0, with `wet` the
- * voxel's wet′ (`wetAt`) and `densityTop` its position's density top. With `densityTop` NaN, −1 when the answer needs
- * it (wet′ > 0 and the ellipsoid holds the voxel under σ_i and σ_u alone), so a probe reads the top only then. The
- * voxel's solidity is the caller's to check.
+ * voxel's wet′ (`wetAt`), `densityTop` its position's density top and `floorY` its position's floorY (`floorYAt`). With
+ * `densityTop` NaN, −1 when the answer needs it (wet′ > 0 and the ellipsoid holds the voxel under σ_i, σ_u and σ_b
+ * alone), so a probe reads the top only then. The voxel's solidity is the caller's to check.
  */
 export function carveTest(
-  p: CarverParams, path: CarverPath, e: number, x: number, y: number, z: number, wet: number, densityTop: number,
+  p: CarverParams, path: CarverPath, e: number, x: number, y: number, z: number, wet: number, densityTop: number, floorY: number,
 ): number {
   if (y <= Y0) return 0;
   const ell = path.ell;
@@ -130,7 +153,7 @@ export function carveTest(
   // σ ≥ 0, so 1 − σ ≤ 1: d ≥ 1 is never carved.
   if (!(d < 1)) return 0;
   if (path.kind !== 'ravine' && !(dy > ell[o + 5]!)) return 0;
-  const siu = shrinkIU(p, path.kind, y);
+  const siu = shrinkIUB(p, path.kind, y, floorY);
   if (!(d < 1 - siu)) return 0;
   if (wet > 0) {
     if (densityTop !== densityTop) return NEED_TOP;
@@ -256,8 +279,8 @@ function columnPaths(cache: CarverCache, cx: number, cz: number): ColumnPaths {
  * `fillDensityColumn`'s index `((y + 64)·16 + lz)·16 + lx`) that a path of the window carves becomes 0, and its entry
  * of `tags` (same index; when not null) takes the kind of the first such source in the window's order unless it is
  * already non-zero. `s` is the column's sample (for wet′), `densityTop[lz·16 + lx]` each position's density top
- * (`densityTopOf` over the fill, before carving). No `stop()`: the T stage polls once before calling it. Throws a
- * RangeError on other sizes.
+ * (`densityTopOf` over the fill, before carving); each position's floorY is `floorYAt` over the cache's floor noise.
+ * No `stop()`: the T stage polls once before calling it. Throws a RangeError on other sizes.
  */
 export function carveColumn(
   cache: CarverCache, p: CarverParams, s: ColumnSample, cx: number, cz: number, solid: Uint8Array, densityTop: Int16Array,
@@ -267,7 +290,12 @@ export function carveColumn(
     throw new RangeError('carveColumn: solid and tags need 98,304 entries, densityTop 256');
   }
   const x0 = 16 * cx, z0 = 16 * cz;
-  for (let q = 0; q < 256; q++) WET[q] = wetAt(s, x0 + (q & 15), z0 + (q >> 4));
+  const nf = cache.floorNoise;
+  for (let q = 0; q < 256; q++) {
+    const x = x0 + (q & 15), z = z0 + (q >> 4);
+    WET[q] = wetAt(s, x, z);
+    FLOOR[q] = floorYAt(p, nf, x, z);
+  }
   const L = columnPaths(cache, cx, cz);
   const paths = L.paths, ells = L.ells, ranges = L.ranges;
   for (let k = 0; k < L.count; k++) {
@@ -284,7 +312,7 @@ export function carveColumn(
           const q = zq | (x - x0);
           const v = row | q;
           if (CARVES[solid[v]!] !== 1) continue;
-          if (carveTest(p, path, e, x, y, z, WET[q]!, densityTop[q]!) !== 1) continue;
+          if (carveTest(p, path, e, x, y, z, WET[q]!, densityTop[q]!, FLOOR[q]!) !== 1) continue;
           solid[v] = 0;
           if (tags !== null && tags[v] === 0) tags[v] = tag;
         }
@@ -296,8 +324,10 @@ export function carveColumn(
 /**
  * The carver kind that carves voxel (x, y, z) (`CAVE_KIND`'s worm, ravine or underground worm: the first source in the
  * window's order whose ellipsoid carves it), 0 when none; `s` is the voxel's column sample and `densityTopAt()` its
- * position's density top, called only when some ellipsoid holds the voxel and its wet′ is above 0. The result means
- * anything only for a voxel the density fill leaves solid (ruling P19): it then equals `carveColumn`'s tag there.
+ * position's density top, called only when some ellipsoid holds the voxel and its wet′ is above 0; its floorY is
+ * `floorYAt` over the cache's floor noise, computed once per call, when a path's range first holds the voxel. The
+ * result means anything only for a voxel the density fill leaves solid (ruling P19): it then equals `carveColumn`'s tag
+ * there.
  */
 export function carvedKind(
   cache: CarverCache, p: CarverParams, s: ColumnSample, x: number, y: number, z: number, densityTopAt: () => number,
@@ -306,15 +336,17 @@ export function carvedKind(
   const L = columnPaths(cache, Math.floor(x / 16), Math.floor(z / 16));
   const paths = L.paths, ells = L.ells, ranges = L.ranges;
   const wet = wetAt(s, x, z);
+  let floorY = Number.NaN;
   let top = Number.NaN;
   for (let k = 0; k < L.count; k++) {
     const r = 6 * k;
     if (x < ranges[r]! || x > ranges[r + 1]! || y < ranges[r + 2]! || y > ranges[r + 3]! || z < ranges[r + 4]! || z > ranges[r + 5]!) continue;
     const path = paths[k]!;
-    let hit = carveTest(p, path, ells[k]!, x, y, z, wet, top);
+    if (floorY !== floorY) floorY = floorYAt(p, cache.floorNoise, x, z);
+    let hit = carveTest(p, path, ells[k]!, x, y, z, wet, top, floorY);
     if (hit === NEED_TOP) {
       top = densityTopAt();
-      hit = carveTest(p, path, ells[k]!, x, y, z, wet, top);
+      hit = carveTest(p, path, ells[k]!, x, y, z, wet, top, floorY);
     }
     if (hit === 1) return tagOf(path.kind);
   }
@@ -350,7 +382,7 @@ const AT_TOP_OF = (): number => {
 
 /**
  * The carver kind that carves world voxel (x, y, z) (spec §3.4, D22): `carvedKind` through `carverCacheOf(dc.ctx)` and
- * its carver leaves, with `dc`'s column sample (`dc.column`, which makes the column current) and, only when the answer
+ * its carver leaves (σ_b's floorY from the cache's floor noise, the same as T's), with `dc`'s column sample (`dc.column`, which makes the column current) and, only when the answer
  * needs it, the position's density top by a downward scan of the density probe (`voxelFn > 0` from y 319, with
  * `densityTopOf`'s island rule under `islands.enabled`; memoised per position of the column last probed, ruling R18).
  * 0 when no carver carves it (and at y −64). Like `carvedKind`, the result means anything only for a voxel the density
