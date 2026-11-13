@@ -259,6 +259,9 @@ test('a GV8 world with edits where the rock floor closes opens with the floor an
     const loaded = loadParams(p.kept());
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
+    // Identity (ruling P14): the GV8 surface tree still equals today's canonically, so only `toBe` shows the migration ran.
+    expect(loaded.value.density.defs).toBe(resolveProfile('default').density.defs);
+    expect(loaded.value.surface.rules).toBe(resolveProfile('default').surface.rules);
     expect(canonicalJSON(loaded.value.density.defs)).toBe(canonicalJSON(DEFAULT_DENSITY_TREE));
     expect(canonicalJSON(loaded.value.surface.rules)).toBe(canonicalJSON(DEFAULT_SURFACE_RULES));
     expect(p.opened.older).toBe(true);
