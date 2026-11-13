@@ -54,7 +54,7 @@ import { resolveDensity, resolveDensityNode } from '../density/source';
 import { surfaceContextOf, type SurfaceContext, type SurfaceProbeColumn } from '../surface/context';
 import { surfaceProbeColumn } from '../surface/probe';
 import type { RuleNodeRef } from '../surface/reference';
-import { memoWorkCost, ruleNodeCount, tColumnCost } from './cost';
+import { compiledVoxelWork, memoWorkCost, ruleNodeCount, tColumnCost } from './cost';
 
 const HEIGHT_ = HEIGHT;
 const MIN_Y_ = MIN_Y;
@@ -79,6 +79,7 @@ const RESOLVE_NODE = resolveDensityNode;
 const SURFACE_CONTEXT = surfaceContextOf;
 const PROBE_COLUMN = surfaceProbeColumn;
 const MEMO_WORK = memoWorkCost;
+const COMPILED_VOXEL_WORK = compiledVoxelWork;
 const T_COLUMN_COST = tColumnCost;
 const RULE_NODES = ruleNodeCount;
 const CAVE_RUN = caveTagRun;
@@ -630,6 +631,30 @@ export function sliceColumnCorners(plane: SliceGeometry['plane'], n: number, ext
 }
 
 /**
+ * The most distinct quart lattice points a horizontal row of n samples on a square of side `extent` reads (SP6b ruling
+ * U3), over every alignment of the square to the lattice (its west edge mod 16): each sample reads its cell's 4 points
+ * (lattice x ⌊x / 4⌋ and the next, on its 2 lattice rows z), which the part's corner sampler computes once
+ * (`createCornerSampler`). 4n when no two samples share a point (E / n ≥ 8), fewer below: 132 for a 128² row at 256,
+ * 258 at 512. Points shared with the part's other sample columns are counted in each, so the sum bounds the part's.
+ */
+export function sliceLatticePoints(n: number, extent: number): number {
+  checkN(n);
+  const e = extentProblem(extent);
+  if (e !== null) throw new RangeError(`sliceLatticePoints: ${e}`);
+  let most = 0;
+  for (let o = 0; o < 16; o++) {
+    const lines = new Set<number>();
+    for (let i = 0; i < n; i++) {
+      const q = (o + Math.floor(((2 * i + 1) * extent) / (2 * n))) >> 2;
+      lines.add(q);
+      lines.add(q + 1);
+    }
+    if (2 * lines.size > most) most = 2 * lines.size;
+  }
+  return most;
+}
+
+/**
  * The most distinct chunk columns a horizontal row of n samples on a square of side `extent` crosses, over every
  * alignment of the square to the chunk grid (its west edge mod 16): n when each sample lies in a chunk column of its own.
  */
@@ -679,10 +704,13 @@ function caveAcquisition(cornerWork: number, plane: SliceGeometry['plane'], n: n
  * `density` / `node`: the evaluated expression's `memoWorkCost` (SP6a spec §7.4, the reference's corner memo),
  * n × voxel + K × corner with K = `sliceColumnCorners(plane, n, extent)`, so each def and each interpolated child is
  * counted once per distinct corner the sample column reads; the acquisition, vertical `COLUMN_SAMPLE_COST` per column,
- * horizontal n × `CORNER_SAMPLE_COST`, `CORNER_STEEP_COST` when the expression reads `col steep`, or `COLUMN_SAMPLE_COST`
- * when it takes full samples (`sliceAcquisitionCost`). `blocks`: one T column (`tColumnCost`); `rule`: the same plus
+ * horizontal n × `CORNER_SAMPLE_COST`, or `COLUMN_SAMPLE_COST` when it takes full samples, and when the expression reads
+ * `col steep` the distinct lattice points the sample column reads × `CORNER_STEEP_COST` / 4 (SP6b ruling U3: the part's
+ * corner sampler computes each point once; `sliceLatticePoints`; n × `CORNER_STEEP_COST` from E / n ≥ 8)
+ * (`sliceAcquisitionCost`). `blocks`: one T column (`tColumnCost`); `rule`: the same plus
  * n × the rule tree's node count. `caves` (SP6a spec §7.4, refusable like `density`): the stage's compile of the resolved
- * tree, so with the `density` field's `memoWorkCost` w, n × (w.voxel + one sample's tag), plus on a vertical plane
+ * tree, so with the `density` field's `memoWorkCost` w, n × (the compile's voxel work, `compiledVoxelWork`, each def
+ * once per sample, SP6b ruling U2, + one sample's tag), plus on a vertical plane
  * K × w.corner as `density`'s, plus `caveAcquisition` (the chunk columns visited: ColumnSample, carver window, and on a
  * horizontal plane its corners). The UI passes it to the pool and the worker recomputes it from its configured params.
  * `extent` is the horizontal square's side (ignored on a vertical plane). Throws a RangeError for n ∉ SLICE_NS, a
@@ -697,11 +725,12 @@ export function sliceCostOf(params: Params, field: SliceField, path: string, pla
       const e = evaluatedExpression(params, field, path);
       const w = MEMO_WORK(e, params);
       const k = sliceColumnCorners(plane, n, extent);
-      return satCost(satCost(satCost(n * w.voxel) + satCost(k * w.corner)) + acquisitionOf(e, plane, n));
+      return satCost(satCost(satCost(n * w.voxel) + satCost(k * w.corner)) + acquisitionOf(e, plane, n, extent));
     }
     case 'caves': {
-      const w = MEMO_WORK(evaluatedExpression(params, 'density', ''), params);
-      const voxels = satCost(n * satCost(w.voxel + CAVE_SAMPLE_COST));
+      const e = evaluatedExpression(params, 'density', '');
+      const w = MEMO_WORK(e, params);
+      const voxels = satCost(n * satCost(COMPILED_VOXEL_WORK(e, params) + CAVE_SAMPLE_COST));
       const corners = plane === 'vertical' ? satCost(sliceColumnCorners(plane, n) * w.corner) : 0;
       return satCost(satCost(voxels + corners) + caveAcquisition(w.corner, plane, n, extent));
     }
@@ -716,18 +745,22 @@ export function sliceCostOf(params: Params, field: SliceField, path: string, pla
 }
 
 /** A density or node sample column's acquisition cost (§5.2): see `sliceCostOf`. */
-function acquisitionOf(e: DensityExpr, plane: SliceGeometry['plane'], n: number): number {
+function acquisitionOf(e: DensityExpr, plane: SliceGeometry['plane'], n: number, extent?: number): number {
   if (plane === 'vertical') return COLUMN_COST;
   const mode = horizontalSampling(e);
-  return satCost(n * (mode === 'full' ? COLUMN_COST : mode === 'cornerSteep' ? STEEP_COST : CORNER_COST));
+  if (mode === 'cornerSteep') return satCost(sliceLatticePoints(n, extent ?? Number.NaN) * (STEEP_COST / 4));
+  return satCost(n * (mode === 'full' ? COLUMN_COST : CORNER_COST));
 }
 
 /**
  * The acquisition part of a density or node slice's column cost (`sliceCostOf`): vertical `COLUMN_SAMPLE_COST`;
- * horizontal n × the per-sample corner or full sample cost. Throws as `sliceCostOf`.
+ * horizontal n × the per-sample corner or full sample cost, or with `col steep` the distinct lattice points the sample
+ * column reads × `CORNER_STEEP_COST` / 4 (`sliceLatticePoints`, which needs the extent). Throws as `sliceCostOf`.
  */
-export function sliceAcquisitionCost(params: Params, field: 'density' | 'node', path: string, plane: SliceGeometry['plane'], n: number): number {
+export function sliceAcquisitionCost(
+  params: Params, field: 'density' | 'node', path: string, plane: SliceGeometry['plane'], n: number, extent?: number,
+): number {
   checkN(n);
   if (plane !== 'vertical' && plane !== 'horizontal') throw new RangeError(`sliceAcquisitionCost: unknown plane ${JSON.stringify(plane)}`);
-  return acquisitionOf(evaluatedExpression(params, field, path), plane, n);
+  return acquisitionOf(evaluatedExpression(params, field, path), plane, n, extent);
 }

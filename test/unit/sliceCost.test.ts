@@ -5,8 +5,8 @@ import {
 import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import type { Params } from '../../src/core/params/schema';
-import { densityColumnCost, memoWorkCost, ruleNodeCount, rulesColumnCost, tColumnCost, workCost } from '../../src/gen/inspect/cost';
-import { evaluatedExpression, sliceColumnCorners, sliceCostOf } from '../../src/gen/inspect/fieldSlice';
+import { compiledVoxelWork, densityColumnCost, memoWorkCost, ruleNodeCount, rulesColumnCost, tColumnCost, workCost } from '../../src/gen/inspect/cost';
+import { evaluatedExpression, sliceAcquisitionCost, sliceColumnCorners, sliceCostOf, sliceLatticePoints } from '../../src/gen/inspect/fieldSlice';
 import { isRefusableField, planFieldSlice } from '../../src/workers/protocol';
 import { paramsWith } from '../harness/gen';
 import { steepDefaultTree, steepTree, terrainMuted } from './fixtures/editedTrees';
@@ -106,6 +106,22 @@ describe('memoWorkCost: the work under the slice reference\'s corner memo (SP6a 
     expect(memoWorkCost({ root: 7 }, DEFAULTS)).toEqual({ voxel: 0, corner: 0 });
   });
 
+  test('compiledVoxelWork (SP6b ruling U2): the voxel work with each def once per sample, a later read 1', () => {
+    // A def read twice at voxel placement: memoWorkCost walks it per read (1 + 8 + 8), the compile once (1 + 8 + 1).
+    const twice = D({ op: 'add', a: ref('s'), b: ref('s') }, { s: detail });
+    expect([memoWorkCost(twice, DEFAULTS).voxel, compiledVoxelWork(twice, DEFAULTS)]).toEqual([17, 10]);
+    // Read once, or behind interpolated (1 per node, the child the corner's): memoWorkCost's voxel.
+    for (const e of [D(ref('s'), { s: detail }), D({ op: 'add', a: I(ref('s')), b: I(ref('s')) }, { s: detail }), D(I(detail))]) {
+      expect(compiledVoxelWork(e, DEFAULTS)).toBe(memoWorkCost(e, DEFAULTS).voxel);
+    }
+    // A def reading a def: each once; a missing def 1; nothing for a non-tree.
+    expect(compiledVoxelWork(D({ op: 'add', a: ref('a'), b: ref('b') }, { a: { op: 'add', a: ref('b'), b: ref('b') }, b: detail }), DEFAULTS)).toBe(1 + 1 + 8 + 1 + 1);
+    expect(compiledVoxelWork(D(ref('nope')), DEFAULTS)).toBe(1);
+    expect([compiledVoxelWork(null, DEFAULTS), compiledVoxelWork({ root: 7 }, DEFAULTS)]).toEqual([0, 0]);
+    // The default root reads `ref wetSteep` twice (15 units): 179 − 15 + 1.
+    expect(compiledVoxelWork(evaluatedExpression(DEFAULTS, 'density', ''), DEFAULTS)).toBe(165);
+  });
+
   test('the default tree: 179 per sample and 1,106 per corner (workCost 17,467 = 179 + 8 × 2,161: its defs\' CSE at a corner)', () => {
     const e = evaluatedExpression(DEFAULTS, 'density', '');
     // D25's lever 5 (Task 15b): 1,116 and 2,171 before it, less cheese's 8 and entrance's 4 per corner; the user's check's
@@ -139,6 +155,15 @@ describe('sliceColumnCorners: the distinct corners one sample column reads (SP6a
   });
 });
 
+describe('sliceLatticePoints: the distinct quart lattice points a horizontal sample column reads (SP6b ruling U3)', () => {
+  test('4n without sharing (E / n ≥ 8); a 128² row at 256 reads 132 (2 lattice rows × 66), at 512 258', () => {
+    for (const e of SLICE_EXTENTS) expect(sliceLatticePoints(32, e), `E ${e}`).toBe(128);
+    expect(SLICE_EXTENTS.map((e) => sliceLatticePoints(128, e))).toEqual([132, 258, 512, 512, 512, 512]);
+    expect(() => sliceLatticePoints(128, 300)).toThrow(RangeError);
+    expect(() => sliceLatticePoints(64, 256)).toThrow(RangeError);
+  });
+});
+
 describe('sliceCostOf (SP3d spec §5.2; SP6a §7.4\'s memo-aware bound, rulings R7, R9)', () => {
   const vCost = (p: Params, field: 'density' | 'node', path: string, n: number) => {
     const w = memoWorkCost(evaluatedExpression(p, field, path), p);
@@ -148,6 +173,9 @@ describe('sliceCostOf (SP3d spec §5.2; SP6a §7.4\'s memo-aware bound, rulings 
     const w = memoWorkCost(evaluatedExpression(p, field, path), p);
     return n * (w.voxel + perSample) + sliceColumnCorners('horizontal', n, e) * w.corner;
   };
+  /** A steep-reading horizontal sample column: its distinct lattice points × CORNER_STEEP_COST / 4 (SP6b ruling U3). */
+  const hSteep = (p: Params, field: 'density' | 'node', path: string, n: number, e: number) =>
+    hCost(p, field, path, n, e, 0) + sliceLatticePoints(n, e) * (CORNER_STEEP_COST / 4);
 
   test('the defaults: n × 179 + K × 1,106 plus the acquisition; vertical 128² 34.9 M units, horizontal 128² 82.9 M at E 256, 127.7 M at 512, 181.5 M from 1024', () => {
     const v128 = sliceCostOf(DEFAULTS, 'density', '', 'vertical', 128);
@@ -213,16 +241,23 @@ describe('sliceCostOf (SP3d spec §5.2; SP6a §7.4\'s memo-aware bound, rulings 
     expect(memoWorkCost(e, DEFAULTS).voxel).toBe(1);
   });
 
-  test('horizontal: a node reading col steep through the evaluated expression pays CORNER_STEEP_COST per sample', () => {
+  test('horizontal: a node reading col steep through the evaluated expression pays CORNER_STEEP_COST / 4 per lattice point it reads (SP6b ruling U3)', () => {
     const p = withTree(steepTree());
     expect(workCost(evaluatedExpression(p, 'density', ''), p)).toBe(574 + 2);
     expect(memoWorkCost(evaluatedExpression(p, 'density', ''), p)).toEqual({ voxel: 32, corner: 68 });
     for (const e of SLICE_EXTENTS) {
-      expect(sliceCostOf(p, 'density', '', 'horizontal', 128, e)).toBe(hCost(p, 'density', '', 128, e, CORNER_STEEP_COST));
-      expect(sliceCostOf(p, 'node', 'root.b', 'horizontal', 128, e)).toBe(hCost(p, 'node', 'root.b', 128, e, CORNER_STEEP_COST));
+      expect(sliceCostOf(p, 'density', '', 'horizontal', 128, e)).toBe(hSteep(p, 'density', '', 128, e));
+      expect(sliceCostOf(p, 'node', 'root.b', 'horizontal', 128, e)).toBe(hSteep(p, 'node', 'root.b', 128, e));
+      expect(sliceAcquisitionCost(p, 'density', '', 'horizontal', 128, e)).toBe(sliceLatticePoints(128, e) * 1280);
       expect(sliceCostOf(p, 'node', 'root.a', 'horizontal', 128, e)).toBe(hCost(p, 'node', 'root.a', 128, e, CORNER_SAMPLE_COST));
     }
     expect(sliceCostOf(p, 'density', '', 'vertical', 128)).toBe(vCost(p, 'density', '', 128));
+    // n × CORNER_STEEP_COST where no two samples share a point (every 32² draft; a 128² from 1024); the extent is needed.
+    for (const e of SLICE_EXTENTS) expect(sliceAcquisitionCost(p, 'density', '', 'horizontal', 32, e)).toBe(32 * CORNER_STEEP_COST);
+    expect(sliceAcquisitionCost(p, 'density', '', 'horizontal', 128, 1024)).toBe(128 * CORNER_STEEP_COST);
+    expect(() => sliceAcquisitionCost(p, 'density', '', 'horizontal', 128)).toThrow(RangeError);
+    // Other modes need none: the corner sample's n × CORNER_SAMPLE_COST.
+    expect(sliceAcquisitionCost(DEFAULTS, 'density', '', 'horizontal', 128)).toBe(128 * CORNER_SAMPLE_COST);
   });
 
   test('a steep-reading horizontal 128² slice of a tree of the default\'s weight without its cave terms fits REQUEST_BUDGET, and its 32² draft DRAFT_BUDGET', () => {
@@ -239,7 +274,7 @@ describe('sliceCostOf (SP3d spec §5.2; SP6a §7.4\'s memo-aware bound, rulings 
       for (const [n, budget] of [[32, DRAFT_BUDGET], [128, REQUEST_BUDGET]] as const) {
         for (const e of SLICE_EXTENTS) {
           const cost = sliceCostOf(p, field, path, 'horizontal', n, e);
-          expect(cost, `${field} ${path} ${n} ${e}`).toBe(hCost(p, field, path, n, e, CORNER_STEEP_COST));
+          expect(cost, `${field} ${path} ${n} ${e}`).toBe(hSteep(p, field, path, n, e));
           expect(n * cost, `${field} ${path} ${n} ${e}`).toBeLessThanOrEqual(budget);
           expect(cost, `${field} ${path} ${n} ${e}`).toBeLessThanOrEqual(PART_BUDGET);
         }
@@ -255,7 +290,9 @@ describe('sliceCostOf (SP3d spec §5.2; SP6a §7.4\'s memo-aware bound, rulings 
     // memo-aware bound, at Task 9's wet roof).
     for (const e of SLICE_EXTENTS) expect(DRAFT_BUDGET - 32 * sliceCostOf(p, 'density', '', 'horizontal', 32, e), `E ${e}`).toBe(2_288_640);
     expect(SLICE_EXTENTS.map((e) => 128 * sliceCostOf(p, 'density', '', 'horizontal', 128, e) <= REQUEST_BUDGET)).toEqual([true, false, false, false, false, false]);
-    expect(REQUEST_BUDGET - 128 * sliceCostOf(p, 'density', '', 'horizontal', 128, 256)).toBe(931_840);
+    // 128 × (128 × 181 + 328 × 1,106 + 132 × 1,280): its 132 lattice points per row (SP6b ruling U3; 931,840 with
+    // 128 × CORNER_STEEP_COST per row, which the corner sampler's point memo does not spend).
+    expect(REQUEST_BUDGET - 128 * sliceCostOf(p, 'density', '', 'horizontal', 128, 256)).toBe(63_191_040);
     // Its vertical 128² slice samples columns (no corner steep).
     expect(128 * sliceCostOf(p, 'density', '', 'vertical', 128)).toBeLessThanOrEqual(REQUEST_BUDGET);
   });
@@ -268,30 +305,31 @@ describe('sliceCostOf (SP3d spec §5.2; SP6a §7.4\'s memo-aware bound, rulings 
     expect(sliceCostOf(DEFAULTS, 'rule', 'root', 'vertical', 32)).toBe(t + 32 * 163);
   });
 
-  test('caves (SP6a §7.4): n × (voxel + 64) + the chunk columns visited; vertical with K × corner, horizontal with 50 corners per visit', () => {
+  test('caves (SP6a §7.4): n × (the compile\'s voxel work + 64) + the chunk columns visited; vertical with K × corner, horizontal with 50 corners per visit', () => {
     // A visit: the ColumnSample (COLUMN_SAMPLE_COST) and the carver window (32,768); on a horizontal plane also the 50
     // corners at one y of its chunk column (50 × 1,106 at the defaults).
     const visitV = COLUMN_SAMPLE_COST + 32768;
     const visitH = visitV + 50 * 1106;
     for (const n of [32, 128]) {
-      expect(sliceCostOf(DEFAULTS, 'caves', '', 'vertical', n)).toBe(n * (179 + 64) + 196 * 1106 + visitV);
+      // The compile's voxel work (SP6b ruling U2): `ref wetSteep` once per sample, 165 (179 per read).
+      expect(sliceCostOf(DEFAULTS, 'caves', '', 'vertical', n)).toBe(n * (165 + 64) + 196 * 1106 + visitV);
       expect(sliceCostOf(DEFAULTS, 'caves', '', 'vertical', n, 8192)).toBe(sliceCostOf(DEFAULTS, 'caves', '', 'vertical', n));
     }
-    expect(sliceCostOf(DEFAULTS, 'caves', '', 'vertical', 128)).toBe(313_416);
+    expect(sliceCostOf(DEFAULTS, 'caves', '', 'vertical', 128)).toBe(311_624);
     // Horizontal: ⌈(the row's chunk columns, over every alignment) × visit / r⌉, r = max(1, ⌊16n / E⌋) rows per chunk row.
     const rows = (n: number, e: number) => Math.max(1, Math.floor((16 * n) / e));
     const chunks128 = [17, 33, 65, 128, 128, 128];
     const chunks32 = [17, 32, 32, 32, 32, 32];
     SLICE_EXTENTS.forEach((e, i) => {
-      expect(sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 128, e), `128 at ${e}`).toBe(128 * 243 + Math.ceil((chunks128[i]! * visitH) / rows(128, e)));
-      expect(sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 32, e), `32 at ${e}`).toBe(32 * 243 + Math.ceil((chunks32[i]! * visitH) / rows(32, e)));
+      expect(sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 128, e), `128 at ${e}`).toBe(128 * 229 + Math.ceil((chunks128[i]! * visitH) / rows(128, e)));
+      expect(sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 32, e), `32 at ${e}`).toBe(32 * 229 + Math.ceil((chunks32[i]! * visitH) / rows(32, e)));
     });
-    expect(sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 128, 256)).toBe(287_881);
+    expect(sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 128, 256)).toBe(286_089);
     // It follows the configured tree's work (the stage's compile of the resolved tree), not the selection.
     const steep = withTree(steepTree());
     const w = memoWorkCost(evaluatedExpression(steep, 'density', ''), steep);
-    expect(sliceCostOf(steep, 'caves', '', 'vertical', 128)).toBe(128 * (w.voxel + 64) + 196 * w.corner + visitV);
-    expect(sliceCostOf(DEFAULTS, 'caves', 'root', 'vertical', 128)).toBe(313_416);
+    expect(sliceCostOf(steep, 'caves', '', 'vertical', 128)).toBe(128 * (compiledVoxelWork(evaluatedExpression(steep, 'density', ''), steep) + 64) + 196 * w.corner + visitV);
+    expect(sliceCostOf(DEFAULTS, 'caves', 'root', 'vertical', 128)).toBe(311_624);
     expect(() => sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 128)).toThrow(/extent/);
   });
 
@@ -304,8 +342,9 @@ describe('sliceCostOf (SP3d spec §5.2; SP6a §7.4\'s memo-aware bound, rulings 
     // A horizontal draft visits a chunk column per sample (a 32² draft's samples share few): refused, so the 256 and 512
     // planes ask for the 128² slice at once (ruling R9); from 1024 nothing is drawn but the notice.
     expect(SLICE_EXTENTS.map((e) => refused(sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 32, e), 32, DRAFT_BUDGET))).toEqual([true, true, true, true, true, true]);
-    // The 512 plane's margin: 128 × 1,028,001 of REQUEST_BUDGET.
-    expect(REQUEST_BUDGET - 128 * sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 128, 512)).toBe(2_633_600);
+    // The 512 plane's margin: 128 × 1,026,209 of REQUEST_BUDGET (2,633,600 before SP6b ruling U2 charged the compile's
+    // voxel work; every later change of the default density tree re-checks it).
+    expect(REQUEST_BUDGET - 128 * sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 128, 512)).toBe(2_862_976);
   });
 
   test('the costs follow the configured params: a muted tap and the noise octaves', () => {

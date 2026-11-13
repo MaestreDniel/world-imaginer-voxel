@@ -270,6 +270,38 @@ export function memoWorkCost(expr: unknown, params: Params): MemoWork {
   return { voxel, corner };
 }
 
+/**
+ * One sample's voxel work as T's compiled evaluator does it (SP6b ruling U2, the `caves` slice field's): `memoWorkCost`'s
+ * voxel (every `interpolated` node 1, its child nothing) with each def reached at voxel placement evaluated once per
+ * sample and every later read of it costing 1 (the compile's per-voxel CSE of refs and defs, `src/gen/density/compile.ts`);
+ * a ref to a missing def costs 1, as in `workCost`. Saturates at 2^31. The default root: one `ref steep` read of its two.
+ */
+export function compiledVoxelWork(expr: unknown, params: Params): number {
+  if (!isRec(expr)) return 0;
+  const defs = Object.hasOwn(expr, 'defs') ? expr['defs'] : undefined;
+  const weigh = (n: Rec, op: string | undefined): number => (isNoise(op) ? noiseWeight(params, n['id']) : 1);
+  const hasDef = (name: unknown): name is string => typeof name === 'string' && isRec(defs) && Object.hasOwn(defs, name);
+  const evaluated = new Set<string>();
+  let work = 0;
+  const stack: unknown[] = [Object.hasOwn(expr, 'root') ? expr['root'] : undefined];
+  while (stack.length > 0) {
+    const v = stack.pop();
+    if (!isRec(v)) continue;
+    const op = opOf(v);
+    if (op === 'ref') {
+      const name = v['name'];
+      if (!hasDef(name)) work = sat(work + weigh(v, op));
+      else if (evaluated.has(name)) work = sat(work + 1);
+      else { evaluated.add(name); stack.push((defs as Rec)[name]); }
+      continue;
+    }
+    work = sat(work + weigh(v, op));
+    if (op === 'interpolated') continue;
+    for (const k of (op === undefined ? undefined : CHILD_KEYS.get(op)) ?? NO_KEYS) if (Object.hasOwn(v, k)) stack.push(v[k]);
+  }
+  return work;
+}
+
 const DENSITY_COLUMN: Model = {
   own: (_n, op, corner) => (isNoise(op) ? NOISE_MAX_WEIGHT : 1) * (corner ? COLUMN_CORNERS : COLUMN_VOXELS),
   factor: () => 1,

@@ -714,7 +714,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       }
     });
 
-    test('a tree that reads col steep: the horizontal draft and then the 128² slice are requested with no notice; its limit is 3 072, never 0', async () => {
+    test('a tree that reads col steep: the horizontal draft and then the 128² slice are requested with no notice; its limit is 5 612 at 512, never 0', async () => {
       const steep = paramsWith({ density: { defs: steepTree() } } as never);
       const { r, calls } = harness(steep);
       r.request(want(HORI));
@@ -724,17 +724,20 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       calls[0]!.resolve(density(32));
       await flush();
       expect(calls).toHaveLength(2);
-      // 128 × (32 + CORNER_STEEP_COST) + 644 × 68: the 128² samples at extent 512 share corners (SP6a §7.4).
-      expect([calls[1]!.req.n, calls[1]!.opts]).toEqual([128, { priority: 500, columnCost: 128 * (32 + CORNER_STEEP_COST) + 644 * 68, budget: REQUEST_BUDGET }]);
+      // 128 × 32 + 644 × 68 + 258 × CORNER_STEEP_COST / 4: the 128² samples at extent 512 share corners (SP6a §7.4) and
+      // read 258 distinct lattice points per row (SP6b ruling U3).
+      expect([calls[1]!.req.n, calls[1]!.opts]).toEqual([128, { priority: 500, columnCost: 128 * 32 + 644 * 68 + 258 * (CORNER_STEEP_COST / 4), budget: REQUEST_BUDGET }]);
       const f = density(128);
       calls[1]!.resolve(f);
       await flush();
       expect([r.shown?.result, r.pending, r.notice]).toEqual([f, null, null]);
-      // The notice a heavier steep tree would get: the limit is the largest work per sample accepted, 3 072 (11 264 for a
-      // draft); the cost, the column's evaluation work per sample (⌈(128 × 32 + 644 × 68) / 128⌉ = 375 at 128², whose
-      // samples share corners; 576 at 32², whose samples share none).
-      expect(tooHeavyText('full', steep, 'density', '', 'horizontal', 128, sliceCostOf(steep, 'density', '', 'horizontal', 128, 512), 2 ** 20)).toBe('node too heavy for a 128² slice (cost 375, limit 3 072)');
-      expect(tooHeavyText('draft', steep, 'density', '', 'horizontal', 32, sliceCostOf(steep, 'density', '', 'horizontal', 32, 512), 2 ** 19)).toBe('node too heavy to slice (cost 576, limit 11 264)');
+      // The notice a heavier steep tree would get: the limit is the largest work per sample accepted at the plane's extent,
+      // 5 612 at 512 (⌊(2^20 − 258 × 1,280) / 128⌋; 3 072 from 1024, where no two samples share a lattice point) and
+      // 11 264 for a draft; the cost, the column's evaluation work per sample (⌈(128 × 32 + 644 × 68) / 128⌉ = 375 at 128²,
+      // whose samples share corners; 576 at 32², whose samples share none).
+      expect(tooHeavyText('full', steep, 'density', '', 'horizontal', 128, sliceCostOf(steep, 'density', '', 'horizontal', 128, 512), 2 ** 20, null, 512)).toBe('node too heavy for a 128² slice (cost 375, limit 5 612)');
+      expect(tooHeavyText('full', steep, 'density', '', 'horizontal', 128, sliceCostOf(steep, 'density', '', 'horizontal', 128, 1024), 2 ** 20, null, 1024)).toMatch(/, limit 3 072\)$/);
+      expect(tooHeavyText('draft', steep, 'density', '', 'horizontal', 32, sliceCostOf(steep, 'density', '', 'horizontal', 32, 512), 2 ** 19, null, 512)).toBe('node too heavy to slice (cost 576, limit 11 264)');
     });
 
     test('a SliceTooHeavy from the pool gives the same notice; tooHeavyText converts planFieldSlice\'s column-cost limit', async () => {
@@ -1011,10 +1014,10 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       const plan = planFieldSlice(32, cost, 3, DRAFT_BUDGET);
       if (!plan.refused) throw new Error('expected a refusal');
       expect(r.notice).toBe(tooHeavyText('draft', DEFAULTS, 'caves', '', 'horizontal', 32, cost, plan.limit, 512));
-      // Per sample, its chunk column's acquisition included: ⌈3,874,528 / 32⌉ against ⌊DRAFT_BUDGET / 32 / 32⌋.
-      expect([cost, plan.limit]).toEqual([3874528, DRAFT_BUDGET / 32]);
+      // Per sample, its chunk column's acquisition included: ⌈3,874,080 / 32⌉ against ⌊DRAFT_BUDGET / 32 / 32⌋.
+      expect([cost, plan.limit]).toEqual([3874080, DRAFT_BUDGET / 32]);
       // The widest extent whose request is admitted is named (Task 52, minors-16).
-      expect(r.notice).toBe('cave type too heavy to slice (cost 121 079, limit 16 384) — narrow the extent to 512 or less');
+      expect(r.notice).toBe('cave type too heavy to slice (cost 121 065, limit 16 384) — narrow the extent to 512 or less');
     });
 
     test('the widest admitted caves extent (Task 52, minors-16): 512 at the defaults (the 128² slice admitted at 256 and 512, nothing from 1024); named from 1024 up', () => {
@@ -1029,7 +1032,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
         expect(r.notice).toMatch(/^cave type too heavy to slice \(cost [\d ]+, limit 16 384\) — narrow the extent to 512 or less$/);
       }
       // The node and density notices and a notice with no admitted extent are unchanged.
-      expect(tooHeavyText('draft', DEFAULTS, 'caves', '', 'horizontal', 32, 3874528, DRAFT_BUDGET / 32, null)).toBe('cave type too heavy to slice (cost 121 079, limit 16 384)');
+      expect(tooHeavyText('draft', DEFAULTS, 'caves', '', 'horizontal', 32, 3874080, DRAFT_BUDGET / 32, null)).toBe('cave type too heavy to slice (cost 121 065, limit 16 384)');
       expect(tooHeavyText('full', DEFAULTS, 'density', '', 'vertical', 128, sliceCostOf(DEFAULTS, 'density', '', 'vertical', 128), 2 ** 20)).toBe('node too heavy for a 128² slice (cost 1 873, limit 7 936)');
     });
 

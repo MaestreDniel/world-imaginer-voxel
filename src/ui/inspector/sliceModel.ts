@@ -606,7 +606,7 @@ export function fieldSliceSpec(s: SliceState, line: Segment | null, field: Slice
 /**
  * The refusal notice of a density, node or caves slice whose column cost exceeds `limit` (`planFieldSlice`'s, in
  * column-cost units), in §5.2's per-sample units: c = the column's evaluation work per sample, ⌈(columnCost − a) / n⌉
- * with a the column's acquisition (`sliceAcquisitionCost`; c is the evaluated expression's work cost when it has no
+ * with a the column's acquisition (`sliceAcquisitionCost` at the plane's `extent`; c is the evaluated expression's work cost when it has no
  * `interpolated`, and less with one, whose corners the memo shares, SP6a §7.4), and L = the largest c accepted,
  * ⌊(limit − a) / n⌋. The draft's (`draft`) reads "node too heavy to slice", the full slice's "node too heavy for a 128²
  * slice". A caves slice (SP6a §7.4) reads "cave type too heavy …" with c = ⌈columnCost / n⌉ and L = ⌊limit / n⌋, its
@@ -615,9 +615,9 @@ export function fieldSliceSpec(s: SliceState, line: Segment | null, field: Slice
  */
 export function tooHeavyText(
   stage: 'draft' | 'full', params: Params, field: 'density' | 'node' | 'caves', path: string, plane: SliceGeometry['plane'], n: number, columnCost: number, limit: number,
-  narrowTo: number | null = null,
+  narrowTo: number | null = null, extent?: number,
 ): string {
-  const a = field === 'caves' ? 0 : sliceAcquisitionCost(params, field, path, plane, n);
+  const a = field === 'caves' ? 0 : sliceAcquisitionCost(params, field, path, plane, n, extent);
   const c = Math.ceil((columnCost - a) / n);
   const l = Math.floor((limit - a) / n);
   const who = field === 'caves' ? 'cave type' : 'node';
@@ -757,7 +757,7 @@ export function createFieldSliceRequests(src: FieldSliceSource): FieldSliceReque
       // A horizontal caves slice names the widest extent it is admitted at, when narrower (Task 52, minors-16).
       const widest = field === 'caves' && state.plane === 'horizontal' ? widestCaveExtent(cfg.params) : null;
       const narrowTo = widest !== null && widest < state.extent ? widest : null;
-      return tooHeavyText(draft ? 'draft' : 'full', cfg.params, field as 'density' | 'node' | 'caves', path, state.plane, n, cost, limit, narrowTo);
+      return tooHeavyText(draft ? 'draft' : 'full', cfg.params, field as 'density' | 'node' | 'caves', path, state.plane, n, cost, limit, narrowTo, state.extent);
     };
     if (isRefusableField(field)) {
       const plan = planFieldSlice(n, cost, src.pool.size, budget);
