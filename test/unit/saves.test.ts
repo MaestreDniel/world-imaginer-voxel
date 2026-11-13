@@ -32,6 +32,7 @@ import { normalizeHotbar } from '../../src/player/hotbar';
 import { NO_ENTRY } from '../../src/sim/diffStore';
 import { Y_MAX, Y_MIN } from '../../src/ui/world/query';
 import { REGISTRY } from '../../src/world/blocks';
+import { gv8DensityTrees, gv8SurfaceTrees, type Gv8DensityKind } from '../harness/gv8Trees';
 import { sp5cTrees, type Sp5cKind } from '../harness/sp5cTrees';
 import { sp6aTrees, type Sp6aKind } from '../harness/sp6aTrees';
 
@@ -103,8 +104,8 @@ describe('loadParams (D33)', () => {
     }
   });
 
-  test('`schemaVersion` 5 → a `MIGRATION_FAILED` issue', () => {
-    const r = loadParams({ ...fixture(), schemaVersion: 5 });
+  test('`schemaVersion` 6 → a `MIGRATION_FAILED` issue', () => {
+    const r = loadParams({ ...fixture(), schemaVersion: 6 });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.issues.map((i) => i.code)).toContain('MIGRATION_FAILED');
   });
@@ -534,6 +535,44 @@ describe('GV7 worlds (schema 3) and the user\'s check\'s migration (R31, R32; SP
     const p = loadParams({ params: params as JsonObject, schemaVersion: 2, profile: 'default' });
     if (!p.ok) throw new Error(JSON.stringify(p.issues));
     expect(p.value.caves.noodles).toEqual({ ...resolveProfile('default').caves.noodles, thickness: 0.11, maxY: 64 });
+  });
+});
+
+describe('GV8 worlds (schema 4) and SP6b\'s migration (D29, spec §14.4)', () => {
+  const KINDS: readonly Gv8DensityKind[] = ['default', 'amplified', 'floating_islands'];
+  const seed: Seed64 = seedFromInput('s');
+  /**
+   * A GV8 world record as SP6a's builds wrote it: schema 4, the full params of `profile` with both built-in trees as
+   * GV8 stored them (`test/fixtures/gv8-*-trees.json`), and the genKey `key` (by default that of the stored params).
+   */
+  const gv8 = (profile: Gv8DensityKind, key?: string): WorldRecord => {
+    const params = JSON.parse(canonicalJSON(resolveProfile(profile))) as Record<string, any>;
+    params['density'].defs = gv8DensityTrees()[profile];
+    params['surface'].rules = gv8SurfaceTrees()[profile === 'floating_islands' ? 'floating_islands' : 'default'];
+    return {
+      id: `w-${profile}`, name: profile, seedText: 's', seed: [seed[0], seed[1]], profile, params: params as JsonObject, schemaVersion: 4,
+      paramsHash: '0123456789abcdef', generatorVersion: 8, genKey: key ?? hex64(genKey(seed, stageHashes(params as unknown as Params))), stateTable: todayStateTable(), created: 1, backupOf: null,
+    };
+  };
+
+  test.each(KINDS)('the %s world opens through loadParams with the live trees (toBe) and its profile\'s params', (kind) => {
+    const p = loadParams(gv8(kind));
+    if (!p.ok) throw new Error(JSON.stringify(p.issues));
+    expect(p.value.density.defs).toBe(resolveProfile(kind).density.defs);
+    expect(p.value.surface.rules).toBe(resolveProfile(kind).surface.rules);
+    expect(canonicalJSON(p.value)).toBe(canonicalJSON(resolveProfile(kind)));
+  });
+
+  test.each(KINDS)('the %s world\'s olderGenerator is computed as today: today\'s genKey of the loaded params against the stored one', (kind) => {
+    for (const key of [undefined, '0123456789abcdef']) {
+      const w = gv8(kind, key);
+      const p = loadParams(w);
+      if (!p.ok) throw new Error(JSON.stringify(p.issues));
+      expect(olderGenerator(w, p.value)).toBe(hex64(genKey(w.seed, stageHashes(p.value))) !== w.genKey);
+    }
+    const foreign = gv8(kind, '0123456789abcdef');
+    const p = loadParams(foreign);
+    expect(p.ok && olderGenerator(foreign, p.value)).toBe(true);
   });
 });
 

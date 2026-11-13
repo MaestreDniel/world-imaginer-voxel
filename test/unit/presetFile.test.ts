@@ -9,6 +9,7 @@ import { isProfileReady, PROFILE_IDS, PROFILES, resolveProfile, type ProfileId }
 import { SCHEMA } from '../../src/core/params/schema';
 import { paramsHash } from '../../src/core/stage/hash';
 import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
+import { FLOATING_SURFACE_RULES } from '../../src/core/params/presetTrees';
 import { validateParamTrees } from '../../src/gen/trees';
 import { knotAt, setKnot } from '../../src/core/spline/edit';
 import { WorldSession } from '../../src/engine/session';
@@ -18,6 +19,7 @@ import {
 } from '../../src/ui/presets/presetFile';
 import { leafOpts } from '../../src/ui/splineEditor/model';
 import { randomParams } from '../harness/params';
+import { gv8DensityTrees, gv8SurfaceTrees } from '../harness/gv8Trees';
 import { sp5cTrees } from '../harness/sp5cTrees';
 import { testRng } from '../harness/stats';
 import { editedPatch } from './fixtures/editedTrees';
@@ -88,11 +90,11 @@ describe('presetFileName', () => {
 describe('presetText', () => {
   test('pretty JSON of exportPreset in envelope order, with a final newline', () => {
     expect(presetText(' My world ', 'default', withScaleMul(2))).toBe(
-      '{\n  "format": "wi10-preset",\n  "schemaVersion": 4,\n  "name": "My world",\n  "profile": "default",\n' +
+      '{\n  "format": "wi10-preset",\n  "schemaVersion": 5,\n  "name": "My world",\n  "profile": "default",\n' +
       '  "params": {\n    "climate": {\n      "scaleMul": 2\n    }\n  }\n}\n',
     );
     expect(presetText('Big', 'large_biomes', resolveProfile('large_biomes'))).toBe(
-      '{\n  "format": "wi10-preset",\n  "schemaVersion": 4,\n  "name": "Big",\n  "profile": "large_biomes",\n  "params": {}\n}\n',
+      '{\n  "format": "wi10-preset",\n  "schemaVersion": 5,\n  "name": "Big",\n  "profile": "large_biomes",\n  "params": {}\n}\n',
     );
   });
   test('equals exportPreset for random drafts', () => {
@@ -145,6 +147,29 @@ describe('readPresetText', () => {
     const kept = importPreset(JSON.parse(doc({ schemaVersion: 2, params: { density: { defs: edited } } })) as unknown);
     expect(kept.ok && canonicalJSON(kept.value.params.density.defs)).toBe(canonicalJSON(edited));
   });
+  test('a schema-4 preset file holding the GV8 default trees (U4\'s preset-v4.json) imports with the live trees (SP6b D29); an edited GV8 tree is kept', () => {
+    const text = readFileSync(new URL('../fixtures/preset-v4.json', import.meta.url), 'utf8');
+    const file = JSON.parse(text) as { schemaVersion: number; params: { density: { defs: unknown }; surface: { rules: unknown } } };
+    expect(file.schemaVersion).toBe(4);
+    expect(canonicalJSON(file.params.density.defs)).toBe(canonicalJSON(gv8DensityTrees().default));
+    expect(canonicalJSON(file.params.surface.rules)).toBe(canonicalJSON(gv8SurfaceTrees().default));
+    const r = readPresetText(text);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(canonicalJSON(r.patch)).toBe('{"caves":{"cheese":{"offset":0.45}}}');
+    const imported = importPreset(JSON.parse(text) as unknown);
+    expect(imported.ok).toBe(true);
+    if (!imported.ok) return;
+    expect(imported.value.params.density.defs).toBe(resolveProfile('default').density.defs);
+    expect(imported.value.params.surface.rules).toBe(resolveProfile('default').surface.rules);
+    const floating = importPreset(JSON.parse(doc({ schemaVersion: 4, profile: 'floating_islands', params: { density: { defs: gv8DensityTrees().floating_islands }, surface: { rules: gv8SurfaceTrees().floating_islands } } })) as unknown);
+    expect(floating.ok && floating.value.params.density.defs).toBe(resolveProfile('floating_islands').density.defs);
+    expect(floating.ok && floating.value.params.surface.rules).toBe(FLOATING_SURFACE_RULES);
+    const edited = gv8SurfaceTrees().default as { rules: [{ if: { falseAtAndAbove: number } }] };
+    edited.rules[0].if.falseAtAndAbove = -60;
+    const kept = importPreset(JSON.parse(doc({ schemaVersion: 4, params: { surface: { rules: edited } } })) as unknown);
+    expect(kept.ok && canonicalJSON(kept.value.params.surface.rules)).toBe(canonicalJSON(edited));
+  });
   test('JSON parse errors', () => {
     for (const text of ['', '{"format":', 'wi10']) {
       const r = readPresetText(text);
@@ -162,7 +187,7 @@ describe('readPresetText', () => {
     ]],
     ['reserved name', doc({ name: 'default' }), ['name: RESERVED_NAME — "default" is a built-in profile name']],
     ['unknown profile', doc({ profile: 'nope' }), ['profile: UNKNOWN_PROFILE — unknown profile "nope"']],
-    ['newer schema version', doc({ schemaVersion: 5 }), ['schemaVersion: NEWER_SCHEMA_VERSION — schemaVersion 5 is newer than this build (4)']],
+    ['newer schema version', doc({ schemaVersion: 6 }), ['schemaVersion: NEWER_SCHEMA_VERSION — schemaVersion 6 is newer than this build (5)']],
     ['cave_heavy with an invalid parameter', doc({ profile: 'cave_heavy', params: { climate: { scaleMull: 4 } } }), [
       'params.climate.scaleMull: UNKNOWN_KEY — unknown key "scaleMull"',
     ]],
@@ -365,7 +390,7 @@ describe('edited trees and version-1 presets (SP3d spec §1.11)', () => {
     const a = open({ patch: editedPatch(), profile: 'large_biomes' });
     expect(a.initNotice).toBeNull();
     const text = presetText('Edited trees', a.state.profile, a.state.params);
-    expect(JSON.parse(text).schemaVersion).toBe(4);
+    expect(JSON.parse(text).schemaVersion).toBe(5);
     const imported = importPreset(JSON.parse(text) as unknown);
     expect(imported.ok).toBe(true);
     if (!imported.ok) return;

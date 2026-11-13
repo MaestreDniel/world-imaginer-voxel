@@ -1,8 +1,8 @@
 import { fnv1a64, hex64 } from '../hash';
 import { canonicalJSON } from './canonical';
-import { DEFAULT_DENSITY_TREE } from './defaultTrees';
+import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from './defaultTrees';
 import type { Result } from './kit';
-import { AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE } from './presetTrees';
+import { AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE, FLOATING_SURFACE_RULES } from './presetTrees';
 
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | JsonObject;
 export interface JsonObject {
@@ -11,7 +11,7 @@ export interface JsonObject {
 
 export type Migration = (doc: JsonObject) => JsonObject;
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 const isObject = (v: unknown): v is JsonObject => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -95,6 +95,48 @@ function sp6aNoodles(doc: JsonObject): JsonObject {
 }
 
 /**
+ * The three built-in density trees at `GENERATOR_VERSION` 8 (default, amplified, floating_islands, as at aed4e07, the
+ * trees of 1ac9e7b: SP6a's after the user's check), by `hex64(fnv1a64(canonicalJSON(tree)))`, each mapped to today's tree
+ * of the same kind (SP6b D29, spec §14.4). The trees themselves are in `test/fixtures/gv8-density-trees.json`, and
+ * `test/unit/gv8Trees.test.ts` pins the same three hashes.
+ */
+const GV8_DENSITY_HASHES: ReadonlyMap<string, JsonValue> = new Map<string, JsonValue>([
+  ['c5416a3f42427b9c', DEFAULT_DENSITY_TREE as JsonValue],
+  ['f58b85b4aa09314e', AMPLIFIED_DENSITY_TREE as JsonValue],
+  ['132038069924a1c8', FLOATING_DENSITY_TREE as JsonValue],
+]);
+
+/**
+ * The two built-in surface trees at `GENERATOR_VERSION` 8 (`DEFAULT_SURFACE_RULES` and floating_islands', as at
+ * aed4e07), by the same hash, each mapped to today's tree of the same kind (SP6b D29). The trees are in
+ * `test/fixtures/gv8-surface-trees.json`, and `test/unit/gv8Trees.test.ts` pins the same two hashes.
+ */
+const GV8_SURFACE_HASHES: ReadonlyMap<string, JsonValue> = new Map<string, JsonValue>([
+  ['12b40aeca522f544', DEFAULT_SURFACE_RULES as JsonValue],
+  ['86856ea3ad435d0b', FLOATING_SURFACE_RULES as JsonValue],
+]);
+
+/** `doc` with the object tree at `group.leaf` replaced by `hashes`' tree for its hash, or `doc` itself when none. */
+function mapBuiltInTree(doc: JsonObject, group: string, leaf: string, hashes: ReadonlyMap<string, JsonValue>): JsonObject {
+  const parent = doc[group];
+  if (!isObject(parent) || !Object.hasOwn(parent, leaf) || !isObject(parent[leaf])) return doc;
+  const today = hashes.get(hex64(fnv1a64(canonicalJSON(parent[leaf]))));
+  return today === undefined ? doc : mapPath(doc, `${group}.${leaf}`, () => today);
+}
+
+/**
+ * 4 → 5 (SP6b D29, spec §14.4): a stored `density.defs` canonically equal to one of GV8's built-in density trees, and a
+ * stored `surface.rules` canonically equal to one of GV8's built-in surface trees, each become today's tree of that kind
+ * (the registered frozen tree itself), apart; any other tree (a user's edit) and every other leaf are kept. The new
+ * leaves (`caves.biomes.*`, the floor's, the new noises) are not written: a missing leaf takes the profile's value. A
+ * document whose trees are absent, not objects, or not GV8's is returned as is; the input is never mutated. SP6a's and
+ * SP5c's trees reach today's through 3 → 4 and 2 → 3, which map them by reference to the live trees.
+ */
+function sp6bTrees(doc: JsonObject): JsonObject {
+  return mapBuiltInTree(mapBuiltInTree(doc, 'density', 'defs', GV8_DENSITY_HASHES), 'surface', 'rules', GV8_SURFACE_HASHES);
+}
+
+/**
  * MIGRATIONS[v - 1] upgrades a version-v document to v + 1; invariant: length === SCHEMA_VERSION - 1.
  * 1 → 2 (SP3d spec §1.11): the identity — version 2 adds the `json` leaves `density.defs` and `surface.rules`, which a
  * version-1 document lacks, and a missing leaf takes the profile's value.
@@ -102,8 +144,10 @@ function sp6aNoodles(doc: JsonObject): JsonObject {
  * with the caves tree; an edited tree is kept.
  * 3 → 4 (the user's check, R31, R32): SP6a's built-in trees become today's, with the noodle toggle's threshold, and
  * their documents' SP6a noodle defaults today's (`sp6aNoodles`); an edited tree or value is kept.
+ * 4 → 5 (SP6b D29): GV8's built-in density and surface trees become today's, with the rock floor and rule 4
+ * (`sp6bTrees`); an edited tree is kept.
  */
-export const MIGRATIONS: readonly Migration[] = [(doc) => doc, builtInTrees, sp6aNoodles];
+export const MIGRATIONS: readonly Migration[] = [(doc) => doc, builtInTrees, sp6aNoodles, sp6bTrees];
 
 /** Upgrades a document from `from` to migrations.length + 1 (SP1 spec §4.6). */
 export function migrate(doc: JsonObject, from: number, migrations: readonly Migration[] = MIGRATIONS): Result<JsonObject> {
