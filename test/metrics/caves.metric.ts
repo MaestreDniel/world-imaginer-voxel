@@ -9,7 +9,7 @@ import { seedFromInput } from '../../src/core/seed';
 import { carverPath, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
 import {
   aperiodicRatios, bandDetail, borderPlaneRatio, C1_C6_PARTS, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, emptyBandCounts,
-  emptyLayerCounts, emptyWallResidues, EXAMPLE_IDS, GRID_H, GRID_Y0, verticalStepDetail,
+  emptyLayerCounts, emptyWallResidues, EXAMPLE_IDS, floorFaceResidues, GRID_H, GRID_Y0, verticalStepDetail,
   type C1C6Part, type C7C9Part, type CaveC7C9Counts, type CavePose, type CaveRegionCounts,
 } from '../harness/caveMetrics';
 import type { CaveRegionResult } from '../harness/caveRegionWorker';
@@ -351,8 +351,8 @@ const NAN_ON_FAST: readonly string[] = [];
 /**
  * C1-C6 (SP6a spec §10.1, D26: tuning parts, gated from Task 38): measured over the tier's default regions (default and
  * large_biomes; C1 per profile) by `test/harness/caveMetrics.ts`, whose header states each definition as built, and
- * written to `.out/caves.C1-C6.json`: the parts, the value per profile, C5.thinnest's components per value, and per
- * region its counts' summary. Every part is finite (fast: or listed in `NAN_ON_FAST`).
+ * written to `.out/caves.C1-C6.json`: the parts, the value per profile, the bands' and the floor faces' residues per
+ * profile, C5.thinnest's components per value, and per region its counts' summary. Every part is finite (fast: or listed in `NAN_ON_FAST`).
  */
 async function measureC1C6(): Promise<Record<C1C6Part, number>> {
   const measured: Array<{ site: Site; counts: CaveRegionCounts; ms: number }> = (await measuredRegions())
@@ -362,15 +362,18 @@ async function measureC1C6(): Promise<Record<C1C6Part, number>> {
   const profiles = [...new Set(measured.map((m) => m.site.profile))];
   const perProfile = Object.fromEntries(profiles.map((p) => [p, c1c6Parts(measured.filter((m) => m.site.profile === p).map((m) => ({ profile: p, counts: m.counts })))]));
   const nan = C1_C6_PARTS.filter((p) => Number.isNaN(parts[p]));
-  // Per profile, the bands' carve rates and residue ratios behind C4.bands and C6.latticeBias.
-  const bands = Object.fromEntries(profiles.map((p) => {
+  // Per profile, the bands' carve rates and residue ratios behind C4.bands and C6.latticeBias, and the floor faces'
+  // residues behind C6.floorFaceLattice.
+  const bandSums = new Map(profiles.map((p) => {
     const sum = emptyBandCounts();
     for (const m of measured) {
       if (m.site.profile !== p) continue;
       for (const k of Object.keys(sum) as Array<keyof typeof sum>) for (let i = 0; i < sum[k].length; i++) sum[k][i]! += m.counts.bands[k][i]!;
     }
-    return [p, bandDetail(sum)];
+    return [p, sum];
   }));
+  const bands = Object.fromEntries([...bandSums].map(([p, sum]) => [p, bandDetail(sum)]));
+  const floorFaces = Object.fromEntries([...bandSums].map(([p, sum]) => [p, floorFaceResidues(sum)]));
   const regions = measured.map(({ site, counts: c, ms }) => ({
     label: site.label, profile: site.profile, ms,
     ...c1c6Parts([{ profile: site.profile, counts: c }]),
@@ -390,7 +393,7 @@ async function measureC1C6(): Promise<Record<C1C6Part, number>> {
   const thinnest = { all: histOf((t) => t.all), notNoodle: histOf((t) => t.notNoodle), cheese: histOf((t) => t.cheese), spaghetti3d: histOf((t) => t.spaghetti3d) };
   mkdirSync(OUT_DIR, { recursive: true });
   writeFileSync(join(OUT_DIR, 'caves.C1-C6.json'), json({
-    id: 'C1-C6', tier: process.env.METRICS_TIER ?? null, values: parts, nanParts: nan, perProfile, bands, thinnest, regions,
+    id: 'C1-C6', tier: process.env.METRICS_TIER ?? null, values: parts, nanParts: nan, perProfile, bands, floorFaces, thinnest, regions,
   }));
   for (const p of C1_C6_PARTS) {
     const v = parts[p];

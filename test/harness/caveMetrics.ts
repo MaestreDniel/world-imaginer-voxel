@@ -31,8 +31,17 @@
  *   box's faces cut the components (a component cut by the region's border or by y −56 reads thinner there).
  *   `thinnest` is the median over the components ≥ 64 voxels that are not mostly noodle (ruling R32), `thinnestByKind`
  *   over those mostly cheese / mostly spaghetti 3D. "Mostly" a kind: more than half its voxels.
- * - C6: per band, the carve rate of the underground voxels with y ≡ r (mod 8), x ≡ r (mod 4) and z ≡ r (mod 4), each
- *   over the band's rate; the maximum over residues and the bands whose rate is > 0.
+ * - C6: per band, the carve rate of the underground voxels with y ≡ r (mod 8) over their lattice-neutral local
+ *   expectation, and of those with x ≡ r (mod 4) and z ≡ r (mod 4) over the band's rate; the maximum over residues and
+ *   the bands whose rate is > 0 (SP6b ruling U1, a measurement correction of SP6a's stated intent, "so depth variation
+ *   is not read as lattice bias"). A y residue's expectation is Σ voxels(y)·m(y) over the band's rows y ≡ r, m(y) the
+ *   rows' carve rate averaged over y − 4 … y + 4 with weights ½, 1, 1, 1, 1, 1, 1, 1, ½ (÷ 8; `W9`): the window spans
+ *   one period of 8, so a pure period-8 modulation reads as over the band's mean and a depth trend linear over 9 rows
+ *   reads 1. The rows y −60 … 43 are counted for it (the bands and 4 rows each side, underground by the same rule).
+ *   `C6.latticeBiasAsDefined` is SP6a's reading (each y residue over the band's rate), recorded beside it, and
+ *   `C6.floorFaceLattice` a recorded floor check: a floor face is a tagged voxel whose voxel below is solid; over the
+ *   rows y −56 … −33, the floor faces at y ≡ 0 (mod 8, the density cells' corner layers) over their W9 expectation
+ *   (the rows' floor-face rate, W9-averaged, times their voxels), each residue's in the record.
  * The region parts pool their counts over the regions (C1 per profile); the per-km² parts divide by the regions' area.
  *
  * C7-C9 (the tuning parts; C7's construction parts live in `caves.metric.ts`, but for the stored side of
@@ -403,9 +412,18 @@ export function ravinePathsOf(g: CaveGrid, seed: string, params: Params): {
 export const BAND_Y0 = -56;
 export const BANDS = 6;
 
+/** C6's rows (its W9 expectation): the bands and 4 rows each side, y −60 … 43; index y − ROW_Y0. */
+export const ROW_Y0 = BAND_Y0 - 4;
+export const ROWS = 16 * BANDS + 8;
+/** C6.floorFaceLattice's rows: y −56 … −33 (the bottom's two bands, where a floor shows). */
+export const FLOOR_FACE_Y0 = BAND_Y0;
+export const FLOOR_FACE_Y1 = -33;
+
 /**
  * C4's and C6's counts per band b (6): the underground voxels (y ≤ top − 8) and the tagged ones, in total and per
- * residue y mod 8, x mod 4, z mod 4 (world coordinates). Index: total [b]; y residues [8b + r]; x and z [4b + r].
+ * residue y mod 8, x mod 4, z mod 4 (world coordinates). Index: total [b]; y residues [8b + r]; x and z [4b + r]. Per
+ * row y −60 … 43 (C6, index y − ROW_Y0): the underground voxels, the tagged ones and the floor faces (a tagged voxel
+ * whose voxel below is solid).
  */
 export interface BandCounts {
   readonly voxels: Float64Array;
@@ -416,6 +434,9 @@ export interface BandCounts {
   readonly xTagged: Float64Array;
   readonly zVoxels: Float64Array;
   readonly zTagged: Float64Array;
+  readonly rowVoxels: Float64Array;
+  readonly rowTagged: Float64Array;
+  readonly rowFloor: Float64Array;
 }
 
 export function emptyBandCounts(): BandCounts {
@@ -424,6 +445,7 @@ export function emptyBandCounts(): BandCounts {
     yVoxels: new Float64Array(8 * BANDS), yTagged: new Float64Array(8 * BANDS),
     xVoxels: new Float64Array(4 * BANDS), xTagged: new Float64Array(4 * BANDS),
     zVoxels: new Float64Array(4 * BANDS), zTagged: new Float64Array(4 * BANDS),
+    rowVoxels: new Float64Array(ROWS), rowTagged: new Float64Array(ROWS), rowFloor: new Float64Array(ROWS),
   };
 }
 
@@ -457,7 +479,42 @@ export function bandCounts(g: CaveGrid, tops: Int16Array, into: BandCounts = emp
       }
     }
   }
+  for (let i = 0; i < ROWS; i++) {
+    const y = ROW_Y0 + i;
+    const row = (y - GRID_Y0) * plane;
+    for (let p = 0; p < plane; p++) {
+      if (y > tops[p]! - 8) continue;
+      into.rowVoxels[i]!++;
+      if ((cells[row + p]! & TAG_MASK) === 0) continue;
+      into.rowTagged[i]!++;
+      if ((cells[row - plane + p]! & SOLID_BIT) !== 0) into.rowFloor[i]!++;
+    }
+  }
   return into;
+}
+
+/** C6's W9 weights over y − 4 … y + 4 (÷ 8): one period of 8, the ends halved. */
+const W9 = [0.5, 1, 1, 1, 1, 1, 1, 1, 0.5] as const;
+
+/** The W9 mean at row y of a per-row count over the rows' voxels (a row without voxels reads 0). */
+function w9(c: BandCounts, of: Float64Array, y: number): number {
+  let m = 0;
+  for (let k = 0; k < 9; k++) {
+    const i = y - 4 + k - ROW_Y0;
+    if (c.rowVoxels[i]! > 0) m += W9[k]! * of[i]! / c.rowVoxels[i]!;
+  }
+  return m / 8;
+}
+
+/** Per y residue r of the rows y0 … y1: the count `of` over its W9 expectation (NaN where the expectation is 0). */
+function w9Residues(c: BandCounts, of: Float64Array, y0: number, y1: number): number[] {
+  const obs = new Float64Array(8), ex = new Float64Array(8);
+  for (let y = y0; y <= y1; y++) {
+    const r = mod(y, 8);
+    obs[r]! += of[y - ROW_Y0]!;
+    ex[r]! += c.rowVoxels[y - ROW_Y0]! * w9(c, of, y);
+  }
+  return Array.from({ length: 8 }, (_, r) => ratio(obs[r]!, ex[r]!));
 }
 
 /** C4.bands: the lowest band carve rate; NaN when a band has no underground voxel. */
@@ -470,35 +527,63 @@ export function bandsMin(c: BandCounts): number {
   return min;
 }
 
-/** C6.latticeBias: the largest residue rate over its band's rate, over the bands carved; NaN when none is. */
+/**
+ * C6.latticeBias: per band carved, each y residue's tagged voxels over their W9 expectation and each x and z residue's
+ * rate over the band's; the largest, NaN when no band is carved (SP6b ruling U1).
+ */
 export function latticeBias(c: BandCounts): number {
+  return residueMax(c, true);
+}
+
+/** C6.latticeBiasAsDefined (recorded): SP6a's reading, every residue's rate over its band's rate. */
+export function latticeBiasAsDefined(c: BandCounts): number {
+  return residueMax(c, false);
+}
+
+function residueMax(c: BandCounts, local: boolean): number {
   let max = Number.NaN;
+  const consider = (r: number): void => { if (!Number.isNaN(r) && !(r <= max)) max = r; };
   for (let b = 0; b < BANDS; b++) {
     if (c.voxels[b]! === 0 || c.tagged[b]! === 0) continue;
     const mean = c.tagged[b]! / c.voxels[b]!;
-    const consider = (v: Float64Array, t: Float64Array, k: number): void => {
+    const overMean = (v: Float64Array, t: Float64Array, k: number): void => {
       for (let r = 0; r < k; r++) {
         const i = k * b + r;
-        if (v[i]! === 0) continue;
-        const ratio = t[i]! / v[i]! / mean;
-        if (!(ratio <= max)) max = ratio;
+        if (v[i]! !== 0) consider(t[i]! / v[i]! / mean);
       }
     };
-    consider(c.yVoxels, c.yTagged, 8);
-    consider(c.xVoxels, c.xTagged, 4);
-    consider(c.zVoxels, c.zTagged, 4);
+    if (local) for (const r of w9Residues(c, c.rowTagged, BAND_Y0 + 16 * b, BAND_Y0 + 16 * b + 15)) consider(r);
+    else overMean(c.yVoxels, c.yTagged, 8);
+    overMean(c.xVoxels, c.xTagged, 4);
+    overMean(c.zVoxels, c.zTagged, 4);
   }
   return max;
 }
 
-/** Per band (C4, C6; recorded beside the parts): its first y, its carve rate and each residue's rate over it. */
-export function bandDetail(c: BandCounts): Array<{ y0: number; rate: number; y: number[]; x: number[]; z: number[] }> {
-  const out: Array<{ y0: number; rate: number; y: number[]; x: number[]; z: number[] }> = [];
+/** C6.floorFaceLattice's residues (recorded): the floor faces of y −56 … −33 per y mod 8 over their W9 expectation. */
+export function floorFaceResidues(c: BandCounts): number[] {
+  return w9Residues(c, c.rowFloor, FLOOR_FACE_Y0, FLOOR_FACE_Y1);
+}
+
+/** C6.floorFaceLattice (recorded, not gated): `floorFaceResidues` at y ≡ 0, the density cells' corner layers. */
+export function floorFaceLattice(c: BandCounts): number {
+  return floorFaceResidues(c)[0]!;
+}
+
+/**
+ * Per band (C4, C6; recorded beside the parts): its first y, its carve rate, each residue's rate over it and each y
+ * residue over its W9 expectation (`yLocal`, C6.latticeBias's).
+ */
+export function bandDetail(c: BandCounts): Array<{ y0: number; rate: number; y: number[]; yLocal: number[]; x: number[]; z: number[] }> {
+  const out: Array<{ y0: number; rate: number; y: number[]; yLocal: number[]; x: number[]; z: number[] }> = [];
   for (let b = 0; b < BANDS; b++) {
     const rate = ratio(c.tagged[b]!, c.voxels[b]!);
     const rel = (v: Float64Array, t: Float64Array, k: number): number[] =>
       Array.from({ length: k }, (_, r) => ratio(ratio(t[k * b + r]!, v[k * b + r]!), rate));
-    out.push({ y0: BAND_Y0 + 16 * b, rate, y: rel(c.yVoxels, c.yTagged, 8), x: rel(c.xVoxels, c.xTagged, 4), z: rel(c.zVoxels, c.zTagged, 4) });
+    out.push({
+      y0: BAND_Y0 + 16 * b, rate, y: rel(c.yVoxels, c.yTagged, 8),
+      yLocal: w9Residues(c, c.rowTagged, BAND_Y0 + 16 * b, BAND_Y0 + 16 * b + 15), x: rel(c.xVoxels, c.xTagged, 4), z: rel(c.zVoxels, c.zTagged, 4),
+    });
   }
   return out;
 }
@@ -940,7 +1025,7 @@ export const C1_C6_PARTS = [
   'C3.ravines', 'C3.ravinesSky', 'C3.maxShare',
   'C4.bands', 'C4.floorPeak',
   'C5.largest', 'C5.landCarved', 'C5.thinnest', 'C5.thinnestByKind',
-  'C6.latticeBias',
+  'C6.latticeBias', 'C6.latticeBiasAsDefined', 'C6.floorFaceLattice',
 ] as const;
 export type C1C6Part = (typeof C1_C6_PARTS)[number];
 
@@ -1018,6 +1103,8 @@ export function c1c6Parts(regions: ReadonlyArray<{ readonly profile: string; rea
     'C5.thinnest': median(thin),
     'C5.thinnestByKind': ratio(median(cheese), median(spag)),
     'C6.latticeBias': latticeBias(bands),
+    'C6.latticeBiasAsDefined': latticeBiasAsDefined(bands),
+    'C6.floorFaceLattice': floorFaceLattice(bands),
   };
 }
 

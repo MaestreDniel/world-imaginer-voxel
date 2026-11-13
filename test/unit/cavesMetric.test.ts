@@ -4,13 +4,14 @@ import { CAVE_KIND } from '../../src/core/constants';
 import { resolveProfile } from '../../src/core/params/profiles';
 import type { CarverPath } from '../../src/gen/caves/carvers';
 import {
-  aperiodicCounts, aperiodicity, aperiodicLags, bandCounts, bandsMin, borderPlaneRatio, c1c6Parts, C1_C6_PARTS, c7c9Parts,
+  aperiodicCounts, aperiodicity, aperiodicLags, BAND_Y0, bandCounts, bandDetail, BANDS, bandsMin, borderPlaneRatio, c1c6Parts, C1_C6_PARTS, c7c9Parts,
   C7_C9_PARTS, caveC7C9Counts, caveComponents, caveExamples, caveRegionCounts, COMP_Y_MIN, countsTransfer, emptyCaveGrid, flatWallCounts, flatWallDetail,
-  floorCounts, floorPeak, GRID_H, GRID_Y0, jensenShannon, kindCounts, landCounts, largestCounts, latticeBias, layerCounts,
+  emptyBandCounts, floorCounts, floorFaceLattice, floorFaceResidues, floorPeak, GRID_H, GRID_Y0, jensenShannon, kindCounts, landCounts,
+  largestCounts, latticeBias, latticeBiasAsDefined, layerCounts, ROW_Y0, ROWS,
   localThickness, logSd, median, nearestEntranceDistances, openingMask, percentile, PILLAR_AREA_MAX, PILLAR_BACK, pillarTiles, PILLAR_VIEW, preCaveTops, ravineCounts, regionCounts,
   setCell, skyCounts, surfaceCounts, switchWall, switchWallCounts, thinnestAxes, typeMixDivergences, verticalStep, verticalStepDetail,
   voidCounts,
-  wallResidues, waterWallCount, type CaveGrid,
+  wallResidues, waterWallCount, type BandCounts, type CaveGrid,
 } from '../harness/caveMetrics';
 import { NIBBLE_REGION, nibbleRegion } from '../harness/caveNibbles';
 import { measureCaveRegion, type CaveRegionResult } from '../harness/caveRegionWorker';
@@ -210,8 +211,9 @@ describe('the caves instruments on fixtures (SP6a §10.1, C1-C6)', () => {
     // Only the band −8 … 7 is carved: the others have no carving, so their minimum rate is 0.
     expect(bandsMin(b)).toBe(0);
 
+    // Uniform over every row C6 counts (y −60 … 43: the bands and the W9 window's 4 rows each side).
     const uniform = rock(16, 16, 100);
-    carve(uniform, K.cheese, 0, 15, -56, 39, 0, 15);
+    carve(uniform, K.cheese, 0, 15, -60, 43, 0, 15);
     const u = bandCounts(uniform, preCaveTops(uniform));
     expect(latticeBias(u)).toBeCloseTo(1, 12);
     expect(bandsMin(u)).toBe(1);
@@ -221,6 +223,67 @@ describe('the caves instruments on fixtures (SP6a §10.1, C1-C6)', () => {
     const cb = bandCounts(columns, preCaveTops(columns));
     expect(latticeBias(cb)).toBeCloseTo(4, 12);
     expect(bandsMin(cb)).toBeCloseTo(0.25, 12);
+  });
+
+  /** Band counts built from per-row voxels and tagged voxels (y −60 … 43), every x and z residue at the band's rate. */
+  function rowCounts(tagged: (y: number) => number, voxels = 1000): BandCounts {
+    const c = emptyBandCounts();
+    for (let i = 0; i < ROWS; i++) {
+      const y = ROW_Y0 + i;
+      c.rowVoxels[i] = voxels;
+      c.rowTagged[i] = tagged(y);
+      const b = Math.floor((y - BAND_Y0) / 16);
+      if (b < 0 || b >= BANDS) continue;
+      c.voxels[b]! += voxels;
+      c.tagged[b]! += tagged(y);
+      c.yVoxels[8 * b + (((y % 8) + 8) % 8)]! += voxels;
+      c.yTagged[8 * b + (((y % 8) + 8) % 8)]! += tagged(y);
+    }
+    for (let b = 0; b < BANDS; b++) {
+      for (let r = 0; r < 4; r++) {
+        c.xVoxels[4 * b + r] = c.zVoxels[4 * b + r] = c.voxels[b]! / 4;
+        c.xTagged[4 * b + r] = c.zTagged[4 * b + r] = c.tagged[b]! / 4;
+      }
+    }
+    return c;
+  }
+
+  test('C6 reads each y residue over its W9 expectation: a depth ramp reads 1, which the band mean read as a bias; a period-8 modulation reads as over the band mean (SP6b U1)', () => {
+    // A carve rate rising linearly with y (no lattice part): the W9 mean of a line is the line, so every residue reads 1.
+    // SP6a's reading puts each band's top residue above its mean: band −56 … −41's y ≡ 7 (rows −49 and −41) the largest.
+    const ramp = rowCounts((y) => y + 160);
+    expect(latticeBias(ramp)).toBeCloseTo(1, 12);
+    expect(latticeBiasAsDefined(ramp)).toBeCloseTo((111 + 119) / 2 / ((104 + 119) / 2), 12);
+    // A 20 % excess on the corner layers y ≡ 0 over a flat rate: both read it as 120 / 102.5, the band's mean.
+    const corner = rowCounts((y) => (((y % 8) + 8) % 8 === 0 ? 120 : 100));
+    expect(latticeBias(corner)).toBeCloseTo(120 / 102.5, 12);
+    expect(latticeBiasAsDefined(corner)).toBeCloseTo(120 / 102.5, 12);
+    expect(bandDetail(corner)[0]!.yLocal[0]).toBeCloseTo(120 / 102.5, 12);
+    // The record's parts: both readings and the floor check (no floor face here: NaN, an undefined population).
+    const parts = c1c6Parts([]);
+    expect(C1_C6_PARTS.filter((p) => p.startsWith('C6.'))).toEqual(['C6.latticeBias', 'C6.latticeBiasAsDefined', 'C6.floorFaceLattice']);
+    expect(parts['C6.latticeBias']).toBeNaN();
+    expect(floorFaceLattice(corner)).toBeNaN();
+  });
+
+  test('C6 counts the rows y −60 … 43 (underground) and their floor faces; floors on the corner layers alone read 8 (SP6b U1)', () => {
+    const g = rock(16, 16, 100);
+    for (const y0 of [-56, -48, -40]) carve(g, K.cheese, 0, 15, y0, y0 + 2, 0, 15);
+    carve(g, K.cheese, 0, 15, -32, -30, 0, 15);
+    const b = bandCounts(g, preCaveTops(g));
+    expect([ROW_Y0, ROWS]).toEqual([-60, 104]);
+    expect(b.rowVoxels[0]).toBe(256);
+    expect(b.rowVoxels[ROWS - 1]).toBe(256);
+    expect(b.rowTagged[-56 - ROW_Y0]).toBe(256);
+    expect(b.rowFloor[-56 - ROW_Y0]).toBe(256);
+    // The slab's upper rows have tagged voxels below them, so no floor face.
+    expect(b.rowFloor[-55 - ROW_Y0]).toBe(0);
+    // Rows y −56 … −33 only: the slab at −32 lies above them.
+    expect(floorFaceResidues(b)).toEqual([8, 0, 0, 0, 0, 0, 0, 0]);
+    expect(floorFaceLattice(b)).toBe(8);
+    // Above the underground (y > top − 8) nothing is counted.
+    const low = rock(16, 16, 30);
+    expect(bandCounts(low, preCaveTops(low)).rowVoxels[ROWS - 1]).toBe(0);
   });
 
   test('the bands count only underground voxels (y ≤ top − 8) and use world residues', () => {

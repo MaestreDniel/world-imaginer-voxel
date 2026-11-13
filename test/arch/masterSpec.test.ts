@@ -2653,6 +2653,17 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(THRESHOLDS.DT2?.caveBiomeProbe).toEqual({ max: 0, activeFrom: 'SP6b' });
   });
 
+  test('§6.4\'s C6 row reads each y residue over its lattice-neutral local mean, the 1.1 as ≤ 1.09 on it (SP6b spec §15 item 20, ruling U1)', () => {
+    const c6 = text.split('\n').find((l) => l.startsWith('| C6 |'));
+    expect(c6, 'no C6 row in §6.4').toBeDefined();
+    expect(c6).toContain('each y residue is read over its lattice-neutral local mean instead of the band\'s (the rows\' carve rate averaged over y − 4 … y + 4 with weights ½, 1, 1, 1, 1, 1, 1, 1, ½ ÷ 8, one period of 8');
+    expect(c6).toContain('a measurement correction of SP6a\'s intent "so depth variation is not read as lattice bias"');
+    expect(c6).toContain('SP6a\'s reading is recorded beside it (`latticeBiasAsDefined`) with a floor-face check (`floorFaceLattice`, recorded, not gated); on this reading the 1.1 is ≤ 1.09');
+    expect(c6).toContain('(SP6b: ruling U1, the user\'s; amended by SP6b) |');
+    // Recorded, not gated: THRESHOLDS holds latticeBias alone (the row cross-check above keeps its bound).
+    expect(Object.keys(THRESHOLDS.C6 ?? {})).toEqual(['latticeBias']);
+  });
+
   test('§3.12 names the abyss surface-palette blocks (SP6b spec §15 item 13)', () => {
     const abyss = text.split('\n').find((l) => l.startsWith('- abyss:'));
     expect(abyss, 'no `- abyss:` line in §3.12').toBeDefined();
