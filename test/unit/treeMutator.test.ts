@@ -441,6 +441,82 @@ describe('treeMutator: caveBiome (SP6b spec §3.2, §3.5)', () => {
   }, 120_000);
 });
 
+describe('treeMutator: strata (SP6b spec §3.3)', () => {
+  /** The strata nodes of a value (any JSON). */
+  const strataNodes = (v: unknown): Array<Record<string, unknown>> => {
+    const out: Array<Record<string, unknown>> = [];
+    const stack: unknown[] = [v];
+    while (stack.length > 0) {
+      const x = stack.pop();
+      if (typeof x !== 'object' || x === null) continue;
+      if (!Array.isArray(x) && (x as Record<string, unknown>)['kind'] === 'strata') out.push(x as Record<string, unknown>);
+      for (const y of Object.values(x)) stack.push(y);
+    }
+    return out;
+  };
+
+  test('the mutator emits strata on each 2D remap-none schema noise (accepted), and broken ones (refused with their paths)', () => {
+    const next = testRng(1605);
+    const accepted = new Set<string>(), refusedCodes = new Set<string>(), mutated = new Set<string>();
+    for (let i = 0; i < 1500; i++) {
+      const m = mutateTree(next, mutationBase(next, 'surfaceRules'), 'surfaceRules', { count: 1 + (next() % 2) });
+      const nodes = strataNodes(m.value);
+      if (nodes.length === 0) continue;
+      const j = judge(m.value, 'surfaceRules');
+      if (j.params !== null) {
+        for (const n of nodes) accepted.add(String(n['noise']));
+        for (const name of m.names) mutated.add(name);
+      } else {
+        for (const x of j.issues) if (x.code.startsWith('STRATA_')) refusedCodes.add(x.code);
+      }
+    }
+    // The schema's 2D remap-'none' surface noises before SP6b's own (surface.noises.depth, patch, bandOffset).
+    expect([...accepted].sort()).toEqual([...SCHEMA_SURFACE_NOISES].sort());
+    expect([...refusedCodes].sort()).toEqual(['STRATA_LAYERS', 'STRATA_LEN', 'STRATA_WEIGHT']);
+    // Accepted trees holding strata come out of preserving mutations of their literals among others.
+    expect(mutated.has('changeLiteral')).toBe(true);
+  });
+
+  test('compiled == reference, and the fast path == full evaluation, on 200 accepted mutated trees holding strata', () => {
+    const cols = [43, 44].map((k) => withCaveBiomes(randomSurfaceColumn(testRng(k)), k));
+    const scans = cols.map((col) => scanColumn(newSurfaceScan(), SC.settings, col.sample, col.solid, col.water, col.biomes, col.tags, col.cave));
+    const next = testRng(1606);
+    let trees = 0, fastTrees = 0, checked = 0;
+    for (let i = 0; trees < 200; i++) {
+      expect(i, 'too few accepted trees with strata').toBeLessThan(8000);
+      const m = mutateTree(next, mutationBase(next, 'surfaceRules'), 'surfaceRules', { count: 1 + (next() % 2) });
+      if (strataNodes(m.value).length === 0) continue;
+      const j = judge(m.value, 'surfaceRules');
+      if (j.params === null) continue;
+      trees++;
+      const rules = resolveRules(j.params.surface.rules, j.params);
+      const compiled = compileSurfaceRules(CTX.seed, rules, SC.noises, SC.settings, SC.bands);
+      const reference = createSurfaceReference(CTX.seed, rules, SC.noises, SC.bands);
+      if (compiled.fastPath !== null) fastTrees++;
+      for (const [n, scan] of scans.entries()) {
+        FULL.fill(0);
+        compiled.fillColumn(scan, FULL, false);
+        if (compiled.fastPath !== null) {
+          FAST.fill(0);
+          compiled.fillColumn(scan, FAST, true);
+          for (let v = 0; v < 98304; v++) if (FAST[v] !== FULL[v]) throw new Error(`value ${i} column ${n}: fast path ≠ full at ${v}`);
+        }
+        for (let p = (i + n) % 9; p < 256; p += 9) {
+          for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
+            for (let y = scan.runTop[r]!; y >= scan.runBottom[r]!; y--) {
+              const want = reference.state(scan, SC.settings, p, y);
+              if (FULL[((y + 64) << 8) | p] !== want) throw new Error(`value ${i} column ${n} (${p}, ${y}): compiled ${FULL[((y + 64) << 8) | p]}, reference ${want}`);
+              checked++;
+            }
+          }
+        }
+      }
+    }
+    expect(fastTrees).toBeGreaterThan(10);
+    expect(checked).toBeGreaterThan(200_000);
+  }, 120_000);
+});
+
 describe('the fuzz harness options for json leaves (SP3d spec §10)', () => {
   test('randomDensityExpr negativeZero false: the same trees with every −0 written +0', () => {
     const throws = (v: unknown): boolean => {

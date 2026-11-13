@@ -223,6 +223,28 @@ describe('rows and summaries', () => {
     ]);
   });
 
+  test('a strata row reads strata <n> layers ×<maxLen> ±<amp> (SP6b spec §3.3)', () => {
+    const layers = [
+      { state: 'abyss_stone', weight: 50, maxLen: 8 }, { state: 'abyss_shale', weight: 25, maxLen: 4 },
+      { state: 'cracked_abyss_stone', weight: 15, maxLen: 3 }, { state: 'abyss_stone_veined', weight: 10, maxLen: 1 },
+    ];
+    const tree = {
+      kind: 'sequence', rules: [
+        { kind: 'condition', if: { kind: 'caveBiome', side: 'here', biomes: ['abyss'] }, then: { kind: 'strata', layers, minLen: 1, maxLen: 6, noise: 'surface.noises.bandOffset', amp: 6 } },
+        { kind: 'strata', layers: [layers[0]], minLen: 2, maxLen: 3, noise: 'surface.noises.patch', amp: 0.5 },
+      ],
+    };
+    const p = withRules(tree);
+    const rows = rowsOf(inspectorTree(p, expandAll(p), null), 'surface.rules');
+    expect(rows.map((r) => `${r.path} | ${r.summary}`)).toEqual([
+      'root | sequence 2',
+      'root.rules[0] | if caveBiome here [abyss] → strata',
+      'root.rules[0].if | caveBiome here [abyss]',
+      'root.rules[0].then | strata 4 layers ×6 ±6',
+      'root.rules[1] | strata 1 layer ×3 ±0.5',
+    ]);
+  });
+
   test('a noiseScaled row reads noiseScaled <id> /<s>, s a literal or a ref (SP6a §1.5)', () => {
     const tree = { root: { op: 'add', a: { op: 'noiseScaled', id: 'detail', s: 0.75 }, b: { op: 'noiseScaled', id: 'overhang', s: { param: 'density.noises.detail.clampSigma' } } }, defs: {} };
     const p = withDensity(tree);

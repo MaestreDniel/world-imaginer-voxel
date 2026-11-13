@@ -5,7 +5,8 @@
  * invalid tree is never sent, and a refusal comes back as issue lines). Node paths are never session paths.
  *
  * Operations: the fields of the selected node (`formFields`: one per scalar, with the select options of noises, sample
- * fields, defs, block states, biomes and sides, `caveBiome`'s three sides and four cave biomes); parameter refs on every
+ * fields, defs, block states, biomes and sides, `caveBiome`'s three sides and four cave biomes, `strata`'s noise, lengths
+ * and amp, its layers edited as JSON, SP6b); parameter refs on every
  * numeric field (`setNumber`: on `const.v` a target replaces the node by `{op: 'param', path}` and "literal" turns a
  * `param` node back into `const(<its current value>)`; elsewhere the ref form `{param, neg?}` and "literal" writes the
  * current resolved value; an int field lists only int targets, `refOptions`); replace op / kind with children kept by
@@ -107,11 +108,16 @@ const UNWRAP_OPS: ReadonlySet<string> = new Set(['neg', 'abs', 'square', 'clamp'
 const KEPT_SCALARS: ReadonlyMap<string, readonly string[]> = new Map([
   ['clamp', ['lo', 'hi']], ['rangeChoice', ['lo', 'hi']], ['noise', ['id']], ['noiseScaled', ['id']],
 ]);
-/** The rules' numeric fields and whether they are int fields (§1.3). */
+/**
+ * The rules' numeric fields and whether they are int fields (§1.3); `strata`'s lengths and amp (SP6b spec §3.3) are
+ * literals only, so a ref offered there is refused at commit (STRATA_LEN, NOT_FINITE).
+ */
 const RULE_NUMBERS: ReadonlyMap<string, boolean> = new Map([
   ['offset', true], ['minY', true], ['trueAtAndBelow', true], ['falseAtAndAbove', true], ['min', false], ['max', false], ['t', false],
+  ['minLen', true], ['maxLen', true], ['amp', false],
 ]);
-const RULE_CHILD_FIELDS: ReadonlySet<string> = new Set(['if', 'then', 'rules']);
+/** Rule fields with no form control: the children, and `strata`'s layers (edited in the JSON editor). */
+const RULE_CHILD_FIELDS: ReadonlySet<string> = new Set(['if', 'then', 'rules', 'layers']);
 const KNOT_KEY = /^knots\[(0|[1-9][0-9]*)\]\[([01])\]$/;
 const DEF_ROOT = /^defs\.([^.[]+)$/;
 
@@ -271,6 +277,14 @@ function densityScalars(op: string, value: unknown): [string, unknown][] {
 const CONST_0 = (): Rec => record([['op', 'const'], ['v', 0]]);
 const SKY_OPEN = (): Rec => record([['kind', 'skyOpen']]);
 const EMPTY_SEQUENCE = (): Rec => record([['kind', 'sequence'], ['rules', []]]);
+/** A new `strata` leaf's fields: SP6b §3.3's abyss layers and lengths, on the band offset noise (2D, remap 'none'). */
+const STRATA_DEFAULT = (): [string, unknown][] => [
+  ['layers', [
+    record([['state', 'abyss_stone'], ['weight', 50], ['maxLen', 8]]), record([['state', 'abyss_shale'], ['weight', 25], ['maxLen', 4]]),
+    record([['state', 'cracked_abyss_stone'], ['weight', 15], ['maxLen', 3]]), record([['state', 'abyss_stone_veined'], ['weight', 10], ['maxLen', 1]]),
+  ]],
+  ['minLen', 1], ['maxLen', 6], ['noise', 'surface.noises.bandOffset'], ['amp', 6],
+];
 
 /** A condition kind's defaults (§3.3); `not` wraps the old condition. */
 function defaultCondition(kind: string, old: TreeNode): Rec {
@@ -299,6 +313,7 @@ function replacedRule(kind: string, old: TreeNode): Rec {
     case 'sequence': return record([['kind', 'sequence'], ['rules', children]]);
     case 'condition': return record([['kind', 'condition'], ['if', SKY_OPEN()], ['then', children[0] ?? EMPTY_SEQUENCE()]]);
     case 'block': return record([['kind', 'block'], ['state', 'stone']]);
+    case 'strata': return record([['kind', 'strata'], ...STRATA_DEFAULT()]);
     default: return record([['kind', kind]]);
   }
 }

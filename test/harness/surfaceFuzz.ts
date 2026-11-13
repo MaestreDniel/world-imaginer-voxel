@@ -2,8 +2,10 @@
  * Random valid surface-rule trees and random hand-built columns for the compile / reference / fast-path fuzz (SP3c
  * spec §3.4, §8).
  *
- * Trees (`randomSurfaceRules`) use every rule kind (one leaf in 8 is a `bandlands`) and condition kind of §3.1 (and
- * SP6b's `caveBiome`, every side and any list of 1-4 distinct cave biomes, SP6b spec §3.2) with
+ * Trees (`randomSurfaceRules`) use every rule kind (one leaf in 8 is a `bandlands`, one in 16 a `strata`: 1-4 layers or,
+ * one time in 8, 1-16, of any solid states, weights and lengths, on any of the trees' noises, amp 0 … 16, SP6b spec §3.3)
+ * and condition kind of §3.1 (and SP6b's `caveBiome`, every side and any list of 1-4 distinct cave biomes, SP6b spec
+ * §3.2) with
  * values aimed at the columns below
  * (y bounds over the whole height and its edges, gradients with and without a dither interval, offsets around the
  * skin depths, thresholds inside the noises' ranges and at their clamps); they are valid by construction (no −0,
@@ -218,6 +220,8 @@ const THRESHOLDS: readonly number[] = [-8, -3, -2, -0.55, 0, 0.55, 1.5, 2, 3, 8]
 const SOLID_KEYS: readonly string[] = Array.from({ length: REGISTRY.stateCount }, (_, s) => s)
   .filter((s) => COLLIDE[s] !== COLLIDE_NONE).map((s) => REGISTRY.stateKey(s));
 const CAVE_SIDES = ['floor', 'ceiling', 'here'] as const;
+/** `strata` layer weights: even and skewed tables, §3.3's abyss weights among them. */
+const STRATA_WEIGHTS: readonly number[] = [1, 2, 10, 15, 25, 50, 0.25, 1000];
 /** +0 for a zero (a product or a difference can give −0, which validateRules rejects). */
 const plus0 = (v: number): number => (v === 0 ? 0 : v);
 
@@ -233,9 +237,22 @@ export function randomSurfaceRules(next: () => number, opts: SurfaceRulesOptions
   const yValue = (): number => (bool() ? pick(Y_POINTS) + (next() % 3) - 1 : -64 + (next() % 385));
   const threshold = (): number => (next() % 3 === 0 ? pick(THRESHOLDS) : plus0(Math.round((testFloat(next) - 0.5) * 700) / 100));
 
-  /** A leaf: a `bandlands` one time in 8, else a block of any colliding state (a block leaf must collide, tier 2). */
-  const block = (): Rule =>
-    next() % 8 === 0 ? { kind: 'bandlands' } : { kind: 'block', state: pick(SOLID_KEYS) };
+  /** A `strata` leaf over the trees' noises: 1-4 layers (1-16 one time in 8), lengths 1 … 8, amp 0 … 16. */
+  const strata = (): Rule => {
+    const n = next() % 8 === 0 ? 1 + (next() % 16) : 1 + (next() % 4);
+    const layers = Array.from({ length: n }, () => ({ state: pick(SOLID_KEYS), weight: pick(STRATA_WEIGHTS), maxLen: 1 + (next() % 8) }));
+    const a = 1 + (next() % 8), b = 1 + (next() % 8);
+    const amp = next() % 4 === 0 ? pick([0, 16]) : Math.round(testFloat(next) * 1600) / 100;
+    return { kind: 'strata', layers, minLen: Math.min(a, b), maxLen: Math.max(a, b), noise: pick(noises), amp: plus0(amp) };
+  };
+  /**
+   * A leaf: a `bandlands` one time in 8, a `strata` one time in 16, else a block of any colliding state (a block leaf
+   * must collide, tier 2).
+   */
+  const block = (): Rule => {
+    const k = next() % 16;
+    return k % 8 === 0 ? { kind: 'bandlands' } : k === 1 ? strata() : { kind: 'block', state: pick(SOLID_KEYS) };
+  };
 
   const gradient = (): Condition => {
     const lo = bool() ? pick(Y_POINTS) - (next() % 3) : -66 + (next() % 380);

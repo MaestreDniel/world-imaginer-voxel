@@ -6,7 +6,7 @@ import { readField, readLevel } from '../../src/gen/column/columnStage';
 import { SURFACE_BIOMES } from '../../src/gen/biomes/registry';
 import { pickCaveBiome } from '../../src/gen/biomes/caveRegistry';
 import { createSurfaceReference } from '../../src/gen/surface/reference';
-import { RuleValidationError, ruleLeaves, type Condition, type Rule } from '../../src/gen/surface/rules';
+import { RuleValidationError, ruleLeaves, type Condition, type Rule, type StrataRule } from '../../src/gen/surface/rules';
 import { newSurfaceScan, scanColumn, type SurfaceScan, type SurfaceScanSettings } from '../../src/gen/surface/scan';
 import { BEDROCK, REGISTRY, STONE } from '../../src/world/blocks/index';
 import {
@@ -114,6 +114,39 @@ function oracleBand(seed: Seed64, x: number, y: number, z: number): number {
   return table[(((y + o) % 192) + 192) % 192]!;
 }
 
+const STRATA_TABLES = new Map<string, number[]>();
+
+/**
+ * §3.3's strata block at (x, y, z), recomputed (SP6b, Spec correction 16): the table of node k from its Xoshiro128 runs
+ * (a layer by weight over every layer but the previous run's, then its length), the offset from the node's noise.
+ */
+function oracleStrata(seed: Seed64, k: number, r: StrataRule, x: number, y: number, z: number): number {
+  const key = `${seed.join()}|${k}|${JSON.stringify(r)}`;
+  let table = STRATA_TABLES.get(key);
+  if (table === undefined) {
+    const rng = new Xoshiro128(deriveSeed(seed, `surface.strata.${k}`));
+    table = [];
+    let prev = -1;
+    while (table.length < 192) {
+      const pool = r.layers.map((_, j) => j).filter((j) => r.layers.length === 1 || j !== prev);
+      let f = rng.nextFloat() * pool.reduce((t, j) => t + r.layers[j]!.weight, 0);
+      let layer = pool[pool.length - 1]!;
+      for (const j of pool) {
+        if (f < r.layers[j]!.weight) { layer = j; break; }
+        f -= r.layers[j]!.weight;
+      }
+      const lm = r.layers[layer]!.maxLen;
+      const len = lm < r.minLen ? lm : r.minLen + rng.nextInt(Math.min(r.maxLen, lm) - r.minLen + 1);
+      for (let i = 0; i < len; i++) table.push(REGISTRY.parseStateKey(r.layers[layer]!.state));
+      prev = layer;
+    }
+    STRATA_TABLES.set(key, table);
+  }
+  const n = NOISES(r.noise)!;
+  const o = Math.round((r.amp * n.z2(x, z)) / n.clampSigma);
+  return table[(((y + o) % 192) + 192) % 192]!;
+}
+
 /** The rule ids from root to a leaf id: every prefix ending at a `.rules[k]` or `.then` segment. */
 function idChain(leafId: string): string[] {
   const out = ['root'];
@@ -124,9 +157,14 @@ function idChain(leafId: string): string[] {
 
 /** The oracle's result: the first leaf (evaluation order) whose path conditions all hold; stone and [] when none. */
 function oracle(tree: Rule, col: SurfaceFuzzColumn, set: SurfaceScanSettings, seed: Seed64, v: OracleVoxel) {
-  for (const leaf of ruleLeaves(tree)) {
+  const leaves = ruleLeaves(tree);
+  // A strata node's k: its index among the tree's strata leaves in evaluation (depth-first) order.
+  const strata = leaves.flatMap((l) => (l.rule.kind === 'strata' ? [l.rule] : []));
+  for (const leaf of leaves) {
     if (leaf.conditions.every((c) => oracleHolds(c, col, set, seed, v))) {
-      const state = leaf.rule.kind === 'block' ? REGISTRY.parseStateKey(leaf.rule.state) : oracleBand(seed, v.x, v.y, v.z);
+      const r = leaf.rule;
+      const state = r.kind === 'block' ? REGISTRY.parseStateKey(r.state)
+        : r.kind === 'bandlands' ? oracleBand(seed, v.x, v.y, v.z) : oracleStrata(seed, strata.indexOf(r), r, v.x, v.y, v.z);
       return { state, path: idChain(leaf.id) };
     }
   }
@@ -227,6 +265,69 @@ describe('surface reference evaluator (SP3c spec §3.4)', () => {
     expect(createSurfaceReference(SEED, B('stone'), NOISES, flat).state(scan, set, 7, 180)).toBe(STONE);
   });
 
+  test('strata (SP6b spec §3.3) yields its table\'s block at (x, y, z), shifted by its noise; y and y + 192 alike; amp 0 ignores the noise', () => {
+    const layers = [
+      { state: 'abyss_stone', weight: 50, maxLen: 8 }, { state: 'abyss_shale', weight: 25, maxLen: 4 },
+      { state: 'cracked_abyss_stone', weight: 15, maxLen: 3 }, { state: 'abyss_stone_veined', weight: 10, maxLen: 1 },
+    ];
+    const ST = (noise: string, amp: number): StrataRule => ({ kind: 'strata', layers, minLen: 1, maxLen: 6, noise, amp });
+    const col = handColumn((p) => 300 + (p % 7));
+    const scan = scanOf(col, set);
+    const a = ST('surface.noises.fuzzB', 6), flat = ST('surface.noises.patch', 0);
+    // Under a Y-only condition; the top voxel takes the second strata node (k 1), whose amp is 0.
+    const tree = SEQ(IF({ kind: 'stoneDepth', side: 'floor', offset: 0, addSurfaceDepth: false }, flat), IF({ kind: 'yAbove', minY: -20, runTop: false }, a), B('bedrock'));
+    const ref = createSurfaceReference(SEED, tree, NOISES);
+    const other = createSurfaceReference(SEED, SEQ(IF({ kind: 'stoneDepth', side: 'floor', offset: 0, addSurfaceDepth: false }, ST('surface.noises.fuzzB', 0)),
+      IF({ kind: 'yAbove', minY: -20, runTop: false }, a), B('bedrock')), NOISES);
+    const shifts = new Set<number>(), seen = new Set<number>();
+    for (let p = 0; p < 256; p += 5) {
+      const x = 16 * col.sample.cx + (p & 15), z = 16 * col.sample.cz + (p >> 4);
+      const top = 300 + (p % 7);
+      // k 0 is the floor leaf (first in depth-first order); amp 0: table[top mod 192] whatever the noise.
+      expect(ref.evaluate(scan, set, p, top)).toEqual({ state: oracleStrata(SEED, 0, flat, x, top, z), path: ['root', 'root.rules[0]', 'root.rules[0].then'] });
+      expect(oracleStrata(SEED, 0, flat, x, top, z)).toBe(oracleStrata(SEED, 0, ST('surface.noises.fuzzB', 0), x, top, z));
+      expect(other.state(scan, set, p, top)).toBe(ref.state(scan, set, p, top));
+      for (let y = -20; y < top; y++) {
+        const got = ref.evaluate(scan, set, p, y);
+        expect(got).toEqual({ state: oracleStrata(SEED, 1, a, x, y, z), path: ['root', 'root.rules[1]', 'root.rules[1].then'] });
+        seen.add(got.state);
+        if (y + 192 < top) expect(ref.state(scan, set, p, y + 192)).toBe(got.state);
+      }
+      expect(ref.state(scan, set, p, -21)).toBe(BEDROCK);
+      shifts.add(Math.round((6 * NOISES('surface.noises.fuzzB')!.z2(x, z)) / 2));
+    }
+    expect(seen).toEqual(new Set(layers.map((l) => REGISTRY.parseStateKey(l.state))));
+    // The noise shifts the table: several offsets over the positions checked.
+    expect(shifts.size).toBeGreaterThanOrEqual(3);
+  });
+
+  test('strata under caveBiome{here} (SP6b spec §3.3, §3.4): the reference equals the oracle on columns holding every cave biome', () => {
+    const st: StrataRule = {
+      kind: 'strata', layers: [{ state: 'abyss_stone', weight: 2, maxLen: 3 }, { state: 'abyss_shale', weight: 1, maxLen: 2 }],
+      minLen: 1, maxLen: 3, noise: 'surface.noises.patch', amp: 4,
+    };
+    const tree = SEQ(IF({ kind: 'caveBiome', side: 'here', biomes: ['abyss', 'lush'] }, st), B('bedrock'));
+    const ref = createSurfaceReference(SEED, tree, NOISES);
+    let layered = 0, plain = 0;
+    for (const k of [3, 5]) {
+      const col = withCaveBiomes(randomSurfaceColumn(testRng(k)), k);
+      const scan = scanOf(col, set);
+      for (let p = k % 3; p < 256; p += 3) {
+        for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
+          for (let y = scan.runTop[r]!; y >= scan.runBottom[r]!; y -= 2) {
+            const want = oracle(tree, col, set, SEED, oracleVoxel(col, p, y));
+            const got = ref.evaluate(scan, set, p, y);
+            if (got.state !== want.state || got.path.join() !== want.path.join()) throw new Error(`column ${k} p ${p} y ${y}: ${JSON.stringify(got)} ≠ ${JSON.stringify(want)}`);
+            if (got.path.length === 3) layered++;
+            else plain++;
+          }
+        }
+      }
+    }
+    expect(layered).toBeGreaterThan(1000);
+    expect(plain).toBeGreaterThan(1000);
+  });
+
   test('a voxel no rule matches is stone with an empty path', () => {
     const col = handColumn(() => 10);
     const scan = scanOf(col, set);
@@ -294,7 +395,7 @@ describe('surface reference evaluator (SP3c spec §3.4)', () => {
       e[v ? 0 : 1]++;
       seen.set(k, e);
     };
-    let checked = 0, matched = 0, banded = 0;
+    let checked = 0, matched = 0, banded = 0, layered = 0;
     for (let round = 0; round < 24; round++) {
       const seed: Seed64 = [next(), next()];
       const noises = surfaceFuzzNoiseSource(SEED);
@@ -318,7 +419,9 @@ describe('surface reference evaluator (SP3c spec §3.4)', () => {
             expect(ref.state(scan, rset, p, y)).toBe(got.state);
             checked++;
             if (got.path.length > 0) matched++;
-            if (got.path.length > 0 && leaves.find((l) => l.id === got.path[got.path.length - 1])!.rule.kind === 'bandlands') banded++;
+            const kind = got.path.length > 0 ? leaves.find((l) => l.id === got.path[got.path.length - 1])!.rule.kind : '';
+            if (kind === 'bandlands') banded++;
+            if (kind === 'strata') layered++;
             if ((p + y) % 5 === 0) for (const l of leaves) for (const c of l.conditions) note(c, oracleHolds(c, col, rset, seed, v));
           }
         }
@@ -326,6 +429,7 @@ describe('surface reference evaluator (SP3c spec §3.4)', () => {
     }
     expect(checked).toBeGreaterThan(100_000);
     expect(banded).toBeGreaterThan(1_000);
+    expect(layered).toBeGreaterThan(500);
     expect(matched / checked).toBeGreaterThan(0.2);
     expect(matched / checked).toBeLessThan(0.95);
     for (const k of [

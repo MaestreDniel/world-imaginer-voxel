@@ -11,7 +11,8 @@
  * list length and solid block states.
  * SP6b (its spec §3.2, D18) adds `caveBiome{side, biomes}`: the cave biome of the run's floor (the tagged voxel above its
  * top), of its ceiling (the tagged voxel below its bottom) or at the voxel (the picker), in a list of 1-4 distinct
- * `CAVE_BIOME_NAMES`.
+ * `CAVE_BIOME_NAMES`, and the `strata` rule kind (its spec §3.3, D19): a band table of 1-16 weighted layers of solid block
+ * states drawn per world seed and node, shifted per position by a 2D noise (bands.ts).
  */
 import { CAVE_BIOME_NAMES, type CaveBiomeName } from '../../core/constants';
 import { SURFACE_BIOMES, type SurfaceBiome } from '../biomes/registry';
@@ -32,10 +33,20 @@ export interface ConditionRule { readonly kind: 'condition'; readonly if: Condit
 export interface BlockRule { readonly kind: 'block'; readonly state: string }
 /** The badlands band block at the voxel's (x, y, z) (§3.3, bands.ts). */
 export interface BandlandsRule { readonly kind: 'bandlands' }
-export type Rule = SequenceRule | ConditionRule | BlockRule | BandlandsRule;
+/** One layer of a `strata` table: a solid state key, its draw weight (> 0) and its longest run (1 … 8). */
+export interface StrataLayer { readonly state: string; readonly weight: number; readonly maxLen: number }
+/**
+ * The band of a data table at the voxel's (x, y, z) (SP6b spec §3.3, D19, bands.ts): runs of `layers` drawn by weight,
+ * each `minLen` … min(`maxLen`, the layer's maxLen) long, shifted by round(`amp` · z / clampSigma), z the 2D `noise`.
+ */
+export interface StrataRule {
+  readonly kind: 'strata'; readonly layers: readonly StrataLayer[]; readonly minLen: number; readonly maxLen: number;
+  readonly noise: string; readonly amp: number;
+}
+export type Rule = SequenceRule | ConditionRule | BlockRule | BandlandsRule | StrataRule;
 export type RuleKind = Rule['kind'];
 /** A leaf: a rule that yields a block by itself. */
-export type LeafRule = BlockRule | BandlandsRule;
+export type LeafRule = BlockRule | BandlandsRule | StrataRule;
 
 export interface BiomeCondition { readonly kind: 'biome'; readonly biomes: readonly SurfaceBiome[] }
 export type StoneDepthSide = 'floor' | 'ceiling';
@@ -67,8 +78,8 @@ export type Condition =
   | NoiseThresholdCondition | TemperatureBelowCondition | SkyOpenCondition | LakeCondition | NotCondition | CaveBiomeCondition;
 export type ConditionKind = Condition['kind'];
 
-/** The rule kinds of §3.1's first table, in its order. */
-export const RULE_KINDS: readonly RuleKind[] = ['sequence', 'condition', 'block', 'bandlands'];
+/** The rule kinds of §3.1's first table, in its order; SP6b appends `strata`. */
+export const RULE_KINDS: readonly RuleKind[] = ['sequence', 'condition', 'block', 'bandlands', 'strata'];
 /** The condition kinds of §3.1's second table, in its order; SP6b appends `caveBiome`. */
 export const CONDITION_KINDS: readonly ConditionKind[] = [
   'biome', 'stoneDepth', 'water', 'yAbove', 'verticalGradient', 'steep', 'noiseThreshold', 'temperatureBelow', 'skyOpen', 'lake', 'not',
@@ -121,7 +132,7 @@ export function ruleLeaves(root: Rule): RuleLeaf[] {
       case 'condition':
         walk(r.then, conditionThenId(id), [...conds, r.if]);
         break;
-      case 'block': case 'bandlands':
+      case 'block': case 'bandlands': case 'strata':
         out.push({ id, rule: r, conditions: conds });
         break;
     }
@@ -134,7 +145,7 @@ export type RuleErrorCode =
   | 'NOT_OBJECT' | 'NOT_ARRAY' | 'UNKNOWN_KIND' | 'UNKNOWN_FIELD' | 'MISSING_FIELD' | 'UNKNOWN_BLOCK' | 'UNKNOWN_BIOME'
   | 'UNKNOWN_NOISE' | 'NOISE_DIMS' | 'NOISE_REMAP' | 'NOT_FINITE' | 'NOT_INTEGER' | 'OUT_OF_RANGE' | 'NEGATIVE_ZERO'
   | 'NOT_BOOLEAN' | 'BAD_SIDE' | 'RANGE_ORDER' | 'GRADIENT_ORDER' | 'TOO_DEEP' | 'TOO_MANY_NODES' | 'NO_BAND_NOISE'
-  | 'CAVE_BIOME_SIDE' | 'CAVE_BIOME_LIST';
+  | 'CAVE_BIOME_SIDE' | 'CAVE_BIOME_LIST' | 'STRATA_LAYERS' | 'STRATA_WEIGHT' | 'STRATA_LEN';
 
 export interface RuleIssue {
   /** The node path: a rule's id (`root.rules[1].then`), `.if` / `.if.if` for conditions, then the field (`.offset`, `.biomes[2]`). */
@@ -194,6 +205,7 @@ export class RuleValidationError extends Error {
  */
 export const FIELDS: { readonly [K in RuleKind | ConditionKind]: readonly string[] } = Object.freeze({
   sequence: Object.freeze(['rules']), condition: Object.freeze(['if', 'then']), block: Object.freeze(['state']), bandlands: Object.freeze([]),
+  strata: Object.freeze(['layers', 'minLen', 'maxLen', 'noise', 'amp']),
   biome: Object.freeze(['biomes']), stoneDepth: Object.freeze(['side', 'offset', 'addSurfaceDepth']), water: Object.freeze(['offset', 'runTop']),
   yAbove: Object.freeze(['minY', 'runTop']), verticalGradient: Object.freeze(['trueAtAndBelow', 'falseAtAndAbove']), steep: Object.freeze(['min']),
   noiseThreshold: Object.freeze(['noise', 'min', 'max']), temperatureBelow: Object.freeze(['t']), skyOpen: Object.freeze([]), lake: Object.freeze([]),
@@ -205,6 +217,15 @@ const BIOME_SET = new Set<string>(BIOMES);
 const CAVE_BIOME_SET = new Set<string>(CAVE_BIOMES);
 /** A `caveBiome` list holds 1 … CAVE_BIOME_LIST_MAX distinct names (every cave biome at most once). */
 const CAVE_BIOME_LIST_MAX = CAVE_BIOMES.length;
+/** A `strata` table holds 1 … STRATA_LAYERS_MAX layers, each with exactly the STRATA_LAYER_FIELDS. */
+const STRATA_LAYERS_MAX = 16;
+const STRATA_LAYER_FIELDS: readonly string[] = ['state', 'weight', 'maxLen'];
+/** `strata` run lengths (minLen, maxLen, a layer's maxLen) are integers in 1 … STRATA_LEN_MAX. */
+const STRATA_LEN_MAX = 8;
+/** A layer's weight lies in (0, STRATA_WEIGHT_MAX], so the cumulative weights of a table stay finite. */
+const STRATA_WEIGHT_MAX = 1e9;
+/** `strata.amp` lies in [0, STRATA_AMP_MAX]. */
+const STRATA_AMP_MAX = 16;
 /** Integer fields lie in [−INT_LIMIT, INT_LIMIT] (§3.1). */
 const INT_LIMIT = 384;
 /** Nesting depth limit (the root is at depth 1; rules and conditions count) and node-count limit (§3.1). */
@@ -240,7 +261,12 @@ function isBlockKey(v: unknown): boolean {
  * `bandlands` leaf without a dims-2, remap-'none' `surface.noises.bandOffset` in `noises` (NO_BAND_NOISE when the leaf
  * is absent, §9's cut line), a
  * `caveBiome` side that is not floor, ceiling or here (CAVE_BIOME_SIDE) and a `caveBiome` list that is not 1-4
- * distinct cave biome names (CAVE_BIOME_LIST, at `.biomes`; a literal list in the source mode too), a
+ * distinct cave biome names (CAVE_BIOME_LIST, at `.biomes`; a literal list in the source mode too), a `strata` leaf
+ * (SP6b spec §3.3; every field a literal in the source mode too) whose `layers` is not an array of 1-16 layers each
+ * holding exactly `state`, `weight` and `maxLen` with a solid block state (STRATA_LAYERS; UNKNOWN_FIELD / MISSING_FIELD
+ * for a layer's keys), whose layer weight is not a finite number in (0, 1e9] (STRATA_WEIGHT), whose `minLen`, `maxLen`
+ * or a layer's `maxLen` is not an integer in 1 … 8, or `minLen` > `maxLen` (STRATA_LEN, at the node), whose `noise` is
+ * not as `noiseThreshold`'s, or whose `amp` is not a finite number in [0, 16] (NOT_FINITE, OUT_OF_RANGE), a
  * nesting depth above 32 (each node past it is reported and not entered) and more than 4096 nodes (reported once, at
  * `root`; the walk stops there).
  *
@@ -342,6 +368,60 @@ export function validateRules(value: unknown, noises: SurfaceNoiseLookup, source
     if (typeof node[k] !== 'boolean') push(`${path}.${k}`, 'NOT_BOOLEAN', `${kind}.${k} must be a boolean`);
   };
 
+  /** `node.noise` names a dims-2, remap-'none' `surface.noises.*` leaf known to `noises` (`noiseThreshold`, `strata`). */
+  const noise2 = (node: Record<string, unknown>, kind: string, path: string): void => {
+    const name = node['noise'];
+    const info = typeof name === 'string' && name.startsWith(NOISE_PREFIX) ? noises(name) : undefined;
+    if (info === undefined) push(`${path}.noise`, 'UNKNOWN_NOISE', `${JSON.stringify(name)} is not a surface.noises.* leaf`);
+    else if (info.dims !== 2) push(`${path}.noise`, 'NOISE_DIMS', `${kind} needs a 2D noise; ${String(name)} is ${info.dims}D`);
+    else if (info.remap !== 'none') push(`${path}.noise`, 'NOISE_REMAP', `surface noise ${String(name)} must have remap 'none'`);
+  };
+  /** A `strata` run length at `where`: a literal integer in 1 … 8 (−0 is NEGATIVE_ZERO); the value, or undefined after its issue. */
+  const strataLen = (v: unknown, where: string): number | undefined => {
+    if (Object.is(v, -0)) { push(where, 'NEGATIVE_ZERO', 'a strata length is −0 (write 0)'); return undefined; }
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > STRATA_LEN_MAX) {
+      push(where, 'STRATA_LEN', `a strata length must be an integer in 1 … ${STRATA_LEN_MAX}`);
+      return undefined;
+    }
+    return v;
+  };
+  /** A `strata` leaf's fields (SP6b spec §3.3), all present: layers, lengths, noise and amp, every one a literal. */
+  const strata = (node: Record<string, unknown>, path: string): void => {
+    const layers = node['layers'];
+    if (!Array.isArray(layers) || layers.length < 1 || layers.length > STRATA_LAYERS_MAX) {
+      push(`${path}.layers`, 'STRATA_LAYERS', `strata needs 1-${STRATA_LAYERS_MAX} layers`);
+    } else {
+      for (let i = 0; i < layers.length; i++) {
+        const at = `${path}.layers[${i}]`;
+        const layer: unknown = layers[i];
+        if (!isRecord(layer)) { push(at, 'STRATA_LAYERS', 'a strata layer is an object {state, weight, maxLen}'); continue; }
+        let complete = true;
+        for (const k of Object.keys(layer)) if (!STRATA_LAYER_FIELDS.includes(k)) push(`${at}.${k}`, 'UNKNOWN_FIELD', `unknown field "${k}" on a strata layer`);
+        for (const k of STRATA_LAYER_FIELDS) {
+          if (!Object.hasOwn(layer, k)) { push(`${at}.${k}`, 'MISSING_FIELD', `a strata layer's ${k} is missing (every field is written)`); complete = false; }
+        }
+        if (!complete) continue;
+        const state = layer['state'];
+        if (!isBlockKey(state) || COLLIDES[BLOCKS.parseStateKey(state as string)] === NO_COLLISION) {
+          push(`${at}.state`, 'STRATA_LAYERS', `${JSON.stringify(state)} is not a solid registered state key`);
+        }
+        const w = layer['weight'];
+        if (Object.is(w, -0)) push(`${at}.weight`, 'NEGATIVE_ZERO', 'a strata weight is −0 (write 0)');
+        else if (typeof w !== 'number' || !Number.isFinite(w) || w <= 0 || w > STRATA_WEIGHT_MAX) {
+          push(`${at}.weight`, 'STRATA_WEIGHT', `a strata weight must be a finite number in (0, ${STRATA_WEIGHT_MAX}]`);
+        }
+        strataLen(layer['maxLen'], `${at}.maxLen`);
+      }
+    }
+    const lo = strataLen(node['minLen'], `${path}.minLen`), hi = strataLen(node['maxLen'], `${path}.maxLen`);
+    if (lo !== undefined && hi !== undefined && lo > hi) push(path, 'STRATA_LEN', 'strata needs minLen ≤ maxLen');
+    noise2(node, 'strata', path);
+    const amp = node['amp'];
+    if (typeof amp !== 'number' || !Number.isFinite(amp)) push(`${path}.amp`, 'NOT_FINITE', 'strata.amp must be a finite number');
+    else if (Object.is(amp, -0)) push(`${path}.amp`, 'NEGATIVE_ZERO', 'strata.amp is −0 (write 0)');
+    else if (amp < 0 || amp > STRATA_AMP_MAX) push(`${path}.amp`, 'OUT_OF_RANGE', `strata.amp ${amp} is outside [0, ${STRATA_AMP_MAX}]`);
+  };
+
   const condition = (node: unknown, path: string, depth: number): void => {
     if (!enter(path, depth)) return;
     if (!isRecord(node)) { push(path, 'NOT_OBJECT', 'a condition is an object with a kind'); return; }
@@ -385,11 +465,7 @@ export function validateRules(value: unknown, noises: SurfaceNoiseLookup, source
       case 'steep': num(node, c, 'min', path); break;
       case 'temperatureBelow': num(node, c, 't', path); break;
       case 'noiseThreshold': {
-        const name = node['noise'];
-        const info = typeof name === 'string' && name.startsWith(NOISE_PREFIX) ? noises(name) : undefined;
-        if (info === undefined) push(`${path}.noise`, 'UNKNOWN_NOISE', `${JSON.stringify(name)} is not a surface.noises.* leaf`);
-        else if (info.dims !== 2) push(`${path}.noise`, 'NOISE_DIMS', `noiseThreshold needs a 2D noise; ${String(name)} is ${info.dims}D`);
-        else if (info.remap !== 'none') push(`${path}.noise`, 'NOISE_REMAP', `surface noise ${String(name)} must have remap 'none'`);
+        noise2(node, c, path);
         const lo = num(node, c, 'min', path), hi = num(node, c, 'max', path);
         if (lo !== undefined && hi !== undefined && lo[1] > hi[0]) {
           push(path, 'RANGE_ORDER', `noiseThreshold needs min ≤ max${overRefs(node['min'], node['max'])}`);
@@ -446,6 +522,9 @@ export function validateRules(value: unknown, noises: SurfaceNoiseLookup, source
         else if (info.remap !== 'none') push(path, 'NOISE_REMAP', `surface noise ${BAND_NOISE} must have remap 'none'`);
         break;
       }
+      case 'strata':
+        if (complete) strata(node, path);
+        break;
     }
   };
 

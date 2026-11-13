@@ -117,7 +117,9 @@ describe('sp3c.surface.ops (§7)', () => {
   const sc = createSurfaceContext(CTX, tree);
 
   test('the fixture tree uses every rule kind and condition kind, both sides and both runTop / addSurfaceDepth values', () => {
-    expect([...ruleKindsOf(tree)].sort()).toEqual([...RULE_KINDS].sort());
+    // Every rule kind but strata until SP6b Task 22 (the generator push): adding it here would change sp3c.surface.ops in
+    // the pre-push span.
+    expect([...ruleKindsOf(tree)].sort()).toEqual(RULE_KINDS.filter((k) => k !== 'strata').sort());
     const conds = conditionsOf(tree);
     // Every kind but caveBiome until SP6b Task 22 (the generator push): adding it here would change sp3c.surface.ops in
     // the pre-push span, and no column carries cave tags or a picker before Task 18's surface probe.

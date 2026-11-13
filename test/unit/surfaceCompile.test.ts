@@ -3,7 +3,8 @@ import type { Seed64 } from '../../src/core/hash';
 import { SURFACE_BIOMES } from '../../src/gen/biomes/registry';
 import { compileSurfaceRules, surfaceFastPath, type CompiledSurfaceRules, type SurfaceFastPath } from '../../src/gen/surface/compile';
 import { createSurfaceReference } from '../../src/gen/surface/reference';
-import { RuleValidationError, ruleLeaves, type Condition, type Rule, type SurfaceNoiseSource } from '../../src/gen/surface/rules';
+import { RuleValidationError, ruleLeaves, type Condition, type Rule, type StrataRule, type SurfaceNoiseSource } from '../../src/gen/surface/rules';
+import { strataOffset, strataState, strataTable } from '../../src/gen/surface/bands';
 import { newSurfaceScan, scanColumn, surfaceScanSettings, type SurfaceScan, type SurfaceScanSettings } from '../../src/gen/surface/scan';
 import { AIR, BEDROCK, REGISTRY, STONE } from '../../src/world/blocks/index';
 import { caveBiomeHere } from '../../src/gen/surface/conditions';
@@ -288,12 +289,15 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     const tally = {
       refChecked: 0, voxels: 0, fast: 0, noSkyNearTop: 0, fastTrees: 0, offTrees: 0, gated: 0, ungated: 0, yBefore: 0, yAfter: 0, bandlandsBands: 0,
     };
-    for (let round = 0; round < 44; round++) {
+    // The columns from a stream of their own, so the trees' draws (SP6b's strata leaves) no longer move them; 48 rounds
+    // (44 before), so the solid voxels checked stay above 3,000,000 on that stream.
+    const nextColumn = testRng(7102);
+    for (let round = 0; round < 48; round++) {
       const seed: Seed64 = [next(), next()];
       const noises = surfaceFuzzNoiseSource(SEED);
       const rset = surfaceFuzzSettings(seed, round % 2 === 0 ? randomSurfaceParams(next) : undefined, noises);
-      // Cave biomes from a stream of their own (the column's and the trees' draws are those of SP3c's fuzz).
-      const col = withCaveBiomes(randomSurfaceColumn(next), 7101 + round);
+      // Cave biomes from a stream of their own.
+      const col = withCaveBiomes(randomSurfaceColumn(nextColumn), 7101 + round);
       const scan = scanOf(col, rset);
       for (const [style, skyGated] of cases) {
         const tree = randomSurfaceRules(next, { style, skyGated });
@@ -409,6 +413,74 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
       expect(compileSurfaceRules(SEED, trees[0]!, NOISES, set).fastPath).toBeNull();
       expect(compileSurfaceRules(SEED, trees[1]!, NOISES, set).fastPath).toMatchObject({ maxSurfaceDepth: 1 });
     }
+  });
+
+  test('strata (SP6b spec §3.3): a Y-only strata leaf decides an evaluated band; compiled == reference; y and y + 192 alike; amp 0 ignores the noise', () => {
+    const layers = [
+      { state: 'abyss_stone', weight: 50, maxLen: 8 }, { state: 'abyss_shale', weight: 25, maxLen: 4 },
+      { state: 'cracked_abyss_stone', weight: 15, maxLen: 3 }, { state: 'abyss_stone_veined', weight: 10, maxLen: 1 },
+    ];
+    const ST = (noise: string, amp: number): StrataRule => ({ kind: 'strata', layers, minLen: 1, maxLen: 6, noise, amp });
+    const a = ST('surface.noises.fuzzB', 6);
+    const tree = (flat: StrataRule): Rule => SEQ(IFS([SKY, TOP], flat), IF(grad(0, 8), B('bedrock')), IF(yAbove(-40, false), a));
+    const t1 = tree(ST('surface.noises.patch', 0)), t2 = tree(ST('surface.noises.fuzzB', 0));
+    // The strata leaf is Y-only: the band it decides (8 … 319) has no constant state and is evaluated.
+    expect(surfaceFastPath(t1, 11)).toEqual({
+      maxSurfaceDepth: 0, skyGated: true,
+      bands: [band(-63, -41, BEDROCK), band(-40, 0, BEDROCK), dither(1, 7), { yMin: 8, yMax: 319, dither: false, state: -1 }],
+    });
+    const col = handColumn((p) => 300 + (p % 7));
+    const scan = scanOf(col, set);
+    const c1 = compileSurfaceRules(SEED, t1, NOISES, set), c2 = compileSurfaceRules(SEED, t2, NOISES, set);
+    const ref = createSurfaceReference(SEED, t1, NOISES);
+    const slow = fill(c1, scan, false), fast = fill(c1, scan, true);
+    expect(Buffer.from(fast.out).equals(Buffer.from(slow.out))).toBe(true);
+    // amp 0 ignores the noise: the top voxels take table[top mod 192] whichever noise the node names.
+    expect(Buffer.from(fill(c2, scan, true).out).equals(Buffer.from(slow.out))).toBe(true);
+    // k: the node's index among the tree's strata nodes in depth-first order (the top's is 0, a 1).
+    const tTop = strataTable(SEED, 0, ST('surface.noises.patch', 0)), ta = strataTable(SEED, 1, a);
+    const fuzzB = NOISES('surface.noises.fuzzB')!;
+    for (let p = 0; p < 256; p++) {
+      const top = 300 + (p % 7);
+      const o = strataOffset(fuzzB.z2(16 * col.sample.cx + (p & 15), 16 * col.sample.cz + (p >> 4)), 6, fuzzB.clampSigma);
+      expect(slow.out[at(p, top)]).toBe(strataState(tTop, top, 0));
+      for (let y = -63; y <= top; y++) {
+        const want = ref.state(scan, set, p, y);
+        if (slow.out[at(p, y)] !== want || c1.state(scan, p, y) !== want) throw new Error(`p ${p} y ${y}: compiled ${slow.out[at(p, y)]} ≠ reference ${want}`);
+        if (y >= 8 && y < top) {
+          expect(want).toBe(strataState(ta, y, o));
+          if (y + 192 < top) expect(slow.out[at(p, y + 192)]).toBe(want);
+        }
+      }
+    }
+  });
+
+  test('strata under caveBiome{here} (SP6b spec §3.3, §3.4): compiled == reference on columns holding every cave biome', () => {
+    const st: StrataRule = {
+      kind: 'strata', layers: [{ state: 'abyss_stone', weight: 2, maxLen: 3 }, { state: 'abyss_shale', weight: 1, maxLen: 2 }, { state: 'stone', weight: 1, maxLen: 1 }],
+      minLen: 1, maxLen: 3, noise: 'surface.noises.patch', amp: 4,
+    };
+    const tree = SEQ(IFS([TOP, { kind: 'caveBiome', side: 'floor', biomes: ['abyss'] }], B('abyss_ash')), IF({ kind: 'caveBiome', side: 'here', biomes: ['abyss'] }, st));
+    const c = compileSurfaceRules(SEED, tree, NOISES, set);
+    const ref = createSurfaceReference(SEED, tree, NOISES);
+    expect(c.fastPath).toBeNull();
+    const states = new Set<number>();
+    for (const k of [3, 5, 8, 13]) {
+      const col = withCaveBiomes(randomSurfaceColumn(testRng(k)), k);
+      const scan = scanOf(col, set);
+      const slow = fill(c, scan, false);
+      expect(Buffer.from(fill(c, scan, true).out).equals(Buffer.from(slow.out))).toBe(true);
+      for (let p = 0; p < 256; p++) {
+        for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
+          for (let y = scan.runTop[r]!; y >= scan.runBottom[r]!; y--) {
+            const want = ref.state(scan, set, p, y);
+            if (slow.out[at(p, y)] !== want) throw new Error(`column ${k} p ${p} y ${y}: compiled ${slow.out[at(p, y)]} ≠ reference ${want}`);
+            states.add(want);
+          }
+        }
+      }
+    }
+    expect([...states].map((s) => REGISTRY.stateKey(s)).sort()).toEqual(['abyss_ash', 'abyss_shale', 'abyss_stone', 'stone']);
   });
 
   test('the biome masks and every condition compile alike for every surface biome', () => {

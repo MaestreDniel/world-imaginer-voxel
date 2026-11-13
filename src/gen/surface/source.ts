@@ -3,7 +3,9 @@
  * nine numeric fields (`stoneDepth.offset`, `water.offset`, `yAbove.minY`, `verticalGradient.trueAtAndBelow` and
  * `.falseAtAndAbove`, `steep.min`, `noiseThreshold.min` and `.max`, `temperatureBelow.t`) may hold a parameter ref
  * `{param: <path>}` or `{param: <path>, neg: true}` instead of a number. Every other field is a literal: `caveBiome`'s
- * side and its list of cave biomes (SP6b spec §3.2) take no ref (a ref there is CAVE_BIOME_SIDE or CAVE_BIOME_LIST).
+ * side and its list of cave biomes (SP6b spec §3.2) take no ref (a ref there is CAVE_BIOME_SIDE or CAVE_BIOME_LIST), nor
+ * do a `strata` leaf's layers, lengths and amp (SP6b spec §3.3; a ref there is STRATA_LEN, NOT_FINITE or, in a layer,
+ * STRATA_WEIGHT / STRATA_LEN).
  *
  * `validateRulesSource` is tier 2 for the leaf: `validateRules` in its source mode over the schema's surface noises and
  * the ref targets below (every check over the targets' static ranges, so a slider move never invalidates a stored tree),
@@ -151,17 +153,24 @@ function refValue(ref: Record<string, unknown>, params: Params): number {
   return ref['neg'] === true ? 0 - v : v;
 }
 
+/** A fresh frozen copy of a validated `strata` node's literal layers (objects of literals, no refs). */
+function literalLayers(v: unknown): unknown {
+  return Object.freeze((v as readonly Record<string, unknown>[]).map((l) => Object.freeze({ ...l })));
+}
+
 /**
  * A fresh frozen copy of the validated node `v`: every object without a `kind` (after validation, exactly the refs in
- * the nine numeric fields) becomes its number. Recursion is bounded by `validateRules`' depth limit (32 nodes).
+ * the nine numeric fields, and the layers of a `strata` node, which are copied as they are) becomes its number.
+ * Recursion is bounded by `validateRules`' depth limit (32 nodes).
  */
 function resolveNode(v: unknown, params: Params): unknown {
   if (Array.isArray(v)) return Object.freeze(v.map((x: unknown) => resolveNode(x, params)));
   if (typeof v !== 'object' || v === null) return v;
   const o = v as Record<string, unknown>;
   if (!Object.hasOwn(o, 'kind')) return refValue(o, params);
+  const strata = o['kind'] === 'strata';
   const out: Record<string, unknown> = {};
-  for (const k of Object.keys(o)) out[k] = resolveNode(o[k], params);
+  for (const k of Object.keys(o)) out[k] = strata && k === 'layers' ? literalLayers(o[k]) : resolveNode(o[k], params);
   return Object.freeze(out);
 }
 

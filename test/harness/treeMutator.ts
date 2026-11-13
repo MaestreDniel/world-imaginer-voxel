@@ -6,18 +6,20 @@
  * - Bases (`mutationBase`): the default tree of the format (`DEFAULT_DENSITY_TREE`, `DEFAULT_SURFACE_RULES`) or a
  *   valid-by-construction fuzz tree drawn over the schema's noises (`randomDensityExpr` with `SCHEMA_DENSITY_NOISES` and
  *   `negativeZero: false`; `randomSurfaceRules` with `SCHEMA_SURFACE_NOISES`, any style, so `caveBiome` of every side
- *   and list, SP6b), so tier 2 does not refuse a base for its noise ids alone.
+ *   and list and `strata` on any schema surface noise, SP6b), so tier 2 does not refuse a base for its noise ids alone.
  * - Breaking mutations (`BREAKING_MUTATIONS`): delete or add keys, swap ops and kinds, numbers set to −0, NaN, ±∞,
  *   ±1e308, ±(1e9 + 1) and huge or tiny exponents, very deep and very wide nesting, arrays, strings and other
  *   primitives in node slots, def, tap, biome, block, noise and field names empty, dotted, `__proto__` (an own key, as
  *   `JSON.parse` makes it), `constructor`, `toString` and over-long (also as a `caveBiome` side or cave biome, beside
- *   an empty or repeated `caveBiome` list, SP6b), param paths of the same names and to missing or
+ *   an empty or repeated `caveBiome` list, and as a `strata` layer's state or noise, SP6b), param paths of the same
+ *   names and to missing or
  *   non-numeric targets, refs to missing defs, ref cycles, knots with overflowing slopes, long knot lists (64 knots,
  *   the most tier 2 accepts, or 65, 200 and 1,024), air and unknown blocks,
  *   oversized values (too many values, too long arrays and strings, too large a text).
- * - Structure-preserving mutations (`PRESERVING_MUTATIONS`): change a literal within its range, swap two siblings,
- *   replace a literal by a param ref (int fields take only int targets; a `noiseScaled.s` only the targets whose static
- *   range lies inside [1/16, 16], never negated), wrap a node in a tap (rules: a rule in a one-child sequence, a
+ * - Structure-preserving mutations (`PRESERVING_MUTATIONS`): change a literal within its range (also a `strata` leaf's
+ *   lengths, amp and layer weights and lengths, SP6b), swap two siblings, replace a literal by a param ref (never in a
+ *   `strata` field, which takes literals only; int fields take only int targets; a `noiseScaled.s` only the targets
+ *   whose static range lies inside [1/16, 16], never negated), wrap a node in a tap (rules: a rule in a one-child sequence, a
  *   condition in a double `not`), mute a tap, add a def and reference it (rules: duplicate a branch), and (density, SP6a
  *   §1.5) turn a `noise` into a `noiseScaled` of the same id, s a literal of `FUZZ_SCALES` or a clampSigma ref
  *   (`scaleNoise`), so the edited trees of DT2 cover `noiseScaled` on the default trees too.
@@ -118,13 +120,16 @@ interface Field {
   readonly key: string | number;
   /** An int field of the rules (offset, minY, the gradient bounds). */
   readonly int: boolean;
-  /** density: a field that takes the ref form (not `const.v`, which takes a `param` node). */
+  /** density: a field that takes the ref form (not `const.v`, which takes a `param` node); rules: not a `strata` field. */
   readonly refable: boolean;
 }
 
 const RULE_INT_FIELDS: ReadonlySet<string> = new Set(['offset', 'minY', 'trueAtAndBelow', 'falseAtAndAbove']);
 const RULE_NUMBER_FIELDS: ReadonlySet<string> = new Set(['offset', 'minY', 'trueAtAndBelow', 'falseAtAndAbove', 'min', 'max', 't']);
 const DENSITY_REF_FIELDS: ReadonlySet<string> = new Set(['lo', 'hi', 'mute', 's']);
+/** A `strata` leaf's literal numeric fields (int or not), and its layers' (SP6b spec §3.3). */
+const STRATA_FIELDS: ReadonlyMap<string, boolean> = new Map([['minLen', true], ['maxLen', true], ['amp', false]]);
+const STRATA_LAYER_FIELDS: ReadonlyMap<string, boolean> = new Map([['weight', false], ['maxLen', true]]);
 const SOURCE_OP_SET: ReadonlySet<string> = new Set<string>(SOURCE_OPS);
 
 /** Child keys of a density node (unknown op: none). */
@@ -193,6 +198,14 @@ class Tree {
             for (const kn of x) if (Array.isArray(kn)) for (let i = 0; i < kn.length; i++) if (isNum(kn[i])) out.push({ parent: kn, key: i, int: false, refable: true });
           } else if (isNum(x)) {
             out.push({ parent: n, key: k, int: false, refable: DENSITY_REF_FIELDS.has(k) });
+          }
+        }
+      } else if (own(n, 'kind') === 'strata') {
+        for (const [k, int] of STRATA_FIELDS) if (isNum(own(n, k))) out.push({ parent: n, key: k, int, refable: false });
+        const layers = own(n, 'layers');
+        if (Array.isArray(layers)) {
+          for (const l of layers) {
+            if (isObj(l)) for (const [k, int] of STRATA_LAYER_FIELDS) if (isNum(own(l, k))) out.push({ parent: l, key: k, int, refable: false });
           }
         }
       } else {
@@ -411,6 +424,9 @@ class Mutator {
             { kind: 'caveBiome', side: bad, biomes: ['lush'] },
             { kind: 'caveBiome', side: this.pick(['floor', 'ceiling', 'here']), biomes: this.pick([[bad], ['abyss', bad], [], ['lush', 'lush']]) },
           ]));
+        } else if (this.next() % 4 === 0) {
+          const noise = this.pick(['surface.noises.depth', bad]);
+          setSlot(slot, { kind: 'strata', layers: [{ state: bad, weight: 1, maxLen: 1 }], minLen: 1, maxLen: 1, noise, amp: 0 });
         } else {
           setSlot(slot, { kind: 'block', state: bad });
         }
@@ -555,7 +571,7 @@ class Mutator {
           else setSlot(f, neg ? { param: this.pick(TARGETS), neg: true } : { param: this.pick(TARGETS) });
           return true;
         }
-        const fields = t.fields();
+        const fields = t.fields().filter((f) => f.refable);
         if (fields.length === 0) return false;
         const f = this.pick(fields);
         const path = this.pick(f.int ? INT_TARGETS : TARGETS);

@@ -3,7 +3,8 @@
  * order) and **Surface rules** (`root`), whose rows are built from the session's current values: a row is a node (an
  * object carrying the format's `op` / `kind`) with its path tail, its op or kind, a short summary (`const 0.5`,
  * `param density.detailAmpLo = 0.6`, `slide 4 knots`, `tap terrain`, `if biome(desert, beach, …) → sand`,
- * `if stoneDepth floor 0+sd`, `caveBiome floor [lush, dripstone]`, `sequence 3`, …) and its full path as the title; a
+ * `if stoneDepth floor 0+sd`, `caveBiome floor [lush, dripstone]`, `strata 4 layers ×6 ±6` (its layer count, maxLen and
+ * amp), `sequence 3`, …) and its full path as the title; a
  * rule's conditions are rows of their rule (`.if`, a `not`'s `.if.if`) before its `.then`. A tap row carries the mute
  * toggle; a muted tap shows its value and its subtree is dimmed. Expansion is three levels at first (levels 0 and 1
  * open) with explicit overrides, "Expand to selection" opens the selected node's ancestors, and the indentation is 8 px
@@ -361,9 +362,15 @@ function rulesSummary(node: TreeNode, cond: boolean): string {
       const head = `if ${isNode(c, 'kind') ? conditionSummary(c) : '?'}`;
       if (isNode(then, 'kind') && then['kind'] === 'block') return `${head} → ${String(own(then, 'state'))}`;
       if (isNode(then, 'kind') && then['kind'] === 'bandlands') return `${head} → bandlands`;
+      if (isNode(then, 'kind') && then['kind'] === 'strata') return `${head} → strata`;
       return head;
     }
     case 'block': return `block ${String(own(node, 'state'))}`;
+    case 'strata': {
+      const layers = own(node, 'layers');
+      const n = Array.isArray(layers) ? layers.length : 0;
+      return `strata ${n} ${n === 1 ? 'layer' : 'layers'} ×${field(own(node, 'maxLen'))} ±${field(own(node, 'amp'))}`;
+    }
     default: return kind;
   }
 }

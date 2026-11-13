@@ -384,7 +384,7 @@ function rulesCost(source: unknown): { readonly nodes: number; readonly perNode:
         stack.push({ rule: field(rule, 'then'), bound: b, bounded: bd, yOnly: yOnly && isYOnly(c) });
         break;
       }
-      case 'block': case 'bandlands':
+      case 'block': case 'bandlands': case 'strata':
         if (bounded) maxBound = Math.max(maxBound, bound);
         else if (!yOnly) fast = false;
         break;

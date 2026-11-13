@@ -35,7 +35,14 @@ const EVERY_CONDITION: readonly Condition[] = [
   { kind: 'not', if: { kind: 'stoneDepth', side: 'ceiling', offset: 3, addSurfaceDepth: false } },
   { kind: 'caveBiome', side: 'floor', biomes: ['lush', 'dripstone'] },
 ];
-const EVERY_KIND: Rule = seq(...EVERY_CONDITION.map((c, k) => cond(c, block(k % 2 === 0 ? 'stone' : 'bedrock'))), { kind: 'bandlands' }, block('stone'));
+/** A valid `strata` leaf (SP6b spec §3.3): two layers over the depth noise. */
+const STRATA: Rule = {
+  kind: 'strata', layers: [{ state: 'stone', weight: 3, maxLen: 4 }, { state: 'bedrock', weight: 1, maxLen: 1 }],
+  minLen: 1, maxLen: 6, noise: 'surface.noises.depth', amp: 6,
+};
+const EVERY_KIND: Rule = seq(
+  ...EVERY_CONDITION.map((c, k) => cond(c, block(k % 2 === 0 ? 'stone' : 'bedrock'))), { kind: 'bandlands' }, STRATA, block('stone'),
+);
 
 /** n condition rules nested through `then`, ending in a block: the block (and the last `if`) sit at depth n + 1. */
 function chain(n: number): Rule {
@@ -46,7 +53,7 @@ function chain(n: number): Rule {
 
 describe('rule model (SP3c spec §3.1)', () => {
   test('RULE_KINDS and CONDITION_KINDS list the kinds of the two tables', () => {
-    expect([...RULE_KINDS]).toEqual(['sequence', 'condition', 'block', 'bandlands']);
+    expect([...RULE_KINDS]).toEqual(['sequence', 'condition', 'block', 'bandlands', 'strata']);
     expect([...CONDITION_KINDS]).toEqual([
       'biome', 'stoneDepth', 'water', 'yAbove', 'verticalGradient', 'steep', 'noiseThreshold', 'temperatureBelow', 'skyOpen', 'lake', 'not',
       'caveBiome',
@@ -60,7 +67,7 @@ describe('rule model (SP3c spec §3.1)', () => {
     expect(sequenceChildId(conditionThenId(sequenceChildId('root', 1)), 3)).toBe('root.rules[1].then.rules[3]');
   });
 
-  test('ruleLeaves lists every block and bandlands leaf in tree order with its id and the ifs of its condition ancestors', () => {
+  test('ruleLeaves lists every block, bandlands and strata leaf in tree order with its id and the ifs of its condition ancestors', () => {
     const notWater: Condition = { kind: 'not', if: { kind: 'water', offset: 0, runTop: false } };
     const tree = seq(
       cond({ kind: 'verticalGradient', trueAtAndBelow: -64, falseAtAndAbove: -59 }, block('bedrock')),
@@ -79,6 +86,9 @@ describe('rule model (SP3c spec §3.1)', () => {
     expect(leaves[4]!.conditions).toEqual([]);
     expect(ruleLeaves(block('stone'))).toEqual([{ id: 'root', rule: block('stone'), conditions: [] }]);
     expect(ruleLeaves({ kind: 'bandlands' })).toEqual([{ id: 'root', rule: { kind: 'bandlands' }, conditions: [] }]);
+    expect(ruleLeaves(seq(block('stone'), cond(SKY, STRATA)))).toEqual([
+      { id: 'root.rules[0]', rule: block('stone'), conditions: [] }, { id: 'root.rules[1].then', rule: STRATA, conditions: [SKY] },
+    ]);
   });
 });
 
@@ -140,6 +150,52 @@ describe('validateRules (SP3c spec §3.1)', () => {
     expect(without({ dims: 3, remap: 'none', clampSigma: 3 })(band)).toEqual(['root: NOISE_DIMS']);
     expect(without({ dims: 2, remap: 'uniform', clampSigma: 3 })(band)).toEqual(['root: NOISE_REMAP']);
     expect(validateRules(band, () => undefined)[0]!.message).toMatch(/surface\.noises\.bandOffset/);
+  });
+
+  test('strata (SP6b spec §3.3): 1-16 solid layers, weights > 0, integer lengths 1 ≤ minLen ≤ maxLen ≤ 8, a 2D noise, amp in [0, 16]', () => {
+    const st = (patch: object): Rule => ({ ...STRATA, ...patch }) as Rule;
+    const layer = (state: string, weight: unknown, maxLen: unknown) => ({ state, weight, maxLen });
+    expect(issues(STRATA)).toEqual([]);
+    expect(issues(st({ layers: Array.from({ length: 16 }, () => layer('stone', 1, 8)), minLen: 8, maxLen: 8, amp: 16 }))).toEqual([]);
+    expect(issues(st({ layers: [layer('stone', 1e9, 1)], minLen: 1, maxLen: 1, amp: 0 }))).toEqual([]);
+    // §3.3's codes: 17 layers, weight 0, minLen 0, maxLen 9, a 3D noise.
+    expect(issues(st({ layers: Array.from({ length: 17 }, () => layer('stone', 1, 8)) }))).toEqual(['root.layers: STRATA_LAYERS']);
+    expect(issues(st({ layers: [] }))).toEqual(['root.layers: STRATA_LAYERS']);
+    expect(issues(st({ layers: layer('stone', 1, 1) }))).toEqual(['root.layers: STRATA_LAYERS']);
+    expect(issues(st({ layers: [layer('stone', 0, 4)] }))).toEqual(['root.layers[0].weight: STRATA_WEIGHT']);
+    expect(issues(st({ minLen: 0 }))).toEqual(['root.minLen: STRATA_LEN']);
+    expect(issues(st({ maxLen: 9 }))).toEqual(['root.maxLen: STRATA_LEN']);
+    expect(issues(st({ noise: 'surface.noises.vol' }))).toEqual(['root.noise: NOISE_DIMS']);
+    expect(validateRules(st({ noise: 'surface.noises.vol' }), LOOKUP)[0]!.message).toBe('strata needs a 2D noise; surface.noises.vol is 3D');
+    // Layers: a solid registered state, weights finite in (0, 1e9], lengths integers 1 … 8, exactly three fields.
+    expect(issues(st({ layers: [layer('air', 1, 1), layer('nope', 1, 1), 'stone'] }))).toEqual([
+      'root.layers[0].state: STRATA_LAYERS', 'root.layers[1].state: STRATA_LAYERS', 'root.layers[2]: STRATA_LAYERS',
+    ]);
+    expect(issues(st({ layers: [layer('stone', -1, 1), layer('stone', Infinity, 1), layer('stone', 2e9, 1), layer('stone', '1', 1)] }))).toEqual([
+      'root.layers[0].weight: STRATA_WEIGHT', 'root.layers[1].weight: STRATA_WEIGHT', 'root.layers[2].weight: STRATA_WEIGHT', 'root.layers[3].weight: STRATA_WEIGHT',
+    ]);
+    expect(issues(st({ layers: [layer('stone', 1, 0), layer('stone', 1, 9), layer('stone', 1, 1.5)] }))).toEqual([
+      'root.layers[0].maxLen: STRATA_LEN', 'root.layers[1].maxLen: STRATA_LEN', 'root.layers[2].maxLen: STRATA_LEN',
+    ]);
+    expect(issues(st({ layers: [{ state: 'stone', weight: 1 }] }))).toEqual(['root.layers[0].maxLen: MISSING_FIELD']);
+    expect(issues(st({ layers: [{ state: 'stone', weight: 1, maxLen: 1, kind: 'block' }] }))).toEqual(['root.layers[0].kind: UNKNOWN_FIELD']);
+    // A layer's maxLen may be below minLen (its runs are then exactly that long); minLen > maxLen is refused at the node.
+    expect(issues(st({ layers: [layer('stone', 1, 1)], minLen: 4, maxLen: 6 }))).toEqual([]);
+    expect(issues(st({ minLen: 5, maxLen: 4 }))).toEqual(['root: STRATA_LEN']);
+    expect(issues(st({ minLen: 2.5 }))).toEqual(['root.minLen: STRATA_LEN']);
+    // The noise as noiseThreshold's; amp finite in [0, 16]; −0 anywhere.
+    expect(issues(st({ noise: 'surface.noises.flat' }))).toEqual(['root.noise: NOISE_REMAP']);
+    expect(issues(st({ noise: 'density.noises.jag' }))).toEqual(['root.noise: UNKNOWN_NOISE']);
+    expect(issues(st({ amp: 16.5 }))).toEqual(['root.amp: OUT_OF_RANGE']);
+    expect(issues(st({ amp: -1 }))).toEqual(['root.amp: OUT_OF_RANGE']);
+    expect(issues(st({ amp: NaN }))).toEqual(['root.amp: NOT_FINITE']);
+    expect(issues(st({ amp: -0 }))).toEqual(['root.amp: NEGATIVE_ZERO']);
+    expect(issues(st({ minLen: -0, layers: [layer('stone', -0, 1)] }))).toEqual(['root.layers[0].weight: NEGATIVE_ZERO', 'root.minLen: NEGATIVE_ZERO']);
+    // Every field is written; nothing else; a ref is a literal's error (strata takes no ref).
+    expect(issues({ kind: 'strata', layers: [layer('stone', 1, 1)], minLen: 1, maxLen: 1, noise: 'surface.noises.depth' })).toEqual(['root.amp: MISSING_FIELD']);
+    expect(issues(st({ state: 'stone' }))).toEqual(['root.state: UNKNOWN_FIELD']);
+    expect(issues(st({ minLen: { param: 'surface.cliffMinY' } }))).toEqual(['root.minLen: STRATA_LEN']);
+    expect(issues(cond(STRATA as unknown as Condition, block('stone')))).toEqual(['root.if: UNKNOWN_KIND']);
   });
 
   test('noiseThreshold.noise must be a dims-2 surface.noises.* leaf (remap none)', () => {

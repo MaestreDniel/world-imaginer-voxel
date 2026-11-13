@@ -170,6 +170,7 @@ import { MAX_STEP_EDITS, SUB_BATCH } from '../../src/sim/edits';
 import { PIN_MAX } from '../../src/ui/inspector/sliceModel';
 import { MAX_HISTORY_EDITS } from '../../src/ui/world/blockHistory';
 import { REGISTRY } from '../../src/world/blocks';
+import { RULE_KINDS } from '../../src/gen/surface/rules';
 import {
   BENCH_ROWS, ISLANDS_P50_MAX_MS, ISLANDS_P99_MAX_MS, LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P99_MAX_MS,
   SLICE_CAVES_P50_MAX_MS, TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS,
@@ -2563,6 +2564,16 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(conditions).toContain('deferred to SP8b (amended by SP6b)');
     // Moved from the SP6a describe, which pinned the line before SP6b.
     expect(conditions).not.toContain('`caveBiome` stays SP6b\'s');
+  });
+
+  test('§3.11\'s rule kinds gain strata (SP6b spec §15 item 12)', () => {
+    const conditions = text.split('\n').find((l) => l.startsWith('**Conditions:**'));
+    expect(conditions, 'no **Conditions:** line in §3.11').toBeDefined();
+    expect(conditions).toContain('`strata` joins the rule kinds (SP6b)');
+    expect(conditions).toContain('`strata{layers, minLen, maxLen, noise, amp}`');
+    expect(conditions).toContain('(SP6b spec §3.3, D19)');
+    // The rule kinds the line names are RULE_KINDS.
+    for (const k of RULE_KINDS) expect(conditions).toContain(`\`${k}\``);
   });
 
   test('§3.12 names the abyss surface-palette blocks (SP6b spec §15 item 13)', () => {

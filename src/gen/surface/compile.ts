@@ -10,8 +10,8 @@
  * `caveBiome`'s floor and ceiling biome of the run and the picker's biome at the voxel, SP6b), so the
  * compiled tree equals the reference on every voxel. Nothing yielded leaves the voxel stone.
  *
- * Fast path (`surfaceFastPath`, compile time, general and conservative). Every leaf (`block` or `bandlands`) is classed
- * by the `if`s on its path (sequences ignored):
+ * Fast path (`surfaceFastPath`, compile time, general and conservative). Every leaf (`block`, `bandlands` or `strata`)
+ * is classed by the `if`s on its path (sequences ignored):
  * - depth-bounded: a path `if` is `stoneDepth{side floor}` (not under a `not`); its bound is the smallest, over those
  *   gates, of offset + (addSurfaceDepth ? SD_MAX : 0);
  * - Y-only: every path `if` is a `verticalGradient`, a `yAbove{runTop false}` or a `not` of these.
@@ -23,20 +23,22 @@
  * `yAbove{runTop false}`'s minY and at each such gradient's ends; a gradient's dither interval
  * [trueAtAndBelow + 1, falseAtAndAbove − 1] is always evaluated; every other interval is a constant band whose state is
  * the tree evaluated at compile time without its depth-bounded leaves (stone when nothing matches); a band whose first
- * holding Y-only leaf is a `bandlands` has no constant state (the band block varies with x, y, z) and is always
- * evaluated, like a dither interval. `fillColumn` gives
+ * holding Y-only leaf is a `bandlands` or a `strata` (SP6b) has no constant state (the band block varies with x, y, z)
+ * and is always evaluated, like a dither interval. `fillColumn` gives
  * a solid voxel of a constant band its band's state without evaluating when floorDepth > maxSurfaceDepth or, in a
  * sky-gated tree, when its run is not sky-open; non-solid voxels are never written. Follows the gen determinism rules.
  */
 import type { Seed64 } from '../../core/hash';
 import { REGISTRY, STONE } from '../../world/blocks/index';
 import type { CaveColumnPass, CavePickerInputs } from '../biomes/cavePicker';
-import { BAND_OFFSET_NOISE, bandlandsOffset, bandlandsState, bandlandsTable, isBandlandsTable } from './bands';
+import {
+  BAND_OFFSET_NOISE, bandlandsOffset, bandlandsState, bandlandsTable, isBandlandsTable, strataOffset, strataState, strataTable,
+} from './bands';
 import {
   biomeHolds, biomeMask, caveBiomeHere, caveBiomeHolds, caveBiomeMask, gradientSeed, lakeHolds, noiseThresholdHolds, skyOpenHolds,
   steepHolds, stoneDepthHolds, temperatureBelowHolds, verticalGradientHolds, waterHolds, yAboveHolds,
 } from './conditions';
-import { requireValidRules, ruleLeaves, type Condition, type Rule, type SurfaceNoiseSource } from './rules';
+import { requireValidRules, ruleLeaves, type Condition, type Rule, type StrataRule, type SurfaceNoiseSource } from './rules';
 import { runAt, tEff, type SurfaceScan, type SurfaceScanSettings } from './scan';
 
 const BLOCKS = REGISTRY;
@@ -65,6 +67,9 @@ const BAND_TABLE = bandlandsTable;
 const IS_BAND_TABLE = isBandlandsTable;
 const BAND_OFFSET = bandlandsOffset;
 const BAND_STATE = bandlandsState;
+const STRATA_TABLE = strataTable;
+const STRATA_OFFSET = strataOffset;
+const STRATA_STATE = strataState;
 
 /** Voxels per column, index `256·(y + 64) + p` (the T stage's order). */
 const COLUMN_VOXELS = 98304;
@@ -79,7 +84,7 @@ export interface SurfaceBand {
   readonly dither: boolean;
   /**
    * The constant band's state (the tree without its depth-bounded leaves); −1 for a dither interval and for a band
-   * whose result is a `bandlands` leaf (both always evaluated).
+   * whose result is a `bandlands` or `strata` leaf (both always evaluated).
    */
   readonly state: number;
 }
@@ -172,7 +177,7 @@ export function surfaceFastPath(root: Rule, sdMax: number): SurfaceFastPath | nu
       maxSurfaceDepth = Math.max(maxSurfaceDepth, bound);
       if (!sky) skyGated = false;
     } else if (leaf.conditions.every(isYOnly)) {
-      // A bandlands leaf's block varies with (x, y, z): a band it decides is evaluated (state −1).
+      // A bandlands or strata leaf's block varies with (x, y, z): a band it decides is evaluated (state −1).
       yLeaves.push({ state: leaf.rule.kind === 'block' ? BLOCKS.parseStateKey(leaf.rule.state) : -1, conditions: leaf.conditions });
     } else {
       return null;
@@ -234,7 +239,8 @@ type RuleFn = () => number;
  * the world seed `seed` (the gradient seeds, the band table), the surface noises `noises` and the scan settings `set`
  * (SD_MAX for the fast path; lapse and lapseBase for T_eff). Scans evaluated with it must be made with the same
  * settings. `bands` is the band table of `seed` when the caller already holds it (the SurfaceContext's); by default it
- * is built when the tree has a `bandlands` leaf.
+ * is built when the tree has a `bandlands` leaf. Each `strata` node's table is built here, numbered by its first
+ * occurrence in depth-first order (SP6b spec §3.3).
  */
 export function compileSurfaceRules(
   seed: Seed64, rules: unknown, noises: SurfaceNoiseSource, set: SurfaceScanSettings, bands?: Uint16Array,
@@ -242,6 +248,7 @@ export function compileSurfaceRules(
   const tree = VALID(rules, noises);
   if (bands !== undefined && !IS_BAND_TABLE(bands)) throw new RangeError(`compileSurfaceRules: the band table has ${bands.length} entries`);
   let table: Uint16Array | null = null;
+  const strataTables = new Map<StrataRule, Uint16Array>();
   const lapse = set.lapse;
   const lapseBase = set.lapseBase;
   const cur: Cursor = {
@@ -347,6 +354,28 @@ export function compileSurfaceRules(
             stamp = cur.stamp;
           }
           return BAND_STATE(t, cur.y, o);
+        };
+      }
+      case 'strata': {
+        let t = strataTables.get(r);
+        if (t === undefined) {
+          t = STRATA_TABLE(seed, strataTables.size, r);
+          strataTables.set(r, t);
+        }
+        const tt = t;
+        const n = noises(r.noise)!;
+        const { amp } = r;
+        const cs = n.clampSigma;
+        // amp 0 ignores the noise; otherwise the offset depends on (x, z) only: sampled once per position.
+        if (amp === 0) return () => STRATA_STATE(tt, cur.y, 0);
+        let stamp = -1;
+        let o = 0;
+        return () => {
+          if (stamp !== cur.stamp) {
+            o = STRATA_OFFSET(n.z2(cur.x, cur.z), amp, cs);
+            stamp = cur.stamp;
+          }
+          return STRATA_STATE(tt, cur.y, o);
         };
       }
     }
