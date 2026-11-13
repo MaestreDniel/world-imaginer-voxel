@@ -2649,7 +2649,7 @@ describe('master spec amendments (SP6b §15)', () => {
   test('§6.4\'s DT2 row gains caveBiomeProbe (SP6b spec §15 item 20)', () => {
     const dt2 = text.split('\n').find((l) => l.startsWith('| DT2 |'));
     expect(dt2, 'no DT2 row in §6.4').toBeDefined();
-    expect(dt2).toContain('SP6b: `caveBiomeProbe` counts tagged voxels whose stored cave biome (bits 4-7 of the `cave` byte) ≠ `caveBiomeAt`, and quarts holding a tagged voxel whose `caveBiomeQ` ≠ 1 + the biome most of their tagged voxels get from `caveBiomeAt` (amended by SP6b) |');
+    expect(dt2).toContain('SP6b: `caveBiomeProbe` counts tagged voxels whose stored cave biome (bits 4-7 of the `cave` byte) ≠ `caveBiomeAt`, and quarts holding a tagged voxel whose `caveBiomeQ` ≠ 1 + the biome most of their tagged voxels get from `caveBiomeAt`; the surface parts (`surfaceProbeBulk`, `surfaceReference`, `editedSurfaceReference`) are re-asserted with `caveBiome` and `strata` (amended by SP6b) |');
     expect(THRESHOLDS.DT2?.caveBiomeProbe).toEqual({ max: 0, activeFrom: 'SP6b' });
   });
 
