@@ -5,12 +5,16 @@ import { compileSurfaceRules, surfaceFastPath, type CompiledSurfaceRules, type S
 import { createSurfaceReference } from '../../src/gen/surface/reference';
 import { RuleValidationError, ruleLeaves, type Condition, type Rule, type StrataRule, type SurfaceNoiseSource } from '../../src/gen/surface/rules';
 import { strataOffset, strataState, strataTable } from '../../src/gen/surface/bands';
-import { newSurfaceScan, scanColumn, surfaceScanSettings, type SurfaceScan, type SurfaceScanSettings } from '../../src/gen/surface/scan';
+import {
+  classifyCaveBiomes, newSurfaceScan, scanColumn, surfaceScanSettings, type SurfaceScan, type SurfaceScanSettings,
+} from '../../src/gen/surface/scan';
 import { AIR, BEDROCK, REGISTRY, STONE } from '../../src/world/blocks/index';
 import { caveBiomeHere } from '../../src/gen/surface/conditions';
+import { caveBiomeOfPass } from '../../src/gen/biomes/cavePicker';
+import type { CaveBiomeSettings } from '../../src/gen/biomes/caveRegistry';
 import {
-  randomSurfaceColumn, randomSurfaceParams, randomSurfaceRules, SURFACE_FUZZ_PARAMS, surfaceFuzzNoiseSource, surfaceFuzzSettings,
-  withCaveBiomes, type SurfaceFuzzColumn, type SurfaceFuzzStyle,
+  fuzzCavePicker, handCavePass, randomSurfaceColumn, randomSurfaceParams, randomSurfaceRules, SURFACE_FUZZ_CAVE_SETTINGS, SURFACE_FUZZ_PARAMS,
+  surfaceFuzzNoiseSource, surfaceFuzzSettings, withCaveBiomes, type CaveFields, type SurfaceFuzzColumn, type SurfaceFuzzStyle,
 } from '../harness/surfaceFuzz';
 import { testRng } from '../harness/stats';
 import { legacyDefaultSurfaceRules } from '../harness/legacyTrees';
@@ -110,22 +114,26 @@ function fill(c: CompiledSurfaceRules, scan: SurfaceScan, fast: boolean): { out:
 }
 
 /**
- * The voxels §3.4 and SP6b §3.5 (D20 1-2) let take their band: solid, in a constant band, floorDepth beyond the run's
+ * The voxels §3.4 and SP6b §3.5 (D20 1-3) let take their band: solid, in a constant band, floorDepth beyond the run's
  * floor bound (the sky-open run's: the larger of the two floor classes'; any other run's: the non-sky class's) and
- * ceilDepth beyond the ceiling class's bound.
+ * ceilDepth beyond the ceiling class's bound, a class's bound −1 for a run whose floor (ceiling) biome its biome-gated
+ * skip leaves out. (A tree with here-gated leaves, item 4, takes more: this counts only the bands whose state is one.)
  */
 function fastVoxels(fp: SurfaceFastPath, scan: SurfaceScan): { fast: number; noSkyNearTop: number; solid: number } {
   const bandAt = new Int32Array(384).fill(-1);
   for (const b of fp.bands) for (let y = b.yMin; y <= b.yMax; y++) bandAt[y + 64] = b.state;
+  const skipped = (set: number, biome: number) => set >= 0 && (biome < 0 || ((set >> biome) & 1) === 0);
   let fast = 0, noSkyNearTop = 0, solid = 0;
   for (let p = 0; p < 256; p++) {
     for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
       const sky = r === scan.skyRun[p];
-      const floorBound = sky ? Math.max(fp.skyFloorBound, fp.floorBound) : fp.floorBound;
+      const other = skipped(fp.floorBiomes, scan.runFloorBiome[r]!) ? -1 : fp.floorBound;
+      const ceilBound = skipped(fp.ceilBiomes, scan.runCeilBiome[r]!) ? -1 : fp.ceilBound;
+      const floorBound = sky ? Math.max(fp.skyFloorBound, other) : other;
       for (let y = scan.runTop[r]!; y >= scan.runBottom[r]!; y--) {
         solid++;
         const depth = scan.runTop[r]! - y;
-        if (bandAt[y + 64]! >= 0 && depth > floorBound && y - scan.runBottom[r]! > fp.ceilBound) {
+        if (bandAt[y + 64]! >= 0 && depth > floorBound && y - scan.runBottom[r]! > ceilBound) {
           fast++;
           if (!sky && depth <= fp.maxSurfaceDepth) noSkyNearTop++;
         }
@@ -133,6 +141,79 @@ function fastVoxels(fp: SurfaceFastPath, scan: SurfaceScan): { fast: number; noS
     }
   }
   return { fast, noSkyNearTop, solid };
+}
+
+type CaveSide = 'floor' | 'ceiling' | 'here';
+type CaveName = 'plain' | 'lush' | 'dripstone' | 'abyss';
+const CB = (side: CaveSide, ...biomes: CaveName[]): Condition => ({ kind: 'caveBiome', side, biomes });
+const PATCH = (min: number, max: number): Condition => ({ kind: 'noiseThreshold', noise: 'surface.noises.patch', min, max });
+/** §3.3's abyss layers. */
+const ABYSS_LAYERS = [
+  { state: 'abyss_stone', weight: 50, maxLen: 8 }, { state: 'abyss_shale', weight: 25, maxLen: 4 },
+  { state: 'cracked_abyss_stone', weight: 15, maxLen: 3 }, { state: 'abyss_stone_veined', weight: 10, maxLen: 1 },
+];
+
+/**
+ * Rule 4 (SP6b spec §3.4) as Task 22 writes it, with `surface.noises.patch` standing in for `cavePatch` and
+ * `surface.noises.bandOffset` for `strataOffset` (both 2D, remap none: the leaves Task 22 adds do not exist yet).
+ */
+const RULE4: Rule = SEQ(
+  IF(CB('here', 'abyss'), SEQ(
+    IFS([floor(1, false), CB('floor', 'abyss'), PATCH(-0.84, 8)], B('abyss_ash')),
+    { kind: 'strata', layers: ABYSS_LAYERS, minLen: 1, maxLen: 6, noise: 'surface.noises.bandOffset', amp: 6 },
+  )),
+  IFS([floor(1, false), CB('floor', 'lush')], SEQ(IF(PATCH(0.84, 8), B('clay')), B('moss_block'))),
+  IFS([floor(1, false), CB('floor', 'dripstone'), NOT(PATCH(-8, -0.97))], B('dripstone_block')),
+  IFS([ceil(0, false), CB('ceiling', 'lush'), PATCH(-0.52, 8)], B('moss_block')),
+  IFS([ceil(1, false), CB('ceiling', 'dripstone'), NOT(PATCH(-8, -0.97))], B('dripstone_block')),
+);
+
+/** The default's shape with `inserted` at root.rules[2] (rule 4's place). */
+function withRule(inserted: Rule): Rule {
+  const [rule1, sky, rule2] = (DEFAULT_SHAPE as Extract<Rule, { kind: 'sequence' }>).rules;
+  return SEQ(rule1!, sky!, inserted, rule2!);
+}
+
+/** Position p's classification (`classifyCaveBiomes`) as a mask per y + 64 (0 when the scan has no picker). */
+function classMasks(scan: SurfaceScan, p: number): Uint8Array {
+  const out = new Uint8Array(384);
+  const n = classifyCaveBiomes(scan, p);
+  for (let i = 0; i < n; i++) {
+    const hi = i === 0 ? 319 : scan.caveRangeLow[i - 1]! - 1;
+    for (let y = scan.caveRangeLow[i]!; y <= hi; y++) out[y + 64] = scan.caveRangeMask[i]!;
+  }
+  return out;
+}
+
+/** p's (2J + 1)² neighbourhood in a pass: every box's climate test there and the extreme Y0s. */
+function neighbourhood(pass: ReturnType<typeof handCavePass>, st: CaveBiomeSettings, p: number) {
+  const j = pass.j;
+  let abyssAll = true, lushAll = true, y0Min = Infinity, y0Max = -Infinity;
+  for (let dz = -j; dz <= j; dz++) {
+    for (let dx = -j; dx <= j; dx++) {
+      const k = ((p >> 4) + 4 + dz) * 24 + (p & 15) + 4 + dx;
+      abyssAll &&= pass.e[k]! <= st.abyss.eMax && pass.c[k]! > st.abyss.cMin;
+      lushAll &&= pass.h[k]! >= st.lush.hMin;
+      y0Min = Math.min(y0Min, pass.y0[k]!);
+      y0Max = Math.max(y0Max, pass.y0[k]!);
+    }
+  }
+  return { abyssAll, lushAll, y0Min, y0Max };
+}
+
+/**
+ * An abyss column (under a mountain: ground −63 … 180-186): the pass's E′ −0.8 rising by 0.06 a block past local x 8,
+ * so the abyss's climate test is surely true at local x ≤ 10, mixed around 11-14 and surely false beyond, C′ 0.2,
+ * H′ `h(lz)`, and Y0 sloping across the neighbourhood (160 + 1.3·lx + 0.7·lz + a quarter-block wobble).
+ */
+function abyssColumn(settings: CaveBiomeSettings, h: (lz: number) => number = () => 0): SurfaceFuzzColumn & { cave: NonNullable<SurfaceFuzzColumn['cave']> } {
+  const col = handColumn((p) => 180 + (p % 7));
+  const { cx, cz } = col.sample;
+  const pass = handCavePass(cx, cz, settings.edgeJitter, (x, z): CaveFields => {
+    const lx = x - 16 * cx, lz = z - 16 * cz;
+    return { c: 0.2, e: -0.8 + 0.06 * Math.max(0, lx - 8), h: h(lz), y0: 160 + 1.3 * lx + 0.7 * lz + 0.25 * (((x * 7 + z * 3) % 5 + 5) % 5) };
+  });
+  return { ...col, cave: { inputs: fuzzCavePicker(settings), pass } };
 }
 
 describe('surface rule compiler (SP3c spec §3.4)', () => {
@@ -155,6 +236,9 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
       skyFloorBound: 15,
       floorBound: -1,
       ceilBound: -1,
+      floorBiomes: -1,
+      ceilBiomes: -1,
+      here: false,
       bands: [dither(-63, -60), band(-59, 0, BEDROCK), dither(1, 7), band(8, 319, STONE)],
     });
     // SD_MAX comes from the live settings: depthMul 0 gives 3, so 7.
@@ -189,7 +273,10 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     expect(fp(SEQ(IF(floor(3, false), B('air')), IF(floor(-2, true), B('air')), IF(floor(20, false), IF(floor(9, false), B('air')))), 11).maxSurfaceDepth).toBe(9);
     expect(fp(SEQ(IF(floor(3, false), B('air')), IF(floor(-2, true), B('air'))), 11).maxSurfaceDepth).toBe(9);
     expect(fp(IF(floor(-3, false), B('air')), 11).maxSurfaceDepth).toBe(-1);
-    expect(fp(SEQ(), 11)).toEqual({ maxSurfaceDepth: -1, skyGated: true, skyFloorBound: -1, floorBound: -1, ceilBound: -1, bands: [band(-63, 319, STONE)] });
+    expect(fp(SEQ(), 11)).toEqual({
+      maxSurfaceDepth: -1, skyGated: true, skyFloorBound: -1, floorBound: -1, ceilBound: -1, floorBiomes: -1, ceilBiomes: -1, here: false,
+      bands: [band(-63, 319, STONE)],
+    });
     expect(fp(IF(grad(0, 8), B('air')), 11).skyGated).toBe(true);
     // Sky gate: a skyOpen `if` on every depth-bounded path, not under a not; the Y-only leaves need none.
     expect(fp(SEQ(IFS([SKY, TOP], B('air')), IFS([floor(2, false), yAbove(3, true), SKY], B('air')), B('bedrock')), 11).skyGated).toBe(true);
@@ -242,7 +329,8 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
   test("rule 4's ceiling leaves without their caveBiome gates (SP6b §3.4-§3.5): ceilBound 1, each run's bottom 2 voxels plus the floor class's", () => {
     // stoneDepth{ceiling, 0} → cavePatch → moss_block; stoneDepth{ceiling, 1} → not(cavePatch) → dripstone_block, with
     // surface.noises.patch standing in for cavePatch (Task 22's leaf) and no floor gate; inserted at root.rules[2] of
-    // the default's shape. With the caveBiome{ceiling} gates back the tree has no fast path until extension 3 (Task 15).
+    // the default's shape. With the caveBiome{ceiling} gates back the tree keeps this fast path, and the biome-gated
+    // skip (extension 3) leaves out the runs whose ceiling biome no leaf names.
     const CEILING_LEAVES = SEQ(
       IFS([ceil(0, false), { kind: 'noiseThreshold', noise: 'surface.noises.patch', min: -0.52, max: 8 }], B('moss_block')),
       IFS([ceil(1, false), NOT({ kind: 'noiseThreshold', noise: 'surface.noises.patch', min: -8, max: -0.97 })], B('dripstone_block')),
@@ -297,6 +385,9 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
       skyFloorBound: 11,
       floorBound: -1,
       ceilBound: -1,
+      floorBiomes: -1,
+      ceilBiomes: -1,
+      here: false,
       bands: [
         band(-63, -10, AIR), dither(-9, -6), band(-5, 19, STONE), band(20, 99, STONE), band(100, 150, BEDROCK), band(151, 300, BEDROCK),
         dither(301, 319),
@@ -318,6 +409,9 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
       skyFloorBound: 0,
       floorBound: -1,
       ceilBound: -1,
+      floorBiomes: -1,
+      ceilBiomes: -1,
+      here: false,
       bands: [band(-63, 0, BEDROCK), dither(1, 7), band(8, 39, STONE), { yMin: 40, yMax: 59, dither: false, state: -1 }, band(60, 319, STONE)],
     });
     const col = handColumn((p) => 70 + (p % 5));
@@ -453,7 +547,9 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
         }
         const v = fastVoxels(fp, scan);
         expect(slow.evaluated).toBe(v.solid);
-        expect(fast.evaluated).toBe(v.solid - v.fast);
+        // Here-gated leaves (SP6b §3.5 item 4, a free tree's): the classification takes more than the constant bands.
+        if (fp.here) expect(fast.evaluated).toBeLessThanOrEqual(v.solid - v.fast);
+        else expect(fast.evaluated).toBe(v.solid - v.fast);
         tally.fastTrees++;
         tally.voxels += v.solid;
         tally.fast += v.fast;
@@ -531,7 +627,9 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
         // the floor and ceiling sides), so not(plain) is left only to biomes the earlier branches took.
         expect([side, states.size]).toEqual([side, tree !== trees[0] ? 4 : side === 'here' ? 5 : 6]);
       }
-      expect(compileSurfaceRules(SEED, trees[0]!, NOISES, set).fastPath).toBeNull();
+      // trees[0]'s ungated floor and ceiling leaves are in no class; on the here side its leaves are here-gated (SP6b
+      // §3.5 item 4) but for the floor-bounded last one.
+      expect(compileSurfaceRules(SEED, trees[0]!, NOISES, set).fastPath?.here ?? null).toBe(side === 'here' ? true : null);
       expect(compileSurfaceRules(SEED, trees[1]!, NOISES, set).fastPath).toMatchObject({ maxSurfaceDepth: 1 });
     }
   });
@@ -547,7 +645,7 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     const t1 = tree(ST('surface.noises.patch', 0)), t2 = tree(ST('surface.noises.fuzzB', 0));
     // The strata leaf is Y-only: the band it decides (8 … 319) has no constant state and is evaluated.
     expect(surfaceFastPath(t1, 11)).toEqual({
-      maxSurfaceDepth: 0, skyGated: true, skyFloorBound: 0, floorBound: -1, ceilBound: -1,
+      maxSurfaceDepth: 0, skyGated: true, skyFloorBound: 0, floorBound: -1, ceilBound: -1, floorBiomes: -1, ceilBiomes: -1, here: false,
       bands: [band(-63, -41, BEDROCK), band(-40, 0, BEDROCK), dither(1, 7), { yMin: 8, yMax: 319, dither: false, state: -1 }],
     });
     const col = handColumn((p) => 300 + (p % 7));
@@ -584,7 +682,8 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     const tree = SEQ(IFS([TOP, { kind: 'caveBiome', side: 'floor', biomes: ['abyss'] }], B('abyss_ash')), IF({ kind: 'caveBiome', side: 'here', biomes: ['abyss'] }, st));
     const c = compileSurfaceRules(SEED, tree, NOISES, set);
     const ref = createSurfaceReference(SEED, tree, NOISES);
-    expect(c.fastPath).toBeNull();
+    // The strata leaf is here-gated, the ash leaf in the floor class under its caveBiome{floor} gate (SP6b §3.5 3-4).
+    expect(c.fastPath).toMatchObject({ floorBound: 0, floorBiomes: 1 << 3, here: true });
     const states = new Set<number>();
     for (const k of [3, 5, 8, 13]) {
       const col = withCaveBiomes(randomSurfaceColumn(testRng(k)), k);
@@ -615,5 +714,228 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
       expect(c.state(scan, p, 64)).toBe(REGISTRY.parseStateKey((p % SURFACE_BIOMES.length) % 2 === 0 ? 'air' : 'bedrock'));
       expect(c.state(scan, p, 63)).toBe(STONE);
     }
+  });
+  test('the caveBiome{here} classification (SP6b §3.5 item 4): sound for the picker; the abyss surely abyss under its climate; overlaps mixed', () => {
+    const st = SURFACE_FUZZ_CAVE_SETTINGS;
+    const J = st.edgeJitter;
+    // Soundness: the picker's biome at every voxel lies in its range's mask, over the abyss column and eight columns of
+    // every biome (their own boxes, overlapping one time in four, D 16 … 128, J 0 … 4).
+    const sound = [abyssColumn(st), abyssColumn({ ...st, lush: { ...st.lush, depthMax: 1.5 } }, (lz) => (lz < 8 ? 0.6 : 0)),
+      ...[3, 5, 8, 13, 21, 34, 55, 89].map((k) => withCaveBiomes(randomSurfaceColumn(testRng(k)), k))];
+    let picks = 0, single = 0;
+    for (const col of sound) {
+      const scan = scanOf(col, set);
+      const { inputs, pass } = col.cave!;
+      for (let p = 0; p < 256; p++) {
+        const n = classifyCaveBiomes(scan, p);
+        expect(n).toBeGreaterThan(0);
+        expect(n).toBeLessThanOrEqual(16);
+        expect(scan.caveRangeLow[n - 1]).toBe(-63);
+        for (let i = 1; i < n; i++) expect(scan.caveRangeLow[i]!).toBeLessThan(scan.caveRangeLow[i - 1]!);
+        const masks = classMasks(scan, p);
+        for (let y = -63; y <= 319; y++) {
+          const b = caveBiomeOfPass(inputs, pass, 16 * col.sample.cx + (p & 15), y, 16 * col.sample.cz + (p >> 4));
+          const m = masks[y + 64]!;
+          if (((m >> b) & 1) === 0) throw new Error(`column ${sound.indexOf(col)} p ${p} y ${y}: the picker's ${b} is not in mask ${m}`);
+          picks++;
+          if ((m & (m - 1)) === 0) single++;
+        }
+      }
+    }
+    expect(picks).toBe(10 * 256 * 383);
+    expect(single / picks).toBeGreaterThan(0.5);
+
+    // The default boxes over 64 positions of the abyss column: where the abyss's climate test is surely true over the
+    // position's (2J + 1)² neighbourhood, every voxel below min Y0 − (128 + J) is surely abyss and none above
+    // max Y0 − 128 + J is; nowhere else is any voxel surely abyss.
+    const col = abyssColumn(st);
+    const scan = scanOf(col, set);
+    let sure = 0, unsure = 0;
+    for (let p = 0; p < 256; p += 4) {
+      const nb = neighbourhood(col.cave.pass, st, p);
+      const masks = classMasks(scan, p);
+      if (nb.abyssAll) sure++; else unsure++;
+      for (let y = -63; y <= 319; y++) {
+        const m = masks[y + 64]!;
+        if (nb.abyssAll && y < nb.y0Min - (128 + J)) expect([p, y, m]).toEqual([p, y, 8]);
+        if (y > nb.y0Max - 128 + J || !nb.abyssAll) expect([p, y, m === 8]).toEqual([p, y, false]);
+      }
+    }
+    expect([sure, unsure].every((n) => n >= 16)).toBe(true);
+
+    // A tree whose bands depend on the cave biome: the abyss's strata and lush's moss_block are here-gated leaves.
+    const st4: StrataRule = { kind: 'strata', layers: ABYSS_LAYERS, minLen: 1, maxLen: 6, noise: 'surface.noises.patch', amp: 4 };
+    const tree = SEQ(IF(CB('here', 'abyss'), st4), IF(CB('here', 'lush'), B('moss_block')));
+    const c = compileSurfaceRules(SEED, tree, NOISES, set);
+    expect(c.fastPath).toMatchObject({ floorBound: -1, ceilBound: -1, here: true, bands: [{ yMin: -63, yMax: 319, dither: false, state: -1 }] });
+    const ref = createSurfaceReference(SEED, tree, NOISES);
+    // Evaluated: the voxels whose mask holds biomes with different results (abyss: the strata lookup; lush: moss;
+    // plain and dripstone: stone); with lush.depthMax 1.5 and H′ 0.6 at local z < 8, the overlap y range where lush
+    // and abyss are both possible is evaluated.
+    const result = (b: number) => (b === 3 ? 'A' : b === 1 ? 'L' : 'S');
+    const mixed = (m: number) => new Set([0, 1, 2, 3].filter((b) => (m >> b) & 1).map(result)).size > 1;
+    const counts: number[] = [];
+    for (const [k, c2] of [abyssColumn(st), abyssColumn({ ...st, lush: { ...st.lush, depthMax: 1.5 } }, (lz) => (lz < 8 ? 0.6 : 0))].entries()) {
+      const scan2 = scanOf(c2, set);
+      const slow = fill(c, scan2, false), fast = fill(c, scan2, true);
+      expect(Buffer.from(fast.out).equals(Buffer.from(slow.out))).toBe(true);
+      let want = 0, overlap = 0, abyssRock = 0;
+      for (let p = 0; p < 256; p++) {
+        const masks = classMasks(scan2, p);
+        // Where the abyss's climate test is surely true (and lush's surely false), the mixed voxels are a band across
+        // the depth border no thicker than the neighbourhood's Y0 spread plus the jitter.
+        const nb = neighbourhood(c2.cave.pass, st, p);
+        let mixedHere = 0;
+        for (let y = -63; y <= scan2.runTop[scan2.runFirst[p]!]!; y++) {
+          const m = masks[y + 64]!;
+          if (mixed(m)) { want++; mixedHere++; }
+          if ((m & 10) === 10) overlap++;
+          if (m === 8) abyssRock++;
+          if (p % 16 === k) expect(slow.out[at(p, y)]).toBe(ref.state(scan2, set, p, y));
+        }
+        if (k === 0 && nb.abyssAll) expect(mixedHere).toBeLessThanOrEqual(Math.ceil(nb.y0Max - nb.y0Min) + 2 * J + 2);
+      }
+      expect(fast.evaluated).toBe(want);
+      counts.push(want, overlap, abyssRock);
+    }
+    const [evalDefault, overlapDefault, rockDefault, evalOverlap, overlap] = counts;
+    // Default boxes: no voxel where lush and abyss are both possible (H′ 0: lush surely false); the rock surely abyss
+    // (taken without evaluation) outweighs the evaluated voxels, which lie mostly in the columns of mixed climate. With
+    // the overlap, a band of about 64 blocks under half the column.
+    expect(overlapDefault).toBe(0);
+    expect(rockDefault!).toBeGreaterThan(evalDefault!);
+    expect(overlap!).toBeGreaterThan(64 * 40);
+    expect(evalOverlap!).toBeGreaterThanOrEqual(evalDefault! + overlap!);
+  });
+
+  test("Task 14's ceiling tree with its caveBiome{ceiling} gates back (SP6b §3.5 item 3): output unchanged, only the named runs' ceiling voxels evaluated", () => {
+    const CEILING_LEAVES = SEQ(
+      IFS([ceil(0, false), CB('ceiling', 'lush'), PATCH(-0.52, 8)], B('moss_block')),
+      IFS([ceil(1, false), CB('ceiling', 'dripstone'), NOT(PATCH(-8, -0.97))], B('dripstone_block')),
+    );
+    const tree = withRule(CEILING_LEAVES);
+    const c = compileSurfaceRules(SEED, tree, NOISES, set);
+    const fp = c.fastPath!;
+    expect([fp.skyFloorBound, fp.floorBound, fp.ceilBound, fp.floorBiomes, fp.ceilBiomes, fp.here]).toEqual([15, -1, 1, -1, (1 << 1) | (1 << 2), false]);
+    const ref = createSurfaceReference(SEED, tree, NOISES);
+    let named = 0, unnamed = 0, ceilingStates = 0;
+    for (let k = 0; k < 16; k++) {
+      const col = withCaveBiomes(randomSurfaceColumn(testRng(1510 + k)), 1510 + k);
+      const scan = scanOf(col, set);
+      const slow = fill(c, scan, false), fast = fill(c, scan, true);
+      expect(Buffer.from(fast.out).equals(Buffer.from(slow.out))).toBe(true);
+      // Evaluated: the dither intervals, the sky-open run's top 16 and the bottom 2 of the runs whose ceiling biome is
+      // lush or dripstone.
+      let want = 0;
+      for (let p = 0; p < 256; p++) {
+        for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
+          const top = scan.runTop[r]!, bottom = scan.runBottom[r]!;
+          const cb = scan.runCeilBiome[r]!;
+          const isNamed = cb === 1 || cb === 2;
+          if (isNamed) named++; else unnamed++;
+          for (let y = top; y >= bottom; y--) {
+            const dithered = (y >= -63 && y <= -60) || (y >= 1 && y <= 7);
+            if (dithered || (r === scan.skyRun[p] && top - y <= 15) || (isNamed && y - bottom <= 1)) want++;
+            const s = slow.out[at(p, y)]!;
+            if (s === REGISTRY.parseStateKey('moss_block') || s === REGISTRY.parseStateKey('dripstone_block')) ceilingStates++;
+            if (p % 16 === k) expect(s).toBe(ref.state(scan, set, p, y));
+          }
+        }
+      }
+      expect(fast.evaluated).toBe(want);
+    }
+    expect(named).toBeGreaterThan(500);
+    expect(unnamed).toBeGreaterThan(named);
+    expect(ceilingStates).toBeGreaterThan(300);
+  });
+
+  test('rule 4 over a column holding each cave biome (SP6b §3.4-§3.5): the floor class plus about 3 voxels per biome run end, and the mixed abyss', () => {
+    const tree = withRule(RULE4);
+    const c = compileSurfaceRules(SEED, tree, NOISES, set);
+    const fp = c.fastPath!;
+    expect([fp.skyFloorBound, fp.floorBound, fp.ceilBound, fp.floorBiomes, fp.ceilBiomes, fp.here]).toEqual([15, 1, 1, 0b1110, 0b0110, true]);
+    // The default's cuts; no band's result is one state for every cave biome (the abyss's is the strata lookup).
+    expect(fp.bands).toEqual(compileSurfaceRules(SEED, DEFAULT_SHAPE, NOISES, set).fastPath!.bands.map((b) => ({ ...b, state: -1 })));
+    const ref = createSurfaceReference(SEED, tree, NOISES);
+    // A column of four quadrants (lush, dripstone, abyss, plain; J 2, D 128), ground −63 … about 170, and two caves per
+    // position, 66-70 and 146-150 blocks under the top (depth about 0.6 and 1.2), tagged with the picker's biome.
+    const quadrant = (): SurfaceFuzzColumn & { tags: Uint8Array; cave: NonNullable<SurfaceFuzzColumn['cave']> } => {
+      const col = handColumn((p) => 168 + (((p & 15) + (p >> 4)) >> 2));
+      const { cx, cz } = col.sample;
+      const pass = handCavePass(cx, cz, 2, (x, z): CaveFields => {
+        const lx = x - 16 * cx, lz = z - 16 * cz;
+        const top = 168 + ((Math.min(15, Math.max(0, lx)) + Math.min(15, Math.max(0, lz))) >> 2);
+        const f = lz < 8 ? (lx < 8 ? { c: 0, e: 0, h: 0.7 } : { c: 0.85, e: 0, h: 0 }) : lx < 8 ? { c: 0.2, e: -0.8, h: 0 } : { c: 0, e: 0, h: 0 };
+        return { ...f, y0: top + 10 + 0.1 * lx };
+      });
+      const inputs = fuzzCavePicker(SURFACE_FUZZ_CAVE_SETTINGS);
+      const tags = new Uint8Array(98304);
+      for (let p = 0; p < 256; p++) {
+        const top = 168 + (((p & 15) + (p >> 4)) >> 2);
+        for (const [a, b] of [[top - 70, top - 66], [top - 150, top - 146]] as const) {
+          for (let y = a; y <= b; y++) {
+            col.solid[at(p, y)] = 0;
+            tags[at(p, y)] = 1 | (caveBiomeOfPass(inputs, pass, 16 * cx + (p & 15), y, 16 * cz + (p >> 4)) << 4);
+          }
+        }
+      }
+      return { ...col, tags, cave: { inputs, pass } };
+    };
+    const columns = [quadrant(), ...[3, 5, 8, 13].map((k) => withCaveBiomes(randomSurfaceColumn(testRng(k)), k))];
+    const stats: number[][] = [];
+    for (const [k, col] of columns.entries()) {
+      const scan = scanOf(col, set);
+      const slow = fill(c, scan, false), fast = fill(c, scan, true);
+      expect(Buffer.from(fast.out).equals(Buffer.from(slow.out))).toBe(true);
+      // Evaluated: the floor classes (the dither intervals, the sky-open run's top 16), the top 2 of each run whose
+      // floor biome is lush, dripstone or abyss and the bottom 2 of each whose ceiling biome is lush or dripstone, and
+      // beyond those the voxels where the picker may return the abyss or another biome (the strata or the band).
+      let want = 0, floorClass = 0, runEnds = 0, mixedAbyss = 0, abyssRock = 0, mixedInside = 0, inside = 0;
+      const states = new Set<string>();
+      for (let p = 0; p < 256; p++) {
+        const masks = classMasks(scan, p);
+        const nb = neighbourhood(col.cave.pass, col.cave.inputs.settings, p);
+        if (nb.abyssAll) inside++;
+        for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
+          const top = scan.runTop[r]!, bottom = scan.runBottom[r]!;
+          const fb = scan.runFloorBiome[r]!, cb = scan.runCeilBiome[r]!;
+          const floorNamed = fb >= 1 && fb <= 3, ceilNamed = cb === 1 || cb === 2;
+          runEnds += (floorNamed ? 1 : 0) + (ceilNamed ? 1 : 0);
+          for (let y = top; y >= bottom; y--) {
+            const m = masks[y + 64]!;
+            const dithered = (y >= -63 && y <= -60) || (y >= 1 && y <= 7);
+            const skyTop = r === scan.skyRun[p] && top - y <= 15;
+            const window = dithered || skyTop || (floorNamed && top - y <= 1) || (ceilNamed && y - bottom <= 1);
+            if (dithered || skyTop) floorClass++;
+            if (m === 8) abyssRock++;
+            if (window) want++;
+            else if ((m & 8) !== 0 && m !== 8) {
+              want++;
+              mixedAbyss++;
+              if (nb.abyssAll) mixedInside++;
+            }
+            states.add(REGISTRY.stateKey(slow.out[at(p, y)]!));
+            if (p % 16 === k) expect(slow.out[at(p, y)]).toBe(ref.state(scan, set, p, y));
+          }
+        }
+      }
+      expect(fast.evaluated).toBe(want);
+      expect(fast.evaluated).toBeLessThanOrEqual(floorClass + 3 * runEnds + mixedAbyss);
+      stats.push([fast.evaluated, floorClass, runEnds, mixedAbyss, abyssRock, states.size, mixedInside, inside]);
+    }
+    // The quadrant column: every rule-4 block occurs; the rock surely abyss is taken without evaluation; the mixed
+    // abyss voxels lie within J of the abyss's climate border (§1.5: the here test is evaluated per voxel only there)
+    // but for a band across its depth border inside it (the Y0 spread, up to 2.4 blocks, plus 2J: up to 7 voxels a
+    // position); the rest is the floor class and 2 voxels per biome run end.
+    const [evaluated, floorClass, runEnds, mixedAbyss, abyssRock, kinds, mixedInside, inside] = stats[0]!;
+    expect(kinds!).toBeGreaterThanOrEqual(8);
+    // Per quadrant position: lush and dripstone name a cave floor and a cave ceiling, the abyss its deep cave's floor.
+    expect(runEnds!).toBe(64 * 5);
+    // Surely abyss: the 6 × 6 positions whose neighbourhood lies inside the abyss quadrant, about 110 voxels each.
+    expect(inside).toBe(36);
+    expect(abyssRock!).toBeGreaterThan(36 * 100);
+    expect(mixedInside!).toBeLessThanOrEqual(36 * 7);
+    expect(mixedAbyss!).toBeGreaterThan(mixedInside!);
+    expect(evaluated!).toBeLessThanOrEqual(floorClass! + 3 * runEnds! + mixedAbyss!);
   });
 });

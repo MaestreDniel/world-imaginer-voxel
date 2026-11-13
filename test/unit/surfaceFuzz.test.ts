@@ -10,14 +10,26 @@ import { validateParamTrees } from '../../src/gen/trees';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { applyPatch } from '../../src/core/params/kit';
 import { SCHEMA } from '../../src/core/params/schema';
-import { CAVE_BIOME_NAMES } from '../../src/core/constants';
-import { caveBiomeOfPass } from '../../src/gen/biomes/cavePicker';
+import { CAVE_BIOME_NAMES, caveKindOf, type CaveBiomeName } from '../../src/core/constants';
+import { deriveSeed } from '../../src/core/hash';
+import { NormalNoise } from '../../src/core/noise/normal';
+import { completeNoiseDef } from '../../src/core/noise/types';
 import {
-  randomSurfaceColumn, randomSurfaceParams, randomSurfaceRules, SCHEMA_SURFACE_NOISES, SURFACE_FUZZ_BIOMES, SURFACE_FUZZ_NOISES,
-  surfaceFuzzNoiseSource, surfaceFuzzSettings, withCaveBiomes, type SurfaceFuzzStyle,
+  caveBiomeOfPass, fillCaveColumnPass, newCaveColumnPass, type CaveColumnPass, type CavePickerInputs,
+} from '../../src/gen/biomes/cavePicker';
+import type { CaveBiomeSettings } from '../../src/gen/biomes/caveRegistry';
+import { buildColumnSample, newColumnSample, type ColumnSample } from '../../src/gen/column/columnStage';
+import { terrainStage } from '../../src/gen/pipeline/terrainStage';
+import { surfaceContextOf } from '../../src/gen/surface/context';
+import { surfaceProbeColumn } from '../../src/gen/surface/probe';
+import { createStore } from '../../src/world/store/store';
+import {
+  fuzzCavePicker, randomSurfaceColumn, randomSurfaceParams, randomSurfaceRules, SCHEMA_SURFACE_NOISES, SURFACE_FUZZ_BIOMES,
+  SURFACE_FUZZ_CAVE_SETTINGS, SURFACE_FUZZ_NOISES, surfaceFuzzNoiseSource, surfaceFuzzSettings, withCaveBiomes, type SurfaceFuzzStyle,
 } from '../harness/surfaceFuzz';
 import { mutateTree } from '../harness/treeMutator';
-import { testRng } from '../harness/stats';
+import { testFloat, testRng } from '../harness/stats';
+import { ctxFor } from '../harness/gen';
 
 const NOISES = surfaceFuzzNoiseSource();
 const at = (p: number, y: number): number => 256 * (y + 64) + p;
@@ -45,6 +57,86 @@ const isCeilGate = (c: Condition): boolean => c.kind === 'stoneDepth' && c.side 
 const ceilBounded = (l: RuleLeaf): boolean => !depthBounded(l) && l.conditions.some(isCeilGate);
 const yOnlyLeaf = (l: RuleLeaf): boolean => l.conditions.every(isYOnly);
 const skyGatedLeaf = (l: RuleLeaf): boolean => l.conditions.some((c) => c.kind === 'skyOpen');
+
+/**
+ * A 'fastPath' tree with SP6b §3.5's cave gates (items 3-4): each depth-bounded branch, three times in four, under a
+ * `caveBiome{floor}`, a `caveBiome{ceiling}` or both; each other branch, two times in three, under a `caveBiome{here}`
+ * or its `not`; one time in two a here-gated `strata` branch (rule 4's shape, with a floor leaf before the strata one
+ * time in two) at a random place. Lists of 1-4 distinct cave biomes in any order.
+ */
+function withCaveGates(next: () => number, tree: Rule): Rule {
+  const pick = <T,>(xs: readonly T[]): T => xs[next() % xs.length]!;
+  const list = (): CaveBiomeName[] => {
+    const pool = [...CAVE_BIOME_NAMES];
+    const out: CaveBiomeName[] = [];
+    for (let n = 1 + (next() % pool.length); n > 0; n--) out.push(pool.splice(next() % pool.length, 1)[0]!);
+    return out;
+  };
+  const cb = (side: 'floor' | 'ceiling' | 'here'): Condition => ({ kind: 'caveBiome', side, biomes: list() });
+  const IF = (c: Condition, then: Rule): Rule => ({ kind: 'condition', if: c, then });
+  const strata = (): Rule => ({
+    kind: 'strata',
+    layers: Array.from({ length: 1 + (next() % 4) }, () => ({
+      state: pick(['abyss_stone', 'abyss_shale', 'cracked_abyss_stone', 'abyss_stone_veined', 'stone', 'deepslate', 'clay']),
+      weight: 1 + (next() % 50), maxLen: 1 + (next() % 8),
+    })),
+    minLen: 1 + (next() % 3), maxLen: 4 + (next() % 5), noise: pick(['surface.noises.patch', 'surface.noises.bandOffset']), amp: next() % 13,
+  });
+  if (tree.kind !== 'sequence') return tree;
+  const branches = tree.rules.map((b): Rule => {
+    const depth = ruleLeaves(b).some((l) => l.conditions.some((c) => c.kind === 'stoneDepth'));
+    if (depth) {
+      switch (next() % 4) {
+        case 1: return IF(cb('floor'), b);
+        case 2: return IF(cb('ceiling'), b);
+        case 3: return IF(cb('floor'), IF(cb('ceiling'), b));
+        default: return b;
+      }
+    }
+    switch (next() % 3) {
+      case 1: return IF(cb('here'), b);
+      case 2: return IF({ kind: 'not', if: cb('here') }, b);
+      default: return b;
+    }
+  });
+  if (next() % 2 === 0) {
+    const leaf = next() % 2 === 0
+      ? strata()
+      : { kind: 'sequence', rules: [IF({ kind: 'stoneDepth', side: 'floor', offset: 1, addSurfaceDepth: false }, IF(cb('floor'), { kind: 'block', state: 'abyss_ash' })), strata()] } as Rule;
+    branches.splice(next() % (branches.length + 1), 0, IF(cb('here'), leaf));
+  }
+  return { kind: 'sequence', rules: branches };
+}
+
+/**
+ * Random `caves.biomes` settings over §6.1's ranges, with overlapping boxes: hMin, cMin −0.2 … 0.9; eMax −0.9 … 0.2,
+ * the abyss's cMin −0.6 … 0.4; lush and dripstone depthMin 0 … 1 and depthMax up to 2 (one time in 8 below depthMin,
+ * the lint's case), the abyss's depthMin 0 … 1.5; D 32 … 256; edgeJitter 0 … 4; the warps from `warp`.
+ */
+function randomCaveSettings(next: () => number, warp: readonly [number, number]): CaveBiomeSettings {
+  const f = (lo: number, hi: number) => lo + (hi - lo) * testFloat(next);
+  const range = () => {
+    const depthMin = f(0, 1);
+    return { depthMin, depthMax: next() % 8 === 0 ? f(0, depthMin) : f(depthMin, 2) };
+  };
+  return {
+    lush: { hMin: f(-0.2, 0.9), ...range() },
+    dripstone: { cMin: f(-0.2, 0.9), ...range() },
+    abyss: { eMax: f(-0.9, 0.2), cMin: f(-0.6, 0.4), depthMin: f(0, 1.5) },
+    depthScale: 32 + (next() % 225),
+    borderWarp: warp[0],
+    depthWarp: warp[1],
+    edgeJitter: next() % 5,
+  };
+}
+
+/** The warps (borderWarp, depthWarp) the fuzz's settings take: the generated columns' passes are filled once per pair. */
+const WARPS: readonly (readonly [number, number])[] = [[0, 0], [0.05, 10], [0.2, 32], [0.1, 3]];
+/** Sixteen columns of seed '42' for the generated half of the fuzz (the terrain stage's fixtures and a spread). */
+const GENERATED: readonly (readonly [number, number])[] = [
+  [-1963, -2000], [-2000, -2000], [-1001, -2000], [-742, -2000], [-1667, -2000], [-1238, -2000], [-1689, -2000], [546, 25857],
+  [4, -10], [0, 0], [100, 37], [-300, 412], [1234, -567], [-2500, 1800], [3000, 3000], [-50, -50],
+];
 
 describe('surfaceFuzz: random rule trees and hand-built columns (SP3c spec §3.4, §8)', () => {
   const trees = (seed: number, n: number, style: SurfaceFuzzStyle, skyGated?: boolean): Rule[] => {
@@ -266,6 +358,108 @@ describe('surfaceFuzz: random rule trees and hand-built columns (SP3c spec §3.4
     expect(voxels).toBeGreaterThan(200_000_000);
     expect(fastEvaluated).toBeLessThan(voxels / 2);
   }, 120_000);
+
+  test('the fast path equals full evaluation over caveBiome and strata trees and random cave-biome settings (§3.5)', () => {
+    // 16 hand-built columns whose tags hold every biome (withCaveBiomes: the picker's nibble half the time) and 16
+    // generated by the terrain stage (seed '42'), their tagged voxels given the picker's nibble on the default boxes
+    // with the real border and depth noises, as T will write it.
+    const ctx = ctxFor('42');
+    const sc = surfaceContextOf(ctx);
+    const set = surfaceFuzzSettings([15, 1]);
+    const noise = (name: string, wavelength: number) => new NormalNoise(ctx.seed, name, completeNoiseDef({ wavelength, octaves: 2 }));
+    const real = {
+      borderC: noise('caveBiome.C', 64), borderE: noise('caveBiome.E', 64), borderH: noise('caveBiome.H', 64),
+      depth: noise('caves.biomes.noises.depth', 96), jitterSeed: deriveSeed(ctx.seed, 'caveBiome.jitter'),
+    };
+    const store = createStore({ shared: false, maxBlockBytes: 64 << 20, maxByteBytes: 64 << 20 });
+    const generated: Array<{ scan: SurfaceScan; sample: ColumnSample; passes: CaveColumnPass[] }> = [];
+    let taggedVoxels = 0;
+    const nibbles = new Set<number>();
+    for (const [cx, cz] of GENERATED) {
+      const w = store.claimColumn(cx, cz, 0);
+      expect(terrainStage(ctx, cx, cz, w, () => false)).toBe(true);
+      w.commit(1);
+      const view = store.proto(cx, cz)!;
+      const col = surfaceProbeColumn(sc, cx, cz);
+      const sample = buildColumnSample(ctx, cx, cz, newColumnSample());
+      // One pass per warp pair, filled at J 4 (its j set per tree: the positions within a smaller J hold the same values).
+      const passes = WARPS.map(([borderWarp, depthWarp]) =>
+        fillCaveColumnPass({ ...real, settings: { ...SURFACE_FUZZ_CAVE_SETTINGS, borderWarp, depthWarp, edgeJitter: 4 } }, sample, newCaveColumnPass()));
+      const inputs: CavePickerInputs = { ...real, settings: SURFACE_FUZZ_CAVE_SETTINGS };
+      const pass = fillCaveColumnPass(inputs, sample, newCaveColumnPass());
+      const tags = new Uint8Array(98304);
+      for (let i = 256; i < 98304; i++) {
+        const p = i & 255, y = (i >> 8) - 64;
+        const kind = caveKindOf(view.cave(p & 15, y, p >> 4));
+        if (kind === 0) continue;
+        const b = caveBiomeOfPass(inputs, pass, 16 * cx + (p & 15), y, 16 * cz + (p >> 4));
+        tags[i] = kind | (b << 4);
+        taggedVoxels++;
+        nibbles.add(b);
+      }
+      const scan = scanColumn(newSurfaceScan(), set, sample, col.solid.slice(), col.water.slice(), col.biomes.slice(), tags, { inputs, pass });
+      generated.push({ scan, sample, passes });
+    }
+    expect(taggedVoxels).toBeGreaterThan(16 * 1000);
+    expect(nibbles.size).toBeGreaterThanOrEqual(2);
+    const hand = Array.from({ length: 16 }, (_, k) => withCaveBiomes(randomSurfaceColumn(testRng(1501 + k)), 1501 + k));
+    const handScans = hand.map((col) => scanColumn(newSurfaceScan(), set, col.sample, col.solid, col.water, col.biomes, col.tags, col.cave));
+
+    const next = testRng(1500);
+    const fast = new Uint16Array(98304), full = new Uint16Array(98304);
+    const tally = { trees: 0, fastTrees: 0, here: 0, floorSkip: 0, ceilSkip: 0, voxels: 0, fastEvaluated: 0 };
+    for (let i = 0; tally.trees < 300; i++) {
+      expect(i, 'too few accepted trees').toBeLessThan(3000);
+      const base = withCaveGates(next, randomSurfaceRules(next, { style: 'fastPath', ceilingGates: true, noises: SCHEMA_SURFACE_NOISES }));
+      const m = mutateTree(next, base, 'surfaceRules', { cls: 'preserving' });
+      const r = applyPatch(SCHEMA, DEFAULTS, { surface: { rules: m.value } });
+      if (!r.ok || validateParamTrees(r.value).length > 0) continue;
+      const rules = resolveRules(r.value.surface.rules, r.value);
+      tally.trees++;
+      const c = compileSurfaceRules([15, 1], rules, NOISES, set);
+      const fp = c.fastPath;
+      if (fp !== null) {
+        tally.fastTrees++;
+        if (fp.here) tally.here++;
+        if (fp.floorBiomes >= 0 && fp.floorBound >= 0) tally.floorSkip++;
+        if (fp.ceilBiomes >= 0 && fp.ceilBound >= 0) tally.ceilSkip++;
+      }
+      // This tree's cave-biome settings: the generated columns' pass for its warps, the hand-built columns' own pass
+      // (hand-filled fields), both read with its jitter.
+      const wi = next() % WARPS.length;
+      const st = randomCaveSettings(next, WARPS[wi]!);
+      const scans: SurfaceScan[] = [];
+      for (const g of generated) {
+        const pass = g.passes[wi]!;
+        pass.j = st.edgeJitter;
+        g.scan.cavePicker = { ...real, settings: st };
+        g.scan.cavePass = pass;
+        scans.push(g.scan);
+      }
+      for (const [k, scan] of handScans.entries()) {
+        const pass = hand[k]!.cave.pass;
+        pass.j = st.edgeJitter;
+        scan.cavePicker = fuzzCavePicker(st, hand[k]!.cave.inputs.jitterSeed);
+        scan.cavePass = pass;
+        scans.push(scan);
+      }
+      for (const [k, scan] of scans.entries()) {
+        fast.fill(0);
+        full.fill(0);
+        tally.fastEvaluated += c.fillColumn(scan, fast, true);
+        tally.voxels += c.fillColumn(scan, full, false);
+        if (!Buffer.from(fast.buffer).equals(Buffer.from(full.buffer))) expect([i, k, Array.from(fast)]).toEqual([i, k, Array.from(full)]);
+      }
+    }
+    // Most trees keep a fast path; many have here-gated leaves (item 4) or a biome-gated floor or ceiling class
+    // (item 3); the fast fills evaluate a minority of the solid voxels.
+    expect(tally.fastTrees).toBeGreaterThan(250);
+    expect(tally.here).toBeGreaterThan(100);
+    expect(tally.floorSkip).toBeGreaterThan(30);
+    expect(tally.ceilSkip).toBeGreaterThan(30);
+    expect(tally.voxels).toBeGreaterThan(200_000_000);
+    expect(tally.fastEvaluated).toBeLessThan(tally.voxels / 2);
+  }, 360_000);
 
   test('columns: reproducible; overhangs, caves, water above / over a gap / in two segments, empty positions, every regime', () => {
     const a = randomSurfaceColumn(testRng(26)), b = randomSurfaceColumn(testRng(26));

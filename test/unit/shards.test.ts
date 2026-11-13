@@ -2,7 +2,8 @@
  * The CI shard tables (SP4b spec §1.1, D1): `shardArgs` selects a named shard's files or excludes every named file for
  * the catch-all, and `coverageProblems` holds every rule a table's `check` enforces, on synthetic file lists (no
  * `vitest list`). The unit table is the spec's ten heavy files, plus the five slowest of `rest` in CI run 41132868697
- * (final review GOV-8), SP6a's slow cave files (Task 8's `caveContinuity`, Task 11's `caveTags`, Task 17's `meshXray`, Task 24's `carverPaths`), and `rest`; the metrics-quick table names
+ * (final review GOV-8), SP6a's slow cave files (Task 8's `caveContinuity`, Task 11's `caveTags`, Task 17's `meshXray`, Task 24's `carverPaths`),
+ * SP6b Task 15's `surfaceFuzz`, and `rest`; the metrics-quick table names
  * its shards by (file, env) (SP6b spec §13 L1-L4): T1-T5 and S1-S3 by profile (`METRICS_PROFILES`), the caves by group
  * (`METRICS_CAVE_GROUPS`), `apply.metric.ts` in `terrain-default`; the metrics-fast table (SP4b spec §9's lever, taken
  * after SP4c's merge run) is `terrain`, `surface` and SP6a's `caves` alone plus `rest`.
@@ -20,14 +21,14 @@ const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 
 const HEAVY = ['sliceJob', 'floatingRules', 'workerPool', 'treeMutator', 'reviewSlices', 'columnStage', 'tile', 'fieldSlice',
   'splineFixtures', 'surfaceProbe', 'relight', 'zeroAlloc', 'terrainStage', 'terrainHeap', 'modifyMode', 'caveContinuity',
-  'caveTags', 'meshXray', 'carverPaths'].map((n) => `test/unit/${n}.test.ts`);
+  'caveTags', 'meshXray', 'carverPaths', 'surfaceFuzz'].map((n) => `test/unit/${n}.test.ts`);
 
 describe('shardArgs (SP4b spec §1.1)', () => {
-  test('the unit table: heavy is its nineteen files, rest excludes each of them', () => {
+  test('the unit table: heavy is its twenty files, rest excludes each of them', () => {
     expect(Object.keys(SHARDS)).toEqual(['heavy', 'rest']);
     expect(shardArgs(SHARDS, 'heavy')).toEqual(HEAVY);
     const rest = shardArgs(SHARDS, 'rest');
-    expect(rest).toHaveLength(38);
+    expect(rest).toHaveLength(40);
     expect(rest).toEqual(HEAVY.flatMap((f) => ['--exclude', f]));
     for (const f of HEAVY) expect(existsSync(`${ROOT}${f}`), `${f} does not exist`).toBe(true);
   });

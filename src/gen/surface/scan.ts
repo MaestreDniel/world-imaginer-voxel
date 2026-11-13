@@ -16,7 +16,9 @@
  *   256-entry buffer, `fillSurfaceBiomes`), `lakeLevel` at the nearest quart corner (`readLevel`'s corner) and
  *   surfaceDepth = max(0, ⌊3 + 2.75·depthMul·Ns + 0.25·hash01⌋) ∈ [0, SD_MAX], Ns clamped to ±the depth noise's
  *   clampSigma (SP3d spec §1.10: a schema noise already is; the clamp keeps the fast-path contract for any noise);
- * - per voxel: T_eff(y) = T − lapse·max(0, y − lapseBase) (`tEff`).
+ * - per voxel: T_eff(y) = T − lapse·max(0, y − lapseBase) (`tEff`);
+ * - per position, on demand (`classifyCaveBiomes`, SP6b spec §3.5 item 4, D20): the cave biomes the picker can return
+ *   at each y, from the column pass over the position's (2J + 1)² neighbourhood, as top-down y ranges.
  * The scan reads nothing outside its column. `SurfaceScanSettings` carries what it needs from the seed and the
  * parameters (the depth noise through a SurfaceNoiseSource, `depthMul`, `lapse`, `lapseBase`, `islandRuns`), so it runs on
  * hand-built columns and noises as well as on the schema's. Follows the gen determinism rules.
@@ -48,6 +50,19 @@ const MAX_RUNS = 256 * 192;
 const NO_WATER = Y0 - 1;
 /** A run's floor or ceiling cave biome when the voxel there is not tagged cave air (or there is no such voxel). */
 const NO_CAVE_BIOME = -1;
+/** Most y ranges of one position's cave-biome classification: three boxes, four range ends each, plus one. */
+const MAX_CAVE_RANGES = 16;
+/** The jittered heights the classification's depth thresholds are searched in: y −63 … 319 ± 4 lies inside. */
+const DEPTH_LO = -68;
+const DEPTH_HI = 324;
+/** The classification's bit for plain (cave biome 0) and for each box's biome (1 lush, 2 dripstone, 3 abyss). */
+const PLAIN_BIT = 1;
+const LUSH_BIT = 2;
+const DRIPSTONE_BIT = 4;
+const ABYSS_BIT = 8;
+/** The classification's scratch: the boxes' interval ends (sure lo, sure hi, possible lo, possible hi per box) and the cuts. */
+const ENDS = new Int32Array(12);
+const CUTS = new Int32Array(MAX_CAVE_RANGES);
 
 /** The cave biome of a tag byte when its kind is not 0, else NO_CAVE_BIOME. */
 function tagBiome(byte: number): number {
@@ -104,6 +119,13 @@ export interface SurfaceScan {
   /** The column's cave picker and its filled pass, for `caveBiome{here}` (SP6b spec §3.2); null when not given. */
   cavePicker: CavePickerInputs | null;
   cavePass: CaveColumnPass | null;
+  /**
+   * The cave-biome classification of the position `classifyCaveBiomes` last classified (SP6b spec §3.5 item 4): range i
+   * holds y from `caveRangeLow[i]` up to `caveRangeLow[i − 1] − 1` (range 0 up to y 319), top-down, the last one down
+   * to y −63; `caveRangeMask[i]` has bit b set for each cave biome b the picker can return at a voxel of that range.
+   */
+  readonly caveRangeLow: Int16Array;
+  readonly caveRangeMask: Uint8Array;
   /** Per position: bilinear steep and T, the surface biome id, lakeLevel at the nearest quart corner, surfaceDepth. */
   readonly steep: Float64Array;
   readonly T: Float64Array;
@@ -118,6 +140,7 @@ export function newSurfaceScan(): SurfaceScan {
     runFirst: new Int32Array(257), skyRun: new Int32Array(256), runTop: new Int16Array(MAX_RUNS), runBottom: new Int16Array(MAX_RUNS),
     runWaterAbove: new Uint8Array(MAX_RUNS), runWaterTop: new Int16Array(MAX_RUNS),
     runFloorBiome: new Int8Array(MAX_RUNS), runCeilBiome: new Int8Array(MAX_RUNS), cavePicker: null, cavePass: null,
+    caveRangeLow: new Int16Array(MAX_CAVE_RANGES), caveRangeMask: new Uint8Array(MAX_CAVE_RANGES),
     steep: new Float64Array(256), T: new Float64Array(256), biome: new Uint8Array(256), lakeLevel: new Float64Array(256),
     surfaceDepth: new Int32Array(256),
   };
@@ -277,4 +300,136 @@ export function runAt(scan: SurfaceScan, p: number, y: number): number {
     if (y >= scan.runBottom[r]!) return r;
   }
   return -1;
+}
+
+/** The largest integer y′ in DEPTH_LO … DEPTH_HI with (y0 − y′) / d ≥ depth (the picker's expression), DEPTH_LO − 1 if none. */
+function lastAtLeast(y0: number, d: number, depth: number): number {
+  let t = Math.floor(y0 - d * depth);
+  if (!(t >= DEPTH_LO)) t = DEPTH_LO;
+  else if (t > DEPTH_HI) t = DEPTH_HI;
+  // (y0 − y′) / d is non-increasing in y′ in floating point too (rounding is monotone): step to the last y′ that holds.
+  while (t < DEPTH_HI && (y0 - (t + 1)) / d >= depth) t++;
+  while (t >= DEPTH_LO && !((y0 - t) / d >= depth)) t--;
+  return t;
+}
+
+/** The smallest integer y′ in DEPTH_LO … DEPTH_HI with (y0 − y′) / d ≤ depth, DEPTH_HI + 1 if none. */
+function firstAtMost(y0: number, d: number, depth: number): number {
+  let t = Math.ceil(y0 - d * depth);
+  if (!(t <= DEPTH_HI)) t = DEPTH_HI;
+  else if (t < DEPTH_LO) t = DEPTH_LO;
+  while (t > DEPTH_LO && (y0 - (t - 1)) / d <= depth) t--;
+  while (t <= DEPTH_HI && !((y0 - t) / d <= depth)) t++;
+  return t;
+}
+
+/** The classification's cave biomes at y from the boxes' interval ends in ENDS (box k at 4k: sure lo, hi; possible lo, hi). */
+function caveMaskAt(y: number): number {
+  const sure = (y >= ENDS[0]! && y <= ENDS[1]!) || (y >= ENDS[4]! && y <= ENDS[5]!) || (y >= ENDS[8]! && y <= ENDS[9]!);
+  return (sure ? 0 : PLAIN_BIT)
+    | (y >= ENDS[2]! && y <= ENDS[3]! ? LUSH_BIT : 0)
+    | (y >= ENDS[6]! && y <= ENDS[7]! ? DRIPSTONE_BIT : 0)
+    | (y >= ENDS[10]! && y <= ENDS[11]! ? ABYSS_BIT : 0);
+}
+
+/** Inserts the cut y (a range starts at y) into CUTS[0 … n − 1], top-down without repeats, when inside −62 … 319. */
+function addCut(n: number, y: number): number {
+  if (y <= Y0 + 1 || y > 319) return n;
+  let i = 0;
+  while (i < n && CUTS[i]! > y) i++;
+  if (i < n && CUTS[i] === y) return n;
+  for (let k = n; k > i; k--) CUTS[k] = CUTS[k - 1]!;
+  CUTS[i] = y;
+  return n + 1;
+}
+
+/**
+ * The cave-biome classification of position p of the column last scanned into `scan` (SP6b spec §3.5 item 4, D20), from
+ * its picker and pass (0 ranges when the scan has none), into `caveRangeLow` / `caveRangeMask`; returns the number of
+ * ranges. Over the pass's (2J + 1)² positions around p (J the pass's `j`), each box's climate test (§1.3: H′ ≥ hMin;
+ * C′ ≥ cMin; E′ ≤ eMax and C′ > cMin) is surely true (at all of them), surely false (at none) or mixed, and its depth
+ * tests hold surely for the voxels y whose every jittered height y + jy, jy in −J … J, passes them at every Y0 of the
+ * neighbourhood, possibly for those where one may: the thresholds are found with the picker's own expression
+ * (Y0 − y′) / D at the extreme Y0s, monotone in y′ and Y0. A box is surely true at y when its climate test and its depth
+ * tests are, possibly true when neither is surely false. The mask at y holds each box's biome that is possibly true,
+ * and plain unless a box is surely true: the picker's choice at every voxel of the range is one of them (one bit: the
+ * range is surely that biome; the margin rule decides only between the bits). Allocates nothing.
+ */
+export function classifyCaveBiomes(scan: SurfaceScan, p: number): number {
+  const inp = scan.cavePicker;
+  const pass = scan.cavePass;
+  if (inp === null || pass === null) return 0;
+  const st = inp.settings;
+  const j = pass.j;
+  const lush = st.lush;
+  const drip = st.dripstone;
+  const abyss = st.abyss;
+  const hMin = lush.hMin;
+  const cMin = drip.cMin;
+  const eMax = abyss.eMax;
+  const aMin = abyss.cMin;
+  let lushAll = true, lushAny = false, dripAll = true, dripAny = false, abyssAll = true, abyssAny = false;
+  let y0Min = Infinity, y0Max = -Infinity;
+  const pc = pass.c, pe = pass.e, ph = pass.h, py = pass.y0;
+  const lx = p & 15;
+  const lz = p >> 4;
+  for (let dz = -j; dz <= j; dz++) {
+    const row = (lz + 4 + dz) * 24 + lx + 4;
+    for (let dx = -j; dx <= j; dx++) {
+      const k = row + dx;
+      const c = pc[k]!;
+      // §1.3's climate tests, as pickCaveBiome writes them.
+      const l = ph[k]! >= hMin;
+      const dr = c >= cMin;
+      const a = pe[k]! <= eMax && c > aMin;
+      lushAll = lushAll && l;
+      lushAny = lushAny || l;
+      dripAll = dripAll && dr;
+      dripAny = dripAny || dr;
+      abyssAll = abyssAll && a;
+      abyssAny = abyssAny || a;
+      const y0 = py[k]!;
+      if (y0 < y0Min) y0Min = y0;
+      if (y0 > y0Max) y0Max = y0;
+    }
+  }
+  const d = st.depthScale;
+  // Box k's ends at 4k: surely true from ENDS[4k] to ENDS[4k + 1], possibly true from ENDS[4k + 2] to ENDS[4k + 3]
+  // (empty when lo > hi). depth ≥ min holds at y′ ≤ lastAtLeast, depth ≤ max at y′ ≥ firstAtMost; both thresholds rise
+  // with Y0, so the neighbourhood's extreme Y0s bound them; ±J covers the jittered height.
+  ENDS[0] = lushAll ? firstAtMost(y0Max, d, lush.depthMax) + j : 1;
+  ENDS[1] = lushAll ? lastAtLeast(y0Min, d, lush.depthMin) - j : 0;
+  ENDS[2] = lushAny ? firstAtMost(y0Min, d, lush.depthMax) - j : 1;
+  ENDS[3] = lushAny ? lastAtLeast(y0Max, d, lush.depthMin) + j : 0;
+  ENDS[4] = dripAll ? firstAtMost(y0Max, d, drip.depthMax) + j : 1;
+  ENDS[5] = dripAll ? lastAtLeast(y0Min, d, drip.depthMin) - j : 0;
+  ENDS[6] = dripAny ? firstAtMost(y0Min, d, drip.depthMax) - j : 1;
+  ENDS[7] = dripAny ? lastAtLeast(y0Max, d, drip.depthMin) + j : 0;
+  ENDS[8] = abyssAll ? DEPTH_LO - j : 1;
+  ENDS[9] = abyssAll ? lastAtLeast(y0Min, d, abyss.depthMin) - j : 0;
+  ENDS[10] = abyssAny ? DEPTH_LO - j : 1;
+  ENDS[11] = abyssAny ? lastAtLeast(y0Max, d, abyss.depthMin) + j : 0;
+  // The cuts: where a non-empty interval starts and one past where it ends.
+  let n = 0;
+  for (let o = 0; o < 12; o += 2) {
+    if (ENDS[o]! > ENDS[o + 1]!) continue;
+    n = addCut(n, ENDS[o]!);
+    n = addCut(n, ENDS[o + 1]! + 1);
+  }
+  const low = scan.caveRangeLow;
+  const mask = scan.caveRangeMask;
+  let r = 0;
+  for (let i = 0; i <= n; i++) {
+    const lo = i < n ? CUTS[i]! : Y0 + 1;
+    const m = caveMaskAt(lo);
+    // Adjacent ranges with one mask are one range.
+    if (r > 0 && mask[r - 1] === m) {
+      low[r - 1] = lo;
+    } else {
+      low[r] = lo;
+      mask[r] = m;
+      r++;
+    }
+  }
+  return r;
 }

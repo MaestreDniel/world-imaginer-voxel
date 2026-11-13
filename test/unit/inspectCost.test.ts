@@ -9,7 +9,7 @@ import { EXPR_CHILD_KEYS, type DensityExpr, type Expr } from '../../src/gen/dens
 import { resolveDensity } from '../../src/gen/density/source';
 import { densityColumnCost, rulesColumnCost, structuralCost, workCost } from '../../src/gen/inspect/cost';
 import { surfaceFastPath } from '../../src/gen/surface/compile';
-import type { Rule } from '../../src/gen/surface/rules';
+import type { Condition, Rule } from '../../src/gen/surface/rules';
 import { randomDensityExpr, SCHEMA_DENSITY_NOISES } from '../harness/densityFuzz';
 import { legacyDefaultDensityExpr, legacyDefaultSurfaceRules } from '../harness/legacyTrees';
 import { paramsWith } from '../harness/gen';
@@ -328,23 +328,62 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
     expect(rulesColumnCost(tree('x', false))).toBe(3 * VOXELS);
   });
 
+  /** The rule and condition nodes in the `then` of a here-only condition (a `caveBiome{here}` or a `not` of one). */
+  const underHere = (r: Rule, under = false): number => {
+    const ifNodes = (c: Condition): number => 1 + (c.kind === 'not' ? ifNodes(c.if) : 0);
+    const hereOnly = (c: Condition): boolean => (c.kind === 'caveBiome' && c.side === 'here') || (c.kind === 'not' && hereOnly(c.if));
+    switch (r.kind) {
+      case 'sequence': return (under ? 1 : 0) + r.rules.reduce((n, x) => n + underHere(x, under), 0);
+      case 'condition': return (under ? 1 + ifNodes(r.if) : 0) + underHere(r.then, under || hereOnly(r.if));
+      default: return under ? 1 : 0;
+    }
+  };
+
+  test('here-gated leaves keep the fast path (SP6b §3.5 item 4); the nodes under a here-only condition cost 98,304 each (rulings P20)', () => {
+    const strata = { kind: 'strata', layers: [{ state: 'abyss_stone', weight: 1, maxLen: 8 }], minLen: 1, maxLen: 6, noise: 'surface.noises.bandOffset', amp: 6 };
+    const ash = { kind: 'condition', if: { kind: 'stoneDepth', side: 'floor', offset: 1, addSurfaceDepth: false }, then: { kind: 'block', state: 'abyss_ash' } };
+    // Rule 4's abyss branch: condition + if (256 × (1 + 1) each); the sequence, the floor branch's 3 nodes and the
+    // strata under the here: 5 × 98,304.
+    const abyss = { kind: 'condition', if: { kind: 'caveBiome', side: 'here', biomes: ['abyss'] }, then: { kind: 'sequence', rules: [ash, strata] } };
+    expect(countTreeNodes(abyss, 'surfaceRules')).toBe(7);
+    expect(rulesColumnCost(abyss)).toBe(2 * 256 * 2 + 5 * VOXELS);
+    expect(surfaceFastPath(abyss as Rule, SD_MAX_STATIC)).toMatchObject({ floorBound: 1, here: true });
+    // Under a not, beside a Y-only gate: still here-gated; the not's inner caveBiome is one more node outside.
+    const notHere = { kind: 'condition', if: { kind: 'not', if: { kind: 'caveBiome', side: 'here', biomes: ['plain', 'lush'] } }, then: { kind: 'condition', if: { kind: 'yAbove', minY: 0, runTop: false }, then: strata } };
+    expect(rulesColumnCost(notHere)).toBe(3 * 256 + 3 * VOXELS);
+    expect(surfaceFastPath(notHere as Rule, SD_MAX_STATIC)).toMatchObject({ maxSurfaceDepth: -1, here: true });
+    // Beside a condition in no class the tree has no fast path: every node 98,304.
+    const off = { kind: 'condition', if: { kind: 'caveBiome', side: 'here', biomes: ['abyss'] }, then: { kind: 'condition', if: { kind: 'lake' }, then: strata } };
+    expect(rulesColumnCost(off)).toBe(5 * VOXELS);
+    expect(surfaceFastPath(off as Rule, SD_MAX_STATIC)).toBeNull();
+  });
+
   test('rulesColumnCost decides the fast path as surfaceFastPath does, on 600 random trees of the three fuzz styles', () => {
-    // SP6b §3.5: each node costs 256 × (1 + the largest bound over the floor and ceiling classes); the 'fastPath'
-    // trees draw ceiling-gated branches (the ceiling class) one time in 2.
+    // SP6b §3.5: each node costs 256 × (1 + the largest bound over the floor and ceiling classes), but a node under a
+    // here-only condition 98,304 (rulings P20); the 'fastPath' trees draw ceiling-gated branches (the ceiling class)
+    // one time in 2, and the others gain a here-gated branch (item 4), appended without a draw.
     const next = testRng(4041);
-    let fast = 0, ceiling = 0;
+    let fast = 0, ceiling = 0, here = 0;
     for (let n = 0; n < 600; n++) {
       const style = (['free', 'fastPath', 'nearMiss'] as const)[n % 3]!;
-      const rules = withRegisteredBlocks(randomSurfaceRules(next, { style, ceilingGates: n % 2 === 0 })) as Rule;
+      let tree = randomSurfaceRules(next, { style, ceilingGates: n % 2 === 0 });
+      if (style !== 'free' && n % 2 === 1 && tree.kind === 'sequence') {
+        const gate: Condition = { kind: 'caveBiome', side: 'here', biomes: ['abyss', 'lush'] };
+        tree = { kind: 'sequence', rules: [...tree.rules, { kind: 'condition', if: gate, then: { kind: 'sequence', rules: [{ kind: 'block', state: 'stone' }] } }] };
+      }
+      const rules = withRegisteredBlocks(tree) as Rule;
       const fp = surfaceFastPath(rules, SD_MAX_STATIC);
       const nodes = countTreeNodes(rules, 'surfaceRules');
+      const under = underHere(rules);
       const perNode = fp === null ? VOXELS : Math.min(VOXELS, 256 * (1 + Math.max(0, fp.maxSurfaceDepth, fp.ceilBound)));
       if (fp !== null) fast++;
       if (fp !== null && fp.ceilBound > fp.maxSurfaceDepth) ceiling++;
-      expect(rulesColumnCost(rules)).toBe(Math.min(2 ** 31, nodes * perNode));
+      if (fp !== null && fp.here && under > 0) here++;
+      expect(rulesColumnCost(rules)).toBe(Math.min(2 ** 31, (nodes - under) * perNode + under * VOXELS));
     }
     expect(fast).toBeGreaterThan(100);
     expect(fast).toBeLessThan(500);
     expect(ceiling).toBeGreaterThan(20);
+    expect(here).toBeGreaterThan(50);
   });
 });

@@ -17,12 +17,12 @@ const DIR = 'test/unit';
  * moved to heavy (relight 59.6 s, zeroAlloc 21.1, terrainStage 11.1, terrainHeap 10.9, modifyMode 10.1; 113 s summed),
  * about 240 and 260 s summed, both jobs near 110-120 s (final review GOV-8). SP6a (its spec §11): each new slow cave file
  * joins heavy with the task that creates it (`caveContinuity`, Task 8; `caveTags`, Task 11; `meshXray`, Task 17;
- * `carverPaths`, Task 24).
+ * `carverPaths`, Task 24). SP6b Task 15: `surfaceFuzz` (its two fast-path fuzzes, about 50 s alone).
  */
 export const SHARDS = {
   heavy: ['sliceJob', 'floatingRules', 'workerPool', 'treeMutator', 'reviewSlices', 'columnStage', 'tile', 'fieldSlice',
     'splineFixtures', 'surfaceProbe', 'relight', 'zeroAlloc', 'terrainStage', 'terrainHeap', 'modifyMode',
-    'caveContinuity', 'caveTags', 'meshXray', 'carverPaths'].map((n) => `${DIR}/${n}.test.ts`),
+    'caveContinuity', 'caveTags', 'meshXray', 'carverPaths', 'surfaceFuzz'].map((n) => `${DIR}/${n}.test.ts`),
   rest: null,
 };
 

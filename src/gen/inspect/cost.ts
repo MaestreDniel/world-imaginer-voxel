@@ -318,6 +318,18 @@ function isYOnly(c: unknown): boolean {
   }
 }
 
+/** A here-only condition (the compiler's `isHereOnly`, SP6b §3.5 item 4): a `caveBiome{side here}`, or a `not` of one. */
+function isHereOnly(c: unknown): boolean {
+  let x = c;
+  for (;;) {
+    if (!isRec(x)) return false;
+    const k = kindOf(x);
+    if (k === 'caveBiome') return field(x, 'side') === 'here';
+    if (k !== 'not') return false;
+    x = field(x, 'if');
+  }
+}
+
 interface RulePath {
   readonly rule: unknown;
   /** The smallest floor `stoneDepth` bound among the path's conditions (+∞ when none). */
@@ -328,22 +340,26 @@ interface RulePath {
   readonly ceilBound: number;
   /** A ceiling `stoneDepth` is on the path. */
   readonly ceilBounded: boolean;
-  /** Every condition on the path is Y-only. */
+  /** Every condition on the path is Y-only or here-only (a here-gated leaf, SP6b §3.5 item 4, when it has no depth gate). */
   readonly yOnly: boolean;
+  /** The node is in the `then` of a condition whose `if` is here-only (SP6b's rulings P20: evaluated anywhere). */
+  readonly underHere: boolean;
 }
 
 /**
- * The rules column cost of the source root rule (§1.7 `validateRulesSource`): the rule and condition node count times
- * the voxels a column evaluates, 98,304 without a fast path, or 256 × (1 + the largest depth bound) with one (a leaf
+ * The rules column cost of the source root rule (§1.7 `validateRulesSource`): each rule and condition node times the
+ * voxels a column evaluates it at, 98,304 without a fast path, or with one 256 × (1 + the largest depth bound) (a leaf
  * bounded by its path's floor `stoneDepth` conditions, or with none of those by its ceiling ones (SP6b §3.5): offset
- * at its maximising end plus SD_MAX's static maximum when `addSurfaceDepth`; else its conditions must all be Y-only, as
- * `surfaceFastPath` decides; the largest over the floor and ceiling classes), the depth bound clamped to 0 … 383 so the
- * factor never exceeds a whole column; saturating at 2^31. Tier 2 refuses it above
+ * at its maximising end plus SD_MAX's static maximum when `addSurfaceDepth`; else its conditions must all be Y-only or
+ * here-only (SP6b §3.5 item 4), as `surfaceFastPath` decides; the largest over the floor and ceiling classes, a
+ * `caveBiome{floor | ceiling}`-gated leaf counted at its class's bound), the depth bound clamped to 0 … 383 so the
+ * factor never exceeds a whole column, except the nodes in the `then` of a here-only condition, 98,304 each (SP6b's
+ * rulings P20: the picker's classification may take them at any voxel); saturating at 2^31. Tier 2 refuses it above
  * `RULES_COLUMN_COST_MAX`.
  */
 export function rulesColumnCost(source: unknown): number {
-  const { nodes, perNode } = rulesCost(source);
-  return sat(nodes * perNode);
+  const { nodes, hereNodes, perNode } = rulesCost(source);
+  return sat((nodes - hereNodes) * perNode + hereNodes * COLUMN_VOXELS);
 }
 
 /** The rule and condition objects of the source root rule reached through `rules[]`, `then` and `if` (§5.2 `rule`). */
@@ -360,17 +376,24 @@ export function tColumnCost(params: Params): number {
   return sat(densityColumnCost(params.density.defs, params) + rulesColumnCost(params.surface.rules));
 }
 
-/** The node count and the voxels each node is evaluated at per column (the fast-path rule of `rulesColumnCost`). */
-function rulesCost(source: unknown): { readonly nodes: number; readonly perNode: number } {
+/**
+ * The node count, the nodes under a here-only condition and the voxels each other node is evaluated at per column (the
+ * fast-path rule of `rulesColumnCost`).
+ */
+function rulesCost(source: unknown): { readonly nodes: number; readonly hereNodes: number; readonly perNode: number } {
   let nodes = 0;
+  let hereNodes = 0;
   let fast = true;
   let maxBound = -1;
-  const stack: RulePath[] = [{ rule: source, bound: Infinity, bounded: false, ceilBound: Infinity, ceilBounded: false, yOnly: true }];
+  const stack: RulePath[] = [
+    { rule: source, bound: Infinity, bounded: false, ceilBound: Infinity, ceilBounded: false, yOnly: true, underHere: false },
+  ];
   while (stack.length > 0) {
     const path = stack.pop()!;
-    const { rule, bound, bounded, ceilBound, ceilBounded, yOnly } = path;
+    const { rule, bound, bounded, ceilBound, ceilBounded, yOnly, underHere } = path;
     if (!isRec(rule)) continue;
     nodes++;
+    if (underHere) hereNodes++;
     switch (kindOf(rule)) {
       case 'sequence': {
         const rules = field(rule, 'rules');
@@ -380,7 +403,10 @@ function rulesCost(source: unknown): { readonly nodes: number; readonly perNode:
       }
       case 'condition': {
         const c = field(rule, 'if');
-        for (let x = c; isRec(x); x = kindOf(x) === 'not' ? field(x, 'if') : undefined) nodes++;
+        for (let x = c; isRec(x); x = kindOf(x) === 'not' ? field(x, 'if') : undefined) {
+          nodes++;
+          if (underHere) hereNodes++;
+        }
         let b = bound;
         let bd = bounded;
         let cb = ceilBound;
@@ -396,11 +422,16 @@ function rulesCost(source: unknown): { readonly nodes: number; readonly perNode:
             cbd = true;
           }
         }
-        stack.push({ rule: field(rule, 'then'), bound: b, bounded: bd, ceilBound: cb, ceilBounded: cbd, yOnly: yOnly && isYOnly(c) });
+        const here = isHereOnly(c);
+        stack.push({
+          rule: field(rule, 'then'), bound: b, bounded: bd, ceilBound: cb, ceilBounded: cbd, yOnly: yOnly && (isYOnly(c) || here),
+          underHere: underHere || here,
+        });
         break;
       }
       case 'block': case 'bandlands': case 'strata':
-        // A floor gate bounds the leaf whatever its ceiling gates (SP6b Spec correction 6).
+        // A floor gate bounds the leaf whatever its ceiling gates (SP6b Spec correction 6); with neither, a Y-only or
+        // here-gated leaf keeps the fast path (SP6b §3.5 item 4).
         if (bounded) maxBound = Math.max(maxBound, bound);
         else if (ceilBounded) maxBound = Math.max(maxBound, ceilBound);
         else if (!yOnly) fast = false;
@@ -409,5 +440,5 @@ function rulesCost(source: unknown): { readonly nodes: number; readonly perNode:
     }
   }
   const perNode = fast ? Math.min(COLUMN_VOXELS, COLUMN_POSITIONS * (1 + Math.max(0, maxBound))) : COLUMN_VOXELS;
-  return { nodes, perNode };
+  return { nodes, hereNodes, perNode };
 }
