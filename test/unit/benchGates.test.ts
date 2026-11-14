@@ -281,18 +281,21 @@ test('parseBenchExempt: a comma-separated list of BENCH_ROWS names, empty when u
   expect(parseBenchExempt([...BENCH_ROWS].reverse().join(','))).toEqual([...BENCH_ROWS].reverse());
 });
 
-test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, SP5b\'s persist.flush, SP5c\'s paste.max and paste.maxLit, then SP6a\'s terrain.caves.warm, carver.paths, mesh.xray and slice.caves128, with SP6a\'s density.cornerInlined right after density.corner', () => {
+test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, SP5b\'s persist.flush, SP5c\'s paste.max and paste.maxLit, then SP6a\'s terrain.caves.warm, carver.paths, mesh.xray and slice.caves128, with SP6a\'s density.cornerInlined right after density.corner and SP6b\'s caveBiome.column right after terrain.real', () => {
   expect(BENCH_ROWS).toEqual([
     'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
     'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
     'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
-    'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'surface.column',
+    'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'caveBiome.column', 'surface.column',
     'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
     'light.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
     'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128',
   ]);
   expect(BENCH_ROWS.slice(-10, -6)).toEqual(['light.column', 'mesh.section', 'relight.edit', 'persist.flush']);
   expect(BENCH_ROWS.slice(BENCH_ROWS.indexOf('density.corner'), BENCH_ROWS.indexOf('density.corner') + 3)).toEqual(['density.corner', 'density.cornerInlined', 'terrain.real']);
+  // SP6b §12.5 (D25): the cave-biome step of T alone (the column pass and the picks at T's tagged voxels), measured
+  // right after terrain.real.
+  expect(BENCH_ROWS.slice(BENCH_ROWS.indexOf('terrain.real'), BENCH_ROWS.indexOf('terrain.real') + 3)).toEqual(['terrain.real', 'caveBiome.column', 'surface.column']);
   expect(BENCH_ROWS).not.toContain('terrain.provisional');
   expect(new Set(BENCH_ROWS).size).toBe(BENCH_ROWS.length);
 });

@@ -145,13 +145,14 @@ export function spiralCells(n: number): Array<readonly [number, number]> {
  * kind, cold) and `mesh.xray` (the X-ray pass alone over `mesh.section`'s sections), inserts `density.cornerInlined`
  * (the kill criterion's hand-inlined default expression over `density.corner`'s corners, test/bench/inlined.ts) right
  * after `density.corner`, where it is measured, and appends `slice.caves128` (§7.4: the horizontal 128² `caves` slice,
- * measured last).
+ * measured last). SP6b §12.5 (D25) inserts `caveBiome.column` (T's cave-biome step alone: the column pass and the picks
+ * at T's tagged voxels) right after `terrain.real`, where it is measured.
  */
 export const BENCH_ROWS = [
   'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
   'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
   'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
-  'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'surface.column',
+  'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'caveBiome.column', 'surface.column',
   'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
   'light.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
   'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128',

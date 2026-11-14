@@ -17,12 +17,14 @@ import { DENSITY3D_DEF, JAG, OFFSET, SIGMA } from '../../src/metrics/sp1Fixtures
 import { seedFromInput } from '../../src/core/seed';
 import { createGenContext } from '../../src/gen/context';
 import { createDensityContext } from '../../src/gen/density/context';
-import { cavePickerOf } from '../../src/gen/biomes/cavePicker';
+import { cavePickerOf, newCaveColumnPass } from '../../src/gen/biomes/cavePicker';
 import { surfaceContextOf } from '../../src/gen/surface/context';
 import { surfacePass } from '../../src/gen/surface/pass';
+import { newSurfaceScan } from '../../src/gen/surface/scan';
 import { surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { columnPoint } from '../../src/gen/column/columnPoint';
-import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
+import { buildColumnSample, newColumnSample, type ColumnSample } from '../../src/gen/column/columnStage';
+import { columnCaveBiomes } from '../../src/gen/pipeline/terrainStage';
 import { paintTile } from '../../src/gen/map/tile';
 import { fillColumnT } from '../../src/metrics/region';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
@@ -74,6 +76,7 @@ const HASHES = stageHashes;
 const GENKEY = genKey;
 const CARVER_PATH = carverPath;
 const MESH_XRAY = meshXray;
+const CAVE_BIOMES = columnCaveBiomes;
 const BASELINE_PATH = fileURLToPath(new URL('../baselines.json', import.meta.url));
 const N = 4096;
 let sink = 0;
@@ -252,6 +255,47 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
     sink += fillColumnT(store, gen, tcx, tcz, never) ? 1 : 0;
     store.freeColumn(tcx, tcz);
   });
+  // SP6b §12.5 (D25): caveBiome.column — T's cave-biome step alone (`columnCaveBiomes`, the function the T stage calls:
+  // `fillCaveColumnPass` over the column's (16 + 2J)² positions, then `caveBiomeOfPass` at every tagged voxel), per
+  // column. On terrain.real's first CAVE_BIOME_COLUMNS candidate columns, each generated beforehand by fillColumnT on a
+  // GenContext and a store of their own: its ColumnSample and T's cave bytes with the kind kept (bits 0-3, as the tag pass
+  // leaves them for the step), plus its dense cave sections (the cave channel's bytes per column). Each call copies the
+  // next column's kinds into the step's array untimed and times the step alone (`overriddenDuration`); cyclic.
+  const CAVE_BIOME_COLUMNS = 64;
+  const cbGen = createGenContext(seedFromInput('42'), DEFAULTS);
+  const cbStore = createStore({ shared: true, maxBlockBytes: 32 << 20, maxByteBytes: 16 << 20 });
+  const cbInputs = cavePickerOf(cbGen);
+  const cbPass = newCaveColumnPass();
+  const cbTags = new Uint8Array(98304);
+  const cbCols: { readonly sample: ColumnSample; readonly kinds: Uint8Array; readonly tagged: number; readonly dense: number }[] = [];
+  for (let t = 1; t <= CAVE_BIOME_COLUMNS; t++) {
+    const ccx = (t * 7919) % 60000 - 30000;
+    const ccz = (t * 104729) % 60000 - 30000;
+    if (!fillColumnT(cbStore, cbGen, ccx, ccz, never)) throw new Error('caveBiome.column: a column stopped');
+    const view = cbStore.proto(ccx, ccz)!;
+    const kinds = new Uint8Array(98304);
+    let dense = 0;
+    for (let ssy = 0; ssy < 24; ssy++) {
+      const sec = view.sectionCave(ssy);
+      if (typeof sec === 'number') kinds.fill(sec & 15, ssy * 4096, ssy * 4096 + 4096);
+      else { dense++; for (let i = 0; i < 4096; i++) kinds[ssy * 4096 + i] = sec[i]! & 15; }
+    }
+    cbStore.freeColumn(ccx, ccz);
+    let tagged = 0;
+    for (let i = 0; i < 98304; i++) if (kinds[i] !== 0) tagged++;
+    cbCols.push({ sample: buildColumnSample(cbGen, ccx, ccz, newColumnSample()), kinds, tagged, dense });
+  }
+  expect(cbStore.blockPool.slotCount() - cbStore.blockPool.freeCount(), 'caveBiome.column: its store leaks no slot').toBe(0);
+  let cbc = 0;
+  const caveBiomeRun = await measure('caveBiome.column', 1, () => {
+    const c = cbCols[cbc++ % CAVE_BIOME_COLUMNS]!;
+    cbTags.set(c.kinds);
+    const t0 = performance.now();
+    CAVE_BIOMES(cbInputs, c.sample, cbTags, cbPass);
+    const ms = performance.now() - t0;
+    sink += cbTags[98303]!;
+    return { overriddenDuration: ms };
+  }, undefined, () => { cbc = 0; });
   // SP3c §7: the surface pass alone (`surfacePass`, the function the T stage calls) over one column whose density,
   // water v0 and surface biome buffer are built once beforehand, as the stage builds them (`surfaceProbeColumn` on
   // the stage's own SurfaceContext): column (0, 0), the density.corner column. SP6b §2.3 (Task 18): with the column's
@@ -300,7 +344,9 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   const session = openMapSession(capped, () => [3, 9]);
   const cappedDefs = session.state.params.density.defs;
   expect(canonicalJSON(cappedDefs).length, 'session.commitMaxTree: the session holds the capped density tree').toBeGreaterThan(131_000);
-  expect(canonicalJSON(session.state.params.surface.rules).length, 'session.commitMaxTree: and the capped rules').toBeGreaterThan(131_000);
+  // The rules fill to within one padding condition of the cap (capTrees.ts; test/unit/capTrees.test.ts' slack of 160):
+  // SP6b's rule 4 (Task 22) left the default tree's padding 100 characters short of 131,072.
+  expect(canonicalJSON(session.state.params.surface.rules).length, 'session.commitMaxTree: and the capped rules').toBeGreaterThan(131_072 - 160);
   let commits = 0;
   const commitRun = await measure('session.commitMaxTree', 1, () => {
     const r = session.set('climate.scaleMul', 1 + (++commits & 1));
@@ -803,6 +849,56 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
     pStore.freeColumn(acx, acz);
   }
   const ampSorted = sortedOf(ampMs.slice(ampWarm.length));
+  // SP6b §12.5 (D25's "count evaluated voxels per class"): the surface pass on the same D25_COLUMNS columns, each rebuilt
+  // as T builds it (`surfaceProbeColumn` on a SurfaceContext of its own) and passed as the stage passes it, its evaluated
+  // voxels split by why the fast path evaluated them, from the scan's runs and the tree's fast-path bounds as `fillColumn`
+  // applies them: within the sky-open run's floor bound ('sky floor'), within another run's floor bound ('cave floor',
+  // of it the runs whose floor cave biome is lush, dripstone or abyss: 'biome'), within a run's ceiling bound ('ceiling',
+  // likewise 'biome'), and the rest, a band whose result is not one state (a dither interval, a bandlands or strata
+  // leaf, a `caveBiome{here}` the classification leaves unsure: 'band').
+  const evSc = surfaceContextOf(createGenContext(seedFromInput('42'), DEFAULTS));
+  const evInputs = cavePickerOf(evSc.ctx);
+  const evScan = newSurfaceScan();
+  const evStates = new Uint16Array(98304);
+  const evFast = evSc.compiled.fastPath;
+  const ev = { total: [] as number[], sky: [] as number[], floor: [] as number[], floorBiome: [] as number[], ceil: [] as number[], ceilBiome: [] as number[], band: [] as number[] };
+  for (let t = 1; t <= D25_COLUMNS; t++) {
+    const [ecx, ecz] = candidate(t);
+    const pc = surfaceProbeColumn(evSc, ecx, ecz);
+    const total = surfacePass(evSc, evSc.density.columns.get(ecx, ecz), pc.solid, pc.water, pc.biomes, evStates, evScan, pc.tags, { inputs: evInputs, pass: pc.pass });
+    let sky = 0, floor = 0, floorBiome = 0, ceil = 0, ceilBiome = 0;
+    if (evFast !== null) {
+      const { runFirst, skyRun, runTop, runBottom, runFloorBiome, runCeilBiome } = evScan;
+      for (let p = 0; p < 256; p++) {
+        for (let r = runFirst[p]!; r < runFirst[p + 1]!; r++) {
+          const fb = runFloorBiome[r]!, cb = runCeilBiome[r]!;
+          const fBound = evFast.floorBiomes >= 0 && (fb < 0 || ((evFast.floorBiomes >> fb) & 1) === 0) ? -1 : evFast.floorBound;
+          const cBound = evFast.ceilBiomes >= 0 && (cb < 0 || ((evFast.ceilBiomes >> cb) & 1) === 0) ? -1 : evFast.ceilBound;
+          const isSky = r === skyRun[p];
+          const len = runTop[r]! - runBottom[r]! + 1;
+          // fillColumn evaluates y > deep (the floor bound) and y < shallow (the ceiling bound), each voxel once.
+          const deep = runTop[r]! - (isSky ? Math.max(evFast.skyFloorBound, fBound) : fBound) - 1;
+          const shallow = runBottom[r]! + cBound + 1;
+          const fromFloor = Math.max(0, Math.min(runTop[r]! - deep, len));
+          const fromCeil = Math.max(0, Math.min(shallow - runBottom[r]!, len - fromFloor));
+          if (isSky) sky += fromFloor;
+          else {
+            floor += fromFloor;
+            if (fb > 0) floorBiome += fromFloor;
+          }
+          ceil += fromCeil;
+          if (cb > 0) ceilBiome += fromCeil;
+        }
+      }
+    }
+    ev.total.push(total);
+    ev.sky.push(sky);
+    ev.floor.push(floor);
+    ev.floorBiome.push(floorBiome);
+    ev.ceil.push(ceil);
+    ev.ceilBiome.push(ceilBiome);
+    ev.band.push(total - sky - floor - ceil);
+  }
 
   let solidVoxels = 0;
   for (let i = 256; i < 98304; i++) solidVoxels += sCol.solid[i]!;
@@ -838,6 +934,25 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
       `D25 cave channel: dense cave sections per column median ${q(ds, 0.5)}, mean ${(sum(d25.denseCave) / D25_COLUMNS).toFixed(2)}, p90 ${q(ds, 0.9)}, max ${q(ds, 1)}; `
       + `bytes per column median ${4096 * q(ds, 0.5)}, mean ${Math.round((4096 * sum(d25.denseCave)) / D25_COLUMNS)}`,
     );
+    {
+      // SP6b §12.5 (D25): the cave-biome step's cost per column and what it reads and writes.
+      const tg = sortedOf(cbCols.map((c) => c.tagged)), dn = sortedOf(cbCols.map((c) => c.dense));
+      console.log(
+        `caveBiome.column p50 ${f3(caveBiomeRun.latency.p50)} ms, p99 ${f3(caveBiomeRun.latency.p99)} ms (fillCaveColumnPass at ${(16 + 2 * cbInputs.settings.edgeJitter) * (16 + 2 * cbInputs.settings.edgeJitter)} positions, then a pick at each tagged voxel: `
+        + `median ${q(tg, 0.5)}, p90 ${q(tg, 0.9)}, max ${q(tg, 1)} per column over ${CAVE_BIOME_COLUMNS} columns of terrain.real's sequence; ${cbc} calls); `
+        + `the cave channel's bytes per column on them: median ${4096 * q(dn, 0.5)}, mean ${Math.round((4096 * sum(cbCols.map((c) => c.dense))) / CAVE_BIOME_COLUMNS)}, max ${4096 * q(dn, 1)} `
+        + `(dense cave sections × 4,096)`,
+      );
+      const st = (a: readonly number[]): string => {
+        const s = sortedOf(a);
+        return `median ${q(s, 0.5)}, mean ${(sum(a) / a.length).toFixed(0)}, p90 ${q(s, 0.9)}`;
+      };
+      console.log(
+        `surface pass evaluated voxels per class (${D25_COLUMNS} columns of terrain.real's sequence, per column): total ${st(ev.total)}; sky floor ${st(ev.sky)}; `
+        + `cave floor ${st(ev.floor)} (biome runs ${st(ev.floorBiome)}); ceiling ${st(ev.ceil)} (biome runs ${st(ev.ceilBiome)}); band ${st(ev.band)}; `
+        + `fast path ${evFast === null ? 'none' : `skyFloorBound ${evFast.skyFloorBound}, floorBound ${evFast.floorBound}, ceilBound ${evFast.ceilBound}, floorBiomes ${evFast.floorBiomes}, ceilBiomes ${evFast.ceilBiomes}, here ${evFast.here}`}`,
+      );
+    }
     {
       // The kill criterion (SP6a §10.5, master :1640): the closures' overhead per column over terrain.real's p50.
       const cornerC = ns['density.corner']!, cornerI = ns['density.cornerInlined']!;
