@@ -1030,6 +1030,40 @@ The record at the generator push's head (30541bc plus Task 31's commit; `GENERAT
 - **Goldens** (`git checkout aed4e07 -- test/goldens.json && METRICS_TIMEOUT_SCALE=3 npm run test:goldens`; the unit project's 12 timeouts under a load of 13-33 stopped the chained merge, so the ten files were re-run alone into the same observations, `liveness.test.ts`' cave-class test once more alone, then `MERGE_GOLDENS=1` merged): against the push base aed4e07 exactly `generatorVersion` 8 → 9, `sp1.params`, `sp3a.region.T.default`, `.large_biomes`, `sp3b.density.default`, `sp3c.surface.ops`, `sp3e.region.T.amplified`, `.archipelago`, `.floating_islands`, `sp6a.region.T.caves`, and the added `sp6b.caveBiome.points` and `sp6b.region.T.biomes` (65 keys); against 30541bc only the added key. `npx --yes bun@1 test/tools/goldensJsc.ts`: 65/65 on Bun 1.4.4 (JavaScriptCore). `?selftest=1` (`node test/tools/uiSmoke.ts`, ruling P36): "✓ all 65 goldens match" (`test/goldens.json` holds 65) and "IndexedDB contract: 10/10 passed"; the whole smoke 516/516.
 - **The bench record** (P1, §12.5). `BENCH_EXEMPT=terrain.real,terrain.islands,surface.column,caveBiome.column npm run bench` (1-minute load 0.93): every gate and the +30 % rule except `terrain.islands`' absolute p50, 14.61 ms > 14.5 at the throttled clock (calibration 0.745-0.785 ns; at turbo ≈ 12.2 ms); the turbo window (calibration 0.636 ns) ends before `terrain.islands` in every run. `npm run bench:record` (load 0.06, after 6.5 min idle; a first attempt stopped on the same absolute p50, 14.56 ms): `test/baselines.json` in full; at turbo `terrain.real` 10.74 / 18.25 ms, `surface.column` 1.288 ms (re-baselined from Task 25's 1.309; §12.5's 0.747 was SP6a's, before rule 4), `caveBiome.column` 0.255 ms; at the throttled clock (0.747-0.785 ns) `terrain.islands` 14.13 / 24.55 ms (≈ 12.0 at turbo) and `slice.caves128` 276.8 ms (≈ 230 at turbo). Then `npm run bench` (load 0.13, after 7.5 min idle): `terrain.real` 10.15 / 18.77 ms (≤ 13 / 20), `surface.column` 1.287, `caveBiome.column` 0.255, `slice.caves128` 279.0 ms (≤ 300), every other absolute gate; `terrain.islands` 15.06 / 26.34 ms at 0.79-0.81 ns (≈ 12.0 ms at turbo, ratio 1.024 × the new record) misses the absolute p50 at the throttled clock only, so the run stops before the +30 % rule, which, computed from its table against the record, holds on every row (worst `paste.max` 1.119).
 - **Step 3.** `npm run typecheck` clean; `npm test` 6,774 passed, 21 failed (every one a timeout under a load of up to 38: 15 unit tests, `resolution.test.ts`, metrics-fast U2, S1 and T1), each file passing alone (R18); `npm run test:metrics`: the golden run's metrics-quick project, every metric file passing.
+- **CI at the generator push** (ruling R2; carried into Exit evidence by ruling R25, beside Task 32's commit). Every run is on `sp6b/cave-biomes`; each attempt's wall runs from its start to its last job's end; runner minutes are the sum of the job times.
+  - **79617ef, run 43642270084 #1** (cold: `test/harness/**` changed, so every `regions-*` key logged "Cache not found"): 21:20:15 → 21:26:53Z, wall **6:38**, red. The only failure was `unit (rest)`: `liveness.test.ts > each slot's column` ran 32.9 s against the 30 s unit default. **#2** (`gh run rerun --failed`): red again, the same test at 45.2 s (`unit (rest)` 8:21, vitest 482.8 s).
+  - **36c50df** gives that test and `capTop is live` (21.4 s on #1) an explicit 120 s (ruling R23, the controller's: ratified, no assertion weakened, the precedent `liveness.test.ts:997`; a timeout is not a quality gate).
+  - **36c50df, run 43644303854 #1** (warm: every saved `regions-*` cache hit; `edit`, `clipboard` and `persist` logged "Cache not found"): 21:43:20 → 21:49:49Z, wall **6:29**, green.
+
+| job | 43642270084 #1 (cold) | 43644303854 #1 (warm) |
+|---|---|---|
+| wall | **6:38** (red) | **6:29** |
+| runner minutes | 62.3 | 59.6 |
+| `changes` | 0:09 | 0:09 |
+| `check` | 2:54 | 3:54 |
+| `unit (rest)` | 6:20 (failed; vitest 365.9 s) | 5:35 (vitest 317.5 s) |
+| `unit (heavy)` | 4:55 (vitest 269.0 s) | 5:38 (vitest 323.1 s) |
+| `metrics-fast (rest)` | 5:27 (vitest 312.7 s) | 6:10 (vitest 349.4 s) |
+| `metrics-fast (terrain)` | 4:05 (vitest 227.6 s) | 2:41 |
+| `metrics-fast (surface)` | 2:57 (vitest 164.4 s) | 3:53 |
+| `metrics-fast (caves)` | 1:39 (vitest 78.0 s) | 0:53 (vitest 32.9 s) |
+| `metrics-quick (terrain-default)` | 2:15 (vitest 113.9 s) | 1:57 |
+| `metrics-quick (terrain-large)` | 6:04 (vitest 340.5 s) | 4:24 |
+| `metrics-quick (surface-default)` | 2:04 | 1:54 |
+| `metrics-quick (surface-large)` | 5:28 | 4:30 |
+| `metrics-quick (caves)` | 2:41 (vitest 141.2 s) | 1:37 |
+| `metrics-quick (caves-presets)` | 1:55 (vitest 90.5 s) | 1:08 |
+| `metrics-quick (caves-biomes)` | 1:51 (vitest 86.5 s) | 1:07 |
+| `metrics-quick (render)` | 1:57 | 2:06 |
+| `metrics-quick (edit)` | 2:19 | 2:17 |
+| `metrics-quick (clipboard)` | 1:34 | 2:03 |
+| `metrics-quick (persist)` | 2:24 | 3:08 |
+| `metrics-quick (rest)` | 3:17 | 4:32 |
+| `ci-ok` | 0:02 (failure) | 0:03 |
+
+  - **The jobs.** 19 test jobs with `caves-biomes` (Task 27), which ran 1:51 cold against §13's estimate of 3:10-4:00. The cold long poles are `unit (rest)` 6:20 and `metrics-quick (terrain-large)` 6:04, the warm one `metrics-fast (rest)` 6:10. `liveness.test.ts` alone is 349.8 s of `unit (rest)`'s 365.9 s on the cold run and 302.4 s of 317.5 s on the warm one (its cave-biome leaves' test 152.7 s, 211.3 s on #2, 129.5 s warm); U2 is 106.4 s and 120.9 s of `metrics-fast (rest)` (Task 20's wider biome search, ruling R14). `cavesMetric.test.ts`, in `unit (heavy)` since 79617ef (ruling R5), took 129.6 s and 150.9 s.
+  - **The caves jobs' peak memory** (`CaveGrid.cls`, Task 20; ruling R24, the controller's): no CI step logs memory and no instrumented step was added; the evidence is that every caves job (`metrics-fast (caves)`, `metrics-quick (caves)`, `(caves-presets)`, `(caves-biomes)`) passed on both runs with no worker crash and no OOM.
+  - **Against the budget.** 6:38 cold and 6:29 warm are above the exit's 6 min 0 s (the work item's 5:30 was met at Task 5). The exit's 6:00 is handled by Task 58's rule (ruling R25, the controller's): on the last two cold runs before the exit commit, Stage 2's items not yet taken (6a-6c) join in order, each measured, and a miss after them is a STOP for the user. The levers noted for it: `liveness.test.ts` (302-350 s of `unit (rest)`) and U2 (106-121 s of `metrics-fast (rest)`).
 
 ## Threshold log
 
