@@ -1,16 +1,20 @@
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, test } from 'vitest';
 import { CAVE_BIOME, CAVE_KIND } from '../../src/core/constants';
-import { deriveSeed } from '../../src/core/hash';
+import { deriveSeed, fnv1a32 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
+import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
-import { caveJitter } from '../../src/gen/biomes/cavePicker';
+import { caveBiomeAtPoint, caveJitter, cavePickerOf } from '../../src/gen/biomes/cavePicker';
+import { newPointRecord, samplePoint } from '../../src/gen/column/columnPoint';
+import { createGenContext } from '../../src/gen/context';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, BEDROCK, DEEPSLATE, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { CarverPath } from '../../src/gen/caves/carvers';
 import {
   BIOME_BORDER_VIEW, BIOME_EXAMPLE_IDS, biomeTileMasks, BORDER_PAIR_MIN, BORDER_SAMPLE_PAIRS, borderSampleProblems, caveBiomeExamples,
   emptyBorderCounts, type CavePose,
+  abyssRockCounts, abyssRockStraight, emptyAbyssRockCounts, poolAbyssRockCounts, STRAIGHT_RUN,
   BIOME_MASK, BIOME_SHIFT, BORDER_PAIR_NAMES, caveBorderCounts, caveBorderParts, cellAt, CLS_CLAY, CLS_DRIPSTONE, CLS_MOSS, FLUID_BIT,
   poolBorderCounts, SKIN_NAMES, SOLID_BIT, TAG_MASK,
   ABYSS_STATES, bedrockExposedCount, bottomCavernPose, bottomFloorSpreads, caveBottomCounts, caveBottomGroups, caveBottomParts, caveGridOf,
@@ -30,6 +34,10 @@ import {
   BIOME_REGION, BIOME_SCAN_MIN_POINTS, BIOME_SCAN_SKIPPED, BIOME_TILE_ALL, biomeClimateHolds, biomeRegionClimate, biomeTiles, caveGroupOf,
   caveSites, findBiomeRegion, firstBiomeTile, measureCaveRegions, tileBiomeMask,
 } from '../harness/caveSites';
+import {
+  caveZoneGrid, caveZoneParts, clarkEvans, zoneAperiodicity, ZONE_CELLS, ZONE_DEPTHS, ZONE_LAGS, ZONE_ORIGIN, ZONE_STEP, zoneLagRatios,
+  zonePatches, zonePeriodicDip,
+} from '../harness/caveZones';
 import { components3d } from '../harness/flood';
 import { coverageErrors, evaluateMetric, findMetricCalls } from '../harness/metric';
 import { genRegion } from '../harness/region';
@@ -1314,7 +1322,7 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
     four = await measureCaveRegions(SITES, { ...OPTS, workers: 4 });
   }, 900_000);
 
-  test('per-region counts in a worker equal the in-process ones: CaveRegionCounts, CaveC7C9Counts, B3\'s border counts, the poses and referenceCarve\'s counts', () => {
+  test('per-region counts in a worker equal the in-process ones: CaveRegionCounts, CaveC7C9Counts, B3\'s border and abyss-rock counts, the poses and referenceCarve\'s counts', () => {
     expect(SITES.map((s) => `${s.profile} ${s.size}`)).toEqual(['default 16', 'default 16']);
     for (const [k, s] of SITES.entries()) {
       const ref = inProcess[k]!;
@@ -1337,11 +1345,15 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
       expect(ref.sp6bExamples?.bottomCavern?.voxel[1], s.label).toBeLessThanOrEqual(-38);
       // Task 26: the region's cave air holds biome borders (dripstone | plain at seed '42'), so the comparison is not vacuous.
       expect(caveBorderParts([ref.borders]).overall.borderFaces, s.label).toBeGreaterThan(0);
+      // Task 28: the cave air per biome sums to the region's cave air (> 0), and a default region has abyss-rock counts.
+      expect(ref.borders.air.reduce((a, v) => a + v, 0), s.label).toBeGreaterThan(0);
+      expect(ref.abyssRock, s.label).not.toBeNull();
       for (const [n, got] of [[1, one[k]!], [4, four[k]!]] as const) {
         expect(got.c16, `${s.label}, ${n} worker(s)`).toEqual(ref.c16);
         expect(got.c79, `${s.label}, ${n} worker(s)`).toEqual(ref.c79);
         expect(got.bottom, `${s.label}, ${n} worker(s)`).toEqual(ref.bottom);
         expect(got.borders, `${s.label}, ${n} worker(s)`).toEqual(ref.borders);
+        expect(got.abyssRock, `${s.label}, ${n} worker(s)`).toEqual(ref.abyssRock);
         expect(got.examples, `${s.label}, ${n} worker(s)`).toEqual(ref.examples);
         expect(got.sp6bExamples, `${s.label}, ${n} worker(s)`).toEqual(ref.sp6bExamples);
         expect(got.carver, `${s.label}, ${n} worker(s)`).toEqual(ref.carver);
@@ -1514,4 +1526,204 @@ describe('the stored side of C7.carverReference reads the cave kind (SP6b spec �
     expect(want.capAir).toBeGreaterThan(0);
     expect(regionCounts(nibbled, ref, 0)).toEqual(want);
   }, 120_000); // the nibble fixture (a 5 × 5 region, once per file) and its readers: about 1 s alone, more under load
+});
+
+describe('B3 IV: abyssRockStraight and the regular-grid check (SP6b spec §12.2, Spec corrections 18, 19, ruling P30; Task 28)', () => {
+  /**
+   * A 30-block rock wall on each side of a one-block cave (x 0 … 29, cave air at z = 1, y −20 … 19; rock everywhere
+   * else up to y 60), the rock's class abyss where `abyssAt(x, y, z)` holds.
+   */
+  function wallGrid(abyssAt: (x: number, y: number, z: number) => boolean): CaveGrid {
+    const g = rock(30, 3, 60);
+    carve(g, K.cheese | (CAVE_BIOME.abyss << 4), 0, 29, -20, 19, 1, 1);
+    for (let y = GRID_Y0; y <= 60; y++) {
+      for (let z = 0; z < 3; z++) for (let x = 0; x < 30; x++) if ((g.cells[cellAt(g, x, y, z)]! & SOLID_BIT) !== 0 && abyssAt(x, y, z)) g.cls[cellAt(g, x, y, z)] = CLS_ABYSS;
+    }
+    return g;
+  }
+
+  test('a horizontal abyss boundary across a 30-block wall gives abyssRockStraight 1; a boundary inside the rock is not seen', () => {
+    // Abyss rock below y 0, and in a band y 30 … 39 inside the rock (no cave air beside it: not a wall).
+    const c = abyssRockCounts(wallGrid((_x, y) => y < 0 || (y >= 30 && y < 40)));
+    // The level line y −1 | 0 on both walls (z = 0 and z = 2), 30 edges each, one run each.
+    expect(c.edges).toBe(60);
+    expect(c.straightEdges).toBe(60);
+    expect(abyssRockStraight(c)).toBe(1);
+    // The abyss walls: both walls at y −20 … −1 and the floor under the cave (y −21).
+    expect(c.abyssWalls).toBe(2 * 30 * 20 + 30);
+    // A run of 7 is not straight, one of 8 is (the run rule STRAIGHT_RUN, straightBorder's).
+    expect(STRAIGHT_RUN).toBe(8);
+    const seven = abyssRockCounts(wallGrid((x, y, z) => (z === 0 && x < 7 ? y < 0 : y < 0 && z === 2 && x < 8)));
+    expect([seven.edges, seven.straightEdges]).toEqual([15, 8]);
+  });
+
+  test('a speckled abyss boundary (its height drawn per block in −2 … 2 on each wall) gives abyssRockStraight < 0.1', () => {
+    const rng = new Xoshiro128(fnv1a32('abyssRockStraight speckle'));
+    const h = Array.from({ length: 3 }, () => Array.from({ length: 30 }, () => rng.nextInt(5) - 2));
+    const c = abyssRockCounts(wallGrid((x, y, z) => y < h[z]![x]!));
+    // One edge per block of each wall at its own height.
+    expect(c.edges).toBe(60);
+    expect(abyssRockStraight(c)).toBeLessThan(0.1);
+  });
+
+  test('an edge needs both voxels exposed on one wall plane; no edge reads NaN; pooled counts are sums', () => {
+    // The cave's top row (y −1) filled: the lower voxel of each boundary pair loses its cave air, so no wall plane is shared.
+    const g = wallGrid((_x, y) => y < 0);
+    for (let x = 0; x < 30; x++) setCell(g, x, -1, 1, 0, true);
+    const c = abyssRockCounts(g);
+    expect(c.edges).toBe(0);
+    expect(abyssRockStraight(c)).toBeNaN();
+    expect(abyssRockStraight(emptyAbyssRockCounts())).toBeNaN();
+    const a = abyssRockCounts(wallGrid((_x, y) => y < 0));
+    expect(poolAbyssRockCounts([a, a])).toEqual({ edges: 120, straightEdges: 120, abyssWalls: 2 * a.abyssWalls });
+  });
+
+  test('caveBorderCounts counts the cave air per biome (B3\'s shares of a region, cave_heavy\'s): tagged air, no fluid, under its nibble', () => {
+    const g = wallGrid(() => false);
+    // 1,200 abyss cave-air voxels; two turned lush, one holding water (not cave air), one untagged air.
+    setCell(g, 0, 0, 1, K.cheese | (CAVE_BIOME.lush << 4), false);
+    setCell(g, 1, 0, 1, K.cheese | (CAVE_BIOME.lush << 4), false);
+    setCell(g, 2, 0, 1, K.cheese | (CAVE_BIOME.lush << 4), false, true);
+    setCell(g, 3, 0, 1, 0, false);
+    expect(Array.from(caveBorderCounts(g).air)).toEqual([0, 2, 0, 1196]);
+    expect(Array.from(poolBorderCounts([caveBorderCounts(g), caveBorderCounts(g)]).air)).toEqual([0, 4, 0, 2392]);
+  });
+
+  /** An n² indicator from `at(i, j)`. */
+  const indicator = (n: number, at: (i: number, j: number) => boolean): Uint8Array => {
+    const m = new Uint8Array(n * n);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) m[j * n + i] = at(i, j) ? 1 : 0;
+    return m;
+  };
+
+  test('zoneLagRatios: a periodic indicator (period 512) gives zoneAperiodicity < 0.5 and zonePeriodicDip < 0.5', () => {
+    // Squares of 256 blocks (4 steps of 64), alternating on both axes.
+    const r = zoneLagRatios(indicator(512, (i, j) => (((i >> 2) + (j >> 2)) & 1) === 1), 512, 64);
+    expect(r.map((x) => x.lag)).toEqual([...ZONE_LAGS, ...ZONE_LAGS]);
+    expect(r.filter((x) => x.lag === 256).map((x) => x.ratio)).toEqual([2, 2]);
+    expect(zoneAperiodicity(r)).toBeLessThan(0.5);
+    expect(zonePeriodicDip(r)).toBeLessThan(0.5);
+  });
+
+  test('zoneLagRatios: a white-noise indicator gives zoneAperiodicity ≈ 1', () => {
+    const rng = new Xoshiro128(fnv1a32('zone white noise'));
+    const r = zoneLagRatios(indicator(512, () => rng.nextFloat() < 0.5), 512, 64);
+    expect(zoneAperiodicity(r)).toBeGreaterThan(0.97);
+    expect(Math.max(...r.map((x) => x.ratio))).toBeLessThan(1.03);
+  });
+
+  test('zoneLagRatios: a smooth random indicator (value noise of wavelength 1,024) rises and saturates: zonePeriodicDip ≥ 0.9', () => {
+    // Random values on a 1,024-block lattice (16 steps), smoothstep-interpolated, above their median.
+    const n = 1024;
+    const cell = 16;
+    const k = n / cell + 1;
+    const rng = new Xoshiro128(fnv1a32('zone value noise'));
+    const v = Float64Array.from({ length: k * k }, () => rng.nextFloat());
+    const smooth = (t: number): number => t * t * (3 - 2 * t);
+    const field = (i: number, j: number): number => {
+      const a = Math.floor(i / cell);
+      const b = Math.floor(j / cell);
+      const u = smooth(i / cell - a);
+      const w = smooth(j / cell - b);
+      const top = v[b * k + a]! + (v[b * k + a + 1]! - v[b * k + a]!) * u;
+      const bottom = v[(b + 1) * k + a]! + (v[(b + 1) * k + a + 1]! - v[(b + 1) * k + a]!) * u;
+      return top + (bottom - top) * w;
+    };
+    const r = zoneLagRatios(indicator(n, (i, j) => field(i, j) > 0.5), n, 64);
+    // Smooth (its zones correlated at short lags), not periodic.
+    expect(Math.max(...r.filter((x) => x.lag === 256).map((x) => x.ratio))).toBeLessThan(0.6);
+    expect(zonePeriodicDip(r)).toBeGreaterThanOrEqual(0.9);
+  });
+
+  test('zoneLagRatios refuses a lag that is no whole number of steps inside the grid; an empty indicator reads NaN', () => {
+    expect(() => zoneLagRatios(new Uint8Array(64), 8, 64, [100])).toThrow(RangeError);
+    expect(() => zoneLagRatios(new Uint8Array(64), 8, 64, [512])).toThrow(RangeError);
+    expect(() => zoneLagRatios(new Uint8Array(63), 8, 64, [64])).toThrow(RangeError);
+    const r = zoneLagRatios(new Uint8Array(64), 8, 64, [64]);
+    expect(r.every((x) => Number.isNaN(x.ratio))).toBe(true);
+    expect(zoneAperiodicity(r)).toBeNaN();
+    expect(zonePeriodicDip(r)).toBeNaN();
+  });
+
+  test('clarkEvans over zonePatches\' centroids: a square lattice of patches ≈ 2.0 ± 0.1, a hexagonal one ≈ 2.15 ± 0.1 (Spec correction 18)', () => {
+    const n = 512;
+    const a = 16;
+    // 2 × 2 patches centred on a square lattice of spacing 16.
+    const square = zonePatches(indicator(n, (i, j) => i % a < 2 && j % a < 2), n);
+    expect(square.areas).toHaveLength((n / a) ** 2);
+    expect(square.areas.every((s) => s === 4)).toBe(true);
+    expect(Math.abs(clarkEvans(square.cx, square.cz, n * n) - 2)).toBeLessThanOrEqual(0.1);
+    // 3 × 3 patches on a hexagonal lattice of spacing 16: rows 16·√3/2 apart, every other row shifted by 8.
+    const rowH = (a * Math.sqrt(3)) / 2;
+    const centres = new Set<number>();
+    for (let r = 0; (r + 0.5) * rowH < n; r++) {
+      for (let c = 0; (c + 0.5) * a + (r % 2) * (a / 2) < n - 1; c++) {
+        centres.add(Math.round((r + 0.5) * rowH) * n + Math.round((c + 0.5) * a + (r % 2) * (a / 2)));
+      }
+    }
+    const hex = zonePatches(indicator(n, (i, j) => {
+      for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) if (centres.has((j + dj) * n + i + di)) return true;
+      return false;
+    }), n);
+    expect(hex.areas).toHaveLength(centres.size);
+    expect(Math.abs(clarkEvans(hex.cx, hex.cz, n * n) - 2.15)).toBeLessThanOrEqual(0.1);
+    // Random points read about 1.
+    const rng = new Xoshiro128(fnv1a32('zone random points'));
+    const xs = Array.from({ length: 2000 }, () => rng.nextFloat() * n);
+    const zs = Array.from({ length: 2000 }, () => rng.nextFloat() * n);
+    expect(Math.abs(clarkEvans(xs, zs, n * n) - 1)).toBeLessThanOrEqual(0.1);
+    expect(clarkEvans([1], [1], 4)).toBeNaN();
+  });
+
+  test('zonePatches keeps the 4-connected patches of ≥ 4 points with their centroids; logSd of equal areas is 0', () => {
+    // A 2 × 2 square at (1, 1), a diagonal pair (two patches of 1, dropped) and a 1 × 5 bar at row 6.
+    const m = indicator(8, (i, j) => (i >= 1 && i <= 2 && j >= 1 && j <= 2) || (i === 5 && j === 1) || (i === 6 && j === 2) || (j === 6 && i < 5));
+    const p = zonePatches(m, 8);
+    expect(p).toEqual({ areas: [4, 5], cx: [1.5, 2], cz: [1.5, 6] });
+    expect(zonePatches(m, 8, 1).areas).toEqual([4, 1, 1, 5]);
+    expect(logSd([4, 4, 4])).toBe(0);
+  });
+
+  test('caveZoneGrid reads the picker\'s point form: each point\'s biome is caveBiomeAtPoint\'s at y = Y0 − D·depth', () => {
+    const params = resolveProfile('default');
+    const g = caveZoneGrid('42', params, { n: 6, step: 4096, x0: -12_288, z0: -12_288 });
+    const ctx = createGenContext(seedFromInput('42'), params);
+    const inp = cavePickerOf(ctx);
+    const rec = newPointRecord();
+    expect(g.depths).toEqual(ZONE_DEPTHS);
+    const seen = new Set<number>();
+    for (let j = 0; j < 6; j++) {
+      for (let i = 0; i < 6; i++) {
+        const x = -12_288 + 4096 * i;
+        const z = -12_288 + 4096 * j;
+        const p = samplePoint(ctx, x, z, false, rec);
+        const { y0 } = caveBiomeAtPoint(inp, p.C, p.E, p.H, p.surfaceEst, x, z, 0);
+        for (const [k, depth] of ZONE_DEPTHS.entries()) {
+          const want = caveBiomeAtPoint(inp, p.C, p.E, p.H, p.surfaceEst, x, z, y0 - inp.settings.depthScale * depth).biome;
+          expect(g.biomes[k]![j * 6 + i], `(${x}, ${z}) at depth ${depth}`).toBe(want);
+          seen.add(want);
+        }
+      }
+    }
+    // Not vacuous: the 108 picks hold more than one biome.
+    expect(seen.size).toBeGreaterThan(1);
+    // The default grid: 64 × 64 km of a 64-block lattice centred on the origin.
+    expect([ZONE_CELLS, ZONE_STEP, ZONE_ORIGIN]).toEqual([1024, 64, -32_768]);
+  });
+
+  test('caveZoneParts: per biome and depth the indicator\'s values; an empty indicator is left out of the parts', () => {
+    // Depth 0.3: lush on a periodic checkerboard of 256-block squares, the rest plain; depth 1.1: no biome at all.
+    const n = 512;
+    const lush = indicator(n, (i, j) => (((i >> 2) + (j >> 2)) & 1) === 1);
+    const g = { n, step: 64, x0: 0, z0: 0, depths: [0.3, 1.1], biomes: [lush, new Uint8Array(n * n)] };
+    const p = caveZoneParts(g);
+    expect(p.indicators.map((x) => `${x.biome}@${x.depth}`)).toEqual(['lush@0.3', 'dripstone@0.3', 'abyss@0.3', 'lush@1.1', 'dripstone@1.1', 'abyss@1.1']);
+    expect(p.indicators[0]!.share).toBe(0.5);
+    expect(p.indicators[0]!.patches).toBe(8192);
+    expect(p.zoneAperiodicity).toBe(0);
+    expect(p.zonePeriodicDip).toBe(0);
+    expect(p.zoneSizeSpread).toBeCloseTo(0, 9);
+    expect(p.zoneClarkEvans).toBeGreaterThan(1.8);
+    expect(p.indicators.slice(1).every((x) => x.share === 0 && Number.isNaN(x.aperiodicity) && Number.isNaN(x.clarkEvans))).toBe(true);
+  });
 });

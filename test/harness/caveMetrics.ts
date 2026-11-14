@@ -101,6 +101,15 @@
  *   In the `caves-biomes` job (Task 27) each biome | plain pair needs `BORDER_PAIR_MIN` (2,000) border faces, else an
  *   insufficient sample (`borderSampleProblems`); the biome region's T window (`biomeTileMasks`) and its review poses
  *   (`caveBiomeExamples`: per biome a voxel standing on a floor face of a cave, and one at a biome | plain border).
+ *   The border counts also hold the region's cave air per biome (`air`; Task 28: `cave_heavy`'s shares, §12.1).
+ * - `B3.abyssRockStraight` (SP6b spec §12.2, ruling P30; Task 28, recorded; `abyssRockCounts`): the abyss rock's
+ *   boundary on walls, rock against rock, which the air-to-air parts above do not see. An exposed wall voxel is a solid
+ *   voxel with a cave-air face neighbour; a boundary edge lies between two vertically face-adjacent solid voxels, one
+ *   abyss rock (`cls` 2) and one other rock, on a wall plane both face (a horizontal side with cave air beside both);
+ *   the runs are the consecutive edges along x (walls facing ±z) or z (walls facing ±x) at one y on one wall plane,
+ *   and the part the share of the edges in runs ≥ 8 (`straightBorder`'s run rule, not its every-4th-layer sampling).
+ *   The abyss walls (exposed wall voxels of class 2) are its population. B3's regular-grid check is
+ *   `test/harness/caveZones.ts`' (pure, the picker alone).
  * - The groups: 'default' (the default and large_biomes regions) and each preset. The parts the spec marks "default and
  *   presets" (verticalStep, nearestEntrance, holedSurface) and "default and archipelago" (flatWallShare, waterWall) are
  *   the worst of those groups; the others read the default group.
@@ -1828,12 +1837,14 @@ export interface CaveBorderCounts {
    * voxel of the slot (a cave-air voxel on either side of a border face).
    */
   readonly skin: Float64Array;
+  /** The cave-air voxels per cave biome (0-3; B3's shares of a region, Task 28: `cave_heavy`'s, §12.1's population). */
+  readonly air: Float64Array;
 }
 
 export function emptyBorderCounts(): CaveBorderCounts {
   return {
     faces: new Float64Array(12 * BORDER_SLOTS), pairs: new Float64Array(12), edges: new Float64Array(2 * BORDER_SLOTS),
-    flat: new Float64Array(2 * BORDER_SLOTS), skin: new Float64Array(SKIN_CLASSES * BORDER_SLOTS),
+    flat: new Float64Array(2 * BORDER_SLOTS), skin: new Float64Array(SKIN_CLASSES * BORDER_SLOTS), air: new Float64Array(4),
   };
 }
 
@@ -1876,7 +1887,7 @@ class StraightRuns {
 export function caveBorderCounts(g: CaveGrid, into: CaveBorderCounts = emptyBorderCounts()): CaveBorderCounts {
   const { x0, z0, w, d, cells } = g;
   const plane = w * d;
-  const { faces, pairs } = into;
+  const { faces, pairs, air } = into;
   const rx = new Int8Array(w);
   for (let x = 0; x < w; x++) rx[x] = mod(x0 + x, 4);
   const rz = new Int8Array(d);
@@ -1904,6 +1915,7 @@ export function caveBorderCounts(g: CaveGrid, into: CaveBorderCounts = emptyBord
     const z = rest % d;
     const y = (rest - z) / d;
     b = c >>> BIOME_SHIFT;
+    air[b]!++;
     // Each face once, from its + side voxel (GRID_Y0 ≡ 0 mod 4, so the grid's y index has the world y's residue).
     if (x > 0) face(i - 1, 0, rx[x]!, (x * GRID_H + y) * d + z);
     if (y > 0) face(i - plane, 1, y & 3, i);
@@ -2171,6 +2183,101 @@ export function biomeTileMasks(g: CaveGrid, tile = 8): number[] {
   }
   return out;
 }
+
+// ---------------------------------------------------------------- B3.abyssRockStraight (SP6b spec §12.2; Task 28)
+
+/**
+ * `B3.abyssRockStraight`'s counts of one region or pooled (SP6b spec §12.2, ruling P30): an exposed wall voxel is a
+ * solid voxel with a cave-air face neighbour (§12.1's cave air); abyss rock is a voxel of class `CLS_ABYSS`, other rock
+ * any other solid voxel. A boundary edge lies between two vertically face-adjacent solid voxels, one abyss rock and one
+ * other rock, on a wall plane both face: a horizontal side (−x, +x, −z or +z) on which both have cave air (so both are
+ * exposed walls); a pair facing two such sides gives an edge on each. An edge on a wall facing ±z runs along x, one
+ * facing ±x along z; the runs are the maximal sets of consecutive edges along that axis at one y on one wall plane, and
+ * the straight edges those in runs ≥ `STRAIGHT_RUN` (`straightBorder`'s run rule; not its every-4th-layer sampling,
+ * which a level line, lying between two layers, would never cross).
+ */
+export interface AbyssRockCounts {
+  /** The boundary edges (their length in blocks). */
+  edges: number;
+  /** The edges in straight runs ≥ `STRAIGHT_RUN`. */
+  straightEdges: number;
+  /** The exposed wall voxels of abyss rock (the population: 0 means the region shows no abyss rock on a wall). */
+  abyssWalls: number;
+}
+
+export function emptyAbyssRockCounts(): AbyssRockCounts {
+  return { edges: 0, straightEdges: 0, abyssWalls: 0 };
+}
+
+/** The edges of `keys` (sorted, unique; a row of `row` positions per line) in runs of ≥ `STRAIGHT_RUN` consecutive positions. */
+function straightRunEdges(keys: Int32Array, row: number): number {
+  let straight = 0;
+  let len = 0;
+  let prev = -2;
+  for (let k = 0; k < keys.length; k++) {
+    const key = keys[k]!;
+    if (key === prev + 1 && key % row !== 0) len++;
+    else {
+      if (len >= STRAIGHT_RUN) straight += len;
+      len = 1;
+    }
+    prev = key;
+  }
+  if (len >= STRAIGHT_RUN) straight += len;
+  return straight;
+}
+
+/** Adds the grid's `B3.abyssRockStraight` counts to `into` (fresh when absent); see `AbyssRockCounts`. */
+export function abyssRockCounts(g: CaveGrid, into: AbyssRockCounts = emptyAbyssRockCounts()): AbyssRockCounts {
+  const { w, d, cells, cls } = g;
+  const plane = w * d;
+  const n = cells.length;
+  // The cave-air sides of solid voxel i at (x, z): bit 0 −x, 1 +x, 2 −z, 3 +z, 4 −y, 5 +y (a neighbour beyond the grid
+  // is not seen).
+  const sides = (i: number, x: number, z: number): number =>
+    (x > 0 && caveAir(cells[i - 1]!) ? 1 : 0) | (x < w - 1 && caveAir(cells[i + 1]!) ? 2 : 0)
+    | (z > 0 && caveAir(cells[i - w]!) ? 4 : 0) | (z < d - 1 && caveAir(cells[i + w]!) ? 8 : 0)
+    | (i >= plane && caveAir(cells[i - plane]!) ? 16 : 0) | (i + plane < n && caveAir(cells[i + plane]!) ? 32 : 0);
+  // The edges' keys: along x ((side·GRID_H + y)·d + z)·w + x (side 0 the −z wall, 1 the +z one), along z
+  // ((side·GRID_H + y)·w + x)·d + z (side 0 −x, 1 +x), y the lower voxel's grid layer.
+  const alongX = new IntList();
+  const alongZ = new IntList();
+  for (let i = 0; i < n; i++) {
+    const abyss = cls[i] === CLS_ABYSS;
+    const u = i + plane;
+    const edge = u < n && abyss !== (cls[u] === CLS_ABYSS) && (cells[i]! & SOLID_BIT) !== 0 && (cells[u]! & SOLID_BIT) !== 0;
+    if (!abyss && !edge) continue;
+    const x = i % w;
+    const rest = (i - x) / w;
+    const z = rest % d;
+    const y = (rest - z) / d;
+    const si = sides(i, x, z);
+    if (abyss && si !== 0) into.abyssWalls++;
+    if (!edge) continue;
+    const shared = si & sides(u, x, z);
+    if ((shared & 4) !== 0) alongX.push((y * d + z) * w + x);
+    if ((shared & 8) !== 0) alongX.push(((GRID_H + y) * d + z) * w + x);
+    if ((shared & 1) !== 0) alongZ.push((y * w + x) * d + z);
+    if ((shared & 2) !== 0) alongZ.push(((GRID_H + y) * w + x) * d + z);
+  }
+  into.edges += alongX.n + alongZ.n;
+  into.straightEdges += straightRunEdges(alongX.a.subarray(0, alongX.n).sort(), w) + straightRunEdges(alongZ.a.subarray(0, alongZ.n).sort(), d);
+  return into;
+}
+
+/** The counts of several regions pooled (summed). */
+export function poolAbyssRockCounts(counts: readonly AbyssRockCounts[]): AbyssRockCounts {
+  const out = emptyAbyssRockCounts();
+  for (const c of counts) {
+    out.edges += c.edges;
+    out.straightEdges += c.straightEdges;
+    out.abyssWalls += c.abyssWalls;
+  }
+  return out;
+}
+
+/** `B3.abyssRockStraight`: the share of the boundary edges in straight runs ≥ 8 (NaN with no edge). */
+export const abyssRockStraight = (c: AbyssRockCounts): number => ratio(c.straightEdges, c.edges);
 
 // ---------------------------------------------------------------- C8
 

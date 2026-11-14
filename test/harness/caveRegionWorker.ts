@@ -12,7 +12,8 @@
  *
  * `measureCaveRegion` is the metric's per-region pass, in one function so the worker and an in-process caller (the unit
  * test) run the same code: the grid, the pre-cave tops and the components once; C1-C6's counts (the default group
- * and `cave_heavy`'s regions), C7-C9's, C7's bottom counts (SP6b spec §12.3), B3's border counts (§12.2), the review
+ * and `cave_heavy`'s regions), C7-C9's, C7's bottom counts (SP6b spec §12.3), B3's border counts (§12.2, with the cave
+ * air per biome), `B3.abyssRockStraight`'s counts (§12.2, Task 28: the default group's regions and the biome region), the review
  * poses and SP6b's (`bottomCavern`; the default group's seed '42' default regions only), the biome region's poses and
  * T window (the biomes group's default-profile region, Task 27); then C7's construction counts, `regionCounts` against
  * `referenceCarve`, whose raw reference array never leaves the thread (ruling P6), except in the biomes group, whose
@@ -22,9 +23,9 @@ import type { Params } from '../../src/core/params/schema';
 import { createDensityContext } from '../../src/gen/density/context';
 import { attachStore, type StoreHandles } from '../../src/world/store/store';
 import {
-  biomeTileMasks, CAP_AIR_Y, caveBiomeExamples, caveBorderCounts, caveBottomCounts, caveC7C9Counts, caveComponents, caveExamples, caveGridOf, caveRegionCounts, countsTransfer, flatWallDetail,
+  abyssRockCounts, biomeTileMasks, CAP_AIR_Y, caveBiomeExamples, caveBorderCounts, caveBottomCounts, caveC7C9Counts, caveComponents, caveExamples, caveGridOf, caveRegionCounts, countsTransfer, flatWallDetail,
   landMask, localThickness, preCaveTops, ravinePathsOf, regionCounts, riverMaskOf, sp6bCaveExamples, wetMask,
-  type BiomeExampleId, type CarverRegionCounts, type CaveBorderCounts, type CaveBottomCounts, type CaveC7C9Counts, type CavePose, type CaveRegionCounts, type ExampleId,
+  type AbyssRockCounts, type BiomeExampleId, type CarverRegionCounts, type CaveBorderCounts, type CaveBottomCounts, type CaveC7C9Counts, type CavePose, type CaveRegionCounts, type ExampleId,
   type Sp6bExampleId,
 } from './caveMetrics';
 import type { Site } from './caveSites';
@@ -48,9 +49,14 @@ export interface CaveRegionResult {
   /**
    * B3's border counts (SP6b spec §12.2; Task 26): per biome pair and overall, the border faces per axis and plane
    * residue mod 4, the cave-air face pairs, the straight runs on every 4th layer, the planar patches and the skin by a
-   * border.
+   * border, the cave air per biome (Task 28: `cave_heavy`'s shares).
    */
   readonly borders: CaveBorderCounts;
+  /**
+   * `B3.abyssRockStraight`'s counts (SP6b spec §12.2, Task 28; `abyssRockCounts`): the abyss rock's boundary edges on
+   * walls, those in straight runs, the abyss walls; the default group's regions and the biome region only, else null.
+   */
+  readonly abyssRock: AbyssRockCounts | null;
   /** The review poses: the seed '42' default regions only, else null. */
   readonly examples: Record<ExampleId, CavePose | null> | null;
   /** SP6b's review poses (`bottomCavern`; rulings P17, P59): the seed '42' default regions only, else null. */
@@ -64,9 +70,9 @@ export interface CaveRegionResult {
   readonly biomeTiles: number[] | null;
   /**
    * The ms of the shared grid and components, of C1-C6 (with the thickness), of C7-C9, of the bottom, of the border
-   * counts, of the poses (every list, and the biome region's tile masks).
+   * counts, of the abyss rock's counts, of the poses (every list, and the biome region's tile masks).
    */
-  readonly ms: { shared: number; c16: number; c79: number; bottom: number; borders: number; examples: number };
+  readonly ms: { shared: number; c16: number; c79: number; bottom: number; borders: number; abyssRock: number; examples: number };
   /**
    * C7's construction counts: `regionCounts(view, referenceCarve(…), capY)`, capY on floating_islands only; null in the
    * biomes group (its job registers no C7 call).
@@ -116,17 +122,19 @@ function measureGrid(view: RegionView, site: Site, params: Params, stride: numbe
   const t4 = performance.now();
   const borders = caveBorderCounts(grid);
   const t5 = performance.now();
+  const abyssRock = isDefault || biomeRegion ? abyssRockCounts(grid) : null;
+  const t6 = performance.now();
   const poses = isDefault && site.seed === '42' && site.profile === 'default';
   const examples = poses ? caveExamples(grid, tops, c, thick, pillar) : null;
   const sp6bExamples = poses ? sp6bCaveExamples(grid, c) : null;
   const biomeExamples = biomeRegion ? caveBiomeExamples(grid, c) : null;
   const biomeTiles = biomeRegion ? biomeTileMasks(grid) : null;
-  const t6 = performance.now();
+  const t7 = performance.now();
   return {
-    c16, c79, bottom, borders, examples, sp6bExamples, biomeExamples, biomeTiles,
+    c16, c79, bottom, borders, abyssRock, examples, sp6bExamples, biomeExamples, biomeTiles,
     ms: {
       shared: Math.round(t1 - t0), c16: Math.round(t2 - t1), c79: Math.round(t3 - t2), bottom: Math.round(t4 - t3),
-      borders: Math.round(t5 - t4), examples: Math.round(t6 - t5),
+      borders: Math.round(t5 - t4), abyssRock: Math.round(t6 - t5), examples: Math.round(t7 - t6),
     },
   };
 }

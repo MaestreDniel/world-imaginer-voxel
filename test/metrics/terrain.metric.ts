@@ -74,7 +74,11 @@ import {
  * cave-biome pass in the region worker), per 16-block y band and per cave kind (`b3Values`). Per profile, every window's
  * cave air and four shares and the minima `lushMin`, `dripstoneMin`, `abyssMin` (the smallest window share) and
  * `windowAir` (the smallest window's cave air; a window under 50,000 is flagged `insufficient`) are written to
- * `.out/B3.windows.json` (Task 30's gated call writes `.out/B3.shares.json`).
+ * `.out/B3.windows.json` (Task 30's gated call writes `.out/B3.shares.json`). large_biomes' 32 × 32 km windows are
+ * recorded only (`recordedOnly`; §12.1: its climate is zoomed × 4, so a window may lack a biome): only the default
+ * profile's windows are B3's gated population. This file scatters only the default and large_biomes profiles, so
+ * `cave_heavy`'s shares (§12.1's last recorded item) come from its two caves regions in the `caves-biomes` job
+ * (`caves.metric.ts`, `.out/B3.caveHeavy.json`; Task 28).
  */
 type Tier = 'fast' | 'quick' | 'full';
 const TIER = (process.env.METRICS_TIER ?? 'fast') as Tier;
@@ -192,7 +196,10 @@ test('B3: cave-biome shares per window (recorded, not gated)', async () => {
   const sc = await scattered();
   const profiles = Object.fromEntries(PROFILES.map((p) => [p, b3Values(sc[p], p)])) as Partial<Record<Profile, B3Values>>;
   mkdirSync(OUT_DIR, { recursive: true });
-  writeFileSync(join(OUT_DIR, 'B3.windows.json'), json({ id: 'B3.windows', tier: TIER, seeds: SEEDS, profiles }));
+  const recordedOnly = PROFILES.filter((p) => p === 'large_biomes');
+  writeFileSync(join(OUT_DIR, 'B3.windows.json'), json({
+    id: 'B3.windows', tier: TIER, seeds: SEEDS, recordedOnly, caveHeavy: 'caves.metric.ts: .out/B3.caveHeavy.json', profiles,
+  }));
   for (const p of PROFILES) {
     expect(profiles[p]!.windows, `B3 ${p}: 4 × 4 windows`).toHaveLength(16);
     expect(profiles[p]!.air, `B3 ${p}: cave air over the scattered columns`).toBeGreaterThan(0);

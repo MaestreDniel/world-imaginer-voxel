@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
-import { CARVER_WINDOW_R } from '../../src/core/constants';
+import { CARVER_WINDOW_R, CAVE_BIOME_NAMES } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { Xoshiro128 } from '../../src/core/rng';
@@ -11,13 +11,14 @@ import { carverPath, type CarverKind, type CarverParams, type CarverPath } from 
 import { findSpawn } from '../../src/gen/column/spawn';
 import { createGenContext } from '../../src/gen/context';
 import {
-  aperiodicRatios, BIOME_EXAMPLE_IDS, borderSampleProblems, bandDetail, borderPlaneRatio, BORDER_PAIR_NAMES, C1_C6_PARTS, caveBorderParts, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, caveBottomGroups, caveBottomParts, emptyBandCounts,
+  abyssRockStraight, aperiodicRatios, BIOME_EXAMPLE_IDS, poolAbyssRockCounts, poolBorderCounts, borderSampleProblems, bandDetail, borderPlaneRatio, BORDER_PAIR_NAMES, C1_C6_PARTS, caveBorderParts, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, caveBottomGroups, caveBottomParts, emptyBandCounts,
   emptyLayerCounts, emptyWallResidues, EXAMPLE_IDS, floorFaceResidues, GRID_H, GRID_Y0, SP6B_EXAMPLE_IDS, verticalStepDetail,
   type C1C6Part, type C7C9Part, type CaveBottomParts, type CaveC7C9Counts, type CavePose, type CaveRegionCounts,
 } from '../harness/caveMetrics';
 import type { CaveRegionResult } from '../harness/caveRegionWorker';
 import { CARVER_DEFAULTS, CARVER_MAXIMA } from '../harness/carverParams';
 import { BIOME_REGION, biomeTiles, caveGroupOf, caveSites, firstBiomeTile, measureCaveRegions, type CaveGroup, type Site } from '../harness/caveSites';
+import { caveZoneGrid, caveZoneParts, ZONE_CELLS, ZONE_DEPTHS, ZONE_LAGS, ZONE_ORIGIN, ZONE_STEP } from '../harness/caveZones';
 import { metricTest } from '../harness/metric';
 
 /**
@@ -43,7 +44,12 @@ import { metricTest } from '../harness/metric';
  *   poses and `cave_heavy`'s spawn in `.out/caveBiomes.examples.json`;
  * - every group: B3's border parts (SP6b spec §12.2; recorded, Task 26), per job: each job's own record,
  *   `.out/B3.borders.<group>.json`; in `biomes` each biome | plain pair needs 2,000 border faces (an insufficient sample
- *   fails, Task 27).
+ *   fails, Task 27);
+ * - the default and biomes groups: `B3.abyssRockStraight` (§12.2; recorded, Task 28), per job over the default
+ *   regions and the biome region, `.out/B3.abyssRock.<group>.json`;
+ * - the biomes group (Task 28): B3's regular-grid check (§12.2, pure, `test/harness/caveZones.ts`) in
+ *   `.out/B3.zoneGrid.json`, and `cave_heavy`'s per-biome cave-air shares over its regions (§12.1) in
+ *   `.out/B3.caveHeavy.json`.
  *
  * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
  * - `carverReference`: over every region of the run's groups (the preset regions included), the voxels of the region
@@ -659,6 +665,33 @@ test('B3: border parts per job and biome pair (recorded, not gated)', async () =
   expect(jobs.length).toBeGreaterThan(0);
 }, 900_000 * TIMEOUT_SCALE);
 
+/**
+ * `B3.abyssRockStraight` (SP6b spec §12.2, ruling P30; Task 28: recorded, not gated: Task 30 gates it), as built in
+ * `caveMetrics.ts` (`abyssRockCounts`: the abyss rock's boundary edges between vertically adjacent exposed wall voxels,
+ * one abyss rock and one other rock, on a wall plane both face, and the share of them in straight runs ≥ 8 along x or z
+ * at one y): per job over the regions it measures for it, the default group's regions (`caves`) and the biome region
+ * (`caves-biomes`; not `cave_heavy`'s, not the presets', §12.2), pooled, with each region's values and the abyss walls
+ * (the population: a job whose regions show no abyss rock on a wall reads NaN), in `.out/B3.abyssRock.<group>.json`.
+ * The biome region holds abyss cave air by construction (ruling P33), so its job's abyss walls are asserted > 0.
+ */
+if (DEFAULT_GROUP || BIOMES_GROUP) {
+  test('B3: abyssRockStraight per job (recorded, not gated)', async () => {
+    const measured = (await measuredRegions()).filter((m) => m.abyssRock !== null);
+    const jobs = [...new Set(measured.map((m) => jobOf(m.site)))];
+    mkdirSync(OUT_DIR, { recursive: true });
+    for (const job of jobs) {
+      const rs = measured.filter((m) => jobOf(m.site) === job);
+      const c = poolAbyssRockCounts(rs.map((m) => m.abyssRock!));
+      writeFileSync(join(OUT_DIR, `B3.abyssRock.${job}.json`), json({
+        id: 'B3.abyssRock', tier: process.env.METRICS_TIER ?? null, group: job, abyssRockStraight: abyssRockStraight(c), ...c,
+        regions: rs.map((m) => ({ label: m.site.label, ms: m.ms.abyssRock, abyssRockStraight: abyssRockStraight(m.abyssRock!), ...m.abyssRock! })),
+      }));
+      if (job === 'biomes') expect(c.abyssWalls, `B3 ${job}: abyss rock on the biome region's walls`).toBeGreaterThan(0);
+    }
+    expect(jobs.length).toBeGreaterThan(0);
+  }, 900_000 * TIMEOUT_SCALE);
+}
+
 // The default-only parts, with the default group.
 if (DEFAULT_GROUP) {
   metricTest('C7', ['borderPlaneRatio', 'switchWall'], async () => partsOf(await c7c9(), 'C7', ['borderPlaneRatio', 'switchWall']), 900_000,
@@ -762,4 +795,52 @@ if (BIOMES_GROUP) {
     }));
     for (const id of BIOME_EXAMPLE_IDS) expect(biomes[id], `the ${id} pose`).not.toBeNull();
   }, 900_000 * TIMEOUT_SCALE);
+
+  /**
+   * `cave_heavy`'s cave-biome shares (SP6b spec §12.1 "Recorded: … `cave_heavy`'s shares"; Task 28): §12.1's population
+   * (tagged air, no fluid, under its nibble; `CaveBorderCounts.air`) over `cave_heavy`'s regions (two at seed '42' on
+   * quick, eight on full, none on fast: every share NaN there), pooled and per region, in `.out/B3.caveHeavy.json`.
+   */
+  test('B3: cave_heavy\'s cave-biome shares (recorded)', async () => {
+    const rs = (await measuredRegions()).filter((m) => m.site.profile === 'cave_heavy');
+    const shares = (air: Float64Array) => {
+      const total = air.reduce((a, v) => a + v, 0);
+      return { air: total, ...Object.fromEntries(CAVE_BIOME_NAMES.map((name, b) => [name, total === 0 ? Number.NaN : air[b]! / total])) };
+    };
+    const pooled = poolBorderCounts(rs.map((m) => m.borders)).air;
+    mkdirSync(OUT_DIR, { recursive: true });
+    writeFileSync(join(OUT_DIR, 'B3.caveHeavy.json'), json({
+      id: 'B3.caveHeavy', tier: process.env.METRICS_TIER ?? null, profile: 'cave_heavy', regions: rs.length, ...shares(pooled),
+      perRegion: rs.map((m) => ({ label: m.site.label, ...shares(m.borders.air) })),
+    }));
+    for (const m of rs) expect(m.borders.air.reduce((a, v) => a + v, 0), `cave air at ${m.site.label}`).toBeGreaterThan(0);
+  }, 900_000 * TIMEOUT_SCALE);
+
+  /**
+   * B3's regular-grid check (SP6b spec §12.2, Spec corrections 18, 19; Task 28: recorded, not gated: Task 30 Step 4
+   * takes the zone part's form and bound to the user), as built in `test/harness/caveZones.ts`: the picker alone (no T)
+   * on a 64-block lattice over 64 × 64 km centred on the origin, seed '42', default profile, at depths 0.3, 0.6 and 1.1;
+   * per biome indicator the ratio at lags 256 … 16,384 on both axes (C8's), `zoneAperiodicity` (the smallest),
+   * `zonePeriodicDip`, `zoneClarkEvans` and `zoneSizeSpread`, each indicator's values and its ratio per lag, in
+   * `.out/B3.zoneGrid.json`. The same on every tier (pure; about 8-10 s on the laptop).
+   */
+  test('B3: the regular-grid check (recorded, not gated)', () => {
+    const t0 = performance.now();
+    const grid = caveZoneGrid('42', resolveProfile('default'));
+    const t1 = performance.now();
+    const parts = caveZoneParts(grid);
+    mkdirSync(OUT_DIR, { recursive: true });
+    writeFileSync(join(OUT_DIR, 'B3.zoneGrid.json'), json({
+      id: 'B3.zoneGrid', tier: process.env.METRICS_TIER ?? null, seed: '42', profile: 'default', cells: ZONE_CELLS, step: ZONE_STEP,
+      origin: ZONE_ORIGIN, depths: ZONE_DEPTHS, lags: ZONE_LAGS, points: ZONE_CELLS * ZONE_CELLS,
+      gridMs: Math.round(t1 - t0), partsMs: Math.round(performance.now() - t1), ...parts,
+    }));
+    // Every biome is read at some depth, so each part has data.
+    for (const name of ['lush', 'dripstone', 'abyss']) {
+      expect(parts.indicators.some((i) => i.biome === name && i.share > 0), `B3 zones: ${name} at some depth`).toBe(true);
+    }
+    for (const k of ['zoneAperiodicity', 'zonePeriodicDip', 'zoneClarkEvans', 'zoneSizeSpread'] as const) {
+      expect(Number.isFinite(parts[k]), `B3.${k} = ${parts[k]}`).toBe(true);
+    }
+  }, 600_000 * TIMEOUT_SCALE);
 }

@@ -1,9 +1,11 @@
 import { expect } from 'vitest';
+import { CAVE_BIOME, caveBiomeOf, caveKindOf } from '../../src/core/constants';
 import { resolveProfile, type ProfileId } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { findSpawn } from '../../src/gen/column/spawn';
 import { createGenContext } from '../../src/gen/context';
 import { sp3eWindow, type Sp3ePreset } from '../../src/metrics/sp3eGoldens';
+import { hasFluid } from '../../src/world/blocks/fluid';
 import { AIR, GRASS_BLOCK } from '../../src/world/blocks/index';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
 import { DEFAULT_LIGHT_TABLES, effOpacity } from '../../src/world/blocks/light';
@@ -51,7 +53,11 @@ import { grassUnderIslands, islandWindowAt, MIN_DEEP_GRASS } from '../harness/wi
  *   the BFS rule of §4.1 (no face set in `FULL_FACES` of the voxel left or the opposite face of the voxel entered).
  *   An interior voxel with sky > 0 has a sky-15 voxel within 14 steps, so its path to the sky stays inside R: the
  *   flood's opaque sides make no false count. Re-asserted with real caves (SP6a spec §10.4): most of the enclosed air
- *   it counts is the caves' and the carvers' air.
+ *   it counts is the caves' and the carvers' air. Recorded beside it (SP6b spec §12.3, Task 28; ruling P37): `abyssLit`,
+ *   the interior abyss cave-air voxels (tagged, cave biome abyss in the `cave` byte's high nibble, state air, no fluid)
+ *   whose stored sky light or block light is > 0, and `abyssAir`, those voxels counted, so a tier whose regions hold no
+ *   abyss air (these spawn and preset sites need not reach depth ≥ 1.0 above the rock floor) reads `abyssAir` 0, "not
+ *   sampled", rather than a lit count of 0 over nothing.
  * - DT1's light part (gated, `.out/DT1.light.json`): `lightMismatches`, the runs of a region whose `litHash` (blocks,
  *   fluid, light, aux A and B of R) differs from the first run's.
  * - S1's `grassSky0` (recorded, activeFrom SP6a, `.out/S1.light.json`): the share of grass_block tops (a grass_block
@@ -137,8 +143,8 @@ const FACES: ReadonlyArray<readonly [number, number, number, number, number]> = 
 ];
 
 /**
- * R's final blocks, fluid and light, read section by section, indexed `((y + 64)·H + (z − z0))·W + (x − x0)` for
- * y ∈ [−64, 320), with W = H = 16 · size.
+ * R's final blocks, fluid, light and cave bytes (the kind and the cave biome), read section by section, indexed
+ * `((y + 64)·H + (z − z0))·W + (x − x0)` for y ∈ [−64, 320), with W = H = 16 · size.
  */
 interface Box {
   readonly x0: number;
@@ -147,13 +153,16 @@ interface Box {
   readonly blocks: Uint16Array;
   readonly fluid: Uint8Array;
   readonly light: Uint8Array;
+  readonly cave: Uint8Array;
 }
 
 function loadBox(view: RegionView): Box {
   const side = 16 * view.w;
   if (view.h !== view.w) throw new Error('light.metric: square regions only');
   const n = side * side * 384;
-  const box: Box = { x0: 16 * view.cx0, z0: 16 * view.cz0, side, blocks: new Uint16Array(n), fluid: new Uint8Array(n), light: new Uint8Array(n) };
+  const box: Box = {
+    x0: 16 * view.cx0, z0: 16 * view.cz0, side, blocks: new Uint16Array(n), fluid: new Uint8Array(n), light: new Uint8Array(n), cave: new Uint8Array(n),
+  };
   for (let cz = view.cz0; cz < view.cz0 + view.h; cz++) {
     for (let cx = view.cx0; cx < view.cx0 + view.w; cx++) {
       const v = view.store.final(cx, cz);
@@ -161,7 +170,9 @@ function loadBox(view: RegionView): Box {
       const bx = 16 * (cx - view.cx0);
       const bz = 16 * (cz - view.cz0);
       for (let sy = 0; sy < 24; sy++) {
-        const channels = [[v.sectionBlocks(sy), box.blocks], [v.sectionFluid(sy), box.fluid], [v.sectionLight(sy), box.light]] as const;
+        const channels = [
+          [v.sectionBlocks(sy), box.blocks], [v.sectionFluid(sy), box.fluid], [v.sectionLight(sy), box.light], [v.sectionCave(sy), box.cave],
+        ] as const;
         for (const [src, dst] of channels) {
           for (let ly = 0; ly < 16; ly++) {
             for (let lz = 0; lz < 16; lz++) {
@@ -235,6 +246,8 @@ async function measure(): Promise<Measurement> {
   let voxels = 0;
   let enclosed = 0;
   let enclosedLit = 0;
+  let abyssAir = 0;
+  let abyssLit = 0;
   let lightMismatches = 0;
   let runs = 0;
   let grassTops = 0;
@@ -267,7 +280,7 @@ async function measure(): Promise<Measurement> {
       // The first run: L1, L2 and S1 over the interior columns.
       const view = r.view;
       const box = loadBox(view);
-      const { side, blocks, fluid, light } = box;
+      const { side, blocks, fluid, light, cave } = box;
       const at = (x: number, y: number, z: number): number => ((y + 64) * side + (z - box.z0)) * side + (x - box.x0);
       const reference = referenceLight({ x0: box.x0, z0: box.z0, w: side, h: side }, (x, y, z) => blocks[at(x, y, z)]!, (x, y, z) => fluid[at(x, y, z)]!);
       const connected = skyConnected(box);
@@ -275,6 +288,7 @@ async function measure(): Promise<Measurement> {
       let siteTops = 0;
       let siteSky0 = 0;
       let siteEnclosed = 0;
+      let siteAbyss = 0;
       let siteNoFall = 0;
       let siteNoFallMinSky = 15;
       for (let cz = s.cz0 + 1; cz < s.cz0 + s.size - 1; cz++) {
@@ -308,6 +322,12 @@ async function measure(): Promise<Measurement> {
                     if (problems.L2.length < 20) problems.L2.push(`${s.label}: (${x}, ${y}, ${z}) enclosed air ${deepTop + 16 - y} below WORLD_SURFACE has sky ${got >> 4}`);
                   }
                 }
+                const cb = cave[k]!;
+                if (state === AIR && caveKindOf(cb) !== 0 && caveBiomeOf(cb) === CAVE_BIOME.abyss && !hasFluid(fluid[k]!)) {
+                  abyssAir++;
+                  siteAbyss++;
+                  if (got !== 0) abyssLit++;
+                }
                 if (state === GRASS_BLOCK) {
                   const above = y === 319 ? -1 : k + side * side;
                   if (above < 0 || effOpacity(blocks[above]!, fluid[above]!) < 15) {
@@ -330,6 +350,7 @@ async function measure(): Promise<Measurement> {
       perSiteS1[`grassNoFall.${si}`] = siteNoFall;
       perSiteS1[`grassNoFallMinSky.${si}`] = siteNoFall === 0 ? 15 : siteNoFallMinSky;
       perSiteL2[`enclosedAir.${si}`] = siteEnclosed;
+      perSiteL2[`abyssAir.${si}`] = siteAbyss;
       if (!isIslandGrassSite(s)) {
         grassTops += siteTops;
         grassSky0 += siteSky0;
@@ -350,7 +371,7 @@ async function measure(): Promise<Measurement> {
   const common = { regions: list.length, columns, seconds };
   return {
     L1: { mismatches, skyMismatches, blockMismatches, voxels, ...perSiteL1, ...common },
-    L2: { enclosedLit, enclosedAir: enclosed, ...perSiteL2, ...common },
+    L2: { enclosedLit, enclosedAir: enclosed, abyssLit, abyssAir, ...perSiteL2, ...common },
     DT1: { lightMismatches, runs, genSeconds: Math.round(genMs) / 1000, ...common },
     S1: {
       grassSky0: grassTops === 0 ? 0 : grassSky0 / grassTops, grassTopsSky0: grassSky0, grassTops,
