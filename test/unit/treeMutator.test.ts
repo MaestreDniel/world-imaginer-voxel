@@ -470,7 +470,8 @@ describe('treeMutator: strata (SP6b spec §3.3)', () => {
         for (const x of j.issues) if (x.code.startsWith('STRATA_')) refusedCodes.add(x.code);
       }
     }
-    // The schema's 2D remap-'none' surface noises before SP6b's own (surface.noises.depth, patch, bandOffset).
+    // The schema's 2D remap-'none' surface noises (surface.noises.depth, patch, bandOffset; SP6b's cavePatch and
+    // strataOffset since its Task 22).
     expect([...accepted].sort()).toEqual([...SCHEMA_SURFACE_NOISES].sort());
     expect([...refusedCodes].sort()).toEqual(['STRATA_LAYERS', 'STRATA_LEN', 'STRATA_WEIGHT']);
     // Accepted trees holding strata come out of preserving mutations of their literals among others.
@@ -536,7 +537,7 @@ describe('the fuzz harness options for json leaves (SP3d spec §10)', () => {
   });
 
   test('SCHEMA_SURFACE_NOISES: the schema surface noises, none of the fuzz-only ones', () => {
-    expect(SCHEMA_SURFACE_NOISES).toEqual(['surface.noises.depth', 'surface.noises.patch', 'surface.noises.bandOffset']);
+    expect(SCHEMA_SURFACE_NOISES).toEqual(['surface.noises.depth', 'surface.noises.patch', 'surface.noises.bandOffset', 'surface.noises.cavePatch', 'surface.noises.strataOffset']);
     for (const id of SURFACE_FUZZ_NOISES) if (!SCHEMA_SURFACE_NOISES.includes(id)) expect(id).toBe('surface.noises.fuzzB');
   });
 });

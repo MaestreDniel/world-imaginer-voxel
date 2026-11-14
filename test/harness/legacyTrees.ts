@@ -2,7 +2,8 @@
  * The legacy default-tree builders, kept as fixtures (SP3d spec §2): `defaultDensityExpr`
  * (`src/gen/density/defaults.ts`) and `defaultSurfaceRules` (`src/gen/surface/defaults.ts`) copied unchanged as at
  * 9fababa, renamed `legacyDefaultDensityExpr` and `legacyDefaultSurfaceRules`. The data defaults of
- * `src/core/params/defaultTrees.ts` resolve to exactly these trees (§2.1, §2.2).
+ * `src/core/params/defaultTrees.ts` resolve to exactly these trees (§2.1, §2.2). SP6b (Task 22) added rule 4 at
+ * `root.rules[2]` of `legacyDefaultSurfaceRules` (its spec §3.4), as `DEFAULT_SURFACE_RULES` gained it.
  */
 import type { DensityParams, SurfaceParams } from '../../src/core/params/schema';
 import type { SurfaceBiome } from '../../src/gen/biomes/registry';
@@ -39,7 +40,7 @@ export function legacyDefaultDensityExpr(p: DensityParams): DensityExpr {
 
 // ---- surface rules (src/gen/surface/defaults.ts) ----
 
-/** The bedrock gradient (rule [0]) and the deepslate gradient (rule [2]). */
+/** The bedrock gradient (rule [0]) and the deepslate gradient (rule [3]; [2] before SP6b's rule 4). */
 const BEDROCK_LO = -64;
 const BEDROCK_HI = -59;
 const DEEPSLATE_LO = 0;
@@ -59,7 +60,38 @@ const floor = (offset: number, addSurfaceDepth: boolean): Condition => ({ kind: 
 const water = (offset: number, runTop: boolean): Condition => ({ kind: 'water', offset, runTop });
 const gradient = (trueAtAndBelow: number, falseAtAndAbove: number): Condition => ({ kind: 'verticalGradient', trueAtAndBelow, falseAtAndAbove });
 
-/** The default rule tree of SP3c spec §4 for `p` (= `params.surface`). */
+/** SP6b's cave patch noise (its spec §3.4) and a `noiseThreshold` on it ([min, max] in z2, ±8 for "no bound"). */
+const CAVE_PATCH = 'surface.noises.cavePatch';
+const cavePatch = (min: number, max: number): Condition => ({ kind: 'noiseThreshold', noise: CAVE_PATCH, min, max });
+const ceiling = (offset: number): Condition => ({ kind: 'stoneDepth', side: 'ceiling', offset, addSurfaceDepth: false });
+const caveBiome = (side: 'floor' | 'ceiling' | 'here', ...biomes: ('lush' | 'dripstone' | 'abyss')[]): Condition => ({ kind: 'caveBiome', side, biomes });
+
+/**
+ * Rule 4 (SP6b spec §3.4, D21): ash on abyss floors over the abyss's strata (§3.3's default layers), moss two deep with
+ * clay patches on lush floors, dripstone two deep with bare stone patches on dripstone floors and ceilings, moss on lush
+ * ceilings; every `stoneDepth` without the surface depth (the plan's Spec correction 10).
+ */
+function rule4(): Rule {
+  const floor1 = floor(1, false);
+  const bare = not(cavePatch(-PATCH_LIMIT, -0.97));
+  const strata: Rule = {
+    kind: 'strata',
+    layers: [
+      { state: 'abyss_stone', weight: 50, maxLen: 8 }, { state: 'abyss_shale', weight: 25, maxLen: 4 },
+      { state: 'cracked_abyss_stone', weight: 15, maxLen: 3 }, { state: 'abyss_stone_veined', weight: 10, maxLen: 1 },
+    ],
+    minLen: 1, maxLen: 6, noise: 'surface.noises.strataOffset', amp: 6,
+  };
+  return seq(
+    when([caveBiome('here', 'abyss')], seq(when([floor1, caveBiome('floor', 'abyss'), cavePatch(-0.84, PATCH_LIMIT)], block('abyss_ash')), strata)),
+    when([floor1, caveBiome('floor', 'lush')], seq(when([cavePatch(0.84, PATCH_LIMIT)], block('clay')), block('moss_block'))),
+    when([floor1, caveBiome('floor', 'dripstone'), bare], block('dripstone_block')),
+    when([ceiling(0), caveBiome('ceiling', 'lush'), cavePatch(-0.52, PATCH_LIMIT)], block('moss_block')),
+    when([ceiling(1), caveBiome('ceiling', 'dripstone'), bare], block('dripstone_block')),
+  );
+}
+
+/** The default rule tree of SP3c spec §4 for `p` (= `params.surface`), with SP6b's rule 4 at `root.rules[2]`. */
 export function legacyDefaultSurfaceRules(p: SurfaceParams): Rule {
   const TOP = floor(0, false);
   const SKIN = floor(0, true);
@@ -114,6 +146,7 @@ export function legacyDefaultSurfaceRules(p: SurfaceParams): Rule {
   return seq(
     when([gradient(BEDROCK_LO, BEDROCK_HI)], block('bedrock')),
     when([{ kind: 'skyOpen' }], skin),
+    rule4(),
     when([gradient(DEEPSLATE_LO, DEEPSLATE_HI)], block('deepslate')),
   );
 }

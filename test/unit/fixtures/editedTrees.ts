@@ -17,7 +17,7 @@ const copy = (v: unknown): Tree => JSON.parse(JSON.stringify(v)) as Tree;
  * `root.b`.
  */
 export const densityTree = (): Tree => copy(DEFAULT_DENSITY_TREE);
-/** The default rule tree (a mutable copy). Its deepslate gradient is the condition `rules[2].if`. */
+/** The default rule tree (a mutable copy). Its deepslate gradient is the condition `rules[3].if` (SP6b's rule 4 is `rules[2]`). */
 export const rulesTree = (): Tree => copy(DEFAULT_SURFACE_RULES);
 
 /** uiSmoke step 2 (spec §6): the islands const edited from −1e6 to −10. */
@@ -86,10 +86,10 @@ export function heavyDetailPatch(leaves = 32): ParamsPatch {
   return { density: { noises: { detail: { octaves: 16, double: true } }, defs: t } } as ParamsPatch;
 }
 
-/** U2's rules variant (spec §7): the deepslate gradient's `falseAtAndAbove` 8 → `top`. */
+/** U2's rules variant (spec §7): the deepslate gradient's (`rules[3]` since SP6b's rule 4) `falseAtAndAbove` 8 → `top`. */
 export function gradientTop(top = 12): Tree {
   const t = rulesTree();
-  t['rules'][2].if.falseAtAndAbove = top;
+  t['rules'][3].if.falseAtAndAbove = top;
   return t;
 }
 

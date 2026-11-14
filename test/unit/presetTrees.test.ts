@@ -89,9 +89,10 @@ describe('deriveTree (SP3e spec §1.1, D12)', () => {
   });
 
   test('rules: tier 2\'s `root` names the value itself, `[i]` an array item', () => {
-    const t = deriveTree(DEFAULT_SURFACE_RULES, 'surface.rules', 'surfaceRules', [{ path: 'root.rules[2].if.falseAtAndAbove', was: 8, by: 12 }]);
+    // The deepslate gradient: root.rules[3] since SP6b's rule 4 at root.rules[2] (its spec §3.4).
+    const t = deriveTree(DEFAULT_SURFACE_RULES, 'surface.rules', 'surfaceRules', [{ path: 'root.rules[3].if.falseAtAndAbove', was: 8, by: 12 }]);
     const copy = JSON.parse(JSON.stringify(DEFAULT_SURFACE_RULES)) as { rules: Array<{ if: Rec }> };
-    copy.rules[2]!.if['falseAtAndAbove'] = 12;
+    copy.rules[3]!.if['falseAtAndAbove'] = 12;
     expect(canonicalJSON(t)).toBe(canonicalJSON(copy));
   });
 

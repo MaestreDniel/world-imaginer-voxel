@@ -49,7 +49,7 @@ describe('the two leaves (SP3d spec §1.2)', () => {
   test('the README rows: `<format> tree, <n> nodes`, no range; scope terrain', () => {
     const rows = renderReference(SCHEMA).split('\n');
     expect(rows.find((r) => r.startsWith('| `density.defs` |'))).toMatch(/^\| `density\.defs` \| json \| density tree, 1136 nodes \|  \|  \| terrain \| Density expression: /);
-    expect(rows.find((r) => r.startsWith('| `surface.rules` |'))).toMatch(/^\| `surface\.rules` \| json \| surfaceRules tree, 163 nodes \|  \|  \| terrain \| Surface rules: /);
+    expect(rows.find((r) => r.startsWith('| `surface.rules` |'))).toMatch(/^\| `surface\.rules` \| json \| surfaceRules tree, 207 nodes \|  \|  \| terrain \| Surface rules: /);
   });
 
   test('an edited tree is tier 1\'s frozen clone: a patch with the same registered value keeps it', () => {
@@ -145,7 +145,7 @@ describe('the contexts read the leaves (spec §1.6)', () => {
 
   test('surface: resolveRules(params.surface.rules, params), refs read from the same params', () => {
     const sc = surfaceContextOf(ctxFor('42', { surface: { rules: gradientTop(12), cliffSteep: 2 } } as ParamsPatch));
-    expect((sc.rules as unknown as { rules: { if: unknown }[] }).rules[2]!.if).toMatchObject({ kind: 'verticalGradient', trueAtAndBelow: 0, falseAtAndAbove: 12 });
+    expect((sc.rules as unknown as { rules: { if: unknown }[] }).rules[3]!.if).toMatchObject({ kind: 'verticalGradient', trueAtAndBelow: 0, falseAtAndAbove: 12 });
     expect(findKind(sc.rules, 'steep')).toMatchObject({ min: 2 });
   });
 

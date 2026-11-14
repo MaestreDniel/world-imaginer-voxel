@@ -39,6 +39,8 @@ describe('the source model (SP3d spec §1.3, §1.4)', () => {
       'density.noises.jag.clampSigma', 'density.noises.overhang.clampSigma', 'density.noises.detail.clampSigma',
       'density.noises.islands.clampSigma', 'density.detailAmpLo', 'density.detailAmpHi',
       'surface.noises.depth.clampSigma', 'surface.noises.patch.clampSigma', 'surface.noises.bandOffset.clampSigma',
+      // SP6b Task 22: rule 4's two surface noises.
+      'surface.noises.cavePatch.clampSigma', 'surface.noises.strataOffset.clampSigma',
       'surface.depthMul', 'surface.snowline', 'surface.lapse', 'surface.lapseBase', 'surface.cliffSteep', 'surface.cliffMinY',
       'surface.patchThreshold',
       // SP6a spec §4 (Task 6; Tasks 7, 8, 9 and 27 grow it): the caves group's number and int leaves and cave noises.

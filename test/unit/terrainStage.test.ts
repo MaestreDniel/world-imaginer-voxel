@@ -48,6 +48,8 @@ const RIVER = [-742, -2000] as const;
 const COAST = [-1667, -2000] as const;
 const OVERHANG = [-1238, -2000] as const;
 const WALL = [-1689, -2000] as const;
+/** SP6b's rule 4's states (its spec §3.4). */
+const RULE4_STATES: ReadonlySet<number> = new Set(['moss_block', 'clay', 'dripstone_block', 'abyss_ash', 'abyss_stone', 'abyss_shale', 'cracked_abyss_stone', 'abyss_stone_veined'].map((k) => REGISTRY.parseStateKey(k)));
 const FIXTURES = [['land', LAND], ['sea', SEA], ['lake', LAKE], ['river', RIVER], ['coast', COAST], ['overhang', OVERHANG], ['wall', WALL]] as const;
 
 /** A shape spline that is `y` everywhere. */
@@ -420,9 +422,10 @@ describe('sections (§4: each channel uniform or dense)', () => {
   });
 
   test('a full deepslate section (y −48 … −33, far below the land top: Decision 6) and a full water section of the deep sea cost no slot', () => {
-    // Without SP6a's caves (which carve that section of the land column), the section is uniform deepslate.
-    const land = generate(ctxNoCaves, ...LAND).store;
-    expect(land.table.ints[protoAt(land.table.find(...LAND), 1) + PROTO_BLOCKS]).toBe(-1 - DEEPSLATE);
+    // Without SP6a's caves (which carve that section of the land column), the section is uniform deepslate: LAKE's land
+    // (LAND's lies under the abyss's climate, so SP6b's rule 4 makes that section the abyss's strata, cave or not).
+    const land = generate(ctxNoCaves, ...LAKE).store;
+    expect(land.table.ints[protoAt(land.table.find(...LAKE), 1) + PROTO_BLOCKS]).toBe(-1 - DEEPSLATE);
     const sea = generate(ctx, ...SEA).store;
     const at = protoAt(sea.table.find(...SEA), 7);
     expect([sea.table.ints[at + PROTO_BLOCKS], sea.table.ints[at + PROTO_FLUID]]).toEqual([-1 - AIR, -1 - WATER_SOURCE]);
@@ -484,7 +487,7 @@ describe('the cave channel (SP6a spec §3.1-§3.2, D20)', () => {
     expect(worm).toBeGreaterThan(0);
   });
 
-  test('a ravine floor open to the sky is the scan\'s sky run and gets the biome\'s top (grass); a cave floor under a ceiling gets stone or deepslate, never grass (D6)', () => {
+  test('a ravine floor open to the sky is the scan\'s sky run and gets the biome\'s top (grass); a cave floor under a ceiling gets stone, deepslate or one of rule 4\'s cave states, never grass (D6)', () => {
     // RAVINE: a column a ravine crosses with its floor open to the sky (seed 42, found by a scan of the ravine paths).
     const RAVINE = [4, -10] as const;
     let skyFloors = 0;
@@ -515,7 +518,8 @@ describe('the cave channel (SP6a spec §3.1-§3.2, D20)', () => {
           if (view.block(lx, y, lz) === AIR || !(k === CAVE_KIND.worm || k === CAVE_KIND.ravine || k === CAVE_KIND.undergroundWorm)) continue;
           caveFloors++;
           const b = view.block(lx, y, lz);
-          expect(b === STONE || b === DEEPSLATE, `(${col[0]}, ${col[1]}) (${lx}, ${y}, ${lz}): ${REGISTRY.stateKey(b)}`).toBe(true);
+          // SP6b's rule 4 (its spec §3.4): moss, clay or dripstone on a cave biome's floor, ash or strata in the abyss.
+          expect(b === STONE || b === DEEPSLATE || RULE4_STATES.has(b), `(${col[0]}, ${col[1]}) (${lx}, ${y}, ${lz}): ${REGISTRY.stateKey(b)}`).toBe(true);
           expect(b).not.toBe(GRASS_BLOCK);
         }
       }

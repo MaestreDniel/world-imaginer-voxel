@@ -87,6 +87,19 @@ describe('the GV8 built-in trees fixtures (SP6b D29, spec §14.4)', () => {
     expect((out['density'] as JsonObject)['defs']).toBe(DEFAULT_DENSITY_TREE);
   });
 
+  test.each(SURFACE_KINDS)('the GV8 %s surface tree differs from the live one since rule 4 (SP6b Task 22), and MIGRATIONS[3] maps it there', (k) => {
+    const live = { default: DEFAULT_SURFACE_RULES, floating_islands: FLOATING_SURFACE_RULES }[k];
+    const gv8 = gv8SurfaceTrees()[k];
+    expect(hashOf(gv8)).not.toBe(hashOf(live));
+    // The live tree is the GV8 one with rule 4 inserted at root.rules[2] (SP6b spec §3.4), nothing else.
+    const without = JSON.parse(JSON.stringify(live)) as { rules: unknown[] };
+    expect(without.rules.splice(2, 1)).toEqual([(DEFAULT_SURFACE_RULES as unknown as { rules: unknown[] }).rules[2]]);
+    expect(hashOf(without)).toBe(GV8_SURFACE_HASHES[k]);
+    const doc = { surface: { rules: gv8 } } as unknown as JsonObject;
+    const out = MIGRATIONS[3]!(doc);
+    expect((out['surface'] as JsonObject)['rules']).toBe(live);
+  });
+
   test('five distinct hashes, none an SP6a or SP5c tree\'s (the GV8 trees are their own)', () => {
     const all = [...Object.values(GV8_DENSITY_HASHES), ...Object.values(GV8_SURFACE_HASHES)];
     expect(new Set(all).size).toBe(5);

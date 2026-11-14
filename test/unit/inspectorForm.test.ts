@@ -123,8 +123,9 @@ describe('disabled options', () => {
   });
   test('rules: every rule kind for a rule, every condition kind for a condition', () => {
     expect(opOptions(DEFAULTS, R('root')).map((o) => o.op)).toEqual([...RULE_KINDS]);
-    expect(opOptions(DEFAULTS, R('root.rules[2].if')).map((o) => o.op)).toEqual([...CONDITION_KINDS]);
-    expect(opOptions(DEFAULTS, R('root.rules[2].if')).find((o) => o.current)?.op).toBe('verticalGradient');
+    // The deepslate gradient's condition: root.rules[3] since SP6b's rule 4 at root.rules[2] (its spec §3.4).
+    expect(opOptions(DEFAULTS, R('root.rules[3].if')).map((o) => o.op)).toEqual([...CONDITION_KINDS]);
+    expect(opOptions(DEFAULTS, R('root.rules[3].if')).find((o) => o.current)?.op).toBe('verticalGradient');
     expect(opOptions(DEFAULTS, R('root')).some((o) => o.disabled)).toBe(false);
   });
 });
@@ -168,8 +169,8 @@ describe('wrap, delete, add', () => {
     expect((valueOf(wrapNode(q, D('root.x'))) as { root: { x: unknown } }).root.x).toEqual({ op: 'tap', name: 'tap3', x: Y });
     expect(selectOf(wrapNode(q, D('root.x')))).toEqual(D('root.x'));
     expect(valueOf(wrapNode(withRules(block('stone')), R('root')))).toEqual(seq(block('stone')));
-    expect(formActions(DEFAULTS, R('root.rules[2].if')).wrap).toBe(false);
-    expect(() => wrapNode(DEFAULTS, R('root.rules[2].if'))).toThrow(RangeError);
+    expect(formActions(DEFAULTS, R('root.rules[3].if')).wrap).toBe(false);
+    expect(() => wrapNode(DEFAULTS, R('root.rules[3].if'))).toThrow(RangeError);
   });
   test('delete (density): one-child nodes unwrap, others become const 0, a def is removed', () => {
     for (const op of ['neg', 'abs', 'square', 'interpolated', 'recip']) {

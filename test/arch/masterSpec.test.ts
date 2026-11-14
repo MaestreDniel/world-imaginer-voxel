@@ -156,13 +156,19 @@
  * (§2.2's terrain palette names them, ids 58-64, with their sounds), item 13 (§3.12's abyss line names the abyss
  * palette; the SP6a describe's pin of that line moved here) and item 6's two lines for `sp6bGoldens.ts` (§1's metrics
  * entry and "Banned APIs", which must equal `DET_FILES`; the SP6a describe's pins of that list's end moved here).
+ * Rule 4 (Task 22) lands item 12's order sentence (`root.rules[2]`; the deepslate gradient `root.rules[3]`), rule 4's
+ * text as built with its under-water branches handed to SP7, and the "As built by SP6b" paragraph (the terrain stage's
+ * version 5, `GENERATOR_VERSION` 9), moving the SP6a describe's "SP6b inserts rule 4 before rule 2" pin here; §6.4's
+ * U2 row counts 193 leaves with rule 4's two noises.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { SUB_PROJECTS, type SubProjectId } from '../../src/core/ids';
-import { CARVER_CACHE_PATHS, CARVER_WINDOW_R, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
+import { CARVER_CACHE_PATHS, CARVER_WINDOW_R, GENERATOR_VERSION, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
 import { DEFAULTS } from '../../src/core/params/defaults';
+import { DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
+import { STAGES } from '../../src/core/stage/registry';
 import * as presetTrees from '../../src/core/params/presetTrees';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { SCHEMA } from '../../src/core/params/schema';
@@ -1998,8 +2004,8 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(line('- **`col`**')).toContain('SP6a\'s wet roof reads `wetMask` (1 where `surfaceWaterLevel` is finite), so no level-field rule is needed (amended by SP6a)');
     // Moved from the SP4c describe (§3.7's caching line).
     expect(line('- Caching on the quart lattice comes with its first consumer')).toContain('(aquifers, structures: SP7-SP9; spawn and teleport query one point each and need none, SP4c)');
-    // §3.11's Conditions line moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 12 rewords it).
-    expect(line('**Default rules**')).toContain('SP6b inserts rule 4 before rule 2');
+    // §3.11's Conditions line and the Default rules' order sentence moved to 'master spec amendments (SP6b §15)' (SP6b §15
+    // item 12 rewords them).
     // §3.12's abyss line moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 13 rewords it).
     expect(line('**Greedy meshing.**')).toContain('R2 is re-baselined at SP6a (caves) and SP8b');
     // §5.4's cave-biome sentence moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 18 rewords it).
@@ -2564,6 +2570,35 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(conditions).not.toContain('`caveBiome` stays SP6b\'s');
   });
 
+  test('§3.11: rule 4 at root.rules[2], as built (SP6b spec §15 item 12)', () => {
+    const lines = text.split('\n');
+    // The order sentence (moved from the SP6a describe, which pinned "SP6b inserts rule 4 before rule 2").
+    const order = lines.find((l) => l.startsWith('**Default rules**'));
+    expect(order, 'no **Default rules** line in §3.11').toBeDefined();
+    expect(order).toContain('SP6b inserted rule 4 at `root.rules[2]`; the deepslate gradient is `root.rules[3]`');
+    expect(order).not.toContain('SP6b inserts rule 4 before rule 2');
+    const tree = DEFAULT_SURFACE_RULES as unknown as { rules: Array<{ kind: string; if?: { kind: string } }> };
+    expect(tree.rules[2]!.kind).toBe('sequence');
+    expect(tree.rules[3]!.if?.kind).toBe('verticalGradient');
+    // Rule 4's text as built: its blocks, the strata, and the under-water branches handed to SP7.
+    const rule4 = lines.find((l) => l.startsWith('4. Lower runs use cave-biome floor and ceiling rules'));
+    expect(rule4, 'no rule 4 line in §3.11').toBeDefined();
+    for (const w of ['moss_block', 'clay', 'dripstone_block', '`strata`', 'abyss_ash', 'abyss_stone', 'abyss_shale', 'cracked_abyss_stone', 'abyss_stone_veined']) expect(rule4, w).toContain(w);
+    expect(rule4).toContain('(clay under cave water in lush, gravel under cave water elsewhere: SP7, with aquifers; amended by SP6b)');
+    expect(rule4).toContain('**Grass never appears below the open-sky run.**');
+    // The As built paragraph: the terrain stage's version and GENERATOR_VERSION as the code holds them.
+    const from = lines.findIndex((l) => l.startsWith('**As built by SP6b** (amended by SP6b'));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('### 3.12 '));
+    expect(from, 'no **As built by SP6b** paragraph').toBeGreaterThan(lines.findIndex((l) => l.startsWith('### 3.11 ')));
+    const asBuilt = lines.slice(from, to).join('\n');
+    expect(asBuilt).toContain('The `terrain` stage is version 5; `GENERATOR_VERSION` 9.');
+    expect(STAGES.find((st) => st.id === 'terrain')!.version).toBe(5);
+    expect(GENERATOR_VERSION).toBe(9);
+    expect(asBuilt).toContain('`surface.noises.cavePatch` (λ 12) and `surface.noises.strataOffset` (λ 128), 2 octaves each');
+    expect([DEFAULTS.surface.noises.cavePatch.wavelength, DEFAULTS.surface.noises.strataOffset.wavelength]).toEqual([12, 128]);
+    expect([DEFAULTS.surface.noises.cavePatch.octaves, DEFAULTS.surface.noises.strataOffset.octaves]).toEqual([2, 2]);
+  });
+
   test('§3.11\'s rule kinds gain strata (SP6b spec §15 item 12)', () => {
     const conditions = text.split('\n').find((l) => l.startsWith('**Conditions:**'));
     expect(conditions, 'no **Conditions:** line in §3.11').toBeDefined();
@@ -2676,9 +2711,10 @@ describe('master spec amendments (SP6b §15)', () => {
     const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
     expect(u2, 'no U2 row in §6.4').toBeDefined();
     const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
-    // 187 with the 15 caves.biomes.* leaves (Task 17), 191 with the rock floor's four (Task 19).
-    expect(n).toBe(191);
-    expect(u2).toContain(`; SP6b: the caves.biomes.* leaves are decided on a bounded biome witness (stream columns whose tagged air holds a cave biome the leaf reads, where a step changes the T column) where the class columns leave them dead, the rock floor's leaves (\`caves.noises.floor\`, \`caves.floor.*\`) on the default base's cave class columns, at the bottom; U2 covers ${n} leaves (amended by SP6b)`);
+    // 187 with the 15 caves.biomes.* leaves (Task 17), 191 with the rock floor's four (Task 19), 193 with rule 4's two
+    // noises (Task 22).
+    expect(n).toBe(193);
+    expect(u2).toContain(`; SP6b: the caves.biomes.* leaves are decided on a bounded biome witness (stream columns whose tagged air holds a cave biome the leaf reads, where a step changes the T column) where the class columns leave them dead, the rock floor's leaves (\`caves.noises.floor\`, \`caves.floor.*\`) on the default base's cave class columns, at the bottom, rule 4's noises (\`surface.noises.cavePatch\`, \`strataOffset\`) on the cave class columns or a bounded biome witness (stream columns whose tagged air holds a cave biome rule 4 reads the noise in, where a step changes the T column); U2 covers ${n} leaves (amended by SP6b)`);
   });
 
   test('§6.4\'s DT2 row gains caveBiomeProbe (SP6b spec §15 item 20)', () => {

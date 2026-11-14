@@ -292,7 +292,7 @@ describe('surfaceProbe (spec §3.6)', () => {
     expect(fast).toBeGreaterThan(checked / 2);
   });
 
-  test('a fast-path deepslate voxel at y −30 reports the deepslate rule (root.rules[2].then)', () => {
+  test('a fast-path deepslate voxel at y −30 reports the deepslate rule (root.rules[3].then since SP6b\'s rule 4)', () => {
     const [cx, cz] = LAND;
     // Without SP6a's caves (which split the land column's run above y −30), as the SP3c fixture was.
     const noCaves = ctxFor('42', { density: { defs: cavesMuted(DEFAULT_DENSITY_TREE) as JsonValue } });
@@ -303,7 +303,7 @@ describe('surfaceProbe (spec §3.6)', () => {
     // y −30 lies in the land column's sky-open run, more than maxSurfaceDepth below its top: the fast path's band.
     expect(c.scan.runBottom[r0]).toBe(-63);
     expect(c.scan.runTop[r0]! - -30).toBeGreaterThan(SC.compiled.fastPath!.maxSurfaceDepth);
-    expect(surfaceProbe(SC, 16 * cx, -30, 16 * cz)).toEqual({ state: DEEPSLATE, path: ['root', 'root.rules[2]', 'root.rules[2].then'] });
+    expect(surfaceProbe(SC, 16 * cx, -30, 16 * cz)).toEqual({ state: DEEPSLATE, path: ['root', 'root.rules[3]', 'root.rules[3].then'] });
   });
 
   test('a badlands band voxel reports the bandlands leaf ([1][3][1][1]) with the stage\'s terracotta; its top the red_sand leaf', () => {

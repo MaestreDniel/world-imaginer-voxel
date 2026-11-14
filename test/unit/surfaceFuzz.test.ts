@@ -62,7 +62,8 @@ const skyGatedLeaf = (l: RuleLeaf): boolean => l.conditions.some((c) => c.kind =
  * A 'fastPath' tree with SP6b §3.5's cave gates (items 3-4): each depth-bounded branch, three times in four, under a
  * `caveBiome{floor}`, a `caveBiome{ceiling}` or both; each other branch, two times in three, under a `caveBiome{here}`
  * or its `not`; one time in two a here-gated `strata` branch (rule 4's shape, with a floor leaf before the strata one
- * time in two) at a random place. Lists of 1-4 distinct cave biomes in any order.
+ * time in two) at a random place, its strata on rule 4's noises (`cavePatch` or `strataOffset`, SP6b Task 22). Lists of
+ * 1-4 distinct cave biomes in any order.
  */
 function withCaveGates(next: () => number, tree: Rule): Rule {
   const pick = <T,>(xs: readonly T[]): T => xs[next() % xs.length]!;
@@ -80,7 +81,7 @@ function withCaveGates(next: () => number, tree: Rule): Rule {
       state: pick(['abyss_stone', 'abyss_shale', 'cracked_abyss_stone', 'abyss_stone_veined', 'stone', 'deepslate', 'clay']),
       weight: 1 + (next() % 50), maxLen: 1 + (next() % 8),
     })),
-    minLen: 1 + (next() % 3), maxLen: 4 + (next() % 5), noise: pick(['surface.noises.patch', 'surface.noises.bandOffset']), amp: next() % 13,
+    minLen: 1 + (next() % 3), maxLen: 4 + (next() % 5), noise: pick(['surface.noises.cavePatch', 'surface.noises.strataOffset']), amp: next() % 13,
   });
   if (tree.kind !== 'sequence') return tree;
   const branches = tree.rules.map((b): Rule => {
@@ -144,10 +145,12 @@ describe('surfaceFuzz: random rule trees and hand-built columns (SP3c spec §3.4
     return Array.from({ length: n }, () => randomSurfaceRules(next, { style, skyGated }));
   };
 
-  test('the fuzz noises: 2D, remap none, within ±clampSigma, the depth noise among them; the band offset noise for bandlands', () => {
+  test('the fuzz noises: 2D, remap none, within ±clampSigma, the depth noise among them; the band offset noise for bandlands; rule 4\'s two', () => {
     expect(SURFACE_FUZZ_NOISES).toContain('surface.noises.depth');
-    expect(SURFACE_FUZZ_NOISES).not.toContain('surface.noises.bandOffset');
-    for (const id of [...SURFACE_FUZZ_NOISES, 'surface.noises.bandOffset']) {
+    // The noises random trees do not draw: bandlands' and SP6b's rule-4 noises (Task 22), which the source holds.
+    const apart = ['surface.noises.bandOffset', 'surface.noises.cavePatch', 'surface.noises.strataOffset'];
+    for (const id of apart) expect(SURFACE_FUZZ_NOISES).not.toContain(id);
+    for (const id of [...SURFACE_FUZZ_NOISES, ...apart]) {
       const n = NOISES(id)!;
       expect(n).toMatchObject({ dims: 2, remap: 'none' });
       const v = n.z2(13, -7);

@@ -3,7 +3,8 @@
  * - `sp3c.registry`: SP3a §6.4's registry byte stream over the terrain palette, states 3 … 24 (a fixed count, so
  *   appended states never change it; `sp3a.registry` keeps states 0 … 2).
  * - `sp3c.surface.ops`: the compiled rule results of a frozen fixture tree (`surfaceOpsRules`) that uses every rule
- *   kind and every condition kind of §3.1 (`lake` and `bandlands` included), over every voxel of a frozen column list
+ *   kind and every condition kind of §3.1 (`lake` and `bandlands` included; SP6b's `caveBiome` and `strata` since its
+ *   Task 22, reachable since the probe tags and picks as T, its Task 18), over every voxel of a frozen column list
  *   (`surfaceOpsColumns`). Each column is rebuilt the way the T stage builds it (density fill, water v0, the per-block
  *   biome buffer, the §3.2 scan: `surfaceProbeColumn` on a SurfaceContext of the fixture tree) and the compiled tree
  *   fills it with the fast path (`fillColumn(…, true)`, as the stage does; the fixture has one). Per column in list
@@ -85,10 +86,14 @@ const LAKE: Condition = { kind: 'lake' };
  *    [4] if biome{desert, beach} → sandstone
  *    [5] dirt ]
  *  [2] if not{skyOpen} ∧ stoneDepth{floor 4} ∧ stoneDepth{ceiling 6} → mud             # depth-bounded, not sky-gated
- *  [3] if verticalGradient{0, 8} → deepslate                                            # Y-only
- *  [4] if yAbove{200, runTop false} → calcite ]                                         # Y-only (a band cut at 200)
+ *  [3] if stoneDepth{floor 1} ∧ caveBiome{floor, [plain, lush, dripstone, abyss]}       # depth-bounded (SP6b Task 22)
+ *        → strata{abyss_stone 3 ≤ 4, abyss_shale 2 ≤ 2, cracked_abyss_stone 1 ≤ 1; 1 … 4; strataOffset, amp 6}
+ *  [4] if verticalGradient{0, 8} → deepslate                                            # Y-only
+ *  [5] if yAbove{200, runTop false} → calcite ]                                         # Y-only (a band cut at 200)
  * ```
- * Every leaf is depth-bounded or Y-only, so the tree has a fast path (maxSurfaceDepth 2 + SD_MAX), not sky-gated.
+ * Every leaf is depth-bounded or Y-only, so the tree has a fast path (maxSurfaceDepth 2 + SD_MAX), not sky-gated. The
+ * strata branch takes the top two voxels of every cave floor whose run is too thick for the mud branch; it is not
+ * rule 4 (SP6b spec §3.4), which the fixture does not hold.
  */
 export function surfaceOpsRules(): Rule {
   const TOP = floor(0, false);
@@ -112,6 +117,14 @@ export function surfaceOpsRules(): Rule {
       block('dirt'),
     )),
     when([not(SKY), floor(4, false), ceiling(6, false)], block('mud')),
+    when([floor(1, false), { kind: 'caveBiome', side: 'floor', biomes: ['plain', 'lush', 'dripstone', 'abyss'] }], {
+      kind: 'strata',
+      layers: [
+        { state: 'abyss_stone', weight: 3, maxLen: 4 }, { state: 'abyss_shale', weight: 2, maxLen: 2 },
+        { state: 'cracked_abyss_stone', weight: 1, maxLen: 1 },
+      ],
+      minLen: 1, maxLen: 4, noise: 'surface.noises.strataOffset', amp: 6,
+    }),
     when([gradient(0, 8)], block('deepslate')),
     when([yAbove(200, false)], block('calcite')),
   );

@@ -281,7 +281,9 @@ describe('ranges', () => {
     expect(pathRange(ranges, 'defs.gone.x')).toEqual(ranges.byPath.get('defs'));
     expect(pathRange(ranges, 'nowhere')).toEqual(ranges.byPath.get(''));
     const rules = printTree(DEFAULT_SURFACE_RULES, 'surfaceRules').ranges;
-    expect(pathRange(rules, 'root.rules[2].if.falseAtAndAbove')).toEqual(rules.byPath.get('root.rules[2].if.falseAtAndAbove'));
+    // The deepslate gradient: root.rules[3] since SP6b's rule 4 at root.rules[2].
+    expect(pathRange(rules, 'root.rules[3].if.falseAtAndAbove')).toEqual(rules.byPath.get('root.rules[3].if.falseAtAndAbove'));
+    expect(rules.byPath.get('root.rules[3].if.falseAtAndAbove')).toBeDefined();
     expect(pathRange(rules, 'root.rules[99]')).toEqual(rules.byPath.get('root.rules'));
   });
 

@@ -38,7 +38,8 @@ describe('ruleNodeAt and SurfaceReference.nodeAt (SP3d spec §4.1)', () => {
 
   test('every rule and condition of the default tree is found by its id, as the tree\'s own object', () => {
     const nodes = nodesOf(tree);
-    expect(nodes.length).toBe(163);
+    // 163, and SP6b's rule 4 (Task 22): 207.
+    expect(nodes.length).toBe(207);
     for (const { id, kind, node } of nodes) {
       const got = sc.reference.nodeAt(id);
       expect(got?.kind, id).toBe(kind);
@@ -66,8 +67,9 @@ describe('ruleNodeAt and SurfaceReference.nodeAt (SP3d spec §4.1)', () => {
 
   test.each([
     [''], ['roots'], ['rule'], ['root.'], ['root.rules[01]'], ['root.rules[-1]'], ['root.rules[999]'], ['root.rules[1e1]'],
-    ['root.then'], ['root.if'], ['root.rules[2].if.falseAtAndAbove'], ['root.rules[2].if.if'], ['root.rules[2].then.then'],
-    ['root.rules[2].rules[0]'], ['root.rules[0].if.if.if'], ['root.rules[0]x'], ['constructor'], ['root.rules[0].__proto__'],
+    // root.rules[3]: the deepslate gradient (a condition over a block) since SP6b's rule 4 at root.rules[2].
+    ['root.then'], ['root.if'], ['root.rules[3].if.falseAtAndAbove'], ['root.rules[3].if.if'], ['root.rules[3].then.then'],
+    ['root.rules[3].rules[0]'], ['root.rules[0].if.if.if'], ['root.rules[0]x'], ['constructor'], ['root.rules[0].__proto__'],
   ])('%j names no node', (id) => {
     expect(sc.reference.nodeAt(id)).toBeUndefined();
   });

@@ -3,7 +3,7 @@ import { DENSITY_COLUMN_COST_MAX, RULES_COLUMN_COST_MAX } from '../../src/core/c
 import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { AMPLIFIED_DENSITY_TREE, FLOATING_DENSITY_TREE } from '../../src/core/params/presetTrees';
-import { countTreeNodes } from '../../src/core/params/json';
+import { countTreeNodes, type JsonValue } from '../../src/core/params/json';
 import type { Params } from '../../src/core/params/schema';
 import { EXPR_CHILD_KEYS, type DensityExpr, type Expr } from '../../src/gen/density/expr';
 import { resolveDensity } from '../../src/gen/density/source';
@@ -12,6 +12,7 @@ import { surfaceFastPath } from '../../src/gen/surface/compile';
 import type { Condition, Rule } from '../../src/gen/surface/rules';
 import { randomDensityExpr, SCHEMA_DENSITY_NOISES } from '../harness/densityFuzz';
 import { legacyDefaultDensityExpr, legacyDefaultSurfaceRules } from '../harness/legacyTrees';
+import { gv8SurfaceTrees } from '../harness/gv8Trees';
 import { paramsWith } from '../harness/gen';
 import { sp5cTrees } from '../harness/sp5cTrees';
 import { testRng } from '../harness/stats';
@@ -245,7 +246,14 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
   const DENSITY_DEFAULT = 93_968_961;
   /** The SP3d default tree's column cost, which `DENSITY_COLUMN_COST_MAX` stays pinned to (SP6a D24). */
   const SP3D_DENSITY_DEFAULT = 14_907_917;
-  const RULES_DEFAULT = 163 * 256 * (1 + 4 + SD_MAX_STATIC);
+  /**
+   * The default rules since SP6b's rule 4 (its spec §3.4-§3.5, rulings P20): 207 nodes, the 9 in the `then` of its
+   * caveBiome{here} at a whole column each, every other at 256 × (1 + 51) (the largest bound still a floor `stoneDepth`
+   * offset 4 plus SD_MAX's static 47; rule 4's floor and ceiling leaves are bounded at 1).
+   */
+  const RULES_DEFAULT = (207 - 9) * 256 * (1 + 4 + SD_MAX_STATIC) + 9 * VOXELS;
+  /** SP6a's default rules (the GV8 tree, before rule 4): 163 nodes × 256 × (1 + 51); `RULES_COLUMN_COST_MAX` is 64 × it. */
+  const SP6A_RULES_DEFAULT = 2_169_856;
 
   test('the default density column cost: 759 units × 98,304 outside interpolated, 15,801 × 1,225 inside', () => {
     expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBe(DENSITY_DEFAULT);
@@ -259,21 +267,44 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
     expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBe(oracle(src.root, src.defs as Rec, 'column'));
   });
 
-  test('the default rules column cost: 163 nodes × 256 × (1 + 51), the depth bound 4 + SD_MAX 47', () => {
-    expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(163);
+  test('the default rules column cost: 207 nodes, rule 4\'s 9 under caveBiome{here} × 98,304, the other 198 × 256 × (1 + 51); SP6a\'s 163 × 256 × 52 still', () => {
+    expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(207);
     expect(rulesColumnCost(DEFAULT_SURFACE_RULES)).toBe(RULES_DEFAULT);
-    expect(RULES_DEFAULT).toBe(2_169_856);
-    // The compiler's fast path agrees on the resolved default with SD_MAX at its static maximum.
+    expect(RULES_DEFAULT).toBe(3_520_512);
+    // The compiler's fast path agrees on the resolved default with SD_MAX at its static maximum: bounded, rule 4's floor
+    // and ceiling leaves at their bound 1 (not 98,304 per node), its abyss branch here-gated.
     const resolved = legacyDefaultSurfaceRules(DEFAULTS.surface);
-    expect(surfaceFastPath(resolved, SD_MAX_STATIC)!.maxSurfaceDepth).toBe(4 + SD_MAX_STATIC);
+    const fp = surfaceFastPath(resolved, SD_MAX_STATIC)!;
+    expect([fp.maxSurfaceDepth, fp.floorBound, fp.ceilBound, fp.here]).toEqual([4 + SD_MAX_STATIC, 1, 1, true]);
     expect(rulesColumnCost(resolved)).toBe(RULES_DEFAULT);
+    // SP6a's default (the GV8 tree, before rule 4) keeps its 2,169,856.
+    const sp6a = gv8SurfaceTrees().default as JsonValue;
+    expect(countTreeNodes(sp6a, 'surfaceRules')).toBe(163);
+    expect(rulesColumnCost(sp6a)).toBe(SP6A_RULES_DEFAULT);
+    expect(163 * 256 * (1 + 4 + SD_MAX_STATIC)).toBe(SP6A_RULES_DEFAULT);
   });
 
-  test('the maxima are 64 × the SP3d default density tree (SP6a D24) and 64 × the default rules, below the saturation', () => {
+  test('a strata leaf under a Y-only path (or none) keeps the fast path at no depth bound (SP6b §3.3, §3.5)', () => {
+    const strata = { kind: 'strata', layers: [{ state: 'abyss_stone', weight: 1, maxLen: 8 }], minLen: 1, maxLen: 6, noise: 'surface.noises.strataOffset', amp: 6 };
+    const under = { kind: 'condition', if: { kind: 'not', if: { kind: 'verticalGradient', trueAtAndBelow: -20, falseAtAndAbove: -10 } }, then: strata };
+    expect(surfaceFastPath(under as Rule, SD_MAX_STATIC)).toMatchObject({ maxSurfaceDepth: -1, here: false });
+    expect(rulesColumnCost(under)).toBe(4 * 256);
+    expect(surfaceFastPath(strata as Rule, SD_MAX_STATIC)).not.toBeNull();
+    expect(rulesColumnCost(strata)).toBe(256);
+    // Beside a floor-bounded leaf the strata node costs the tree's bound like every other node.
+    const beside = { kind: 'sequence', rules: [{ kind: 'condition', if: { kind: 'stoneDepth', side: 'floor', offset: 2, addSurfaceDepth: false }, then: { kind: 'block', state: 'dirt' } }, strata] };
+    expect(rulesColumnCost(beside)).toBe(5 * 256 * 3);
+  });
+
+  test('the maxima are 64 × the SP3d default density tree (SP6a D24) and 64 × the SP6a default rules (SP6b rulings P20), below the saturation', () => {
     expect(DENSITY_COLUMN_COST_MAX).toBe(64 * SP3D_DENSITY_DEFAULT);
     expect(DENSITY_COLUMN_COST_MAX).toBe(64 * 14_907_917);
     expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBeLessThanOrEqual(DENSITY_COLUMN_COST_MAX);
-    expect(RULES_COLUMN_COST_MAX).toBe(64 * rulesColumnCost(DEFAULT_SURFACE_RULES));
+    expect(RULES_COLUMN_COST_MAX).toBe(64 * SP6A_RULES_DEFAULT);
+    expect(RULES_COLUMN_COST_MAX).toBe(64 * 2_169_856);
+    // The default with rule 4 is 39.4 × below it.
+    expect(rulesColumnCost(DEFAULT_SURFACE_RULES)).toBeLessThanOrEqual(RULES_COLUMN_COST_MAX);
+    expect(Math.round((10 * RULES_COLUMN_COST_MAX) / RULES_DEFAULT) / 10).toBe(39.4);
     expect(DENSITY_COLUMN_COST_MAX).toBeLessThan(2 ** 31);
     expect(RULES_COLUMN_COST_MAX).toBeLessThan(2 ** 31);
   });
@@ -286,8 +317,9 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
     expect(at(islands, 'root.b')['name']).toBe('islands');
     at(islands, 'root.b.x')['v'] = -10;
     const gradient = copy(DEFAULT_SURFACE_RULES);
-    expect(at(gradient, 'rules[2].if')).toEqual({ kind: 'verticalGradient', trueAtAndBelow: 0, falseAtAndAbove: 8 });
-    at(gradient, 'rules[2].if')['falseAtAndAbove'] = 12;
+    // The deepslate gradient: rules[3] since SP6b's rule 4 at rules[2].
+    expect(at(gradient, 'rules[3].if')).toEqual({ kind: 'verticalGradient', trueAtAndBelow: 0, falseAtAndAbove: 8 });
+    at(gradient, 'rules[3].if')['falseAtAndAbove'] = 12;
     // Muting terrain replaces the interpolated subtree (1 × 98,304 + 293 × 1,225) by one const at voxel placement.
     expect(densityColumnCost(muted)).toBe(DENSITY_DEFAULT - 293 * CORNERS);
     expect(densityColumnCost(islands)).toBe(DENSITY_DEFAULT);
@@ -302,9 +334,9 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
     expect(rulesColumnCost(gradient)).toBeLessThanOrEqual(RULES_COLUMN_COST_MAX);
   });
 
-  test('a default-sized rule tree without a fast path costs 384 / 52 ≈ 7.4 × the default, within 64 ×', () => {
+  test('a default-sized rule tree without a fast path costs 207 × 98,304 ≈ 5.8 × the default, within the maximum', () => {
     // Every stoneDepth replaced by a skyOpen (one node for one): no leaf is depth-bounded, ceiling-bounded (SP6b §3.5)
-    // or Y-only, so no class bounds the tree.
+    // or Y-only, so no class bounds the tree (rule 4's caveBiome{floor | ceiling} leaves lose their depth gates too).
     const noFast = copy(DEFAULT_SURFACE_RULES);
     const stack: unknown[] = [noFast];
     while (stack.length > 0) {
@@ -318,10 +350,11 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
         stack.push(...Object.values(x));
       }
     }
-    expect(countTreeNodes(noFast, 'surfaceRules')).toBe(163);
+    expect(countTreeNodes(noFast, 'surfaceRules')).toBe(207);
     expect(surfaceFastPath(withRegisteredBlocks(noFast) as Rule, SD_MAX_STATIC)).toBeNull();
-    expect(rulesColumnCost(noFast)).toBe(163 * VOXELS);
-    expect(rulesColumnCost(noFast) / RULES_DEFAULT).toBeCloseTo(384 / 52, 12);
+    expect(rulesColumnCost(noFast)).toBe(207 * VOXELS);
+    expect(rulesColumnCost(noFast) / RULES_DEFAULT).toBeCloseTo((207 * 384) / (198 * 52 + 9 * 384), 12);
+    expect(Math.round((10 * rulesColumnCost(noFast)) / RULES_DEFAULT) / 10).toBe(5.8);
     expect(rulesColumnCost(noFast)).toBeLessThanOrEqual(RULES_COLUMN_COST_MAX);
   });
 

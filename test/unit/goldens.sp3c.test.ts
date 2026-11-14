@@ -117,13 +117,10 @@ describe('sp3c.surface.ops (§7)', () => {
   const sc = createSurfaceContext(CTX, tree);
 
   test('the fixture tree uses every rule kind and condition kind, both sides and both runTop / addSurfaceDepth values', () => {
-    // Every rule kind but strata until SP6b Task 22 (the generator push): adding it here would change sp3c.surface.ops in
-    // the pre-push span.
-    expect([...ruleKindsOf(tree)].sort()).toEqual(RULE_KINDS.filter((k) => k !== 'strata').sort());
+    // SP6b's strata and caveBiome among them since its Task 22 (the generator push; the probe tags since Task 18).
+    expect([...ruleKindsOf(tree)].sort()).toEqual([...RULE_KINDS].sort());
     const conds = conditionsOf(tree);
-    // Every kind but caveBiome until SP6b Task 22 (the generator push): adding it here would change sp3c.surface.ops in
-    // the pre-push span, and no column carries cave tags or a picker before Task 18's surface probe.
-    expect([...new Set(conds.map((c) => c.kind))].sort()).toEqual(CONDITION_KINDS.filter((k) => k !== 'caveBiome').sort());
+    expect([...new Set(conds.map((c) => c.kind))].sort()).toEqual([...CONDITION_KINDS].sort());
     const depth = conds.filter((c) => c.kind === 'stoneDepth');
     expect(new Set(depth.map((c) => c.side))).toEqual(new Set(['floor', 'ceiling']));
     expect(new Set(depth.map((c) => c.addSurfaceDepth))).toEqual(new Set([true, false]));
@@ -131,6 +128,9 @@ describe('sp3c.surface.ops (§7)', () => {
     expect(new Set(conds.filter((c) => c.kind === 'yAbove').map((c) => c.runTop))).toEqual(new Set([true, false]));
     expect(new Set(conds.filter((c) => c.kind === 'noiseThreshold').map((c) => c.noise)))
       .toEqual(new Set(['surface.noises.depth', 'surface.noises.patch']));
+    // The strata leaf reads SP6b's strataOffset noise (its spec §3.3).
+    const strata = ruleLeaves(tree).map((l) => l.rule).filter((r) => r.kind === 'strata');
+    expect(strata.map((r) => r.noise)).toEqual(['surface.noises.strataOffset']);
     expect(validateRules(tree, surfaceNoiseSource(CTX))).toEqual([]);
     // Frozen data: a fresh, equal tree on every call.
     expect(surfaceOpsRules()).not.toBe(tree);

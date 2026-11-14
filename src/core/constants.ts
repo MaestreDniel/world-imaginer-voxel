@@ -99,8 +99,9 @@ export const ISLAND_RUN_MIN_BOTTOM = 181;
 /**
  * The largest density and rules column costs tier 2 accepts (SP3d spec §1.7, `gen/inspect/cost.ts`). Density: 64 × the
  * SP3d default tree's 14,907,917, kept as SP6a's cap (SP6a spec D24): about 35 × SP6a's default. Rules: 64 × the
- * default rules' (`DEFAULT_SURFACE_RULES` 163 nodes × 256 × (1 + 51) = 2,169,856, its largest depth bound being a
- * floor `stoneDepth` offset 4 plus SD_MAX's static maximum 47). A unit test pins both.
+ * SP6a default rules' 2,169,856 (163 nodes × 256 × (1 + 51), its largest depth bound being a floor `stoneDepth`
+ * offset 4 plus SD_MAX's static maximum 47), kept as SP6b's cap (its rulings P20): about 39 × the default with SP6b's
+ * rule 4 (3,520,512: its 9 nodes under `caveBiome{here}` at a whole column each). A unit test pins both.
  */
 export const DENSITY_COLUMN_COST_MAX = 954_106_688;
 export const RULES_COLUMN_COST_MAX = 138_870_784;

@@ -49,18 +49,28 @@ import { testFloat, testRng } from './stats';
 export interface SurfaceFuzzNoiseSpec { readonly id: string; readonly def: NoiseDef }
 
 /**
- * The fuzz's surface noises (2D, remap none): the depth noise the scan needs, two for `noiseThreshold` and the band
- * offset noise `bandlands` needs (short wavelength, so the offset changes within a column).
+ * The fuzz's surface noises (2D, remap none): the depth noise the scan needs, two for `noiseThreshold`, the band
+ * offset noise `bandlands` needs (short wavelength, so the offset changes within a column) and SP6b's rule-4 noises
+ * (its spec §3.4: `cavePatch` and `strataOffset`, short too), so the default tree and trees over the schema's noises
+ * (`SCHEMA_SURFACE_NOISES`) compile over this source.
  */
 export const SURFACE_FUZZ_NOISE_SPECS: readonly SurfaceFuzzNoiseSpec[] = [
   { id: 'surface.noises.depth', def: completeNoiseDef({ wavelength: 16, octaves: 2 }) },
   { id: 'surface.noises.patch', def: completeNoiseDef({ wavelength: 8, octaves: 1 }) },
   { id: 'surface.noises.fuzzB', def: completeNoiseDef({ wavelength: 32, octaves: 2, clampSigma: 2 }) },
   { id: 'surface.noises.bandOffset', def: completeNoiseDef({ wavelength: 12, octaves: 1 }) },
+  { id: 'surface.noises.cavePatch', def: completeNoiseDef({ wavelength: 12, octaves: 2 }) },
+  { id: 'surface.noises.strataOffset', def: completeNoiseDef({ wavelength: 12, octaves: 1 }) },
 ];
 
-/** The schema paths of the fuzz noises a `noiseThreshold` may name (the band offset noise is `bandlands`'). */
-export const SURFACE_FUZZ_NOISES: readonly string[] = SURFACE_FUZZ_NOISE_SPECS.map((n) => n.id).filter((id) => id !== 'surface.noises.bandOffset');
+/** The fuzz noises outside `SURFACE_FUZZ_NOISES`: the band offset noise (`bandlands`') and SP6b's two (rule 4's). */
+const NOT_DRAWN: ReadonlySet<string> = new Set(['surface.noises.bandOffset', 'surface.noises.cavePatch', 'surface.noises.strataOffset']);
+
+/**
+ * The schema paths of the fuzz noises a random `noiseThreshold` may name: SP3c's three (the band offset noise is
+ * `bandlands`'; SP6b's two stay out, so the random trees draw as before them).
+ */
+export const SURFACE_FUZZ_NOISES: readonly string[] = SURFACE_FUZZ_NOISE_SPECS.map((n) => n.id).filter((id) => !NOT_DRAWN.has(id));
 
 /**
  * The schema's surface noises (every `surface.noises.*` leaf, by path), for `randomSurfaceRules`' `noises` when a tree

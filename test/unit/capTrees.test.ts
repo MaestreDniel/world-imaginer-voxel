@@ -37,8 +37,9 @@ describe('the capped trees of session.commitMaxTree', () => {
     expect(validateParamTrees(p)).toEqual([]);
     expect(densityNodeCount(density)).toBeLessThanOrEqual(4096);
     expect(densityNodeCount(density)).toBeGreaterThan(3500);
-    // With a fast path a rule node costs 256 × (1 + 51) voxels per column (the default's depth bound), not 98,304.
-    expect(rulesColumnCost(rules) % (256 * 52)).toBe(0);
+    // With a fast path a rule node costs 256 × (1 + 51) voxels per column (the default's depth bound), not 98,304, but for
+    // the 9 nodes under the default's caveBiome{here} (SP6b's rule 4, rulings P20).
+    expect((rulesColumnCost(rules) - 9 * 98_304) % (256 * 52)).toBe(0);
   });
 
   test('a page session opened with both trees holds them, and a slider commit keeps both by identity', () => {

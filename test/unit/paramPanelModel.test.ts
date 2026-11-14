@@ -162,7 +162,7 @@ describe('panel tree', () => {
       'islands.noise',
       'lakes.cell', 'lakes.depthMin', 'lakes.radius', 'lakes.rimNoise', 'lakes.rimWidth', 'lakes.warpNoise',
       'rivers.widthMin', 'rivers.widthNoise',
-      'surface.noises.bandOffset', 'surface.noises.depth', 'surface.noises.patch',
+      'surface.noises.bandOffset', 'surface.noises.cavePatch', 'surface.noises.depth', 'surface.noises.patch', 'surface.noises.strataOffset',
     ]);
     // ratio 15 (ringFrac 0.1 … 1.5), min 0 (zoomJitter, the detail amplitudes, the surface knobs), negative min (coastFadeLo, the surface heights), splines and the table stay linear
     for (const p of ['lakes.ringFrac', 'biomes.zoomJitter', 'density.detailAmpLo', 'density.detailAmpHi', 'rivers.coastFadeLo', 'rivers.valleyFloor', 'shape.offset', 'biomes.table',

@@ -316,6 +316,104 @@
       }
     },
     {
+      "kind": "sequence",
+      "rules": [
+        {
+          "kind": "condition",
+          "if": { "kind": "caveBiome", "side": "here", "biomes": ["abyss"] },
+          "then": {
+            "kind": "sequence",
+            "rules": [
+              {
+                "kind": "condition",
+                "if": { "kind": "stoneDepth", "side": "floor", "offset": 1, "addSurfaceDepth": false },
+                "then": {
+                  "kind": "condition",
+                  "if": { "kind": "caveBiome", "side": "floor", "biomes": ["abyss"] },
+                  "then": {
+                    "kind": "condition",
+                    "if": { "kind": "noiseThreshold", "noise": "surface.noises.cavePatch", "min": -0.84, "max": 8 },
+                    "then": { "kind": "block", "state": "abyss_ash" }
+                  }
+                }
+              },
+              {
+                "kind": "strata",
+                "layers": [
+                  { "state": "abyss_stone", "weight": 50, "maxLen": 8 },
+                  { "state": "abyss_shale", "weight": 25, "maxLen": 4 },
+                  { "state": "cracked_abyss_stone", "weight": 15, "maxLen": 3 },
+                  { "state": "abyss_stone_veined", "weight": 10, "maxLen": 1 }
+                ],
+                "minLen": 1,
+                "maxLen": 6,
+                "noise": "surface.noises.strataOffset",
+                "amp": 6
+              }
+            ]
+          }
+        },
+        {
+          "kind": "condition",
+          "if": { "kind": "stoneDepth", "side": "floor", "offset": 1, "addSurfaceDepth": false },
+          "then": {
+            "kind": "condition",
+            "if": { "kind": "caveBiome", "side": "floor", "biomes": ["lush"] },
+            "then": {
+              "kind": "sequence",
+              "rules": [
+                {
+                  "kind": "condition",
+                  "if": { "kind": "noiseThreshold", "noise": "surface.noises.cavePatch", "min": 0.84, "max": 8 },
+                  "then": { "kind": "block", "state": "clay" }
+                },
+                { "kind": "block", "state": "moss_block" }
+              ]
+            }
+          }
+        },
+        {
+          "kind": "condition",
+          "if": { "kind": "stoneDepth", "side": "floor", "offset": 1, "addSurfaceDepth": false },
+          "then": {
+            "kind": "condition",
+            "if": { "kind": "caveBiome", "side": "floor", "biomes": ["dripstone"] },
+            "then": {
+              "kind": "condition",
+              "if": { "kind": "not", "if": { "kind": "noiseThreshold", "noise": "surface.noises.cavePatch", "min": -8, "max": -0.97 } },
+              "then": { "kind": "block", "state": "dripstone_block" }
+            }
+          }
+        },
+        {
+          "kind": "condition",
+          "if": { "kind": "stoneDepth", "side": "ceiling", "offset": 0, "addSurfaceDepth": false },
+          "then": {
+            "kind": "condition",
+            "if": { "kind": "caveBiome", "side": "ceiling", "biomes": ["lush"] },
+            "then": {
+              "kind": "condition",
+              "if": { "kind": "noiseThreshold", "noise": "surface.noises.cavePatch", "min": -0.52, "max": 8 },
+              "then": { "kind": "block", "state": "moss_block" }
+            }
+          }
+        },
+        {
+          "kind": "condition",
+          "if": { "kind": "stoneDepth", "side": "ceiling", "offset": 1, "addSurfaceDepth": false },
+          "then": {
+            "kind": "condition",
+            "if": { "kind": "caveBiome", "side": "ceiling", "biomes": ["dripstone"] },
+            "then": {
+              "kind": "condition",
+              "if": { "kind": "not", "if": { "kind": "noiseThreshold", "noise": "surface.noises.cavePatch", "min": -8, "max": -0.97 } },
+              "then": { "kind": "block", "state": "dripstone_block" }
+            }
+          }
+        }
+      ]
+    },
+    {
       "kind": "condition",
       "if": { "kind": "verticalGradient", "trueAtAndBelow": 0, "falseAtAndAbove": 8 },
       "then": { "kind": "block", "state": "deepslate" }

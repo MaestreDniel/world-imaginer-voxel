@@ -43,7 +43,11 @@
  * the first whose T column a step changes. The rock floor's leaves (`caves.noises.floor`, `caves.floor.*`; SP6b §12.7,
  * Task 19) act only where cave air reaches the bottom of a column (y ≤ floorY + 8 + span), so they are left out of the
  * slots' acceptance (no land column of the first 4096 draws accepts them with the caverns' leaves) and decided on the
- * class columns, the cave columns first: the default base's cave class columns, at their bottom.
+ * class columns, the cave columns first: the default base's cave class columns, at their bottom. Rule 4's two noises
+ * (`surface.noises.cavePatch`, `strataOffset`; SP6b §3.4, §12.7, Task 22) act only at the floors and ceilings of cave
+ * biome runs and in the abyss's rock: meant for the cave class (`LEAF_CLASS`), each is tried on the class columns, then,
+ * dead there, decided on a bounded biome witness search (`caveRuleWitness`): stream columns whose tagged air holds a
+ * cave biome rule 4 reads the noise in, the first whose T column a step changes.
  */
 import { CAVE_BIOME, SEA_LEVEL, SPAGHETTI_BANDS } from '../core/constants';
 import { fnv1a32, hash4, hashF64, hex64 } from '../core/hash';
@@ -197,6 +201,8 @@ const LEAF_CLASS: ReadonlyMap<string, LivenessClass> = new Map<string, LivenessC
   ['surface.snowline', 'snowline'], ['surface.lapse', 'snowline'], ['surface.lapseBase', 'snowline'],
   ['surface.noises.patch', 'patch'], ['surface.patchThreshold', 'patch'],
   ['surface.noises.bandOffset', 'badlands'],
+  // SP6b spec §3.4 (Task 22): rule 4's noises act in cave biome caves (`caveRuleWitness` when the class columns hold none).
+  ['surface.noises.cavePatch', 'cave'], ['surface.noises.strataOffset', 'cave'],
 ]);
 
 /** SP3e spec §5.6: the island class column's stream, its chunk range [−2048, 2048)², its draw limit and its core mask. */
@@ -385,7 +391,8 @@ function scaleBoxes(t: BoxTable, dir: number): BoxTable {
  * U2's one variant of each `json` leaf (SP3d spec §7, D15): the node at JSON path `at` inside the leaf value must have
  * the fields of `is`; the variant sets its field `key` to `value`. `density.defs`: the `terrain` tap muted to 0 (its
  * toggle's value under `add`; at `root.a.a.a.x.a`, inside the `precave` tap, SP6a §1.1); `surface.rules`: the deepslate gradient's `falseAtAndAbove` 8 → 12 (rule id
- * `root.rules[2].if`), which keeps the tree's fast path. Both are decided on the land column (`intendedClass`).
+ * `root.rules[3].if` since SP6b's rule 4 at `root.rules[2]`), which keeps the tree's fast path. Both are decided on the
+ * land column (`intendedClass`).
  */
 interface JsonVariant {
   readonly at: readonly (string | number)[];
@@ -395,7 +402,7 @@ interface JsonVariant {
 }
 const JSON_VARIANTS: ReadonlyMap<string, JsonVariant> = new Map<string, JsonVariant>([
   ['density.defs', { at: ['root', 'a', 'a', 'a', 'x', 'a'], is: { op: 'tap', name: 'terrain' }, key: 'mute', value: 0 }],
-  ['surface.rules', { at: ['rules', 2, 'if'], is: { kind: 'verticalGradient', falseAtAndAbove: 8 }, key: 'falseAtAndAbove', value: 12 }],
+  ['surface.rules', { at: ['rules', 3, 'if'], is: { kind: 'verticalGradient', falseAtAndAbove: 8 }, key: 'falseAtAndAbove', value: 12 }],
 ]);
 
 /** A copy of `v` (plain objects and arrays copied along `at`, the rest shared) with `key` of the node at `at` set. */
@@ -1293,6 +1300,72 @@ function biomeWitnessOf(base: GenContext, info: LeafInfo, variants: readonly Gen
 }
 
 /**
+ * SP6b spec §3.4, §12.7 (Task 22): the cave biomes rule 4 reads each of its two noises in: `cavePatch` at the floors and
+ * ceilings of lush and dripstone caves and the floors of the abyss, `strataOffset` in the abyss's rock.
+ */
+const CAVE_RULE_NOISES: ReadonlyMap<string, readonly number[]> = new Map<string, readonly number[]>([
+  ['surface.noises.cavePatch', [CB.lush, CB.dripstone, CB.abyss]],
+  ['surface.noises.strataOffset', [CB.abyss]],
+]);
+const isCaveRuleNoise = (path: string): boolean => CAVE_RULE_NOISES.has(path);
+
+/** Whether the base pick (on `BASE_PASS`) is a biome of `want` (a mask) at a voxel of the column's grid. */
+function gridHolds(inp: CavePickerInputs, want: number, cx: number, cz: number): boolean {
+  let y0 = -Infinity;
+  for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) y0 = Math.max(y0, BASE_PASS.y0[(lz + 4) * 24 + lx + 4]!);
+  const top = Math.min(FILL_HI, Math.floor(y0) + BIOME_REACH);
+  for (let y = FILL_LO; y <= top; y += BIOME_GRID) {
+    for (let lz = 0; lz < 16; lz += BIOME_GRID) {
+      for (let lx = 0; lx < 16; lx += BIOME_GRID) {
+        if (((want >> BIOME_OF_PASS(inp, BASE_PASS, 16 * cx + lx, y, 16 * cz + lz)) & 1) !== 0) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * A rule-4 noise's witness (SP6b Task 22): up to `BIOME_DRAWS` draws of the cave-biome stream, a column passing when
+ * the base picker gives a biome rule 4 reads the noise in (`CAVE_RULE_NOISES`) on its grid; up to `BIOME_EXAMINED` such
+ * columns examined (T generated) and `BIOME_CHECKS` hashed; the witness is the first whose tagged air holds such a
+ * biome and whose T column a step changes.
+ */
+function caveRuleWitnessOf(base: GenContext, info: LeafInfo, variants: readonly GenContext[], skip: readonly LivenessColumn[], baseHash: BaseHash): BiomeWitnessScan {
+  const stage = stageOf(info);
+  const want = CAVE_RULE_NOISES.get(info.path)!.reduce((m, b) => m | (1 << b), 0);
+  const inp = PICKER_OF(base);
+  const pts = POINTS(BIOME_STREAM, BIOME_DRAWS);
+  const seen = new Set<number>(skip.map((c) => (c.cx + 32768) * 65536 + (c.cz + 32768)));
+  let examined = 0, checks = 0, n = 0;
+  for (; n < BIOME_DRAWS && examined < BIOME_EXAMINED && checks < BIOME_CHECKS; n++) {
+    const cx = Math.floor(pts.x[n]! / 16);
+    const cz = Math.floor(pts.z[n]! / 16);
+    const key = (cx + 32768) * 65536 + (cz + 32768);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    FILL_PASS(inp, BUILD(base, cx, cz, BIOME_SAMPLE), BASE_PASS);
+    if (!gridHolds(inp, want, cx, cz)) continue;
+    examined++;
+    if ((taggedColumn(base, cx, cz).mask & want) === 0) continue;
+    checks++;
+    const h = baseHash(stage, cx, cz);
+    if (variants.some((v) => stageOutputHash(v, stage, cx, cz) !== h)) return { via: `biome witness column (${cx}, ${cz})`, draws: n + 1, examined, checks };
+  }
+  return { via: null, draws: n, examined, checks };
+}
+
+/**
+ * A rule-4 noise's bounded biome witness search (SP6b Task 22) over the columns not in `skip`: the deciding column
+ * (`biome witness column (cx, cz)`) or null, with the draws taken and the columns examined and hashed (see
+ * `caveRuleWitnessOf`).
+ */
+export function caveRuleWitness(base: GenContext, path: string, skip: readonly LivenessColumn[] = []): BiomeWitnessScan {
+  const info = leafInfo(path);
+  if (!isCaveRuleNoise(path)) throw new Error(`${path} is not a rule-4 noise`);
+  return caveRuleWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
+}
+
+/**
  * A cave-biome leaf's bounded biome witness search (SP6b Task 17) over the columns not in `skip`: the deciding column
  * (`biome witness column (cx, cz)`) or null, with the draws taken and the columns examined and hashed (see `BIOME_LEAF`).
  */
@@ -1681,7 +1754,8 @@ function decide(base: GenContext, info: LeafInfo, columns: readonly LivenessColu
       : isBandLeaf(info.path) ? bandVia(base, info, variants, columns, baseHash)
         : isCarverLeaf(info.path) ? carverWitnessOf(base, info, variants, columns, baseHash).via
           : isBiomeLeaf(info.path) ? biomeWitnessOf(base, info, variants, columns, baseHash).via
-            : info.path === CAP_TOP_PATH ? capTopWitness(base).via : null;
+            : isCaveRuleNoise(info.path) ? caveRuleWitnessOf(base, info, variants, columns, baseHash).via
+              : info.path === CAP_TOP_PATH ? capTopWitness(base).via : null;
   return w !== null ? { path: info.path, live: true, via: w, cls: null } : { path: info.path, live: false, via: null, cls: intended };
 }
 
@@ -1696,9 +1770,9 @@ function bandVia(base: GenContext, info: LeafInfo, variants: readonly GenContext
 /**
  * One leaf's U2 verdict over `columns` (the class columns of `base`): its stage output hash on the class columns (the
  * intended class first; a `terrain` leaf only on the land, coast, surface, island and cave ones), then, except for a
- * `terrain` leaf, the witness search; a spaghetti scale leaf, a depth-band leaf, a carver leaf, a cave-biome leaf and
- * `caves.limits.capTop` (`terrain` leaves) have their own (ruling P5; Task 8's `bandWitness`; Task 27's
- * `carverWitness`; SP6b Task 17's `biomeWitness`; Task 9's `capTopWitness`).
+ * `terrain` leaf, the witness search; a spaghetti scale leaf, a depth-band leaf, a carver leaf, a cave-biome leaf, a
+ * rule-4 noise and `caves.limits.capTop` (`terrain` leaves) have their own (ruling P5; Task 8's `bandWitness`; Task
+ * 27's `carverWitness`; SP6b Task 17's `biomeWitness`; SP6b Task 22's `caveRuleWitness`; Task 9's `capTopWitness`).
  */
 export function leafLiveness(base: GenContext, path: string, columns: readonly LivenessColumn[]): LivenessResult {
   return decide(base, leafInfo(path), columns, baseHasher(base));
@@ -1749,8 +1823,8 @@ export function islandColumn(base: GenContext, leaves: readonly LeafInfo[] = isl
  * cave column (<slot>)". The spaghetti scale leaves dead on the class columns are decided on their bounded witness
  * search (ruling P5), the depth-band leaves on their band witness, then (three maxY leaves) on the amplified base (P3),
  * the carver leaves on their carver witness (`carverWitness`, Task 27, ruling P18), the cave-biome leaves on their biome
- * witness (`biomeWitness`, SP6b Task 17) and `caves.limits.capTop` on its floating_islands witness (`capTopWitness`,
- * Task 9).
+ * witness (`biomeWitness`, SP6b Task 17), rule 4's noises on theirs (`caveRuleWitness`, SP6b Task 22) and
+ * `caves.limits.capTop` on its floating_islands witness (`capTopWitness`, Task 9).
  */
 export function u2(seedText = '42'): { readonly value: number; readonly results: readonly LivenessResult[] } {
   const base = CREATE(SEED(seedText), RESOLVE('default'));

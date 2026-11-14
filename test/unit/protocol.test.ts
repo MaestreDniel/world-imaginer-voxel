@@ -552,7 +552,8 @@ describe('surfaceProbe messages and the handler (SP3c spec §6)', () => {
     expect(at(top!).path.at(-1)).toMatch(/^root\.rules\[1\]\.then\./);
     expect(at(top! + 1)).toMatchObject({ state: AIR, path: [] });
     expect(at(-64)).toMatchObject({ state: BEDROCK, path: [] });
-    expect(at(-30)).toMatchObject({ state: DEEPSLATE, path: ['root', 'root.rules[2]', 'root.rules[2].then'] });
+    // The deepslate gradient: root.rules[3] since SP6b's rule 4 at root.rules[2].
+    expect(at(-30)).toMatchObject({ state: DEEPSLATE, path: ['root', 'root.rules[3]', 'root.rules[3].then'] });
   });
 
   test('the probe reads the voxel the slice shows: its state is the slice\'s block at (⌊xᵢ⌋, y, ⌊zᵢ⌋) for every y', () => {

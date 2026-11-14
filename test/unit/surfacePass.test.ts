@@ -1,10 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import { deriveSeed } from '../../src/core/hash';
 import { Xoshiro128 } from '../../src/core/rng';
-import { noiseFor } from '../../src/gen/context';
+import { createGenContext, noiseFor } from '../../src/gen/context';
 import { biomeId, biomeName, type SurfaceBiome } from '../../src/gen/biomes/registry';
 import { buildColumnSample, nearestCornerIndex, newColumnSample, type ColumnSample } from '../../src/gen/column/columnStage';
 import { terrainStage } from '../../src/gen/pipeline/terrainStage';
+import { caveBiomeOfPass, cavePickerOf } from '../../src/gen/biomes/cavePicker';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { seedFromInput } from '../../src/core/seed';
 import { surfaceContextOf, type SurfaceContext } from '../../src/gen/surface/context';
 import { surfacePass } from '../../src/gen/surface/pass';
 import { surfaceProbeColumn } from '../../src/gen/surface/probe';
@@ -79,12 +82,38 @@ function generate(cx: number, cz: number): ColumnView {
   return store.proto(cx, cz)!;
 }
 
-/** The states the deepslate rule [2] or stone (no rule) leave at y: what every voxel below the skin gets. */
+/** The states the deepslate rule [3] or stone (no rule) leave at y: what every voxel below the skin gets. */
 function belowSkin(y: number): readonly number[] {
   if (y <= -60) return [BEDROCK, DEEPSLATE];
   if (y <= 0) return [DEEPSLATE];
   if (y <= 7) return [DEEPSLATE, STONE];
   return [STONE];
+}
+
+const [MOSS, DRIP, ASH] = ['moss_block', 'dripstone_block', 'abyss_ash'].map((k) => REGISTRY.parseStateKey(k)) as [number, number, number];
+const STRATA: readonly number[] = ['abyss_stone', 'abyss_shale', 'cracked_abyss_stone', 'abyss_stone_veined'].map((k) => REGISTRY.parseStateKey(k));
+/** Every state rule 4 places. */
+const RULE4: ReadonlySet<number> = new Set([MOSS, DRIP, ASH, CLAY, ...STRATA]);
+
+/**
+ * SP6b's rule 4 (its spec §3.4) at voxel y of position p's run r, written from the spec with the scan's cave biomes and
+ * picker: the states the voxel may take below the sky-open skin, or null where no branch of rule 4 can take it. In the
+ * abyss (the picker's pick at the voxel) the strata, abyss_ash two deep on an abyss floor; else moss or clay two deep on
+ * a lush floor, dripstone two deep on a dripstone floor and ceiling (or bare), moss on a lush ceiling's bottom voxel
+ * (or bare); rule 1's bedrock below y −59 first.
+ */
+function rule4States(scan: SurfaceScan, p: number, y: number, r: number): readonly number[] | null {
+  const fd = scan.runTop[r]! - y, cd = y - scan.runBottom[r]!;
+  const f = scan.runFloorBiome[r]!, c = scan.runCeilBiome[r]!;
+  const bedrock = y <= -60 ? [BEDROCK] : [];
+  const x = 16 * scan.cx + (p & 15), z = 16 * scan.cz + (p >> 4);
+  if (scan.cavePicker !== null && caveBiomeOfPass(scan.cavePicker, scan.cavePass!, x, y, z) === 3) {
+    return [...bedrock, ...(fd <= 1 && f === 3 ? [ASH] : []), ...STRATA];
+  }
+  if (fd <= 1 && f === 1) return [...bedrock, MOSS, CLAY];
+  if ((fd <= 1 && f === 2) || (cd <= 1 && c === 2)) return [DRIP, ...belowSkin(y)];
+  if (cd === 0 && c === 1) return [MOSS, ...belowSkin(y)];
+  return null;
 }
 
 interface Seen {
@@ -102,12 +131,15 @@ interface Seen {
   bandVoxels: number;
   bandColours: Set<number>;
   redSandstone: number;
+  /** Voxels below the sky-open skin in one of SP6b's rule-4 states. */
+  rule4: number;
   checked: number;
 }
 
 /**
  * The default tree's outcome (§4) on a column, read back from `block(p, y)` with the scan's readouts, written
- * independently of the rule tree: bedrock and its dither, deepslate below the skin and in runs without sky, the
+ * independently of the rule tree: bedrock and its dither, deepslate below the skin and in runs without sky (or SP6b's
+ * rule 4 where its cave biomes and the abyss call for it, `rule4States`), the
  * snowline, cliffs, the desert's sand over sandstone, grass over dirt, grass and snow only on the top voxel of a
  * sky-open run. Returns the problems (first 20) and fills `seen`.
  */
@@ -139,13 +171,15 @@ function checkColumn(scan: SurfaceScan, block: (p: number, y: number) => number,
         if (b === GRASS_BLOCK && !(sky && fd === 0 && dry && !snow)) bad.push(`p ${p} y ${y}: grass_block off a dry sky-open top under the snowline`);
         if (b === SNOW_BLOCK && !(sky && fd === 0)) bad.push(`p ${p} y ${y}: snow_block off a sky-open top`);
         if (b === CLAY) seen.clay++;
+        const four = rule4States(scan, p, y, r);
+        if (four !== null && RULE4.has(b)) seen.rule4++;
         if (!sky) {
-          expectIn(p, y, belowSkin(y), 'run without sky');
+          expectIn(p, y, four ?? belowSkin(y), four === null ? 'run without sky' : 'rule 4 in a run without sky');
           if (y >= 8) seen.noSkyStoneAbove8++;
           continue;
         }
         if (fd > sd + 4 || (fd > sd && !BAND4.has(biome))) {
-          expectIn(p, y, belowSkin(y), 'below the skin');
+          expectIn(p, y, four ?? belowSkin(y), four === null ? 'below the skin' : 'rule 4 below the skin');
           if (b === DEEPSLATE && y > -60) seen.deepslateBelowSkin++;
           continue;
         }
@@ -195,7 +229,7 @@ function checkColumn(scan: SurfaceScan, block: (p: number, y: number) => number,
 
 const newSeen = (): Seen => ({
   grassOverDirt: 0, desertSandstone: 0, snowTops: 0, cliffStone: 0, cliffIce: 0, clay: 0, deepslateBelowSkin: 0,
-  noSkyStoneAbove8: 0, ditherBedrock: 0, ditherDeepslate: 0, badlandsTops: 0, bandVoxels: 0, bandColours: new Set(), redSandstone: 0, checked: 0,
+  noSkyStoneAbove8: 0, ditherBedrock: 0, ditherDeepslate: 0, badlandsTops: 0, bandVoxels: 0, bandColours: new Set(), redSandstone: 0, rule4: 0, checked: 0,
 });
 
 describe('surfacePass (spec §1 step 5)', () => {
@@ -225,6 +259,33 @@ describe('surfacePass (spec §1 step 5)', () => {
     // The fast path takes most solid voxels (every column here has a deep stone body).
     expect(evaluated).toBeLessThan(solid / 2);
   });
+
+  test.each(['default', 'floating_islands'] as const)('SP6b rule 4 (§3.4-§3.5): with the cave bytes and the picker, the pass (fast path) equals full evaluation on 64 columns of the %s tree', (profile) => {
+    const ctx = createGenContext(seedFromInput('42'), resolveProfile(profile));
+    const sc = surfaceContextOf(ctx);
+    const inputs = cavePickerOf(ctx);
+    const out = new Uint16Array(98304), full = new Uint16Array(98304);
+    let evaluated = 0, solid = 0, cave = 0;
+    // An 8 × 8 grid 2,000 blocks apart around the origin (islands, mountains with the abyss, seas).
+    for (let k = 0; k < 64; k++) {
+      const cx = -500 + 125 * (k % 8), cz = -500 + 125 * (k >> 3);
+      const c = surfaceProbeColumn(sc, cx, cz);
+      const scan = newSurfaceScan();
+      out.fill(0xffff);
+      evaluated += surfacePass(sc, sc.density.columns.get(cx, cz), c.solid, c.water, c.biomes, out, scan, c.tags, { inputs, pass: c.pass });
+      full.fill(0xffff);
+      sc.compiled.fillColumn(scan, full, false);
+      for (let i = 256; i < 98304; i++) {
+        if (c.solid[i] === 0) continue;
+        solid++;
+        if (RULE4.has(full[i]!)) cave++;
+      }
+      expect(Buffer.from(out.buffer).equals(Buffer.from(full.buffer)), `${profile} (${cx}, ${cz})`).toBe(true);
+    }
+    // Rule 4 placed its states; the fast path still takes most voxels.
+    expect(cave).toBeGreaterThan(1000);
+    expect(evaluated).toBeLessThan(solid / 2);
+  }, 120_000);
 
   test('array sizes are checked', () => {
     const c = surfaceProbeColumn(SC, ...LAND);
@@ -265,6 +326,8 @@ describe('the default tree on real columns (spec §4, §8)', () => {
     // The bedrock dither over y −63 … −60 shows both states.
     expect(seen.ditherBedrock).toBeGreaterThan(500);
     expect(seen.ditherDeepslate).toBeGreaterThan(500);
+    // SP6b's rule 4: LAND lies under the abyss's climate (its deep rock is the strata), and cave floors hold moss.
+    expect(seen.rule4).toBeGreaterThan(1000);
   });
 
   test('grass_block tops of snowy biomes appear only where T_eff ≥ snowline; snowy_taiga is snow-topped', () => {

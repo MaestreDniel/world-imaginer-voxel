@@ -198,7 +198,8 @@ describe('evaluateFieldSlice: blocks and rule (SP3d spec §4.1)', () => {
 
   test('a condition mask: 1 where the condition alone holds (whether the walk reaches it or not)', () => {
     const g = vertical(COAST);
-    const conditionIds = ['root.rules[2].if', 'root.rules[1].then.rules[2].if', 'root.rules[1].then.rules[0].if.if'];
+    // root.rules[3].if: the deepslate gradient's (SP6b's rule 4 is root.rules[2]).
+    const conditionIds = ['root.rules[3].if', 'root.rules[1].then.rules[2].if', 'root.rules[1].then.rules[0].if.if'];
     for (const id of conditionIds) {
       const found = sc.reference.nodeAt(id);
       expect(found?.kind).toBe('condition');
@@ -335,7 +336,7 @@ describe('probeField (SP3d spec §5.3): one sample, exactly as the slice', () =>
     ['node', 'vertical', vertical(MOUNTAIN), 'defs.body.a'],
     ['node', 'horizontal', horizontal(32, 4096, 0, 0, 40), 'root.a.a.a.x.a.x'],
     ['rule', 'vertical', vertical(COAST), 'root.rules[1].then'],
-    ['rule', 'vertical', vertical(COAST), 'root.rules[2].if'],
+    ['rule', 'vertical', vertical(COAST), 'root.rules[3].if'],
   ] as const)('%s on a %s plane', (field, _plane, g, path) => {
     const r = run(ctx, g, field, path);
     let i = 0;
@@ -519,8 +520,8 @@ describe('field problems and argument checks (SP3d spec §5.1)', () => {
     expect(fieldSliceProblem(ctx, 'node', 'defs.x', 'vertical')).toBe('path "defs.x" names no node of density.defs');
     expect(fieldSliceProblem(ctx, 'node', 'root.b.x.v', 'vertical')).toBe('path "root.b.x.v" names no node of density.defs');
     expect(fieldSliceProblem(ctx, 'node', 'constructor', 'vertical')).toBe('path "constructor" names no node of density.defs');
-    expect(fieldSliceProblem(ctx, 'rule', 'root.rules[2].if', 'vertical')).toBeNull();
-    expect(fieldSliceProblem(ctx, 'rule', 'root.rules[2].if.falseAtAndAbove', 'vertical')).toBe('path "root.rules[2].if.falseAtAndAbove" names no rule or condition of surface.rules');
+    expect(fieldSliceProblem(ctx, 'rule', 'root.rules[3].if', 'vertical')).toBeNull();
+    expect(fieldSliceProblem(ctx, 'rule', 'root.rules[3].if.falseAtAndAbove', 'vertical')).toBe('path "root.rules[3].if.falseAtAndAbove" names no rule or condition of surface.rules');
     expect(fieldSliceProblem(ctx, 'rule', 'root', 'horizontal')).toBe('field rule has no horizontal slice');
     expect(fieldSliceProblem(ctx, 'blocks', '', 'horizontal')).toBe('field blocks has no horizontal slice');
     expect(fieldSliceProblem(ctx, 'blocks', 'root', 'vertical')).toBe('field blocks takes no node path (got "root")');

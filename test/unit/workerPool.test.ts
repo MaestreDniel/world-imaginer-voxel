@@ -960,7 +960,8 @@ describe('worker pool: surfaceProbe jobs (SP3c spec §6)', () => {
       expect(await pool.surfaceProbe(x, y, z)).toEqual({ state: want.state, path: [...want.path] });
     }
     expect(probesOf(log).map((m) => m.slice(1))).toEqual([[0, -1990, -30, -1999], [0, -1990, 300, -1999], [0, -1990, -64, -1999], [0, 5, 64, -9]]);
-    expect((await pool.surfaceProbe(-1990, -30, -1999)).path).toEqual(['root', 'root.rules[2]', 'root.rules[2].then']);
+    // The deepslate gradient: root.rules[3] since SP6b's rule 4 at root.rules[2].
+    expect((await pool.surfaceProbe(-1990, -30, -1999)).path).toEqual(['root', 'root.rules[3]', 'root.rules[3].then']);
     pool.terminate();
   });
   test('it runs before preview tiles unless given another priority; probe shows it with level null', async () => {

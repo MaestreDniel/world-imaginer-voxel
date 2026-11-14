@@ -10,7 +10,7 @@ import { fnv1a32, hex64 } from '../../src/core/hash';
 import { latticeIndex } from '../../src/gen/column/columnStage';
 import { biomeName } from '../../src/gen/biomes/registry';
 import {
-  amplifiedBandWitness, bandWindow, bandWitness, biomeWitness, capTopWitness, carverWitness, CAVE_SLOTS, caveColumn, caveFamilyCounts, caveLeaves, caveSlotLeaves, cellProbe, findWitness, intendedClass, islandColumn, islandLeaves, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
+  amplifiedBandWitness, bandWindow, bandWitness, biomeWitness, capTopWitness, carverWitness, CAVE_SLOTS, caveColumn, caveFamilyCounts, caveLeaves, caveRuleWitness, caveSlotLeaves, cellProbe, findWitness, intendedClass, islandColumn, islandLeaves, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance,
   scaleBandCarves, scaleWitness, SURFACE_CLASSES, surfacePrefilter, surfaceSlotLeaves, u2Leaves,
   type CaveSlot,
   type LivenessClass,
@@ -50,9 +50,10 @@ const TUNNELS_VIA = 'cave column (-16103, 13714)';
  * The leaves of SP6a Tasks 6, 7, 8, 9 and 27 (the caves group): U2 covers 73 + 19 + 30 + 11 + 1 + 1 + 36 = 171 leaves
  * (Task 9: the island cap's capTop, then the wet roof's waterDepth; Task 27: the 36 carver leaves), and the user's check's
  * `caves.noodles.threshold` (R31): 172; SP6b Task 17's 15 `caves.biomes.*` leaves (Spec correction 5): 187; SP6b Task
- * 19's rock floor (`caves.noises.floor`, `caves.floor.y`, `.amp`, `.span`): 191.
+ * 19's rock floor (`caves.noises.floor`, `caves.floor.y`, `.amp`, `.span`): 191; SP6b Task 22's rule-4 noises
+ * (`surface.noises.cavePatch`, `strataOffset`): 193.
  */
-const U2_LEAVES = 191;
+const U2_LEAVES = 193;
 /** The cave-biome leaves (SP6b Task 17), decided on the class columns or on their bounded biome witness. */
 const BIOME_LEAVES = [
   'caves.biomes.lush.hMin', 'caves.biomes.lush.depthMin', 'caves.biomes.lush.depthMax',
@@ -170,6 +171,8 @@ const SURFACE_PINS: Readonly<Record<SurfaceClass, readonly [number, number, numb
   badlands: [-26426, -31088, 35],
 };
 const SURFACE_LEAVES = SCHEMA.leaves.filter((l) => l.path.startsWith('surface.')).map((l) => l.path);
+/** Rule 4's two noises (SP6b spec §3.4, Task 22): meant for the cave class, decided apart from SP3c's surface leaves. */
+const RULE4_NOISES = ['surface.noises.cavePatch', 'surface.noises.strataOffset'] as const;
 let cached: LivenessColumn[] | null = null;
 /** The class columns of seed 42 and the default params (the scan runs once per file). */
 const columns = (): LivenessColumn[] => (cached ??= livenessColumns(CTX));
@@ -297,8 +300,9 @@ describe('perturbations', () => {
     expect(tree.root.a.a.a.x.a.mute).toBeUndefined();
     const rules = DEFAULTS.surface.rules as Record<string, any>;
     const [higher] = perturbations(leaf('surface.rules'), rules) as Record<string, any>[];
-    expect(rules.rules[2].if).toMatchObject({ kind: 'verticalGradient', trueAtAndBelow: 0, falseAtAndAbove: 8 });
-    expect(higher!.rules[2].if).toEqual({ ...rules.rules[2].if, falseAtAndAbove: 12 });
+    // The deepslate gradient is root.rules[3] since SP6b's rule 4 at root.rules[2] (its spec §3.4).
+    expect(rules.rules[3].if).toMatchObject({ kind: 'verticalGradient', trueAtAndBelow: 0, falseAtAndAbove: 8 });
+    expect(higher!.rules[3].if).toEqual({ ...rules.rules[3].if, falseAtAndAbove: 12 });
     expect(canonicalJSON({ ...higher, rules: rules.rules })).toBe(canonicalJSON(rules));
     // A tree without the pinned node (an edited profile) has no U2 variant: a clear error, not a wrong one.
     expect(() => perturbations(leaf('density.defs'), { root: { op: 'y' }, defs: {} })).toThrow(/density\.defs has no/);
@@ -422,12 +426,12 @@ describe('class columns', () => {
 });
 
 describe('surface class columns (SP3c spec §3.5)', () => {
-  test('the slots serve every surface.* leaf except the depth ones and the rule tree, which belong to land', () => {
+  test('the slots serve every surface.* leaf except the depth ones and the rule tree, which belong to land, and rule 4\'s noises (SP6b), the cave class\'s', () => {
     expect(SURFACE_CLASSES.map((c) => surfaceSlotLeaves(c))).toEqual([
       ['surface.cliffMinY'], ['surface.cliffSteep'], ['surface.snowline', 'surface.lapse', 'surface.lapseBase'],
       ['surface.noises.patch', 'surface.patchThreshold'], ['surface.noises.bandOffset'],
     ]);
-    const served = [...SURFACE_CLASSES.flatMap((c) => surfaceSlotLeaves(c)), 'surface.noises.depth', 'surface.depthMul', 'surface.rules'];
+    const served = [...SURFACE_CLASSES.flatMap((c) => surfaceSlotLeaves(c)), 'surface.noises.depth', 'surface.depthMul', 'surface.rules', ...RULE4_NOISES];
     expect([...served].sort()).toEqual([...SURFACE_LEAVES].sort());
   });
 
@@ -525,7 +529,8 @@ describe('the terrain stage in U2 (SP3b spec §3.3)', () => {
   test('U2 covers the leaves of the climate, shape, biome2d and terrain stages, every density.* and surface.* leaf among them', () => {
     const stages = ['climate', 'shape', 'biome2d', 'terrain'];
     const surface = SCHEMA.leaves.filter((l) => l.path.startsWith('surface.'));
-    expect(surface.length).toBe(11);
+    // SP3c's 11 and SP6b's rule-4 noises (Task 22).
+    expect(surface.length).toBe(13);
     for (const l of surface) expect(l.meta.stage, l.path).toBe('terrain');
     const expected = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && stages.includes(l.meta.stage)).map((l) => l.path);
     expect(u2Leaves().map((l) => l.path)).toEqual(expected);
@@ -551,11 +556,14 @@ describe('the terrain stage in U2 (SP3b spec §3.3)', () => {
     }
   });
 
-  test('every surface.* leaf is decided: each on its own class column, the depth leaves and the rule tree on a land column', () => {
-    for (const path of SURFACE_LEAVES) {
+  test('every surface.* leaf is decided: each on its own class column, the depth leaves and the rule tree on a land column (rule 4\'s noises below)', () => {
+    for (const path of SURFACE_LEAVES.filter((p) => !(RULE4_NOISES as readonly string[]).includes(p))) {
       const r = leafLiveness(CTX, path, columns());
       const cls = intendedClass(path);
-      const c = columns().find((x) => x.cls === cls)!;
+      // The rule tree's variant (the deepslate gradient's top 8 → 12) is decided on the second land column since SP6b's
+      // rule 4: the first, (−25833, 16792), with every top at y ≥ 159, lies under the abyss's climate, whose rock (the
+      // strata) takes every solid voxel at y 1 … 11 before the gradient.
+      const c = columns().filter((x) => x.cls === cls)[path === 'surface.rules' ? 1 : 0]!;
       expect(r, path).toEqual({ path, live: true, via: `${cls} column (${c.cx}, ${c.cz})`, cls });
     }
   });
@@ -807,11 +815,12 @@ describe('the rock floor\'s leaves (SP6b Task 19; spec §5.2, §12.7, Spec corre
 describe('the cave-biome leaves (SP6b Task 17; spec §12.7, Spec correction 5)', () => {
   /**
    * Each cave-biome leaf's U2 verdict at seed 42: tried on the class columns, the cave columns first (the class it is
-   * meant for), then on its bounded biome witness; lush's hMin, the abyss's eMax, cMin and depthMin, the border warp
-   * and the border noise are dead on every class column (since SP6b Task 19's rock floor moved the caverns' column to
-   * (18487, −15384); before it only lush's hMin and the abyss's cMin were). SP6b Task 20's σ_b closed the abyss's cMin
-   * witness (−24350, −30565) and every other column of the first 8,192 draws: its witness lies at draw 21,291, so the
-   * search draws up to 32,768 (`BIOME_DRAWS`).
+   * meant for), then on its bounded biome witness; lush's hMin and the abyss's cMin are dead on every class column (and
+   * were, with the abyss's eMax and depthMin, the border warp and the border noise, from SP6b Task 19's rock floor, which
+   * moved the caverns' column to (18487, −15384), until Task 22's rule 4, whose strata make the abyss's rock show in
+   * every column under its climate: the eMax, border warp and border noise now act on the cliffY column, depthMin on
+   * the caverns'). SP6b Task 20's σ_b closed the abyss's cMin witness (−24350, −30565) and every other column of the
+   * first 8,192 draws: its witness lies at draw 21,291, so the search draws up to 32,768 (`BIOME_DRAWS`).
    */
   const BIOME_PINS: Readonly<Record<(typeof BIOME_LEAVES)[number], string>> = {
     'caves.biomes.lush.hMin': 'biome witness column (-18559, -12761)',
@@ -820,14 +829,14 @@ describe('the cave-biome leaves (SP6b Task 17; spec §12.7, Spec correction 5)',
     'caves.biomes.dripstone.cMin': TUNNELS_VIA,
     'caves.biomes.dripstone.depthMin': CAVERNS_VIA,
     'caves.biomes.dripstone.depthMax': TUNNELS_VIA,
-    'caves.biomes.abyss.eMax': 'biome witness column (22687, -5288)',
+    'caves.biomes.abyss.eMax': 'cliffY column (17107, 13836)',
     'caves.biomes.abyss.cMin': 'biome witness column (-7705, 14078)',
-    'caves.biomes.abyss.depthMin': 'biome witness column (-1893, -974)',
+    'caves.biomes.abyss.depthMin': CAVERNS_VIA,
     'caves.biomes.depthScale': CAVERNS_VIA,
-    'caves.biomes.borderWarp': 'biome witness column (32115, -14419)',
+    'caves.biomes.borderWarp': 'cliffY column (17107, 13836)',
     'caves.biomes.depthWarp': CAVERNS_VIA,
     'caves.biomes.edgeJitter': CAVERNS_VIA,
-    'caves.biomes.noises.border': 'biome witness column (22687, -5288)',
+    'caves.biomes.noises.border': 'cliffY column (17107, 13836)',
     'caves.biomes.noises.depth': CAVERNS_VIA,
   };
   /** The cave biomes each leaf reads: its box's own; any of lush, dripstone and abyss for the border leaves and noises. */
@@ -869,6 +878,53 @@ describe('the cave-biome leaves (SP6b Task 17; spec §12.7, Spec correction 5)',
       expect(reads(p).some((b) => held.has(b)), `${p}: (${cx}, ${cz}) holds ${[...held]}`).toBe(true);
     }
     expect(() => biomeWitness(CTX, 'caves.noodles.regional')).toThrow('not a cave-biome leaf');
+  }, 300_000);
+});
+
+describe('rule 4\'s noises (SP6b Task 22; spec §3.4, §12.7, Spec correction 5)', () => {
+  /** The cave biomes rule 4 reads each noise in: cavePatch's floors and ceilings, strataOffset's abyss rock. */
+  const READS: Readonly<Record<(typeof RULE4_NOISES)[number], readonly number[]>> = {
+    'surface.noises.cavePatch': [1, 2, 3],
+    'surface.noises.strataOffset': [3],
+  };
+  /**
+   * Each noise's U2 verdict at seed 42 (the caverns' column, whose caves hold lush, dripstone and abyss) and its own
+   * witness (the first columns of `sp6b.liveness.caveBiomes` whose tagged air holds a biome it is read in).
+   */
+  const WITNESS: Readonly<Record<(typeof RULE4_NOISES)[number], string>> = {
+    'surface.noises.cavePatch': 'biome witness column (-3157, -27635)',
+    'surface.noises.strataOffset': 'biome witness column (-1893, -974)',
+  };
+
+  test('both are U2 leaves of the T stage, meant for the cave class, served by no surface slot', () => {
+    for (const p of RULE4_NOISES) {
+      expect(u2Leaves().map((l) => l.path)).toContain(p);
+      expect([p, leaf(p).meta.stage, intendedClass(p)]).toEqual([p, 'terrain', 'cave']);
+      expect(SURFACE_CLASSES.flatMap((c) => surfaceSlotLeaves(c))).not.toContain(p);
+    }
+  });
+
+  test('each is live on the caverns\' cave column; its bounded biome witness finds a column holding a biome it is read in', () => {
+    const all = [...columns(), ...CAVE_SLOTS.map((slot) => caveColumn(CTX, slot)!)];
+    for (const p of RULE4_NOISES) {
+      expect(leafLiveness(CTX, p, all)).toEqual({ path: p, live: true, via: CAVERNS_VIA, cls: 'cave' });
+      const w = caveRuleWitness(CTX, p, all);
+      expect([p, w.via]).toEqual([p, WITNESS[p]]);
+      expect(w.checks, p).toBeLessThanOrEqual(64);
+      expect(w.examined, p).toBeLessThanOrEqual(256);
+      expect(w.draws, p).toBeLessThanOrEqual(32768);
+      const [cx, cz] = w.via!.slice('biome witness column ('.length, -1).split(', ').map(Number) as [number, number];
+      const store = createStore({ shared: false, maxBlockBytes: 1 << 20, maxByteBytes: 1 << 20 });
+      expect(fillColumnT(store, CTX, cx, cz, () => false)).toBe(true);
+      const v = store.proto(cx, cz)!;
+      const held = new Set<number>();
+      for (let y = -63; y <= 319; y++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
+        const b = v.cave(lx, y, lz);
+        if ((b & 15) !== 0) held.add(b >> 4);
+      }
+      expect(READS[p].some((b) => held.has(b)), `${p}: (${cx}, ${cz}) holds ${[...held]}`).toBe(true);
+    }
+    expect(() => caveRuleWitness(CTX, 'surface.noises.patch')).toThrow('not a rule-4 noise');
   }, 300_000);
 });
 

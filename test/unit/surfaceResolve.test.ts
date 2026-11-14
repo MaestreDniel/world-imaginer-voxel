@@ -169,9 +169,10 @@ describe('freezing (SP3d spec §1.6, D10): one frozen tree per SurfaceContext', 
 
   test('an explicit tree is frozen in place (identity kept, values untouched), also when part of it was frozen already', () => {
     const tree = legacyDefaultSurfaceRules(paramsWith().surface) as unknown as { rules: Array<Node & { if: Node; then: Node }> };
-    // A partly frozen tree: rule [2] frozen at its top only, its condition and block not.
-    Object.freeze(tree.rules[2]!);
-    expect(Object.isFrozen(tree.rules[2]!.if)).toBe(false);
+    // A partly frozen tree: rule [3] (the deepslate gradient, after SP6b's rule 4) frozen at its top only, its
+    // condition and block not.
+    Object.freeze(tree.rules[3]!);
+    expect(Object.isFrozen(tree.rules[3]!.if)).toBe(false);
     const before = canonicalJSON(tree);
     const sc = createSurfaceContext(ctxFor('42'), tree);
     expect(sc.rules).toBe(tree);
@@ -179,7 +180,7 @@ describe('freezing (SP3d spec §1.6, D10): one frozen tree per SurfaceContext', 
     expect(sc.reference.rules).toBe(tree);
     expect(canonicalJSON(tree)).toBe(before);
     for (const c of containers(tree)) expect(Object.isFrozen(c)).toBe(true);
-    expect(() => { tree.rules[2]!.if['falseAtAndAbove'] = 12; }).toThrow(TypeError);
+    expect(() => { tree.rules[3]!.if['falseAtAndAbove'] = 12; }).toThrow(TypeError);
     expect(() => { tree.rules[0]!.then['state'] = 'stone'; }).toThrow(TypeError);
   });
 

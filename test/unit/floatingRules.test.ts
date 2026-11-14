@@ -3,11 +3,13 @@
  * = the default rules with `root.rules[1]` (the sky-open condition) wrapped as `sequence[islands branch, sky-open
  * condition]`, the branch's `minY` built from `ISLAND_RUN_MIN_BOTTOM`; with `islands.enabled` the scan's sky-open run
  * of a position is the highest run whose bottom voxel is below `ISLAND_RUN_MIN_BOTTOM` (off: the first run):
- * - the tree: identity across `resolveProfile`, exactly the wrapper (U2's pinned `root.rules[2]` is still the
- *   deepslate gradient), 181 nodes, tier 2 [], rules column cost 2,409,472, a fast path that is not sky-gated with
- *   `maxSurfaceDepth` = 4 + SD_MAX and the default's bands; SP6b §3.5's classes: both floor bounds 4 + SD_MAX, no
- *   ceiling class (the branch's `stoneDepth{ceiling}` leaves sit under floor gates, Spec correction 6), and the
- *   constructed column's evaluated count is SP3c's (every run's top 16 voxels outside the dither intervals);
+ * - the tree: identity across `resolveProfile`, exactly the wrapper (the derivation's `was` check of `root.rules[1]`
+ *   holds with SP6b's rule 4 at `root.rules[2]`, inherited from the default; U2's pinned `root.rules[3]` is the
+ *   deepslate gradient), 225 nodes, tier 2 [], rules column cost 3,760,128, a fast path that is not sky-gated with
+ *   `maxSurfaceDepth` = 4 + SD_MAX and the default's bands; SP6b §3.5's classes: both floor bounds 4 + SD_MAX, rule 4's
+ *   ceiling class 1 (the branch's `stoneDepth{ceiling}` leaves sit under floor gates, Spec correction 6), and the
+ *   constructed column's evaluated count is SP3c's (every run's top 16 voxels outside the dither intervals: no tags,
+ *   so no cave biome);
  * - the sky-open run: the scan settings carry the flag (the SurfaceContext's from `islands.enabled`), and the scan's
  *   `skyRun` is the highest run with bottom < 181 (or none) with it, the first run without it;
  * - a constructed column on a floating_islands ColumnSample: grass tops, dirt for the position's surface depth, a
@@ -25,7 +27,7 @@ import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { checkJson, countTreeNodes } from '../../src/core/params/json';
-import { FLOATING_DENSITY_TREE, FLOATING_SURFACE_RULES } from '../../src/core/params/presetTrees';
+import { deriveTree, FLOATING_DENSITY_TREE, FLOATING_SURFACE_RULES } from '../../src/core/params/presetTrees';
 import { resolveProfile } from '../../src/core/params/profiles';
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
@@ -79,10 +81,10 @@ describe('FLOATING_SURFACE_RULES (SP3e spec §4.2, §4.3, §4.5, D6, D7, D21 (b)
     expect(checkJson(FLOATING_SURFACE_RULES, 'surface.rules', [], 'surfaceRules')).toBe(FLOATING_SURFACE_RULES);
   });
 
-  test('exactly the wrapper root.rules[1] = sequence[branch, the default\'s sky-open condition]; rules[0], [2] unchanged', () => {
+  test('exactly the wrapper root.rules[1] = sequence[branch, the default\'s sky-open condition]; rules[0], [2] (rule 4), [3] unchanged', () => {
     const t = FLOATING_SURFACE_RULES as unknown as { rules: Rec[] };
     const d = DEFAULT_SURFACE_RULES as unknown as { rules: Rec[] };
-    expect(t.rules).toHaveLength(3);
+    expect(t.rules).toHaveLength(4);
     expect(t.rules[1]!['kind']).toBe('sequence');
     expect(wrapped(t)).toHaveLength(2);
     expect(canonicalJSON(wrapped(t)[0])).toBe(canonicalJSON(BRANCH));
@@ -92,9 +94,16 @@ describe('FLOATING_SURFACE_RULES (SP3e spec §4.2, §4.3, §4.5, D6, D7, D21 (b)
     const copy = JSON.parse(JSON.stringify(FLOATING_SURFACE_RULES)) as { rules: unknown[] };
     copy.rules[1] = wrapped(copy)[1];
     expect(canonicalJSON(copy)).toBe(canonicalJSON(DEFAULT_SURFACE_RULES));
-    // U2's pinned surface.rules variant path ['rules', 2, 'if'] still names the deepslate gradient.
-    expect(t.rules[2]!['if']).toEqual({ kind: 'verticalGradient', trueAtAndBelow: 0, falseAtAndAbove: 8 });
+    // SP6b's rule 4 sits at root.rules[2] (its spec §3.4), as in the default; U2's pinned surface.rules variant path
+    // ['rules', 3, 'if'] names the deepslate gradient.
+    expect(canonicalJSON(t.rules[2])).toBe(canonicalJSON(d.rules[2]));
+    expect((t.rules[2]!['rules'] as Rec[])[0]!['if']).toEqual({ kind: 'caveBiome', side: 'here', biomes: ['abyss'] });
+    expect(t.rules[3]!['if']).toEqual({ kind: 'verticalGradient', trueAtAndBelow: 0, falseAtAndAbove: 8 });
     expect(canonicalJSON(t.rules[0])).toBe(canonicalJSON(d.rules[0]));
+    // The derivation's `was` check still holds at root.rules[1] (the sky-open condition) and would refuse rule 4's place.
+    const was = { kind: 'condition', if: { kind: 'skyOpen' } };
+    expect(() => deriveTree(DEFAULT_SURFACE_RULES, 'surface.rules', 'surfaceRules', [{ path: 'root.rules[1]', was, by: (x) => x }])).not.toThrow();
+    expect(() => deriveTree(DEFAULT_SURFACE_RULES, 'surface.rules', 'surfaceRules', [{ path: 'root.rules[2]', was, by: (x) => x }])).toThrow();
   });
 
   test('the branch\'s minY literal is ISLAND_RUN_MIN_BOTTOM (one constant, §4.1)', () => {
@@ -103,15 +112,16 @@ describe('FLOATING_SURFACE_RULES (SP3e spec §4.2, §4.3, §4.5, D6, D7, D21 (b)
     expect(minY).toBe(181);
   });
 
-  test('181 nodes (the default 163 + the branch 17 + the wrapping sequence); tier 2 []; rules column cost 2,409,472; no lint', () => {
-    expect(countTreeNodes(FLOATING_SURFACE_RULES, 'surfaceRules')).toBe(181);
-    expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(163);
+  test('225 nodes (the default 207 + the branch 17 + the wrapping sequence); tier 2 []; rules column cost 3,760,128; no lint', () => {
+    expect(countTreeNodes(FLOATING_SURFACE_RULES, 'surfaceRules')).toBe(225);
+    expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(207);
     expect(countTreeNodes(BRANCH, 'surfaceRules')).toBe(17);
-    expect(ruleNodeCount(FLOATING_SURFACE_RULES)).toBe(181);
+    expect(ruleNodeCount(FLOATING_SURFACE_RULES)).toBe(225);
     expect(validateRulesSource(FLOATING_SURFACE_RULES)).toEqual([]);
     expect(validateParamTrees(FLOATING)).toEqual([]);
-    expect(rulesColumnCost(FLOATING_SURFACE_RULES)).toBe(2_409_472);
-    expect(rulesColumnCost(FLOATING_SURFACE_RULES)).toBe(181 * 256 * 52);
+    // 181 nodes and 2,409,472 before SP6b's rule 4; its 9 nodes under caveBiome{here} cost 98,304 each (rulings P20).
+    expect(rulesColumnCost(FLOATING_SURFACE_RULES)).toBe(3_760_128);
+    expect(rulesColumnCost(FLOATING_SURFACE_RULES)).toBe((225 - 9) * 256 * 52 + 9 * 98_304);
     expect(treeLints(FLOATING)).toEqual([]);
   });
 
@@ -121,9 +131,12 @@ describe('FLOATING_SURFACE_RULES (SP3e spec §4.2, §4.3, §4.5, D6, D7, D21 (b)
     expect(fp!.skyGated).toBe(false);
     expect(fp!.maxSurfaceDepth).toBe(4 + sc.settings.sdMax);
     // SP6b §3.5 (Spec correction 6): the island leaves' stoneDepth{ceiling, 100} and {ceiling, 2} sit under floor gates,
-    // so they are floor-bounded (the non-sky class, 4 + SD_MAX) and the tree has no ceiling class.
-    expect([fp!.skyFloorBound, fp!.floorBound, fp!.ceilBound]).toEqual([4 + sc.settings.sdMax, 4 + sc.settings.sdMax, -1]);
-    expect(scDefault.compiled.fastPath!.skyGated).toBe(true);
+    // so they are floor-bounded (the non-sky class, 4 + SD_MAX); the ceiling class is rule 4's (1).
+    expect([fp!.skyFloorBound, fp!.floorBound, fp!.ceilBound]).toEqual([4 + sc.settings.sdMax, 4 + sc.settings.sdMax, 1]);
+    // The island leaves have no caveBiome{floor} gate, so the floor class has no biome-gated skip there (§3.5).
+    expect([fp!.floorBiomes, fp!.ceilBiomes, fp!.here]).toEqual([-1, 0b0110, true]);
+    // The default is not sky-gated either since rule 4 (its floor and ceiling leaves have no skyOpen gate).
+    expect(scDefault.compiled.fastPath!.skyGated).toBe(false);
     expect(fp!.bands).toEqual(scDefault.compiled.fastPath!.bands);
   });
 });
@@ -185,12 +198,14 @@ describe('the islands branch on a constructed column (SP3e spec §4.1, §4.2, §
 
   test("SP6b §3.5: the fast path evaluates SP3c's voxels, every run's top 1 + maxSurfaceDepth outside the dither intervals", () => {
     const fp = sc.compiled.fastPath!;
-    const bandAt = new Int32Array(384).fill(-1);
-    for (const b of fp.bands) for (let y = b.yMin; y <= b.yMax; y++) bandAt[y + 64] = b.state;
+    // The constructed column has no cave tags and no picker: no run has a ceiling biome (rule 4's ceiling class skips
+    // every run, item 3) and no voxel is the abyss (item 4), so the bands rule 4 cuts (state −1) are taken as SP3c's.
+    const dither = new Uint8Array(384);
+    for (const b of fp.bands) for (let y = b.yMin; y <= b.yMax; y++) dither[y + 64] = b.dither ? 1 : 0;
     let want = 0;
     for (let p = 0; p < 256; p++) {
       for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
-        for (let y = scan.runTop[r]!; y >= scan.runBottom[r]!; y--) if (bandAt[y + 64]! < 0 || scan.runTop[r]! - y <= fp.maxSurfaceDepth) want++;
+        for (let y = scan.runTop[r]!; y >= scan.runBottom[r]!; y--) if (dither[y + 64] === 1 || scan.runTop[r]! - y <= fp.maxSurfaceDepth) want++;
       }
     }
     expect(sc.compiled.fillColumn(scan, new Uint16Array(98304), true)).toBe(want);
@@ -236,7 +251,7 @@ describe('the islands branch on a constructed column (SP3e spec §4.1, §4.2, §
     expect(n).toBeGreaterThan(256 * 100);
   });
 
-  test('the default rules with the flag (sky-gated): fast path == full == reference == compiled.state, skyRun −1 and ≠ runFirst included', () => {
+  test('the default rules with the flag: fast path == full == reference == compiled.state, skyRun −1 and ≠ runFirst included', () => {
     // A profile with islands.enabled and the default rules (the flag ticked on default or amplified, Review Focus).
     expect(scDefault.settings.islandRuns).toBe(true);
     const sd = scanColumn(newSurfaceScan(), scDefault.settings, s, solid, water, biomes);
@@ -454,8 +469,10 @@ describe('islands.enabled on trees that do not match it (amplified\'s window, se
   // 4,291; before the carvers, Task 27, default 7,577, 1,955, 37 and amplified 17,529, 5,056, 45, 4,252; before Task
   // 38's tuned defaults, default 7,654, 1,962, 37 and amplified 17,544, 5,056, 45, 4,252). With the
   // carvers 15 of amplified's carved voxels differ (wet positions under a run above y 180, where the flag's island rule
-  // moves the density top that the carvers' wet shrink reads, §2.4); the default window has none.
-  test.each([['default', 6546, 1638, 36, 0, 0], ['amplified', 13651, 3623, 42, 2964, 15]] as const)('%s with the flag on: the same solidity and water (but carved voxels at wet positions under a run above y 180, SP6a §2.4); states change only where a run lies above y 180, stage == reference == compiled.state there', (id, wantVoxels, wantPositions, wantColumns, wantSnowToStone, wantCarved) => {
+  // moves the density top that the carvers' wet shrink reads, §2.4); the default window has none. SP6b's rule 4 (Task
+  // 22): a run the flag takes off the sky-open palette whose top lies under tagged cave air takes rule 4's cave floor
+  // instead (default 6,546 voxels and 1,638 positions before it, amplified 13,651).
+  test.each([['default', 6570, 1640, 36, 0, 0], ['amplified', 13678, 3623, 42, 2964, 15]] as const)('%s with the flag on: the same solidity and water (but carved voxels at wet positions under a run above y 180, SP6a §2.4); states change only where a run lies above y 180, stage == reference == compiled.state there', (id, wantVoxels, wantPositions, wantColumns, wantSnowToStone, wantCarved) => {
     const params = resolveProfile(id);
     const on = withFlag(params, true), off = withFlag(params, false);
     const probeSc = createSurfaceContext(on);
@@ -492,7 +509,7 @@ describe('islands.enabled on trees that do not match it (amplified\'s window, se
         for (let r = c.scan.runFirst[p]!; r < c.scan.runFirst[p + 1]!; r++) if (c.scan.runBottom[r]! >= ISLAND_RUN_MIN_BOTTOM) islandRun = true;
         if (!islandRun) noIslandRun++;
         expect(c.scan.skyRun[p], `(${cx}, ${cz}) p ${p}`).not.toBe(c.scan.runFirst[p]);
-        // The default rules are sky-gated: their fast path must follow the flag's sky-open run.
+        // The default rules' sky floor class (SD_MAX + 4): their fast path must follow the flag's sky-open run.
         for (let y = -63; y <= 319; y++) {
           const i = at(p, y);
           if (a.blocks[i] === AIR) continue;

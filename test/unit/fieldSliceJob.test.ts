@@ -109,7 +109,8 @@ describe('the fieldSlice job (SP3d spec §5.1)', () => {
     // 106,240 before them), so a part holds at most 28 of them (30 before the floor, 3 without the memo-aware bound, 78
     // before SP6a).
     bad(vMsg(MOUNTAIN, 'density', '', 0, 128, 128), `too heavy: 128 × 289864 work units exceed the part budget ${PART_BUDGET}`);
-    bad(vMsg(MOUNTAIN, 'blocks', '', 0, 2), 'too heavy: 2 sample columns of cost 33683245, at most 1 per part');
+    // The T column's cost: the density tree's plus the rules' (3,520,512 since SP6b's rule 4, 2,169,856 before it).
+    bad(vMsg(MOUNTAIN, 'blocks', '', 0, 2), 'too heavy: 2 sample columns of cost 35033901, at most 1 per part');
     expect(h.handle(vMsg(MOUNTAIN, 'density', '', 0, 28, 128)).msg.type).toBe('fieldSliceResult');
     bad(vMsg(MOUNTAIN, 'density', '', 0, 29, 128), `too heavy: 29 × 289864 work units exceed the part budget ${PART_BUDGET}`);
   });
@@ -139,16 +140,17 @@ describe('the fieldProbe job (SP3d spec §5.3)', () => {
     const h = createTaskHandler();
     h.handle(configure(3));
     const g = vGeom(COAST);
-    const slice = evaluateFieldSlice(ctx, { geometry: g, field: 'rule', path: 'root.rules[2]', from: 0, to: 32 }, NEVER)!;
+    // The deepslate gradient (root.rules[3] since SP6b's rule 4 at root.rules[2]).
+    const slice = evaluateFieldSlice(ctx, { geometry: g, field: 'rule', path: 'root.rules[3]', from: 0, to: 32 }, NEVER)!;
     const seen = new Set<number>();
     for (const [c, k] of [[0, 0], [3, 20], [9, 31], [17, 12], [30, 25], [31, 31], [12, 16]] as const) {
       const [x, y, z] = sliceSampleVoxel(g, c, k);
-      for (const [field, path] of [['density', ''], ['node', 'defs.body'], ['rule', 'root.rules[2]'], ['rule', 'root.rules[1].if']] as const) {
+      for (const [field, path] of [['density', ''], ['node', 'defs.body'], ['rule', 'root.rules[3]'], ['rule', 'root.rules[1].if']] as const) {
         const r = h.handle(pMsg(field, path, x, y, z));
         expect(r.msg, `${field} (${x}, ${y}, ${z})`).toEqual({ type: 'fieldProbeResult', jobId: 5, epoch: 3, value: probeField(ctx, field, path, x, y, z, NEVER) });
         expect(r.transfer).toEqual([]);
       }
-      const v = (h.handle(pMsg('rule', 'root.rules[2]', x, y, z)).msg as { value: number }).value;
+      const v = (h.handle(pMsg('rule', 'root.rules[3]', x, y, z)).msg as { value: number }).value;
       expect(v).toBe(slice.values[c * 32 + k]);
       seen.add(v);
     }

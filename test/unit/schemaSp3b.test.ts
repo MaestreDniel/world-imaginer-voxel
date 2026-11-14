@@ -70,6 +70,8 @@ describe('SP3b density group (spec §3.3)', () => {
     expect(PARAM_META.filter((m) => m.remapNone === true).map((m) => m.path)).toEqual([
       'density.noises.jag', 'density.noises.overhang', 'density.noises.detail', 'density.noises.islands', 'surface.noises.depth',
       'surface.noises.patch', 'surface.noises.bandOffset',
+      // SP6b Task 22: rule 4's surface noises.
+      'surface.noises.cavePatch', 'surface.noises.strataOffset',
       // SP6a: every cave noise is a density noise (caveTerms.test.ts).
       ...Object.keys(DEFAULTS.caves.noises).map((id) => `caves.noises.${id}`),
       // SP6b Task 17: the cave-biome noises.

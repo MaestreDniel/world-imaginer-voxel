@@ -147,7 +147,8 @@ describe('instrumented pool (SP2b spec §2.8)', () => {
     expect((await pool.slice({ ax: 0, az: 0, bx: 40, bz: 3 })).blocks.length).toBe(512 * 384);
     // So do surfaceProbe jobs (SP3c spec §6).
     expect(await pool.surfaceProbe(0, -64, 0)).toEqual({ state: 2, path: [] });
-    expect((await pool.surfaceProbe(0, -30, 0)).path).toEqual(['root', 'root.rules[2]', 'root.rules[2].then']);
+    // The deepslate gradient: root.rules[3] since SP6b's rule 4 at root.rules[2].
+    expect((await pool.surfaceProbe(0, -30, 0)).path).toEqual(['root', 'root.rules[3]', 'root.rules[3].then']);
     // And fieldSlice and fieldProbe jobs (SP3d spec §5.1, §5.3).
     // A client cost of 2^20 (parts of 8): the default's 32-sample horizontal column costs 627,040 since SP6a Task 9's wet
     // roof, so the worker refuses parts of 16.

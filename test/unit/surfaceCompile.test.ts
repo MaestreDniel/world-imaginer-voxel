@@ -19,6 +19,7 @@ import {
 import { testRng } from '../harness/stats';
 import { legacyDefaultSurfaceRules } from '../harness/legacyTrees';
 import { DEFAULTS } from '../../src/core/params/defaults';
+import { canonicalJSON } from '../../src/core/params/canonical';
 
 const SEED: Seed64 = [42, 0];
 const NOISES = surfaceFuzzNoiseSource(SEED);
@@ -146,21 +147,19 @@ function fastVoxels(fp: SurfaceFastPath, scan: SurfaceScan): { fast: number; noS
 type CaveSide = 'floor' | 'ceiling' | 'here';
 type CaveName = 'plain' | 'lush' | 'dripstone' | 'abyss';
 const CB = (side: CaveSide, ...biomes: CaveName[]): Condition => ({ kind: 'caveBiome', side, biomes });
-const PATCH = (min: number, max: number): Condition => ({ kind: 'noiseThreshold', noise: 'surface.noises.patch', min, max });
+/** A threshold on rule 4's patch noise (SP6b spec §3.4), which the fuzz noise source holds since Task 22. */
+const PATCH = (min: number, max: number): Condition => ({ kind: 'noiseThreshold', noise: 'surface.noises.cavePatch', min, max });
 /** §3.3's abyss layers. */
 const ABYSS_LAYERS = [
   { state: 'abyss_stone', weight: 50, maxLen: 8 }, { state: 'abyss_shale', weight: 25, maxLen: 4 },
   { state: 'cracked_abyss_stone', weight: 15, maxLen: 3 }, { state: 'abyss_stone_veined', weight: 10, maxLen: 1 },
 ];
 
-/**
- * Rule 4 (SP6b spec §3.4) as Task 22 writes it, with `surface.noises.patch` standing in for `cavePatch` and
- * `surface.noises.bandOffset` for `strataOffset` (both 2D, remap none: the leaves Task 22 adds do not exist yet).
- */
+/** Rule 4 (SP6b spec §3.4) as Task 22 wrote it, on `surface.noises.cavePatch` and `strataOffset`: the default's `root.rules[2]`. */
 const RULE4: Rule = SEQ(
   IF(CB('here', 'abyss'), SEQ(
     IFS([floor(1, false), CB('floor', 'abyss'), PATCH(-0.84, 8)], B('abyss_ash')),
-    { kind: 'strata', layers: ABYSS_LAYERS, minLen: 1, maxLen: 6, noise: 'surface.noises.bandOffset', amp: 6 },
+    { kind: 'strata', layers: ABYSS_LAYERS, minLen: 1, maxLen: 6, noise: 'surface.noises.strataOffset', amp: 6 },
   )),
   IFS([floor(1, false), CB('floor', 'lush')], SEQ(IF(PATCH(0.84, 8), B('clay')), B('moss_block'))),
   IFS([floor(1, false), CB('floor', 'dripstone'), NOT(PATCH(-8, -0.97))], B('dripstone_block')),
@@ -306,20 +305,26 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     expect(bounds(fp(IFS([ceil(0, false), SKY, TOP], A)))).toEqual([0, -1, -1, 0, true]);
   });
 
-  test("the default tree (SP6b §3.5): bounds (15, −1, −1), and fillColumn evaluates exactly SP3c's voxels on 64 columns", () => {
+  test("the default tree (SP6b §3.5, rulings P12): the shape's bounds (15, −1, −1), the real tree's with rule 4 (15, 1, 1); both evaluate exactly SP3c's voxels on 64 columns without cave tags", () => {
     const real = legacyDefaultSurfaceRules(DEFAULTS.surface);
+    const shape = compileSurfaceRules(SEED, DEFAULT_SHAPE, NOISES, set).fastPath!;
+    // The resolved default holds rule 4 at root.rules[2] (Task 22), this file's RULE4.
+    expect(canonicalJSON((real as Extract<Rule, { kind: 'sequence' }>).rules[2])).toBe(canonicalJSON(RULE4));
     for (const tree of [DEFAULT_SHAPE, real]) {
       const c = compileSurfaceRules(SEED, tree, NOISES, set);
       const fp = c.fastPath!;
-      expect([fp.skyFloorBound, fp.floorBound, fp.ceilBound, fp.maxSurfaceDepth, fp.skyGated]).toEqual([15, -1, -1, 15, true]);
+      // Rule 4's floor and ceiling leaves (bounds 1) have no skyOpen gate: the real tree is not sky-gated.
+      expect([fp.skyFloorBound, fp.floorBound, fp.ceilBound, fp.maxSurfaceDepth, fp.skyGated]).toEqual(tree === real ? [15, 1, 1, 15, false] : [15, -1, -1, 15, true]);
       const next = testRng(1401);
       let evaluated = 0, solid = 0;
       for (let k = 0; k < 64; k++) {
         const scan = scanOf(randomSurfaceColumn(next), set);
         const fast = fill(c, scan, true);
-        expect(fast.evaluated).toBe(sp3cEvaluated(fp, scan));
+        // Without cave tags or a picker no run has a cave floor or ceiling biome (the biome-gated skip leaves every run
+        // out of rule 4's classes, §3.5 item 3) and no voxel is the abyss (item 4): the shape's SP3c voxels.
+        expect(fast.evaluated).toBe(sp3cEvaluated(shape, scan));
         evaluated += fast.evaluated;
-        solid += fastVoxels(fp, scan).solid;
+        solid += fastVoxels(shape, scan).solid;
         if (k % 8 === 0) expect(Buffer.from(fast.out).equals(Buffer.from(fill(c, scan, false).out))).toBe(true);
       }
       expect(evaluated).toBeLessThan(solid / 2);
@@ -327,14 +332,10 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
   });
 
   test("rule 4's ceiling leaves without their caveBiome gates (SP6b §3.4-§3.5): ceilBound 1, each run's bottom 2 voxels plus the floor class's", () => {
-    // stoneDepth{ceiling, 0} → cavePatch → moss_block; stoneDepth{ceiling, 1} → not(cavePatch) → dripstone_block, with
-    // surface.noises.patch standing in for cavePatch (Task 22's leaf) and no floor gate; inserted at root.rules[2] of
-    // the default's shape. With the caveBiome{ceiling} gates back the tree keeps this fast path, and the biome-gated
-    // skip (extension 3) leaves out the runs whose ceiling biome no leaf names.
-    const CEILING_LEAVES = SEQ(
-      IFS([ceil(0, false), { kind: 'noiseThreshold', noise: 'surface.noises.patch', min: -0.52, max: 8 }], B('moss_block')),
-      IFS([ceil(1, false), NOT({ kind: 'noiseThreshold', noise: 'surface.noises.patch', min: -8, max: -0.97 })], B('dripstone_block')),
-    );
+    // stoneDepth{ceiling, 0} → cavePatch → moss_block; stoneDepth{ceiling, 1} → not(cavePatch) → dripstone_block, with no
+    // floor gate; inserted at root.rules[2] of the default's shape. With the caveBiome{ceiling} gates back the tree keeps
+    // this fast path, and the biome-gated skip (extension 3) leaves out the runs whose ceiling biome no leaf names.
+    const CEILING_LEAVES = SEQ(IFS([ceil(0, false), PATCH(-0.52, 8)], B('moss_block')), IFS([ceil(1, false), NOT(PATCH(-8, -0.97))], B('dripstone_block')));
     const [rule1, sky, rule2] = (DEFAULT_SHAPE as Extract<Rule, { kind: 'sequence' }>).rules;
     const tree = SEQ(rule1!, sky!, CEILING_LEAVES, rule2!);
     const c = compileSurfaceRules(SEED, tree, NOISES, set);

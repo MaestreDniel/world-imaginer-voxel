@@ -57,9 +57,10 @@ describe('the T column work and the rule node count (SP3d spec §5.2, gen/inspec
     expect([151 - 128, 1090 - 998]).toEqual([23, 4 * 23]);
     expect([203 - 151, 1158 - 1090]).toEqual([18 + 2 * 16 + 2, 4 * 17]);
     expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBe(93_968_961);
-    expect(ruleNodeCount(DEFAULT_SURFACE_RULES)).toBe(163);
-    expect(rulesColumnCost(DEFAULT_SURFACE_RULES)).toBe(2_169_856);
-    expect(tColumnCost(DEFAULTS)).toBe(31_513_389 + 2_169_856);
+    // SP6b's rule 4 (Task 22, rulings P20): 207 rule nodes, 3,520,512 (163 and 2,169,856 before it).
+    expect(ruleNodeCount(DEFAULT_SURFACE_RULES)).toBe(207);
+    expect(rulesColumnCost(DEFAULT_SURFACE_RULES)).toBe(3_520_512);
+    expect(tColumnCost(DEFAULTS)).toBe(31_513_389 + 3_520_512);
     expect(291 * 98304 + 2373 * 1225).toBe(31_513_389);
   });
 
@@ -80,7 +81,7 @@ describe('the T column work and the rule node count (SP3d spec §5.2, gen/inspec
     // The interpolated node (voxel placement) becomes the mute's const; its 69 corner units go (detailG and the cave
     // terms still read the body at the corners).
     expect(densityColumnCost(p.density.defs, p)).toBe(291 * 98304 + (2373 - 69) * 1225);
-    expect(tColumnCost(p)).toBe(291 * 98304 + 2304 * 1225 + 2_169_856);
+    expect(tColumnCost(p)).toBe(291 * 98304 + 2304 * 1225 + 3_520_512);
   });
 });
 
@@ -317,8 +318,8 @@ describe('sliceCostOf (SP3d spec §5.2; SP6a §7.4\'s memo-aware bound, rulings 
     const t = tColumnCost(DEFAULTS);
     expect(sliceCostOf(DEFAULTS, 'blocks', '', 'vertical', 128)).toBe(t);
     expect(sliceCostOf(DEFAULTS, 'blocks', '', 'vertical', 32)).toBe(t);
-    expect(sliceCostOf(DEFAULTS, 'rule', 'root.rules[2]', 'vertical', 128)).toBe(t + 128 * 163);
-    expect(sliceCostOf(DEFAULTS, 'rule', 'root', 'vertical', 32)).toBe(t + 32 * 163);
+    expect(sliceCostOf(DEFAULTS, 'rule', 'root.rules[3]', 'vertical', 128)).toBe(t + 128 * 207);
+    expect(sliceCostOf(DEFAULTS, 'rule', 'root', 'vertical', 32)).toBe(t + 32 * 207);
   });
 
   test('caves (SP6a §7.4): n × (the compile\'s voxel work + 64) + the chunk columns visited; vertical with K × corner, horizontal with 50 corners per visit', () => {

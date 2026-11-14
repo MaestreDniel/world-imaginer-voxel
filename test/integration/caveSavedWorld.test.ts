@@ -12,7 +12,9 @@
  * `test/fixtures/gv8-*-trees.json`) whose diff digs (x, −60, z), which today's T leaves rock under the rock floor, and
  * places stone at a cave voxel above it, opens with today's trees (the migration) and the older-generator flag; the dug
  * voxel reads air with cave byte 0, the placed stone keeps its column's whole cave byte (kind and cave biome), and the
- * X-ray shows no wall toward the dug voxel and none owned by it.
+ * X-ray shows no wall toward the dug voxel and none owned by it. Task 22 extends it: the stone is placed where SP6b's
+ * rule 4 would put a cave block (moss, clay, dripstone, ash or the abyss's strata) were the voxel generated solid, and it
+ * keeps its state: rule 4 never runs on a published edit.
  */
 import { expect, test } from 'vitest';
 import { CAVE_KIND, caveKindOf } from '../../src/core/constants';
@@ -22,7 +24,11 @@ import { canonicalJSON } from '../../src/core/params/canonical';
 import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
 import { resolveProfile } from '../../src/core/params/profiles';
 import type { JsonObject } from '../../src/core/params/migrate';
+import { cavePickerOf } from '../../src/gen/biomes/cavePicker';
 import { terrainStage } from '../../src/gen/pipeline/terrainStage';
+import { surfaceContextOf } from '../../src/gen/surface/context';
+import { surfaceProbeColumn } from '../../src/gen/surface/probe';
+import { newSurfaceScan, scanColumn } from '../../src/gen/surface/scan';
 import { createMeshBuilder } from '../../src/mesh/builder';
 import { unpackXray } from '../../src/mesh/packing';
 import { meshXray } from '../../src/mesh/xray';
@@ -32,7 +38,7 @@ import { createSaves, loadParams, newState } from '../../src/persist/saves';
 import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
 import { newWorldRecord, OLDER_GENERATOR_NOTICE } from '../../src/ui/world/worldPage';
-import { AIR, FULL_FACES, PASS, STONE } from '../../src/world/blocks/index';
+import { AIR, FULL_FACES, PASS, REGISTRY, STONE } from '../../src/world/blocks/index';
 import { ALL_FACES, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import type { NeighborhoodReader } from '../../src/world/store/api';
 import { copyPaddedSection, createPaddedSection, padIndex } from '../../src/world/store/padded';
@@ -188,15 +194,29 @@ test('a GV5 world with edits in what are now caves opens with the caves: today\'
   }
 });
 
+/** Rule 4's states (SP6b spec §3.4). */
+const RULE4_STATES: ReadonlySet<number> = new Set(['moss_block', 'clay', 'dripstone_block', 'abyss_ash', 'abyss_stone', 'abyss_shale', 'cracked_abyss_stone', 'abyss_stone_veined'].map((k) => REGISTRY.parseStateKey(k)));
+
 /**
  * The first column of seed 42 (default, today's T) from (0, 0) outward holding a tagged air voxel at y > −60 whose cave
- * byte carries a cave biome (high nibble ≠ 0; the first column with any tagged air voxel when none within 5 does) and a
- * position whose voxel at y −60 T leaves solid with cave byte 0 (rock under the rock floor): that voxel at −60, and the
- * cave voxel with its whole cave byte.
+ * byte carries a cave biome (high nibble ≠ 0) and that rule 4 would give one of its states were it solid (the default
+ * rules over the probe's rebuild of the column with that voxel made solid; the first column with any tagged air voxel
+ * when none within 5 does), and a position whose voxel at y −60 T leaves solid with cave byte 0 (rock under the rock
+ * floor): that voxel at −60, the cave voxel with its whole cave byte, and the state rule 4 would give it (or −1).
  */
-function findFloorVoxels(): { cx: number; cz: number; dug: Voxel; cave: Voxel; caveByte: number } {
+function findFloorVoxels(): { cx: number; cz: number; dug: Voxel; cave: Voxel; caveByte: number; ruled: number } {
   const ctx = ctxFor('42');
-  let fallback: { cx: number; cz: number; dug: Voxel; cave: Voxel; caveByte: number } | null = null;
+  const sc = surfaceContextOf(ctx);
+  /** The default rules' state at voxel (lx, y, lz) of column (cx, cz) made solid, on the probe's rebuild of the column. */
+  const solidState = (cx: number, cz: number, lx: number, y: number, lz: number): number => {
+    const c = surfaceProbeColumn(sc, cx, cz);
+    const p = (lz << 4) | lx;
+    const solid = c.solid.slice();
+    solid[256 * (y + 64) + p] = 1;
+    const scan = scanColumn(newSurfaceScan(), sc.settings, sc.density.columns.get(cx, cz), solid, c.water, c.biomes, c.tags, { inputs: cavePickerOf(ctx), pass: c.pass });
+    return sc.reference.state(scan, sc.settings, p, y);
+  };
+  let fallback: { cx: number; cz: number; dug: Voxel; cave: Voxel; caveByte: number; ruled: number } | null = null;
   for (let r = 0; r < 6; r++) {
     for (let dz = (-r) | 0; dz <= r; dz++) {
       for (let dx = (-r) | 0; dx <= r; dx++) {
@@ -216,9 +236,11 @@ function findFloorVoxels(): { cx: number; cz: number; dug: Voxel; cave: Voxel; c
             for (let lx = 0; lx < 16; lx++) {
               const b = v.cave(lx, y, lz);
               if (caveKindOf(b) === 0 || v.block(lx, y, lz) !== AIR) continue;
-              const found = { cx: dx, cz: dz, dug, cave: { x: 16 * dx + lx, y, z: 16 * dz + lz }, caveByte: b };
-              if (b >> 4 !== 0) return found;
+              const found = { cx: dx, cz: dz, dug, cave: { x: 16 * dx + lx, y, z: 16 * dz + lz }, caveByte: b, ruled: -1 };
               fallback ??= found;
+              if (b >> 4 === 0) continue;
+              const ruled = solidState(dx, dz, lx, y, lz);
+              if (RULE4_STATES.has(ruled)) return { ...found, ruled };
             }
           }
         }
@@ -229,8 +251,10 @@ function findFloorVoxels(): { cx: number; cz: number; dug: Voxel; cave: Voxel; c
   return fallback;
 }
 
-test('a GV8 world with edits where the rock floor closes opens with the floor and the cave biomes: today\'s trees, the older-generator flag, the dug voxel air with cave byte 0, the placed stone keeps its column\'s byte; the X-ray walls nothing toward the dug voxel (SP6b Review Focus 2)', async () => {
-  const { cx, cz, dug, cave, caveByte } = findFloorVoxels();
+test('a GV8 world with edits where the rock floor closes opens with the floor and the cave biomes: today\'s trees, the older-generator flag, the dug voxel air with cave byte 0, the placed stone keeps its column\'s byte and its state (rule 4 never runs on a published edit); the X-ray walls nothing toward the dug voxel (SP6b Review Focus 2)', async () => {
+  const { cx, cz, dug, cave, caveByte, ruled } = findFloorVoxels();
+  // Rule 4 would give the placed voxel one of its cave states were T to generate it solid (Task 22: not vacuous).
+  expect(RULE4_STATES.has(ruled), `rule 4 gives ${ruled} at the placed voxel`).toBe(true);
   const kv = createMemoryKV();
   const id = 'gv8';
   const session = openMapSession({ ...DEFAULT_MAP_STATE, seed: '42', profile: 'default' }, () => [1, 2]);
@@ -243,6 +267,7 @@ test('a GV8 world with edits where the rock floor closes opens with the floor an
   params['density']!['defs'] = gv8DensityTrees().default;
   params['surface']!['rules'] = gv8SurfaceTrees().default;
   expect(canonicalJSON(params['density']!['defs'])).not.toBe(canonicalJSON(DEFAULT_DENSITY_TREE));
+  expect(canonicalJSON(params['surface']!['rules'])).not.toBe(canonicalJSON(DEFAULT_SURFACE_RULES));
   const entry = (v: Voxel, value: number) => ({ sy: (v.y + 64) >> 4, idx: (((v.y + 64) & 15) << 8) | ((v.z & 15) << 4) | (v.x & 15), value });
   const entries = [entry(dug, AIR << 8), entry(cave, STONE << 8)];
   expect((await kv.write([
@@ -259,7 +284,7 @@ test('a GV8 world with edits where the rock floor closes opens with the floor an
     const loaded = loadParams(p.kept());
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
-    // Identity (ruling P14): the GV8 surface tree still equals today's canonically, so only `toBe` shows the migration ran.
+    // Identity (ruling P14); since SP6b's rule 4 (Task 22) the GV8 surface tree differs from today's canonically too.
     expect(loaded.value.density.defs).toBe(resolveProfile('default').density.defs);
     expect(loaded.value.surface.rules).toBe(resolveProfile('default').surface.rules);
     expect(canonicalJSON(loaded.value.density.defs)).toBe(canonicalJSON(DEFAULT_DENSITY_TREE));
@@ -272,8 +297,10 @@ test('a GV8 world with edits where the rock floor closes opens with the floor an
       // The dug voxel under the floor: air, cave byte 0 (it was rock, not cave).
       expect(p.store.blockAt(dug.x, dug.y, dug.z)).toBe(AIR);
       expect(fin.cave(dug.x & 15, dug.y, dug.z & 15)).toBe(0);
-      // The placed stone keeps its column's whole cave byte (kind and cave biome; `replaceBlocks` keeps the cave entry).
+      // The placed stone keeps its column's whole cave byte (kind and cave biome; `replaceBlocks` keeps the cave entry)
+      // and its state (Task 22): the published edit is never re-ruled, so no moss, dripstone, ash or strata replaces it.
       expect(p.store.blockAt(cave.x, cave.y, cave.z)).toBe(STONE);
+      expect(fin.block(cave.x & 15, cave.y, cave.z & 15)).toBe(STONE);
       expect(fin.cave(cave.x & 15, cave.y, cave.z & 15)).toBe(caveByte);
 
       // The X-ray: the dug voxel is not hollow (air, tag 0), so it owns no face, and no neighbour shows a wall toward it.

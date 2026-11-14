@@ -288,6 +288,10 @@ describe('the default trees as data (SP3d spec §2)', () => {
 
   test('DEFAULT_SURFACE_RULES has as many rule and condition nodes as the fixture (refs are not nodes)', () => {
     expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(countTreeNodes(fixture() as JsonValue, 'surfaceRules'));
-    expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(163);
+    // SP3c's 163 and SP6b's rule 4 (its spec §3.4): the sequence, the abyss branch's 11 (its condition and here gate,
+    // the sequence, the ash leaf's three gates and block, the strata), lush floors' 9, dripstone floors' 8, lush
+    // ceilings' 7 and dripstone ceilings' 8.
+    expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(163 + 1 + 11 + 9 + 8 + 7 + 8);
+    expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(207);
   });
 });

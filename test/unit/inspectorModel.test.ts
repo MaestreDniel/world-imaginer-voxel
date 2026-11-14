@@ -105,16 +105,23 @@ describe('rows and summaries', () => {
       '2 defs.steep.b.b | b | clamp 0 … 1 [+]',
     ]);
     expect(rowsOf(t, 'surface.rules').map(brief)).toEqual([
-      '0 root | root | sequence 3 [-]',
+      '0 root | root | sequence 4 [-]',
       '1 root.rules[0] | rules[0] | if verticalGradient -64 … -59 → bedrock [-]',
       '2 root.rules[0].if | if | verticalGradient -64 … -59',
       '2 root.rules[0].then | then | block bedrock',
       '1 root.rules[1] | rules[1] | if skyOpen [-]',
       '2 root.rules[1].if | if | skyOpen',
       '2 root.rules[1].then | then | sequence 5 [+]',
-      '1 root.rules[2] | rules[2] | if verticalGradient 0 … 8 → deepslate [-]',
-      '2 root.rules[2].if | if | verticalGradient 0 … 8',
-      '2 root.rules[2].then | then | block deepslate',
+      // SP6b's rule 4 (its spec §3.4), then the deepslate gradient at root.rules[3].
+      '1 root.rules[2] | rules[2] | sequence 5 [-]',
+      '2 root.rules[2].rules[0] | rules[0] | if caveBiome here [abyss] [+]',
+      '2 root.rules[2].rules[1] | rules[1] | if stoneDepth floor 1 [+]',
+      '2 root.rules[2].rules[2] | rules[2] | if stoneDepth floor 1 [+]',
+      '2 root.rules[2].rules[3] | rules[3] | if stoneDepth ceiling 0 [+]',
+      '2 root.rules[2].rules[4] | rules[4] | if stoneDepth ceiling 1 [+]',
+      '1 root.rules[3] | rules[3] | if verticalGradient 0 … 8 → deepslate [-]',
+      '2 root.rules[3].if | if | verticalGradient 0 … 8',
+      '2 root.rules[3].then | then | block deepslate',
     ]);
     const root = rowsOf(t, 'density.defs')[0]!;
     expect([root.kind, root.title, root.leaf]).toEqual(['max', 'density.defs.root', 'density.defs']);
@@ -294,7 +301,8 @@ describe('expansion, expand to selection and the indentation cap', () => {
     expect(rootRows(e)).toEqual(['root']);
     // SP6b Task 19: `defs.steep` (S_w + S_b) shows 7 rows where `defs.wetSteep` showed 5, and `defs.floorGentle` 4.
     expect(rowsOf(inspectorTree(DEFAULTS, e, null), 'density.defs').filter((r) => r.path.startsWith('defs.'))).toHaveLength(20);
-    expect(rowsOf(inspectorTree(DEFAULTS, e, null), 'surface.rules')).toHaveLength(10);
+    // SP6b's rule 4 (Task 22) adds its row and its five branches' rows.
+    expect(rowsOf(inspectorTree(DEFAULTS, e, null), 'surface.rules')).toHaveLength(16);
     e = toggleExpansion(e, 'density.defs', 'root.a.a', 2);
     expect(rootRows(e)).toEqual(['root']);
     e = toggleExpansion(e, 'density.defs', 'root', 0);
@@ -407,7 +415,7 @@ describe('selection follows the longest prefix that still names a node', () => {
 
   test('findNode reads own properties only', () => {
     expect(findNode(DEFAULT_DENSITY_TREE, 'density', 'root.b')).toEqual({ op: 'tap', name: 'islands', x: { op: 'const', v: -1000000 } });
-    expect(findNode(DEFAULT_SURFACE_RULES, 'surfaceRules', 'root.rules[2].if')).toEqual({ kind: 'verticalGradient', trueAtAndBelow: 0, falseAtAndAbove: 8 });
+    expect(findNode(DEFAULT_SURFACE_RULES, 'surfaceRules', 'root.rules[3].if')).toEqual({ kind: 'verticalGradient', trueAtAndBelow: 0, falseAtAndAbove: 8 });
     expect(findNode(DEFAULT_SURFACE_RULES, 'surfaceRules', 'root')).toBe(DEFAULT_SURFACE_RULES);
     for (const p of ['root.toString', 'defs.constructor', 'root.__proto__', 'root.a.knots', 'root.rules[3]', '']) {
       expect(findNode(DEFAULT_DENSITY_TREE, 'density', p)).toBeUndefined();
