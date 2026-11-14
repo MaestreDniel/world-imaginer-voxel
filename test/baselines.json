@@ -8,157 +8,157 @@
       "ratio": 1
     },
     "lattice3.slice": {
-      "nsPerEval": 22.34,
-      "ratio": 35.086
+      "nsPerEval": 22.369,
+      "ratio": 35.138
     },
     "perm512.slice": {
-      "nsPerEval": 28.148,
-      "ratio": 44.208
+      "nsPerEval": 27.82,
+      "ratio": 43.702
     },
     "lattice3.random": {
-      "nsPerEval": 22.679,
-      "ratio": 35.578
+      "nsPerEval": 22.631,
+      "ratio": 35.549
     },
     "perm512.random": {
-      "nsPerEval": 27.189,
-      "ratio": 42.702
+      "nsPerEval": 27.422,
+      "ratio": 43.084
     },
     "normal.z2.climateC": {
-      "nsPerEval": 314.506,
-      "ratio": 493.949
+      "nsPerEval": 324.218,
+      "ratio": 509.396
     },
     "normal.z3.density3d": {
-      "nsPerEval": 218.632,
-      "ratio": 343.438
+      "nsPerEval": 222.227,
+      "ratio": 349.22
     },
     "spline.offset": {
-      "nsPerEval": 44.608,
-      "ratio": 70.059
+      "nsPerEval": 45.165,
+      "ratio": 70.961
     },
     "spline.mix3": {
-      "nsPerEval": 86.831,
-      "ratio": 136.346
+      "nsPerEval": 87.19,
+      "ratio": 136.99
     },
     "detErf": {
-      "nsPerEval": 3.122,
+      "nsPerEval": 3.12,
       "ratio": 4.903
     },
     "stageHashes.genKey": {
-      "nsPerEval": 510974.219,
-      "ratio": 802357.83
+      "nsPerEval": 508314.062,
+      "ratio": 798639.969
     },
     "column.point": {
-      "nsPerEval": 15272.641,
-      "ratio": 23981.881
+      "nsPerEval": 15511.195,
+      "ratio": 24370.486
     },
     "column.sample": {
-      "nsPerEval": 338628,
-      "ratio": 532036.934
+      "nsPerEval": 344987,
+      "ratio": 541923.97
     },
     "map.tile.b64.biome": {
-      "nsPerEval": 310628805,
-      "ratio": 487952285.384
+      "nsPerEval": 312763149.5,
+      "ratio": 491210836.237
     },
     "map.tile.b16.relief": {
-      "nsPerEval": 300158308.5,
-      "ratio": 471323914.591
+      "nsPerEval": 302673579.5,
+      "ratio": 475455793.767
     },
     "worker.configure": {
-      "nsPerEval": 3559233.5,
-      "ratio": 5589961.814
+      "nsPerEval": 3583649,
+      "ratio": 5630466.556
     },
     "map.tile.b256.biome": {
-      "nsPerEval": 48854095,
-      "ratio": 76757335.287
+      "nsPerEval": 50511443,
+      "ratio": 79330855.298
     },
     "map.tile.b256.relief": {
-      "nsPerEval": 50773456.5,
-      "ratio": 79696523.423
+      "nsPerEval": 52225359.5,
+      "ratio": 82038378.703
     },
     "store.alloc": {
-      "nsPerEval": 156.458,
-      "ratio": 245.679
+      "nsPerEval": 156.513,
+      "ratio": 245.954
     },
     "density.corner": {
-      "nsPerEval": 2769.557,
-      "ratio": 3737.761
+      "nsPerEval": 2257.442,
+      "ratio": 3546.11
     },
     "density.cornerInlined": {
-      "nsPerEval": 992.592,
-      "ratio": 1350.941
+      "nsPerEval": 814.3,
+      "ratio": 1279.145
     },
     "terrain.real": {
-      "nsPerEval": 11943585,
-      "ratio": 16220465.577
+      "nsPerEval": 10742826,
+      "ratio": 16872168.449
     },
     "caveBiome.column": {
-      "nsPerEval": 297545.5,
-      "ratio": 406655.445
+      "nsPerEval": 254876,
+      "ratio": 400449.596
     },
     "surface.column": {
-      "nsPerEval": 1464062,
-      "ratio": 2055105.534
+      "nsPerEval": 1288437,
+      "ratio": 2025110.494
     },
     "slice.vertical128": {
-      "nsPerEval": 134941584,
-      "ratio": 189580081.583
+      "nsPerEval": 116150720,
+      "ratio": 182525742.856
     },
     "slice.horizontal128": {
-      "nsPerEval": 1110835465,
-      "ratio": 1499417389.366
+      "nsPerEval": 1170471807,
+      "ratio": 1568799908.151
     },
     "slice.partWorst": {
-      "nsPerEval": 62644551,
-      "ratio": 98443154.06
+      "nsPerEval": 78658720,
+      "ratio": 102574376.873
     },
     "session.commitMaxTree": {
-      "nsPerEval": 3282031,
-      "ratio": 5154600.829
+      "nsPerEval": 3636348.5,
+      "ratio": 5176188.859
     },
     "terrain.islands": {
-      "nsPerEval": 14150716,
-      "ratio": 18981933.079
+      "nsPerEval": 14127964.5,
+      "ratio": 18444029.491
     },
     "light.column": {
-      "nsPerEval": 2612230.5,
-      "ratio": 3717754.041
+      "nsPerEval": 2608088.5,
+      "ratio": 3529147.828
     },
     "mesh.section": {
-      "nsPerEval": 365897.5,
-      "ratio": 508642.851
+      "nsPerEval": 381986,
+      "ratio": 505611.457
     },
     "relight.edit": {
-      "nsPerEval": 27204,
-      "ratio": 38173.205
+      "nsPerEval": 27670.5,
+      "ratio": 37810.965
     },
     "persist.flush": {
-      "nsPerEval": 813540.5,
-      "ratio": 1153231.319
+      "nsPerEval": 877275,
+      "ratio": 1112654.712
     },
     "paste.max": {
-      "nsPerEval": 190252967,
-      "ratio": 261151526.487
+      "nsPerEval": 175335907.5,
+      "ratio": 227883825.765
     },
     "paste.maxLit": {
-      "nsPerEval": 294623738.5,
-      "ratio": 408938946.795
+      "nsPerEval": 288247233.5,
+      "ratio": 381227209.605
     },
     "terrain.caves.warm": {
-      "nsPerEval": 10799788.5,
-      "ratio": 15488772.268
+      "nsPerEval": 11027166.5,
+      "ratio": 14891946.578
     },
     "carver.paths": {
-      "nsPerEval": 24989,
-      "ratio": 37965.484
+      "nsPerEval": 32052.5,
+      "ratio": 40136.668
     },
     "mesh.xray": {
-      "nsPerEval": 21489,
-      "ratio": 33743.126
+      "nsPerEval": 23848.5,
+      "ratio": 33504.873
     },
     "slice.caves128": {
-      "nsPerEval": 223252615,
-      "ratio": 350764369.113
+      "nsPerEval": 276842793,
+      "ratio": 350687515.157
     }
   },
-  "killRatio": 0.834
+  "killRatio": 0.825
 }

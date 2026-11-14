@@ -46,14 +46,14 @@ const SP3C_REGISTRY_BYTES = new Uint8Array(PALETTE.flatMap(([name, sound, tint, 
   ...ascii(name), 0, ...u16(3 + i), 15, 1, 1, 63, 0, carvable, 0, 1, 0, tint, sound, ...Array<number>(12).fill(0),
 ]));
 
-test('2 unique SP3c keys, chained into allGoldenKeys after SP3b\'s (SP3e\'s 5, SP6a\'s 3 and SP6b\'s 2 follow): 64 goldens', () => {
+test('2 unique SP3c keys, chained into allGoldenKeys after SP3b\'s (SP3e\'s 5, SP6a\'s 3 and SP6b\'s 3 follow): 65 goldens', () => {
   const keys = sp3cGoldenKeys();
   expect(keys).toEqual(['sp3c.registry', 'sp3c.surface.ops']);
   expect(sp3cGoldenKeys().length).toBe(2);
-  expect(allGoldenKeys().slice(-12, -10)).toEqual(keys);
-  expect(allGoldenKeys().slice(-14, -12)).toEqual(['sp3b.density.ops', 'sp3b.density.default']);
-  expect(allGoldenKeys().length).toBe(64);
-  expect(new Set(allGoldenKeys()).size).toBe(64);
+  expect(allGoldenKeys().slice(-13, -11)).toEqual(keys);
+  expect(allGoldenKeys().slice(-15, -13)).toEqual(['sp3b.density.ops', 'sp3b.density.default']);
+  expect(allGoldenKeys().length).toBe(65);
+  expect(new Set(allGoldenKeys()).size).toBe(65);
   for (const bad of ['sp3c.surface', 'sp3c.surface.ops.x', 'sp3c.surface.default', 'sp3c.registry.x', 'sp3c.nope']) {
     expect(() => computeSp3cGolden(bad)).toThrow(/unknown golden/);
     expect(() => computeAnyGolden(bad)).toThrow(/unknown golden/);

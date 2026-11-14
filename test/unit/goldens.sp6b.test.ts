@@ -3,10 +3,11 @@
  * §6.4's registry byte stream over SP6b's seven types, states 58 … 64 (SP6b spec §4, D36), written here from the §4
  * table, as `sp3c.registry` (a fixed range, so states appended later never change it). The generator push appends
  * `sp6b.caveBiome.points` (Task 17: the picker at 64 fixed 3D points, recomputed here from the module comment) and
- * `sp6b.region.T.biomes`. The keys match `test/goldens.json`.
+ * `sp6b.region.T.biomes` (Task 31: the first 8 × 8 window of the biome region holding the three cave biomes, its
+ * candidates written here from the module comment). The keys match `test/goldens.json`.
  */
 import { describe, expect, test } from 'vitest';
-import { CAVE_BIOME } from '../../src/core/constants';
+import { CAVE_BIOME, caveBiomeOf } from '../../src/core/constants';
 import { fnv1a32, fnv1a64Bytes, hex64 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { Xoshiro128 } from '../../src/core/rng';
@@ -17,11 +18,16 @@ import { createGenContext } from '../../src/gen/context';
 import { allGoldenKeys, computeAnyGolden } from '../../src/metrics/sp2aGoldens';
 import { registryDigest } from '../../src/metrics/sp3aGoldens';
 import { sp3cRegistryDigest } from '../../src/metrics/sp3cGoldens';
-import { caveBiomePoints, caveBiomePointsDigest, computeSp6bGolden, sp6bGoldenKeys, sp6bRegistryDigest } from '../../src/metrics/sp6bGoldens';
+import { regionHash } from '../../src/metrics/region';
+import {
+  BIOME_SCAN_REGION, BIOMES_WINDOW, biomesWindowCandidates, biomesWindowStore, caveBiomePoints, caveBiomePointsDigest,
+  computeSp6bGolden, sp6bGoldenKeys, sp6bRegistryDigest,
+} from '../../src/metrics/sp6bGoldens';
 import { BLOCK_DEFS } from '../../src/world/blocks/defs';
 import { REGISTRY } from '../../src/world/blocks/index';
 import { buildRegistry, type BlockDef } from '../../src/world/blocks/registry';
 import { SOLID_TABLES } from '../harness/blockFixtures';
+import { BIOME_REGION } from '../harness/caveSites';
 import { expectGolden } from '../harness/goldens';
 
 const ascii = (s: string): number[] => [...s].map((c) => c.charCodeAt(0));
@@ -44,14 +50,16 @@ const SP6B_REGISTRY_BYTES = new Uint8Array(SP6B.flatMap(([name, sound], i) => [
   ...ascii(name), 0, ...u16(50 + i), 15, 1, 1, 63, 0, 1, 0, 1, 0, 0, sound, ...Array<number>(12).fill(0),
 ]));
 
-test('2 SP6b keys, chained last into allGoldenKeys after SP6a\'s: 64 goldens', () => {
-  const keys = ['sp6b.registry', 'sp6b.caveBiome.points'];
+test('3 SP6b keys, chained last into allGoldenKeys after SP6a\'s: 65 goldens', () => {
+  const keys = ['sp6b.registry', 'sp6b.caveBiome.points', 'sp6b.region.T.biomes'];
   expect(sp6bGoldenKeys()).toEqual(keys);
-  expect(allGoldenKeys().slice(-2)).toEqual(keys);
-  expect(allGoldenKeys().slice(-5, -2)).toEqual(['sp6a.density.ops', 'sp6a.carver.paths', 'sp6a.region.T.caves']);
-  expect(allGoldenKeys()).toHaveLength(64);
-  expect(new Set(allGoldenKeys()).size).toBe(64);
-  for (const bad of ['sp6b.registry.x', 'sp6b.region.T.biomes', 'sp6b.caveBiome.points.x', 'sp6b.nope']) {
+  expect(allGoldenKeys().slice(-3)).toEqual(keys);
+  expect(allGoldenKeys().slice(-6, -3)).toEqual(['sp6a.density.ops', 'sp6a.carver.paths', 'sp6a.region.T.caves']);
+  expect(allGoldenKeys()).toHaveLength(65);
+  expect(new Set(allGoldenKeys()).size).toBe(65);
+  for (const bad of [
+    'sp6b.registry.x', 'sp6b.region.T', 'sp6b.region.T.biomes.x', 'sp6b.region.T.default', 'sp6b.caveBiome.points.x', 'sp6b.nope',
+  ]) {
     expect(() => computeSp6bGolden(bad)).toThrow(/unknown golden/);
     expect(() => computeAnyGolden(bad)).toThrow(/unknown golden/);
   }
@@ -122,6 +130,51 @@ describe('sp6b.caveBiome.points (§14.3, Task 17)', () => {
     expect(new Set(ids).size).toBeGreaterThan(1);
     expect(ids.every((b) => b >= CAVE_BIOME.plain && b <= CAVE_BIOME.abyss)).toBe(true);
   });
+});
+
+describe('sp6b.region.T.biomes (§14.3, Task 31)', () => {
+  /** The stored cave-biome nibbles (ids 0-15) the 8 × 8 window at chunk (cx0, cz0) holds, as bits. */
+  const biomeMask = (cx0: number, cz0: number): number => {
+    const store = biomesWindowStore(cx0, cz0);
+    let mask = 0;
+    for (let cz = cz0; cz < cz0 + 8; cz++) {
+      for (let cx = cx0; cx < cx0 + 8; cx++) {
+        const v = store.proto(cx, cz);
+        expect(v, `column (${cx}, ${cz}) has a proto set`).not.toBeNull();
+        for (let sy = 0; sy < 24; sy++) {
+          const c = v!.sectionCave(sy);
+          if (typeof c === 'number') mask |= 1 << caveBiomeOf(c);
+          else for (let i = 0; i < 4096; i++) mask |= 1 << caveBiomeOf(c[i]!);
+        }
+      }
+    }
+    return mask;
+  };
+  const ALL = (1 << CAVE_BIOME.lush) | (1 << CAVE_BIOME.dripstone) | (1 << CAVE_BIOME.abyss);
+
+  test('the scan\'s region mirrors the harness\'s BIOME_REGION; its candidates are the 16 tiles, z rows then x', () => {
+    expect(BIOME_SCAN_REGION).toEqual(BIOME_REGION);
+    expect(BIOME_SCAN_REGION).toEqual([-112, 80]);
+    const want: Array<[number, number]> = [];
+    for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) want.push([-112 + 8 * i, 80 + 8 * j]);
+    expect(biomesWindowCandidates()).toEqual(want);
+    // The window is tile (1, 2), the 10th candidate.
+    expect(biomesWindowCandidates()[9]).toEqual(BIOMES_WINDOW);
+    expect(BIOMES_WINDOW).toEqual([-104, 96]);
+  });
+
+  test('the window holds a voxel of each cave biome 1-3 in its stored nibbles and no candidate before it does; the key is its regionHash', () => {
+    const cands = biomesWindowCandidates();
+    const at = cands.findIndex(([x, z]) => x === BIOMES_WINDOW[0] && z === BIOMES_WINDOW[1]);
+    for (const [cx0, cz0] of cands.slice(0, at)) {
+      expect((biomeMask(cx0, cz0) & ALL) === ALL, `candidate (${cx0}, ${cz0}) holds the three biomes`).toBe(false);
+    }
+    const [cx0, cz0] = BIOMES_WINDOW;
+    expect(biomeMask(cx0, cz0) & ALL).toBe(ALL);
+    const store = biomesWindowStore();
+    expect(computeSp6bGolden('sp6b.region.T.biomes')).toBe(hex64(regionHash(store, cx0, cz0, 8, 8)));
+    expect(computeAnyGolden('sp6b.region.T.biomes')).toBe(computeSp6bGolden('sp6b.region.T.biomes'));
+  }, 600_000); // 12 windows of 8 × 8 chunks up to T in process
 });
 
 describe('SP6b goldens', () => {
