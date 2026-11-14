@@ -1,5 +1,5 @@
 {
-  "sha256": "0cdec9b4714360be56cad1f449316f48cd12e35b72970e76420ae5fcbc6fac02",
+  "sha256": "06a74799c26097e3a05c0f3a88014aeffea26ee782b0796f2891da83af29eb48",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -108,6 +108,41 @@
         "riverChannelWater": {
           "activeFrom": "SP3c",
           "min": 0.85
+        }
+      },
+      "B3": {
+        "abyssMin": {
+          "activeFrom": "SP6b",
+          "min": 0.005
+        },
+        "abyssRockStraight": {
+          "activeFrom": "SP6b",
+          "max": 0.1
+        },
+        "borderLattice": {
+          "activeFrom": "SP6b",
+          "max": 1.1,
+          "min": 0.9
+        },
+        "dripstoneMin": {
+          "activeFrom": "SP6b",
+          "min": 0.005
+        },
+        "flatBorder": {
+          "activeFrom": "SP6b",
+          "max": 0.05
+        },
+        "lushMin": {
+          "activeFrom": "SP6b",
+          "min": 0.005
+        },
+        "straightBorder": {
+          "activeFrom": "SP6b",
+          "max": 0.1
+        },
+        "windowAir": {
+          "activeFrom": "SP6b",
+          "min": 50000
         }
       },
       "B4": {
@@ -259,6 +294,10 @@
           "activeFrom": "SP6a",
           "max": 1.1,
           "min": 0.9
+        },
+        "bottomFloorSpread": {
+          "activeFrom": "SP6b",
+          "min": 6
         },
         "bottomPlane": {
           "activeFrom": "SP6b",

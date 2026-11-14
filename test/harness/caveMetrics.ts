@@ -2067,8 +2067,11 @@ export function poolBorderCounts(counts: readonly CaveBorderCounts[]): CaveBorde
   return out;
 }
 
-/** The value farthest from 1 (|ln v| largest; 0 is infinitely far); NaN values left out, NaN when all are. */
-function farthestFromOne(values: readonly number[]): number {
+/**
+ * The value farthest from 1 (|ln v| largest; 0 is infinitely far); NaN values left out, NaN when all are. Exported for
+ * the worst job's two-sided ratio (`B3.borderLattice`, `caves.metric.ts`).
+ */
+export function farthestFromOne(values: readonly number[]): number {
   let value = Number.NaN;
   let worst = -1;
   for (const v of values) {

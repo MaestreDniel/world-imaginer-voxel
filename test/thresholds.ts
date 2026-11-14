@@ -49,6 +49,17 @@ export const THRESHOLDS: ThresholdTable = {
     riverChannelWater: { min: 0.85, activeFrom: 'SP3c' },
   },
   B5: { perKm2Min: { min: 0.2, activeFrom: 'SP2a' }, perKm2Max: { max: 2, activeFrom: 'SP2a' }, highShare: { min: 0.3, activeFrom: 'SP2a' } },
+  // SP6b spec §12.1-§12.2 (D26; Task 30): the cave-biome shares per 8 × 8 km window of the default profile's T1 scatter
+  // (`terrain.metric.ts`, `.out/B3.shares.json`; master :1505's 0.5 %, and the window's 50,000 cave-air voxels); the
+  // border parts per job and the worst job's (`caves.metric.ts`, `.out/B3.borders.json`: the default, presets and
+  // biomes jobs, as its `B3_BORDERS_GATED` names) and the abyss rock's boundary (`.out/B3.abyssRock.json`: the biomes
+  // job; the default job records it, its regions holding no abyss rock on a wall), at the spec's proposed bounds.
+  B3: {
+    lushMin: { min: 0.005, activeFrom: 'SP6b' }, dripstoneMin: { min: 0.005, activeFrom: 'SP6b' }, abyssMin: { min: 0.005, activeFrom: 'SP6b' },
+    windowAir: { min: 50000, activeFrom: 'SP6b' },
+    borderLattice: { min: 0.9, max: 1.1, activeFrom: 'SP6b' }, straightBorder: { max: 0.1, activeFrom: 'SP6b' }, flatBorder: { max: 0.05, activeFrom: 'SP6b' },
+    abyssRockStraight: { max: 0.1, activeFrom: 'SP6b' },
+  },
   U2: { value: { min: 1, activeFrom: 'SP2b' } },
   // SP4a spec §9.1 (D25): the light part, the upTo 'L' region hash over threads and orders (`light.metric.ts`).
   // SP6a spec §10.3: the carver path cache's parts, the region hash at an LRU of 1, of 1,024 and warm from another
@@ -120,6 +131,11 @@ export const THRESHOLDS: ThresholdTable = {
     // SP6b spec §12.3 (D6, D26; Task 21): the cave-air voxels face-adjacent to a bedrock voxel, per group and the worst
     // group's (`.out/C7.bedrockExposed.json`); gated in the commit after the floor's, which read it 0 on every group.
     bedrockExposed: { max: 0, activeFrom: 'SP6b' },
+    // SP6b spec §12.3 (D6, D26; Task 30): the floor not a plane at another height (`bottomFloorSpread`: the median
+    // 10th-90th percentile range of the large components' floor-face y), per group and the worst group's
+    // (`.out/C7.bottom.json`). `bottomFlatRatio` is recorded beside it: its proposed 1.5 misses on fast and full (the
+    // user's bound, Task 30 Step 4).
+    bottomFloorSpread: { min: 6, activeFrom: 'SP6b' },
   },
   C8: {
     aperiodicity: { min: 0.63, activeFrom: 'SP6a', tiers: ['quick', 'full'] }, typeMixVariation: { min: 0.021, activeFrom: 'SP6a' },

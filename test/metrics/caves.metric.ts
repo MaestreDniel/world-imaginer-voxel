@@ -12,7 +12,7 @@ import { findSpawn } from '../../src/gen/column/spawn';
 import { createGenContext } from '../../src/gen/context';
 import {
   abyssRockStraight, aperiodicRatios, BIOME_EXAMPLE_IDS, poolAbyssRockCounts, poolBorderCounts, borderSampleProblems, bandDetail, borderPlaneRatio, BORDER_PAIR_NAMES, C1_C6_PARTS, caveBorderParts, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, caveBottomGroups, caveBottomParts, emptyBandCounts,
-  emptyLayerCounts, emptyWallResidues, EXAMPLE_IDS, floorFaceResidues, GRID_H, GRID_Y0, SP6B_EXAMPLE_IDS, verticalStepDetail,
+  emptyLayerCounts, farthestFromOne, emptyWallResidues, EXAMPLE_IDS, floorFaceResidues, GRID_H, GRID_Y0, SP6B_EXAMPLE_IDS, verticalStepDetail,
   type C1C6Part, type C7C9Part, type CaveBottomParts, type CaveC7C9Counts, type CavePose, type CaveRegionCounts,
 } from '../harness/caveMetrics';
 import type { CaveRegionResult } from '../harness/caveRegionWorker';
@@ -34,7 +34,7 @@ import { metricTest } from '../harness/metric';
  * - the presets group (the three preset regions): the pure parts and `islandCapAir` (`C7.construction`);
  * - both: `carverReference` (max 0 per region, so the sum over the jobs is the unsplit value), and the per-group parts
  *   of C7-C9 (`C7.tuning`: verticalStep, flatWallShare, waterWall; `C9`: nearestEntrance, holedSurface) and C7's
- *   bottom parts (`C7.bottomPlane`, `C7.bedrockExposed`, SP6b spec §12.3), each the worst of the groups the job measures
+ *   bottom parts (`C7.bottomPlane`, `C7.bedrockExposed`, `C7.bottom`; SP6b spec §12.3), each the worst of the groups the job measures
  *   (`c7c9Parts`, `caveBottomParts`; ruling P2), so the worst over the jobs is the unsplit value; these read the default
  *   and preset regions only;
  * - the biomes group (SP6b spec §12.2-§12.3, §13; the `caves-biomes` job, Task 27: `cave_heavy`'s regions on quick and
@@ -42,11 +42,12 @@ import { metricTest } from '../harness/metric';
  *   `C1.caveHeavy` (`caveHeavyMin`, `caveHeavyMax`: both `cave_heavy`'s void share, recorded until SP12) with C2 and C9
  *   on `cave_heavy` in `.out/caves.caveHeavy.json`; the biome region's T window re-checked (ruling P33); its review
  *   poses and `cave_heavy`'s spawn in `.out/caveBiomes.examples.json`;
- * - every group: B3's border parts (SP6b spec §12.2; recorded, Task 26), per job: each job's own record,
- *   `.out/B3.borders.<group>.json`; in `biomes` each biome | plain pair needs 2,000 border faces (an insufficient sample
- *   fails, Task 27);
- * - the default and biomes groups: `B3.abyssRockStraight` (§12.2; recorded, Task 28), per job over the default
- *   regions and the biome region, `.out/B3.abyssRock.<group>.json`;
+ * - every group: B3's border parts (SP6b spec §12.2; Task 26), per job: each job's own record,
+ *   `.out/B3.borders.<group>.json`; gated (`B3.borders`, Task 30) in the groups `B3_BORDERS_GATED` names, each job its
+ *   own regions; in `biomes` each biome | plain pair needs 2,000 border faces (an insufficient sample fails, Task 27);
+ * - the default and biomes groups: `B3.abyssRockStraight` (§12.2; Task 28), per job over the default regions and the
+ *   biome region, `.out/B3.abyssRock.<group>.json`; gated (`B3.abyssRock`, Task 30) in the groups
+ *   `B3_ABYSS_ROCK_GATED` names;
  * - the biomes group (Task 28): B3's regular-grid check (§12.2, pure, `test/harness/caveZones.ts`) in
  *   `.out/B3.zoneGrid.json`, and `cave_heavy`'s per-biome cave-air shares over its regions (§12.1) in
  *   `.out/B3.caveHeavy.json`.
@@ -588,7 +589,8 @@ if (C1_C9_GROUPS) {
  *   SP6b at max 0.01 (§5.2's floor holds it by construction: no cave air below `caves.floor.y` + 5);
  * - `C7.bedrockExposed`, the cave-air voxels face-adjacent to a bedrock voxel, gated from SP6b at max 0 (Task 21: it read
  *   0 on every group after the floor), with every region's bedrock count > 0 asserted (ruling R16);
- * - recorded (Task 30 gates the first two at tuning): `C7.bottomFlatRatio`, `C7.bottomFloorSpread`, `C7.bottomFloorPeak`.
+ * - `C7.bottomFloorSpread` (min 6), gated from SP6b's tuning (Task 30); `C7.bottomFlatRatio` (its proposed 1.5 missed
+ *   on fast and full: its bound is the user's, Task 30 Step 4) and `C7.bottomFloorPeak` recorded beside it.
  * All per group, with the flat-floor histogram y −64 … −32, the cave air per 16-block band from y −64 and each region's
  * counts, in `.out/caves.bottom.json`.
  */
@@ -615,15 +617,16 @@ let bottomRun: Promise<CaveBottomParts> | null = null;
 /** C7's bottom parts, measured once (the first test to ask). */
 const bottom = (): Promise<CaveBottomParts> => (bottomRun ??= measureBottom());
 
-// C7.bottomPlane and C7.bedrockExposed in the default and the presets group's jobs (each the worst of its own groups);
-// the recorded bottom parts beside bottomPlane.
+// C7's bottom parts in the default and the presets group's jobs (each the worst of its own groups): bottomPlane and
+// bedrockExposed, then the tuning's bottomFloorSpread (Task 30) with the recorded bottomFlatRatio and bottomFloorPeak.
 if (C1_C9_GROUPS) {
-  metricTest('C7', ['bottomPlane'], async () => {
-    const p = await bottom();
-    return { bottomPlane: p.bottomPlane, bottomFlatRatio: p.bottomFlatRatio, bottomFloorSpread: p.bottomFloorSpread, bottomFloorPeak: p.bottomFloorPeak };
-  }, 900_000, { outName: 'C7.bottomPlane' });
+  metricTest('C7', ['bottomPlane'], async () => ({ bottomPlane: (await bottom()).bottomPlane }), 900_000, { outName: 'C7.bottomPlane' });
   metricTest('C7', ['bedrockExposed'], async () => ({ bedrockExposed: (await bottom()).bedrockExposed }), 900_000,
     { outName: 'C7.bedrockExposed' });
+  metricTest('C7', ['bottomFloorSpread'], async () => {
+    const p = await bottom();
+    return { bottomFlatRatio: p.bottomFlatRatio, bottomFloorSpread: p.bottomFloorSpread, bottomFloorPeak: p.bottomFloorPeak };
+  }, 900_000, { outName: 'C7.bottom' });
 }
 
 /** The scale of `metricTest`'s timeouts (`METRICS_TIMEOUT_SCALE`, SP6b spec §12.9), for the plain record test below. */
@@ -632,16 +635,31 @@ const TIMEOUT_SCALE = Number(process.env.METRICS_TIMEOUT_SCALE ?? '1');
 /** The job (`METRICS_CAVE_GROUPS`) a region belongs to: its group. */
 const jobOf = (s: Site): CaveGroup => s.group;
 
+/** The run's groups (`METRICS_CAVE_GROUPS`; every group with none, ruling P2). */
+const RUN_GROUPS: readonly CaveGroup[] = GROUP === null ? ['default', 'presets', 'biomes'] : [GROUP];
 /**
- * B3's border parts (SP6b spec §12.2, D26; Task 26: recorded, not gated: B3 has no THRESHOLDS row until the tuning task,
- * Task 30), as built in `test/harness/caveMetrics.ts` (`caveBorderCounts`, `caveBorderParts`): per job over the regions
+ * The groups whose jobs gate B3's border parts and `B3.abyssRockStraight` (SP6b spec §12.2, rulings P29, P38; Task 30):
+ * a literal per group, decided from Task 30 Step 1's dry run, never from a run's own counts (a short sample must not
+ * turn into a pass). The border parts: `biomes` always (its biome | plain pairs need 2,000 border faces each, so a short
+ * sample fails); `default` and `presets` because each read at least 2,000 border faces on every tier it has regions on
+ * (default 122,960 on fast, 1,203,848 on quick, 1,281,162 on full; presets 825,389 on quick, 2,349,531 on full, fast
+ * holding no preset region). `B3.abyssRockStraight`: `biomes` (the biome region) always; not `default`,
+ * whose regions show no abyss rock on a wall (0 boundary edges on every tier, below the 2,000 its rule asks), so its job
+ * records the part (`.out/B3.abyssRock.default.json`) instead of gating a NaN; never `presets` (§12.2).
+ */
+const B3_BORDERS_GATED: Readonly<Record<CaveGroup, boolean>> = { default: true, presets: true, biomes: true };
+const B3_ABYSS_ROCK_GATED: Readonly<Record<CaveGroup, boolean>> = { default: false, presets: false, biomes: true };
+
+/**
+ * B3's border parts' record (SP6b spec §12.2, D26; Task 26; gated by `B3.borders` below, Task 30), as built in
+ * `test/harness/caveMetrics.ts` (`caveBorderCounts`, `caveBorderParts`): per job over the regions
  * it holds (with every group in this one process, per group, so each record is the one its job writes alone; ruling
  * P2), overall and per biome pair: `borderLattice` (with each axis' ratio), `straightBorder`, `flatBorder`, the border
  * faces (per axis), and the painted skin's mix within 2 blocks of a border; with each region's overall values, in
- * `.out/B3.borders.<group>.json`. The overall border faces are the pairs' sum (each face has one pair). In the biomes
- * job each biome | plain pair needs 2,000 border faces, else the test fails as an insufficient sample (§12.2; Task 27).
+ * `.out/B3.borders.<group>.json`, for every job (a job whose group `B3_BORDERS_GATED` leaves out is recorded only). The
+ * overall border faces are the pairs' sum (each face has one pair).
  */
-test('B3: border parts per job and biome pair (recorded, not gated)', async () => {
+test('B3: border parts per job and biome pair (recorded)', async () => {
   const measured = await measuredRegions();
   const jobs = [...new Set(measured.map((m) => jobOf(m.site)))];
   mkdirSync(OUT_DIR, { recursive: true });
@@ -660,13 +678,44 @@ test('B3: border parts per job and biome pair (recorded, not gated)', async () =
     }));
     const pairFaces = BORDER_PAIR_NAMES.reduce((a, name) => a + parts.pairs[name]!.borderFaces, 0);
     expect(parts.overall.borderFaces, `B3 ${job}: the overall border faces are the pairs' sum`).toBe(pairFaces);
-    if (job === 'biomes') expect(borderSampleProblems(parts), `B3 ${job}`).toEqual([]);
   }
   expect(jobs.length).toBeGreaterThan(0);
 }, 900_000 * TIMEOUT_SCALE);
 
 /**
- * `B3.abyssRockStraight` (SP6b spec §12.2, ruling P30; Task 28: recorded, not gated: Task 30 gates it), as built in
+ * B3's border parts gated (SP6b spec §12.2, D26; Task 30) in the jobs of the groups `B3_BORDERS_GATED` names: each job's
+ * overall value over its own regions (the record above), the part the worst job's (`borderLattice` the value farthest
+ * from 1, `straightBorder` and `flatBorder` the largest; ruling P2), with each job's values and border faces beside it.
+ * The biomes job's three biome | plain pairs need 2,000 border faces each, else the part fails as an insufficient
+ * sample (§12.2; Task 27); its other pairs, and every job's pairs, are recorded only.
+ */
+if (RUN_GROUPS.some((g) => B3_BORDERS_GATED[g])) {
+  metricTest('B3', ['borderLattice', 'straightBorder', 'flatBorder'], async () => {
+    const measured = await measuredRegions();
+    const jobs = RUN_GROUPS.filter((g) => B3_BORDERS_GATED[g] && measured.some((m) => jobOf(m.site) === g));
+    expect(jobs.length, 'B3.borders: no gated job measured').toBeGreaterThan(0);
+    const rec: Record<string, number> = {};
+    const overall = jobs.map((job) => {
+      const parts = caveBorderParts(measured.filter((m) => jobOf(m.site) === job).map((m) => m.borders));
+      if (job === 'biomes') expect(borderSampleProblems(parts), `B3 ${job}`).toEqual([]);
+      const o = parts.overall;
+      rec[`borderLattice.${job}`] = o.borderLattice;
+      rec[`straightBorder.${job}`] = o.straightBorder;
+      rec[`flatBorder.${job}`] = o.flatBorder;
+      rec[`borderFaces.${job}`] = o.borderFaces;
+      return o;
+    });
+    return {
+      borderLattice: farthestFromOne(overall.map((o) => o.borderLattice)),
+      straightBorder: Math.max(...overall.map((o) => o.straightBorder)),
+      flatBorder: Math.max(...overall.map((o) => o.flatBorder)),
+      ...rec,
+    };
+  }, 900_000, { outName: 'B3.borders' });
+}
+
+/**
+ * `B3.abyssRockStraight`'s record (SP6b spec §12.2, ruling P30; Task 28; gated by `B3.abyssRock` below, Task 30), as built in
  * `caveMetrics.ts` (`abyssRockCounts`: the abyss rock's boundary edges between vertically adjacent exposed wall voxels,
  * one abyss rock and one other rock, on a wall plane both face, and the share of them in straight runs ≥ 8 along x or z
  * at one y): per job over the regions it measures for it, the default group's regions (`caves`) and the biome region
@@ -675,7 +724,7 @@ test('B3: border parts per job and biome pair (recorded, not gated)', async () =
  * The biome region holds abyss cave air by construction (ruling P33), so its job's abyss walls are asserted > 0.
  */
 if (DEFAULT_GROUP || BIOMES_GROUP) {
-  test('B3: abyssRockStraight per job (recorded, not gated)', async () => {
+  test('B3: abyssRockStraight per job (recorded)', async () => {
     const measured = (await measuredRegions()).filter((m) => m.abyssRock !== null);
     const jobs = [...new Set(measured.map((m) => jobOf(m.site)))];
     mkdirSync(OUT_DIR, { recursive: true });
@@ -690,6 +739,30 @@ if (DEFAULT_GROUP || BIOMES_GROUP) {
     }
     expect(jobs.length).toBeGreaterThan(0);
   }, 900_000 * TIMEOUT_SCALE);
+}
+
+/**
+ * `B3.abyssRockStraight` gated (SP6b spec §12.2, rulings P29, P30; Task 30) in the jobs of the groups
+ * `B3_ABYSS_ROCK_GATED` names: each job's value over its regions' pooled counts (the record above), the part the
+ * largest, with each job's value, boundary edges and abyss walls beside it (a job with no abyss rock on a wall reads NaN,
+ * which fails).
+ */
+if (RUN_GROUPS.some((g) => B3_ABYSS_ROCK_GATED[g])) {
+  metricTest('B3', ['abyssRockStraight'], async () => {
+    const measured = (await measuredRegions()).filter((m) => m.abyssRock !== null);
+    const jobs = RUN_GROUPS.filter((g) => B3_ABYSS_ROCK_GATED[g] && measured.some((m) => jobOf(m.site) === g));
+    expect(jobs.length, 'B3.abyssRock: no gated job measured').toBeGreaterThan(0);
+    const rec: Record<string, number> = {};
+    const values = jobs.map((job) => {
+      const c = poolAbyssRockCounts(measured.filter((m) => jobOf(m.site) === job).map((m) => m.abyssRock!));
+      const v = abyssRockStraight(c);
+      rec[`abyssRockStraight.${job}`] = v;
+      rec[`edges.${job}`] = c.edges;
+      rec[`abyssWalls.${job}`] = c.abyssWalls;
+      return v;
+    });
+    return { abyssRockStraight: Math.max(...values), ...rec };
+  }, 900_000, { outName: 'B3.abyssRock' });
 }
 
 // The default-only parts, with the default group.

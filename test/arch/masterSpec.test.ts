@@ -160,7 +160,9 @@
  * text as built with its under-water branches handed to SP7, and the "As built by SP6b" paragraph (the terrain stage's
  * version 5, `GENERATOR_VERSION` 9), moving the SP6a describe's "SP6b inserts rule 4 before rule 2" pin here; §6.4's
  * U2 row counts 193 leaves with rule 4's two noises. U2's full-tier audit (Task 29) words that row as built: each new
- * leaf on the class columns, the cave columns first, else on its bounded witness.
+ * leaf on the class columns, the cave columns first, else on its bounded witness. The tuning (Task 30) lands item 20's
+ * B3, C1, C6, C7 and S2 parts (B3's row with its parts and the bottom parts of C7, cross-checked against THRESHOLDS;
+ * C1's, C6's and C7's threshold cells move here from the SP6a describe, ruling P27) and item 5 (SP12's line).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2323,7 +2325,7 @@ describe('master spec amendments (SP6a §13)', () => {
       expect(i, `§6.4's C7 row does not name \`${part}\` after the previous part`).toBeGreaterThan(-1);
       from = i;
     }
-    expect(c7!.endsWith(' | 0 / 0 / 0 / 0 / 0.9-1.1 / ≤ 8.1 / ≤ 3.7% / ≤ 2 / ≤ 3.3 per km² |')).toBe(true);
+    // The threshold cell moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 20 appends the bottom parts; ruling P27).
     for (const part of parts) {
       const tiers = part === 'islandCapAir' ? { tiers: ['quick', 'full'] } : {};
       expect(THRESHOLDS.C7?.[part], `THRESHOLDS.C7.${part}`).toEqual({ max: 0, activeFrom: 'SP6a', ...tiers });
@@ -2344,8 +2346,10 @@ describe('master spec amendments (SP6a §13)', () => {
   test('§6.4\'s C1-C9 rows name the tuning parts and their bounds, which THRESHOLDS holds activeFrom SP6a (SP6a spec §13 item 18, §10.1, R21)', () => {
     const QF = ['quick', 'full'] as const;
     type Bound = { min?: number; max?: number; tiers?: readonly string[] };
-    const rows: Array<[id: 'C1' | 'C2' | 'C3' | 'C4' | 'C5' | 'C6' | 'C7' | 'C8' | 'C9', parts: Array<[part: string, bound: Bound]>, cell: string]> = [
-      ['C1', [['voidShareMin', { min: 0.05 }], ['voidShareMax', { max: 0.15 }]], '5-15%; cave_heavy 10-22%'],
+    // C1's, C6's and C7's threshold cells moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 20 rewords them;
+    // ruling P27): null here, their parts and bounds still checked.
+    const rows: Array<[id: 'C1' | 'C2' | 'C3' | 'C4' | 'C5' | 'C6' | 'C7' | 'C8' | 'C9', parts: Array<[part: string, bound: Bound]>, cell: string | null]> = [
+      ['C1', [['voidShareMin', { min: 0.05 }], ['voidShareMax', { max: 0.15 }]], null],
       ['C2', [['skyComponents', { min: 20 }], ['skyShare', { min: 0.2 }]], '≥ 20 per km² / ≥ 20%'],
       ['C3', [
         ['cheeseShare', { min: 0.2 }], ['spaghettiShare', { min: 0.1 }], ['noodleShare', { min: 0.005 }], ['carverShare', { min: 0.1 }],
@@ -2353,11 +2357,11 @@ describe('master spec amendments (SP6a §13)', () => {
       ], 'cheese ≥ 20%, spaghetti ≥ 10%, noodle ≥ 0.5% (2% until the SP6a user\'s check, R31), carvers ≥ 10%, entrances ≥ 2%; pillars in ≥ 90% of 8×8-chunk blocks; ravines ≥ 10/km² (sky-exposed ≥ 3/km²); the largest kind ≤ 70%'],
       ['C4', [['bands', { min: 0.02 }], ['floorPeak', { max: 0.1 }]], '≥ 2% each / ≤ 10%'],
       ['C5', [['largest', { max: 0.6, tiers: QF }], ['landCarved', { min: 0.6 }], ['thinnest', { min: 4 }], ['thinnestByKind', { min: 1.5 }]], '< 60% of void / ≥ 60% / ≥ 4 / ≥ 1.5'],
-      ['C6', [['latticeBias', { max: 1.25 }]], '≤ 1.1 (1.25 at SP6a (R21), 1.1 pending)'],
+      ['C6', [['latticeBias', { max: 1.25 }]], null],
       ['C7', [
         ['borderPlaneRatio', { min: 0.9, max: 1.1 }], ['verticalStep', { max: 8.1 }], ['flatWallShare', { max: 0.037 }], ['switchWall', { max: 2 }],
         ['waterWall', { max: 3.3 }],
-      ], '0 / 0 / 0 / 0 / 0.9-1.1 / ≤ 8.1 / ≤ 3.7% / ≤ 2 / ≤ 3.3 per km²'],
+      ], null],
       ['C8', [['aperiodicity', { min: 0.63, tiers: QF }], ['typeMixVariation', { min: 0.021 }], ['sizeSpread', { min: 1.5, tiers: QF }]], '≥ 0.63 / ≥ 0.021 / ≥ 1.5'],
       ['C9', [['nearestEntrance', { max: 192 }], ['entrancesMax', { max: 150, tiers: QF }], ['holedSurface', { max: 0.02 }], ['thinRoof', { max: 0.05 }]],
         '≤ 192 / ≤ 150 per km² / ≤ 2% / ≤ 5%'],
@@ -2368,7 +2372,7 @@ describe('master spec amendments (SP6a §13)', () => {
       expect(row, `no ${id} row in §6.4`).toBeDefined();
       const cells = row!.split(' | ');
       expect(cells.length, `${id}'s row has three cells`).toBe(3);
-      expect(cells[2], `${id}'s threshold cell`).toBe(`${cell} |`);
+      if (cell !== null) expect(cells[2], `${id}'s threshold cell`).toBe(`${cell} |`);
       let from = 0;
       for (const [part, bound] of parts) {
         const i = cells[1]!.indexOf(`\`${part}\``, from);
@@ -2746,5 +2750,70 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(abyss).toContain('The abyss surface-palette blocks are abyss_stone, abyss_stone_veined, cracked_abyss_stone, abyss_shale and abyss_ash (SP6b);');
     expect(abyss).not.toContain('are decided in the SP6b spec;');
     expect(abyss).toContain('the decoration blocks (crystals, dead roots, fossils, the exclusive mineral) in the SP8b spec;');
+  });
+
+  /** §6.4's row of `id`, split into its three cells. */
+  const row64 = (id: string): string[] => {
+    const row = text.split('\n').find((l) => l.startsWith(`| ${id} |`));
+    expect(row, `no ${id} row in §6.4`).toBeDefined();
+    const cells = row!.split(' | ');
+    expect(cells.length, `${id}'s row has three cells`).toBe(3);
+    return cells;
+  };
+  /** The parts named in a row's definition cell in this order, each with its THRESHOLDS bound, activeFrom SP6b. */
+  const sp6bParts = (id: 'B3' | 'C7', def: string, parts: Array<[part: string, bound: { min?: number; max?: number; tiers?: readonly string[] }]>): void => {
+    let from = 0;
+    for (const [part, bound] of parts) {
+      const i = def.indexOf(`\`${part}\``, from);
+      expect(i, `§6.4's ${id} row does not name \`${part}\` after the previous part`).toBeGreaterThan(-1);
+      from = i;
+      expect(THRESHOLDS[id]?.[part], `THRESHOLDS.${id}.${part}`).toEqual({ ...bound, activeFrom: 'SP6b' });
+    }
+    expect(Object.keys(THRESHOLDS[id] ?? {}).filter((p) => THRESHOLDS[id]?.[p]?.activeFrom === 'SP6b'), `${id}'s SP6b parts`).toEqual(parts.map(([p]) => p));
+  };
+
+  test('§6.4\'s B3 row names its parts as built with their bounds, which THRESHOLDS holds activeFrom SP6b (SP6b spec §15 item 20)', () => {
+    const [, def, cell] = row64('B3');
+    expect(cell).toBe('lush, dripstone, abyss each ≥ 0.5% of cave air / ≥ 50,000 voxels / 0.9-1.1 / ≤ 10% / ≤ 5% / ≤ 10% |');
+    sp6bParts('B3', def!, [
+      ['lushMin', { min: 0.005 }], ['dripstoneMin', { min: 0.005 }], ['abyssMin', { min: 0.005 }], ['windowAir', { min: 50000 }],
+      ['borderLattice', { min: 0.9, max: 1.1 }], ['straightBorder', { max: 0.1 }], ['flatBorder', { max: 0.05 }], ['abyssRockStraight', { max: 0.1 }],
+    ]);
+    expect(def).toContain('over the 4 × 4 windows of 8 × 8 km of the default profile\'s T1 scatter');
+    expect(def).toContain('per job, the part the worst job\'s (the default, presets and biomes jobs, decided from the tuning\'s dry run; the biomes job\'s lush, dripstone and abyss \\| plain pairs need 2,000 border faces each)');
+    expect(def).toContain('(the biomes job; the default job records it, its regions holding no abyss rock on a wall) (SP6b, its spec §12.1-§12.2; amended by SP6b)');
+  });
+
+  test('§6.4\'s C1, C6 and C7 rows as built: cave_heavy recorded, the 1.1 pending to SP12, the bottom parts (SP6b spec §15 item 20)', () => {
+    // Moved from the SP6a describe (ruling P27): C1's, C6's and C7's threshold cells, which SP6b rewords.
+    const [, c1, c1Cell] = row64('C1');
+    expect(c1Cell).toBe('5-15%; cave_heavy 10-22% (recorded from SP6b, gated in SP12) |');
+    expect(c1).toContain('SP6b\'s `caveHeavyMin` / `caveHeavyMax`, cave_heavy\'s share over its regions in the caves-biomes job (two at seed 42 on quick, eight on full), recorded from SP6b, gated in SP12 (amended by SP6b)');
+    expect(THRESHOLDS.C1?.caveHeavyMin).toEqual({ min: 0.10, activeFrom: 'SP12' });
+    expect(THRESHOLDS.C1?.caveHeavyMax).toEqual({ max: 0.22, activeFrom: 'SP12' });
+    expect(row64('C6')[2]).toBe('≤ 1.1 (1.25 at SP6a (R21), 1.1 pending (SP12, with the structural levers)) |');
+    const [, c7, c7Cell] = row64('C7');
+    expect(c7Cell).toBe('0 / 0 / 0 / 0 / 0.9-1.1 / ≤ 8.1 / ≤ 3.7% / ≤ 2 / ≤ 3.3 per km² / ≤ 1% / 0 / ≥ 6 |');
+    sp6bParts('C7', c7!, [['bottomPlane', { max: 0.01 }], ['bedrockExposed', { max: 0 }], ['bottomFloorSpread', { min: 6 }]]);
+    // Recorded, not gated (its bound is the user's, Task 30 Step 4).
+    expect(c7).toContain('recorded beside them, `bottomFlatRatio`, the share of flat floor faces (in ≥ 6 × 6 patches) among the wall faces at y ≤ −40 over the same share at y −39 … 0 (amended by SP6b)');
+    expect(THRESHOLDS.C7?.bottomFlatRatio).toBeUndefined();
+    // SP6a's tuning parts keep their place before SP6b's (the SP6a describe pins them).
+    expect(c7!.indexOf('`waterWall`')).toBeLessThan(c7!.indexOf('`bottomPlane`'));
+  });
+
+  test('§6.4\'s S2 row: the SP6b blocks leave deepslateBelow0\'s counts (SP6b spec §15 item 20)', () => {
+    const [, s2, cell] = row64('S2');
+    expect(s2).toContain('the SP6b blocks leave `deepslateBelow0`\'s counts (moss_block, dripstone_block, the abyss rock and ash are neither stone nor deepslate, and the abyss\'s strata place no stone; amended by SP6b)');
+    expect(cell).toBe('≥ 95% / ≤ 1% / 100% |');
+  });
+
+  test('§10\'s SP12 line: the flat-wall note, the refill by Point 3, C6\'s 1.1 with its levers (SP6b spec §15 item 5)', () => {
+    // Item 5 rewords SP12's "Received from SP6a" line in place (its new "Received from SP6b" line is item 2's).
+    const line = sp12Entry().split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):')) ?? '';
+    expect(line).toContain('`C7.flatWallShare` (its bedrock-floor faces removed by SP6b\'s rock floor, the SP6b spec §5)');
+    expect(line).not.toContain('a quarter of its flat faces on the bedrock floor y −63');
+    expect(line).toContain('the X-ray refill\'s 6 s target, handed on by SP6b (its Point 3, the user\'s: re-measured in SP6b\'s L14, not chased there) with its levers (a frame cap while regenerating with a scaled upload budget, a cached non-cave density) (the SP6a spec §10.6, §14; amended by SP6b);');
+    expect(line).toContain('`C6.latticeBias`\'s 1.1 (1.25 at SP6a and SP6b), read as ≤ 1.09 on SP6b\'s measure (each y residue over its lattice-neutral local mean, the SP6b spec §12.3, ruling U1), with its structural levers (cell height 4, per-voxel noise for the thin families), SP12\'s (amended by SP6b);');
   });
 });

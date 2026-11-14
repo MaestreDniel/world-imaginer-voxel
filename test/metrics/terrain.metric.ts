@@ -67,14 +67,16 @@ import {
  *   air gap of ≥ 3 blocks (a per-column proxy: it also counts thin ledges and arch roofs). `floatingRockShare` is the
  *   share of land positions with one, `floatingRockVoxels` the voxels in such runs per land position.
  *
- * B3's cave-biome shares (SP6b spec §12.1, D26; recorded here, gated at the tuning task) ride on the same scattered
+ * B3's cave-biome shares (SP6b spec §12.1, D26; recorded here, gated from the tuning task, Task 30) ride on the same scattered
  * columns, no new generation: cave air = tagged voxels (kind ≠ 0) that are air with no fluid, each counted under its
  * nibble (`analyseColumn`), per window of the profile's square (default: ±16,384 blocks in 4 × 4 windows of 8 × 8 km;
  * large_biomes: ±65,536 in 4 × 4 of 32 × 32 km, recorded only), per 0.1 band of §1.2's depth (Y0 from each column's
  * cave-biome pass in the region worker), per 16-block y band and per cave kind (`b3Values`). Per profile, every window's
  * cave air and four shares and the minima `lushMin`, `dripstoneMin`, `abyssMin` (the smallest window share) and
  * `windowAir` (the smallest window's cave air; a window under 50,000 is flagged `insufficient`) are written to
- * `.out/B3.windows.json` (Task 30's gated call writes `.out/B3.shares.json`). large_biomes' 32 × 32 km windows are
+ * `.out/B3.windows.json`; the gated call `B3.shares` (Task 30) writes the default profile's four minima to
+ * `.out/B3.shares.json`, registered only when the run scatters the default profile (the `terrain-large` job holds no
+ * default window, and a missing value is an error). large_biomes' 32 × 32 km windows are
  * recorded only (`recordedOnly`; §12.1: its climate is zoomed × 4, so a window may lack a biome): only the default
  * profile's windows are B3's gated population. This file scatters only the default and large_biomes profiles, so
  * `cave_heavy`'s shares (§12.1's last recorded item) come from its two caves regions in the `caves-biomes` job
@@ -191,8 +193,8 @@ const OUT_DIR = fileURLToPath(new URL('./.out/', import.meta.url));
 /** Non-finite numbers (an empty window's NaN shares) as strings, as caves.metric.ts' records write them. */
 const json = (v: unknown): string => `${JSON.stringify(v, (_, x: unknown) => (typeof x === 'number' && !Number.isFinite(x) ? String(x) : x), 2)}\n`;
 
-// B3's per-window record (header; recorded, not gated: B3 has no THRESHOLDS row until the tuning task).
-test('B3: cave-biome shares per window (recorded, not gated)', async () => {
+// B3's per-window record (header), every profile's.
+test('B3: cave-biome shares per window (recorded)', async () => {
   const sc = await scattered();
   const profiles = Object.fromEntries(PROFILES.map((p) => [p, b3Values(sc[p], p)])) as Partial<Record<Profile, B3Values>>;
   mkdirSync(OUT_DIR, { recursive: true });
@@ -205,6 +207,18 @@ test('B3: cave-biome shares per window (recorded, not gated)', async () => {
     expect(profiles[p]!.air, `B3 ${p}: cave air over the scattered columns`).toBeGreaterThan(0);
   }
 }, 600_000);
+
+// B3's gated parts (header; SP6b spec §12.1, master :1505): the default profile's smallest window share per biome
+// (≥ 0.005 each) and its smallest window's cave air (≥ 50,000: an insufficient sample fails rather than passes).
+if (PROFILES.includes('default')) {
+  metricTest('B3', ['lushMin', 'dripstoneMin', 'abyssMin', 'windowAir'], async () => {
+    const b = b3Values((await scattered()).default, 'default');
+    return {
+      lushMin: b.lushMin, dripstoneMin: b.dripstoneMin, abyssMin: b.abyssMin, windowAir: b.windowAir,
+      insufficientWindows: b.insufficientWindows, air: b.air,
+    };
+  }, 600_000, { outName: 'B3.shares' });
+}
 
 metricTest('T4', ['floorSd', 'exposedBedrock', 'deepFloor'], async () => {
   const t0 = performance.now();
