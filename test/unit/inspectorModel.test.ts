@@ -164,7 +164,7 @@ describe('rows and summaries', () => {
     // SP6b Task 19: the rock floor's g_b, `ref floorGentle` (ruling R11), reads floorY = add(param caves.floor.y, mul(param
     // amp, abs(clamp(noise2 floor)))).
     expect(sum.get('root.a.a.b.a.a.a.a.a.x.x.b.a.b.b.b')).toBe('ref floorGentle');
-    expect(sum.get('defs.floorGentle.x.a.a.a.a.a')).toBe('param caves.floor.y = -58');
+    expect(sum.get('defs.floorGentle.x.a.a.a.a.a')).toBe('param caves.floor.y = -60');
     expect(sum.get('defs.floorGentle.x.a.a.a.a.b.b.x.x')).toBe('noise2 floor');
     expect(sum.get('root.a.a.b.a.a.a.b')).toBe('tap spag3d');
     expect(sum.get('root.a.a.b.a.a.b')).toBe('tap spag2d');

@@ -37,15 +37,15 @@ const ISLAND_DRAW = 33;
  * caverns' (4705, −24478) at draw 224 (where caves.limits.bandSpan no longer changes the T column: it changed the noodle's
  * band edge there) and the tunnels' (−24763, −17996) at draw 314 before them. SP6b's rock floor (Task 19) moved the
  * caverns' from (19524, −7785) at draw 512, where a caverns leaf no longer changes the T column once the floor closes
- * its bottom.
+ * its bottom. Task 25's lever 25c (`caves.floor.y` −58 → −60) moved the tunnels' from (−16103, 13714) at draw 422.
  */
 const CAVE_PINS: Readonly<Record<CaveSlot, readonly [LivenessColumn, number]>> = {
   caverns: [{ cx: 18487, cz: -15384, cls: 'cave' }, 1765],
-  tunnels: [{ cx: -16103, cz: 13714, cls: 'cave' }, 422],
+  tunnels: [{ cx: -1986, cz: -30779, cls: 'cave' }, 896],
 };
 /** The two cave class columns' verdict strings. */
 const CAVERNS_VIA = 'cave column (18487, -15384)';
-const TUNNELS_VIA = 'cave column (-16103, 13714)';
+const TUNNELS_VIA = 'cave column (-1986, -30779)';
 /**
  * The leaves of SP6a Tasks 6, 7, 8, 9 and 27 (the caves group): U2 covers 73 + 19 + 30 + 11 + 1 + 1 + 36 = 171 leaves
  * (Task 9: the island cap's capTop, then the wet roof's waterDepth; Task 27: the 36 carver leaves), and the user's check's
@@ -84,17 +84,18 @@ const BAND_LEAVES = [
  * cheese, spaghetti 3D and the entrances on the amplified base (P3: the default base's scan has none), spaghetti 2D's
  * maxY 215 on its witness (R5). SP6b's rock floor (Task 19) shadows every minY at SP6a's defaults (g_b saturates the
  * caps at corners −64 and −56), so ruling R10 raised them to the shadow's edge (−55; entrances −54) with no change to the
- * world: cheese's minY on the cliffSteep class column, the other four on their own band witness (P4). Before: cheese's
+ * world: cheese's minY on the cliffSteep class column, the other four on their own band witness (P4); spaghetti 3D's on
+ * the tunnels' cave column since Task 25's lever 25c (`caves.floor.y` −60; its witness before). Before: cheese's
  * and spaghetti 3D's minY on the cave columns, spaghetti 2D's on (−17888, 14467), the entrances' on the badlands column.
  */
 const BAND_PINS: Readonly<Record<(typeof BAND_LEAVES)[number], string>> = {
   'caves.cheese.minY': 'cliffSteep column (-24200, -4864)',
   'caves.cheese.maxY': 'amplified witness column (15998, 4660)',
-  'caves.spaghetti3d.minY': 'witness column (-14676, -24410)',
+  'caves.spaghetti3d.minY': TUNNELS_VIA,
   'caves.spaghetti3d.maxY': 'amplified witness column (15676, 27143)',
   'caves.spaghetti2d.minY': 'witness column (-4103, 15609)',
   'caves.spaghetti2d.maxY': 'witness column (-8539, 19151)',
-  'caves.noodles.minY': 'witness column (21447, 18469)',
+  'caves.noodles.minY': 'witness column (30642, 22358)',
   'caves.noodles.maxY': CAVERNS_VIA,
   'caves.entrances.minY': 'witness column (-19897, -15804)',
   'caves.entrances.maxY': 'amplified witness column (17330, 32119)',
@@ -111,27 +112,29 @@ const ONE_STEP = [
 ];
 /**
  * Each carver leaf's U2 verdict at seed 42 (Task 27, ruling P18; re-pinned at Task 38's tuned defaults, at the user's
- * check's cave columns and at SP6b's rock floor, Task 19, which moved the caverns' column): most worm leaves on the
- * caverns' cave column, the worms' floorMin and the ravines' widthSmoothness on the tunnels', the worms' chance on the
- * snowline class column, their floorMax on a land class column, the underground worms' startYMin on the patch class
- * column (their startYMax too until SP6b Task 20's σ_b closed the low start there; now on its carver witness), the ravine leaves but widthSmoothness on their carver witness (5, 1) (the ravines' chance on (0, −3)), the
- * rest on their carver witness (the spiral's first source whose path a step changes; for `undergroundWorms.maxY` the
- * first reaching its shrink's band). Before the floor the worms' start range was decided on the tunnels' column and the
- * underground worms' start range and the ravine leaves on the caverns' (19524, −7785).
+ * check's cave columns, at SP6b's rock floor, Task 19, which moved the caverns' column, and at Task 25's lever 25c,
+ * `caves.floor.y` −60, which moved the tunnels'): most worm leaves on the caverns' cave column, the worms' floorMin and
+ * floorMax and the underground worms' chance on the tunnels', the worms' chance on the snowline class column, the
+ * underground worms' startYMin on the patch class column (their startYMax too until SP6b Task 20's σ_b closed the low
+ * start there; now on its carver witness), the ravine leaves on their carver witness (5, 1) (the ravines' chance on
+ * (0, −3)), the rest on their carver witness (the spiral's first source whose path a step changes; for
+ * `undergroundWorms.maxY` the first reaching its shrink's band). Before the floor the worms' start range was decided on
+ * the tunnels' column and the underground worms' start range and the ravine leaves on the caverns' (19524, −7785);
+ * before lever 25c the worms' floorMax was on a land class column, the underground worms' chance on its carver witness
+ * (3, −6) and the ravines' widthSmoothness on the tunnels' column.
  */
 const CARVER_PINS: Readonly<Record<string, string>> = {
   'caves.worms.chance': 'snowline column (-25681, 32120)',
   'caves.worms.floorMin': TUNNELS_VIA,
-  'caves.worms.floorMax': 'land column (-25833, 16792)',
+  'caves.worms.floorMax': TUNNELS_VIA,
   'caves.worms.branchChance': 'carver witness column (-3, -5)',
   'caves.worms.roomYScaleMin': 'carver witness column (5, 5)',
   'caves.worms.roomYScaleMax': 'carver witness column (-3, -5)',
-  'caves.undergroundWorms.chance': 'carver witness column (3, -6)',
+  'caves.undergroundWorms.chance': TUNNELS_VIA,
   'caves.undergroundWorms.startYMin': 'patch column (-20548, -22882)',
   'caves.undergroundWorms.startYMax': 'carver witness column (-3, -5)',
   'caves.undergroundWorms.maxY': 'carver witness column (-2, -2)',
   'caves.ravines.chance': 'carver witness column (0, -3)',
-  'caves.ravines.widthSmoothness': TUNNELS_VIA,
 };
 /** The other ravine leaves: decided on their carver witness (5, 1). */
 const RAVINE_VIA = 'carver witness column (5, 1)';
@@ -820,13 +823,15 @@ describe('the cave-biome leaves (SP6b Task 17; spec §12.7, Spec correction 5)',
    * moved the caverns' column to (18487, −15384), until Task 22's rule 4, whose strata make the abyss's rock show in
    * every column under its climate: the eMax, border warp and border noise now act on the cliffY column, depthMin on
    * the caverns'). SP6b Task 20's σ_b closed the abyss's cMin witness (−24350, −30565) and every other column of the
-   * first 8,192 draws: its witness lies at draw 21,291, so the search draws up to 32,768 (`BIOME_DRAWS`).
+   * first 8,192 draws: its witness lies at draw 21,291, so the search draws up to 32,768 (`BIOME_DRAWS`). Task 25's lever
+   * 25c (`caves.floor.y` −60) moved the tunnels' column: lush's depthMax and dripstone's cMin, decided there before, now
+   * act on a land and the cliffSteep column.
    */
   const BIOME_PINS: Readonly<Record<(typeof BIOME_LEAVES)[number], string>> = {
     'caves.biomes.lush.hMin': 'biome witness column (-18559, -12761)',
     'caves.biomes.lush.depthMin': 'land column (-25833, 16792)',
-    'caves.biomes.lush.depthMax': TUNNELS_VIA,
-    'caves.biomes.dripstone.cMin': TUNNELS_VIA,
+    'caves.biomes.lush.depthMax': 'land column (-15542, -30245)',
+    'caves.biomes.dripstone.cMin': 'cliffSteep column (-24200, -4864)',
     'caves.biomes.dripstone.depthMin': CAVERNS_VIA,
     'caves.biomes.dripstone.depthMax': TUNNELS_VIA,
     'caves.biomes.abyss.eMax': 'cliffY column (17107, 13836)',
@@ -1004,12 +1009,12 @@ describe('the depth-band leaves (SP6a Task 8; rulings P3, P4, R5)', () => {
     // SP6b Task 19: at the R10 values (−55; entrances −54), each witness lies where the floor leaves corner −48
     // unsaturated (floorY < −56); before the floor: (−26773, −930) 2, (12710, −20366) 5, (−17888, 14467) 8, the noodle's
     // the same, (10701, −27440) 13. Task 25's lever 25d (`caves.floor.amp` 5 → 7) moved only the noodle's minY witness:
-    // (−1578, −11634) at draw 3 before it.
+    // (−1578, −11634) at draw 3 before it; lever 25c (`caves.floor.y` −60) moved it again, from (21447, 18469) at draw 9.
     const pins: Array<[string, string, number]> = [
       ['caves.cheese.minY', 'witness column (-11258, 17222)', 20],
       ['caves.spaghetti3d.minY', 'witness column (-14676, -24410)', 45],
       ['caves.spaghetti2d.minY', 'witness column (-4103, 15609)', 146],
-      ['caves.noodles.minY', 'witness column (21447, 18469)', 9],
+      ['caves.noodles.minY', 'witness column (30642, 22358)', 76],
       ['caves.entrances.minY', 'witness column (-19897, -15804)', 112],
       ['caves.noodles.maxY', 'witness column (-22165, -25285)', 3],
     ];

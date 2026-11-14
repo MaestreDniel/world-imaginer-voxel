@@ -335,7 +335,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     // (Nf clamped to ±3); every cave family closes above it, so no cave air lies below y + 5 (y ≥ −62 keeps two rock
     // voxels above rule 1's bedrock dither over the whole range).
     floor: group('Floor', 'The rock floor above the bedrock (SP6b spec §5.2): floorY = y + amp·|Nf|; the noise families narrow over the softness above floorY + 8 and close from floorY + 4 down, and the carvers shrink over it to nothing at floorY + 8, so wide caves end on rolling rock, never on the bedrock.', {
-      y: int(-58, { ...TERRAIN, label: 'Floor y', doc: 'The floor\'s lowest height (its gullies, where Nf crosses 0): no cave air lies below this y + 5.', unit: 'y', min: -62, max: -16 }),
+      y: int(-60, { ...TERRAIN, label: 'Floor y', doc: 'The floor\'s lowest height (its gullies, where Nf crosses 0): no cave air lies below this y + 5.', unit: 'y', min: -62, max: -16 }),
       amp: num(7, { ...TERRAIN, label: 'Floor relief', doc: 'Times |Nf|: the floor\'s mounds rise up to 3·amp blocks above Floor y.', unit: 'blocks', min: 0, max: 12, step: 0.05 }),
       span: int(8, { ...TERRAIN, label: 'Floor softness', doc: 'The noise families and the carvers narrow over this many blocks above floorY + 8 (the gentle part); the families then close by floorY + 4 (the steep part), the carvers at floorY + 8.', unit: 'blocks', min: 1, max: 32 }),
     }),

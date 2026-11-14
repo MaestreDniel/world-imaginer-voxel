@@ -1144,11 +1144,11 @@ describe('the rock floor (SP6b spec §5.2, D6)', () => {
     expect(paths.slice(at0, at0 + 5)).toEqual(['caves.noises.floor', 'caves.floor.y', 'caves.floor.amp', 'caves.floor.span', 'caves.biomes.lush.hMin']);
     const leaf = (p: string) => SCHEMA.leaves.find((l) => l.path === p)!;
     expect(['y', 'amp', 'span'].map((k) => { const l = leaf(`caves.floor.${k}`); return [k, l.leaf.kind, l.leaf.def, l.leaf.min, l.leaf.max, l.meta.label]; })).toEqual([
-      ['y', 'int', -58, -62, -16, 'Floor y'],
+      ['y', 'int', -60, -62, -16, 'Floor y'],
       ['amp', 'number', 7, 0, 12, 'Floor relief'],
       ['span', 'int', 8, 1, 32, 'Floor softness'],
     ]);
-    expect(DEFAULTS.caves.floor).toEqual({ y: -58, amp: 7, span: 8 });
+    expect(DEFAULTS.caves.floor).toEqual({ y: -60, amp: 7, span: 8 });
     expect((SCHEMA.byPath.get('caves.floor') as { label: string }).label).toBe('Floor');
     expect(leaf('caves.noises.floor').leaf.dims).toBe(2);
   });

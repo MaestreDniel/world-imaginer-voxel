@@ -395,15 +395,16 @@ describe('the default world is unchanged (SP3d spec §1.9 D: proven, not only cl
     // user's check's noodles (R31, R32: a third of them, twice as thick, the band's top at 48):
     // '60f0c3d6ec016667 405632 965020'; with SP6b's rock floor (Task 19: no cave air below floorY + 5, so more voxels
     // solid and more cells there decided solid without corners): 'bec6d3f17a1db8cd 379136 980174'; with its relief 7
-    // (Task 25's lever 25d: the mounds rise higher, so more voxels solid):
-    expect(hashed(createDensityContext(ctxFor('42')))).toBe('e10053ef8f7e6903 376576 981610');
+    // (Task 25's lever 25d: the mounds rise higher, so more voxels solid): 'e10053ef8f7e6903 376576 981610'; lowered to
+    // y −60 (lever 25c: the floor two blocks lower, so fewer voxels solid):
+    expect(hashed(createDensityContext(ctxFor('42')))).toBe('c378c687837818c2 381184 979923');
   });
 
   test('… and with the sub-blocks (SP6a ruling R13): the same solid voxels, fewer evaluated', () => {
     const c = ctxFor('42');
     for (const [dc, solids] of [
       [createDensityContext(c, resolveDensity(cavesMuted(DEFAULT_DENSITY_TREE), c.params)), 1040924],
-      [createDensityContext(ctxFor('42')), 981610],
+      [createDensityContext(ctxFor('42')), 979923],
     ] as const) {
       const [, masked, solid] = hashed(dc, true).split(' ').map(Number);
       expect(solid).toBe(solids);
