@@ -9,8 +9,8 @@ import { seedFromInput } from '../../src/core/seed';
 import { carverPath, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
 import {
   aperiodicRatios, bandDetail, borderPlaneRatio, C1_C6_PARTS, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, caveBottomGroups, caveBottomParts, emptyBandCounts,
-  emptyLayerCounts, emptyWallResidues, EXAMPLE_IDS, floorFaceResidues, GRID_H, GRID_Y0, verticalStepDetail,
-  type C1C6Part, type C7C9Part, type CaveC7C9Counts, type CavePose, type CaveRegionCounts,
+  emptyLayerCounts, emptyWallResidues, EXAMPLE_IDS, floorFaceResidues, GRID_H, GRID_Y0, SP6B_EXAMPLE_IDS, verticalStepDetail,
+  type C1C6Part, type C7C9Part, type CaveBottomParts, type CaveC7C9Counts, type CavePose, type CaveRegionCounts,
 } from '../harness/caveMetrics';
 import type { CaveRegionResult } from '../harness/caveRegionWorker';
 import { CARVER_DEFAULTS, CARVER_MAXIMA } from '../harness/carverParams';
@@ -30,8 +30,8 @@ import { metricTest } from '../harness/metric';
  * - the presets group (the three preset regions): the pure parts and `islandCapAir` (`C7.construction`);
  * - both: `carverReference` (max 0 per region, so the sum over the jobs is the unsplit value), and the per-group parts
  *   of C7-C9 (`C7.tuning`: verticalStep, flatWallShare, waterWall; `C9`: nearestEntrance, holedSurface) and C7's
- *   bottom part (`C7.bottomPlane`, SP6b spec §12.3), each the worst of the groups the job measures (`c7c9Parts`,
- *   `caveBottomParts`; ruling P2), so the worst over the jobs is the unsplit value.
+ *   bottom parts (`C7.bottomPlane`, `C7.bedrockExposed`, SP6b spec §12.3), each the worst of the groups the job measures
+ *   (`c7c9Parts`, `caveBottomParts`; ruling P2), so the worst over the jobs is the unsplit value.
  *
  * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
  * - `carverReference`: over every region of the run's groups (the preset regions included), the voxels of the region
@@ -428,8 +428,9 @@ const C79_GATED: readonly C7C9Part[] = C7_C9_PARTS.filter((p) => DEFAULT_GROUP
  * `.out/caves.C7-C9.json` (the parts, the per-group values of the "default and presets" parts, each part's detail, and
  * per region its counts' summary). With the default group, the review poses at seed '42' (§10.1, §10.10, D16) go to
  * `.out/caves.examples.json`: per pose, the first of the tier's seed '42' default regions (in `defaultSites`' order)
- * holding one. Every part the run gates (`C79_GATED`) is finite (fast: or listed in `C79_NAN_ON_FAST`), and with the
- * default group every pose found.
+ * holding one; SP6b's (`SP6B_EXAMPLE_IDS`: `bottomCavern`, SP6b spec §12.3; rulings P17, P59) beside `poses` as
+ * top-level fields, chosen alike. Every part the run gates (`C79_GATED`) is finite (fast: or listed in
+ * `C79_NAN_ON_FAST`), and with the default group every pose found.
  */
 async function measureC7C9(): Promise<Record<C7C9Part, number>> {
   const measured = await measuredRegions();
@@ -506,10 +507,16 @@ async function measureC7C9(): Promise<Record<C7C9Part, number>> {
       const m = measured.find((r) => r.examples !== null && r.examples[id] !== null);
       poses[id] = m === undefined ? null : { ...m.examples![id]!, region: m.site.label };
     }
+    const sp6b: Record<string, (CavePose & { region: string }) | null> = {};
+    for (const id of SP6B_EXAMPLE_IDS) {
+      const m = measured.find((r) => r.sp6bExamples !== null && r.sp6bExamples[id] !== null);
+      sp6b[id] = m === undefined ? null : { ...m.sp6bExamples![id]!, region: m.site.label };
+    }
     writeFileSync(join(OUT_DIR, 'caves.examples.json'), json({
-      id: 'caves.examples', tier: process.env.METRICS_TIER ?? null, seed: '42', profile: 'default', poses,
+      id: 'caves.examples', tier: process.env.METRICS_TIER ?? null, seed: '42', profile: 'default', poses, ...sp6b,
     }));
     for (const id of EXAMPLE_IDS) expect(poses[id], `the ${id} pose`).not.toBeNull();
+    for (const id of SP6B_EXAMPLE_IDS) expect(sp6b[id], `the ${id} pose`).not.toBeNull();
   }
   return parts;
 }
@@ -544,29 +551,48 @@ metricTest('C7', ['verticalStep', 'flatWallShare', 'waterWall'], async () => par
   { outName: 'C7.tuning' });
 metricTest('C9', ['nearestEntrance', 'holedSurface'], async () => partsOf(await c7c9(), 'C9', PER_GROUP_C9));
 /**
- * C7's bottom parts (SP6b spec §12.3, D6, D26; Task 20), over every region of the run's groups, per group (the default
- * group, each preset) and the worst group's (ruling P2; each job gates its own regions): `C7.bottomPlane`, the flat
- * floor faces on the bedrock plane (cave voxel at y −63) over all flat faces, gated from SP6b at max 0.01 (§5.2's floor
- * holds it by construction: no cave air below `caves.floor.y` + 5); `C7.bedrockExposed`, the cave voxels face-adjacent
- * to a bedrock voxel, recorded (Task 21 gates it at 0 once it reads 0 everywhere). Both per group, with each region's
+ * C7's bottom parts (SP6b spec §12.3, D6, D26; Tasks 20-21), over every region of the run's groups, per group (the
+ * default group, each preset) and the worst group's (ruling P2; each job gates its own regions), as built in
+ * `test/harness/caveMetrics.ts`:
+ * - `C7.bottomPlane`, the flat floor faces on the bedrock plane (cave voxel at y −63) over all flat faces, gated from
+ *   SP6b at max 0.01 (§5.2's floor holds it by construction: no cave air below `caves.floor.y` + 5);
+ * - `C7.bedrockExposed`, the cave-air voxels face-adjacent to a bedrock voxel, gated from SP6b at max 0 (Task 21: it read
+ *   0 on every group after the floor), with every region's bedrock count > 0 asserted (ruling R16);
+ * - recorded (Task 30 gates the first two at tuning): `C7.bottomFlatRatio`, `C7.bottomFloorSpread`, `C7.bottomFloorPeak`.
+ * All per group, with the flat-floor histogram y −64 … −32, the cave air per 16-block band from y −64 and each region's
  * counts, in `.out/caves.bottom.json`.
  */
-async function measureBottom(): Promise<{ bottomPlane: number; bedrockExposed: number }> {
+async function measureBottom(): Promise<CaveBottomParts> {
   const measured = await measuredRegions();
   const regions = measured.map((m) => ({ group: groupOf(m.site), bottom: m.bottom }));
   const parts = caveBottomParts(regions);
   mkdirSync(OUT_DIR, { recursive: true });
   writeFileSync(join(OUT_DIR, 'caves.bottom.json'), json({
     id: 'caves.bottom', tier: process.env.METRICS_TIER ?? null, values: parts, groups: caveBottomGroups(regions),
-    regions: measured.map((m) => ({ label: m.site.label, group: groupOf(m.site), ms: m.ms.bottom, ...m.bottom })),
+    // Per region, its counts read as a group of one.
+    regions: measured.map((m) => ({
+      label: m.site.label, group: groupOf(m.site), ms: m.ms.bottom, ...caveBottomGroups([{ group: 'region', bottom: m.bottom }]).region,
+    })),
   }));
+  // The grid's bedrock is read in every region (y −64), so bedrockExposed 0 is not a class table that lost bedrock.
+  for (const m of measured) expect(m.bottom.bedrock, `bedrock voxels at ${m.site.label}`).toBeGreaterThan(0);
   expect(Number.isFinite(parts.bottomPlane), `C7.bottomPlane = ${parts.bottomPlane} is not finite`).toBe(true);
   expect(Number.isFinite(parts.bedrockExposed), `C7.bedrockExposed = ${parts.bedrockExposed} is not finite`).toBe(true);
   return parts;
 }
 
-// C7.bottomPlane in every group's job (each the worst of its own groups); C7.bedrockExposed recorded beside it.
-metricTest('C7', ['bottomPlane'], async () => measureBottom(), 900_000, { outName: 'C7.bottomPlane' });
+let bottomRun: Promise<CaveBottomParts> | null = null;
+/** C7's bottom parts, measured once (the first test to ask). */
+const bottom = (): Promise<CaveBottomParts> => (bottomRun ??= measureBottom());
+
+// C7.bottomPlane and C7.bedrockExposed in every group's job (each the worst of its own groups); the recorded bottom parts
+// beside bottomPlane.
+metricTest('C7', ['bottomPlane'], async () => {
+  const p = await bottom();
+  return { bottomPlane: p.bottomPlane, bottomFlatRatio: p.bottomFlatRatio, bottomFloorSpread: p.bottomFloorSpread, bottomFloorPeak: p.bottomFloorPeak };
+}, 900_000, { outName: 'C7.bottomPlane' });
+metricTest('C7', ['bedrockExposed'], async () => ({ bedrockExposed: (await bottom()).bedrockExposed }), 900_000,
+  { outName: 'C7.bedrockExposed' });
 // The default-only parts, with the default group.
 if (DEFAULT_GROUP) {
   metricTest('C7', ['borderPlaneRatio', 'switchWall'], async () => partsOf(await c7c9(), 'C7', ['borderPlaneRatio', 'switchWall']), 900_000,

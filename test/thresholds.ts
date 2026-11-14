@@ -111,6 +111,9 @@ export const THRESHOLDS: ThresholdTable = {
     // SP6b spec §12.3 (D6, D26; Task 20): the flat floor faces on the bedrock plane (y −63) over all flat faces, per group
     // and the worst group's (`.out/C7.bottomPlane.json`); 15.7-34.5 % before the rock floor, which holds it by construction.
     bottomPlane: { max: 0.01, activeFrom: 'SP6b' },
+    // SP6b spec §12.3 (D6, D26; Task 21): the cave-air voxels face-adjacent to a bedrock voxel, per group and the worst
+    // group's (`.out/C7.bedrockExposed.json`); gated in the commit after the floor's, which read it 0 on every group.
+    bedrockExposed: { max: 0, activeFrom: 'SP6b' },
   },
   C8: {
     aperiodicity: { min: 0.63, activeFrom: 'SP6a', tiers: ['quick', 'full'] }, typeMixVariation: { min: 0.021, activeFrom: 'SP6a' },

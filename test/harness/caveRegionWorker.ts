@@ -12,7 +12,8 @@
  *
  * `measureCaveRegion` is the metric's per-region pass, in one function so the worker and an in-process caller (the unit
  * test) run the same code: the grid, the pre-cave tops and the components once; C1-C6's counts (the default group
- * only), C7-C9's, C7's bottom counts (SP6b spec §12.3), the review poses (seed '42' default only); then C7's
+ * only), C7-C9's, C7's bottom counts (SP6b spec §12.3), the review poses and SP6b's (`bottomCavern`; seed '42' default
+ * only); then C7's
  * construction counts, `regionCounts` against `referenceCarve`, whose raw reference array never leaves the thread
  * (ruling P6).
  */
@@ -21,8 +22,9 @@ import { createDensityContext } from '../../src/gen/density/context';
 import { attachStore, type StoreHandles } from '../../src/world/store/store';
 import {
   CAP_AIR_Y, caveBottomCounts, caveC7C9Counts, caveComponents, caveExamples, caveGridOf, caveRegionCounts, countsTransfer, flatWallDetail,
-  landMask, localThickness, preCaveTops, ravinePathsOf, regionCounts, riverMaskOf, wetMask,
+  landMask, localThickness, preCaveTops, ravinePathsOf, regionCounts, riverMaskOf, sp6bCaveExamples, wetMask,
   type CarverRegionCounts, type CaveBottomCounts, type CaveC7C9Counts, type CavePose, type CaveRegionCounts, type ExampleId,
+  type Sp6bExampleId,
 } from './caveMetrics';
 import type { Site } from './caveSites';
 import { referenceCarve } from './refs';
@@ -34,11 +36,16 @@ export interface CaveRegionResult {
   /** C1-C6's counts: the default group's regions (default and large_biomes) only, else null. */
   readonly c16: CaveRegionCounts | null;
   readonly c79: CaveC7C9Counts;
-  /** C7's bottom counts (SP6b spec §12.3): the flat floors on the bedrock plane, all flat faces, the exposed bedrock. */
+  /**
+   * C7's bottom counts (SP6b spec §12.3): the flat floors on the bedrock plane, all flat faces, the exposed bedrock and
+   * the bedrock, and the accumulators of bottomFlatRatio, bottomFloorSpread and the records (Task 21).
+   */
   readonly bottom: CaveBottomCounts;
   /** The review poses: the seed '42' default regions only, else null. */
   readonly examples: Record<ExampleId, CavePose | null> | null;
-  /** The ms of the shared grid and components, of C1-C6 (with the thickness), of C7-C9, of the bottom, of the poses. */
+  /** SP6b's review poses (`bottomCavern`; rulings P17, P59): the seed '42' default regions only, else null. */
+  readonly sp6bExamples: Record<Sp6bExampleId, CavePose | null> | null;
+  /** The ms of the shared grid and components, of C1-C6 (with the thickness), of C7-C9, of the bottom, of the poses (both lists). */
   readonly ms: { shared: number; c16: number; c79: number; bottom: number; examples: number };
   /** C7's construction counts: `regionCounts(view, referenceCarve(…), capY)`, capY on floating_islands only. */
   readonly carver: CarverRegionCounts;
@@ -79,12 +86,14 @@ function measureGrid(view: RegionView, site: Site, params: Params, stride: numbe
   });
   const t3 = performance.now();
   // C7.bottomPlane's flat faces are every position's (C7.flatWallShare's are the sea floor's on archipelago).
-  const bottom = caveBottomCounts(grid, seaFloor === null ? c79.flat : flatWallDetail(grid));
+  const bottom = caveBottomCounts(grid, seaFloor === null ? c79.flat : flatWallDetail(grid), c);
   const t4 = performance.now();
-  const examples = site.seed === '42' && site.profile === 'default' ? caveExamples(grid, tops, c, thick, pillar) : null;
+  const poses = site.seed === '42' && site.profile === 'default';
+  const examples = poses ? caveExamples(grid, tops, c, thick, pillar) : null;
+  const sp6bExamples = poses ? sp6bCaveExamples(grid, c) : null;
   const t5 = performance.now();
   return {
-    c16, c79, bottom, examples,
+    c16, c79, bottom, examples, sp6bExamples,
     ms: { shared: Math.round(t1 - t0), c16: Math.round(t2 - t1), c79: Math.round(t3 - t2), bottom: Math.round(t4 - t3), examples: Math.round(t5 - t4) },
   };
 }

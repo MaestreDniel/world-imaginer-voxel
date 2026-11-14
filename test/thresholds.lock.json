@@ -1,5 +1,5 @@
 {
-  "sha256": "aaa7840dc6b1faff4d3b0126cf7bafaef0c73e2da8d0748d65673a95b8c8919f",
+  "sha256": "277e38b4642643177a5a0fc869c4c28de2914f1587b6753693f339eb1bf8932d",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -243,6 +243,10 @@
         }
       },
       "C7": {
+        "bedrockExposed": {
+          "activeFrom": "SP6b",
+          "max": 0
+        },
         "borderPlaneRatio": {
           "activeFrom": "SP6a",
           "max": 1.1,

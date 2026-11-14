@@ -62,9 +62,17 @@
  *   wall in the shell when its cave voxel is) over its share of the pre-cave rock (solid or tagged voxels, y ≥ −56).
  * - C7.waterWall: a fluid voxel with a horizontal neighbour that is tagged air (tagged, neither solid nor fluid).
  * - C7's bottom parts (SP6b spec §12.3, D6): `bottomPlane` the flat floor faces (C7.flatWallShare's 6 × 6 patches, over
- *   every position) whose cave voxel lies at y −63, on the bedrock, over all flat faces; `bedrockExposed` the cave voxels
- *   (tagged, not solid) face-adjacent to a bedrock voxel, read from the grid's block class `cls` (the cell byte cannot
- *   tell bedrock from the stone rule 1 dithers it among). Each per group, the worst group's (ruling P2).
+ *   every position) whose cave voxel lies at y −63, on the bedrock, over all flat faces; `bedrockExposed` the cave-air
+ *   voxels (tagged, neither solid nor fluid, ruling R16) face-adjacent to a bedrock voxel, read from the grid's block
+ *   class `cls` (the cell byte cannot tell bedrock from the stone rule 1 dithers it among), beside the grid's bedrock
+ *   voxels (> 0, so a class-table regression cannot read 0); `bottomFlatRatio` the flat floor faces' share of the walls
+ *   (both of cave voxels, fluid included, as C7.flatWallShare's) at y ≤ −40 over the same share at y −39 … 0 (the spec's
+ *   "y −40 … 0" without the shared layer, which is the bottom's); `bottomFloorSpread` the median over the components of
+ *   ≥ 10,000 voxels (C4's) holding a floor face (a cave voxel whose voxel below is solid) at y ≤ −40 of the nearest-rank
+ *   10th-90th percentile range of their floor faces' y at y ≤ −32 (a component cut by the region's border or by y −56 is
+ *   read as cut); recorded beside them: the flat-floor histogram y −64 … −32, `bottomFloorPeak` (C4.floorPeak over C4's
+ *   floors at y ≤ −32) and the cave air (no fluid) per 16-block band from y −64. Each per group, the worst group's
+ *   (ruling P2): the largest, but the smallest spread. The `bottomCavern` pose: `bottomCavernPose`.
  * - C8.aperiodicity: m is the tag (1 when tagged) on the layer; the random-pair mean is the expectation 2f(1 − f) of
  *   |m(p) − m(q)| over the layer's ordered pairs (f its tagged share in the region); per (layer, axis, lag) the pooled
  *   Σ |Δm| over Σ expectation, the part the smallest.
@@ -626,12 +634,13 @@ export const FLOOR_MIN_VOXELS = 10_000;
 
 /**
  * C4.floorPeak's counts: the floor voxels of components ≥ `minSize` voxels (a voxel whose voxel below is not tagged)
- * per y, index y + 56 (y −56 … 319, 376 entries, whatever the components' yMax, so regions add up).
+ * per y, index y + 56 (y −56 … 319, 376 entries, whatever the components' yMax, so regions add up); with `y1`, only
+ * those of y ≤ y1 (C7.bottomFloorPeak's).
  */
-export function floorCounts(g: CaveGrid, c: CaveComponents, minSize = FLOOR_MIN_VOXELS): Float64Array {
+export function floorCounts(g: CaveGrid, c: CaveComponents, minSize = FLOOR_MIN_VOXELS, y1 = c.yMax): Float64Array {
   const plane = g.w * g.d;
   const out = new Float64Array(GRID_Y0 + GRID_H - COMP_Y_MIN);
-  for (let y = c.yMin; y <= c.yMax; y++) {
+  for (let y = c.yMin; y <= Math.min(y1, c.yMax); y++) {
     const base = (y - c.yMin) * plane;
     const below = (y - 1 - GRID_Y0) * plane;
     for (let p = 0; p < plane; p++) {
@@ -1513,8 +1522,9 @@ export function waterWallCount(g: CaveGrid): number {
 export const BOTTOM_PLANE_Y = -63;
 
 /**
- * C7.bedrockExposed's count: the cave voxels (tagged, not solid: cave air, or cave fluid, through which the bedrock shows
- * as well) with a face neighbour in the grid whose block class is bedrock (`CLS_BEDROCK`), each voxel counted once.
+ * C7.bedrockExposed's count: the cave-air voxels (tagged, neither solid nor fluid: spec §12.3's "cave-air voxels", B3's
+ * cave air, ruling R16) with a face neighbour in the grid whose block class is bedrock (`CLS_BEDROCK`), each voxel
+ * counted once.
  */
 export function bedrockExposedCount(g: CaveGrid): number {
   const { w, d, cells, cls } = g;
@@ -1523,7 +1533,7 @@ export function bedrockExposedCount(g: CaveGrid): number {
   let count = 0;
   for (let i = 0; i < n; i++) {
     const c = cells[i]!;
-    if ((c & TAG_MASK) === 0 || (c & SOLID_BIT) !== 0) continue;
+    if ((c & TAG_MASK) === 0 || (c & (SOLID_BIT | FLUID_BIT)) !== 0) continue;
     const x = i % w;
     const z = ((i - x) / w) % d;
     if ((x > 0 && cls[i - 1] === CLS_BEDROCK) || (x < w - 1 && cls[i + 1] === CLS_BEDROCK)
@@ -1533,7 +1543,72 @@ export function bedrockExposedCount(g: CaveGrid): number {
   return count;
 }
 
-/** One region's counts for C7's bottom parts. */
+/** The grid's bedrock voxels (block class `CLS_BEDROCK`): > 0 in a generated region (y −64 is bedrock; ruling R16). */
+export function bedrockCount(g: CaveGrid): number {
+  const { cls } = g;
+  let count = 0;
+  for (let i = 0, n = cls.length; i < n; i++) if (cls[i] === CLS_BEDROCK) count++;
+  return count;
+}
+
+/** A floor "at the bottom": C7.bottomFlatRatio's bottom band and the floors C7.bottomFloorSpread and bottomCavern read, y ≤ −40. */
+export const BOTTOM_Y = -40;
+/** C7.bottomFlatRatio's reference band's top: y −39 … 0 (−40 is the bottom's). */
+export const BOTTOM_REF_Y1 = 0;
+/** The top of C7.bottomFloorSpread's floor faces, of the flat-floor histogram and of C7.bottomFloorPeak's floors: y ≤ −32. */
+export const BOTTOM_SPREAD_Y1 = -32;
+/** Cave air at the bottom per 16-block band from y −64: −64 … −49, −48 … −33, −32 … −17, −16 … −1. */
+export const BOTTOM_AIR_BANDS = 4;
+
+/** Whether cell i (y > −64) is a floor face: a cave voxel (tagged, not solid) whose voxel below is solid. */
+const floorFace = (cells: Uint8Array, i: number, plane: number): boolean => caveCell(cells[i]!) && (cells[i - plane]! & SOLID_BIT) !== 0;
+
+/**
+ * C7.bottomFloorSpread's spreads (SP6b spec §12.3, the technical review's M2): per component of ≥ `minSize` voxels
+ * (C4's 10,000) holding a floor face (a cave voxel whose voxel below is solid) at y ≤ −40, the nearest-rank 10th-90th
+ * percentile range of the y of its floor faces at y ≤ −32; in label order.
+ */
+export function bottomFloorSpreads(g: CaveGrid, c: CaveComponents, minSize = FLOOR_MIN_VOXELS): number[] {
+  const plane = g.w * g.d;
+  const y1 = Math.min(BOTTOM_SPREAD_Y1, c.yMax);
+  const bins = BOTTOM_SPREAD_Y1 - c.yMin + 1;
+  const hists = new Map<number, Int32Array>();
+  for (let y = c.yMin; y <= y1; y++) {
+    const base = (y - c.yMin) * plane;
+    const at = (y - GRID_Y0) * plane;
+    for (let p = 0; p < plane; p++) {
+      const l = c.label[base + p]!;
+      if (l === 0 || c.size.get(l)! < minSize || !floorFace(g.cells, at + p, plane)) continue;
+      let h = hists.get(l);
+      if (h === undefined) hists.set(l, (h = new Int32Array(bins)));
+      h[y - c.yMin]!++;
+    }
+  }
+  const out: number[] = [];
+  for (const l of [...hists.keys()].sort((a, b) => a - b)) {
+    const h = hists.get(l)!;
+    let total = 0;
+    let bottom = 0;
+    for (let k = 0; k < bins; k++) {
+      total += h[k]!;
+      if (c.yMin + k <= BOTTOM_Y) bottom += h[k]!;
+    }
+    if (bottom === 0) continue;
+    /** The y of the k-th floor face (0-based) in ascending y. */
+    const kth = (k: number): number => {
+      let acc = 0;
+      for (let b = 0; b < bins; b++) {
+        acc += h[b]!;
+        if (acc > k) return c.yMin + b;
+      }
+      return y1;
+    };
+    out.push(kth(Math.ceil(0.9 * total) - 1) - kth(Math.ceil(0.1 * total) - 1));
+  }
+  return out;
+}
+
+/** One region's counts for C7's bottom parts (plain numbers and number arrays, so a structured clone carries them). */
 export interface CaveBottomCounts {
   /** The flat floor faces (`flatWallDetail`'s 6 × 6 patches) whose cave voxel lies at y −63, on the bedrock plane. */
   readonly flatAtBottom: number;
@@ -1541,23 +1616,81 @@ export interface CaveBottomCounts {
   readonly flat: number;
   /** `bedrockExposedCount`. */
   readonly bedrockExposed: number;
+  /** `bedrockCount`: > 0 in every generated region, so a class-table regression cannot read bedrockExposed 0 (ruling R16). */
+  readonly bedrock: number;
+  /** The walls (every orientation) of the cave voxels per y −64 … 0, index y + 64 (C7.bottomFlatRatio). */
+  readonly wallsByY: number[];
+  /** The flat floor faces (`flatWallDetail`'s) per y of their cave voxel, y −64 … 0, index y + 64. */
+  readonly flatFloorsByY: number[];
+  /** `bottomFloorSpreads` (C7.bottomFloorSpread). */
+  readonly floorSpreads: number[];
+  /** C4's floor voxels (`floorCounts`) per y −56 … −32, index y + 56 (C7.bottomFloorPeak). */
+  readonly floors: number[];
+  /** The cave air (tagged, neither solid nor fluid) per 16-block band from y −64 (`BOTTOM_AIR_BANDS`). */
+  readonly airByBand: number[];
 }
 
 /**
  * C7's bottom counts of one region: `flat` is `flatWallDetail` over every position of the grid (on archipelago not the
- * sea-floor restricted detail C7.flatWallShare reads), `bedrockExposed` `bedrockExposedCount(g)`.
+ * sea-floor restricted detail C7.flatWallShare reads), `c` the region's components (computed when absent).
  */
-export function caveBottomCounts(g: CaveGrid, flat: { readonly flat: number; readonly flatFloorsByY: Float64Array }): CaveBottomCounts {
-  return { flatAtBottom: flat.flatFloorsByY[BOTTOM_PLANE_Y - GRID_Y0]!, flat: flat.flat, bedrockExposed: bedrockExposedCount(g) };
+export function caveBottomCounts(
+  g: CaveGrid, flat: { readonly flat: number; readonly flatFloorsByY: Float64Array }, c: CaveComponents = caveComponents(g, preCaveTops(g)),
+): CaveBottomCounts {
+  const { w, d, cells } = g;
+  const plane = w * d;
+  const walls = new Array<number>(BOTTOM_REF_Y1 - GRID_Y0 + 1).fill(0);
+  const air = new Array<number>(BOTTOM_AIR_BANDS).fill(0);
+  for (let y = GRID_Y0; y <= BOTTOM_REF_Y1; y++) {
+    const yi = y - GRID_Y0;
+    for (let z = 0; z < d; z++) {
+      for (let x = 0; x < w; x++) {
+        const i = (yi * d + z) * w + x;
+        const cell = cells[i]!;
+        if (!caveCell(cell)) continue;
+        if ((cell & FLUID_BIT) === 0 && y < GRID_Y0 + 16 * BOTTOM_AIR_BANDS) air[(yi >> 4)]!++;
+        let k = 0;
+        if (x > 0 && (cells[i - 1]! & SOLID_BIT) !== 0) k++;
+        if (x < w - 1 && (cells[i + 1]! & SOLID_BIT) !== 0) k++;
+        if (yi > 0 && (cells[i - plane]! & SOLID_BIT) !== 0) k++;
+        if ((cells[i + plane]! & SOLID_BIT) !== 0) k++;
+        if (z > 0 && (cells[i - w]! & SOLID_BIT) !== 0) k++;
+        if (z < d - 1 && (cells[i + w]! & SOLID_BIT) !== 0) k++;
+        walls[yi]! += k;
+      }
+    }
+  }
+  return {
+    flatAtBottom: flat.flatFloorsByY[BOTTOM_PLANE_Y - GRID_Y0]!, flat: flat.flat,
+    bedrockExposed: bedrockExposedCount(g), bedrock: bedrockCount(g),
+    wallsByY: walls, flatFloorsByY: Array.from(flat.flatFloorsByY.subarray(0, BOTTOM_REF_Y1 - GRID_Y0 + 1)),
+    floorSpreads: bottomFloorSpreads(g, c),
+    floors: Array.from(floorCounts(g, c, FLOOR_MIN_VOXELS, BOTTOM_SPREAD_Y1).subarray(0, BOTTOM_SPREAD_Y1 - COMP_Y_MIN + 1)),
+    airByBand: air,
+  };
 }
 
-/** C7's bottom parts of one group (its regions pooled): `bottomPlane` = flat floor faces at y −63 over all flat faces. */
+/** C7's bottom parts of one group (its regions pooled), with the counts and the records behind them. */
 export interface CaveBottomGroup {
+  /** Flat floor faces at y −63 over all flat faces. */
   readonly bottomPlane: number;
+  /** The flat floor faces' share of the walls at y ≤ −40 over their share at y −39 … 0. */
+  readonly bottomFlatRatio: number;
+  /** The median of the regions' `floorSpreads`. */
+  readonly bottomFloorSpread: number;
+  /** C4.floorPeak over C4's floors at y ≤ −32. */
+  readonly bottomFloorPeak: number;
   readonly flatAtBottom: number;
   readonly flat: number;
   readonly bedrockExposed: number;
+  readonly bedrock: number;
   readonly regions: number;
+  /** The components C7.bottomFloorSpread read. */
+  readonly components: number;
+  /** The flat floor faces per y −64 … −32 (index y + 64). */
+  readonly flatFloorHistogram: number[];
+  /** The cave air per 16-block band from y −64. */
+  readonly airByBand: number[];
 }
 
 /** Per group ('default' for the default and large_biomes regions, else the preset), its regions' bottom counts pooled. */
@@ -1566,20 +1699,55 @@ export function caveBottomGroups(regions: ReadonlyArray<{ readonly group: string
   for (const group of [...new Set(regions.map((r) => r.group))]) {
     const rs = regions.filter((r) => r.group === group).map((r) => r.bottom);
     const sum = (f: (b: CaveBottomCounts) => number): number => rs.reduce((a, b) => a + f(b), 0);
+    const sumAt = (f: (b: CaveBottomCounts) => number[], n: number): number[] => Array.from({ length: n }, (_, k) => sum((b) => f(b)[k]!));
+    const ys = BOTTOM_REF_Y1 - GRID_Y0 + 1;
+    const walls = sumAt((b) => b.wallsByY, ys);
+    const flatFloors = sumAt((b) => b.flatFloorsByY, ys);
+    const floors = sumAt((b) => b.floors, BOTTOM_SPREAD_Y1 - COMP_Y_MIN + 1);
+    const spreads = rs.flatMap((b) => b.floorSpreads);
+    /** Σ of `v` over y0 … y1. */
+    const over = (v: readonly number[], y0: number, y1: number): number => v.slice(y0 - GRID_Y0, y1 - GRID_Y0 + 1).reduce((a, x) => a + x, 0);
     const flatAtBottom = sum((b) => b.flatAtBottom);
     const flat = sum((b) => b.flat);
-    out[group] = { bottomPlane: ratio(flatAtBottom, flat), flatAtBottom, flat, bedrockExposed: sum((b) => b.bedrockExposed), regions: rs.length };
+    out[group] = {
+      bottomPlane: ratio(flatAtBottom, flat),
+      bottomFlatRatio: ratio(
+        ratio(over(flatFloors, GRID_Y0, BOTTOM_Y), over(walls, GRID_Y0, BOTTOM_Y)),
+        ratio(over(flatFloors, BOTTOM_Y + 1, BOTTOM_REF_Y1), over(walls, BOTTOM_Y + 1, BOTTOM_REF_Y1)),
+      ),
+      bottomFloorSpread: median(spreads),
+      bottomFloorPeak: floorPeak(Float64Array.from(floors)),
+      flatAtBottom, flat, bedrockExposed: sum((b) => b.bedrockExposed), bedrock: sum((b) => b.bedrock), regions: rs.length,
+      components: spreads.length,
+      flatFloorHistogram: flatFloors.slice(0, BOTTOM_SPREAD_Y1 - GRID_Y0 + 1),
+      airByBand: sumAt((b) => b.airByBand, BOTTOM_AIR_BANDS),
+    };
   }
   return out;
 }
 
+/** C7's bottom parts (`caveBottomParts`). */
+export interface CaveBottomParts {
+  readonly bottomPlane: number;
+  readonly bedrockExposed: number;
+  readonly bottomFlatRatio: number;
+  readonly bottomFloorSpread: number;
+  readonly bottomFloorPeak: number;
+}
+
 /**
- * C7's bottom parts over the run's regions (SP6b spec §12.3; ruling P2: per group, the worst group's value):
- * `C7.bottomPlane` (gated) and `C7.bedrockExposed` (recorded until Task 21 gates it).
+ * C7's bottom parts over the run's regions (SP6b spec §12.3; ruling P2: per group, the worst group's value): the largest
+ * `bottomPlane`, `bedrockExposed`, `bottomFlatRatio` and `bottomFloorPeak`, the smallest `bottomFloorSpread` (NaN groups
+ * left out). `C7.bottomPlane` and (from Task 21) `C7.bedrockExposed` are gated; the other three are recorded (Task 30
+ * gates bottomFlatRatio and bottomFloorSpread at tuning).
  */
-export function caveBottomParts(regions: ReadonlyArray<{ readonly group: string; readonly bottom: CaveBottomCounts }>): { bottomPlane: number; bedrockExposed: number } {
+export function caveBottomParts(regions: ReadonlyArray<{ readonly group: string; readonly bottom: CaveBottomCounts }>): CaveBottomParts {
   const groups = Object.values(caveBottomGroups(regions));
-  return { bottomPlane: maxOf(groups.map((g) => g.bottomPlane)), bedrockExposed: maxOf(groups.map((g) => g.bedrockExposed)) };
+  return {
+    bottomPlane: maxOf(groups.map((g) => g.bottomPlane)), bedrockExposed: maxOf(groups.map((g) => g.bedrockExposed)),
+    bottomFlatRatio: maxOf(groups.map((g) => g.bottomFlatRatio)), bottomFloorSpread: minOf(groups.map((g) => g.bottomFloorSpread)),
+    bottomFloorPeak: maxOf(groups.map((g) => g.bottomFloorPeak)),
+  };
 }
 
 // ---------------------------------------------------------------- C8
@@ -2033,6 +2201,8 @@ const maxOf = (values: readonly number[]): number => {
   for (const v of values) if (!Number.isNaN(v) && !(v <= m)) m = v;
   return m;
 };
+/** The smallest of the values that are not NaN; NaN when none is. */
+const minOf = (values: readonly number[]): number => -maxOf(values.map((v) => -v));
 
 /**
  * The C7-C9 parts. The parts the spec marks "default and presets" (verticalStep, nearestEntrance, holedSurface) and
@@ -2107,6 +2277,34 @@ export const PILLAR_RISE = 2;
 export const PILLAR_BACK = 8;
 /** …and at most this many, so that the pillar and the cavern on both sides of it fill the view. */
 export const PILLAR_VIEW = 20;
+
+/**
+ * The yaw (0°, 45° … 315°) of the longest straight run of non-solid voxels from (x, y, z) (grid-local x, z; world y),
+ * up to `LOOK_STEPS`; ties to the smaller yaw.
+ */
+function longestRunYaw(g: CaveGrid, x: number, y: number, z: number): number {
+  const { w, d, cells } = g;
+  const plane = w * d;
+  let best = -1;
+  let yaw = 0;
+  for (let k = 0; k < 8; k++) {
+    const dx = Math.round(Math.sin((k * Math.PI) / 4));
+    const dz = Math.round(-Math.cos((k * Math.PI) / 4));
+    let s = 0;
+    while (s < LOOK_STEPS) {
+      const xx = x + dx * (s + 1);
+      const zz = z + dz * (s + 1);
+      if (xx < 0 || xx >= w || zz < 0 || zz >= d) break;
+      if ((cells[(y - GRID_Y0) * plane + zz * w + xx]! & SOLID_BIT) !== 0) break;
+      s++;
+    }
+    if (s > best) {
+      best = s;
+      yaw = 45 * k;
+    }
+  }
+  return yaw;
+}
 
 /**
  * The poses of one region (§10.1: per kind, its largest component's air voxel nearest the region's centre; D16):
@@ -2209,28 +2407,7 @@ export function caveExamples(
       }
     }
   }
-  /** The yaw of the longest run of non-solid voxels from (x, y, z) (grid-local x, z). */
-  const yawAt = (x: number, y: number, z: number): number => {
-    let best = -1;
-    let yaw = 0;
-    for (let k = 0; k < 8; k++) {
-      const dx = Math.round(Math.sin((k * Math.PI) / 4));
-      const dz = Math.round(-Math.cos((k * Math.PI) / 4));
-      let s = 0;
-      while (s < LOOK_STEPS) {
-        const xx = x + dx * (s + 1);
-        const zz = z + dz * (s + 1);
-        if (xx < 0 || xx >= w || zz < 0 || zz >= d) break;
-        if ((cells[(y - GRID_Y0) * plane + zz * w + xx]! & SOLID_BIT) !== 0) break;
-        s++;
-      }
-      if (s > best) {
-        best = s;
-        yaw = 45 * k;
-      }
-    }
-    return yaw;
-  };
+  const yawAt = (x: number, y: number, z: number): number => longestRunYaw(g, x, y, z);
   const poseAt = (b: number, pitch: number, yaw: number | null = null): CavePose => {
     const p = b % plane;
     const x = p % w;
@@ -2372,6 +2549,91 @@ export function caveExamples(
     if (out.pillars !== null) break;
   }
   return out;
+}
+
+/**
+ * SP6b's review poses (rulings P17, P59: a list of their own, written as top-level fields of `caves.examples.json`, so
+ * `EXAMPLE_IDS` stays SP6a's ten): `bottomCavern`, the floor of a wide cavern at the bottom (SP6b spec §5.2, §12.3; D25's
+ * checkpoint screenshot).
+ */
+export const SP6B_EXAMPLE_IDS = ['bottomCavern'] as const;
+export type Sp6bExampleId = (typeof SP6B_EXAMPLE_IDS)[number];
+
+/** The bottomCavern pose's pitch, looking down along the floor. */
+export const BOTTOM_PITCH = -15;
+/** How far the bottomCavern eye rises above its floor voxel, through non-solid voxels. */
+export const BOTTOM_EYE_RISE = 2;
+
+/**
+ * The bottomCavern pose (SP6b spec §12.3, D6): the component holding the most floor faces (a cave voxel whose voxel
+ * below is solid) at y ≤ −40 (ties to the lower label); of those faces' voxels, the one nearest horizontally to their
+ * mean position (voxel centres; ties to the lower index: the lower y first), raised by up to `BOTTOM_EYE_RISE` while the
+ * voxel above is not solid, is the eye (the pose's voxel), its yaw along the longest run of non-solid voxels from it
+ * (`caveExamples`' rule), its pitch `BOTTOM_PITCH`. Null when no component has a floor face at y ≤ −40.
+ */
+export function bottomCavernPose(g: CaveGrid, c: CaveComponents): CavePose | null {
+  const { x0, z0, w, cells } = g;
+  const plane = w * g.d;
+  const y1 = Math.min(BOTTOM_Y, c.yMax);
+  const faces = new Map<number, number>();
+  for (let y = c.yMin; y <= y1; y++) {
+    const base = (y - c.yMin) * plane;
+    const at = (y - GRID_Y0) * plane;
+    for (let p = 0; p < plane; p++) {
+      const l = c.label[base + p]!;
+      if (l !== 0 && floorFace(cells, at + p, plane)) faces.set(l, (faces.get(l) ?? 0) + 1);
+    }
+  }
+  let best = 0;
+  let most = 0;
+  for (const [l, n] of faces) {
+    if (n > most || (n === most && l < best)) {
+      most = n;
+      best = l;
+    }
+  }
+  if (best === 0) return null;
+  // The faces' mean position, doubled (2x + 1 is a voxel centre doubled), then the nearest face.
+  let sx = 0;
+  let sz = 0;
+  const on = (y: number, p: number): boolean => c.label[(y - c.yMin) * plane + p] === best && floorFace(cells, (y - GRID_Y0) * plane + p, plane);
+  for (let y = c.yMin; y <= y1; y++) {
+    for (let p = 0; p < plane; p++) {
+      if (!on(y, p)) continue;
+      sx += 2 * (p % w) + 1;
+      sz += 2 * Math.floor(p / w) + 1;
+    }
+  }
+  const mx = sx / most;
+  const mz = sz / most;
+  let near = Infinity;
+  let fy = 0;
+  let fp = 0;
+  for (let y = c.yMin; y <= y1; y++) {
+    for (let p = 0; p < plane; p++) {
+      if (!on(y, p)) continue;
+      const ex = 2 * (p % w) + 1 - mx;
+      const ez = 2 * Math.floor(p / w) + 1 - mz;
+      if (ex * ex + ez * ez < near) {
+        near = ex * ex + ez * ez;
+        fy = y;
+        fp = p;
+      }
+    }
+  }
+  let ey = fy;
+  for (let k = 0; k < BOTTOM_EYE_RISE && ey + 1 < GRID_Y0 + GRID_H && (cells[(ey + 1 - GRID_Y0) * plane + fp]! & SOLID_BIT) === 0; k++) ey++;
+  const x = fp % w;
+  const z = Math.floor(fp / w);
+  return {
+    x: x0 + x + 0.5, y: ey + 0.5, z: z0 + z + 0.5, yaw: longestRunYaw(g, x, ey, z), pitch: BOTTOM_PITCH,
+    voxel: [x0 + x, ey, z0 + z], component: c.size.get(best)!,
+  };
+}
+
+/** SP6b's review poses of one region (`SP6B_EXAMPLE_IDS`). */
+export function sp6bCaveExamples(g: CaveGrid, c: CaveComponents): Record<Sp6bExampleId, CavePose | null> {
+  return { bottomCavern: bottomCavernPose(g, c) };
 }
 
 // ---------------------------------------------------------------- C7's construction: the stored side (ruling P4)
