@@ -695,7 +695,7 @@ describe('the cave class columns (SP6a spec §4)', () => {
     // No draw up to the tunnels' column holds the tunnels' families and accepts every leaf of both slots (none of the
     // first 4096 draws holds every family and accepts every leaf, a 7 s scan left out here), hence the two slots.
     expect(caveColumn(CTX, 'tunnels', [...caveSlotLeaves('caverns'), ...caveSlotLeaves('tunnels')], CAVE_PINS.tunnels[1] + 1)).toBeNull();
-  });
+  }, 120_000); // 33-45 s on CI's unit (rest) at the generator push (run 43642270084), over the 30 s default
 
   test('every caves leaf but the scale, band, carver, cave-biome and rock-floor leaves, capTop and waterDepth is live on a cave column (the class it is meant for), and only through the T stage', () => {
     const cs = caves();
@@ -1105,7 +1105,7 @@ describe('the island cap\'s capTop (SP6a Task 9; spec §1.4, §4)', () => {
     for (let y = 319; y >= -63 && top === -64; y--) for (let p = 0; p < 256; p++) if (dc.compiled.tapFn('precave', p & 15, y, p >> 4) > 0) { top = y; break; }
     expect(top).toBeGreaterThanOrEqual(200);
     expect(stageOutputHash(at207, 'terrain', cx, cz)).not.toBe(stageOutputHash(FLOATING, 'terrain', cx, cz));
-  });
+  }, 120_000); // 21-27 s on CI's unit (rest) at the generator push (run 43642270084), near the 30 s default
 });
 
 describe('witnesses', () => {
