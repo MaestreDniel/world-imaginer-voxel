@@ -13,7 +13,9 @@
  * Fast path (`surfaceFastPath`, compile time, general and conservative). Every leaf (`block`, `bandlands` or `strata`)
  * is classed by the `if`s on its path (sequences ignored), a gate counting only when not under a `not`:
  * - floor-bounded: a path `if` is `stoneDepth{side floor}`; its bound is the smallest, over those gates, of offset +
- *   (addSurfaceDepth ? SD_MAX : 0); it is in the sky class when a path `if` is `skyOpen`, else in the other floor class;
+ *   (addSurfaceDepth ? SD_MAX : 0); it is in the sky class when a path `if` is `skyOpen`, else in the run-top-gated
+ *   class when a path `if` is a `yAbove{runTop true}` (SP6b §3.5's islands lever: floating_islands' island branch),
+ *   else in the other floor class;
  * - ceiling-bounded (SP6b §3.5, Spec correction 6): no floor gate and a path `if` is `stoneDepth{side ceiling}`; its
  *   bound is the same smallest over its ceiling gates, counted from the run's bottom (a leaf with a floor gate is
  *   floor-bounded only: its floor gate already excludes every voxel beyond it, whatever its ceiling gates say);
@@ -22,7 +24,7 @@
  *   `not` of one), at least one here-only.
  * With any other leaf there is no fast path (any condition on a depth-bounded path is harmless, a `caveBiome` too, as
  * `rulesCost` decides). Otherwise each class's bound is the largest over its leaves (−1 when it has none: a depth ≥ 0
- * exceeds it everywhere); maxSurfaceDepth is the larger floor bound; the tree is sky-gated when every floor- or
+ * exceeds it everywhere); maxSurfaceDepth is the largest floor bound; the tree is sky-gated when every floor- or
  * ceiling-bounded path also holds a `skyOpen` `if`. The biome-gated skip (SP6b §3.5 item 3): when every leaf of the
  * other floor class holds a `caveBiome{side floor}` `if`, `floorBiomes` is the set of cave biomes they name (each leaf's
  * gates intersected), and a run whose floor biome is none or outside it has no such leaf that can hold (its floor
@@ -36,8 +38,9 @@
  * dither interval, and a here-gated one is looked up without evaluating the tree. A band's `state` is its result when
  * that is one state for every cave biome, else −1. `fillColumn` gives a solid voxel of a band its result without
  * evaluating when it lies beyond every class's bound: floorDepth > the run's floor bound (the sky-open run's: the
- * larger of the two floor classes'; any other run's: the non-sky class's, so in a sky-gated tree every depth of such a
- * run) and ceilDepth > the ceiling bound (each −1 for a run the biome-gated skip excludes), and, in a tree with
+ * largest of the floor classes'; any other run's: the non-sky classes', so in a sky-gated tree every depth of such a
+ * run; the run-top-gated class's counts only in a run whose top is ≥ its topFloorMinY, the smallest of its leaves'
+ * gates, since no leaf of it holds in a lower run) and ceilDepth > the ceiling bound (each −1 for a run the biome-gated skip excludes), and, in a tree with
  * here-gated leaves, the position's classification (`classifyCaveBiomes`, SP6b §3.5 item 4) leaves one result over
  * the cave biomes the picker can return at that y (one biome, or several with one result); else the voxel is evaluated,
  * a `caveBiome{here}` there taking the classification's answer when it is sure (true when every possible biome is in
@@ -115,7 +118,7 @@ export interface SurfaceBand {
 
 /** The fast-path analysis of a tree (§3.4; SP6b §3.5's per-class bounds). */
 export interface SurfaceFastPath {
-  /** The largest bound of the floor-bounded leaves (both classes), at the settings' SD_MAX; −1 when there is none. */
+  /** The largest bound of the floor-bounded leaves (every class), at the settings' SD_MAX; −1 when there is none. */
   readonly maxSurfaceDepth: number;
   /**
    * Every floor- or ceiling-bounded leaf's path holds a `skyOpen` (not under a `not`); true when there is none (then
@@ -124,8 +127,15 @@ export interface SurfaceFastPath {
   readonly skyGated: boolean;
   /** The largest floor bound of the floor-bounded leaves whose path holds a `skyOpen`; −1 when there is none. */
   readonly skyFloorBound: number;
-  /** The largest floor bound of the other floor-bounded leaves; −1 when there is none. */
+  /** The largest floor bound of the other floor-bounded leaves but the run-top-gated ones; −1 when there is none. */
   readonly floorBound: number;
+  /**
+   * The largest floor bound of the run-top-gated floor-bounded leaves (no `skyOpen`; a `yAbove{runTop true}` on the
+   * path, SP6b §3.5's islands lever); −1 when there is none. They hold only in a run whose top is ≥ topFloorMinY.
+   */
+  readonly topFloorBound: number;
+  /** The smallest, over the run-top-gated leaves, of the largest `yAbove{runTop true}` minY on each path; −1 when none. */
+  readonly topFloorMinY: number;
   /** The largest ceiling bound (from the run's bottom) of the ceiling-bounded leaves; −1 when there is none. */
   readonly ceilBound: number;
   /**
@@ -243,6 +253,8 @@ function analyse(root: Rule, sdMax: number): BandAnalysis | null {
   const leaves = LEAVES(root);
   let skyFloorBound = -1;
   let floorBound = -1;
+  let topFloorBound = -1;
+  let topFloorMinY = Infinity;
   let ceilBound = -1;
   let skyGated = true;
   // The biome-gated skip: the union of the leaves' gate sets, −1 once a leaf of the class lacks a gate.
@@ -259,6 +271,8 @@ function analyse(root: Rule, sdMax: number): BandAnalysis | null {
     let sky = false;
     let floorGate = -1;
     let ceilGate = -1;
+    // The leaf's run-top gate: the largest yAbove{runTop true} minY on its path (−Infinity: none).
+    let topGate = -Infinity;
     for (const c of leaf.conditions) {
       if (c.kind === 'stoneDepth') {
         const b = c.offset + (c.addSurfaceDepth ? sdMax : 0);
@@ -266,6 +280,8 @@ function analyse(root: Rule, sdMax: number): BandAnalysis | null {
         else ceil = Math.min(ceil, b);
       } else if (c.kind === 'skyOpen') {
         sky = true;
+      } else if (c.kind === 'yAbove' && c.runTop) {
+        topGate = Math.max(topGate, c.minY);
       } else if (c.kind === 'caveBiome' && c.side === 'floor') {
         floorGate = (floorGate < 0 ? ~0 : floorGate) & caveBits(c.biomes);
       } else if (c.kind === 'caveBiome' && c.side === 'ceiling') {
@@ -276,6 +292,11 @@ function analyse(root: Rule, sdMax: number): BandAnalysis | null {
       // Floor-bounded, whatever its ceiling gates (Spec correction 6).
       if (sky) {
         skyFloorBound = Math.max(skyFloorBound, floor);
+      } else if (topGate !== -Infinity) {
+        // Run-top-gated (SP6b §3.5's islands lever): a class of its own, so the runs below its gate take the band state.
+        topFloorBound = Math.max(topFloorBound, floor);
+        topFloorMinY = Math.min(topFloorMinY, topGate);
+        skyGated = false;
       } else {
         floorBound = Math.max(floorBound, floor);
         skyGated = false;
@@ -336,7 +357,8 @@ function analyse(root: Rule, sdMax: number): BandAnalysis | null {
     y = end + 1;
   }
   const fastPath: SurfaceFastPath = {
-    maxSurfaceDepth: Math.max(skyFloorBound, floorBound), skyGated, skyFloorBound, floorBound, ceilBound,
+    maxSurfaceDepth: Math.max(skyFloorBound, floorBound, topFloorBound), skyGated, skyFloorBound, floorBound,
+    topFloorBound, topFloorMinY: topFloorBound < 0 ? -1 : topFloorMinY, ceilBound,
     floorBiomes: floorLeaves === 0 ? -1 : floorBiomes, ceilBiomes: ceilLeaves === 0 ? -1 : ceilBiomes, here, bands,
   };
   return { fastPath, results: Int32Array.from(results), direct };
@@ -637,10 +659,13 @@ export function compileSurfaceRules(
     fillColumn(scan, out, fast) {
       if (out.length !== COLUMN_VOXELS) throw new RangeError(`fillColumn: out has ${out.length} entries, expected ${COLUMN_VOXELS}`);
       const useFast = fast && fastPath !== null;
-      // The floor bounds of the sky-open run (both floor classes) and of every other run (the non-sky class only), and
-      // the ceiling bound, each with its biome-gated skip (SP6b §3.5 items 1-3).
+      // The floor bounds of the sky-open run (every floor class) and of every other run (the non-sky classes only, the
+      // run-top-gated one where the run's top reaches its gate), and the ceiling bound, each with its biome-gated skip
+      // (SP6b §3.5 items 1-3 and its islands lever).
       const skyFloor = fastPath === null ? 0 : fastPath.skyFloorBound;
       const otherFloor = fastPath === null ? 0 : fastPath.floorBound;
+      const topFloor = fastPath === null ? -1 : fastPath.topFloorBound;
+      const topMinY = fastPath === null ? 0 : fastPath.topFloorMinY;
       const ceilAll = fastPath === null ? 0 : fastPath.ceilBound;
       const floorSet = fastPath === null ? -1 : fastPath.floorBiomes;
       const ceilSet = fastPath === null ? -1 : fastPath.ceilBiomes;
@@ -662,7 +687,9 @@ export function compileSurfaceRules(
           const bottom = runBottom[r]!;
           const fb = runFloorBiome[r]!;
           const cb = runCeilBiome[r]!;
-          const floor = floorSet >= 0 && (fb < 0 || ((floorSet >> fb) & 1) === 0) ? -1 : otherFloor;
+          const biomeFloor = floorSet >= 0 && (fb < 0 || ((floorSet >> fb) & 1) === 0) ? -1 : otherFloor;
+          // The run-top-gated class holds only in a run whose top reaches its gate (SP6b §3.5's islands lever).
+          const floor = top >= topMinY ? Math.max(biomeFloor, topFloor) : biomeFloor;
           const ceil = ceilSet >= 0 && (cb < 0 || ((ceilSet >> cb) & 1) === 0) ? -1 : ceilAll;
           // Voxels at shallow ≤ y ≤ deep may take their band's result: floorDepth beyond the run's floor bound and
           // ceilDepth beyond its ceiling bound (a bound −1 holds the whole run).

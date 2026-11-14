@@ -131,10 +131,13 @@ describe('FLOATING_SURFACE_RULES (SP3e spec §4.2, §4.3, §4.5, D6, D7, D21 (b)
     expect(fp!.skyGated).toBe(false);
     expect(fp!.maxSurfaceDepth).toBe(4 + sc.settings.sdMax);
     // SP6b §3.5 (Spec correction 6): the island leaves' stoneDepth{ceiling, 100} and {ceiling, 2} sit under floor gates,
-    // so they are floor-bounded (the non-sky class, 4 + SD_MAX); the ceiling class is rule 4's (1).
-    expect([fp!.skyFloorBound, fp!.floorBound, fp!.ceilBound]).toEqual([4 + sc.settings.sdMax, 4 + sc.settings.sdMax, 1]);
-    // The island leaves have no caveBiome{floor} gate, so the floor class has no biome-gated skip there (§3.5).
-    expect([fp!.floorBiomes, fp!.ceilBiomes, fp!.here]).toEqual([-1, 0b0110, true]);
+    // so they are floor-bounded (4 + SD_MAX); the ceiling class is rule 4's (1). §3.5's islands lever (Task 25e): the
+    // island leaves are gated by yAbove{ISLAND_RUN_MIN_BOTTOM, runTop}, so they are a floor class of their own, bounded
+    // at 4 + SD_MAX in runs whose top is ≥ 181 only; the other non-sky floor class is rule 4's (1), with its skip.
+    expect([fp!.skyFloorBound, fp!.floorBound, fp!.ceilBound]).toEqual([4 + sc.settings.sdMax, 1, 1]);
+    expect([fp!.topFloorBound, fp!.topFloorMinY]).toEqual([4 + sc.settings.sdMax, ISLAND_RUN_MIN_BOTTOM]);
+    // Rule 4's floor leaves all hold a caveBiome{floor} gate, so the floor class has its biome-gated skip again (§3.5).
+    expect([fp!.floorBiomes, fp!.ceilBiomes, fp!.here]).toEqual([0b1110, 0b0110, true]);
     // The default is not sky-gated either since rule 4 (its floor and ceiling leaves have no skyOpen gate).
     expect(scDefault.compiled.fastPath!.skyGated).toBe(false);
     expect(fp!.bands).toEqual(scDefault.compiled.fastPath!.bands);
@@ -196,16 +199,19 @@ describe('the islands branch on a constructed column (SP3e spec §4.1, §4.2, §
   const dflt = new Uint16Array(98304);
   scDefault.compiled.fillColumn(bareScan, dflt, true);
 
-  test("SP6b §3.5: the fast path evaluates SP3c's voxels, every run's top 1 + maxSurfaceDepth outside the dither intervals", () => {
+  test("SP6b §3.5: the fast path evaluates the sky-open run's and the island runs' top 1 + maxSurfaceDepth outside the dither intervals", () => {
     const fp = sc.compiled.fastPath!;
-    // The constructed column has no cave tags and no picker: no run has a ceiling biome (rule 4's ceiling class skips
+    // The constructed column has no cave tags and no picker: no run has a floor or ceiling biome (rule 4's classes skip
     // every run, item 3) and no voxel is the abyss (item 4), so the bands rule 4 cuts (state −1) are taken as SP3c's.
+    // The island class (Task 25e) holds in the runs whose top is ≥ 181; the other non-sky runs (the ground under a
+    // detached run, case 7's [−63, 70]) evaluate their dither intervals only.
     const dither = new Uint8Array(384);
     for (const b of fp.bands) for (let y = b.yMin; y <= b.yMax; y++) dither[y + 64] = b.dither ? 1 : 0;
     let want = 0;
     for (let p = 0; p < 256; p++) {
       for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
-        for (let y = scan.runTop[r]!; y >= scan.runBottom[r]!; y--) if (dither[y + 64] === 1 || scan.runTop[r]! - y <= fp.maxSurfaceDepth) want++;
+        const bound = r === scan.skyRun[p] || scan.runTop[r]! >= ISLAND_RUN_MIN_BOTTOM ? fp.maxSurfaceDepth : -1;
+        for (let y = scan.runTop[r]!; y >= scan.runBottom[r]!; y--) if (dither[y + 64] === 1 || scan.runTop[r]! - y <= bound) want++;
       }
     }
     expect(sc.compiled.fillColumn(scan, new Uint16Array(98304), true)).toBe(want);

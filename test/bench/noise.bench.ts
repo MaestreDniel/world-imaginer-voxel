@@ -872,7 +872,9 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
       for (let p = 0; p < 256; p++) {
         for (let r = runFirst[p]!; r < runFirst[p + 1]!; r++) {
           const fb = runFloorBiome[r]!, cb = runCeilBiome[r]!;
-          const fBound = evFast.floorBiomes >= 0 && (fb < 0 || ((evFast.floorBiomes >> fb) & 1) === 0) ? -1 : evFast.floorBound;
+          const bBound = evFast.floorBiomes >= 0 && (fb < 0 || ((evFast.floorBiomes >> fb) & 1) === 0) ? -1 : evFast.floorBound;
+          // The run-top-gated class where the run's top reaches its gate (SP6b §3.5's islands lever; compile.ts' bounds).
+          const fBound = runTop[r]! >= evFast.topFloorMinY ? Math.max(bBound, evFast.topFloorBound) : bBound;
           const cBound = evFast.ceilBiomes >= 0 && (cb < 0 || ((evFast.ceilBiomes >> cb) & 1) === 0) ? -1 : evFast.ceilBound;
           const isSky = r === skyRun[p];
           const len = runTop[r]! - runBottom[r]! + 1;
@@ -950,7 +952,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
       console.log(
         `surface pass evaluated voxels per class (${D25_COLUMNS} columns of terrain.real's sequence, per column): total ${st(ev.total)}; sky floor ${st(ev.sky)}; `
         + `cave floor ${st(ev.floor)} (biome runs ${st(ev.floorBiome)}); ceiling ${st(ev.ceil)} (biome runs ${st(ev.ceilBiome)}); band ${st(ev.band)}; `
-        + `fast path ${evFast === null ? 'none' : `skyFloorBound ${evFast.skyFloorBound}, floorBound ${evFast.floorBound}, ceilBound ${evFast.ceilBound}, floorBiomes ${evFast.floorBiomes}, ceilBiomes ${evFast.ceilBiomes}, here ${evFast.here}`}`,
+        + `fast path ${evFast === null ? 'none' : `skyFloorBound ${evFast.skyFloorBound}, floorBound ${evFast.floorBound}, topFloorBound ${evFast.topFloorBound} (runs from ${evFast.topFloorMinY}), ceilBound ${evFast.ceilBound}, floorBiomes ${evFast.floorBiomes}, ceilBiomes ${evFast.ceilBiomes}, here ${evFast.here}`}`,
       );
     }
     {

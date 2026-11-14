@@ -116,7 +116,8 @@ function fill(c: CompiledSurfaceRules, scan: SurfaceScan, fast: boolean): { out:
 
 /**
  * The voxels §3.4 and SP6b §3.5 (D20 1-3) let take their band: solid, in a constant band, floorDepth beyond the run's
- * floor bound (the sky-open run's: the larger of the two floor classes'; any other run's: the non-sky class's) and
+ * floor bound (the sky-open run's: the largest of the floor classes'; any other run's: the non-sky classes', the
+ * run-top-gated one only where the run's top reaches its gate) and
  * ceilDepth beyond the ceiling class's bound, a class's bound −1 for a run whose floor (ceiling) biome its biome-gated
  * skip leaves out. (A tree with here-gated leaves, item 4, takes more: this counts only the bands whose state is one.)
  */
@@ -128,7 +129,9 @@ function fastVoxels(fp: SurfaceFastPath, scan: SurfaceScan): { fast: number; noS
   for (let p = 0; p < 256; p++) {
     for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
       const sky = r === scan.skyRun[p];
-      const other = skipped(fp.floorBiomes, scan.runFloorBiome[r]!) ? -1 : fp.floorBound;
+      const biome = skipped(fp.floorBiomes, scan.runFloorBiome[r]!) ? -1 : fp.floorBound;
+      // The run-top-gated class (SP6b §3.5's islands lever) where the run's top reaches its gate.
+      const other = scan.runTop[r]! >= fp.topFloorMinY ? Math.max(biome, fp.topFloorBound) : biome;
       const ceilBound = skipped(fp.ceilBiomes, scan.runCeilBiome[r]!) ? -1 : fp.ceilBound;
       const floorBound = sky ? Math.max(fp.skyFloorBound, other) : other;
       for (let y = scan.runTop[r]!; y >= scan.runBottom[r]!; y--) {
@@ -234,6 +237,8 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
       skyGated: true,
       skyFloorBound: 15,
       floorBound: -1,
+      topFloorBound: -1,
+      topFloorMinY: -1,
       ceilBound: -1,
       floorBiomes: -1,
       ceilBiomes: -1,
@@ -273,7 +278,7 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     expect(fp(SEQ(IF(floor(3, false), B('air')), IF(floor(-2, true), B('air'))), 11).maxSurfaceDepth).toBe(9);
     expect(fp(IF(floor(-3, false), B('air')), 11).maxSurfaceDepth).toBe(-1);
     expect(fp(SEQ(), 11)).toEqual({
-      maxSurfaceDepth: -1, skyGated: true, skyFloorBound: -1, floorBound: -1, ceilBound: -1, floorBiomes: -1, ceilBiomes: -1, here: false,
+      maxSurfaceDepth: -1, skyGated: true, skyFloorBound: -1, floorBound: -1, topFloorBound: -1, topFloorMinY: -1, ceilBound: -1, floorBiomes: -1, ceilBiomes: -1, here: false,
       bands: [band(-63, 319, STONE)],
     });
     expect(fp(IF(grad(0, 8), B('air')), 11).skyGated).toBe(true);
@@ -301,7 +306,17 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     expect(bounds(fp(IFS([SKY, ceil(2, false)], A)))).toEqual([-1, -1, 2, -1, true]);
     // Spec correction 6: floating_islands' island leaves hold stoneDepth{ceiling, 100} under stoneDepth{floor, 4 + SD}:
     // floor-bounded only (the floor gate already excludes every voxel beyond it), never the bottom 100 of every run.
-    expect(bounds(fp(IFS([yAbove(181, true), ceil(100, false), BAND4], SEQ(IF(TOP, A), IF(ceil(2, false), A), A))))).toEqual([-1, 15, -1, 15, false]);
+    // §3.5's islands lever (Task 25e): their yAbove{181, runTop} makes them a floor class of their own, with its gate.
+    const islands = fp(IFS([yAbove(181, true), ceil(100, false), BAND4], SEQ(IF(TOP, A), IF(ceil(2, false), A), A)));
+    expect(bounds(islands)).toEqual([-1, -1, -1, 15, false]);
+    expect([islands.topFloorBound, islands.topFloorMinY]).toEqual([15, 181]);
+    // The run-top class: each leaf's largest gate, the smallest over its leaves; beside it the other floor class and its
+    // biome-gated skip; under skyOpen a leaf stays in the sky class; a negated run-top gate is no gate.
+    const mixed = fp(SEQ(IFS([yAbove(150, true), yAbove(200, true), floor(4, false)], A), IFS([yAbove(190, true), floor(2, false)], A),
+      IFS([CB('floor', 'lush'), floor(1, false)], A), IFS([SKY, yAbove(100, true), floor(6, false)], A)));
+    expect([mixed.skyFloorBound, mixed.floorBound, mixed.topFloorBound, mixed.topFloorMinY, mixed.floorBiomes, mixed.maxSurfaceDepth]).toEqual([6, 1, 4, 190, 1 << 1, 6]);
+    const negated = fp(IFS([{ kind: 'not', if: yAbove(181, true) }, floor(4, false)], A));
+    expect([negated.floorBound, negated.topFloorBound, negated.topFloorMinY]).toEqual([4, -1, -1]);
     expect(bounds(fp(IFS([ceil(0, false), SKY, TOP], A)))).toEqual([0, -1, -1, 0, true]);
   });
 
@@ -385,6 +400,8 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
       skyGated: true,
       skyFloorBound: 11,
       floorBound: -1,
+      topFloorBound: -1,
+      topFloorMinY: -1,
       ceilBound: -1,
       floorBiomes: -1,
       ceilBiomes: -1,
@@ -409,6 +426,8 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
       skyGated: true,
       skyFloorBound: 0,
       floorBound: -1,
+      topFloorBound: -1,
+      topFloorMinY: -1,
       ceilBound: -1,
       floorBiomes: -1,
       ceilBiomes: -1,
@@ -646,7 +665,7 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     const t1 = tree(ST('surface.noises.patch', 0)), t2 = tree(ST('surface.noises.fuzzB', 0));
     // The strata leaf is Y-only: the band it decides (8 … 319) has no constant state and is evaluated.
     expect(surfaceFastPath(t1, 11)).toEqual({
-      maxSurfaceDepth: 0, skyGated: true, skyFloorBound: 0, floorBound: -1, ceilBound: -1, floorBiomes: -1, ceilBiomes: -1, here: false,
+      maxSurfaceDepth: 0, skyGated: true, skyFloorBound: 0, floorBound: -1, topFloorBound: -1, topFloorMinY: -1, ceilBound: -1, floorBiomes: -1, ceilBiomes: -1, here: false,
       bands: [band(-63, -41, BEDROCK), band(-40, 0, BEDROCK), dither(1, 7), { yMin: 8, yMax: 319, dither: false, state: -1 }],
     });
     const col = handColumn((p) => 300 + (p % 7));
