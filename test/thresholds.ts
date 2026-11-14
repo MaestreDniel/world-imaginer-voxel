@@ -87,7 +87,13 @@ export const THRESHOLDS: ThresholdTable = {
   // × 0.85 (min): C7.verticalStep, flatWallShare, waterWall, C8.aperiodicity, typeMixVariation (C8.largeShare is
   // recorded, not gated). The parts that read 32 × 32 regions or depend on the region's size, on quick and full only
   // (ruling P32, R21 (e)): C5.largest, C8.aperiodicity, C8.sizeSpread, C9.entrancesMax.
-  C1: { voidShareMin: { min: 0.05, activeFrom: 'SP6a' }, voidShareMax: { max: 0.15, activeFrom: 'SP6a' } },
+  // SP6b spec §12.3 (Task 27): `cave_heavy`'s void share over its regions in the `caves-biomes` job (quick and full;
+  // `.out/C1.caveHeavy.json`), both parts the one share against the master's 10-22 % (:1508, :2009), recorded in SP6b and
+  // gated from SP12 (the fixture's pattern, `test/unit/metric.test.ts:9`).
+  C1: {
+    voidShareMin: { min: 0.05, activeFrom: 'SP6a' }, voidShareMax: { max: 0.15, activeFrom: 'SP6a' },
+    caveHeavyMin: { min: 0.10, activeFrom: 'SP12' }, caveHeavyMax: { max: 0.22, activeFrom: 'SP12' },
+  },
   C2: { skyComponents: { min: 20, activeFrom: 'SP6a' }, skyShare: { min: 0.2, activeFrom: 'SP6a' } },
   C3: {
     cheeseShare: { min: 0.2, activeFrom: 'SP6a' }, spaghettiShare: { min: 0.1, activeFrom: 'SP6a' }, noodleShare: { min: 0.005, activeFrom: 'SP6a' },

@@ -5,7 +5,7 @@
  * (final review GOV-8), SP6a's slow cave files (Task 8's `caveContinuity`, Task 11's `caveTags`, Task 17's `meshXray`, Task 24's `carverPaths`),
  * SP6b Task 15's `surfaceFuzz`, and `rest`; the metrics-quick table names
  * its shards by (file, env) (SP6b spec §13 L1-L4): T1-T5 and S1-S3 by profile (`METRICS_PROFILES`), the caves by group
- * (`METRICS_CAVE_GROUPS`), `apply.metric.ts` in `terrain-default`; the metrics-fast table (SP4b spec §9's lever, taken
+ * (`METRICS_CAVE_GROUPS`; Task 27's `caves-biomes` after `caves-presets`, the 19th job), `apply.metric.ts` in `terrain-default`; the metrics-fast table (SP4b spec §9's lever, taken
  * after SP4c's merge run) is `terrain`, `surface` and SP6a's `caves` alone plus `rest`.
  */
 import { spawnSync } from 'node:child_process';
@@ -37,9 +37,10 @@ describe('shardArgs (SP4b spec §1.1)', () => {
     expect(() => shardArgs(SHARDS, 'nope')).toThrow('unknown shard nope; shards: heavy, rest');
   });
 
-  test('the metrics-quick table by (file, env) (SP6b spec §13 L1-L4): T1-T5 and S1-S3 by profile, the caves by group, apply in terrain-default', () => {
+  test('the metrics-quick table by (file, env) (SP6b spec §13 L1-L4): T1-T5 and S1-S3 by profile, the caves by group (caves-biomes after caves-presets, Task 27), apply in terrain-default', () => {
     expect(Object.keys(METRIC_SHARDS)).toEqual([
-      'terrain-default', 'terrain-large', 'surface-default', 'surface-large', 'render', 'edit', 'persist', 'clipboard', 'caves', 'caves-presets', 'rest',
+      'terrain-default', 'terrain-large', 'surface-default', 'surface-large', 'render', 'edit', 'persist', 'clipboard', 'caves', 'caves-presets',
+      'caves-biomes', 'rest',
     ]);
     expect(METRIC_SHARDS).toEqual({
       'terrain-default': { files: ['test/metrics/terrain.metric.ts', 'test/metrics/apply.metric.ts'], env: { METRICS_PROFILES: 'default' } },
@@ -52,11 +53,14 @@ describe('shardArgs (SP4b spec §1.1)', () => {
       clipboard: ['test/metrics/clipboard.metric.ts'],
       caves: { files: ['test/metrics/caves.metric.ts'], env: { METRICS_CAVE_GROUPS: 'default' } },
       'caves-presets': { files: ['test/metrics/caves.metric.ts'], env: { METRICS_CAVE_GROUPS: 'presets' } },
+      'caves-biomes': { files: ['test/metrics/caves.metric.ts'], env: { METRICS_CAVE_GROUPS: 'biomes' } },
       rest: null,
     });
     // An env shard selects its files and sets its env; a plain shard sets none.
     expect(shardArgs(METRIC_SHARDS, 'terrain-default')).toEqual(['test/metrics/terrain.metric.ts', 'test/metrics/apply.metric.ts']);
     expect(shardArgs(METRIC_SHARDS, 'caves-presets')).toEqual(['test/metrics/caves.metric.ts']);
+    expect(shardArgs(METRIC_SHARDS, 'caves-biomes')).toEqual(['test/metrics/caves.metric.ts']);
+    expect(shardEnv(METRIC_SHARDS, 'caves-biomes')).toEqual({ METRICS_CAVE_GROUPS: 'biomes' });
     expect(shardEnv(METRIC_SHARDS, 'surface-large')).toEqual({ METRICS_PROFILES: 'large_biomes' });
     expect(shardEnv(METRIC_SHARDS, 'render')).toEqual({});
     expect(shardEnv(METRIC_SHARDS, 'rest')).toEqual({});
@@ -65,6 +69,9 @@ describe('shardArgs (SP4b spec §1.1)', () => {
       .filter(([, s]) => s !== null && (Array.isArray(s) ? s : s.files).includes(f)).map(([n]) => n);
     expect(shardsOf('test/metrics/apply.metric.ts')).toEqual(['terrain-default']);
     expect(shardsOf('test/metrics/terrain.metric.ts')).toEqual(['terrain-default', 'terrain-large']);
+    expect(shardsOf('test/metrics/caves.metric.ts')).toEqual(['caves', 'caves-presets', 'caves-biomes']);
+    // 12 shards: with the unit table's 2, metrics-fast's 4 and `check`, the 19 parallel test jobs (SP6b spec §13).
+    expect(Object.keys(METRIC_SHARDS).length + Object.keys(SHARDS).length + Object.keys(FAST_SHARDS).length + 1).toBe(19);
     // The catch-all excludes each named file once.
     const rest = shardArgs(METRIC_SHARDS, 'rest');
     expect(rest.filter((a) => a === 'test/metrics/terrain.metric.ts')).toHaveLength(1);
@@ -77,6 +84,7 @@ describe('shardArgs (SP4b spec §1.1)', () => {
     expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
     expect(r.stdout).toMatch(/^terrain-default: test\/metrics\/apply\.metric\.ts test\/metrics\/terrain\.metric\.ts$/m);
     expect(r.stdout).toMatch(/^caves-presets: test\/metrics\/caves\.metric\.ts$/m);
+    expect(r.stdout).toMatch(/^caves-biomes: test\/metrics\/caves\.metric\.ts$/m);
     expect(r.stdout).toMatch(/shards cover the \d+ metrics-quick files exactly once/);
   }, 120_000);
 

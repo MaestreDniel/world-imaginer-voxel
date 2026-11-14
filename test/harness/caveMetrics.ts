@@ -98,6 +98,9 @@
  *   by a border: the wall faces of the cave-air voxels within 2 blocks (Chebyshev) of a border voxel (a cave-air voxel
  *   on either side of a border face), by the solid neighbour's block class (`cls`: rule 4's moss, clay, dripstone, the
  *   abyss rock, bedrock, other). A region's counts are sums, so a job's parts are those of its regions' summed counts.
+ *   In the `caves-biomes` job (Task 27) each biome | plain pair needs `BORDER_PAIR_MIN` (2,000) border faces, else an
+ *   insufficient sample (`borderSampleProblems`); the biome region's T window (`biomeTileMasks`) and its review poses
+ *   (`caveBiomeExamples`: per biome a voxel standing on a floor face of a cave, and one at a biome | plain border).
  * - The groups: 'default' (the default and large_biomes regions) and each preset. The parts the spec marks "default and
  *   presets" (verticalStep, nearestEntrance, holedSurface) and "default and archipelago" (flatWallShare, waterWall) are
  *   the worst of those groups; the others read the default group.
@@ -2129,6 +2132,46 @@ export function caveBorderParts(counts: readonly CaveBorderCounts[]): CaveBorder
   };
 }
 
+/**
+ * The fewest border faces each biome | plain pair needs in the `caves-biomes` job (SP6b spec §12.2; Task 27): fewer is
+ * an insufficient sample, a failure rather than a pass (as `B3.windowAir`).
+ */
+export const BORDER_PAIR_MIN = 2000;
+/** The pairs `BORDER_PAIR_MIN` applies to: each biome | plain (lush | dripstone is recorded: their overlap may be absent). */
+export const BORDER_SAMPLE_PAIRS: readonly string[] = BORDER_PAIR_NAMES.slice(0, 3);
+
+/** The insufficient samples among `parts`' biome | plain pairs (`BORDER_PAIR_MIN`), one message each; empty when none. */
+export function borderSampleProblems(parts: Pick<CaveBorderParts, 'pairs'>, min = BORDER_PAIR_MIN): string[] {
+  const out: string[] = [];
+  for (const name of BORDER_SAMPLE_PAIRS) {
+    const n = parts.pairs[name]?.borderFaces ?? 0;
+    if (!(n >= min)) out.push(`B3 ${name}: ${n} border faces < ${min} (insufficient sample)`);
+  }
+  return out;
+}
+
+/**
+ * Per tile of `tile` × `tile` chunks of the grid (`sp6a.region.T.caves`' order: rows of tiles from low z to high z, each
+ * from low x to high x), the stored cave biomes its voxels hold, bit k for biome k (the cell's bits 6-7: T writes the
+ * nibble at every tagged voxel; SP6b spec §12.2, ruling P33's T check). The grid's sides are multiples of 16 · tile.
+ */
+export function biomeTileMasks(g: CaveGrid, tile = 8): number[] {
+  const side = 16 * tile;
+  const nx = g.w / side;
+  const nz = g.d / side;
+  if (!Number.isInteger(nx) || !Number.isInteger(nz)) throw new RangeError(`biomeTileMasks: the grid ${g.w} × ${g.d} is not a whole number of ${side}-block tiles`);
+  const out = new Array<number>(nx * nz).fill(0);
+  const { w, d, cells } = g;
+  for (let y = 0; y < GRID_H; y++) {
+    for (let z = 0; z < d; z++) {
+      const row = (y * d + z) * w;
+      const t0 = Math.floor(z / side) * nx;
+      for (let x = 0; x < w; x++) out[t0 + Math.floor(x / side)]! |= 1 << ((cells[row + x]! & BIOME_MASK) >> BIOME_SHIFT);
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- C8
 
 /** C8.aperiodicity's layers. */
@@ -3013,6 +3056,84 @@ export function bottomCavernPose(g: CaveGrid, c: CaveComponents): CavePose | nul
 /** SP6b's review poses of one region (`SP6B_EXAMPLE_IDS`). */
 export function sp6bCaveExamples(g: CaveGrid, c: CaveComponents): Record<Sp6bExampleId, CavePose | null> {
   return { bottomCavern: bottomCavernPose(g, c) };
+}
+
+/**
+ * The `caves-biomes` job's review poses in the biome region (SP6b spec §12.8; Task 27), written to
+ * `.out/caveBiomes.examples.json` beside `caveHeavySpawn` (the `cave_heavy` profile's `findSpawn`, the metric's).
+ */
+export const BIOME_EXAMPLE_IDS = ['lush', 'dripstone', 'abyss', 'biomeBorder'] as const;
+export type BiomeExampleId = (typeof BIOME_EXAMPLE_IDS)[number];
+
+/** How far `biomeBorder`'s view looks for a biome's cave air, in voxels along an axis. */
+export const BIOME_BORDER_VIEW = 16;
+
+/** The grid-local axis steps of the yaws 0°, 90°, 180°, 270° (0° facing −z, 90° +x; `player/fly.ts`). */
+const AXIS_YAWS: ReadonlyArray<readonly [yaw: number, dx: number, dz: number]> = [[0, 0, -1], [90, 1, 0], [180, 0, 1], [270, -1, 0]];
+
+/**
+ * The biome poses of one region (SP6b spec §12.8, Task 27). A voxel stands on a floor face when it is cave air (tagged,
+ * neither solid nor fluid, §12.1's), the voxel below is solid and the voxel above is not, and it lies in a component of
+ * at least `cavern` voxels (C4's 10,000 by default: a cave, not a pocket). Scanning the grid's voxels in index order (y
+ * from the lowest, then z, then x):
+ * - `lush`, `dripstone`, `abyss`: the first standing voxel of that biome (the cell's bits 6-7); the eye at its centre,
+ *   the yaw along the longest straight run of non-solid voxels from it (`caveExamples`' rule; ties to the smaller yaw),
+ *   pitch 0, so the view runs along the floor with floor and ceiling in it;
+ * - `biomeBorder`: the first standing voxel of plain cave air from which, along one of the axis yaws (0°, 90°, 180°,
+ *   270°, in that order), the run of cave-air voxels reaches a biome's cave air within `BIOME_BORDER_VIEW` voxels; the
+ *   eye at its centre, that yaw, pitch 0: the view crosses the border face between the last plain voxel and the biome's.
+ * Null where the region holds no such voxel.
+ */
+export function caveBiomeExamples(g: CaveGrid, c: CaveComponents, cavern = FLOOR_MIN_VOXELS): Record<BiomeExampleId, CavePose | null> {
+  const { x0, z0, w, d, cells } = g;
+  const plane = w * d;
+  const out: Record<BiomeExampleId, CavePose | null> = { lush: null, dripstone: null, abyss: null, biomeBorder: null };
+  const names: readonly BiomeExampleId[] = ['biomeBorder', 'lush', 'dripstone', 'abyss'];
+  let missing = 4;
+  const biomeOf = (cell: number): number => (cell & BIOME_MASK) >> BIOME_SHIFT;
+  const pose = (x: number, y: number, z: number, yaw: number, l: number): CavePose => ({
+    x: x0 + x + 0.5, y: y + 0.5, z: z0 + z + 0.5, yaw, pitch: 0, voxel: [x0 + x, y, z0 + z], component: c.size.get(l)!,
+  });
+  /** The first axis yaw from (x, y, z) whose run of cave air reaches a biome's within the view; −1 when none does. */
+  const borderYaw = (x: number, y: number, z: number): number => {
+    for (const [yaw, dx, dz] of AXIS_YAWS) {
+      for (let s = 1; s <= BIOME_BORDER_VIEW; s++) {
+        const xx = x + dx * s;
+        const zz = z + dz * s;
+        if (xx < 0 || xx >= w || zz < 0 || zz >= d) break;
+        const cell = cells[(y - GRID_Y0) * plane + zz * w + xx]!;
+        if (!caveAir(cell)) break;
+        if (biomeOf(cell) !== 0) return yaw;
+      }
+    }
+    return -1;
+  };
+  const y0 = Math.max(c.yMin, GRID_Y0 + 1);
+  const y1 = Math.min(c.yMax, GRID_Y0 + GRID_H - 2);
+  for (let y = y0; y <= y1 && missing > 0; y++) {
+    const at = (y - GRID_Y0) * plane;
+    const lab = (y - c.yMin) * plane;
+    for (let p = 0; p < plane && missing > 0; p++) {
+      const cell = cells[at + p]!;
+      if (!caveAir(cell) || (cells[at + p - plane]! & SOLID_BIT) === 0 || (cells[at + p + plane]! & SOLID_BIT) !== 0) continue;
+      const l = c.label[lab + p]!;
+      if (l === 0 || c.size.get(l)! < cavern) continue;
+      const b = biomeOf(cell);
+      const x = p % w;
+      const z = Math.floor(p / w);
+      if (b === 0) {
+        if (out.biomeBorder !== null) continue;
+        const yaw = borderYaw(x, y, z);
+        if (yaw < 0) continue;
+        out.biomeBorder = pose(x, y, z, yaw, l);
+        missing--;
+      } else if (out[names[b]!] === null) {
+        out[names[b]!] = pose(x, y, z, longestRunYaw(g, x, y, z), l);
+        missing--;
+      }
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- C7's construction: the stored side (ruling P4)

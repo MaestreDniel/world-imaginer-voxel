@@ -55,6 +55,10 @@ export const SHARDS = {
   // The three preset regions (their C7-C9 groups and `carverReference`, `islandCapAir`) and the pure parts
   // (`reachOverflow`, `endTaper`). 56 s.
   'caves-presets': { files: [`${DIR}/caves.metric.ts`], env: { METRICS_CAVE_GROUPS: 'presets' } },
+  // SP6b spec §12.2-§12.3, §13 (Task 27): the biomes group, the 19th job: `cave_heavy`'s two regions (C1.caveHeavy, C2
+  // and C9 recorded on it) and the biome region (B3's border parts with each biome | plain pair's 2,000-face minimum,
+  // the T window's re-check, the review poses); the spec's estimate 3:10-4:00 cold with Tasks 28 and 39's additions.
+  'caves-biomes': { files: [`${DIR}/caves.metric.ts`], env: { METRICS_CAVE_GROUPS: 'biomes' } },
   rest: null,
 };
 

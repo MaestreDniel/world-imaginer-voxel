@@ -921,6 +921,35 @@ Per pair (quick; the pairs not listed hold no border face in that job):
 
 Against §12.2's proposed bounds (0.9-1.1, ≤ 10 %, ≤ 5 %) every job and pair holds on both tiers; the default regions hold no abyss border (as §12.2 expects; the preset regions and Task 27's biome region sample it). Every region holds borders (81,772 … 356,977 faces on quick). Cost: the border counts take 0.72-1.19 s per 32 × 32 region on quick (in the 4 region workers, 1-minute load 1.4; 0.18-0.29 s per fast region); the quick shards' walls on the laptop's warm region cache were 64.9 s (`caves`) and 38.7 s (`caves-presets`).
 
+### The `caves-biomes` job (Task 27)
+
+The biomes group (`METRICS_CAVE_GROUPS=biomes`, the 19th CI job `caves-biomes`; with no env, every group in one process, so `npm test`'s metrics-fast run measures it too, rulings P2, P28): on quick `cave_heavy`'s two 32 × 32 regions at seed '42', (−16, −16) and (16, −16) (the default group's origins; seeds '42', '1', '2', '3' on full; none on fast), then the biome region on every tier. The group registers none of the C1-C9 calls of the default and preset groups (§10, §12.3) and no `carverReference` (its regions skip `referenceCarve`); it registers `C1.caveHeavy` (`caveHeavyMin`, `caveHeavyMax`: both `cave_heavy`'s void share, `activeFrom: 'SP12'`), B3's border parts per job (Task 26's test, now with each biome | plain pair's 2,000-face minimum in this job: fewer fails as an insufficient sample), the biome region's T re-check and the review poses.
+
+**The biome region** (`BIOME_REGION` in `test/harness/caveSites.ts`, chunk origin (−112, 80), 32 × 32 chunks, seed '42', default profile; ruling P33's shape). The scan runs over the preset scan's candidates R(a, b) in its ring order (chunk origin (8a − 16, 8b − 16)) and takes the first that passes the climate check and then the T check. Climate (as §1.6's, no T): `samplePoint` on a 64-block grid, 64 points, the master's raw boxes (lush H ≥ 0.4; dripstone C ≥ 0.6; abyss E ≤ −0.5, C > −0.1 and surfaceEst − 128 > −47, §1.6's room above the rock floor), **each box holding at least 8 of the 64 points** (as built: with one point per box the first candidate holding the T window is R(−11, 11), climate lush 1, dripstone 52, abyss 37, whose generated cave air holds only 30 lush | plain border faces, short of §12.2's 2,000 on the fast tier, where the biome region is the biomes group alone). T (ruling P33): some 8 × 8-chunk tile, in `sp6a.region.T.caves`' order, holds stored nibbles 1, 2 and 3. Run at the generator push's local head after Task 26 (`GENERATOR_VERSION` 9, Task 25's levers in): R(−12, 12), climate lush 11, dripstone 47, abyss 39, its tile (1, 2) (chunks (−104, 96) … (−97, 103)) holding the three; skipped by the T check before it: R(−7, 10) and R(−7, 11) (`BIOME_SCAN_SKIPPED`; 30 tiles generated in all). `caveSites` re-checks the climate predicate at every run, the metric re-checks the T window over the measured region (`.out/caves.biomeRegion.json`), and `cavesMetric.test.ts` re-runs the scan (about 37 s alone on the laptop: 30 tiles up to T, no region cache in the unit job). A box retune (Task 30) re-runs it.
+
+**B3's border parts in `caves-biomes`** (recorded; Task 30 gates them), quick (`.out/B3.borders.biomes.json`):
+
+| job (tier) | border faces | `borderLattice` | `straightBorder` | `flatBorder` |
+|---|---|---|---|---|
+| `caves-biomes` (quick, 3 regions) | 861,555 | 0.9957 | 0.0045 | 0.000028 |
+
+| pair (quick) | border faces | `borderLattice` | `straightBorder` | `flatBorder` | skin by the border (other / moss / clay / dripstone / abyss) |
+|---|---|---|---|---|---|
+| lush \| plain | 16,127 | 0.9791 | 0.0030 | 0 | 69.4 / 25.4 / 2.2 / 1.4 / 1.6 % |
+| dripstone \| plain | 742,831 | 0.9943 | 0.0045 | 0.000032 | 70.2 / 0.0 / 0.0 / 29.7 / 0.1 % |
+| abyss \| plain | 93,020 | 1.0013 | 0.0043 | 0 | 51.3 / 0.2 / 0 / 0.5 / 47.9 % |
+| lush \| dripstone | 9,425 | 1.0732 | 0.0059 | 0 | 50.2 / 23.7 / 1.9 / 24.1 / 0.1 % |
+| lush \| abyss | 77 | 1.5015 | 0 | 0 | (77 faces) |
+| dripstone \| abyss | 75 | 1.0547 | 0 | 0 | (75 faces) |
+
+Each biome | plain pair clears the 2,000-face minimum on quick, and on fast, where the biome region alone gives lush | plain 16,127, dripstone | plain 176,490, abyss | plain 93,020. `cave_heavy`'s two regions hold no lush and no abyss border at seed '42' (dripstone | plain only, 309,737 and 256,604 faces); the abyss and lush pairs come from the biome region. lush | abyss and dripstone | abyss are too few for their ratios to mean anything (recorded).
+
+**`cave_heavy`** (quick, `.out/caves.caveHeavy.json`, `.out/C1.caveHeavy.json`; its overlay is still `{}` until Task 30's tuning, so these are the default params on its regions): C1's void share 0.0931 (0.0934, 0.0927 per region; 10-22 % gated from SP12); C2 skyComponents 330.0 per km², skyShare 0.768; C9 nearestEntrance 44.0, entrancesMax 330.0, holedSurface 0.0321, thinRoof 0.0174.
+
+**Review poses** (`.out/caveBiomes.examples.json`, quick; Task 56 merges it with `caves.examples.json`'s `bottomCavern`): per biome the first voxel in the grid's index order standing on a floor face (cave air, solid below, not solid above) of a cave (a component ≥ 10,000 voxels), the eye at its centre, the yaw along the longest straight run of non-solid voxels, pitch 0: `lush` (−1778, −29, 1650) yaw 45, `dripstone` (−1580, −49, 1293) yaw 180, `abyss` (−1542, −52, 1350) yaw 0; `biomeBorder` the first such voxel of plain cave air whose run of cave air along an axis yaw reaches a biome's within 16 voxels, looking along it: (−1542, −52, 1349) yaw 180, into the abyss; `caveHeavySpawn` `findSpawn` on `cave_heavy` at seed '42': (0, 101, 0), not a fallback.
+
+**Cost** (§13's estimate for the job: about 3:10-4:00 cold with R3 and the regular-grid check, Tasks 28 and 39): the `caves-biomes` shard alone through `node .github/scripts/metricShards.mjs run caves-biomes` took 37.2 s wall on the laptop with its three regions generated cold (1-minute load 4.9 at the start): per region in the workers the shared grid 3.1-5.4 s, `cave_heavy`'s C1-C6 counts (for C1 and C2) 20.6-22.4 s, C7-C9's 2.2-3.0 s, the border counts 0.66-1.08 s. `metrics-fast (caves)` (every group, now with the biome region) 32.0 s wall with the biome region's dump warm against 35.5 s before on the same cache (within the run-to-run spread; the biome region is measured in a worker idle on fast); cold it adds the region's generation, 7-12 s on the laptop.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
@@ -930,3 +959,4 @@ Against §12.2's proposed bounds (0.9-1.1, ≤ 10 %, ≤ 5 %) every job and pair
 - 2026-11-13 — SP6b Task 19: C6.latticeBias reads each y residue over its W9 lattice-neutral local mean instead of the band's mean (ruling U1, the user's: a measurement correction of SP6a's intent, §12.3; the floor's ramp read 1.666 on fast as SP6a defined it, 1.112 on W9); max 1.25 unchanged, re-judged at Task 20; C6.latticeBiasAsDefined and C6.floorFaceLattice recorded, not gated; SP12's 1.1 restated as ≤ 1.09 on W9; no lock change.
 - 2026-11-13 — SP6b Task 20: C7.bottomPlane max 0.01, gated from SP6b on every tier (spec §12.3, D26; holds by construction under §5.2; new part, measured 0 on quick in every group: default, archipelago, amplified, floating_islands; 0 on fast); C7.bedrockExposed recorded, 0 in every group on quick and fast. C6.latticeBias re-judged with σ_b (ruling U1): W9 1.116 on fast, 1.111 on quick (as defined 1.881 and 1.784; floorFaceLattice 1.60 and 1.46); max 1.25 kept.
 - 2026-11-14 — SP6b Task 21: C7.bedrockExposed max 0, gated from SP6b on every tier (spec §12.3; measured 0 on every group on quick in Task 20 and here).
+- 2026-11-14 — SP6b Task 27: C1.caveHeavyMin min 0.10, caveHeavyMax max 0.22, activeFrom 'SP12' (recorded in SP6b, gated in SP12; master :1508, :2009; spec §12.3).

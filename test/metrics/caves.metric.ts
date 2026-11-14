@@ -4,17 +4,20 @@ import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
 import { CARVER_WINDOW_R } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
+import { resolveProfile } from '../../src/core/params/profiles';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
 import { carverPath, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
+import { findSpawn } from '../../src/gen/column/spawn';
+import { createGenContext } from '../../src/gen/context';
 import {
-  aperiodicRatios, bandDetail, borderPlaneRatio, BORDER_PAIR_NAMES, C1_C6_PARTS, caveBorderParts, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, caveBottomGroups, caveBottomParts, emptyBandCounts,
+  aperiodicRatios, BIOME_EXAMPLE_IDS, borderSampleProblems, bandDetail, borderPlaneRatio, BORDER_PAIR_NAMES, C1_C6_PARTS, caveBorderParts, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, caveBottomGroups, caveBottomParts, emptyBandCounts,
   emptyLayerCounts, emptyWallResidues, EXAMPLE_IDS, floorFaceResidues, GRID_H, GRID_Y0, SP6B_EXAMPLE_IDS, verticalStepDetail,
   type C1C6Part, type C7C9Part, type CaveBottomParts, type CaveC7C9Counts, type CavePose, type CaveRegionCounts,
 } from '../harness/caveMetrics';
 import type { CaveRegionResult } from '../harness/caveRegionWorker';
 import { CARVER_DEFAULTS, CARVER_MAXIMA } from '../harness/carverParams';
-import { caveGroupOf, caveSites, measureCaveRegions, type CaveGroup, type Site } from '../harness/caveSites';
+import { BIOME_REGION, biomeTiles, caveGroupOf, caveSites, firstBiomeTile, measureCaveRegions, type CaveGroup, type Site } from '../harness/caveSites';
 import { metricTest } from '../harness/metric';
 
 /**
@@ -22,17 +25,25 @@ import { metricTest } from '../harness/metric';
  * (`RegionView.tag`). The regions per tier, and the preset regions' scan, are `test/harness/caveSites.ts`' (its
  * header).
  *
- * By group (SP6b spec §13 L4; `METRICS_CAVE_GROUPS`, read once: `default` or `presets`, one per CI job; absent, every
- * group in this one process, ruling P2; an unknown name throws). Each part keeps one literal `metricTest` call; a call
- * is registered when a group it reads runs:
+ * By group (SP6b spec §13 L4; `METRICS_CAVE_GROUPS`, read once: `default`, `presets` or `biomes`, one per CI job; absent,
+ * every group in this one process, ruling P2; an unknown name throws). Each part keeps one literal `metricTest` call; a
+ * call is registered when a group it reads runs:
  * - the default group (the default and large_biomes regions): C1-C6, and the default-only parts of C7-C9
  *   (`C7.default`: borderPlaneRatio, switchWall; C8; `C9.default`: entrancesMax, thinRoof), with the review poses;
  * - the presets group (the three preset regions): the pure parts and `islandCapAir` (`C7.construction`);
  * - both: `carverReference` (max 0 per region, so the sum over the jobs is the unsplit value), and the per-group parts
  *   of C7-C9 (`C7.tuning`: verticalStep, flatWallShare, waterWall; `C9`: nearestEntrance, holedSurface) and C7's
  *   bottom parts (`C7.bottomPlane`, `C7.bedrockExposed`, SP6b spec §12.3), each the worst of the groups the job measures
- *   (`c7c9Parts`, `caveBottomParts`; ruling P2), so the worst over the jobs is the unsplit value; and B3's border parts
- *   (SP6b spec §12.2; recorded, Task 26), per job: each job's own record, `.out/B3.borders.<group>.json`.
+ *   (`c7c9Parts`, `caveBottomParts`; ruling P2), so the worst over the jobs is the unsplit value; these read the default
+ *   and preset regions only;
+ * - the biomes group (SP6b spec §12.2-§12.3, §13; the `caves-biomes` job, Task 27: `cave_heavy`'s regions on quick and
+ *   full, and the biome region): none of the C1-C9 calls above (spec §10 and §12.3 name the default and preset groups);
+ *   `C1.caveHeavy` (`caveHeavyMin`, `caveHeavyMax`: both `cave_heavy`'s void share, recorded until SP12) with C2 and C9
+ *   on `cave_heavy` in `.out/caves.caveHeavy.json`; the biome region's T window re-checked (ruling P33); its review
+ *   poses and `cave_heavy`'s spawn in `.out/caveBiomes.examples.json`;
+ * - every group: B3's border parts (SP6b spec §12.2; recorded, Task 26), per job: each job's own record,
+ *   `.out/B3.borders.<group>.json`; in `biomes` each biome | plain pair needs 2,000 border faces (an insufficient sample
+ *   fails, Task 27).
  *
  * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
  * - `carverReference`: over every region of the run's groups (the preset regions included), the voxels of the region
@@ -81,9 +92,13 @@ const GROUP = caveGroupOf(process.env.METRICS_CAVE_GROUPS);
 const DEFAULT_GROUP = GROUP === null || GROUP === 'default';
 /** Whether the run measures the presets group (the pure parts and `islandCapAir`). */
 const PRESETS_GROUP = GROUP === null || GROUP === 'presets';
+/** Whether the run measures the default or the presets group (the C1-C9 calls; the biomes group registers none). */
+const C1_C9_GROUPS = GROUP !== 'biomes';
+/** Whether the run measures the biomes group (`C1.caveHeavy`, C2 and C9 on `cave_heavy`, the biome region). */
+const BIOMES_GROUP = GROUP === null || GROUP === 'biomes';
 
 let sitesMemo: Site[] | null = null;
-/** Every region of the run's groups: the default regions, then the preset regions. */
+/** Every region of the run's groups: the default regions, then the preset regions, then the biomes group's. */
 const sites = (): Site[] => (sitesMemo ??= caveSites(TIER, GROUP));
 
 // ---------------------------------------------------------------- the pure parts
@@ -252,8 +267,9 @@ async function measureCarvers(): Promise<CarverCounts> {
   let carved = 0;
   let capAir = Number.NaN;
   let islandVoxels = Number.NaN;
-  const all = await measuredRegions();
-  for (const { site: s, carver: c } of all) {
+  const all = await c1c9Regions();
+  for (const { site: s, carver } of all) {
+    const c = carver!;
     const island = s.profile === 'floating_islands';
     expect(c.examples, `C7.carverReference at ${s.label}`).toEqual([]);
     // Each region holds carved voxels, so the comparison is not vacuous.
@@ -274,12 +290,14 @@ let carverRun: Promise<CarverCounts> | null = null;
 /** The region parts of C7's construction, measured once (the first test to ask). */
 const carvers = (): Promise<CarverCounts> => (carverRun ??= measureCarvers());
 
-// `carverReference` over the run's regions (every group: max 0 per region, so the jobs' sum is the unsplit value). The
-// first test: it measures every region (its timeout covers them).
-metricTest('C7', ['carverReference'], async () => {
-  const c = await carvers();
-  return { carverReference: c.mismatches, regions: c.regions, carverVoxels: c.carved };
-}, 900_000);
+// `carverReference` over the run's default and preset regions (max 0 per region, so the jobs' sum is the unsplit value).
+// The first test: it measures every region (its timeout covers them).
+if (C1_C9_GROUPS) {
+  metricTest('C7', ['carverReference'], async () => {
+    const c = await carvers();
+    return { carverReference: c.mismatches, regions: c.regions, carverVoxels: c.carved };
+  }, 900_000);
+}
 
 // The pure parts and the island cap, with the presets group (or every group).
 if (PRESETS_GROUP) {
@@ -339,6 +357,8 @@ async function measureRegions(): Promise<Measured[]> {
 let measuredRun: Promise<Measured[]> | null = null;
 /** The run's regions, measured once (the first test to ask). */
 const measuredRegions = (): Promise<Measured[]> => (measuredRun ??= measureRegions());
+/** The run's default and preset regions (C1-C9's; the biomes group's are B3's and its own parts'). */
+const c1c9Regions = async (): Promise<Measured[]> => (await measuredRegions()).filter((m) => m.site.group !== 'biomes');
 
 /** JSON with every non-finite number written as its string ("NaN"). */
 const json = (v: unknown): string => `${JSON.stringify(v, (_, x: unknown) => (typeof x === 'number' && !Number.isFinite(x) ? String(x) : x), 2)}\n`;
@@ -358,7 +378,7 @@ const NAN_ON_FAST: readonly string[] = [];
  */
 async function measureC1C6(): Promise<Record<C1C6Part, number>> {
   const measured: Array<{ site: Site; counts: CaveRegionCounts; ms: number }> = (await measuredRegions())
-    .filter((m) => groupOf(m.site) === 'default')
+    .filter((m) => m.site.group === 'default')
     .map((m) => ({ site: m.site, counts: m.c16!, ms: m.ms.shared + m.ms.c16 }));
   const parts = c1c6Parts(measured.map((m) => ({ profile: m.site.profile, counts: m.counts })));
   const profiles = [...new Set(measured.map((m) => m.site.profile))];
@@ -434,7 +454,7 @@ const C79_GATED: readonly C7C9Part[] = C7_C9_PARTS.filter((p) => DEFAULT_GROUP
  * `C79_NAN_ON_FAST`), and with the default group every pose found.
  */
 async function measureC7C9(): Promise<Record<C7C9Part, number>> {
-  const measured = await measuredRegions();
+  const measured = await c1c9Regions();
   const regions = measured.map((m) => ({ group: groupOf(m.site), full: m.site.size === 32, counts: m.c79 }));
   const parts = c7c9Parts(regions);
   const nan = C7_C9_PARTS.filter((p) => Number.isNaN(parts[p]));
@@ -547,10 +567,13 @@ if (DEFAULT_GROUP) {
   metricTest('C5', ['largest', 'landCarved', 'thinnest', 'thinnestByKind'], async () => partsOf(await c1c6(), 'C5'));
   metricTest('C6', ['latticeBias'], async () => partsOf(await c1c6(), 'C6'));
 }
-// The per-group parts (SP6b spec §13 L4), in every group: each job gates the worst of its own groups.
-metricTest('C7', ['verticalStep', 'flatWallShare', 'waterWall'], async () => partsOf(await c7c9(), 'C7', PER_GROUP_C7), 900_000,
-  { outName: 'C7.tuning' });
-metricTest('C9', ['nearestEntrance', 'holedSurface'], async () => partsOf(await c7c9(), 'C9', PER_GROUP_C9));
+// The per-group parts (SP6b spec §13 L4), with the default and the presets group: each job gates the worst of its own
+// groups.
+if (C1_C9_GROUPS) {
+  metricTest('C7', ['verticalStep', 'flatWallShare', 'waterWall'], async () => partsOf(await c7c9(), 'C7', PER_GROUP_C7), 900_000,
+    { outName: 'C7.tuning' });
+  metricTest('C9', ['nearestEntrance', 'holedSurface'], async () => partsOf(await c7c9(), 'C9', PER_GROUP_C9));
+}
 /**
  * C7's bottom parts (SP6b spec §12.3, D6, D26; Tasks 20-21), over every region of the run's groups, per group (the
  * default group, each preset) and the worst group's (ruling P2; each job gates its own regions), as built in
@@ -564,7 +587,7 @@ metricTest('C9', ['nearestEntrance', 'holedSurface'], async () => partsOf(await 
  * counts, in `.out/caves.bottom.json`.
  */
 async function measureBottom(): Promise<CaveBottomParts> {
-  const measured = await measuredRegions();
+  const measured = await c1c9Regions();
   const regions = measured.map((m) => ({ group: groupOf(m.site), bottom: m.bottom }));
   const parts = caveBottomParts(regions);
   mkdirSync(OUT_DIR, { recursive: true });
@@ -586,20 +609,22 @@ let bottomRun: Promise<CaveBottomParts> | null = null;
 /** C7's bottom parts, measured once (the first test to ask). */
 const bottom = (): Promise<CaveBottomParts> => (bottomRun ??= measureBottom());
 
-// C7.bottomPlane and C7.bedrockExposed in every group's job (each the worst of its own groups); the recorded bottom parts
-// beside bottomPlane.
-metricTest('C7', ['bottomPlane'], async () => {
-  const p = await bottom();
-  return { bottomPlane: p.bottomPlane, bottomFlatRatio: p.bottomFlatRatio, bottomFloorSpread: p.bottomFloorSpread, bottomFloorPeak: p.bottomFloorPeak };
-}, 900_000, { outName: 'C7.bottomPlane' });
-metricTest('C7', ['bedrockExposed'], async () => ({ bedrockExposed: (await bottom()).bedrockExposed }), 900_000,
-  { outName: 'C7.bedrockExposed' });
+// C7.bottomPlane and C7.bedrockExposed in the default and the presets group's jobs (each the worst of its own groups);
+// the recorded bottom parts beside bottomPlane.
+if (C1_C9_GROUPS) {
+  metricTest('C7', ['bottomPlane'], async () => {
+    const p = await bottom();
+    return { bottomPlane: p.bottomPlane, bottomFlatRatio: p.bottomFlatRatio, bottomFloorSpread: p.bottomFloorSpread, bottomFloorPeak: p.bottomFloorPeak };
+  }, 900_000, { outName: 'C7.bottomPlane' });
+  metricTest('C7', ['bedrockExposed'], async () => ({ bedrockExposed: (await bottom()).bedrockExposed }), 900_000,
+    { outName: 'C7.bedrockExposed' });
+}
 
 /** The scale of `metricTest`'s timeouts (`METRICS_TIMEOUT_SCALE`, SP6b spec §12.9), for the plain record test below. */
 const TIMEOUT_SCALE = Number(process.env.METRICS_TIMEOUT_SCALE ?? '1');
 
-/** The job (`METRICS_CAVE_GROUPS`) a region belongs to: 'default' for the default and large_biomes profiles, else 'presets'. */
-const jobOf = (s: Site): CaveGroup => (groupOf(s) === 'default' ? 'default' : 'presets');
+/** The job (`METRICS_CAVE_GROUPS`) a region belongs to: its group. */
+const jobOf = (s: Site): CaveGroup => s.group;
 
 /**
  * B3's border parts (SP6b spec §12.2, D26; Task 26: recorded, not gated: B3 has no THRESHOLDS row until the tuning task,
@@ -607,7 +632,8 @@ const jobOf = (s: Site): CaveGroup => (groupOf(s) === 'default' ? 'default' : 'p
  * it holds (with every group in this one process, per group, so each record is the one its job writes alone; ruling
  * P2), overall and per biome pair: `borderLattice` (with each axis' ratio), `straightBorder`, `flatBorder`, the border
  * faces (per axis), and the painted skin's mix within 2 blocks of a border; with each region's overall values, in
- * `.out/B3.borders.<group>.json`. The overall border faces are the pairs' sum (each face has one pair).
+ * `.out/B3.borders.<group>.json`. The overall border faces are the pairs' sum (each face has one pair). In the biomes
+ * job each biome | plain pair needs 2,000 border faces, else the test fails as an insufficient sample (§12.2; Task 27).
  */
 test('B3: border parts per job and biome pair (recorded, not gated)', async () => {
   const measured = await measuredRegions();
@@ -628,6 +654,7 @@ test('B3: border parts per job and biome pair (recorded, not gated)', async () =
     }));
     const pairFaces = BORDER_PAIR_NAMES.reduce((a, name) => a + parts.pairs[name]!.borderFaces, 0);
     expect(parts.overall.borderFaces, `B3 ${job}: the overall border faces are the pairs' sum`).toBe(pairFaces);
+    if (job === 'biomes') expect(borderSampleProblems(parts), `B3 ${job}`).toEqual([]);
   }
   expect(jobs.length).toBeGreaterThan(0);
 }, 900_000 * TIMEOUT_SCALE);
@@ -641,4 +668,98 @@ if (DEFAULT_GROUP) {
   metricTest('C8', ['aperiodicity', 'typeMixVariation', 'sizeSpread'], async () => partsOf(await c7c9(), 'C8'));
   metricTest('C9', ['entrancesMax', 'thinRoof'], async () => partsOf(await c7c9(), 'C9', ['entrancesMax', 'thinRoof']), 600_000,
     { outName: 'C9.default' });
+}
+
+// ---------------------------------------------------------------- the biomes group (SP6b spec §12.2-§12.3; Task 27)
+
+/** `cave_heavy`'s C1, C2 and C9 (SP6b spec §12.3), recorded. */
+interface CaveHeavyParts {
+  readonly regions: number;
+  readonly voidShare: number;
+}
+
+/**
+ * `cave_heavy`'s parts over its regions (quick and full; none on fast, where every value is NaN): C1's void share,
+ * C2's parts and C9's, by `c1c6Parts` and `c7c9Parts` over its regions alone (a group of their own, so C9's
+ * default-only parts read them), written with each region's values to `.out/caves.caveHeavy.json`.
+ */
+async function measureCaveHeavy(): Promise<CaveHeavyParts> {
+  const rs = (await measuredRegions()).filter((m) => m.site.profile === 'cave_heavy');
+  const c16 = c1c6Parts(rs.map((m) => ({ profile: 'cave_heavy', counts: m.c16! })));
+  const c79 = c7c9Parts(rs.map((m) => ({ group: 'default', full: m.site.size === 32, counts: m.c79 })));
+  const recorded = (c: Record<string, number>, c9: Record<string, number>) => ({
+    C1: { voidShare: c['C1.voidShareMin']! },
+    C2: { skyComponents: c['C2.skyComponents']!, skyShare: c['C2.skyShare']! },
+    C9: { nearestEntrance: c9['C9.nearestEntrance']!, entrancesMax: c9['C9.entrancesMax']!, holedSurface: c9['C9.holedSurface']!, thinRoof: c9['C9.thinRoof']! },
+  });
+  mkdirSync(OUT_DIR, { recursive: true });
+  writeFileSync(join(OUT_DIR, 'caves.caveHeavy.json'), json({
+    id: 'caves.caveHeavy', tier: process.env.METRICS_TIER ?? null, profile: 'cave_heavy', regions: rs.length, ...recorded(c16, c79),
+    perRegion: rs.map((m) => ({
+      label: m.site.label, ms: m.ms,
+      ...recorded(c1c6Parts([{ profile: 'cave_heavy', counts: m.c16! }]), c7c9Parts([{ group: 'default', full: m.site.size === 32, counts: m.c79 }])),
+    })),
+  }));
+  return { regions: rs.length, voidShare: c16['C1.voidShareMin'] };
+}
+
+let caveHeavyRun: Promise<CaveHeavyParts> | null = null;
+/** `cave_heavy`'s parts, measured once (the first test to ask). */
+const caveHeavy = (): Promise<CaveHeavyParts> => (caveHeavyRun ??= measureCaveHeavy());
+
+/** The biome region's measurement (the biomes group's default-profile region). */
+async function biomeRegionMeasured(): Promise<Measured> {
+  const m = (await measuredRegions()).find((r) => r.site.group === 'biomes' && r.site.profile === 'default');
+  if (m === undefined) throw new Error('caves.metric: the biomes group has no biome region');
+  return m;
+}
+
+if (BIOMES_GROUP) {
+  // C1 on cave_heavy (SP6b spec §12.3): both parts the one void share, against 10-22 %, recorded until SP12 (activeFrom
+  // 'SP12'); C2 and C9 on cave_heavy recorded in `.out/caves.caveHeavy.json`.
+  metricTest('C1', ['caveHeavyMin', 'caveHeavyMax'], async () => {
+    const h = await caveHeavy();
+    return { caveHeavyMin: h.voidShare, caveHeavyMax: h.voidShare, regions: h.regions };
+  }, 900_000, { outName: 'C1.caveHeavy' });
+
+  /**
+   * The biome region's T window (ruling P33's second check, re-checked over the measured region): some 8 × 8-chunk tile,
+   * in `sp6a.region.T.caves`' order, holds stored nibbles 1, 2 and 3; the first such tile is recorded with the masks.
+   */
+  test('the biome region still holds its scan\'s T window (ruling P33)', async () => {
+    const m = await biomeRegionMeasured();
+    const masks = m.biomeTiles!;
+    const k = firstBiomeTile(masks);
+    mkdirSync(OUT_DIR, { recursive: true });
+    writeFileSync(join(OUT_DIR, 'caves.biomeRegion.json'), json({
+      id: 'caves.biomeRegion', tier: process.env.METRICS_TIER ?? null, region: BIOME_REGION, label: m.site.label,
+      tileMasks: masks, firstTile: k < 0 ? null : biomeTiles(BIOME_REGION[0], BIOME_REGION[1])[k],
+    }));
+    expect(masks).toHaveLength(16);
+    expect(k, `no 8 × 8-chunk tile of ${m.site.label} holds nibbles 1, 2 and 3 (masks ${masks.join(', ')})`).toBeGreaterThanOrEqual(0);
+  }, 900_000 * TIMEOUT_SCALE);
+
+  /**
+   * SP6b's review poses of the biomes group (SP6b spec §12.8): the biome region's (`caveBiomeExamples`: `lush`,
+   * `dripstone`, `abyss`, `biomeBorder`; seed '42', default profile) and `caveHeavySpawn`, the `cave_heavy` profile's
+   * `findSpawn` at seed '42' (the eye at its voxel's centre, yaw and pitch 0, no component), written to
+   * `.out/caveBiomes.examples.json` (Task 56 merges it with `caves.examples.json`'s `bottomCavern`). Every pose found.
+   */
+  test('the biome region\'s review poses and cave_heavy\'s spawn (caveBiomes.examples.json)', async () => {
+    const m = await biomeRegionMeasured();
+    const spawn = findSpawn(createGenContext(seedFromInput('42'), resolveProfile('cave_heavy')));
+    const biomes = Object.fromEntries(BIOME_EXAMPLE_IDS.map((id) => {
+      const p = m.biomeExamples![id];
+      return [id, p === null ? null : { ...p, profile: 'default', region: m.site.label }];
+    }));
+    const caveHeavySpawn = {
+      x: spawn.x + 0.5, y: spawn.y + 0.5, z: spawn.z + 0.5, yaw: 0, pitch: 0, voxel: [spawn.x, spawn.y, spawn.z], component: 0,
+      profile: 'cave_heavy', fallback: spawn.fallback,
+    };
+    mkdirSync(OUT_DIR, { recursive: true });
+    writeFileSync(join(OUT_DIR, 'caveBiomes.examples.json'), json({
+      id: 'caveBiomes.examples', tier: process.env.METRICS_TIER ?? null, seed: '42', ...biomes, caveHeavySpawn,
+    }));
+    for (const id of BIOME_EXAMPLE_IDS) expect(biomes[id], `the ${id} pose`).not.toBeNull();
+  }, 900_000 * TIMEOUT_SCALE);
 }

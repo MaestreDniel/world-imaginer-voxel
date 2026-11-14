@@ -9,6 +9,8 @@ import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, BEDROCK, DEEPSLATE, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { CarverPath } from '../../src/gen/caves/carvers';
 import {
+  BIOME_BORDER_VIEW, BIOME_EXAMPLE_IDS, biomeTileMasks, BORDER_PAIR_MIN, BORDER_SAMPLE_PAIRS, borderSampleProblems, caveBiomeExamples,
+  emptyBorderCounts, type CavePose,
   BIOME_MASK, BIOME_SHIFT, BORDER_PAIR_NAMES, caveBorderCounts, caveBorderParts, cellAt, CLS_CLAY, CLS_DRIPSTONE, CLS_MOSS, FLUID_BIT,
   poolBorderCounts, SKIN_NAMES, SOLID_BIT, TAG_MASK,
   ABYSS_STATES, bedrockExposedCount, bottomCavernPose, bottomFloorSpreads, caveBottomCounts, caveBottomGroups, caveBottomParts, caveGridOf,
@@ -24,7 +26,10 @@ import {
 } from '../harness/caveMetrics';
 import { NIBBLE_REGION, nibbleRegion } from '../harness/caveNibbles';
 import { measureCaveRegion, type CaveRegionResult } from '../harness/caveRegionWorker';
-import { caveGroupOf, caveSites, measureCaveRegions } from '../harness/caveSites';
+import {
+  BIOME_REGION, BIOME_SCAN_MIN_POINTS, BIOME_SCAN_SKIPPED, BIOME_TILE_ALL, biomeClimateHolds, biomeRegionClimate, biomeTiles, caveGroupOf,
+  caveSites, findBiomeRegion, firstBiomeTile, measureCaveRegions, tileBiomeMask,
+} from '../harness/caveSites';
 import { components3d } from '../harness/flood';
 import { coverageErrors, evaluateMetric, findMetricCalls } from '../harness/metric';
 import { genRegion } from '../harness/region';
@@ -1215,7 +1220,7 @@ describe('B3\'s border parts (SP6b spec §12.2, D26; Task 26)', () => {
 describe('the caves metric by group (SP6b spec §13 L4: `METRICS_CAVE_GROUPS`)', () => {
   const label = (s: { label: string }): string => s.label;
 
-  test('caveSites: default holds the six default-group regions, presets the three preset regions, null all nine; fast has no preset region', () => {
+  test('caveSites: default holds the six default-group regions, presets the three preset regions, biomes cave_heavy ×2 and the biome region, null all twelve; fast has no preset region and the biome region alone in biomes (ruling P28)', () => {
     const def = caveSites('quick', 'default');
     expect(def.map(label)).toEqual([
       "seed '42' default (-16, -16)", "seed '42' default (16, -16)", "seed '42' large_biomes (-16, -16)",
@@ -1229,18 +1234,36 @@ describe('the caves metric by group (SP6b spec §13 L4: `METRICS_CAVE_GROUPS`)',
     expect(presets.map((s) => [s.profile, s.cx0, s.cz0, s.size])).toEqual([
       ['archipelago', -8, -32, 32], ['amplified', -56, -24, 32], ['floating_islands', -32, -24, 32],
     ]);
-    expect(caveSites('quick', null)).toEqual([...def, ...presets]);
+    // SP6b Task 27: the biomes group, cave_heavy's two regions at seed '42' and then the biome region (ruling P28).
+    const region = {
+      label: "seed '42' default biome region (-112, 80)", group: 'biomes', seed: '42', profile: 'default', cx0: BIOME_REGION[0], cz0: BIOME_REGION[1], size: 32,
+    };
+    const biomes = caveSites('quick', 'biomes');
+    expect(biomes).toEqual([
+      { label: "seed '42' cave_heavy (-16, -16)", group: 'biomes', seed: '42', profile: 'cave_heavy', cx0: -16, cz0: -16, size: 32 },
+      { label: "seed '42' cave_heavy (16, -16)", group: 'biomes', seed: '42', profile: 'cave_heavy', cx0: 16, cz0: -16, size: 32 },
+      region,
+    ]);
+    expect(def.every((s) => s.group === 'default') && presets.every((s) => s.group === 'presets')).toBe(true);
+    expect(caveSites('quick', null)).toEqual([...def, ...presets, ...biomes]);
+    expect(caveSites('quick', null)).toHaveLength(12);
     expect(caveSites('fast', 'presets')).toEqual([]);
-    expect(caveSites('fast', null).map(label)).toEqual(["seed '42' default (-8, -8)", "seed '42' default (8, -8)"]);
-    expect(caveSites('fast', null)).toEqual(caveSites('fast', 'default'));
+    expect(caveSites('fast', 'biomes')).toEqual([region]);
+    expect(caveSites('fast', null).map(label)).toEqual(["seed '42' default (-8, -8)", "seed '42' default (8, -8)", region.label]);
+    expect(caveSites('fast', null)).toEqual([...caveSites('fast', 'default'), region]);
+    // Full: cave_heavy's two regions per seed '42', '1', '2', '3', then the biome region.
+    expect(caveSites('full', 'biomes').map(label)).toEqual([
+      ...['42', '1', '2', '3'].flatMap((seed) => [`seed '${seed}' cave_heavy (-16, -16)`, `seed '${seed}' cave_heavy (16, -16)`]), region.label,
+    ]);
   });
 
-  test('caveGroupOf: absent is every group (null); default and presets are read; an unknown name throws', () => {
+  test('caveGroupOf: absent is every group (null); default, presets and biomes are read; an unknown name throws', () => {
     expect(caveGroupOf(undefined)).toBeNull();
     expect(caveGroupOf('default')).toBe('default');
     expect(caveGroupOf('presets')).toBe('presets');
-    expect(() => caveGroupOf('biome')).toThrow("METRICS_CAVE_GROUPS 'biome' (default or presets)");
-    expect(() => caveGroupOf('')).toThrow("METRICS_CAVE_GROUPS '' (default or presets)");
+    expect(caveGroupOf('biomes')).toBe('biomes');
+    expect(() => caveGroupOf('biome')).toThrow("METRICS_CAVE_GROUPS 'biome' (default, presets or biomes)");
+    expect(() => caveGroupOf('')).toThrow("METRICS_CAVE_GROUPS '' (default, presets or biomes)");
   });
 
   test('caves.metric.ts splits its calls into disjoint literal part lists with distinct .out names; the coverage scan stays clean', () => {
@@ -1262,14 +1285,15 @@ describe('the caves metric by group (SP6b spec §13 L4: `METRICS_CAVE_GROUPS`)',
       'C7:borderPlaneRatio|switchWall:C7.default',
       'C8:aperiodicity|typeMixVariation|sizeSpread:C8',
       'C9:entrancesMax|thinRoof:C9.default',
+      'C1:caveHeavyMin|caveHeavyMax:C1.caveHeavy',
     ]);
     expect(coverageErrors(calls)).toEqual([]);
   });
 });
 
 describe("the caves metric's regions in worker threads (SP6b spec §13 L6, ruling P6)", () => {
-  /** The two fast regions (seed '42', default, 16 × 16). */
-  const SITES = caveSites('fast', null);
+  /** The two fast regions of the default group (seed '42', default, 16 × 16). */
+  const SITES = caveSites('fast', 'default');
   /** C7.switchWall's stride on fast (`caves.metric.ts`' SWITCH_STRIDE). */
   const STRIDE = 2;
   const OPTS = { stride: STRIDE, regionWorkerDir: 'cavesMetricRegionWorker', workerDir: 'cavesMetricMeasureWorker' };
@@ -1297,8 +1321,11 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
       // Not vacuous: a default region has C1-C6's counts and the poses, carved voxels, and no carver mismatch.
       expect(ref.c16, s.label).not.toBeNull();
       expect(ref.examples, s.label).not.toBeNull();
-      expect(ref.carver.carved, s.label).toBeGreaterThan(0);
-      expect(ref.carver.examples, s.label).toEqual([]);
+      expect(ref.carver!.carved, s.label).toBeGreaterThan(0);
+      expect(ref.carver!.examples, s.label).toEqual([]);
+      // Task 27: the biome poses and tile masks are the biome region's only.
+      expect(ref.biomeExamples, s.label).toBeNull();
+      expect(ref.biomeTiles, s.label).toBeNull();
       // C7's bottom counts (Task 20): the region has flat faces, and the rock floor leaves none on the bedrock plane.
       expect(ref.bottom.flat, s.label).toBeGreaterThan(0);
       expect(ref.bottom.flatAtBottom, s.label).toBe(0);
@@ -1349,6 +1376,130 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
     expect(countsTransfer({ x: 1, a, nested: { list: [a, b], s: 'x' }, none: null })).toEqual([a.buffer, b.buffer]);
     expect(() => countsTransfer({ v: new Float64Array(8).subarray(2) })).toThrow('countsTransfer: counts.v does not own its whole ArrayBuffer');
     expect(() => countsTransfer([new Int32Array(new SharedArrayBuffer(16))])).toThrow('countsTransfer: counts.0 does not own its whole ArrayBuffer');
+  });
+});
+
+describe("the caves-biomes job: the biome region, the pair minimum, the biome poses (SP6b spec §12.2-§12.3, §12.8; Task 27)", () => {
+  const B = CAVE_BIOME;
+  /** A cave-air `tag` of kind cheese in `biome` (the stored byte: the kind, the biome in the high nibble). */
+  const tagOf = (biome: number): number => K.cheese | (biome << 4);
+
+  test('BIOME_REGION is the scan\'s first candidate holding the three biomes: the climate check (each raw box ≥ 8 of 64 points), then a T tile holding nibbles 1, 2 and 3 (ruling P33)', async () => {
+    const scan = await findBiomeRegion('42', (cx0, cz0) => tileBiomeMask('42', cx0, cz0, 'cavesMetricBiomeTiles'));
+    expect(scan.region).toEqual(BIOME_REGION);
+    expect(scan.skipped).toEqual(BIOME_SCAN_SKIPPED);
+    // Its tile (1, 2), the 10th in sp6a.region.T.caves' order.
+    expect(scan.tile).toEqual([BIOME_REGION[0] + 8, BIOME_REGION[1] + 16]);
+    expect(biomeTiles(BIOME_REGION[0], BIOME_REGION[1])[9]).toEqual(scan.tile);
+    const climate = biomeRegionClimate('42', BIOME_REGION[0], BIOME_REGION[1]);
+    expect(climate).toEqual({ lush: 11, dripstone: 47, abyss: 39 });
+    expect(biomeClimateHolds(climate)).toBe(true);
+    // The first candidate holding the T window with one point per box, R(−11, 11), fails the eighth (lush 1).
+    expect(biomeRegionClimate('42', -104, 72)).toEqual({ lush: 1, dripstone: 52, abyss: 37 });
+    expect(biomeClimateHolds({ lush: BIOME_SCAN_MIN_POINTS - 1, dripstone: 64, abyss: 64 })).toBe(false);
+    for (const [cx0, cz0] of BIOME_SCAN_SKIPPED) expect(biomeClimateHolds(biomeRegionClimate('42', cx0, cz0)), `(${cx0}, ${cz0})`).toBe(true);
+  }, 900_000); // 30 tiles of 8 × 8 chunks up to T, no region cache: about 30 s alone on the laptop
+
+  test('biomeTileMasks: per tile, in sp6a.region.T.caves\' order (rows from low z), the stored biomes as bits; firstBiomeTile', () => {
+    // A 64 × 64-block grid read in tiles of 2 × 2 chunks: tile (1, 0) holds lush and abyss, tile (0, 1) all three.
+    const g = rock(64, 64, -40, -32, 32);
+    setCell(g, -32 + 40, -50, 32 + 5, tagOf(B.lush), false);
+    setCell(g, -32 + 41, -50, 32 + 5, tagOf(B.abyss), false);
+    for (const b of [B.lush, B.dripstone, B.abyss]) setCell(g, -32 + 3 + b, -45, 32 + 40, tagOf(b), false);
+    const masks = biomeTileMasks(g, 2);
+    // Every tile holds plain (bit 0: the rock's nibble 0).
+    expect(masks).toEqual([0b1, 0b1011, 0b1111, 0b1]);
+    expect(firstBiomeTile(masks)).toBe(2);
+    expect(firstBiomeTile([0b1011, 0b0111])).toBe(-1);
+    expect(BIOME_TILE_ALL).toBe(0b1110);
+    expect(() => biomeTileMasks(g, 3)).toThrow(RangeError);
+  });
+
+  test('a biome | plain pair with 1,999 border faces fails with "insufficient sample"; 2,000 passes; lush | dripstone is recorded', () => {
+    const base = caveBorderParts([emptyBorderCounts()]);
+    const withFaces = (faces: Record<string, number>) => ({
+      pairs: Object.fromEntries(BORDER_PAIR_NAMES.map((n) => [n, { ...base.pairs[n]!, borderFaces: faces[n] ?? 0 }])),
+    });
+    const enough = { 'lush|plain': 2000, 'dripstone|plain': 5000, 'abyss|plain': 2000 };
+    expect(BORDER_PAIR_MIN).toBe(2000);
+    expect(BORDER_SAMPLE_PAIRS).toEqual(['lush|plain', 'dripstone|plain', 'abyss|plain']);
+    expect(borderSampleProblems(withFaces(enough))).toEqual([]);
+    expect(borderSampleProblems(withFaces({ ...enough, 'lush|plain': 1999 }))).toEqual(['B3 lush|plain: 1999 border faces < 2000 (insufficient sample)']);
+    expect(borderSampleProblems(withFaces({ ...enough, 'abyss|plain': 1999 }))[0]).toContain('insufficient sample');
+    // lush | dripstone holds none: recorded, not a problem.
+    expect(withFaces(enough).pairs['lush|dripstone']!.borderFaces).toBe(0);
+    // A job with no biome at all fails every biome | plain pair.
+    expect(borderSampleProblems(base)).toHaveLength(3);
+  });
+
+  describe('caveBiomeExamples on a hand-built grid', () => {
+    // A rock grid at (16, −32) with one room x 2 … 29, z 2 … 29 (grid-local), y −40 … −35: plain at x 2 … 9, lush at
+    // 10 … 15, dripstone at 16 … 21, abyss at 22 … 29; and a tall pocket of lush (too small for a cave) below it.
+    const X0 = 16;
+    const Z0 = -32;
+    const g = rock(32, 32, 0, X0, Z0);
+    const biomeOfX = (x: number): number => (x < 10 ? B.plain : x < 16 ? B.lush : x < 22 ? B.dripstone : B.abyss);
+    for (let y = -40; y <= -35; y++) for (let z = 2; z <= 29; z++) for (let x = 2; x <= 29; x++) setCell(g, X0 + x, y, Z0 + z, tagOf(biomeOfX(x)), false);
+    carve(g, tagOf(B.lush), X0 + 5, X0 + 6, -50, -46, Z0 + 5, Z0 + 6);
+    const c = caveComponents(g, preCaveTops(g));
+    const poses = caveBiomeExamples(g, c, 1000);
+    const cellOfVoxel = (v: readonly [number, number, number]): number => g.cells[cellAt(g, v[0], v[1], v[2])]!;
+    const biomeAt = (v: readonly [number, number, number]): number => (cellOfVoxel(v) & BIOME_MASK) >> BIOME_SHIFT;
+    const standsOnFloor = (p: CavePose): boolean => {
+      const [x, y, z] = p.voxel;
+      const at = cellOfVoxel([x, y, z]);
+      return (at & TAG_MASK) !== 0 && (at & (SOLID_BIT | FLUID_BIT)) === 0
+        && (cellOfVoxel([x, y - 1, z]) & SOLID_BIT) !== 0 && (cellOfVoxel([x, y + 1, z]) & SOLID_BIT) === 0;
+    };
+
+    test('each biome pose stands in cave air of its biome on a floor face, the first in index order, eye at its centre, yaw along the floor', () => {
+      expect(Object.keys(poses)).toEqual([...BIOME_EXAMPLE_IDS]);
+      for (const [id, biome, x] of [['lush', B.lush, 10], ['dripstone', B.dripstone, 16], ['abyss', B.abyss, 22]] as const) {
+        const p = poses[id]!;
+        expect(p, id).not.toBeNull();
+        expect(standsOnFloor(p), id).toBe(true);
+        expect(biomeAt(p.voxel), id).toBe(biome);
+        // The first standing voxel of the biome in index order (the lowest y, then z, then x): the room's floor at
+        // (x, −40, 2), not the pocket below (too small).
+        expect(p.voxel, id).toEqual([X0 + x, -40, Z0 + 2]);
+        expect([p.x, p.y, p.z], id).toEqual([X0 + x + 0.5, -39.5, Z0 + 2.5]);
+        expect(p.pitch, id).toBe(0);
+        expect(p.component, id).toBe(6 * 28 * 28);
+      }
+      // From the room's z = 2 edge the longest straight run along the floor is along +z (180°: 27 voxels, against 19 and
+      // 7 along +x).
+      expect(poses.lush!.yaw).toBe(180);
+      expect(poses.abyss!.yaw).toBe(180);
+    });
+
+    test('biomeBorder stands in plain cave air on a floor face and its view crosses a border face into a biome', () => {
+      const p = poses.biomeBorder!;
+      expect(p).not.toBeNull();
+      expect(standsOnFloor(p)).toBe(true);
+      expect(biomeAt(p.voxel)).toBe(B.plain);
+      expect(p.voxel).toEqual([X0 + 2, -40, Z0 + 2]);
+      expect(p.yaw).toBe(90);
+      // Walk the view: consecutive cave-air voxels along the yaw, one with plain and the next with a biome (a border face).
+      const step: Record<number, readonly [number, number]> = { 0: [0, -1], 90: [1, 0], 180: [0, 1], 270: [-1, 0] };
+      const [dx, dz] = step[p.yaw]!;
+      let crossed = -1;
+      for (let s = 0; s < BIOME_BORDER_VIEW && crossed < 0; s++) {
+        const a: [number, number, number] = [p.voxel[0] + dx * s, p.voxel[1], p.voxel[2] + dz * s];
+        const b: [number, number, number] = [a[0] + dx, a[1], a[2] + dz];
+        if ((cellOfVoxel(b) & SOLID_BIT) !== 0) break;
+        if (biomeAt(a) === B.plain && biomeAt(b) !== B.plain) crossed = s;
+      }
+      expect(crossed).toBe(7);
+    });
+
+    test('a grid without a biome, or without a cave as large as `cavern`, gives null poses', () => {
+      const plain = rock(32, 32, 0, X0, Z0);
+      carve(plain, tagOf(B.plain), X0 + 2, X0 + 29, -40, -35, Z0 + 2, Z0 + 29);
+      const pc = caveComponents(plain, preCaveTops(plain));
+      expect(caveBiomeExamples(plain, pc, 1000)).toEqual({ lush: null, dripstone: null, abyss: null, biomeBorder: null });
+      // The room (4,704 voxels) is no cave at C4's 10,000 (the default).
+      expect(caveBiomeExamples(g, c)).toEqual({ lush: null, dripstone: null, abyss: null, biomeBorder: null });
+    });
   });
 });
 

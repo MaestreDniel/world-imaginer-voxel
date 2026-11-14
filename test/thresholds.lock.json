@@ -1,5 +1,5 @@
 {
-  "sha256": "277e38b4642643177a5a0fc869c4c28de2914f1587b6753693f339eb1bf8932d",
+  "sha256": "0cdec9b4714360be56cad1f449316f48cd12e35b72970e76420ae5fcbc6fac02",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -147,6 +147,14 @@
         }
       },
       "C1": {
+        "caveHeavyMax": {
+          "activeFrom": "SP12",
+          "max": 0.22
+        },
+        "caveHeavyMin": {
+          "activeFrom": "SP12",
+          "min": 0.1
+        },
         "voidShareMax": {
           "activeFrom": "SP6a",
           "max": 0.15
