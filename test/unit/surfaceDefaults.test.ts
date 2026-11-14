@@ -358,13 +358,37 @@ describe('rule 4 (SP6b spec §3.4, D21): the cave floors, ceilings and the abyss
   });
 
   /**
+   * The thresholds are z2 values chosen for z2 ≈ N(0, 1) (spec §3.4): the shares 1 − Φ(0.84) = 0.2005 (lush clay),
+   * 1 − Φ(−0.52) = 0.6985 (lush ceiling moss), 1 − Φ(−0.84) = 0.7995 (abyss ash) and Φ(−0.97) = 0.1660 (dripstone bare
+   * stone). They are gated on the noise itself, on two disjoint 400 × 400 grids 13 blocks apart (a step longer than the
+   * noise's 12-block wavelength, so the samples are close to independent; 160,000 points give a binomial σ ≤ 0.0012).
+   */
+  const PATCH_SHARES = { clay: 0.2005, ceilMoss: 0.6985, ash: 0.7995, bare: 0.166 };
+  test.each([[0, 0], [-60_000, 45_000]])('the cavePatch noise\'s threshold shares follow z2 ≈ N(0, 1) (a 400 × 400 grid from (%i, %i))', (x0, z0) => {
+    let clay = 0, ceilMoss = 0, ash = 0, bare = 0;
+    for (let i = 0; i < 400; i++) {
+      for (let j = 0; j < 400; j++) {
+        const v = PATCH.z2(x0 + 13 * i, z0 + 13 * j);
+        if (v >= 0.84) clay++;
+        if (v >= -0.52) ceilMoss++;
+        if (v >= -0.84) ash++;
+        if (v <= -0.97) bare++;
+      }
+    }
+    const share = { clay: clay / 160_000, ceilMoss: ceilMoss / 160_000, ash: ash / 160_000, bare: bare / 160_000 };
+    console.log(`cavePatch threshold shares from (${x0}, ${z0}): ${JSON.stringify(share)}`);
+    for (const k of ['clay', 'ceilMoss', 'ash', 'bare'] as const) expect(Math.abs(share[k] - PATCH_SHARES[k]), k).toBeLessThanOrEqual(0.01);
+  });
+
+  /**
    * 64 columns of seed '42' on an 8 × 8 grid 4,000 blocks apart: their caves hold every biome (the abyss's floors in 8 of
-   * them). The patch noise varies over 12 blocks, so a cavern's floor is a few samples, not hundreds: the shares move by
-   * about ±0.1 between such sets (Task 22's report: an 8,000-block grid read ash 0.70 and bare stone 0.08).
+   * them). Their shares are recorded, not gated: the patch noise varies over 12 blocks, so a cavern's floor is a few
+   * samples, not hundreds, and equally valid 64-column sets read shares about ±0.1 apart. The test asserts each class has
+   * a sample, both outcomes occur and rule 4 places only its own states there.
    */
   const GRID: ReadonlyArray<readonly [number, number]> = Array.from({ length: 64 }, (_, k) => [-1000 + 250 * (k % 8), -1000 + 250 * (k >> 3)] as const);
 
-  test('over 64 generated columns: the patch shares follow z2 ≈ N(0, 1) (lush clay 0.2, lush ceiling moss 0.7, abyss ash 0.8, dripstone bare 0.17)', () => {
+  test('over 64 generated columns: every patch branch occurs on lush, dripstone and abyss floors and lush ceilings (shares recorded)', () => {
     const n = { lushFloor: 0, clay: 0, lushCeil: 0, ceilMoss: 0, abyssFloor: 0, ash: 0, dripFloor: 0, bare: 0 };
     const out = new Uint16Array(98304);
     for (const [cx, cz] of GRID) {
@@ -397,13 +421,9 @@ describe('rule 4 (SP6b spec §3.4, D21): the cave floors, ceilings and the abyss
     const share = { clay: n.clay / n.lushFloor, ceilMoss: n.ceilMoss / n.lushCeil, ash: n.ash / n.abyssFloor, bare: n.bare / n.dripFloor };
     console.log(`rule 4's patch shares over 64 columns: ${JSON.stringify(n)} → ${JSON.stringify(share)}`);
     expect(Math.min(n.lushFloor, n.lushCeil, n.abyssFloor, n.dripFloor)).toBeGreaterThan(100);
-    expect(share.clay).toBeGreaterThanOrEqual(0.12);
-    expect(share.clay).toBeLessThanOrEqual(0.28);
-    expect(share.ceilMoss).toBeGreaterThanOrEqual(0.6);
-    expect(share.ceilMoss).toBeLessThanOrEqual(0.8);
-    expect(share.ash).toBeGreaterThanOrEqual(0.7);
-    expect(share.ash).toBeLessThanOrEqual(0.9);
-    expect(share.bare).toBeGreaterThanOrEqual(0.09);
-    expect(share.bare).toBeLessThanOrEqual(0.25);
+    for (const k of ['clay', 'ceilMoss', 'ash', 'bare'] as const) {
+      expect(share[k], k).toBeGreaterThan(0);
+      expect(share[k], k).toBeLessThan(1);
+    }
   }, 120_000);
 });
