@@ -38,7 +38,7 @@ export const CARVER_DEFAULTS: CarverParams = {
     vRotation: 0.125, startYMin: 10, startYMax: 72,
   },
   limits: { waterDepth: 16, bandSpan: 16, capTop: 344 },
-  floor: { y: -58, amp: 5, span: 8 },
+  floor: { y: -58, amp: 7, span: 8 },
 };
 
 export const CARVER_MAXIMA: CarverParams = {

@@ -234,7 +234,7 @@ Generated from `src/core/params/schema.ts` by `npm run docs:params`; a test fail
 | `caves.noises.noodleRidgeB` | noise | {"amplitudes":null,"clampSigma":3,"double":false,"lacunarity":2,"octaves":1,"persistence":0.5,"remap":"none","wavelength":18,"yScale":1} | wavelength 16 … 8192 |  | terrain | Noodle ridge noise B: Bn of the noodle ridges max(\|An\|, \|Bn\|). |
 | `caves.noises.floor` | noise | {"amplitudes":null,"clampSigma":3,"double":false,"lacunarity":2,"octaves":3,"persistence":0.5,"remap":"none","wavelength":48,"yScale":1} | wavelength 16 … 8192 |  | terrain | Floor noise: Nf (2D) of the rock floor: floorY = Floor y + Floor relief·\|Nf\|, mounds where \|Nf\| is high, gullies where it crosses 0. |
 | `caves.floor.y` | int | -58 | -62 … -16 | y | terrain | Floor y: The floor's lowest height (its gullies, where Nf crosses 0): no cave air lies below this y + 5. |
-| `caves.floor.amp` | number | 5 | 0 … 12 | blocks | terrain | Floor relief: Times \|Nf\|: the floor's mounds rise up to 3·amp blocks above Floor y. |
+| `caves.floor.amp` | number | 7 | 0 … 12 | blocks | terrain | Floor relief: Times \|Nf\|: the floor's mounds rise up to 3·amp blocks above Floor y. |
 | `caves.floor.span` | int | 8 | 1 … 32 | blocks | terrain | Floor softness: The noise families and the carvers narrow over this many blocks above floorY + 8 (the gentle part); the families then close by floorY + 4 (the steep part), the carvers at floorY + 8. |
 | `caves.biomes.lush.hMin` | number | 0.4 | -1 … 1 |  | terrain | Lowest humidity: Lush where the perturbed humidity H′ is at least this. |
 | `caves.biomes.lush.depthMin` | number | 0.2 | 0 … 2 |  | terrain | Shallowest depth: Lush from this depth down (depth = (Y0 − y) / depthScale). |

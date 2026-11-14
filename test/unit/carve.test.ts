@@ -519,7 +519,9 @@ describe('the rock floor\'s shrink σ_b (SP6b spec §5.2, D6; Task 20)', () => {
   test('σ_b is 1 at y ≤ floorY + 8, 0 at y ≥ floorY + 8 + span and linear between (dry, below the cap and σ_u)', () => {
     for (const span of [1, 8, 32]) {
       const p: CarverParams = { ...CARVER_DEFAULTS, floor: { ...CARVER_DEFAULTS.floor, span } };
-      for (const floorY of [-58, -54.3, -43]) {
+      // The defaults' gully, about their mean (|z| ≈ 0.74) and their highest mound (DEFAULTS.caves.floor).
+      const f = DEFAULTS.caves.floor;
+      for (const floorY of [f.y, f.y + 0.74 * f.amp, f.y + 3 * f.amp]) {
         for (let y = -80; y <= 0; y++) {
           for (const kind of KINDS) {
             const sigma = carveShrink(p, kind, y, 0, 100, floorY);

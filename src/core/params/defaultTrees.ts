@@ -84,7 +84,7 @@ const capTop = (): JsonValue => param('caves.limits.capTop');
 /**
  * floorY = `caves.floor.y` + `caves.floor.amp`·|clamp(Nf, −3, 3)| (SP6b §5.2, D6): the rock floor's height, Nf the z2 of
  * `caves.noises.floor` (COLUMN class: a slot reads it at its corners, the voxel level at the position), so floorY lies in
- * y … y + 3·amp over every leaf value (−58 … −43 at the defaults).
+ * y … y + 3·amp over every leaf value (−58 … −37 at the defaults).
  */
 const floorY = (): JsonValue => add(param('caves.floor.y'), mul(param('caves.floor.amp'), abs(clamp(noise2('floor'), -3, 3))));
 /** s_b = `caves.floor.span`, the floor's gentle span (1 … 32 blocks). */
