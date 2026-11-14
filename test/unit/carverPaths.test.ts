@@ -16,7 +16,7 @@ import { Xoshiro128 } from '../../src/core/rng';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { applyPatch, patchAt } from '../../src/core/params/kit';
 import { SCHEMA, type Params } from '../../src/core/params/schema';
-import { carverParamsOf, carverPath, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
+import { carverParamsOf, carverPath, carverSourceSeed, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
 import { CARVER_DEFAULTS, CARVER_MAXIMA } from '../harness/carverParams';
 import { chiSquareP } from '../harness/stats';
 
@@ -348,6 +348,35 @@ describe('carverPath: sources and worm paths (SP6a §2.1-§2.2)', () => {
           expect(firstDiff(other[i]!.widthSq, once[i]!.widthSq)).toBe(-1);
         }
       }
+    }
+  });
+
+  test('the derived seeds\' memo per kind (SP6b D32, Task 25f): deriveSeed(seed, \'caves.\' + kind) for every seed and kind, interleaved; the paths equal with and without it', () => {
+    // Two world seeds and the three kinds in an order that changes the seed at every call (the memo recomputes each
+    // time: without it) and grouped by seed (the memo hits: with it); the seeds the memo returns equal deriveSeed's.
+    const seeds: Seed64[] = [SEED, [0x9e3779b9 | 0, 7], [42, 0x7fffffff]];
+    for (let i = 0; i < 300; i++) {
+      const seed = seeds[(i * 7) % 3]!, kind = ALL_KINDS[i % 3]!;
+      expect(carverSourceSeed(seed, kind), `${seed} ${kind}`).toBe(deriveSeed(seed, 'caves.' + kind));
+    }
+    // A fresh tuple with the same values is the same seed.
+    expect(carverSourceSeed([42, 0], 'ravine')).toBe(deriveSeed(SEED, 'caves.ravine'));
+    const sources: Array<[number, number]> = [];
+    for (const s of spiral()) {
+      if (sources.length === 256) break;
+      sources.push(s);
+    }
+    for (const kind of ALL_KINDS) {
+      const grouped = seeds.map((seed) => sources.map(([sx, sz]) => carverPath(seed, kind, sx, sz, ALWAYS)!));
+      sources.forEach(([sx, sz], i) => {
+        for (let k = 0; k < 3; k++) {
+          // Interleaved: another seed's path between every two calls of one seed.
+          const a = carverPath(seeds[k]!, kind, sx, sz, ALWAYS)!;
+          carverPath(seeds[(k + 1) % 3]!, kind, sz, sx, ALWAYS);
+          const b = grouped[k]![i]!;
+          expect([firstDiff(a.ell, b.ell), firstDiff(a.box, b.box), firstDiff(a.widthSq, b.widthSq), a.count], `${kind} ${k} (${sx}, ${sz})`).toEqual([-1, -1, -1, b.count]);
+        }
+      });
     }
   });
 

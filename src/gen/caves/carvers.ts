@@ -1,7 +1,8 @@
 /**
  * The carvers' sources and paths (SP6a spec §2.1-§2.3, D5, D21, D35): a pure function of the world seed, the kind and
  * the source chunk (sx, sz), never of the column that asks for it, so two columns see the same path.
- * - Source (§2.1): `rng = Xoshiro128(hash2(deriveSeed(seed, 'caves.' + kind), sx, sz))`; its first `nextFloat()`
+ * - Source (§2.1): `rng = Xoshiro128(hash2(deriveSeed(seed, 'caves.' + kind), sx, sz))` (the derived seed memoised per
+ *   kind, `carverSourceSeed`; SP6b D32); its first `nextFloat()`
  *   against the kind's chance, else no path (null). A source reaches only the chunks within `CARVER_WINDOW_R` of its
  *   own (`core/constants.ts`; `reachOverflow` pins it on `box`).
  * - Worm and underground worm (§2.2), in this draw order (frozen by the golden `sp6a.carver.paths`):
@@ -323,12 +324,35 @@ function ravinePath(rng: Rng, sx: number, sz: number, p: CarverParams): CarverPa
   return { kind: 'ravine', sx, sz, count: n, ell, box: reachOf(ell, n), widthSq };
 }
 
+/** The world seed whose three derived seeds the memo holds (`carverSourceSeed`), NaN before the first call. */
+let memoLo = NaN;
+let memoHi = NaN;
+let memoWorm = 0;
+let memoRavine = 0;
+let memoUnderground = 0;
+
+/**
+ * `deriveSeed(seed, 'caves.' + kind)`, the kind's source seed (§2.1), memoised per kind for the last world seed asked
+ * (SP6b D32, Task 25f): a failed roll is not cached by the path cache, so a carve or a slice asks it for every source of
+ * its window; a seed with other values recomputes the three. The same number as deriveSeed's, so no path changes.
+ */
+export function carverSourceSeed(seed: GenContext['seed'], kind: CarverKind): number {
+  if (seed[0] !== memoLo || seed[1] !== memoHi) {
+    memoWorm = DERIVE(seed, 'caves.worm');
+    memoRavine = DERIVE(seed, 'caves.ravine');
+    memoUnderground = DERIVE(seed, 'caves.undergroundWorm');
+    memoLo = seed[0];
+    memoHi = seed[1];
+  }
+  return kind === 'ravine' ? memoRavine : kind === 'undergroundWorm' ? memoUnderground : memoWorm;
+}
+
 /**
  * The path of the carver source (kind, sx, sz) of the world `seed` (§2.1): null when its roll fails. Worms and
  * underground worms (§2.2), ravines (§2.3).
  */
 export function carverPath(seed: GenContext['seed'], kind: CarverKind, sx: number, sz: number, p: CarverParams): CarverPath | null {
-  const rng = new RNG(HASH2(DERIVE(seed, 'caves.' + kind), sx, sz));
+  const rng = new RNG(HASH2(carverSourceSeed(seed, kind), sx, sz));
   const chance = kind === 'ravine' ? p.ravines.chance : kind === 'undergroundWorm' ? p.undergroundWorms.chance : p.worms.chance;
   if (!(rng.nextFloat() < chance)) return null;
   return kind === 'ravine' ? ravinePath(rng, sx, sz, p) : wormPath(rng, kind, sx, sz, p);
