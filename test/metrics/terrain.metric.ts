@@ -1,9 +1,13 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { expect, test } from 'vitest';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { metricTest } from '../harness/metric';
 import { genRegion } from '../harness/region';
 import {
-  mergeScattered, metricsProfiles, newGrid, newScattered, putColumn, scatterColumns, scatterColumnsThreaded, t1Values, t2Values,
-  t3Values, t4Sites, t5Values, waterWalls, type Scattered, type ScatterProfile,
+  b3Values, mergeScattered, metricsProfiles, newGrid, newScattered, putColumn, scatterColumns, scatterColumnsThreaded, t1Values,
+  t2Values, t3Values, t4Sites, t5Values, waterWalls, type B3Values, type Scattered, type ScatterProfile,
 } from '../harness/terrainScatter';
 
 /**
@@ -62,6 +66,15 @@ import {
  * - floating rocks (T2.json): a land position has one when, at or above y −56, a solid run of height ≤ 6 rests on an
  *   air gap of ≥ 3 blocks (a per-column proxy: it also counts thin ledges and arch roofs). `floatingRockShare` is the
  *   share of land positions with one, `floatingRockVoxels` the voxels in such runs per land position.
+ *
+ * B3's cave-biome shares (SP6b spec §12.1, D26; recorded here, gated at the tuning task) ride on the same scattered
+ * columns, no new generation: cave air = tagged voxels (kind ≠ 0) that are air with no fluid, each counted under its
+ * nibble (`analyseColumn`), per window of the profile's square (default: ±16,384 blocks in 4 × 4 windows of 8 × 8 km;
+ * large_biomes: ±65,536 in 4 × 4 of 32 × 32 km, recorded only), per 0.1 band of §1.2's depth (Y0 from each column's
+ * cave-biome pass in the region worker), per 16-block y band and per cave kind (`b3Values`). Per profile, every window's
+ * cave air and four shares and the minima `lushMin`, `dripstoneMin`, `abyssMin` (the smallest window share) and
+ * `windowAir` (the smallest window's cave air; a window under 50,000 is flagged `insufficient`) are written to
+ * `.out/B3.windows.json` (Task 30's gated call writes `.out/B3.shares.json`).
  */
 type Tier = 'fast' | 'quick' | 'full';
 const TIER = (process.env.METRICS_TIER ?? 'fast') as Tier;
@@ -168,6 +181,23 @@ metricTest('T5', ['median', 'p90', 'p99'], async () => {
   extras(rec, per, ['median', 'p90', 'p99']);
   return rec;
 });
+
+const OUT_DIR = fileURLToPath(new URL('./.out/', import.meta.url));
+
+/** Non-finite numbers (an empty window's NaN shares) as strings, as caves.metric.ts' records write them. */
+const json = (v: unknown): string => `${JSON.stringify(v, (_, x: unknown) => (typeof x === 'number' && !Number.isFinite(x) ? String(x) : x), 2)}\n`;
+
+// B3's per-window record (header; recorded, not gated: B3 has no THRESHOLDS row until the tuning task).
+test('B3: cave-biome shares per window (recorded, not gated)', async () => {
+  const sc = await scattered();
+  const profiles = Object.fromEntries(PROFILES.map((p) => [p, b3Values(sc[p], p)])) as Partial<Record<Profile, B3Values>>;
+  mkdirSync(OUT_DIR, { recursive: true });
+  writeFileSync(join(OUT_DIR, 'B3.windows.json'), json({ id: 'B3.windows', tier: TIER, seeds: SEEDS, profiles }));
+  for (const p of PROFILES) {
+    expect(profiles[p]!.windows, `B3 ${p}: 4 × 4 windows`).toHaveLength(16);
+    expect(profiles[p]!.air, `B3 ${p}: cave air over the scattered columns`).toBeGreaterThan(0);
+  }
+}, 600_000);
 
 metricTest('T4', ['floorSd', 'exposedBedrock', 'deepFloor'], async () => {
   const t0 = performance.now();

@@ -1,5 +1,6 @@
 import { Worker } from 'node:worker_threads';
 import { expect } from 'vitest';
+import { CAVE_BIOME_NAMES, type CaveBiomeName } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
 import type { Params } from '../../src/core/params/schema';
@@ -12,10 +13,10 @@ import type { ColumnView } from '../../src/world/store/api';
 import { createStore } from '../../src/world/store/store';
 import { ask, buildNodeTaskWorker } from './nodeWorker';
 import type { RegionAttachMsg, RegionColumnMsg, RegionScatterMsg, RegionWorkerReply } from './regionWorker';
-import { newScattered, type Scattered } from './terrainAnalysis';
+import { B3_DEPTH_BIN0, B3_DEPTH_BINS, B3_FINE_BLOCKS, B3_FINE_HALF, B3_FINE_N, newScattered, type Scattered } from './terrainAnalysis';
 
 export {
-  analyseColumn, newGrid, newScatterScratch, newScattered, preCaveSolidity, preCaveTop, putColumn, solidity, transitions,
+  analyseColumn, caveDepthOf, newGrid, newScatterScratch, newScattered, preCaveSolidity, preCaveTop, putColumn, solidity, transitions,
   waterWalls, type Grid, type ScatterColumn, type ScatterScratch, type Scattered,
 } from './terrainAnalysis';
 
@@ -389,6 +390,110 @@ export function t5Values(s: Scattered, mode: PopulationMode, label: string): Rec
   };
   populations(rec, mode, ['median', 'p90', 'p99'], sorted.length);
   return rec;
+}
+
+/**
+ * B3's window side per profile (SP6b spec §12.1): the default profile's ±16,384-block square (its scatter's `RANGE`) in
+ * 4 × 4 windows of 8,192 blocks; large_biomes' ±65,536 in 4 × 4 windows of 32,768 (its climate is zoomed × 4; recorded).
+ */
+export const B3_WINDOW_BLOCKS: Readonly<Record<ScatterProfile, number>> = { default: 8192, large_biomes: 32768 };
+/** B3.windowAir's bound (SP6b spec §12.1): a window with fewer cave-air voxels is an insufficient sample. */
+export const B3_WINDOW_AIR_MIN = 50_000;
+
+/** Cave-air voxels per cave biome (`<biome>`) and in all (`air`). */
+export type B3Counts = { air: number } & Record<CaveBiomeName, number>;
+
+/** One window: its index (wx, wz), its corner in blocks, its cave air, each biome's share of it, and the 50,000 flag. */
+export type B3Window = { wx: number; wz: number; x0: number; z0: number; air: number } & Record<CaveBiomeName, number> & { insufficient: boolean };
+
+export interface B3Values {
+  /** The smallest share of cave air over the windows, per biome (NaN when a window holds no cave air). */
+  lushMin: number;
+  dripstoneMin: number;
+  abyssMin: number;
+  /** The smallest window's cave-air voxels. */
+  windowAir: number;
+  /** The windows with fewer than `B3_WINDOW_AIR_MIN` cave-air voxels. */
+  insufficientWindows: number;
+  windowBlocks: number;
+  /** The cave air inside the profile's square, and each biome's share of it. */
+  air: number;
+  shares: Record<CaveBiomeName, number>;
+  /** Row by row (wz, then wx). */
+  windows: B3Window[];
+  /** Per non-empty 0.1 depth band (`depth` its lower edge; the end bands hold everything beyond ±3.1). */
+  byDepth: Array<{ depth: number } & B3Counts>;
+  /** Per non-empty 16-block y band (`y` its lowest y). */
+  byY: Array<{ y: number } & B3Counts>;
+  /** Per non-empty cave kind (`CAVE_KIND`). */
+  byKind: Array<{ kind: number } & B3Counts>;
+}
+
+/** Adds the counts at entry i of a per-biome accumulator (entry `4·i + biome`) into `into`; returns `into`. */
+function addCounts(into: B3Counts, a: Float64Array, i: number): B3Counts {
+  CAVE_BIOME_NAMES.forEach((name, b) => {
+    const n = a[i * CAVE_BIOME_NAMES.length + b]!;
+    into[name] += n;
+    into.air += n;
+  });
+  return into;
+}
+
+const noCounts = (): B3Counts => ({ air: 0, ...Object.fromEntries(CAVE_BIOME_NAMES.map((name) => [name, 0])) }) as B3Counts;
+
+/** Each biome's share of `c.air` (NaN for none). */
+const b3Shares = (c: B3Counts): Record<CaveBiomeName, number> =>
+  Object.fromEntries(CAVE_BIOME_NAMES.map((name) => [name, c[name] / c.air])) as Record<CaveBiomeName, number>;
+
+/** The non-empty entries of a per-biome accumulator with n entries, each keyed by `key(i)`. */
+function b3Rows<K extends string>(a: Float64Array, n: number, k: K, key: (i: number) => number): Array<Record<K, number> & B3Counts> {
+  const rows: Array<Record<K, number> & B3Counts> = [];
+  for (let i = 0; i < n; i++) {
+    const c = addCounts(noCounts(), a, i);
+    if (c.air > 0) rows.push({ [k]: key(i), ...c } as Record<K, number> & B3Counts);
+  }
+  return rows;
+}
+
+/**
+ * B3 of one population (SP6b spec §12.1, D26): the cave air (tagged, air, no fluid, under its nibble) of the profile's
+ * 4 × 4 windows (`B3_WINDOW_BLOCKS`), each biome's share per window and the minima (`lushMin`, `dripstoneMin`,
+ * `abyssMin`; `windowAir`, the smallest window's cave air, against `B3_WINDOW_AIR_MIN`), then the recorded shares
+ * overall, per depth band, per 16-block y band and per cave kind (over every column of the population).
+ */
+export function b3Values(s: Scattered, profile: ScatterProfile): B3Values {
+  const size = B3_WINDOW_BLOCKS[profile];
+  const span = size / B3_FINE_BLOCKS;
+  const windows: B3Window[] = [];
+  const all = noCounts();
+  for (let wz = 0; wz < 4; wz++) {
+    for (let wx = 0; wx < 4; wx++) {
+      const x0 = (wx - 2) * size;
+      const z0 = (wz - 2) * size;
+      const fx0 = (x0 + B3_FINE_HALF) / B3_FINE_BLOCKS;
+      const fz0 = (z0 + B3_FINE_HALF) / B3_FINE_BLOCKS;
+      const c = noCounts();
+      for (let fz = fz0; fz < fz0 + span; fz++) for (let fx = fx0; fx < fx0 + span; fx++) addCounts(c, s.caveWindows, fz * B3_FINE_N + fx);
+      for (const name of CAVE_BIOME_NAMES) all[name] += c[name];
+      all.air += c.air;
+      windows.push({ wx, wz, x0, z0, air: c.air, ...b3Shares(c), insufficient: c.air < B3_WINDOW_AIR_MIN });
+    }
+  }
+  const min = (name: CaveBiomeName): number => Math.min(...windows.map((w) => w[name]));
+  return {
+    lushMin: min('lush'),
+    dripstoneMin: min('dripstone'),
+    abyssMin: min('abyss'),
+    windowAir: Math.min(...windows.map((w) => w.air)),
+    insufficientWindows: windows.filter((w) => w.insufficient).length,
+    windowBlocks: size,
+    air: all.air,
+    shares: b3Shares(all),
+    windows,
+    byDepth: b3Rows(s.caveDepthBands, B3_DEPTH_BINS, 'depth', (i) => (i - B3_DEPTH_BIN0) / 10),
+    byY: b3Rows(s.caveYBands, 24, 'y', (i) => 16 * i - 64),
+    byKind: b3Rows(s.caveKinds, 16, 'kind', (i) => i),
+  };
 }
 
 /** The draft presets whose full-tier records `presetRecord` keys (SP3e spec §5.5). */

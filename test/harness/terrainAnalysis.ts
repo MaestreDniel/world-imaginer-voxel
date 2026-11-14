@@ -1,4 +1,7 @@
+import { CAVE_BIOME_NAMES, caveKindOf } from '../../src/core/constants';
+import { fillCaveColumnPass, type CaveColumnPass, type CavePickerInputs } from '../../src/gen/biomes/cavePicker';
 import { biomeFamily, biomeId } from '../../src/gen/biomes/registry';
+import type { ColumnSample } from '../../src/gen/column/columnStage';
 import type { DensityContext } from '../../src/gen/density/context';
 import { probe } from '../../src/gen/density/probe';
 import { AIR } from '../../src/world/blocks/index';
@@ -15,9 +18,11 @@ const T5_LOCAL = [2, 6, 10, 14];
 const FLOAT_MAX_HEIGHT = 6;
 const FLOAT_MIN_GAP = 3;
 
-/** What the per-column analysis reads of a column: its blocks, its cave tags and aux A (a `ColumnView` is one). */
+/** What the per-column analysis reads of a column: its blocks, fluids, cave bytes and aux A (a `ColumnView` is one). */
 export interface ScatterColumn {
   sectionBlocks(sy: number): Uint16Array | number;
+  /** The fluid byte per voxel, or its uniform byte (B3's cave air holds no fluid, SP6b spec §12.1). */
+  sectionFluid(sy: number): Uint8Array | number;
   /** The cave tag per voxel (SP6a spec §3.2-§3.3), or its uniform byte. */
   sectionCave(sy: number): Uint8Array | number;
   aux(): Pick<AuxView, 'worldSurfaceWG' | 'oceanFloorWG' | 'surfaceBiome'> | null;
@@ -122,6 +127,16 @@ export function waterWalls(g: Grid): [number, number] {
   return [walls, water];
 }
 
+/** B3's cave biomes per accumulator entry (`CAVE_BIOME` 0-3; the nibbles 4-15 are reserved and refused). */
+const B3_BIOMES = CAVE_BIOME_NAMES.length;
+/** B3's windows are accumulated on a fine grid of 8,192-block windows over ±65,536 blocks (16 × 16; `b3Values` groups them). */
+export const B3_FINE_BLOCKS = 8192;
+export const B3_FINE_HALF = 65536;
+export const B3_FINE_N = (2 * B3_FINE_HALF) / B3_FINE_BLOCKS;
+/** B3's depth bands: 0.1 bins of the depth, bin k = ⌊10·depth⌋ + 32 clamped to 0 … 63 (depth −3.2 … 3.2). */
+export const B3_DEPTH_BINS = 64;
+export const B3_DEPTH_BIN0 = 32;
+
 /** The accumulators of one population of scattered columns (order-independent sums). */
 export interface Scattered {
   hist: Float64Array; // land tops, index top + 64
@@ -149,6 +164,15 @@ export interface Scattered {
   water: number;
   columns: number;
   waterPositions: number;
+  /**
+   * B3 (SP6b spec §12.1): cave air (tagged, air, no fluid) per cave biome (its nibble), entry `4·i + biome`: per fine
+   * window i = wz·16 + wx (`B3_FINE_*`), per depth band i (`B3_DEPTH_*`; filled only with a `caveDepth`), per 16-block y
+   * band i = (y + 64) >> 4 and per cave kind i (`caveKindOf`).
+   */
+  caveWindows: Float64Array;
+  caveDepthBands: Float64Array;
+  caveYBands: Float64Array;
+  caveKinds: Float64Array;
   /** Wall time of the population, set by the caller (a timing key: never compared). */
   seconds: number;
 }
@@ -158,7 +182,9 @@ export const newScattered = (): Scattered => ({
   floatPositions: 0, floatVoxels: 0, peakFloatPositions: 0, t5: [], t5Land: 0, t5Multi: 0, t5Raised: 0,
   inside: new Float64Array(256), insideSteep: new Float64Array(256),
   borderPairs: new Float64Array(65536), borderSteep: new Float64Array(65536), landPairs: 0, crossFamilyPairs: 0,
-  walls: 0, water: 0, columns: 0, waterPositions: 0, seconds: 0,
+  walls: 0, water: 0, columns: 0, waterPositions: 0,
+  caveWindows: new Float64Array(B3_FINE_N * B3_FINE_N * B3_BIOMES), caveDepthBands: new Float64Array(B3_DEPTH_BINS * B3_BIOMES),
+  caveYBands: new Float64Array(24 * B3_BIOMES), caveKinds: new Float64Array(16 * B3_BIOMES), seconds: 0,
 });
 
 /** Reusable buffers of `analyseColumn` (one per caller thread): the true and the pre-cave solidity, the grid. */
@@ -181,6 +207,50 @@ export function preCaveTop(dc: DensityContext, x: number, z: number, top: number
 }
 
 /**
+ * B3's depth at a voxel of the column (cx, cz) whose ColumnSample is `s` (SP6b spec §1.2, §12.1): (Y0 − y) / depthScale,
+ * Y0 read from the column's cave-biome pass at the voxel's own position (no jitter), as the picker reads it. Fills `pass`
+ * (`fillCaveColumnPass`); the function reads it, so it holds until `pass` is refilled.
+ */
+export function caveDepthOf(inp: CavePickerInputs, s: ColumnSample, pass: CaveColumnPass): (x: number, y: number, z: number) => number {
+  fillCaveColumnPass(inp, s, pass);
+  const d = inp.settings.depthScale;
+  const { cx, cz, y0 } = pass;
+  return (x, y, z) => (y0[(z - 16 * cz + 4) * 24 + (x - 16 * cx + 4)]! - y) / d;
+}
+
+/**
+ * B3's cave air of one column (SP6b spec §12.1): every tagged voxel (kind ≠ 0) that is air with no fluid, counted under
+ * its nibble per window, per y band, per kind and (with `caveDepth`) per depth band. A nibble of 4-15 throws.
+ */
+function caveAir(s: Scattered, view: ScatterColumn, cx: number, cz: number, caveDepth: ((x: number, y: number, z: number) => number) | null): void {
+  const fx = Math.floor((16 * cx + B3_FINE_HALF) / B3_FINE_BLOCKS);
+  const fz = Math.floor((16 * cz + B3_FINE_HALF) / B3_FINE_BLOCKS);
+  if (fx < 0 || fx >= B3_FINE_N || fz < 0 || fz >= B3_FINE_N) throw new RangeError(`analyseColumn: column (${cx}, ${cz}) lies outside B3's ±${B3_FINE_HALF}-block grid`);
+  const win = (fz * B3_FINE_N + fx) * B3_BIOMES;
+  for (let sy = 0; sy < 24; sy++) {
+    const c = view.sectionCave(sy);
+    if (c === 0) continue;
+    const b = view.sectionBlocks(sy);
+    const f = view.sectionFluid(sy);
+    for (let i = 0; i < 4096; i++) {
+      const byte = typeof c === 'number' ? c : c[i]!;
+      if (byte === 0) continue;
+      if ((typeof b === 'number' ? b : b[i]!) !== AIR || (typeof f === 'number' ? f : f[i]!) !== 0) continue;
+      const biome = byte >> 4;
+      if (biome >= B3_BIOMES) throw new RangeError(`analyseColumn: cave biome ${biome} at a tagged voxel of column (${cx}, ${cz}) (0-3; 4-15 reserved)`);
+      const y = 16 * sy - 64 + (i >> 8);
+      s.caveWindows[win + biome]!++;
+      s.caveYBands[((y + 64) >> 4) * B3_BIOMES + biome]!++;
+      s.caveKinds[caveKindOf(byte) * B3_BIOMES + biome]!++;
+      if (caveDepth !== null) {
+        const k = Math.min(B3_DEPTH_BINS - 1, Math.max(0, Math.floor(10 * caveDepth(16 * cx + (i & 15), y, 16 * cz + ((i >> 4) & 15))) + B3_DEPTH_BIN0));
+        s.caveDepthBands[k * B3_BIOMES + biome]!++;
+      }
+    }
+  }
+}
+
+/**
  * Adds one generated column (chunk column cx, cz) to `s`: T1's land tops, T2's overhangs and floating rocks, T5's
  * |surfaceEst − pre-cave top| at its 16 positions (`surfaceEst(x, z)` is `surfaceEst3` on the population's density
  * context; `preTop(x, z, top)` the pre-cave top over the true top, `preCaveTop` on that context, SP6a spec §10.4;
@@ -190,6 +260,8 @@ export function preCaveTop(dc: DensityContext, x: number, z: number, top: number
  * over the pre-cave run that holds the land position's true top (climbed through the tagged voxels above it, so an
  * entrance that opens the surface is looked through): cave transitions would inflate it. T1, T3, T5's single-surface
  * test and the water walls read the generated voxels as before.
+ * B3 (SP6b spec §12.1) counts the column's cave air (`caveAir`); `caveDepth(x, y, z)` (`caveDepthOf` on the column's
+ * pass) gives the depth band of each cave-air voxel, and null skips the depth bands.
  */
 export function analyseColumn(
   s: Scattered,
@@ -199,6 +271,7 @@ export function analyseColumn(
   surfaceEst: (x: number, z: number) => number,
   scratch: ScatterScratch,
   preTop: (x: number, z: number, top: number) => number = TRUE_TOP,
+  caveDepth: ((x: number, y: number, z: number) => number) | null = null,
 ): void {
   const { solid, pre, g } = scratch;
   const aux = view.aux()!;
@@ -263,4 +336,5 @@ export function analyseColumn(
     if ((k & 15) < 15) pair(k, k + 1);
     if (k < 240) pair(k, k + 16);
   }
+  caveAir(s, view, cx, cz, caveDepth);
 }

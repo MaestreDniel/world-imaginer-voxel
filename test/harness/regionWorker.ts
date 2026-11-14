@@ -16,13 +16,15 @@
  *   ruling P27);
  * - `{type: 'scatter', cols}` (T1-T5's analysis, SP6b spec §13 L5, ruling P5; `scatterColumnsThreaded`): per column in
  *   order, `fillColumnT`, `analyseColumn` in place (`surfaceEst3` and `preCaveTop` on this worker's DensityContext,
- *   built once from its GenContext) and `freeColumn`, answered `{type: 'scattered', scattered, ms}`: one `Scattered`
- *   for all its columns (`seconds` 0), its Float64Arrays' buffers transferred.
+ *   built once from its GenContext; B3's `caveDepth` from the column's cave-biome pass, `caveDepthOf` with
+ *   `cavePickerOf(ctx)`, SP6b spec §12.1) and `freeColumn`, answered `{type: 'scattered', scattered, ms}`: one
+ *   `Scattered` for all its columns (`seconds` 0), its Float64Arrays' buffers transferred.
  * Anything that throws is answered `{type: 'error', message}`.
  */
 import { CARVER_CACHE_PATHS } from '../../src/core/constants';
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
+import { cavePickerOf, newCaveColumnPass, type CaveColumnPass } from '../../src/gen/biomes/cavePicker';
 import { carverCacheOf, setCarverCacheCapacity } from '../../src/gen/caves/carverCache';
 import { surfaceEst3 } from '../../src/gen/column/surfaceEstimate';
 import { createGenContext, type GenContext } from '../../src/gen/context';
@@ -33,7 +35,7 @@ import { createMeshScratch, type ColumnMeshPayload, type MeshScratch } from '../
 import type { MeshOptions } from '../../src/mesh/greedy';
 import { attachStore, type StoreHandles, type VoxelStore } from '../../src/world/store/store';
 import { fillColumnD, fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
-import { analyseColumn, newScatterScratch, newScattered, preCaveTop, type Scattered, type ScatterScratch } from './terrainAnalysis';
+import { analyseColumn, caveDepthOf, newScatterScratch, newScattered, preCaveTop, type Scattered, type ScatterScratch } from './terrainAnalysis';
 
 export interface RegionAttachMsg {
   readonly type: 'attach';
@@ -100,6 +102,7 @@ export function createTaskHandler(): { handle(raw: unknown): Reply } {
   let meshScratch: MeshScratch | null = null;
   let dc: DensityContext | null = null;
   let scatterScratch: ScatterScratch | null = null;
+  let cavePass: CaveColumnPass | null = null;
   const reply = (msg: RegionWorkerReply, transfer: Transferable[] = []): Reply => ({ msg, transfer });
   return {
     handle(raw) {
@@ -119,18 +122,21 @@ export function createTaskHandler(): { handle(raw: unknown): Reply } {
           const scratch = scatterScratch ??= newScatterScratch();
           const est = (x: number, z: number): number => surfaceEst3(density, x, z);
           const pre = (x: number, z: number, top: number): number => preCaveTop(density, x, z, top);
+          const picker = cavePickerOf(ctx);
+          const pass = cavePass ??= newCaveColumnPass();
           const s = newScattered();
           for (const [cx, cz] of (raw as RegionScatterMsg).cols) {
             if (!fillColumnT(store, ctx, cx, cz, NEVER)) throw new Error(`region worker: column (${cx}, ${cz}) not filled`);
             try {
               const view = store.proto(cx, cz);
               if (view === null) throw new Error(`region worker: column (${cx}, ${cz}) has no proto set`);
-              analyseColumn(s, view, cx, cz, est, scratch, pre);
+              analyseColumn(s, view, cx, cz, est, scratch, pre, caveDepthOf(picker, density.columns.get(cx, cz), pass));
             } finally {
               store.freeColumn(cx, cz);
             }
           }
-          const transfer = [s.hist, s.inside, s.insideSteep, s.borderPairs, s.borderSteep].map((a) => a.buffer as ArrayBuffer);
+          const transfer = [s.hist, s.inside, s.insideSteep, s.borderPairs, s.borderSteep, s.caveWindows, s.caveDepthBands, s.caveYBands, s.caveKinds]
+            .map((a) => a.buffer as ArrayBuffer);
           return reply({ type: 'scattered', scattered: s, ms: performance.now() - t0 }, transfer);
         }
         if (m.type === 'column' || m.type === 'decorate' || m.type === 'light' || m.type === 'meshColumn') {

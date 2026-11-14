@@ -1,8 +1,10 @@
 import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest';
+import { CAVE_BIOME, CAVE_KIND } from '../../src/core/constants';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import type { JsonValue } from '../../src/core/params/json';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
+import { cavePickerOf, newCaveColumnPass } from '../../src/gen/biomes/cavePicker';
 import { biomeId } from '../../src/gen/biomes/registry';
 import { surfaceEst3 } from '../../src/gen/column/surfaceEstimate';
 import { createGenContext } from '../../src/gen/context';
@@ -15,7 +17,7 @@ import { CARVERS_OFF } from '../harness/carverParams';
 import { ctxFor } from '../harness/gen';
 import { cavesMuted } from '../harness/sp5cTrees';
 import {
-  analyseColumn, metricsProfiles, newScatterScratch, newScattered, preCaveSolidity, preCaveTop, presetRecord, SCATTER_PROFILES,
+  analyseColumn, B3_WINDOW_AIR_MIN, b3Values, caveDepthOf, metricsProfiles, newScatterScratch, newScattered, preCaveSolidity, preCaveTop, presetRecord, SCATTER_PROFILES,
   scatterColumns, scatterColumnsThreaded, solidity, t1Values, t2Values, t3Values, t4Sites, t5Values, transitions, type ScatterColumn,
   type Scattered,
 } from '../harness/terrainScatter';
@@ -33,7 +35,8 @@ const STONY = biomeId('stony_peaks');
 
 /**
  * A column from a per-position solidity rule and its aux A heightmaps (`ws`, `of`) and biomes; `cave` (default none)
- * the cave tag of each voxel (SP6a spec §3.2: a tagged voxel is air the caves carved out of pre-cave rock).
+ * the cave byte of each voxel (SP6a spec §3.2: a tagged voxel is air the caves carved out of pre-cave rock; SP6b spec
+ * §2.1: bits 4-7 its cave biome); `fluid` (default none) the fluid byte of each voxel.
  */
 function column(
   solid: (p: number, y: number) => boolean,
@@ -41,6 +44,7 @@ function column(
   of: (p: number) => number,
   biome: (p: number) => number,
   cave: ((p: number, y: number) => number) | null = null,
+  fluid: ((p: number, y: number) => number) | null = null,
 ): ScatterColumn {
   const sections = Array.from({ length: 24 }, (_, sy) => {
     const b = new Uint16Array(4096);
@@ -53,12 +57,18 @@ function column(
     for (let i = 0; i < 4096; i++) c[i] = cave(i & 255, sy * 16 - 64 + (i >> 8));
     return c;
   });
+  const fluids = Array.from({ length: 24 }, (_, sy) => {
+    if (fluid === null) return 0;
+    const f = new Uint8Array(4096);
+    for (let i = 0; i < 4096; i++) f[i] = fluid(i & 255, sy * 16 - 64 + (i >> 8));
+    return f;
+  });
   const aux = {
     worldSurfaceWG: Int16Array.from({ length: 256 }, (_, p) => ws(p)),
     oceanFloorWG: Int16Array.from({ length: 256 }, (_, p) => of(p)),
     surfaceBiome: Uint8Array.from({ length: 256 }, (_, p) => biome(p)),
   };
-  return { sectionBlocks: (sy) => sections[sy]!, sectionCave: (sy) => caves[sy]!, aux: () => aux };
+  return { sectionBlocks: (sy) => sections[sy]!, sectionFluid: (sy) => fluids[sy]!, sectionCave: (sy) => caves[sy]!, aux: () => aux };
 }
 
 /**
@@ -417,6 +427,127 @@ describe('the profile split (SP6b spec §13 L2, L3; ruling P1): a filtered run d
   }, 60_000);
 });
 
+describe("B3's cave-biome shares per window (SP6b spec §12.1, D26)", () => {
+  const { plain: PLAIN_CAVE, lush: LUSH, dripstone: DRIPSTONE, abyss: ABYSS } = CAVE_BIOME;
+  /** The chunk column at the centre of the default profile's window (wx, wz): ±16,384 blocks in 4 × 4 windows of 8,192. */
+  const centre = (w: number): number => (-16384 + 8192 * w + 4096) / 16;
+  /**
+   * Rock to y 200 (top 200, WS = OF = 201) with cave air at y −60 … `airTop` and water at 180 … 189 (tagged, so not
+   * cave air: no fluid), y 190 tagged rock (not air) and untagged sky above 200; every tagged voxel carries kind `kind(p)`
+   * and nibble `nibble(p)`.
+   */
+  function caveColumn(nibble: (p: number) => number, airTop = 179, kind: (p: number) => number = () => CAVE_KIND.cheese): ScatterColumn {
+    return column(
+      (_p, y) => y <= 200 && !(y >= -60 && y <= airTop) && !(y >= 180 && y <= 189),
+      () => 201,
+      () => 201,
+      () => PLAINS,
+      (p, y) => (y >= -60 && y <= 190 && (y <= airTop || y >= 180) ? kind(p) | (nibble(p) << 4) : 0),
+      (_p, y) => (y >= 180 && y <= 189 ? 1 : 0),
+    );
+  }
+  /** Window k = 4·wz + wx: abyss at positions p < k + 1, lush at the next 64, dripstone at the next 32, plain elsewhere. */
+  const windowNibble = (k: number) => (p: number): number =>
+    p < k + 1 ? ABYSS : p < k + 65 ? LUSH : p < k + 97 ? DRIPSTONE : PLAIN_CAVE;
+  /** Window 5's column holds cave air at y −60 … 119 only: 180 rows × 256 = 46,080 voxels, under B3_WINDOW_AIR_MIN. */
+  const THIN = 5;
+  const s = newScattered();
+  const scratch = newScatterScratch();
+  for (let k = 0; k < 16; k++) analyseColumn(s, caveColumn(windowNibble(k), k === THIN ? 119 : 179), centre(k & 3), centre(k >> 2), () => 0, scratch);
+  // A column of large_biomes' square outside the default profile's (x 48,000: large_biomes' window wx 3).
+  analyseColumn(s, caveColumn(() => ABYSS), 3000, centre(0), () => 0, scratch);
+  const b3 = b3Values(s, 'default');
+
+  test('the population: tagged, air, no fluid, counted under its nibble; per window the four shares and the cave-air count', () => {
+    expect(b3.windowBlocks).toBe(8192);
+    expect(b3.windows).toHaveLength(16);
+    for (const w of b3.windows) {
+      const k = 4 * w.wz + w.wx;
+      const air = 256 * (k === THIN ? 180 : 240);
+      expect(w, `window ${k}`).toEqual({
+        wx: k & 3, wz: k >> 2, x0: -16384 + 8192 * (k & 3), z0: -16384 + 8192 * (k >> 2), air,
+        plain: (256 - 97 - k) / 256, lush: 64 / 256, dripstone: 32 / 256, abyss: (k + 1) / 256, insufficient: k === THIN,
+      });
+    }
+    // The water at 180-189, the tagged rock at 190 and the sky are not cave air; the column outside the square is not in it.
+    expect(b3.air).toBe(15 * 256 * 240 + 256 * 180);
+  });
+
+  test('the gated parts: each biome\'s smallest window share, and windowAir the smallest window\'s cave air (a thin window is flagged)', () => {
+    expect(b3.lushMin).toBe(0.25);
+    expect(b3.dripstoneMin).toBe(0.125);
+    expect(b3.abyssMin).toBe(1 / 256);
+    expect(B3_WINDOW_AIR_MIN).toBe(50000);
+    expect(b3.windowAir).toBe(46080);
+    expect(b3.insufficientWindows).toBe(1);
+    expect(b3.windows.filter((w) => w.insufficient).map((w) => [w.wx, w.wz])).toEqual([[1, 1]]);
+  });
+
+  test('a window with no cave air reads NaN shares and windowAir 0 (an empty window fails, never passes)', () => {
+    const one = newScattered();
+    analyseColumn(one, caveColumn(() => LUSH), centre(0), centre(0), () => 0, newScatterScratch());
+    const v = b3Values(one, 'default');
+    expect(v.windowAir).toBe(0);
+    expect(v.insufficientWindows).toBe(15);
+    expect(v.lushMin).toBeNaN();
+    expect(v.windows[0]!.lush).toBe(1);
+  });
+
+  test('large_biomes: 4 × 4 windows of 32,768 blocks over ±65,536 (each default window inside one of them)', () => {
+    const large = b3Values(s, 'large_biomes');
+    expect(large.windowBlocks).toBe(32768);
+    expect(large.windows).toHaveLength(16);
+    const air = (wx: number, wz: number): number => large.windows.find((w) => w.wx === wx && w.wz === wz)!.air;
+    // (1, 1) holds the default windows 0, 1, 4 and 5 (the thin one), (1, 2) the windows 8, 9, 12 and 13.
+    expect(air(1, 1)).toBe(3 * 256 * 240 + 256 * 180);
+    expect(air(1, 2)).toBe(4 * 256 * 240);
+    expect(air(2, 2)).toBe(4 * 256 * 240);
+    expect(air(3, 1)).toBe(256 * 240);
+    expect(large.windows.find((w) => w.wx === 3 && w.wz === 1)!.abyss).toBe(1);
+    expect(air(0, 0)).toBe(0);
+    expect(large.air).toBe(b3.air + 256 * 240);
+  });
+
+  test('by 16-block y band and by cave kind, per biome', () => {
+    const one = newScattered();
+    analyseColumn(one, caveColumn((p) => (p < 128 ? LUSH : PLAIN_CAVE), 179, (p) => (p & 1 ? CAVE_KIND.worm : CAVE_KIND.cheese)), centre(1), centre(2), () => 0, newScatterScratch());
+    const v = b3Values(one, 'default');
+    // y −64 … −49 holds the rows −60 … −49; y 176 … 191 the rows 176 … 179.
+    expect(v.byY[0]).toEqual({ y: -64, air: 12 * 256, plain: 12 * 128, lush: 12 * 128, dripstone: 0, abyss: 0 });
+    expect(v.byY.at(-1)).toEqual({ y: 176, air: 4 * 256, plain: 4 * 128, lush: 4 * 128, dripstone: 0, abyss: 0 });
+    expect(v.byY).toHaveLength(16);
+    expect(v.byKind).toEqual([
+      { kind: CAVE_KIND.cheese, air: 240 * 128, plain: 240 * 64, lush: 240 * 64, dripstone: 0, abyss: 0 },
+      { kind: CAVE_KIND.worm, air: 240 * 128, plain: 240 * 64, lush: 240 * 64, dripstone: 0, abyss: 0 },
+    ]);
+    expect(v.shares).toEqual({ plain: 0.5, lush: 0.5, dripstone: 0, abyss: 0 });
+  });
+
+  test('by depth band: 0.1 bins of caveDepth(x, y, z) at each cave-air voxel; no caveDepth, no depth bands', () => {
+    const one = newScattered();
+    const asked = new Set<string>();
+    // depth = (100 − y) / 128: the bin [0, 0.1) holds y 88 … 100, [−0.1, 0) y 101 … 112.
+    const depth = (x: number, y: number, z: number): number => { asked.add(`${x},${z}`); return (100 - y) / 128; };
+    analyseColumn(one, caveColumn(() => DRIPSTONE), centre(2), centre(3), () => 0, newScatterScratch(), undefined, depth);
+    const v = b3Values(one, 'default');
+    expect(asked.size).toBe(256);
+    expect(asked.has(`${16 * centre(2) + 15},${16 * centre(3)}`)).toBe(true);
+    expect(v.byDepth.find((b) => b.depth === 0)).toEqual({ depth: 0, air: 13 * 256, plain: 0, lush: 0, dripstone: 13 * 256, abyss: 0 });
+    expect(v.byDepth.find((b) => b.depth === -0.1)).toEqual({ depth: -0.1, air: 12 * 256, plain: 0, lush: 0, dripstone: 12 * 256, abyss: 0 });
+    expect(v.byDepth.reduce((a, b) => a + b.air, 0)).toBe(240 * 256);
+    // Bins in depth order, empty bins left out: y 179 is depth −0.617 (bin −0.7), y −60 depth 1.25 (bin 1.2).
+    expect(v.byDepth[0]!.depth).toBe(-0.7);
+    expect(v.byDepth.at(-1)!.depth).toBe(1.2);
+    expect(v.byDepth.map((b) => b.depth)).toEqual([...v.byDepth.map((b) => b.depth)].sort((a, b) => a - b));
+    expect(b3.byDepth).toEqual([]);
+  });
+
+  test('a reserved nibble (4-15) is refused', () => {
+    expect(() => analyseColumn(newScattered(), caveColumn(() => 4), centre(0), centre(0), () => 0, newScatterScratch()))
+      .toThrow('analyseColumn: cave biome 4 at a tagged voxel of column');
+  });
+});
+
 describe("T1's analysis in the region workers (SP6b spec §13 L5; ruling P5): sliced-and-summed equals serial", () => {
   const SEED = '42';
   const params = resolveProfile('default');
@@ -435,9 +566,11 @@ describe("T1's analysis in the region workers (SP6b spec §13 L5; ruling P5): sl
     const dc = createDensityContext(createGenContext(seedFromInput(SEED), params));
     const store = createStore({ shared: false, maxBlockBytes: 8 << 20, maxByteBytes: 8 << 20 });
     const scratch = newScatterScratch();
+    const pass = newCaveColumnPass();
     for (const [cx, cz] of cols) {
       if (!fillColumnT(store, ctx, cx, cz, () => false)) throw new Error(`column (${cx}, ${cz}) not filled`);
-      analyseColumn(serial, store.proto(cx, cz)!, cx, cz, (x, z) => surfaceEst3(dc, x, z), scratch, (x, z, top) => preCaveTop(dc, x, z, top));
+      const depth = caveDepthOf(cavePickerOf(dc.ctx), dc.columns.get(cx, cz), pass);
+      analyseColumn(serial, store.proto(cx, cz)!, cx, cz, (x, z) => surfaceEst3(dc, x, z), scratch, (x, z, top) => preCaveTop(dc, x, z, top), depth);
       store.freeColumn(cx, cz);
     }
   }, 300_000);
@@ -446,6 +579,14 @@ describe("T1's analysis in the region workers (SP6b spec §13 L5; ruling P5): sl
     expect(serial.columns).toBe(512);
     expect(serial.land).toBeGreaterThan(0);
     expect(serial.t5.length).toBeGreaterThan(1000);
+    // B3's accumulators are filled (the depth bands from the worker's own caveDepth): every cave-air voxel in one
+    // window, one depth band, one y band and one kind.
+    const sum = (a: Float64Array): number => a.reduce((x, y) => x + y, 0);
+    expect(sum(serial.caveWindows)).toBeGreaterThan(100_000);
+    expect(sum(serial.caveDepthBands)).toBe(sum(serial.caveWindows));
+    expect(sum(serial.caveYBands)).toBe(sum(serial.caveWindows));
+    expect(sum(serial.caveKinds)).toBe(sum(serial.caveWindows));
+    expect(serial.caveWindows.some((n, i) => i % 4 !== 0 && n > 0)).toBe(true);
     const threaded = await scatterColumnsThreaded('terrainScatterTest', SEED, params, cols, { workers });
     expect(threaded.t5).toEqual([...threaded.t5].sort((a, b) => a - b));
     expect(comparable(threaded)).toEqual(comparable(serial));

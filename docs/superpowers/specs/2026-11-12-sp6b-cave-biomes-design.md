@@ -830,6 +830,34 @@ Ids are recon-obligations' (§1a E, §1b R, §1c U, §2 M, §3 A, §5 K); "→ X
 - **The account.** `gh api user --jq .plan` reads null: the plan needs the `user` scope, and the CLI token holds `gist`, `read:org` and `repo`. The repository is public. In all six attempts the 18 test jobs (`check`, 2 unit, 4 metrics-fast, 11 metrics-quick) started within 1 s of each other, so the concurrent limit is at least 18. 18 ≤ 20, the Free plan's limit, which is the lowest one.
 - **C4 and C7 before-values** (ruling P21; Task 4's local quick run at 27d50c9, `METRICS_TIER=quick METRICS_CAVE_GROUPS=<group>`, which are also the push base's values since no output has changed): C4's lowest band (y0 −56) carve rate 0.0849682 on default and 0.0886095 on large_biomes; C4.bands 0.0788569; C4.floorPeak 0.0138940; C7.flatWallShare 0.0305727 on default, 0.0248378 on archipelago, 0.0297897 on amplified and 0.0278583 on floating_islands.
 
+### B3's shares per 8 × 8 km window (Task 23)
+
+Recorded, not gated (Task 30 gates them). `METRICS_PROFILES=default npx vitest run --project metrics-quick test/metrics/terrain.metric.ts` at the generator push's local head after Task 22 (`GENERATOR_VERSION` 9, rule 4 and the rock floor in), seed '42', 8,192 default columns (512 per window), written to `.out/B3.windows.json`. Cave air = tagged voxels that are air with no fluid, under their nibble.
+
+- **Minima:** `lushMin` 0.1169, `dripstoneMin` 0.0632, `abyssMin` 0.00733 (window (2, 0)), `windowAir` 799,672 (window (1, 2)); no window under 50,000. Against Task 30's bounds (each share ≥ 0.005, `windowAir` ≥ 50,000) every part holds on quick.
+- **Overall** (16,511,102 cave-air voxels): plain 58.43 %, lush 20.32 %, dripstone 15.39 %, abyss 5.87 % (§1.6's raw-box estimate: 63.4 / 17.6 / 13.4 / 5.6 %).
+- **By depth** (0.1 bands of §1.2's depth): lush and dripstone in 0.1 … 0.9 (the bands next to 0.2 and 0.9 hold the ±J jitter's spill), the abyss from 0.9 (16,672 voxels, the jitter's) and 1.0 … 2.0, its air peaking in the 1.0 band (218,544) and falling to 1,746 at 1.9; plain air from −0.6 to 1.5.
+- **By kind:** cheese holds 69 % of the cave air (11.42 M); each kind's biome shares stay within a few points of the overall ones.
+
+| window (wx, wz) | corner (x, z) | cave air | plain % | lush % | dripstone % | abyss % |
+|---|---|---|---|---|---|---|
+| (0, 0) | −16384, −16384 | 988,094 | 66.62 | 15.62 | 14.73 | 3.031 |
+| (1, 0) | −8192, −16384 | 1,158,057 | 53.21 | 23.08 | 12.10 | 11.608 |
+| (2, 0) | 0, −16384 | 970,720 | 63.25 | 29.70 | 6.32 | 0.733 |
+| (3, 0) | 8192, −16384 | 987,617 | 59.06 | 17.46 | 18.70 | 4.782 |
+| (0, 1) | −16384, −8192 | 1,008,435 | 56.45 | 28.33 | 10.57 | 4.641 |
+| (1, 1) | −8192, −8192 | 1,091,310 | 48.98 | 22.05 | 19.52 | 9.450 |
+| (2, 1) | 0, −8192 | 931,909 | 65.90 | 14.48 | 17.31 | 2.307 |
+| (3, 1) | 8192, −8192 | 1,185,791 | 51.00 | 25.81 | 12.89 | 10.308 |
+| (0, 2) | −16384, 0 | 1,106,459 | 51.59 | 22.99 | 17.32 | 8.098 |
+| (1, 2) | −8192, 0 | 799,672 | 59.32 | 24.96 | 10.05 | 5.666 |
+| (2, 2) | 0, 0 | 995,709 | 60.42 | 19.81 | 14.44 | 5.325 |
+| (3, 2) | 8192, 0 | 1,137,415 | 62.17 | 11.74 | 20.39 | 5.707 |
+| (0, 3) | −16384, 8192 | 1,000,417 | 61.91 | 25.37 | 10.35 | 2.374 |
+| (1, 3) | −8192, 8192 | 1,013,173 | 63.89 | 11.69 | 17.16 | 7.250 |
+| (2, 3) | 0, 8192 | 1,003,860 | 66.35 | 16.41 | 14.92 | 2.323 |
+| (3, 3) | 8192, 8192 | 1,132,464 | 49.95 | 16.24 | 26.50 | 7.308 |
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
