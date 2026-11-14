@@ -1,4 +1,5 @@
 import { expect } from 'vitest';
+import { CAVE_FILM_KIND, caveBiomeOf } from '../../src/core/constants';
 import { MEDIUM } from '../../src/core/params/graphicsPresets';
 import { resolveProfile, type ProfileId } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
@@ -7,7 +8,7 @@ import { createGenContext } from '../../src/gen/context';
 import { sp3eWindow, type Sp3ePreset } from '../../src/metrics/sp3eGoldens';
 import type { MeshOptions } from '../../src/mesh/greedy';
 import { metricTest } from '../harness/metric';
-import { bruteFaces, bruteXrayFaces, meshFaceCounts } from '../harness/refs';
+import { bruteFaces, bruteXrayFaces, meshFaceCounts, xrayKeyFields } from '../harness/refs';
 import { genRegion, type RegionView } from '../harness/region';
 import { caveRegionAt, caveRegionHolds, crossingPairs, MIN_CROSSING_PAIRS } from '../harness/windowScans';
 import { nearestRank } from '../harness/zMetrics';
@@ -37,8 +38,10 @@ import { nearestRank } from '../harness/zMetrics';
  *   against `bruteFaces`' (ruling P32): `hiddenEmitted` counts mesh keys missing from brute plus every repeat after the
  *   first, `visibleMissing` brute keys missing from the mesh; both summed over both meshings. `xray` (SP6a spec §10.4):
  *   the X-ray rows' face keys (`meshFaceCounts`' `xray`, pass 3) against `bruteXrayFaces` (hollow voxels' walls and the
- *   surface film, with their kinds), missing + extra (repeats counted) summed over both meshings; `xrayFaces` records
- *   the brute count.
+ *   surface film, with their kinds and cave biomes), missing + extra (repeats counted) summed over both meshings;
+ *   `xrayFaces` records the brute count. `xrayBiome` (SP6b spec §12.5, §7.1): each X-ray unit face of the mesh whose
+ *   `biome` bits differ from the cave biome (bits 4-7 of the store's `cave` byte) at its hollow voxel, or a film face's
+ *   from 0, summed over both meshings; `quadsXray` records the X-ray quads of the Medium meshing.
  * - R2 (gated): opaque quads per visible opaque face (brute's keys), pooled over the interior columns: `quadsPerFaceAo`
  *   on the Medium meshing, `quadsPerFaceNoAo` on the other. Re-measured with caves (SP6a spec §10.4): the bounds stay
  *   unless the measurement misses them, which goes to the user.
@@ -143,6 +146,8 @@ async function measure(): Promise<Measurement> {
   const quadsOpaque = { ao: 0, noAo: 0 };
   let xrayDiff = 0;
   let xrayFaces = 0;
+  let quadsXray = 0;
+  let xrayBiome = 0;
   let visibleOpaque = 0;
   let visibleWater = 0;
   let quadsWater = 0;
@@ -194,8 +199,17 @@ async function measure(): Promise<Measurement> {
           if (dx.hidden + dx.missing > 0) {
             problems.push(`${s.label}, ${variant}, (${cx}, ${cz}) xray: ${dx.hidden} extra, ${dx.missing} missing`);
           }
+          let biomeMiss = 0;
+          for (const key of m.xray) {
+            const f = xrayKeyFields(key);
+            const want = f.kind === CAVE_FILM_KIND ? 0 : caveBiomeOf(view.tag(16 * cx + f.lx, f.y, 16 * cz + f.lz));
+            if (f.biome !== want) biomeMiss++;
+          }
+          xrayBiome += biomeMiss;
+          if (biomeMiss > 0) problems.push(`${s.label}, ${variant}, (${cx}, ${cz}) xrayBiome: ${biomeMiss} faces`);
           quadsOpaque[variant] += m.quadsOpaque;
           if (variant === 'ao') {
+            quadsXray += m.quadsXray;
             quadsWater += m.quadsWater;
             waterFaces += distinct(m.water);
             perColumn.push(m.quadsOpaque + m.quadsWater);
@@ -212,7 +226,7 @@ async function measure(): Promise<Measurement> {
     R1: {
       hiddenEmitted: hidden.ao + hidden.noAo, visibleMissing: missing.ao + missing.noAo,
       hiddenEmittedAo: hidden.ao, hiddenEmittedNoAo: hidden.noAo, visibleMissingAo: missing.ao, visibleMissingNoAo: missing.noAo,
-      visibleOpaqueFaces: visibleOpaque, visibleWaterFaces: visibleWater, xray: xrayDiff, xrayFaces,
+      visibleOpaqueFaces: visibleOpaque, visibleWaterFaces: visibleWater, xray: xrayDiff, xrayFaces, xrayBiome, quadsXray,
       caveEntrancePairs: caveCrossings.entrance, caveRavinePairs: caveCrossings.ravine, ...common,
     },
     R2: {
@@ -231,7 +245,7 @@ async function measure(): Promise<Measurement> {
 let measured: Promise<Measurement> | null = null;
 const measurement = (): Promise<Measurement> => (measured ??= measure());
 
-metricTest('R1', ['hiddenEmitted', 'visibleMissing', 'xray'], async () => {
+metricTest('R1', ['hiddenEmitted', 'visibleMissing', 'xray', 'xrayBiome'], async () => {
   const m = await measurement();
   expect.soft(m.problems.slice(0, 20), `R1 face mismatches (tier ${TIER}), first 20 of ${m.problems.length}`).toEqual([]);
   return m.R1;

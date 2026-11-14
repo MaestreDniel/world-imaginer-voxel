@@ -1,4 +1,4 @@
-import { CAVE_FILM_KIND, CAVE_KIND } from '../core/constants';
+import { CAVE_BIOME, CAVE_BIOME_COLORS, CAVE_FILM_KIND, CAVE_KIND } from '../core/constants';
 
 /**
  * The X-ray's colours and the legend's names by kind (SP6a spec §5.2, D10): index = the X-ray pack's `kind` (the cave
@@ -41,5 +41,28 @@ export const XRAY_LABELS: readonly string[] = byKind('', [
   [CAVE_KIND.ravine, 'Ravine'],
   [CAVE_KIND.undergroundWorm, 'Underground worm'],
   [CAVE_KIND.other, 'Other density air'],
+  [CAVE_FILM_KIND, 'Surface'],
+]);
+
+/**
+ * The X-ray's colours and the legend's names by cave biome (SP6b spec §7.2, D7): index = the X-ray pack's `biome` (the
+ * cave biome of `CAVE_BIOME`, 0-3), with 15 the surface film's (the material picks by kind for the film, whose biome is
+ * 0, so entry 15 is the legend's). Colours 0-3 are `CAVE_BIOME_COLORS`, the one table the map's layer and the slice
+ * read too; entries 4-14 are unused: the unused colour and no label.
+ */
+export const XRAY_BIOME_COLORS: readonly string[] = byKind(UNUSED_COLOR, [
+  [CAVE_BIOME.plain, CAVE_BIOME_COLORS[CAVE_BIOME.plain]!],
+  [CAVE_BIOME.lush, CAVE_BIOME_COLORS[CAVE_BIOME.lush]!],
+  [CAVE_BIOME.dripstone, CAVE_BIOME_COLORS[CAVE_BIOME.dripstone]!],
+  [CAVE_BIOME.abyss, CAVE_BIOME_COLORS[CAVE_BIOME.abyss]!],
+  [CAVE_FILM_KIND, '#c8c8c8'],
+]);
+
+/** The biome legend's names: 0-3 and 15; the unused entries empty. */
+export const XRAY_BIOME_LABELS: readonly string[] = byKind('', [
+  [CAVE_BIOME.plain, 'Plain cave'],
+  [CAVE_BIOME.lush, 'Lush'],
+  [CAVE_BIOME.dripstone, 'Dripstone'],
+  [CAVE_BIOME.abyss, 'Abyss'],
   [CAVE_FILM_KIND, 'Surface'],
 ]);

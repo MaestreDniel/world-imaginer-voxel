@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
-import { XRAY_COLORS, XRAY_LABELS } from '../../src/render/xrayPalette';
+import { CAVE_BIOME, CAVE_BIOME_COLORS, CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
+import { XRAY_BIOME_COLORS, XRAY_BIOME_LABELS, XRAY_COLORS, XRAY_LABELS } from '../../src/render/xrayPalette';
 
 /** The kinds the X-ray draws: the nine cave kinds (1-9) and the surface film (15). */
 const SHOWN = [1, 2, 3, 4, 5, 6, 7, 8, 9, 15] as const;
@@ -34,5 +34,30 @@ describe('the X-ray palette (SP6a spec §5.2, D10)', () => {
       'Other density air', 'Surface',
     ]);
     for (const k of [0, 10, 11, 12, 13, 14]) expect(XRAY_LABELS[k], `kind ${k}`).toBe('');
+  });
+});
+
+describe('the X-ray palette by cave biome (SP6b spec §7.2, D7)', () => {
+  test('16 sRGB hex colours by the pack\'s biome: 0-3 CAVE_BIOME_COLORS, 15 the film\'s grey, the rest the unused colour', () => {
+    expect(XRAY_BIOME_COLORS).toHaveLength(16);
+    expect(Object.isFrozen(XRAY_BIOME_COLORS)).toBe(true);
+    for (const c of XRAY_BIOME_COLORS) expect(c).toMatch(/^#[0-9a-f]{6}$/);
+    expect(XRAY_BIOME_COLORS.slice(0, 4)).toEqual([...CAVE_BIOME_COLORS]);
+    expect(XRAY_BIOME_COLORS.slice(0, 4)).toEqual(['#6f86a6', '#4dff7a', '#ffb347', '#b05cff']);
+    expect(XRAY_BIOME_COLORS[CAVE_BIOME.plain]).toBe('#6f86a6');
+    expect(XRAY_BIOME_COLORS[CAVE_BIOME.lush]).toBe('#4dff7a');
+    expect(XRAY_BIOME_COLORS[CAVE_BIOME.dripstone]).toBe('#ffb347');
+    expect(XRAY_BIOME_COLORS[CAVE_BIOME.abyss]).toBe('#b05cff');
+    expect(XRAY_BIOME_COLORS[CAVE_FILM_KIND]).toBe('#c8c8c8');
+    // The unused entries are the kind table's unused colour (black: adds nothing under additive blending).
+    for (let k = 4; k < 15; k++) expect(XRAY_BIOME_COLORS[k], `entry ${k}`).toBe(XRAY_COLORS[0]);
+    expect(new Set([0, 1, 2, 3, 15].map((k) => XRAY_BIOME_COLORS[k])).size).toBe(5);
+  });
+
+  test('the legend\'s labels: "Plain cave", "Lush", "Dripstone", "Abyss", [15] "Surface"; the rest empty', () => {
+    expect(XRAY_BIOME_LABELS).toHaveLength(16);
+    expect(Object.isFrozen(XRAY_BIOME_LABELS)).toBe(true);
+    expect([0, 1, 2, 3, 15].map((k) => XRAY_BIOME_LABELS[k])).toEqual(['Plain cave', 'Lush', 'Dripstone', 'Abyss', 'Surface']);
+    for (let k = 4; k < 15; k++) expect(XRAY_BIOME_LABELS[k], `entry ${k}`).toBe('');
   });
 });

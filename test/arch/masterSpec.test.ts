@@ -182,6 +182,7 @@ import { MAX_STEP_EDITS, SUB_BATCH } from '../../src/sim/edits';
 import { PIN_MAX } from '../../src/ui/inspector/sliceModel';
 import { MAX_HISTORY_EDITS } from '../../src/ui/world/blockHistory';
 import { REGISTRY } from '../../src/world/blocks';
+import { PACK_LAYOUT } from '../../src/mesh/packing';
 import { RULE_KINDS } from '../../src/gen/surface/rules';
 import {
   BENCH_ROWS, ISLANDS_P50_MAX_MS, ISLANDS_P99_MAX_MS, LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P99_MAX_MS,
@@ -2839,5 +2840,26 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(line).not.toContain('a quarter of its flat faces on the bedrock floor y −63');
     expect(line).toContain('the X-ray refill\'s 6 s target, handed on by SP6b (its Point 3, the user\'s: re-measured in SP6b\'s L14, not chased there) with its levers (a frame cap while regenerating with a scaled upload budget, a cached non-cave density) (the SP6a spec §10.6, §14; amended by SP6b);');
     expect(line).toContain('`C6.latticeBias`\'s 1.1 (1.25 at SP6a and SP6b), read as ≤ 1.09 on SP6b\'s measure (each y residue over its lattice-neutral local mean, the SP6b spec §12.3, ruling U1), with its structural levers (cell height 4, per-voxel noise for the thin families), SP12\'s (amended by SP6b);');
+  });
+
+  test('§4.4/§4.5: the xray word\'s biome bits written from the nibble (SP6b spec §15 item 16)', () => {
+    const lines = text.split('\n');
+    const from = lines.findIndex((l) => l.startsWith('### 4.4 '));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('### 4.5 '));
+    expect(from, 'no §4.4').toBeGreaterThanOrEqual(0);
+    const xray = lines.slice(from, to).find((l) => l.startsWith('  - X-ray (SP6a, pass 3):'));
+    expect(xray, 'no X-ray word in §4.4\'s vertex format').toBeDefined();
+    expect(xray).toContain('`face3 | kind4 | biome4`; `face` 0-2, `kind` 3-6 (the cave kind, `CAVE_KIND`, or 15 the surface film), `biome` 7-10, spare 11-31.');
+    expect(xray).toContain('The mesher writes `biome` from the `cave` byte\'s bits 4-7 (the cave biome, `CAVE_BIOME`; the film\'s 0) and merges on (kind | biome << 4, face), so a quad splits only where the biome changes inside one kind\'s walls (amended by SP6b).');
+    // The bit positions the line names are PACK_LAYOUT.xray's.
+    const x = PACK_LAYOUT.xray;
+    expect([x.face.offset, x.face.bits, x.kind.offset, x.kind.bits, x.biome.offset, x.biome.bits]).toEqual([0, 3, 3, 4, 7, 4]);
+  });
+
+  test('§6.4\'s R1 row gains xrayBiome (SP6b spec §15 item 20)', () => {
+    const [, def, cell] = row64('R1');
+    expect(def).toContain('SP6b: `xrayBiome` counts the X-ray faces whose `biome` bits (the `xray` word\'s bits 7-10) ≠ the cave biome in bits 4-7 of the `cave` byte at their hollow voxel (the film\'s ≠ 0), over both meshings of R1\'s sites (amended by SP6b)');
+    expect(cell).toBe('0 / 0; `xrayBiome` 0 |');
+    expect(THRESHOLDS.R1?.xrayBiome).toEqual({ max: 0, activeFrom: 'SP6b' });
   });
 });

@@ -1,13 +1,15 @@
 /**
  * The X-ray pass (SP6a spec §5.1, D10, D23): `meshXray` against a brute force on hand-built padded sections. A voxel is
  * hollow when its tag's low 4 bits are not 0 and its block is not an opaque full cube; a wall is each face of a hollow
- * voxel whose neighbour shows an opaque full face, kind = the hollow's tag; the film is each up face of an opaque or
- * fluid voxel whose up neighbour is air (no fluid) with sky light 15, kind 15; quads merge greedily on (kind, face)
- * only. The pass is the builder's pass 3; passes 0-2 stay empty. Review Focus 2's placed stone and dug voxel are here
- * on fixtures and in `test/integration/caveSavedWorld.test.ts` on a real saved world.
+ * voxel whose neighbour shows an opaque full face, kind = the hollow's tag's low 4 bits and biome its high 4 (SP6b spec
+ * §7.1); the film is each up face of an opaque or fluid voxel whose up neighbour is air (no fluid) with sky light 15,
+ * kind 15, biome 0; quads merge greedily on (kind | biome << 4, face) only. The pass is the builder's pass 3; passes 0-2
+ * stay empty. Review Focus 2's placed stone and dug voxel are here on fixtures and in
+ * `test/integration/caveSavedWorld.test.ts` on a real saved world.
  */
+import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
-import { CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
+import { CAVE_BIOME, CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
 import { createMeshBuilder, type MeshBuilder } from '../../src/mesh/builder';
 import { unpackXray } from '../../src/mesh/packing';
 import { meshXray } from '../../src/mesh/xray';
@@ -26,6 +28,7 @@ const OPPOSITE = [2, 3, 0, 1, 5, 4] as const;
 const UP = 4;
 
 const { cheese, spaghetti3d, worm } = CAVE_KIND;
+const { lush, dripstone, abyss } = CAVE_BIOME;
 
 /** A padded section with a cave channel: `cave` gives the tag byte per voxel over the whole 18³ (default 0). */
 function section(block: VoxelFn, o: { light?: VoxelFn; fluid?: VoxelFn; cave?: VoxelFn } = {}): PaddedSection {
@@ -48,11 +51,15 @@ function mesh(p: PaddedSection): Meshed {
 
 const faceOf = (q: ReadQuad): number => unpackXray(q.words[0]!).face;
 const kindOf = (q: ReadQuad): number => unpackXray(q.words[0]!).kind;
+const biomeOf = (q: ReadQuad): number => unpackXray(q.words[0]!).biome;
 
-/** The unit faces a quad covers, as `x,y,z,face,kind` keys of the voxel that owns each face. */
+/**
+ * The unit faces a quad covers, as `x,y,z,face,key` keys of the voxel that owns each face, key = kind | biome << 4 (the
+ * kind alone when the biome is 0).
+ */
 function unitFaces(q: ReadQuad): string[] {
   const f = faceOf(q);
-  const k = kindOf(q);
+  const k = kindOf(q) | biomeOf(q) << 4;
   const a = AXIS[f]!;
   const plane = q.corners[0]![a]! / 8;
   const lo = [0, 1, 2].map((ax) => Math.min(...q.corners.map((c) => c[ax]!)) / 8);
@@ -70,7 +77,10 @@ function unitFaces(q: ReadQuad): string[] {
 
 const allUnitFaces = (quads: readonly ReadQuad[]): string[] => quads.flatMap(unitFaces).sort();
 
-/** The brute force of spec §5.1, voxel by voxel over the section, under the registry's tables. */
+/**
+ * The brute force of spec §5.1, voxel by voxel over the section, under the registry's tables: a wall's key is the
+ * hollow's whole tag byte (kind | biome << 4, SP6b spec §7.1), the film's 15 (biome 0).
+ */
 function bruteFaces(p: PaddedSection): string[] {
   const opaqueFull = (s: number): boolean => PASS[s] === PASS_OPAQUE && FULL_FACES[s] === ALL_FACES;
   const out: string[] = [];
@@ -84,7 +94,7 @@ function bruteFaces(p: PaddedSection): string[] {
           for (let f = 0; f < 6; f++) {
             const [dx, dy, dz] = NORMAL[f]!;
             const n = p.blocks[padIndex(x + dx, y + dy, z + dz)]!;
-            if (PASS[n] === PASS_OPAQUE && (FULL_FACES[n]! & (1 << OPPOSITE[f]!)) !== 0) out.push(`${x},${y},${z},${f},${kind}`);
+            if (PASS[n] === PASS_OPAQUE && (FULL_FACES[n]! & (1 << OPPOSITE[f]!)) !== 0) out.push(`${x},${y},${z},${f},${p.cave[i]!}`);
           }
         }
         if (opaqueFull(s) || hasFluid(p.fluid[i]!)) {
@@ -97,9 +107,9 @@ function bruteFaces(p: PaddedSection): string[] {
   return out.sort();
 }
 
-/** Every quad: four equal words with biome 0 and bits 11-31 clear, the position's fourth byte 0, the split along v0-v2 (no flip). */
+/** Every quad: four equal words with bits 11-31 clear, the position's fourth byte 0, the split along v0-v2 (no flip). */
 function expectWellFormed(m: Meshed): void {
-  const bad = m.quads.filter((q) => q.words.some((w) => w !== q.words[0]) || q.words[0]! >>> 7 !== 0
+  const bad = m.quads.filter((q) => q.words.some((w) => w !== q.words[0]) || q.words[0]! >>> 11 !== 0
     || q.w.some((w) => w !== 0) || q.index.join() !== '0,1,2,0,2,3');
   expect(bad).toEqual([]);
   for (const pass of [0, 1, 2] as const) expect(m.b.view(pass).vertices).toBe(0);
@@ -193,14 +203,14 @@ describe('meshXray: walls (SP6a spec §5.1)', () => {
     expect(checked(dug).quads).toEqual([]);
   });
 
-  test('only the tag\'s low 4 bits make a voxel hollow (bits 4-7 are reserved)', () => {
+  test('only the tag\'s low 4 bits make a voxel hollow (bits 4-7 hold the cave biome)', () => {
     const at = (x: number, y: number, z: number): boolean => x === 5 && y === 5 && z === 5;
-    const reserved = section((x, y, z) => (at(x, y, z) ? AIR : STONE), { light: DARK, cave: (x, y, z) => (at(x, y, z) ? 0x30 : 0) });
-    expect(checked(reserved).quads).toEqual([]);
+    const biomeOnly = section((x, y, z) => (at(x, y, z) ? AIR : STONE), { light: DARK, cave: (x, y, z) => (at(x, y, z) ? 0x30 : 0) });
+    expect(checked(biomeOnly).quads).toEqual([]);
     const both = section((x, y, z) => (at(x, y, z) ? AIR : STONE), { light: DARK, cave: (x, y, z) => (at(x, y, z) ? 0x30 | worm : 0) });
     const m = checked(both);
     expect(m.quads).toHaveLength(6);
-    for (const q of m.quads) expect(kindOf(q)).toBe(worm);
+    for (const q of m.quads) expect([kindOf(q), biomeOf(q)]).toEqual([worm, 3]);
   });
 
   test('the section\'s border reads the padded neighbours, and border voxels themselves emit nothing', () => {
@@ -262,6 +272,72 @@ describe('meshXray: the surface film (SP6a spec §5.1, D10)', () => {
     expect(checked(open).quads).toHaveLength(1);
     const roofed = section((_x, y) => (y < 16 ? GRASS_BLOCK : STONE));
     expect(checked(roofed).quads).toEqual([]);
+  });
+});
+
+describe('meshXray: cave biomes (SP6b spec §7.1, D17)', () => {
+  /** A cheese row at (y 5, z 5), x 4 … 7, in stone, its tag's biome `biome(x)`. */
+  const row = (biome: (x: number) => number): PaddedSection => section(
+    (x, y, z) => (y === 5 && z === 5 && x >= 4 && x <= 7 ? AIR : STONE),
+    { light: DARK, cave: (x, y, z) => (y === 5 && z === 5 && x >= 4 && x <= 7 ? cheese | biome(x) << 4 : 0) },
+  );
+
+  test('a lush wall and a dripstone wall of one kind side by side: two quads per face, biome bits 1 and 2, nothing merged across the change', () => {
+    const m = checked(row((x) => (x <= 5 ? lush : dripstone)));
+    // North, south, up and down: one lush and one dripstone quad each; west lush, east dripstone.
+    expect(m.quads).toHaveLength(10);
+    for (const q of m.quads) expect(kindOf(q)).toBe(cheese);
+    for (const f of [0, 2, 4, 5]) {
+      const quads = m.quads.filter((q) => faceOf(q) === f);
+      expect(quads.map(biomeOf).sort(), `face ${f}`).toEqual([lush, dripstone]);
+      for (const q of quads) {
+        const xs = unitFaces(q).map((k) => Number(k.split(',')[0]));
+        expect(xs.sort(), `face ${f}, biome ${biomeOf(q)}`).toEqual(biomeOf(q) === lush ? [4, 5] : [6, 7]);
+      }
+    }
+    expect(m.quads.filter((q) => faceOf(q) === 3).map(biomeOf)).toEqual([lush]);
+    expect(m.quads.filter((q) => faceOf(q) === 1).map(biomeOf)).toEqual([dripstone]);
+  });
+
+  test('one biome\'s walls merge as before: the same quads as without a biome, the words carrying biome bits 1', () => {
+    const plain = checked(row(() => 0));
+    const green = checked(row(() => lush));
+    expect(green.quads).toHaveLength(6);
+    expect(green.quads.map((q) => q.corners)).toEqual(plain.quads.map((q) => q.corners));
+    expect(green.quads.map((q) => q.words)).toEqual(plain.quads.map((q) => q.words.map((w) => (w | lush << 7) >>> 0)));
+    for (const q of green.quads) expect([kindOf(q), biomeOf(q)]).toEqual([cheese, lush]);
+  });
+
+  test('the film\'s biome is 0: over placed grass in tagged voxels, and over tagged water whose walls carry their biome', () => {
+    const grass = checked(section((_x, y) => (y < 5 ? GRASS_BLOCK : AIR), { cave: (_x, y) => (y < 5 ? cheese | abyss << 4 : 0) }));
+    expect(grass.quads).toHaveLength(1);
+    expect([kindOf(grass.quads[0]!), biomeOf(grass.quads[0]!)]).toEqual([CAVE_FILM_KIND, 0]);
+    // Tagged water over stone: the water's down faces are lush walls, its surface the film.
+    const water = checked(section((_x, y) => (y < 3 ? STONE : AIR), {
+      fluid: (_x, y) => (y >= 3 && y < 6 ? WATER_SOURCE : 0), cave: (_x, y) => (y >= 3 && y < 6 ? cheese | lush << 4 : 0),
+    }));
+    expect(water.quads.map((q) => [faceOf(q), kindOf(q), biomeOf(q)]).sort()).toEqual([[UP, CAVE_FILM_KIND, 0], [5, cheese, lush]]);
+  });
+
+  test('a section with no nibble meshes byte-identically to before (SP6a\'s pass 3, digest recorded before SP6b)', () => {
+    const next = testRng(2026);
+    const pick = (n: number): number => Math.floor(next() / 2 ** 32 * n);
+    const STATES = [AIR, AIR, AIR, STONE, STONE, GRASS_BLOCK, GLASS] as const;
+    const hash = createHash('sha256');
+    for (let t = 0; t < 8; t++) {
+      const p = createPaddedSection();
+      for (let i = 0; i < PAD_VOXELS; i++) {
+        const s = STATES[pick(STATES.length)]!;
+        p.blocks[i] = s;
+        p.fluid[i] = s === AIR && pick(4) === 0 ? WATER_SOURCE : 0;
+        p.light[i] = (pick(2) === 0 ? 15 : pick(16)) << 4;
+        p.cave[i] = pick(3) === 0 ? 0 : pick(16);
+      }
+      const v = mesh(p).b.view(3);
+      expect(v.vertices).toBeGreaterThan(0);
+      for (const a of [v.position, v.data, v.index]) hash.update(new Uint8Array(a.buffer, a.byteOffset, a.byteLength));
+    }
+    expect(hash.digest('hex')).toBe('17d929bea96e868f935d737884367bfc6dd396cfd2a46cc1d8feac2473c2e030');
   });
 });
 

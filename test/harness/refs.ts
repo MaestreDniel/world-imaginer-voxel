@@ -158,17 +158,30 @@ export function bruteFaces(view: RegionView, cx: number, cz: number, t: MeshTabl
   return { opaque: Uint32Array.from(opaque), water: Uint32Array.from(water) };
 }
 
-/** An X-ray face's key (SP6a spec §5.1): `faceKey(lx, y, lz, face)·16 + kind` (kind 1-9 a wall, 15 the film). */
-const xrayKey = (lx: number, y: number, lz: number, face: number, kind: number): number => faceKey(lx, y, lz, face) * 16 + kind;
+/**
+ * An X-ray face's key (SP6a spec §5.1; SP6b spec §7.1): `faceKey(lx, y, lz, face)·256 + (kind | biome << 4)` (kind 1-9 a
+ * wall with its cave biome 0-3, 15 the film with biome 0).
+ */
+const xrayKey = (lx: number, y: number, lz: number, face: number, kind: number, biome: number): number =>
+  faceKey(lx, y, lz, face) * 256 + (kind | biome << 4);
+
+/** An `xrayKey`'s fields: the owner voxel (lx, y, lz) of column-local x and z and world y, its face, kind and biome. */
+export function xrayKeyFields(key: number): { lx: number; y: number; lz: number; face: number; kind: number; biome: number } {
+  const fk = Math.floor(key / 256);
+  const cell = Math.floor(fk / 6);
+  return {
+    lx: cell % 16, y: Math.floor(cell / 256) - 64, lz: Math.floor(cell / 16) % 16, face: fk % 6, kind: key & 15, biome: (key >> 4) & 15,
+  };
+}
 
 /**
  * Every X-ray unit face of column (cx, cz) of `view` by SP6a spec §5.1's rules, one sorted, unique `xrayKey` per face,
  * read voxel by voxel (the store's `cave` channel through the column's view, blocks, fluid and light through `view`):
  * - a voxel is hollow when its tag's kind (`cave & 15`) is not 0 and its block is not an opaque full cube (PASS opaque,
  *   `fullFaces` 63); each face of a hollow voxel whose neighbour is PASS opaque with the facing bit in `fullFaces` is a
- *   wall of the hollow's kind;
+ *   wall of the hollow's kind and cave biome (its tag's bits 4-7: the key is the whole byte, SP6b spec §7.1);
  * - otherwise, the up face of an opaque full cube or of a voxel holding fluid whose up neighbour is air, holds no fluid
- *   and has sky light 15 is the surface film (kind 15).
+ *   and has sky light 15 is the surface film (kind 15, biome 0).
  * Below y −64 is bedrock and above y 319 air without fluid with sky 15, as in the padded view. The column's four side
  * neighbours must be in the view (RangeError otherwise).
  */
@@ -188,7 +201,8 @@ export function bruteXrayFaces(view: RegionView, cx: number, cz: number, t: Mesh
         const x = 16 * cx + lx;
         const z = 16 * cz + lz;
         const s = view.block(x, y, z);
-        const kind = column.cave(lx, y, lz) & 15;
+        const tag = column.cave(lx, y, lz);
+        const kind = tag & 15;
         const hollow = kind !== 0 && !opaqueFull(s);
         const filmBase = opaqueFull(s) || hasFluid(view.fluid(x, y, z));
         // FACES is in face order (north, east, south, west, up, down), so the keys come out sorted.
@@ -196,7 +210,7 @@ export function bruteXrayFaces(view: RegionView, cx: number, cz: number, t: Mesh
           if (hollow) {
             const ns = blockAt(x + dx, y + dy, z + dz);
             if (pass[ns] === PASS_OPAQUE && ((fullFaces[ns]! >> opp) & 1) !== 0) {
-              out.push(xrayKey(lx, y, lz, f, kind));
+              out.push(xrayKey(lx, y, lz, f, kind, tag >> 4));
               continue;
             }
           }
@@ -205,7 +219,7 @@ export function bruteXrayFaces(view: RegionView, cx: number, cz: number, t: Mesh
           const upBlock = above ? AIR : view.block(x, y + 1, z);
           const upFluid = above ? 0 : view.fluid(x, y + 1, z);
           const upLight = above ? 0xf0 : view.light(x, y + 1, z);
-          if (upBlock === AIR && !hasFluid(upFluid) && upLight >> 4 === 15) out.push(xrayKey(lx, y, lz, f, CAVE_FILM_KIND));
+          if (upBlock === AIR && !hasFluid(upFluid) && upLight >> 4 === 15) out.push(xrayKey(lx, y, lz, f, CAVE_FILM_KIND, 0));
         }
       }
     }
@@ -217,12 +231,12 @@ export function bruteXrayFaces(view: RegionView, cx: number, cz: number, t: Mesh
  * The unit faces the quads of a column mesh payload cover (ruling P32), as sorted `faceKey`s with duplicates kept (a
  * face two quads cover counts twice), in `bruteFaces`' categories: rows of passes 0 and 1 are `opaque`, pass 2
  * `water`; and the quads per category. The X-ray's rows (pass 3, SP6a spec §5.1) are in neither: they are `xray`, as
- * sorted `xrayKey`s (duplicates kept), decoded with `PACK_LAYOUT.xray` (face and kind), with `quadsXray`. Each quad
- * is the row's next four vertices; its face is its first vertex's `face` field, its plane the corners' common
- * coordinate P on the face's axis (in blocks), and it covers every unit cell between its corners in the plane, owned
- * by the voxel at P − 1 for a + face (east, south, up) and at P for a − face (an X-ray wall's owner is its hollow
- * voxel). Water tops sit at the voxel's full height (ruling P25), so they need no special case. Throws on a quad that
- * is not an axis-aligned rectangle on whole blocks, or whose owner lies outside its section.
+ * sorted `xrayKey`s (duplicates kept), decoded with `PACK_LAYOUT.xray` (face, kind and biome, SP6b spec §7.1), with
+ * `quadsXray`. Each quad is the row's next four vertices; its face is its first vertex's `face` field, its plane the
+ * corners' common coordinate P on the face's axis (in blocks), and it covers every unit cell between its corners in the
+ * plane, owned by the voxel at P − 1 for a + face (east, south, up) and at P for a − face (an X-ray wall's owner is its
+ * hollow voxel). Water tops sit at the voxel's full height (ruling P25), so they need no special case. Throws on a quad
+ * that is not an axis-aligned rectangle on whole blocks, or whose owner lies outside its section.
  */
 export function meshFaceCounts(p: ColumnMeshPayload): {
   opaque: Uint32Array; water: Uint32Array; xray: Uint32Array; quadsOpaque: number; quadsWater: number; quadsXray: number;
@@ -234,6 +248,7 @@ export function meshFaceCounts(p: ColumnMeshPayload): {
   let quadsWater = 0;
   let quadsXray = 0;
   const xrayKind = PACK_LAYOUT.xray.kind;
+  const xrayBiome = PACK_LAYOUT.xray.biome;
   const lo = [0, 0, 0];
   const hi = [0, 0, 0];
   const at = [0, 0, 0];
@@ -249,6 +264,7 @@ export function meshFaceCounts(p: ColumnMeshPayload): {
       else quadsOpaque++;
       const face = (p.data[v]! >>> faceField.offset) & ((1 << faceField.bits) - 1);
       const kind = (p.data[v]! >>> xrayKind.offset) & ((1 << xrayKind.bits) - 1);
+      const biome = (p.data[v]! >>> xrayBiome.offset) & ((1 << xrayBiome.bits) - 1);
       const dir = FACES[face];
       if (dir === undefined) throw new Error(`meshFaceCounts: row ${r} vertex ${v}: face ${face}`);
       const [, dx, dy, dz] = dir;
@@ -276,7 +292,7 @@ export function meshFaceCounts(p: ColumnMeshPayload): {
           if (lx < 0 || lx > 15 || ly < 0 || ly > 15 || lz < 0 || lz > 15) {
             throw new Error(`meshFaceCounts: row ${r} vertex ${v}: owner (${lx}, ${ly}, ${lz}) outside section ${sy}`);
           }
-          out.push(isXray ? xrayKey(lx, sy * 16 - 64 + ly, lz, face, kind) : faceKey(lx, sy * 16 - 64 + ly, lz, face));
+          out.push(isXray ? xrayKey(lx, sy * 16 - 64 + ly, lz, face, kind, biome) : faceKey(lx, sy * 16 - 64 + ly, lz, face));
         }
       }
     }

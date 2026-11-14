@@ -163,6 +163,9 @@ export const THRESHOLDS: ThresholdTable = {
     hiddenEmitted: { max: 0, activeFrom: 'SP4a' }, visibleMissing: { max: 0, activeFrom: 'SP4a' },
     // SP6a spec §10.4: the X-ray faces missing + extra against a brute force over hollow voxels and the film.
     xray: { max: 0, activeFrom: 'SP6a' },
+    // SP6b spec §12.5, §7.1 (Task 32): each X-ray face's biome bits against the cave biome at its hollow voxel (the
+    // film's 0).
+    xrayBiome: { max: 0, activeFrom: 'SP6b' },
   },
   R2: { quadsPerFaceAo: { max: 0.85, activeFrom: 'SP4a' }, quadsPerFaceNoAo: { max: 0.55, activeFrom: 'SP4a' } },
   R4: { medianQuads: { max: 2000, activeFrom: 'SP8b' }, p95Quads: { max: 4000, activeFrom: 'SP8b' } },

@@ -755,8 +755,9 @@ describe('the face references (SP4a spec §9.2, ruling P32)', () => {
     const view = regionView(s, 0, 0, 3, 3);
     const brute = bruteXrayFaces(view, 1, 1);
     expect(brute.length).toBeGreaterThan(0);
-    expect(brute.every((k) => (k & 15) === CAVE_FILM_KIND && (k >> 4) % 6 === FACE_UP)).toBe(true);
-    const key = (lx: number, y: number, lz: number, f: number, kind: number) => (((y + 64) * 256 + lz * 16 + lx) * 6 + f) * 16 + kind;
+    // An X-ray key is faceKey·256 + (kind | biome << 4) (SP6b spec §7.1); the film's biome is 0.
+    expect(brute.every((k) => (k & 255) === CAVE_FILM_KIND && (k >> 8) % 6 === FACE_UP)).toBe(true);
+    const key = (lx: number, y: number, lz: number, f: number, kind: number) => (((y + 64) * 256 + lz * 16 + lx) * 6 + f) * 256 + kind;
     expect(brute.includes(key(7, 319, 8, FACE_UP, CAVE_FILM_KIND))).toBe(true);
     const m = meshFaceCounts(meshColumnPayload(s.neighborhood(1, 1), createMeshScratch(), { ao: false, smoothLight: false }));
     expect(Buffer.from(m.xray.buffer).equals(Buffer.from(brute.buffer))).toBe(true);

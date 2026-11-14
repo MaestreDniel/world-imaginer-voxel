@@ -1,5 +1,5 @@
 {
-  "sha256": "88f43c79f597fc9208e868cdcf88381af24b18b97af5acbbc8740c2425d297a0",
+  "sha256": "1165f17262b2d3ed19e3d83363b9d7d3ecba0c31b1ca635a3b410570ba06e126",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -849,6 +849,10 @@
         },
         "xray": {
           "activeFrom": "SP6a",
+          "max": 0
+        },
+        "xrayBiome": {
+          "activeFrom": "SP6b",
           "max": 0
         }
       },
