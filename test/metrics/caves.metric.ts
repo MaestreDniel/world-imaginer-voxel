@@ -12,14 +12,15 @@ import { findSpawn } from '../../src/gen/column/spawn';
 import { createGenContext } from '../../src/gen/context';
 import {
   abyssRockStraight, aperiodicRatios, BIOME_EXAMPLE_IDS, poolAbyssRockCounts, poolBorderCounts, borderSampleProblems, bandDetail, borderPlaneRatio, BORDER_PAIR_NAMES, C1_C6_PARTS, caveBorderParts, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, caveBottomGroups, caveBottomParts, emptyBandCounts,
-  emptyLayerCounts, farthestFromOne, emptyWallResidues, EXAMPLE_IDS, floorFaceResidues, GRID_H, GRID_Y0, SP6B_EXAMPLE_IDS, verticalStepDetail,
+  emptyLayerCounts, emptyWallResidues, EXAMPLE_IDS, floorFaceResidues, GRID_H, GRID_Y0, SP6B_EXAMPLE_IDS, verticalStepDetail, worstToBound,
   type C1C6Part, type C7C9Part, type CaveBottomParts, type CaveC7C9Counts, type CavePose, type CaveRegionCounts,
 } from '../harness/caveMetrics';
 import type { CaveRegionResult } from '../harness/caveRegionWorker';
 import { CARVER_DEFAULTS, CARVER_MAXIMA } from '../harness/carverParams';
 import { BIOME_REGION, biomeTiles, caveGroupOf, caveSites, firstBiomeTile, measureCaveRegions, type CaveGroup, type Site } from '../harness/caveSites';
-import { caveZoneGrid, caveZoneParts, ZONE_CELLS, ZONE_DEPTHS, ZONE_LAGS, ZONE_ORIGIN, ZONE_STEP } from '../harness/caveZones';
+import { caveZoneGrid, caveZoneParts, ZONE_CELLS, ZONE_DEPTHS, ZONE_LAGS, ZONE_ORIGIN, ZONE_STEP, type ZoneParts } from '../harness/caveZones';
 import { metricTest } from '../harness/metric';
+import { THRESHOLDS } from '../thresholds';
 
 /**
  * The caves' metrics (SP6a spec §10.1, D26), over harness regions up to 'T' with the tag read from the store
@@ -49,8 +50,8 @@ import { metricTest } from '../harness/metric';
  *   biome region, `.out/B3.abyssRock.<group>.json`; gated (`B3.abyssRock`, Task 30) in the groups
  *   `B3_ABYSS_ROCK_GATED` names;
  * - the biomes group (Task 28): B3's regular-grid check (§12.2, pure, `test/harness/caveZones.ts`) in
- *   `.out/B3.zoneGrid.json`, and `cave_heavy`'s per-biome cave-air shares over its regions (§12.1) in
- *   `.out/B3.caveHeavy.json`.
+ *   `.out/B3.zoneGrid.json`, its zone part gated (`B3.zones`: `zonePeriodicDip`, Task 30, ruling U4), and
+ *   `cave_heavy`'s per-biome cave-air shares over its regions (§12.1) in `.out/B3.caveHeavy.json`.
  *
  * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
  * - `carverReference`: over every region of the run's groups (the preset regions included), the voxels of the region
@@ -589,8 +590,10 @@ if (C1_C9_GROUPS) {
  *   SP6b at max 0.01 (§5.2's floor holds it by construction: no cave air below `caves.floor.y` + 5);
  * - `C7.bedrockExposed`, the cave-air voxels face-adjacent to a bedrock voxel, gated from SP6b at max 0 (Task 21: it read
  *   0 on every group after the floor), with every region's bedrock count > 0 asserted (ruling R16);
- * - `C7.bottomFloorSpread` (min 6), gated from SP6b's tuning (Task 30); `C7.bottomFlatRatio` (its proposed 1.5 missed
- *   on fast and full: its bound is the user's, Task 30 Step 4) and `C7.bottomFloorPeak` recorded beside it.
+ * - `C7.bottomFloorSpread` (min 6), gated from SP6b's tuning (Task 30), and `C7.bottomFlatRatio` (its proposed 1.5
+ *   missed on fast and full; ruling U5, the user's: a regression guard at max 2.05, the full worst 1.78 × 1.15, gated on
+ *   quick and full, recorded on fast, whose two 16 × 16 regions read it high by their size; re-judged in SP12), with
+ *   `C7.bottomFloorPeak` recorded beside them.
  * All per group, with the flat-floor histogram y −64 … −32, the cave air per 16-block band from y −64 and each region's
  * counts, in `.out/caves.bottom.json`.
  */
@@ -618,12 +621,12 @@ let bottomRun: Promise<CaveBottomParts> | null = null;
 const bottom = (): Promise<CaveBottomParts> => (bottomRun ??= measureBottom());
 
 // C7's bottom parts in the default and the presets group's jobs (each the worst of its own groups): bottomPlane and
-// bedrockExposed, then the tuning's bottomFloorSpread (Task 30) with the recorded bottomFlatRatio and bottomFloorPeak.
+// bedrockExposed, then the tuning's bottomFlatRatio and bottomFloorSpread (Task 30) with the recorded bottomFloorPeak.
 if (C1_C9_GROUPS) {
   metricTest('C7', ['bottomPlane'], async () => ({ bottomPlane: (await bottom()).bottomPlane }), 900_000, { outName: 'C7.bottomPlane' });
   metricTest('C7', ['bedrockExposed'], async () => ({ bedrockExposed: (await bottom()).bedrockExposed }), 900_000,
     { outName: 'C7.bedrockExposed' });
-  metricTest('C7', ['bottomFloorSpread'], async () => {
+  metricTest('C7', ['bottomFlatRatio', 'bottomFloorSpread'], async () => {
     const p = await bottom();
     return { bottomFlatRatio: p.bottomFlatRatio, bottomFloorSpread: p.bottomFloorSpread, bottomFloorPeak: p.bottomFloorPeak };
   }, 900_000, { outName: 'C7.bottom' });
@@ -649,6 +652,8 @@ const RUN_GROUPS: readonly CaveGroup[] = GROUP === null ? ['default', 'presets',
  */
 const B3_BORDERS_GATED: Readonly<Record<CaveGroup, boolean>> = { default: true, presets: true, biomes: true };
 const B3_ABYSS_ROCK_GATED: Readonly<Record<CaveGroup, boolean>> = { default: false, presets: false, biomes: true };
+/** `B3.borderLattice`'s two-sided bound, against which the worst job is picked (`worstToBound`). */
+const BORDER_LATTICE = THRESHOLDS.B3!.borderLattice!;
 
 /**
  * B3's border parts' record (SP6b spec §12.2, D26; Task 26; gated by `B3.borders` below, Task 30), as built in
@@ -685,7 +690,8 @@ test('B3: border parts per job and biome pair (recorded)', async () => {
 /**
  * B3's border parts gated (SP6b spec §12.2, D26; Task 30) in the jobs of the groups `B3_BORDERS_GATED` names: each job's
  * overall value over its own regions (the record above), the part the worst job's (`borderLattice` the value farthest
- * from 1, `straightBorder` and `flatBorder` the largest; ruling P2), with each job's values and border faces beside it.
+ * outside or nearest to its bound 0.9-1.1, by min/v and v/max (`worstToBound`), `straightBorder` and `flatBorder` the
+ * largest; ruling P2), with each job's values and border faces beside it.
  * The biomes job's three biome | plain pairs need 2,000 border faces each, else the part fails as an insufficient
  * sample (§12.2; Task 27); its other pairs, and every job's pairs, are recorded only.
  */
@@ -706,7 +712,7 @@ if (RUN_GROUPS.some((g) => B3_BORDERS_GATED[g])) {
       return o;
     });
     return {
-      borderLattice: farthestFromOne(overall.map((o) => o.borderLattice)),
+      borderLattice: worstToBound(overall.map((o) => o.borderLattice), BORDER_LATTICE.min!, BORDER_LATTICE.max!),
       straightBorder: Math.max(...overall.map((o) => o.straightBorder)),
       flatBorder: Math.max(...overall.map((o) => o.flatBorder)),
       ...rec,
@@ -820,6 +826,23 @@ async function biomeRegionMeasured(): Promise<Measured> {
   return m;
 }
 
+/** The regular-grid check's grid and parts (`caveZones.ts`), with their times. */
+interface Zones {
+  readonly parts: ZoneParts;
+  readonly gridMs: number;
+  readonly partsMs: number;
+}
+
+let zonesRun: Promise<Zones> | null = null;
+/** B3's regular-grid check, computed once (the first test to ask). */
+const zones = (): Promise<Zones> => (zonesRun ??= Promise.resolve().then(() => {
+  const t0 = performance.now();
+  const grid = caveZoneGrid('42', resolveProfile('default'));
+  const t1 = performance.now();
+  const parts = caveZoneParts(grid);
+  return { parts, gridMs: Math.round(t1 - t0), partsMs: Math.round(performance.now() - t1) };
+}));
+
 if (BIOMES_GROUP) {
   // C1 on cave_heavy (SP6b spec §12.3): both parts the one void share, against 10-22 %, recorded until SP12 (activeFrom
   // 'SP12'); C2 and C9 on cave_heavy recorded in `.out/caves.caveHeavy.json`.
@@ -890,23 +913,19 @@ if (BIOMES_GROUP) {
   }, 900_000 * TIMEOUT_SCALE);
 
   /**
-   * B3's regular-grid check (SP6b spec §12.2, Spec corrections 18, 19; Task 28: recorded, not gated: Task 30 Step 4
-   * takes the zone part's form and bound to the user), as built in `test/harness/caveZones.ts`: the picker alone (no T)
-   * on a 64-block lattice over 64 × 64 km centred on the origin, seed '42', default profile, at depths 0.3, 0.6 and 1.1;
-   * per biome indicator the ratio at lags 256 … 16,384 on both axes (C8's), `zoneAperiodicity` (the smallest),
-   * `zonePeriodicDip`, `zoneClarkEvans` and `zoneSizeSpread`, each indicator's values and its ratio per lag, in
-   * `.out/B3.zoneGrid.json`. The same on every tier (pure; about 8-10 s on the laptop).
+   * B3's regular-grid check (SP6b spec §12.2, Spec corrections 18, 19; Task 28; its zone part gated by `B3.zones` below,
+   * Task 30, ruling U4), as built in `test/harness/caveZones.ts`: the picker alone (no T) on a 64-block lattice over
+   * 64 × 64 km centred on the origin, seed '42', default profile, at depths 0.3, 0.6 and 1.1; per biome indicator the
+   * ratio at lags 256 … 16,384 on both axes (C8's), `zoneAperiodicity` (the smallest), `zonePeriodicDip`,
+   * `zoneClarkEvans` and `zoneSizeSpread`, each indicator's values and its ratio per lag, in `.out/B3.zoneGrid.json`.
+   * The same on every tier (pure; about 8-10 s on the laptop).
    */
-  test('B3: the regular-grid check (recorded, not gated)', () => {
-    const t0 = performance.now();
-    const grid = caveZoneGrid('42', resolveProfile('default'));
-    const t1 = performance.now();
-    const parts = caveZoneParts(grid);
+  test('B3: the regular-grid check (recorded)', async () => {
+    const { parts, gridMs, partsMs } = await zones();
     mkdirSync(OUT_DIR, { recursive: true });
     writeFileSync(join(OUT_DIR, 'B3.zoneGrid.json'), json({
       id: 'B3.zoneGrid', tier: process.env.METRICS_TIER ?? null, seed: '42', profile: 'default', cells: ZONE_CELLS, step: ZONE_STEP,
-      origin: ZONE_ORIGIN, depths: ZONE_DEPTHS, lags: ZONE_LAGS, points: ZONE_CELLS * ZONE_CELLS,
-      gridMs: Math.round(t1 - t0), partsMs: Math.round(performance.now() - t1), ...parts,
+      origin: ZONE_ORIGIN, depths: ZONE_DEPTHS, lags: ZONE_LAGS, points: ZONE_CELLS * ZONE_CELLS, gridMs, partsMs, ...parts,
     }));
     // Every biome is read at some depth, so each part has data.
     for (const name of ['lush', 'dripstone', 'abyss']) {
@@ -916,4 +935,20 @@ if (BIOMES_GROUP) {
       expect(Number.isFinite(parts[k]), `B3.${k} = ${parts[k]}`).toBe(true);
     }
   }, 600_000 * TIMEOUT_SCALE);
+
+  /**
+   * B3's zone part gated (SP6b spec §12.2, Spec correction 19; Task 30, ruling U4, the user's): `zonePeriodicDip` (min
+   * 0.9: no dip at a period), with `zoneAperiodicity` (the autocorrelation form §12.2 first proposed, which zones that
+   * follow the climate fields miss by design), the smallest and the largest indicator's `zoneClarkEvans`
+   * (`zoneClarkEvansMin`, `zoneClarkEvansMax`) and `zoneSizeSpread` recorded beside it.
+   */
+  metricTest('B3', ['zonePeriodicDip'], async () => {
+    const { parts } = await zones();
+    const ce = parts.indicators.map((i) => i.clarkEvans).filter((v) => !Number.isNaN(v));
+    return {
+      zonePeriodicDip: parts.zonePeriodicDip, zoneAperiodicity: parts.zoneAperiodicity,
+      zoneClarkEvansMin: ce.length === 0 ? Number.NaN : Math.min(...ce), zoneClarkEvansMax: ce.length === 0 ? Number.NaN : Math.max(...ce),
+      zoneSizeSpread: parts.zoneSizeSpread,
+    };
+  }, 600_000, { outName: 'B3.zones' });
 }

@@ -26,7 +26,7 @@ import {
   localThickness, logSd, median, nearestEntranceDistances, openingMask, percentile, PILLAR_AREA_MAX, PILLAR_BACK, pillarTiles, PILLAR_VIEW, preCaveTops, ravineCounts, regionCounts,
   setCell, skyCounts, surfaceCounts, switchWall, switchWallCounts, thinnestAxes, typeMixDivergences, verticalStep, verticalStepDetail,
   voidCounts,
-  wallResidues, waterWallCount, type BandCounts, type CaveGrid,
+  wallResidues, waterWallCount, worstToBound, type BandCounts, type CaveGrid,
 } from '../harness/caveMetrics';
 import { NIBBLE_REGION, nibbleRegion } from '../harness/caveNibbles';
 import { measureCaveRegion, type CaveRegionResult } from '../harness/caveRegionWorker';
@@ -1158,6 +1158,18 @@ describe('B3\'s border parts (SP6b spec §12.2, D26; Task 26)', () => {
       .toEqual(['B3.borderLattice = NaN (not a number)']);
   });
 
+  test('worstToBound picks the worst job against a two-sided bound by min/v and v/max, not by |ln v| (Task 30 review minor 1)', () => {
+    // |ln 0.901| > |ln 1.105|, so the value farthest from 1 would pass 0.9-1.1 although 1.105 breaks its max.
+    expect(worstToBound([0.901, 1.105], 0.9, 1.1)).toBe(1.105);
+    expect(worstToBound([1.105, 0.89], 0.9, 1.1)).toBe(0.89);
+    expect(worstToBound([1.0071, 0.9957, 1.0045], 0.9, 1.1)).toBe(1.0071);
+    // NaN values are left out (a combined run's job with no border faces fails on its other parts); NaN when all are.
+    expect(worstToBound([Number.NaN, 0.95], 0.9, 1.1)).toBe(0.95);
+    expect(worstToBound([Number.NaN], 0.9, 1.1)).toBeNaN();
+    expect(worstToBound([], 0.9, 1.1)).toBeNaN();
+    expect(worstToBound([0, 1], 0.9, 1.1)).toBe(0);
+  });
+
   test('a straight border on x = 32 gives straightBorder 1 (and flatBorder 1: one planar patch)', () => {
     const g = biomeGrid(64, 64, 0, 15, (x) => (x < 32 ? B.lush : B.plain));
     const p = caveBorderParts([caveBorderCounts(g)]);
@@ -1290,13 +1302,14 @@ describe('the caves metric by group (SP6b spec §13 L4: `METRICS_CAVE_GROUPS`)',
       'C9:nearestEntrance|holedSurface:C9',
       'C7:bottomPlane:C7.bottomPlane',
       'C7:bedrockExposed:C7.bedrockExposed',
-      'C7:bottomFloorSpread:C7.bottom',
+      'C7:bottomFlatRatio|bottomFloorSpread:C7.bottom',
       'B3:borderLattice|straightBorder|flatBorder:B3.borders',
       'B3:abyssRockStraight:B3.abyssRock',
       'C7:borderPlaneRatio|switchWall:C7.default',
       'C8:aperiodicity|typeMixVariation|sizeSpread:C8',
       'C9:entrancesMax|thinRoof:C9.default',
       'C1:caveHeavyMin|caveHeavyMax:C1.caveHeavy',
+      'B3:zonePeriodicDip:B3.zones',
     ]);
     expect(coverageErrors(calls)).toEqual([]);
   });

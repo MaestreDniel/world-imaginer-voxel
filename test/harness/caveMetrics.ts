@@ -2067,16 +2067,33 @@ export function poolBorderCounts(counts: readonly CaveBorderCounts[]): CaveBorde
   return out;
 }
 
-/**
- * The value farthest from 1 (|ln v| largest; 0 is infinitely far); NaN values left out, NaN when all are. Exported for
- * the worst job's two-sided ratio (`B3.borderLattice`, `caves.metric.ts`).
- */
-export function farthestFromOne(values: readonly number[]): number {
+/** The value farthest from 1 (|ln v| largest; 0 is infinitely far); NaN values left out, NaN when all are. */
+function farthestFromOne(values: readonly number[]): number {
   let value = Number.NaN;
   let worst = -1;
   for (const v of values) {
     if (Number.isNaN(v)) continue;
     const dev = v === 0 ? Infinity : Math.abs(Math.log(v));
+    if (dev > worst) {
+      worst = dev;
+      value = v;
+    }
+  }
+  return value;
+}
+
+/**
+ * The worst of `values` against the two-sided bound [min, max]: the value whose distance to the bound, the larger of
+ * min/v and v/max, is largest (above 1 outside the bound; 0 is infinitely far); NaN values left out, NaN when all are.
+ * The worst job's `B3.borderLattice` (`caves.metric.ts`; ln 0.9 and ln 1.1 are not equally far from 0, so the value
+ * farthest from 1 could pass a job that breaks the max).
+ */
+export function worstToBound(values: readonly number[], min: number, max: number): number {
+  let value = Number.NaN;
+  let worst = -1;
+  for (const v of values) {
+    if (Number.isNaN(v)) continue;
+    const dev = Math.max(v === 0 ? Infinity : min / v, v / max);
     if (dev > worst) {
       worst = dev;
       value = v;

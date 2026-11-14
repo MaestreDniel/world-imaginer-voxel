@@ -1,5 +1,5 @@
 {
-  "sha256": "06a74799c26097e3a05c0f3a88014aeffea26ee782b0796f2891da83af29eb48",
+  "sha256": "88f43c79f597fc9208e868cdcf88381af24b18b97af5acbbc8740c2425d297a0",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -143,6 +143,10 @@
         "windowAir": {
           "activeFrom": "SP6b",
           "min": 50000
+        },
+        "zonePeriodicDip": {
+          "activeFrom": "SP6b",
+          "min": 0.9
         }
       },
       "B4": {
@@ -294,6 +298,14 @@
           "activeFrom": "SP6a",
           "max": 1.1,
           "min": 0.9
+        },
+        "bottomFlatRatio": {
+          "activeFrom": "SP6b",
+          "max": 2.05,
+          "tiers": [
+            "quick",
+            "full"
+          ]
         },
         "bottomFloorSpread": {
           "activeFrom": "SP6b",

@@ -162,7 +162,10 @@
  * U2 row counts 193 leaves with rule 4's two noises. U2's full-tier audit (Task 29) words that row as built: each new
  * leaf on the class columns, the cave columns first, else on its bounded witness. The tuning (Task 30) lands item 20's
  * B3, C1, C6, C7 and S2 parts (B3's row with its parts and the bottom parts of C7, cross-checked against THRESHOLDS;
- * C1's, C6's and C7's threshold cells move here from the SP6a describe, ruling P27) and item 5 (SP12's line).
+ * C1's, C6's and C7's threshold cells move here from the SP6a describe, ruling P27) and item 5 (SP12's line); its
+ * follow-up with the user's answers (rulings U4-U6) adds B3's zone part (`zonePeriodicDip`) and C7's `bottomFlatRatio`
+ * (quick and full) to those rows, and item 14 (§3.15's cave_heavy row with the tuned cheese offset, cross-checked
+ * against `DEFAULTS.caves` and `resolveProfile('cave_heavy')`).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2774,14 +2777,19 @@ describe('master spec amendments (SP6b §15)', () => {
 
   test('§6.4\'s B3 row names its parts as built with their bounds, which THRESHOLDS holds activeFrom SP6b (SP6b spec §15 item 20)', () => {
     const [, def, cell] = row64('B3');
-    expect(cell).toBe('lush, dripstone, abyss each ≥ 0.5% of cave air / ≥ 50,000 voxels / 0.9-1.1 / ≤ 10% / ≤ 5% / ≤ 10% |');
+    expect(cell).toBe('lush, dripstone, abyss each ≥ 0.5% of cave air / ≥ 50,000 voxels / 0.9-1.1 / ≤ 10% / ≤ 5% / ≤ 10% / ≥ 0.9 |');
     sp6bParts('B3', def!, [
       ['lushMin', { min: 0.005 }], ['dripstoneMin', { min: 0.005 }], ['abyssMin', { min: 0.005 }], ['windowAir', { min: 50000 }],
       ['borderLattice', { min: 0.9, max: 1.1 }], ['straightBorder', { max: 0.1 }], ['flatBorder', { max: 0.05 }], ['abyssRockStraight', { max: 0.1 }],
+      ['zonePeriodicDip', { min: 0.9 }],
     ]);
+    // The zone part (ruling U4, the user's): the periodicity form gated, the autocorrelation form and the rest recorded.
+    expect(def).toContain('`zonePeriodicDip`, the picker alone on a 64-block lattice over 64 × 64 km at depths 0.3, 0.6 and 1.1, per biome indicator and axis the smallest over lags L ≥ 1,024 of the indicator\'s lag ratio at L over its largest at the lags below L (the biomes job; recorded beside it: `zoneAperiodicity`, `zoneClarkEvansMin` and `zoneClarkEvansMax`, `zoneSizeSpread`; the user\'s choice)');
+    expect(THRESHOLDS.B3?.zoneAperiodicity).toBeUndefined();
     expect(def).toContain('over the 4 × 4 windows of 8 × 8 km of the default profile\'s T1 scatter');
     expect(def).toContain('per job, the part the worst job\'s (the default, presets and biomes jobs, decided from the tuning\'s dry run; the biomes job\'s lush, dripstone and abyss \\| plain pairs need 2,000 border faces each)');
-    expect(def).toContain('(the biomes job; the default job records it, its regions holding no abyss rock on a wall) (SP6b, its spec §12.1-§12.2; amended by SP6b)');
+    expect(def).toContain('(the biomes job; the default job records it, its regions holding no abyss rock on a wall) / `zonePeriodicDip`');
+    expect(def).toContain('`zoneSizeSpread`; the user\'s choice) (SP6b, its spec §12.1-§12.2; amended by SP6b)');
   });
 
   test('§6.4\'s C1, C6 and C7 rows as built: cave_heavy recorded, the 1.1 pending to SP12, the bottom parts (SP6b spec §15 item 20)', () => {
@@ -2793,13 +2801,29 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(THRESHOLDS.C1?.caveHeavyMax).toEqual({ max: 0.22, activeFrom: 'SP12' });
     expect(row64('C6')[2]).toBe('≤ 1.1 (1.25 at SP6a (R21), 1.1 pending (SP12, with the structural levers)) |');
     const [, c7, c7Cell] = row64('C7');
-    expect(c7Cell).toBe('0 / 0 / 0 / 0 / 0.9-1.1 / ≤ 8.1 / ≤ 3.7% / ≤ 2 / ≤ 3.3 per km² / ≤ 1% / 0 / ≥ 6 |');
-    sp6bParts('C7', c7!, [['bottomPlane', { max: 0.01 }], ['bedrockExposed', { max: 0 }], ['bottomFloorSpread', { min: 6 }]]);
-    // Recorded, not gated (its bound is the user's, Task 30 Step 4).
-    expect(c7).toContain('recorded beside them, `bottomFlatRatio`, the share of flat floor faces (in ≥ 6 × 6 patches) among the wall faces at y ≤ −40 over the same share at y −39 … 0 (amended by SP6b)');
-    expect(THRESHOLDS.C7?.bottomFlatRatio).toBeUndefined();
+    expect(c7Cell).toBe('0 / 0 / 0 / 0 / 0.9-1.1 / ≤ 8.1 / ≤ 3.7% / ≤ 2 / ≤ 3.3 per km² / ≤ 1% / 0 / ≥ 6 / ≤ 2.05 (quick, full) |');
+    sp6bParts('C7', c7!, [
+      ['bottomPlane', { max: 0.01 }], ['bedrockExposed', { max: 0 }], ['bottomFloorSpread', { min: 6 }],
+      ['bottomFlatRatio', { max: 2.05, tiers: ['quick', 'full'] }],
+    ]);
+    // A regression guard (ruling U5, the user's): the measured full worst × 1.15, on quick and full, re-judged in SP12.
+    expect(c7).toContain('`bottomFlatRatio`, the share of flat floor faces (in ≥ 6 × 6 patches) among the wall faces at y ≤ −40 over the same share at y −39 … 0, a regression guard at the measured full-tier worst × 1.15 (1.78 × 1.15), gated on quick and full (fast\'s two 16 × 16 regions read it high by their size), re-judged in SP12 (the user\'s; amended by SP6b)');
     // SP6a's tuning parts keep their place before SP6b's (the SP6a describe pins them).
     expect(c7!.indexOf('`waterWall`')).toBeLessThan(c7!.indexOf('`bottomPlane`'));
+  });
+
+  test('§3.15\'s cave_heavy row as built: its overlay over the defaults, the tuned cheese offset 0.30, ready from SP6b, finalised in SP12 (SP6b spec §15 item 14)', () => {
+    const row = presetRow('cave_heavy');
+    expect(row).toBe('| cave_heavy | cheese offset 0.5 → 0.30 (the SP6b tuning\'s, the user\'s: no value of 0.43, 0.38, 0.33 and 0.30 reached the SP6b spec §6.2\'s 12 % C1 on the quick tier, 10.3 % at 0.30), entrance offset 0.37 → 0.30, noodle band widened to y ≤ 96 (48 → 96), worm, underground-worm and ravine chance ×1.5 (0.15 → 0.225, 0.07 → 0.105, 0.015 → 0.0225); ready from SP6b; finalised in SP12 (amended by SP6b) |');
+    // Cross-checked against the defaults and the overlay.
+    const p = resolveProfile('cave_heavy');
+    const d = DEFAULTS.caves;
+    expect([d.cheese.offset, p.caves.cheese.offset]).toEqual([0.5, 0.3]);
+    expect([d.entrances.offset, p.caves.entrances.offset]).toEqual([0.37, 0.3]);
+    expect([d.noodles.maxY, p.caves.noodles.maxY]).toEqual([48, 96]);
+    expect([d.worms.chance, d.undergroundWorms.chance, d.ravines.chance]).toEqual([0.15, 0.07, 0.015]);
+    expect([p.caves.worms.chance, p.caves.undergroundWorms.chance, p.caves.ravines.chance]).toEqual([0.225, 0.105, 0.0225]);
+    expect(row).not.toContain('0.27 → 0.20');
   });
 
   test('§6.4\'s S2 row: the SP6b blocks leave deepslateBelow0\'s counts (SP6b spec §15 item 20)', () => {

@@ -53,12 +53,15 @@ export const THRESHOLDS: ThresholdTable = {
   // (`terrain.metric.ts`, `.out/B3.shares.json`; master :1505's 0.5 %, and the window's 50,000 cave-air voxels); the
   // border parts per job and the worst job's (`caves.metric.ts`, `.out/B3.borders.json`: the default, presets and
   // biomes jobs, as its `B3_BORDERS_GATED` names) and the abyss rock's boundary (`.out/B3.abyssRock.json`: the biomes
-  // job; the default job records it, its regions holding no abyss rock on a wall), at the spec's proposed bounds.
+  // job; the default job records it, its regions holding no abyss rock on a wall), at the spec's proposed bounds; the
+  // zone part (`.out/B3.zones.json`: the biomes job, the picker alone), the user's choice (ruling U4): the periodicity
+  // form `zonePeriodicDip` at ≥ 0.9, `zoneAperiodicity`, `zoneClarkEvansMin`/`Max` and `zoneSizeSpread` recorded.
   B3: {
     lushMin: { min: 0.005, activeFrom: 'SP6b' }, dripstoneMin: { min: 0.005, activeFrom: 'SP6b' }, abyssMin: { min: 0.005, activeFrom: 'SP6b' },
     windowAir: { min: 50000, activeFrom: 'SP6b' },
     borderLattice: { min: 0.9, max: 1.1, activeFrom: 'SP6b' }, straightBorder: { max: 0.1, activeFrom: 'SP6b' }, flatBorder: { max: 0.05, activeFrom: 'SP6b' },
     abyssRockStraight: { max: 0.1, activeFrom: 'SP6b' },
+    zonePeriodicDip: { min: 0.9, activeFrom: 'SP6b' },
   },
   U2: { value: { min: 1, activeFrom: 'SP2b' } },
   // SP4a spec §9.1 (D25): the light part, the upTo 'L' region hash over threads and orders (`light.metric.ts`).
@@ -133,9 +136,11 @@ export const THRESHOLDS: ThresholdTable = {
     bedrockExposed: { max: 0, activeFrom: 'SP6b' },
     // SP6b spec §12.3 (D6, D26; Task 30): the floor not a plane at another height (`bottomFloorSpread`: the median
     // 10th-90th percentile range of the large components' floor-face y), per group and the worst group's
-    // (`.out/C7.bottom.json`). `bottomFlatRatio` is recorded beside it: its proposed 1.5 misses on fast and full (the
-    // user's bound, Task 30 Step 4).
+    // (`.out/C7.bottom.json`). `bottomFlatRatio` (the bottom's flat-floor share over the share above it): its proposed
+    // 1.5 missed on fast (2.34) and full (1.78), so the user's bound (ruling U5) is a regression guard at the full
+    // worst × 1.15, on quick and full (fast's two 16 × 16 regions read it high by their size, as C5.largest), re-judged in SP12.
     bottomFloorSpread: { min: 6, activeFrom: 'SP6b' },
+    bottomFlatRatio: { max: 2.05, activeFrom: 'SP6b', tiers: ['quick', 'full'] },
   },
   C8: {
     aperiodicity: { min: 0.63, activeFrom: 'SP6a', tiers: ['quick', 'full'] }, typeMixVariation: { min: 0.021, activeFrom: 'SP6a' },

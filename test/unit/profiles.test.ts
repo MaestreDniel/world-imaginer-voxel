@@ -39,13 +39,13 @@ describe('profiles', () => {
     expect(isProfileReady('archipelago', 'SP3b')).toBe(false);
     expect(isProfileReady('large_biomes', 'SP1')).toBe(false);
   });
-  test('cave_heavy is ready from SP6b with §6.2\'s overlay (SP6b spec §6.2, §14.1; Spec correction 14)', () => {
+  test('cave_heavy is ready from SP6b with §6.2\'s overlay, its cheese offset 0.30 (SP6b spec §6.2, §14.1; Spec correction 14; ruling U6)', () => {
     expect(PROFILES.cave_heavy.readyFrom).toBe('SP6b');
     expect(isProfileReady('cave_heavy')).toBe(true);
     expect(isProfileReady('cave_heavy', 'SP6a')).toBe(false);
     expect(PROFILES.cave_heavy.overlay).toEqual({
       caves: {
-        cheese: { offset: 0.43 }, entrances: { offset: 0.3 }, noodles: { maxY: 96 },
+        cheese: { offset: 0.3 }, entrances: { offset: 0.3 }, noodles: { maxY: 96 },
         worms: { chance: 0.225 }, undergroundWorms: { chance: 0.105 }, ravines: { chance: 0.0225 },
       },
     });
@@ -53,7 +53,7 @@ describe('profiles', () => {
     expect([
       p.caves.cheese.offset, p.caves.entrances.offset, p.caves.noodles.maxY,
       p.caves.worms.chance, p.caves.undergroundWorms.chance, p.caves.ravines.chance,
-    ]).toEqual([0.43, 0.3, 96, 0.225, 0.105, 0.0225]);
+    ]).toEqual([0.3, 0.3, 96, 0.225, 0.105, 0.0225]);
     // An overlay under `caves` dirties terrain and every stage that reads it, as amplified's density overlay does; the
     // badge scope is terrain (the first dirty stage).
     expect(dirtyStages(stageHashes(DEFAULTS), stageHashes(p))).toEqual(['terrain', 'decorate', 'light', 'mesh']);

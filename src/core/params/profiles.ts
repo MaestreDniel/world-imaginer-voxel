@@ -35,11 +35,12 @@ export const PROFILES: Readonly<Record<ProfileId, Profile>> = {
     overlay: { islands: { enabled: true }, density: { defs: FLOATING_DENSITY_TREE }, surface: { rules: FLOATING_SURFACE_RULES }, caves: { limits: { capTop: 180 } } },
     readyFrom: 'SP3e',
   },
-  // SP6b spec §6.2: the cheese offset stays 0.43 until SP6b's tuning; the other five are its table's values.
+  // SP6b spec §6.2: the cheese offset is the tuning's 0.30 (ruling U6, the user's: no value of §6.2's set reached its
+  // 12 % on the quick tier, 10.3 % at 0.30; SP12 finalises cave_heavy); the other five are its table's values.
   cave_heavy: {
     overlay: {
       caves: {
-        cheese: { offset: 0.43 }, entrances: { offset: 0.3 }, noodles: { maxY: 96 },
+        cheese: { offset: 0.3 }, entrances: { offset: 0.3 }, noodles: { maxY: 96 },
         worms: { chance: 0.225 }, undergroundWorms: { chance: 0.105 }, ravines: { chance: 0.0225 },
       },
     },
