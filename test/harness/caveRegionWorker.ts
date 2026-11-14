@@ -12,18 +12,17 @@
  *
  * `measureCaveRegion` is the metric's per-region pass, in one function so the worker and an in-process caller (the unit
  * test) run the same code: the grid, the pre-cave tops and the components once; C1-C6's counts (the default group
- * only), C7-C9's, C7's bottom counts (SP6b spec §12.3), the review poses and SP6b's (`bottomCavern`; seed '42' default
- * only); then C7's
- * construction counts, `regionCounts` against `referenceCarve`, whose raw reference array never leaves the thread
- * (ruling P6).
+ * only), C7-C9's, C7's bottom counts (SP6b spec §12.3), B3's border counts (§12.2), the review poses and SP6b's
+ * (`bottomCavern`; seed '42' default only); then C7's construction counts, `regionCounts` against `referenceCarve`,
+ * whose raw reference array never leaves the thread (ruling P6).
  */
 import type { Params } from '../../src/core/params/schema';
 import { createDensityContext } from '../../src/gen/density/context';
 import { attachStore, type StoreHandles } from '../../src/world/store/store';
 import {
-  CAP_AIR_Y, caveBottomCounts, caveC7C9Counts, caveComponents, caveExamples, caveGridOf, caveRegionCounts, countsTransfer, flatWallDetail,
+  CAP_AIR_Y, caveBorderCounts, caveBottomCounts, caveC7C9Counts, caveComponents, caveExamples, caveGridOf, caveRegionCounts, countsTransfer, flatWallDetail,
   landMask, localThickness, preCaveTops, ravinePathsOf, regionCounts, riverMaskOf, sp6bCaveExamples, wetMask,
-  type CarverRegionCounts, type CaveBottomCounts, type CaveC7C9Counts, type CavePose, type CaveRegionCounts, type ExampleId,
+  type CarverRegionCounts, type CaveBorderCounts, type CaveBottomCounts, type CaveC7C9Counts, type CavePose, type CaveRegionCounts, type ExampleId,
   type Sp6bExampleId,
 } from './caveMetrics';
 import type { Site } from './caveSites';
@@ -41,12 +40,21 @@ export interface CaveRegionResult {
    * the bedrock, and the accumulators of bottomFlatRatio, bottomFloorSpread and the records (Task 21).
    */
   readonly bottom: CaveBottomCounts;
+  /**
+   * B3's border counts (SP6b spec §12.2; Task 26): per biome pair and overall, the border faces per axis and plane
+   * residue mod 4, the cave-air face pairs, the straight runs on every 4th layer, the planar patches and the skin by a
+   * border.
+   */
+  readonly borders: CaveBorderCounts;
   /** The review poses: the seed '42' default regions only, else null. */
   readonly examples: Record<ExampleId, CavePose | null> | null;
   /** SP6b's review poses (`bottomCavern`; rulings P17, P59): the seed '42' default regions only, else null. */
   readonly sp6bExamples: Record<Sp6bExampleId, CavePose | null> | null;
-  /** The ms of the shared grid and components, of C1-C6 (with the thickness), of C7-C9, of the bottom, of the poses (both lists). */
-  readonly ms: { shared: number; c16: number; c79: number; bottom: number; examples: number };
+  /**
+   * The ms of the shared grid and components, of C1-C6 (with the thickness), of C7-C9, of the bottom, of the border
+   * counts, of the poses (both lists).
+   */
+  readonly ms: { shared: number; c16: number; c79: number; bottom: number; borders: number; examples: number };
   /** C7's construction counts: `regionCounts(view, referenceCarve(…), capY)`, capY on floating_islands only. */
   readonly carver: CarverRegionCounts;
 }
@@ -88,13 +96,18 @@ function measureGrid(view: RegionView, site: Site, params: Params, stride: numbe
   // C7.bottomPlane's flat faces are every position's (C7.flatWallShare's are the sea floor's on archipelago).
   const bottom = caveBottomCounts(grid, seaFloor === null ? c79.flat : flatWallDetail(grid), c);
   const t4 = performance.now();
+  const borders = caveBorderCounts(grid);
+  const t5 = performance.now();
   const poses = site.seed === '42' && site.profile === 'default';
   const examples = poses ? caveExamples(grid, tops, c, thick, pillar) : null;
   const sp6bExamples = poses ? sp6bCaveExamples(grid, c) : null;
-  const t5 = performance.now();
+  const t6 = performance.now();
   return {
-    c16, c79, bottom, examples, sp6bExamples,
-    ms: { shared: Math.round(t1 - t0), c16: Math.round(t2 - t1), c79: Math.round(t3 - t2), bottom: Math.round(t4 - t3), examples: Math.round(t5 - t4) },
+    c16, c79, bottom, borders, examples, sp6bExamples,
+    ms: {
+      shared: Math.round(t1 - t0), c16: Math.round(t2 - t1), c79: Math.round(t3 - t2), bottom: Math.round(t4 - t3),
+      borders: Math.round(t5 - t4), examples: Math.round(t6 - t5),
+    },
   };
 }
 

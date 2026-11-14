@@ -1,10 +1,16 @@
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, test } from 'vitest';
-import { CAVE_KIND } from '../../src/core/constants';
+import { CAVE_BIOME, CAVE_KIND } from '../../src/core/constants';
+import { deriveSeed } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
+import { seedFromInput } from '../../src/core/seed';
+import { caveJitter } from '../../src/gen/biomes/cavePicker';
+import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, BEDROCK, DEEPSLATE, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { CarverPath } from '../../src/gen/caves/carvers';
 import {
+  BIOME_MASK, BIOME_SHIFT, BORDER_PAIR_NAMES, caveBorderCounts, caveBorderParts, cellAt, CLS_CLAY, CLS_DRIPSTONE, CLS_MOSS, FLUID_BIT,
+  poolBorderCounts, SKIN_NAMES, SOLID_BIT, TAG_MASK,
   ABYSS_STATES, bedrockExposedCount, bottomCavernPose, bottomFloorSpreads, caveBottomCounts, caveBottomGroups, caveBottomParts, caveGridOf,
   BOTTOM_PITCH, CLS_ABYSS, CLS_BEDROCK, CLS_OTHER, EXAMPLE_IDS, SP6B_EXAMPLE_IDS, type CaveBottomCounts,
   aperiodicCounts, aperiodicity, aperiodicLags, BAND_Y0, bandCounts, bandDetail, BANDS, bandsMin, borderPlaneRatio, c1c6Parts, C1_C6_PARTS, c7c9Parts,
@@ -20,9 +26,10 @@ import { NIBBLE_REGION, nibbleRegion } from '../harness/caveNibbles';
 import { measureCaveRegion, type CaveRegionResult } from '../harness/caveRegionWorker';
 import { caveGroupOf, caveSites, measureCaveRegions } from '../harness/caveSites';
 import { components3d } from '../harness/flood';
-import { coverageErrors, findMetricCalls } from '../harness/metric';
+import { coverageErrors, evaluateMetric, findMetricCalls } from '../harness/metric';
 import { genRegion } from '../harness/region';
 import { referenceCarve } from '../harness/refs';
+import type { ThresholdTable } from '../thresholds';
 
 const K = CAVE_KIND;
 
@@ -875,10 +882,11 @@ describe('the caves instruments on fixtures (SP6a §10.1, C7-C9)', () => {
 
 
 describe('C7\'s bottom parts and the grid\'s block class (SP6b spec §12.3, D6; Task 20)', () => {
-  test('caveGridOf fills cls from the blocks: bedrock 1, each abyss state 2, every other block 0', () => {
+  test('caveGridOf fills cls from the blocks: bedrock 1, each abyss state 2, moss_block 3, clay 4, dripstone_block 5 (Task 26), every other block 0', () => {
     expect(ABYSS_STATES.map((st) => REGISTRY.stateKey(st))).toEqual(['abyss_stone', 'abyss_stone_veined', 'cracked_abyss_stone', 'abyss_shale', 'abyss_ash']);
     // One proto column (section 0's first row of x holds the states under test), every other section air.
-    const states = [BEDROCK, ...ABYSS_STATES, STONE, DEEPSLATE, AIR];
+    const skins = ['moss_block', 'clay', 'dripstone_block'].map((k) => REGISTRY.parseStateKey(k));
+    const states = [BEDROCK, ...ABYSS_STATES, ...skins, STONE, DEEPSLATE, AIR];
     const blocks = new Uint16Array(4096);
     blocks.set(states);
     const col = {
@@ -888,7 +896,7 @@ describe('C7\'s bottom parts and the grid\'s block class (SP6b spec §12.3, D6; 
     };
     const store = { final: () => null, proto: () => col } as unknown as Parameters<typeof caveGridOf>[0]['store'];
     const g = caveGridOf({ cx0: 0, cz0: 0, w: 1, h: 1, store });
-    const want = [CLS_BEDROCK, CLS_ABYSS, CLS_ABYSS, CLS_ABYSS, CLS_ABYSS, CLS_ABYSS, CLS_OTHER, CLS_OTHER, CLS_OTHER];
+    const want = [CLS_BEDROCK, CLS_ABYSS, CLS_ABYSS, CLS_ABYSS, CLS_ABYSS, CLS_ABYSS, CLS_MOSS, CLS_CLAY, CLS_DRIPSTONE, CLS_OTHER, CLS_OTHER, CLS_OTHER];
     expect(Array.from(g.cls.subarray(0, states.length))).toEqual(want);
     expect([CLS_OTHER, CLS_BEDROCK, CLS_ABYSS]).toEqual([0, 1, 2]);
     // Every other voxel: air, class 0; the solid bit set for every non-air state, whatever its class.
@@ -1067,6 +1075,143 @@ describe('C7\'s bottom parts II: bottomFlatRatio, bottomFloorSpread, bottomFloor
   });
 });
 
+describe('B3\'s border parts (SP6b spec §12.2, D26; Task 26)', () => {
+  const B = CAVE_BIOME;
+  /** The fixtures' jitter: the picker's (`caveJitter`, Task 10's speckle) at seed '42', J = 2. */
+  const JITTER_SEED = deriveSeed(seedFromInput('42'), 'caveBiome.jitter');
+  const J3 = new Int32Array(3);
+  const jitter = (x: number, y: number, z: number): Int32Array => {
+    caveJitter(JITTER_SEED, 2, x, y, z, J3);
+    return J3;
+  };
+  /**
+   * A w × d grid of rock to y y1 + 4 (air above) holding cave air (cheese) at y y0 … y1 over every position, each air
+   * voxel's cave byte carrying `biomeAt(x, y, z)` in its high nibble, as T writes it.
+   */
+  function biomeGrid(w: number, d: number, y0: number, y1: number, biomeAt: (x: number, y: number, z: number) => number): CaveGrid {
+    const g = rock(w, d, y1 + 4);
+    for (let y = y0; y <= y1; y++) for (let z = 0; z < d; z++) for (let x = 0; x < w; x++) setCell(g, x, y, z, K.cheese | (biomeAt(x, y, z) << 4), false);
+    return g;
+  }
+  /** The oblique border x = 32 + ⌊z/3⌋ jittered with J = 2 at every voxel (ruling P31): lush on its −x side, plain on its +x side. */
+  const oblique = (x: number, y: number, z: number): number => {
+    const j = jitter(x, y, z);
+    return x + j[0]! < 32 + Math.floor((z + j[2]!) / 3) ? B.lush : B.plain;
+  };
+
+  test('the biome bits survive the grid\'s packing: caveGridOf and setCell keep the kind, solid, fluid and the biome in bits 6-7', () => {
+    expect([BIOME_SHIFT, BIOME_MASK]).toEqual([6, 192]);
+    // One proto column: section 0's first eight voxels hold cheese of each biome, then a worm of each with water.
+    const cave = new Uint8Array(4096);
+    const fluid = new Uint8Array(4096);
+    for (let b = 0; b < 4; b++) {
+      cave[b] = K.cheese | (b << 4);
+      cave[4 + b] = K.worm | (b << 4);
+      fluid[4 + b] = WATER_SOURCE;
+    }
+    const col = { sectionCave: (sy: number) => (sy === 0 ? cave : 0), sectionBlocks: () => AIR, sectionFluid: (sy: number) => (sy === 0 ? fluid : 0) };
+    const store = { final: () => null, proto: () => col } as unknown as Parameters<typeof caveGridOf>[0]['store'];
+    const g = caveGridOf({ cx0: 0, cz0: 0, w: 1, h: 1, store });
+    const cells = Array.from(g.cells.subarray(0, 8));
+    expect(cells.map((c) => c & TAG_MASK)).toEqual([K.cheese, K.cheese, K.cheese, K.cheese, K.worm, K.worm, K.worm, K.worm]);
+    expect(cells.map((c) => (c & BIOME_MASK) >>> BIOME_SHIFT)).toEqual([0, 1, 2, 3, 0, 1, 2, 3]);
+    expect(cells.map((c) => (c & FLUID_BIT) !== 0)).toEqual([false, false, false, false, true, true, true, true]);
+    expect(cells.every((c) => (c & SOLID_BIT) === 0)).toBe(true);
+    // setCell takes the cave byte alike, beside the solid and fluid bits.
+    const s = emptyCaveGrid(0, 0, 1, 1);
+    setCell(s, 0, 0, 0, K.noodle | (B.abyss << 4), true, true);
+    expect(s.cells[cellAt(s, 0, 0, 0)]).toBe(K.noodle | SOLID_BIT | FLUID_BIT | (B.abyss << BIOME_SHIFT));
+  });
+
+  test('a border on the plane x = 32 plus a jittered border elsewhere in the grid gives borderLattice > 2 on the x axis', () => {
+    // z < 32: lush | plain on the plane x = 32; z ≥ 32: the oblique jittered border (faces on every residue).
+    const g = biomeGrid(64, 64, 0, 63, (x, y, z) => (z < 32 ? (x < 32 ? B.lush : B.plain) : oblique(x, y, z)));
+    const p = caveBorderParts([caveBorderCounts(g)]);
+    expect(p.overall.lattice.x).toBeGreaterThan(2);
+    expect(p.overall.borderLattice).toBe(p.overall.lattice.x);
+    expect(p.pairs['lush|plain']!.lattice.x).toBe(p.overall.lattice.x);
+  });
+
+  test('a border only on planes ≡ 0 (mod 4) gives NaN (no residue 1-3 faces), which the gate fails as a NaN', () => {
+    // Stripes 16 wide: borders on x = 16, 32, 48 only.
+    const g = biomeGrid(64, 64, 0, 15, (x) => (Math.floor(x / 16) % 2 === 1 ? B.dripstone : B.plain));
+    const p = caveBorderParts([caveBorderCounts(g)]);
+    expect(p.overall.borderFaces).toBe(3 * 64 * 16);
+    expect(p.overall.facesByAxis).toEqual([3 * 64 * 16, 0, 0]);
+    expect(p.overall.lattice.x).toBeNaN();
+    expect(p.overall.borderLattice).toBeNaN();
+    const table: ThresholdTable = { B3: { borderLattice: { min: 0.9, max: 1.1, activeFrom: 'SP6b' } } };
+    expect(evaluateMetric('B3', ['borderLattice'], { borderLattice: p.overall.borderLattice }, table, ['SP6b'], 'fast').errors)
+      .toEqual(['B3.borderLattice = NaN (not a number)']);
+  });
+
+  test('a straight border on x = 32 gives straightBorder 1 (and flatBorder 1: one planar patch)', () => {
+    const g = biomeGrid(64, 64, 0, 15, (x) => (x < 32 ? B.lush : B.plain));
+    const p = caveBorderParts([caveBorderCounts(g)]);
+    // The layers y 0, 4, 8, 12 each hold one run of 64 x border edges along z.
+    expect(p.overall.layerEdges).toBe(4 * 64);
+    expect(p.overall.straightBorder).toBe(1);
+    expect(p.overall.flatBorder).toBe(1);
+    expect(p.pairs['lush|plain']).toEqual(p.overall);
+    // The other pairs hold no face: their parts are NaN (an empty population), their counts 0.
+    expect(p.pairs['dripstone|plain']!.borderFaces).toBe(0);
+    expect(p.pairs['dripstone|plain']!.straightBorder).toBeNaN();
+  });
+
+  test('a jittered border (the oblique x = 32 + ⌊z/3⌋, J = 2, on a 64 × 64 grid; ruling P31) gives borderLattice within 0.9-1.1 and straightBorder < 0.1', () => {
+    const g = biomeGrid(64, 64, 0, 63, oblique);
+    const p = caveBorderParts([caveBorderCounts(g)]).overall;
+    for (const v of [p.lattice.x, p.lattice.y, p.lattice.z]) {
+      expect(v).toBeGreaterThanOrEqual(0.9);
+      expect(v).toBeLessThanOrEqual(1.1);
+    }
+    expect(p.borderLattice).toBeGreaterThanOrEqual(0.9);
+    expect(p.borderLattice).toBeLessThanOrEqual(1.1);
+    expect(p.straightBorder).toBeLessThan(0.1);
+    expect(p.flatBorder).toBeLessThan(0.05);
+    // Not vacuous: thousands of faces on every axis.
+    for (const n of p.facesByAxis) expect(n).toBeGreaterThan(1000);
+  });
+
+  test('a 4 × 4 flat patch of border faces counts in flatBorder; a 3 × 3 one does not', () => {
+    // A lush slab one voxel thick at x = 32 in plain cave air: its two 4 × 4 x faces (planes 32 and 33) are flat; its
+    // y face (1 × 4, at y 4) and z faces (1 × 4 each, at z 10 and 14) are not; its bottom lies on the rock.
+    const slab = (side: number) => biomeGrid(64, 64, 0, 15, (x, y, z) => (x === 32 && y < side && z >= 10 && z < 10 + side ? B.lush : B.plain));
+    const four = caveBorderParts([caveBorderCounts(slab(4))]).overall;
+    expect(four.borderFaces).toBe(2 * 16 + 4 + 2 * 4);
+    expect(four.flatFaces).toBe(2 * 16);
+    expect(four.flatBorder).toBe(32 / 44);
+    const three = caveBorderParts([caveBorderCounts(slab(3))]).overall;
+    expect(three.borderFaces).toBe(2 * 9 + 3 + 2 * 3);
+    expect(three.flatFaces).toBe(0);
+  });
+
+  test('the skin mix: the wall faces of cave air within 2 blocks of a border voxel, by the solid neighbour\'s class, per pair', () => {
+    // lush | plain on x = 32 over y 0 … 15: its border voxels x 31 and 32, so cave air at x 29 … 34 is near it. The
+    // floor under x 26 … 37 is moss: the near voxels' floor faces are all moss, their ceiling faces stone.
+    const g = biomeGrid(64, 64, 0, 15, (x) => (x < 32 ? B.lush : B.plain));
+    for (let z = 0; z < 64; z++) for (let x = 26; x <= 37; x++) setCell(g, x, -1, z, 0, true, false, CLS_MOSS);
+    const p = caveBorderParts([caveBorderCounts(g)]);
+    expect(p.overall.skinFaces).toBe(2 * 6 * 64);
+    expect(p.overall.skin).toEqual({ other: 0.5, bedrock: 0, abyss: 0, moss: 0.5, clay: 0, dripstone: 0 });
+    expect(p.pairs['lush|plain']!.skin).toEqual(p.overall.skin);
+    expect(p.pairs['abyss|plain']!.skinFaces).toBe(0);
+    expect(SKIN_NAMES).toEqual(['other', 'bedrock', 'abyss', 'moss', 'clay', 'dripstone']);
+    expect([CLS_MOSS, CLS_CLAY, CLS_DRIPSTONE]).toEqual([3, 4, 5]);
+  });
+
+  test('the counts pool by sum: two regions\' parts are those of their summed counts; the pairs are named in record order', () => {
+    const a = caveBorderCounts(biomeGrid(32, 32, 0, 7, (x) => (x < 16 ? B.lush : B.plain)));
+    const b = caveBorderCounts(biomeGrid(32, 32, 0, 7, (x, y, z) => (z < 16 ? B.abyss : B.dripstone)));
+    const p = caveBorderParts([a, b]);
+    expect(p.overall.borderFaces).toBe(32 * 8 + 32 * 8);
+    expect(p.pairs['lush|plain']!.borderFaces).toBe(32 * 8);
+    expect(p.pairs['dripstone|abyss']!.borderFaces).toBe(32 * 8);
+    expect(p).toEqual(caveBorderParts([poolBorderCounts([a, b])]));
+    expect(BORDER_PAIR_NAMES).toEqual(['lush|plain', 'dripstone|plain', 'abyss|plain', 'lush|dripstone', 'lush|abyss', 'dripstone|abyss']);
+  });
+});
+
 describe('the caves metric by group (SP6b spec §13 L4: `METRICS_CAVE_GROUPS`)', () => {
   const label = (s: { label: string }): string => s.label;
 
@@ -1145,7 +1290,7 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
     four = await measureCaveRegions(SITES, { ...OPTS, workers: 4 });
   }, 900_000);
 
-  test('per-region counts in a worker equal the in-process ones: CaveRegionCounts, CaveC7C9Counts, the poses and referenceCarve\'s counts', () => {
+  test('per-region counts in a worker equal the in-process ones: CaveRegionCounts, CaveC7C9Counts, B3\'s border counts, the poses and referenceCarve\'s counts', () => {
     expect(SITES.map((s) => `${s.profile} ${s.size}`)).toEqual(['default 16', 'default 16']);
     for (const [k, s] of SITES.entries()) {
       const ref = inProcess[k]!;
@@ -1163,10 +1308,13 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
       expect(ref.bottom.wallsByY.some((v) => v > 0), s.label).toBe(true);
       expect(ref.sp6bExamples?.bottomCavern, s.label).not.toBeNull();
       expect(ref.sp6bExamples?.bottomCavern?.voxel[1], s.label).toBeLessThanOrEqual(-38);
+      // Task 26: the region's cave air holds biome borders (dripstone | plain at seed '42'), so the comparison is not vacuous.
+      expect(caveBorderParts([ref.borders]).overall.borderFaces, s.label).toBeGreaterThan(0);
       for (const [n, got] of [[1, one[k]!], [4, four[k]!]] as const) {
         expect(got.c16, `${s.label}, ${n} worker(s)`).toEqual(ref.c16);
         expect(got.c79, `${s.label}, ${n} worker(s)`).toEqual(ref.c79);
         expect(got.bottom, `${s.label}, ${n} worker(s)`).toEqual(ref.bottom);
+        expect(got.borders, `${s.label}, ${n} worker(s)`).toEqual(ref.borders);
         expect(got.examples, `${s.label}, ${n} worker(s)`).toEqual(ref.examples);
         expect(got.sp6bExamples, `${s.label}, ${n} worker(s)`).toEqual(ref.sp6bExamples);
         expect(got.carver, `${s.label}, ${n} worker(s)`).toEqual(ref.carver);

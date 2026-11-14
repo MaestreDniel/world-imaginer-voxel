@@ -1,20 +1,20 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect } from 'vitest';
+import { expect, test } from 'vitest';
 import { CARVER_WINDOW_R } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
 import { carverPath, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
 import {
-  aperiodicRatios, bandDetail, borderPlaneRatio, C1_C6_PARTS, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, caveBottomGroups, caveBottomParts, emptyBandCounts,
+  aperiodicRatios, bandDetail, borderPlaneRatio, BORDER_PAIR_NAMES, C1_C6_PARTS, caveBorderParts, c1c6Parts, C7_C9_PARTS, c7c9Groups, c7c9Parts, caveBottomGroups, caveBottomParts, emptyBandCounts,
   emptyLayerCounts, emptyWallResidues, EXAMPLE_IDS, floorFaceResidues, GRID_H, GRID_Y0, SP6B_EXAMPLE_IDS, verticalStepDetail,
   type C1C6Part, type C7C9Part, type CaveBottomParts, type CaveC7C9Counts, type CavePose, type CaveRegionCounts,
 } from '../harness/caveMetrics';
 import type { CaveRegionResult } from '../harness/caveRegionWorker';
 import { CARVER_DEFAULTS, CARVER_MAXIMA } from '../harness/carverParams';
-import { caveGroupOf, caveSites, measureCaveRegions, type Site } from '../harness/caveSites';
+import { caveGroupOf, caveSites, measureCaveRegions, type CaveGroup, type Site } from '../harness/caveSites';
 import { metricTest } from '../harness/metric';
 
 /**
@@ -31,7 +31,8 @@ import { metricTest } from '../harness/metric';
  * - both: `carverReference` (max 0 per region, so the sum over the jobs is the unsplit value), and the per-group parts
  *   of C7-C9 (`C7.tuning`: verticalStep, flatWallShare, waterWall; `C9`: nearestEntrance, holedSurface) and C7's
  *   bottom parts (`C7.bottomPlane`, `C7.bedrockExposed`, SP6b spec §12.3), each the worst of the groups the job measures
- *   (`c7c9Parts`, `caveBottomParts`; ruling P2), so the worst over the jobs is the unsplit value.
+ *   (`c7c9Parts`, `caveBottomParts`; ruling P2), so the worst over the jobs is the unsplit value; and B3's border parts
+ *   (SP6b spec §12.2; recorded, Task 26), per job: each job's own record, `.out/B3.borders.<group>.json`.
  *
  * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
  * - `carverReference`: over every region of the run's groups (the preset regions included), the voxels of the region
@@ -593,6 +594,44 @@ metricTest('C7', ['bottomPlane'], async () => {
 }, 900_000, { outName: 'C7.bottomPlane' });
 metricTest('C7', ['bedrockExposed'], async () => ({ bedrockExposed: (await bottom()).bedrockExposed }), 900_000,
   { outName: 'C7.bedrockExposed' });
+
+/** The scale of `metricTest`'s timeouts (`METRICS_TIMEOUT_SCALE`, SP6b spec §12.9), for the plain record test below. */
+const TIMEOUT_SCALE = Number(process.env.METRICS_TIMEOUT_SCALE ?? '1');
+
+/** The job (`METRICS_CAVE_GROUPS`) a region belongs to: 'default' for the default and large_biomes profiles, else 'presets'. */
+const jobOf = (s: Site): CaveGroup => (groupOf(s) === 'default' ? 'default' : 'presets');
+
+/**
+ * B3's border parts (SP6b spec §12.2, D26; Task 26: recorded, not gated: B3 has no THRESHOLDS row until the tuning task,
+ * Task 30), as built in `test/harness/caveMetrics.ts` (`caveBorderCounts`, `caveBorderParts`): per job over the regions
+ * it holds (with every group in this one process, per group, so each record is the one its job writes alone; ruling
+ * P2), overall and per biome pair: `borderLattice` (with each axis' ratio), `straightBorder`, `flatBorder`, the border
+ * faces (per axis), and the painted skin's mix within 2 blocks of a border; with each region's overall values, in
+ * `.out/B3.borders.<group>.json`. The overall border faces are the pairs' sum (each face has one pair).
+ */
+test('B3: border parts per job and biome pair (recorded, not gated)', async () => {
+  const measured = await measuredRegions();
+  const jobs = [...new Set(measured.map((m) => jobOf(m.site)))];
+  mkdirSync(OUT_DIR, { recursive: true });
+  for (const job of jobs) {
+    const rs = measured.filter((m) => jobOf(m.site) === job);
+    const parts = caveBorderParts(rs.map((m) => m.borders));
+    writeFileSync(join(OUT_DIR, `B3.borders.${job}.json`), json({
+      id: 'B3.borders', tier: process.env.METRICS_TIER ?? null, group: job, ...parts,
+      regions: rs.map((m) => {
+        const o = caveBorderParts([m.borders]).overall;
+        return {
+          label: m.site.label, ms: m.ms.borders, borderFaces: o.borderFaces, borderLattice: o.borderLattice, lattice: o.lattice,
+          straightBorder: o.straightBorder, flatBorder: o.flatBorder,
+        };
+      }),
+    }));
+    const pairFaces = BORDER_PAIR_NAMES.reduce((a, name) => a + parts.pairs[name]!.borderFaces, 0);
+    expect(parts.overall.borderFaces, `B3 ${job}: the overall border faces are the pairs' sum`).toBe(pairFaces);
+  }
+  expect(jobs.length).toBeGreaterThan(0);
+}, 900_000 * TIMEOUT_SCALE);
+
 // The default-only parts, with the default group.
 if (DEFAULT_GROUP) {
   metricTest('C7', ['borderPlaneRatio', 'switchWall'], async () => partsOf(await c7c9(), 'C7', ['borderPlaneRatio', 'switchWall']), 900_000,

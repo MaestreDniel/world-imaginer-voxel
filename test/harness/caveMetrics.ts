@@ -85,16 +85,29 @@
  *   sample's nearest corner has no wet-river or gorge flag) and measures to the region's own openings (an opening beyond
  *   the region is not seen; a region with none gives NaN distances); C9.entrancesMax is C2.skyComponents' count per km²;
  *   C9.holedSurface's top is the pre-cave top, C9.thinRoof's the true top (land: solid without fluid).
+ * - B3's border parts (SP6b spec §12.2, D26; Task 26, recorded; `caveBorderCounts`, `caveBorderParts`): the grid holds
+ *   the cave biome in bits 6-7. Cave air is a tagged voxel neither solid nor fluid (§12.1's); a border face lies between
+ *   two face-adjacent cave-air voxels of different biomes, on the plane of its + side voxel's coordinate. Each part is
+ *   read overall (every pair) and per pair (`BORDER_PAIRS`: each biome | plain, then the biome pairs), over that pair's
+ *   own faces. `borderLattice`: per axis (x, y, z), the border faces' rate over the cave-air face pairs (the faces a
+ *   border may lie on, so neither the grid's faces nor a lattice in the cave air itself reads as one in the borders) on
+ *   planes ≡ 0 (mod 4) over the mean rate of residues 1-3, the axis ratio farthest from 1 (`C7.borderPlaneRatio`'s
+ *   pattern, NaN ratios left out). `straightBorder`: on the layers y ≡ 0 (mod 4), the border edges (the layer's x and z
+ *   border faces) in a run of ≥ 8 consecutive edges on one plane line, over the layer's edges. `flatBorder`: the border
+ *   faces in a 4 × 4 square of border faces on one plane (`flatWallDetail`'s finder), over the border faces. The skin
+ *   by a border: the wall faces of the cave-air voxels within 2 blocks (Chebyshev) of a border voxel (a cave-air voxel
+ *   on either side of a border face), by the solid neighbour's block class (`cls`: rule 4's moss, clay, dripstone, the
+ *   abyss rock, bedrock, other). A region's counts are sums, so a job's parts are those of its regions' summed counts.
  * - The groups: 'default' (the default and large_biomes regions) and each preset. The parts the spec marks "default and
  *   presets" (verticalStep, nearestEntrance, holedSurface) and "default and archipelago" (flatWallShare, waterWall) are
  *   the worst of those groups; the others read the default group.
  *
  * A region's counts cross threads (SP6b spec §13 L6: `caveRegionWorker.ts` measures each region in a worker thread and
- * the metric pools): `CaveRegionCounts`, `CaveC7C9Counts`, `CarverRegionCounts` and the poses are plain objects of
- * numbers, strings, number arrays and typed arrays that each own their whole buffer, so a structured clone carries them
- * and `countsTransfer` lists the buffers to move.
+ * the metric pools): `CaveRegionCounts`, `CaveC7C9Counts`, `CaveBorderCounts`, `CarverRegionCounts` and the poses are
+ * plain objects of numbers, strings, number arrays and typed arrays that each own their whole buffer, so a structured
+ * clone carries them and `countsTransfer` lists the buffers to move.
  */
-import { CARVER_WINDOW_R, CAVE_KIND, caveKindOf } from '../../src/core/constants';
+import { CARVER_WINDOW_R, CAVE_BIOME_NAMES, CAVE_KIND, caveBiomeOf, caveKindOf } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
 import type { Params } from '../../src/core/params/schema';
 import { Xoshiro128 } from '../../src/core/rng';
@@ -111,20 +124,30 @@ import type { RegionView } from './region';
 /** The grid's y range: the world's, −64 … 319. */
 export const GRID_Y0 = -64;
 export const GRID_H = 384;
-/** A grid cell's bits: the tag (`CAVE_KIND`, bits 0-3), a non-air block (bit 4), a fluid (bit 5). */
+/**
+ * A grid cell's bits: the tag (`CAVE_KIND`, bits 0-3), a non-air block (bit 4), a fluid (bit 5), the cave biome (bits 6-7,
+ * SP6b spec §12.2: the `cave` byte's high nibble, `caveBiomeOf`, whose ids 0-3 are `CAVE_BIOME`'s; 4-15 are reserved
+ * and never written, so two bits hold every biome).
+ */
 export const TAG_MASK = 15;
 export const SOLID_BIT = 16;
 export const FLUID_BIT = 32;
+export const BIOME_SHIFT = 6;
+export const BIOME_MASK = 192;
 
 /**
  * A voxel's block class (`CaveGrid.cls`, SP6b spec §12.3): 0 any other block, 1 bedrock (`C7.bedrockExposed`), 2 abyss
  * rock, one of the five abyss states (abyss_stone, abyss_stone_veined, cracked_abyss_stone, abyss_shale, abyss_ash;
- * Task 28's abyss-rock parts). The cell byte cannot hold it: it says only whether the block is air, and rule 1 dithers
- * bedrock over y −63 … −60 among solid voxels, so "solid" there is not "bedrock".
+ * Task 28's abyss-rock parts), and rule 4's other skins (§3.4; B3's skin mix by a border, §12.2): 3 moss_block, 4 clay,
+ * 5 dripstone_block. The cell byte cannot hold it: it says only whether the block is air, and rule 1 dithers bedrock
+ * over y −63 … −60 among solid voxels, so "solid" there is not "bedrock".
  */
 export const CLS_OTHER = 0;
 export const CLS_BEDROCK = 1;
 export const CLS_ABYSS = 2;
+export const CLS_MOSS = 3;
+export const CLS_CLAY = 4;
+export const CLS_DRIPSTONE = 5;
 /** The five abyss states (SP6b spec §4, ids 58 … 64's last five). */
 export const ABYSS_STATES: readonly number[] = ['abyss_stone', 'abyss_stone_veined', 'cracked_abyss_stone', 'abyss_shale', 'abyss_ash']
   .map((k) => REGISTRY.parseStateKey(k));
@@ -132,10 +155,14 @@ export const ABYSS_STATES: readonly number[] = ['abyss_stone', 'abyss_stone_vein
 const CLASS_OF = new Uint8Array(65536);
 CLASS_OF[BEDROCK] = CLS_BEDROCK;
 for (const st of ABYSS_STATES) CLASS_OF[st] = CLS_ABYSS;
+CLASS_OF[REGISTRY.parseStateKey('moss_block')] = CLS_MOSS;
+CLASS_OF[REGISTRY.parseStateKey('clay')] = CLS_CLAY;
+CLASS_OF[REGISTRY.parseStateKey('dripstone_block')] = CLS_DRIPSTONE;
 
 /**
  * A region's voxels for the instruments: one byte per voxel of x ∈ [x0, x0 + w), z ∈ [z0, z0 + d), y ∈ [−64, 320),
- * index `((y + 64)·d + (z − z0))·w + (x − x0)`, in `cells` (the tag, solid, fluid) and in `cls` (the block class).
+ * index `((y + 64)·d + (z − z0))·w + (x − x0)`, in `cells` (the tag, solid, fluid, the cave biome) and in `cls` (the
+ * block class).
  */
 export interface CaveGrid {
   readonly x0: number;
@@ -143,7 +170,7 @@ export interface CaveGrid {
   readonly w: number;
   readonly d: number;
   readonly cells: Uint8Array;
-  /** The block class per voxel (`CLS_OTHER`, `CLS_BEDROCK`, `CLS_ABYSS`), same index as `cells`. */
+  /** The block class per voxel (`CLS_*`), same index as `cells`. */
   readonly cls: Uint8Array;
 }
 
@@ -157,13 +184,18 @@ export function cellAt(g: CaveGrid, x: number, y: number, z: number): number {
   return ((y - GRID_Y0) * g.d + (z - g.z0)) * g.w + (x - g.x0);
 }
 
+/** A cell byte from a stored `cave` byte (the kind, bits 0-3, and the biome, the high nibble) and the voxel's block and fluid. */
+const cellOf = (cave: number, solid: boolean, fluid: boolean): number =>
+  (cave & TAG_MASK) | (solid ? SOLID_BIT : 0) | (fluid ? FLUID_BIT : 0) | ((caveBiomeOf(cave) & 3) << BIOME_SHIFT);
+
 /**
- * Sets world voxel (x, y, z) of `g`: its tag, whether its block is not air, whether it holds a fluid, and its block class
- * (`CLS_*`; a hand-built fixture's bedrock or abyss rock, 0 by default).
+ * Sets world voxel (x, y, z) of `g`: its `cave` byte (the kind, with the cave biome in the high nibble as T writes it),
+ * whether its block is not air, whether it holds a fluid, and its block class (`CLS_*`; a hand-built fixture's bedrock
+ * or abyss rock, 0 by default).
  */
 export function setCell(g: CaveGrid, x: number, y: number, z: number, tag: number, solid: boolean, fluid = false, cls = CLS_OTHER): void {
   const i = cellAt(g, x, y, z);
-  g.cells[i] = (tag & TAG_MASK) | (solid ? SOLID_BIT : 0) | (fluid ? FLUID_BIT : 0);
+  g.cells[i] = cellOf(tag, solid, fluid);
   g.cls[i] = cls;
 }
 
@@ -189,7 +221,7 @@ export function caveGridOf(view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 's
               const tag = typeof cave === 'number' ? cave : cave[i]!;
               const block = typeof blocks === 'number' ? blocks : blocks[i]!;
               const fl = typeof fluid === 'number' ? fluid : fluid[i]!;
-              cells[row + lx] = (tag & TAG_MASK) | (block !== AIR ? SOLID_BIT : 0) | (hasFluid(fl) ? FLUID_BIT : 0);
+              cells[row + lx] = cellOf(tag, block !== AIR, hasFluid(fl));
               cls[row + lx] = CLASS_OF[block]!;
             }
           }
@@ -1206,17 +1238,7 @@ export function borderPlaneRatio(r: WallResidues): { value: number; x0: number; 
   const x15 = rel(15, [3, 7, 11]);
   const z0 = rel(16, [20, 24, 28]);
   const z15 = rel(31, [19, 23, 27]);
-  let value = Number.NaN;
-  let worst = -1;
-  for (const v of [x0, x15, z0, z15]) {
-    if (Number.isNaN(v)) continue;
-    const dev = v === 0 ? Infinity : Math.abs(Math.log(v));
-    if (dev > worst) {
-      worst = dev;
-      value = v;
-    }
-  }
-  return { value, x0, x15, z0, z15 };
+  return { value: farthestFromOne([x0, x15, z0, z15]), x0, x15, z0, z15 };
 }
 
 /** C7.verticalStep's counts per y (index y + 64): the underground voxels (y ≤ top − 8, C1's) and the tagged ones. */
@@ -1747,6 +1769,363 @@ export function caveBottomParts(regions: ReadonlyArray<{ readonly group: string;
     bottomPlane: maxOf(groups.map((g) => g.bottomPlane)), bedrockExposed: maxOf(groups.map((g) => g.bedrockExposed)),
     bottomFlatRatio: maxOf(groups.map((g) => g.bottomFlatRatio)), bottomFloorSpread: minOf(groups.map((g) => g.bottomFloorSpread)),
     bottomFloorPeak: maxOf(groups.map((g) => g.bottomFloorPeak)),
+  };
+}
+
+// ---------------------------------------------------------------- B3's border parts (SP6b spec §12.2)
+
+/** The biome pairs in record order (SP6b spec §12.2): each biome | plain, then the biome pairs. */
+export const BORDER_PAIRS: ReadonlyArray<readonly [a: number, b: number]> = [[1, 0], [2, 0], [3, 0], [1, 2], [1, 3], [2, 3]];
+/** The pairs' names, `CAVE_BIOME_NAMES` joined ('lush|plain' … 'dripstone|abyss'). */
+export const BORDER_PAIR_NAMES: readonly string[] = BORDER_PAIRS.map(([a, b]) => `${CAVE_BIOME_NAMES[a]}|${CAVE_BIOME_NAMES[b]}`);
+/** The counts' slot of every pair together, after the six pairs' slots. */
+const ALL_PAIRS = 6;
+const BORDER_SLOTS = 7;
+/** Per (biome a, biome b), index 4a + b: the pair's slot, −1 for a = b. */
+const PAIR_OF: Int8Array = (() => {
+  const t = new Int8Array(16).fill(-1);
+  BORDER_PAIRS.forEach(([a, b], k) => { t[4 * a + b] = k; t[4 * b + a] = k; });
+  return t;
+})();
+/** `B3.straightBorder`'s layers (every 4th y, y ≡ 0 mod 4) and its straight runs' least length, in edges. */
+export const STRAIGHT_LAYER_STEP = 4;
+export const STRAIGHT_RUN = 8;
+/** `B3.flatBorder`'s planar patches' side, in faces. */
+export const FLAT_BORDER_SIDE = 4;
+/** The skin mix's reach from a border voxel (Chebyshev, in blocks). */
+export const SKIN_NEAR = 2;
+/** The skin mix's classes, by `CLS_*` id. */
+export const SKIN_NAMES = ['other', 'bedrock', 'abyss', 'moss', 'clay', 'dripstone'] as const;
+const SKIN_CLASSES = SKIN_NAMES.length;
+
+/** Whether a cell is cave air (SP6b spec §12.1): tagged, neither solid nor fluid. */
+const caveAir = (cell: number): boolean => (cell & TAG_MASK) !== 0 && (cell & (SOLID_BIT | FLUID_BIT)) === 0;
+
+/**
+ * B3's border counts of one region or pooled (SP6b spec §12.2), per slot s (0-5 the pairs of `BORDER_PAIRS`, 6 every
+ * pair): a border face is a face between two face-adjacent cave-air voxels (tagged, neither solid nor fluid) of
+ * different cave biomes, its plane the + side voxel's coordinate along its axis (the face between x = 31 and x = 32
+ * lies on the plane x = 32).
+ */
+export interface CaveBorderCounts {
+  /** The border faces per (slot, axis 0-2 for x, y, z, residue 0-3 of the plane's world coordinate mod 4), index (3s + axis)·4 + r. */
+  readonly faces: Float64Array;
+  /** The cave-air face pairs (the faces a border face may lie on) per (axis, residue), index 4·axis + r. */
+  readonly pairs: Float64Array;
+  /**
+   * On the layers y ≡ 0 (mod 4): the border edges (the layer's x and z border faces) per slot at 2s, and at 2s + 1 those
+   * in an axis-aligned straight run of ≥ `STRAIGHT_RUN` (a run of the slot's own edges on one plane line).
+   */
+  readonly edges: Float64Array;
+  /** The border faces per slot at 2s, and at 2s + 1 those in an axis-aligned planar patch of ≥ 4 × 4 of the slot's faces. */
+  readonly flat: Float64Array;
+  /**
+   * The skin by a border, per (slot, `CLS_*` class), index s·6 + class: the wall faces (a cave-air voxel's face whose
+   * neighbour is solid), by the solid voxel's class, of the cave-air voxels within `SKIN_NEAR` (Chebyshev) of a border
+   * voxel of the slot (a cave-air voxel on either side of a border face).
+   */
+  readonly skin: Float64Array;
+}
+
+export function emptyBorderCounts(): CaveBorderCounts {
+  return {
+    faces: new Float64Array(12 * BORDER_SLOTS), pairs: new Float64Array(12), edges: new Float64Array(2 * BORDER_SLOTS),
+    flat: new Float64Array(2 * BORDER_SLOTS), skin: new Float64Array(SKIN_CLASSES * BORDER_SLOTS),
+  };
+}
+
+/** The straight-run counter along one plane line: `push` each position's edge (its slot, or −1 for none), then `end`. */
+class StraightRuns {
+  private pair = -1;
+  private pairLen = 0;
+  private allLen = 0;
+  private readonly edges: Float64Array;
+  constructor(edges: Float64Array) {
+    this.edges = edges;
+  }
+  private flush(slot: number, len: number): void {
+    if (len >= STRAIGHT_RUN) this.edges[2 * slot + 1]! += len;
+  }
+  push(slot: number): void {
+    const e = this.edges;
+    if (slot >= 0) {
+      e[2 * slot]!++;
+      e[2 * ALL_PAIRS]!++;
+      this.allLen++;
+    } else {
+      this.flush(ALL_PAIRS, this.allLen);
+      this.allLen = 0;
+    }
+    if (slot === this.pair) {
+      if (slot >= 0) this.pairLen++;
+      return;
+    }
+    if (this.pair >= 0) this.flush(this.pair, this.pairLen);
+    this.pair = slot;
+    this.pairLen = slot >= 0 ? 1 : 0;
+  }
+  end(): void {
+    this.push(-1);
+  }
+}
+
+/** Adds the grid's border counts to `into` (fresh when absent); see `CaveBorderCounts`. */
+export function caveBorderCounts(g: CaveGrid, into: CaveBorderCounts = emptyBorderCounts()): CaveBorderCounts {
+  const { x0, z0, w, d, cells } = g;
+  const plane = w * d;
+  const { faces, pairs } = into;
+  const rx = new Int8Array(w);
+  for (let x = 0; x < w; x++) rx[x] = mod(x0 + x, 4);
+  const rz = new Int8Array(d);
+  for (let z = 0; z < d; z++) rz[z] = mod(z0 + z, 4);
+  // The border faces' keys per (slot, axis), for the planar patches: x (plane x, row y, column z), y (plane y, row z,
+  // column x: the + side voxel's index), z (plane z, row y, column x), as `flatWallDetail`'s.
+  const lists = Array.from({ length: 3 * BORDER_SLOTS }, () => new IntList());
+  let b = 0;
+  const face = (j: number, axis: number, r: number, key: number): void => {
+    const cj = cells[j]!;
+    if (!caveAir(cj)) return;
+    pairs[4 * axis + r]!++;
+    const s = PAIR_OF[4 * b + (cj >>> BIOME_SHIFT)]!;
+    if (s < 0) return;
+    faces[(3 * s + axis) * 4 + r]!++;
+    faces[(3 * ALL_PAIRS + axis) * 4 + r]!++;
+    lists[3 * s + axis]!.push(key);
+    lists[3 * ALL_PAIRS + axis]!.push(key);
+  };
+  for (let i = 0, n = cells.length; i < n; i++) {
+    const c = cells[i]!;
+    if (!caveAir(c)) continue;
+    const x = i % w;
+    const rest = (i - x) / w;
+    const z = rest % d;
+    const y = (rest - z) / d;
+    b = c >>> BIOME_SHIFT;
+    // Each face once, from its + side voxel (GRID_Y0 ≡ 0 mod 4, so the grid's y index has the world y's residue).
+    if (x > 0) face(i - 1, 0, rx[x]!, (x * GRID_H + y) * d + z);
+    if (y > 0) face(i - plane, 1, y & 3, i);
+    if (z > 0) face(i - w, 2, rz[z]!, (z * GRID_H + y) * w + x);
+  }
+  const dims: ReadonlyArray<readonly [R: number, C: number]> = [[GRID_H, d], [d, w], [GRID_H, w]];
+  for (let s = 0; s < BORDER_SLOTS; s++) {
+    for (let axis = 0; axis < 3; axis++) {
+      const l = lists[3 * s + axis]!;
+      const keys = l.a.subarray(0, l.n).sort();
+      into.flat[2 * s]! += l.n;
+      into.flat[2 * s + 1]! += flatFaces(keys, dims[axis]![0], dims[axis]![1], FLAT_BORDER_SIDE, new Uint8Array(l.n));
+    }
+  }
+  straightCounts(g, into.edges);
+  skinCounts(g, into.skin);
+  return into;
+}
+
+/** One layer's cave biome per position (−1 where the voxel is not cave air); whether any position is cave air. */
+function layerBiomes(cells: Uint8Array, ly: number, plane: number, out: Int8Array): boolean {
+  let any = false;
+  for (let p = 0, base = ly * plane; p < plane; p++) {
+    const c = cells[base + p]!;
+    const air = caveAir(c);
+    out[p] = air ? c >>> BIOME_SHIFT : -1;
+    any ||= air;
+  }
+  return any;
+}
+
+/** The slot of the edge between two positions' biomes (`layerBiomes`), −1 when it is no border edge. */
+const edgeSlot = (a: number, b: number): number => (a < 0 || b < 0 ? -1 : PAIR_OF[4 * a + b]!);
+
+/** `CaveBorderCounts.edges`: on each layer y ≡ 0 (mod 4), the x border faces along z per plane x, the z ones along x per plane z. */
+function straightCounts(g: CaveGrid, edges: Float64Array): void {
+  const { w, d, cells } = g;
+  const plane = w * d;
+  const bio = new Int8Array(plane);
+  const runs = new StraightRuns(edges);
+  for (let ly = 0; ly < GRID_H; ly += STRAIGHT_LAYER_STEP) {
+    if (!layerBiomes(cells, ly, plane, bio)) continue;
+    for (let x = 1; x < w; x++) {
+      for (let z = 0; z < d; z++) runs.push(edgeSlot(bio[z * w + x - 1]!, bio[z * w + x]!));
+      runs.end();
+    }
+    for (let z = 1; z < d; z++) {
+      for (let x = 0; x < w; x++) runs.push(edgeSlot(bio[(z - 1) * w + x]!, bio[z * w + x]!));
+      runs.end();
+    }
+  }
+}
+
+/**
+ * One layer's border voxels (cave-air voxels with a face on a border): their positions in `list`, the count returned,
+ * and at each its bits (1 << slot) of the pairs whose border faces it touches in `bits` (other positions left as they were).
+ */
+function borderVoxels(cells: Uint8Array, w: number, d: number, ly: number, bits: Uint8Array, list: Int32Array): number {
+  const plane = w * d;
+  let n = 0;
+  for (let p = 0, i = ly * plane; p < plane; p++, i++) {
+    const c = cells[i]!;
+    if (!caveAir(c)) continue;
+    const b4 = 4 * (c >>> BIOME_SHIFT);
+    const x = p % w;
+    const z = (p - x) / w;
+    const m = (x > 0 ? touchBit(cells[i - 1]!, b4) : 0) | (x < w - 1 ? touchBit(cells[i + 1]!, b4) : 0)
+      | (z > 0 ? touchBit(cells[i - w]!, b4) : 0) | (z < d - 1 ? touchBit(cells[i + w]!, b4) : 0)
+      | (ly > 0 ? touchBit(cells[i - plane]!, b4) : 0) | (ly < GRID_H - 1 ? touchBit(cells[i + plane]!, b4) : 0);
+    if (m === 0) continue;
+    bits[p] = m;
+    list[n++] = p;
+  }
+  return n;
+}
+
+/** The pair bit (1 << slot) of a neighbour cell beside a cave-air voxel of biome b (`b4` = 4b): 0 unless it is cave air of another biome. */
+function touchBit(cell: number, b4: number): number {
+  if (!caveAir(cell)) return 0;
+  const s = PAIR_OF[b4 + (cell >>> BIOME_SHIFT)]!;
+  return s < 0 ? 0 : 1 << s;
+}
+
+/**
+ * `CaveBorderCounts.skin`, layer by layer: each border voxel ORs its pair bits into the voxels within `SKIN_NEAR`
+ * (Chebyshev) of it, in a ring of 2·SKIN_NEAR + 1 layers; once a layer has received every border voxel within reach,
+ * each of its cave-air voxels that is near a pair counts its wall faces under those pairs and under every pair's slot,
+ * by the solid neighbour's class.
+ */
+function skinCounts(g: CaveGrid, skin: Float64Array): void {
+  const { w, d, cells, cls } = g;
+  const plane = w * d;
+  const R = SKIN_NEAR;
+  const span = 2 * R + 1;
+  const ring = Array.from({ length: span }, () => new Uint8Array(plane));
+  const has = new Uint8Array(span);
+  const bits = new Uint8Array(plane);
+  const list = new Int32Array(plane);
+  const add = (pairsNear: number, k: number): void => {
+    skin[ALL_PAIRS * SKIN_CLASSES + k]!++;
+    for (let s = 0; s < ALL_PAIRS; s++) if ((pairsNear & (1 << s)) !== 0) skin[s * SKIN_CLASSES + k]!++;
+  };
+  // Step t spreads layer t's border voxels over the layers t − R … t + R and counts layer t − R, which then has them all
+  // (layer t + R reuses the slot of layer t − R − 1, counted and cleared at step t − 1).
+  for (let t = 0; t < GRID_H + R; t++) {
+    const n = t < GRID_H ? borderVoxels(cells, w, d, t, bits, list) : 0;
+    for (let k = 0; k < n; k++) {
+      const p = list[k]!;
+      const m = bits[p]!;
+      const x = p % w;
+      const z = (p - x) / w;
+      const x1 = Math.min(w - 1, x + R);
+      const z1 = Math.min(d - 1, z + R);
+      for (let ly = Math.max(0, t - R); ly <= Math.min(GRID_H - 1, t + R); ly++) {
+        const slot = ly % span;
+        const r = ring[slot]!;
+        has[slot] = 1;
+        for (let zz = Math.max(0, z - R); zz <= z1; zz++) for (let xx = Math.max(0, x - R), q = zz * w; xx <= x1; xx++) r[q + xx] |= m;
+      }
+    }
+    const ly = t - R;
+    if (ly < 0) continue;
+    const slot = ly % span;
+    if (has[slot] === 0) continue;
+    const near = ring[slot]!;
+    for (let p = 0, i = ly * plane; p < plane; p++, i++) {
+      const m = near[p]!;
+      if (m === 0 || !caveAir(cells[i]!)) continue;
+      const x = p % w;
+      const z = (p - x) / w;
+      if (x > 0 && (cells[i - 1]! & SOLID_BIT) !== 0) add(m, cls[i - 1]!);
+      if (x < w - 1 && (cells[i + 1]! & SOLID_BIT) !== 0) add(m, cls[i + 1]!);
+      if (z > 0 && (cells[i - w]! & SOLID_BIT) !== 0) add(m, cls[i - w]!);
+      if (z < d - 1 && (cells[i + w]! & SOLID_BIT) !== 0) add(m, cls[i + w]!);
+      if (ly > 0 && (cells[i - plane]! & SOLID_BIT) !== 0) add(m, cls[i - plane]!);
+      if (ly < GRID_H - 1 && (cells[i + plane]! & SOLID_BIT) !== 0) add(m, cls[i + plane]!);
+    }
+    near.fill(0);
+    has[slot] = 0;
+  }
+}
+
+/** The counts of several regions pooled (summed). */
+export function poolBorderCounts(counts: readonly CaveBorderCounts[]): CaveBorderCounts {
+  const out = emptyBorderCounts();
+  for (const c of counts) {
+    for (const k of Object.keys(out) as Array<keyof CaveBorderCounts>) for (let i = 0; i < out[k].length; i++) out[k][i]! += c[k][i]!;
+  }
+  return out;
+}
+
+/** The value farthest from 1 (|ln v| largest; 0 is infinitely far); NaN values left out, NaN when all are. */
+function farthestFromOne(values: readonly number[]): number {
+  let value = Number.NaN;
+  let worst = -1;
+  for (const v of values) {
+    if (Number.isNaN(v)) continue;
+    const dev = v === 0 ? Infinity : Math.abs(Math.log(v));
+    if (dev > worst) {
+      worst = dev;
+      value = v;
+    }
+  }
+  return value;
+}
+
+/** B3's border parts of one slot (a pair, or every pair) of pooled counts. */
+export interface CaveBorderPart {
+  /**
+   * `B3.borderLattice`: per axis, the border faces' rate (over the cave-air face pairs) on planes ≡ 0 (mod 4) over the
+   * mean rate of residues 1-3; the axis ratio farthest from 1 (`C7.borderPlaneRatio`'s pattern; NaN ratios left out).
+   */
+  readonly borderLattice: number;
+  /** The three axes' ratios. */
+  readonly lattice: { readonly x: number; readonly y: number; readonly z: number };
+  /** `B3.straightBorder`: on the layers y ≡ 0 (mod 4), the share of border edges in axis-aligned straight runs ≥ 8. */
+  readonly straightBorder: number;
+  /** `B3.flatBorder`: the share of border faces in axis-aligned planar patches ≥ 4 × 4. */
+  readonly flatBorder: number;
+  /** The border faces, and per axis (x, y, z). */
+  readonly borderFaces: number;
+  readonly facesByAxis: readonly number[];
+  /** The edges `straightBorder` reads, and those in straight runs; the faces in planar patches. */
+  readonly layerEdges: number;
+  readonly straightEdges: number;
+  readonly flatFaces: number;
+  /** The skin by a border: the wall faces counted, and each class's share of them (`SKIN_NAMES`). */
+  readonly skinFaces: number;
+  readonly skin: Record<(typeof SKIN_NAMES)[number], number>;
+}
+
+function borderPartOf(c: CaveBorderCounts, s: number): CaveBorderPart {
+  const axisRatio = (axis: number): number => {
+    const rate = (r: number): number => ratio(c.faces[(3 * s + axis) * 4 + r]!, c.pairs[4 * axis + r]!);
+    return ratio(rate(0), (rate(1) + rate(2) + rate(3)) / 3);
+  };
+  const lattice = { x: axisRatio(0), y: axisRatio(1), z: axisRatio(2) };
+  const facesByAxis = [0, 1, 2].map((axis) => {
+    let n = 0;
+    for (let r = 0; r < 4; r++) n += c.faces[(3 * s + axis) * 4 + r]!;
+    return n;
+  });
+  let skinFaces = 0;
+  for (let k = 0; k < SKIN_CLASSES; k++) skinFaces += c.skin[s * SKIN_CLASSES + k]!;
+  const skin = Object.fromEntries(SKIN_NAMES.map((name, k) => [name, ratio(c.skin[s * SKIN_CLASSES + k]!, skinFaces)])) as CaveBorderPart['skin'];
+  return {
+    borderLattice: farthestFromOne([lattice.x, lattice.y, lattice.z]), lattice,
+    straightBorder: ratio(c.edges[2 * s + 1]!, c.edges[2 * s]!), flatBorder: ratio(c.flat[2 * s + 1]!, c.flat[2 * s]!),
+    borderFaces: facesByAxis[0]! + facesByAxis[1]! + facesByAxis[2]!, facesByAxis,
+    layerEdges: c.edges[2 * s]!, straightEdges: c.edges[2 * s + 1]!, flatFaces: c.flat[2 * s + 1]!, skinFaces, skin,
+  };
+}
+
+/** B3's border parts over some regions' counts (one job's, SP6b spec §12.2): overall (every pair) and per pair. */
+export interface CaveBorderParts {
+  readonly overall: CaveBorderPart;
+  /** Per pair, by `BORDER_PAIR_NAMES`. */
+  readonly pairs: Readonly<Record<string, CaveBorderPart>>;
+}
+
+export function caveBorderParts(counts: readonly CaveBorderCounts[]): CaveBorderParts {
+  const c = poolBorderCounts(counts);
+  return {
+    overall: borderPartOf(c, ALL_PAIRS),
+    pairs: Object.fromEntries(BORDER_PAIR_NAMES.map((name, s) => [name, borderPartOf(c, s)])),
   };
 }
 

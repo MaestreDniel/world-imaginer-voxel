@@ -898,6 +898,29 @@ Applied in the plan's order, each its own commit, measured before the next (ruli
 
 The `bottomCavern` screenshot after 25c (quick's pose (185.5, −38.5, −21.5), yaw 45, pitch −15, RD 12, night vision on so the light floor reads): terraced deepslate mounds and gullies with steps of 1-3 blocks, more relief than at the checkpoint, not a plane. The light-blue patch at the lower left (also in Task 24's shots) is a rendering artefact, not water and not a sky leak: `?at=` takes integers, so the eye sits at (185.0, −38.5, −22.0), on the face of the deepslate column x = 184 (solid at y −41 … −36 for z −23 and −22), and the near plane clips into it, showing the clear colour through the wall's unmeshed inside; the same view from `?at=186,-22` (four air columns around the eye) shows no patch. A review link at this pose would show it too (Task 56).
 
+### B3's border parts on `caves` and `caves-presets` (Task 26)
+
+Recorded, not gated (Task 30 gates them; the `caves-biomes` job and its pair minimum arrive with Task 27). Measured at the generator push's local head after Task 25 (`GENERATOR_VERSION` 9, the picker, rule 4 and the rock floor in), per job over its regions: `METRICS_CAVE_GROUPS=default` and `=presets npx vitest run --project metrics-quick test/metrics/caves.metric.ts`, each writing `.out/B3.borders.<group>.json`; fast through `npm test` (`metrics-fast`, both groups in one process: the default group only, fast has no preset region). As built (`test/harness/caveMetrics.ts`' header): cave air as §12.1's (tagged, neither solid nor fluid); a border face lies between two face-adjacent cave-air voxels of different biomes, on the plane of its + side voxel; `borderLattice` reads each residue's border faces over its cave-air face pairs (the faces a border may lie on), on all three axes, the axis farthest from 1; each pair's parts are read over that pair's own faces; the skin mix counts the wall faces of the cave air within 2 blocks (Chebyshev) of a border voxel, by the solid neighbour's block class.
+
+| job (tier) | border faces (x / y / z) | `borderLattice` (x, y, z) | `straightBorder` (edges in runs ≥ 8 / edges) | `flatBorder` (flat / faces) | skin by a border: stone and other / moss / clay / dripstone_block / abyss rock |
+|---|---|---|---|---|---|
+| `caves`, default (fast, 2 regions 16 × 16) | 122,960 (39,851 / 42,888 / 40,221) | 1.0071 (1.0071, 1.0038, 1.0015) | 0.0043 | 0 | 69.6 / 0 / 0 / 30.4 / 0 % |
+| `caves`, default (quick, 6 regions) | 1,203,848 (390,611 / 422,736 / 390,501) | 1.0009 (1.0009, 0.9997, 0.9999) | 0.0059 (1,196 / 201,678) | 0.000033 (40 / 1,203,848) | 70.6 / 8.2 / 1.3 / 20.0 / 0 % |
+| `caves-presets` (quick, 3 regions) | 825,389 (271,063 / 283,648 / 270,678) | 0.9963 (0.9996, 0.9963, 0.9996) | 0.0049 (677 / 138,510) | 0.000039 (32 / 825,389) | 65.1 / 0 / 0 / 24.2 / 10.7 % |
+
+Per pair (quick; the pairs not listed hold no border face in that job):
+
+| job | pair | border faces | `borderLattice` | `straightBorder` | `flatBorder` | skin by the border (other / moss / clay / dripstone / abyss) |
+|---|---|---|---|---|---|---|
+| `caves` | lush \| plain | 364,696 | 0.9952 | 0.0063 | 0 | 72.4 / 23.7 / 3.7 / 0.1 / 0 % |
+| `caves` | dripstone \| plain | 825,687 | 0.9974 | 0.0058 | 0.000048 | 70.1 / 0.1 / 0.0 / 29.8 / 0 % |
+| `caves` | lush \| dripstone | 13,465 | 1.0255 | 0 | 0 | 40.3 / 25.8 / 4.6 / 29.3 / 0 % |
+| `caves-presets` | dripstone \| plain | 674,562 | 0.9966 | 0.0047 | 0.000024 | 69.6 / 0 / 0.0 / 29.0 / 1.5 % |
+| `caves-presets` | abyss \| plain | 133,597 | 0.9867 | 0.0029 | 0 | 47.9 / 0 / 0 / 2.8 / 49.4 % |
+| `caves-presets` | dripstone \| abyss | 17,230 | 1.0641 | 0 | 0 | 39.4 / 0 / 0 / 19.3 / 41.3 % |
+
+Against §12.2's proposed bounds (0.9-1.1, ≤ 10 %, ≤ 5 %) every job and pair holds on both tiers; the default regions hold no abyss border (as §12.2 expects; the preset regions and Task 27's biome region sample it). Every region holds borders (81,772 … 356,977 faces on quick). Cost: the border counts take 0.72-1.19 s per 32 × 32 region on quick (in the 4 region workers, 1-minute load 1.4; 0.18-0.29 s per fast region); the quick shards' walls on the laptop's warm region cache were 64.9 s (`caves`) and 38.7 s (`caves-presets`).
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
