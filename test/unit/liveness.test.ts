@@ -21,6 +21,7 @@ import { samplePoints } from '../../src/metrics/noiseStats';
 import { fillColumnT, regionHash } from '../../src/metrics/region';
 import { createStore } from '../../src/world/store/store';
 import { resolveProfile } from '../../src/core/params/profiles';
+import { checkRegistry, prefixCovers, STAGES } from '../../src/core/stage/registry';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
 import { createGenContext, type GenContext } from '../../src/gen/context';
@@ -64,6 +65,8 @@ const BIOME_LEAVES = [
 ] as const;
 /** The rock floor's leaves (SP6b Task 19, spec §5.2, §12.7), decided on the class columns, the cave columns first. */
 const FLOOR_LEAVES = ['caves.noises.floor', 'caves.floor.y', 'caves.floor.amp', 'caves.floor.span'] as const;
+/** The four floor leaves' deciding column at seed 42 (SP6b Task 29's full-tier audit, at Task 25's floor −60, amp 7): the tunnels'. */
+const FLOOR_VIA = TUNNELS_VIA;
 /** The carver leaves (SP6a Task 27), decided on the class columns or on their bounded carver witness (ruling P18). */
 const CARVER_LEAVES = SCHEMA.leaves.filter((l) => /^caves\.(worms|undergroundWorms|ravines)\./.test(l.path)).map((l) => l.path);
 /** The spaghetti scale leaves (SP6a Task 7), decided on the class columns or on their bounded witness search (ruling P5). */
@@ -780,7 +783,7 @@ describe('the rock floor\'s leaves (SP6b Task 19; spec §5.2, §12.7, Spec corre
    * floorY ≤ y + 3·amp, g_b is 0 above floorY + 8 + span); the highest is printed (a changed cave floor can move the
    * rules' runs and the water above it).
    */
-  test('each is live on a cave column, where a step changes its T column from the bottom, within the floor\'s reach', () => {
+  test('each is live on the tunnels\' cave column, where a step changes its T column from the bottom, within the floor\'s reach', () => {
     const all = [...columns(), ...CAVE_SLOTS.map((slot) => caveColumn(CTX, slot)!)];
     const blocksOf = (ctx: GenContext, cx: number, cz: number): Uint16Array => {
       const store = createStore({ shared: false, maxBlockBytes: 1 << 20, maxByteBytes: 1 << 20 });
@@ -794,7 +797,7 @@ describe('the rock floor\'s leaves (SP6b Task 19; spec §5.2, §12.7, Spec corre
     const lines: string[] = [];
     for (const p of FLOOR_LEAVES) {
       const r = leafLiveness(CTX, p, all);
-      expect([p, r.live, [CAVERNS_VIA, TUNNELS_VIA].includes(r.via!)]).toEqual([p, true, true]);
+      expect([p, r.live, r.via, r.cls]).toEqual([p, true, FLOOR_VIA, 'cave']);
       const [cx, cz] = r.via!.slice('cave column ('.length, -1).split(', ').map(Number) as [number, number];
       const base = blocksOf(CTX, cx, cz);
       for (const value of perturbations(leaf(p), getPath(DEFAULTS, p))) {
@@ -844,6 +847,16 @@ describe('the cave-biome leaves (SP6b Task 17; spec §12.7, Spec correction 5)',
     'caves.biomes.noises.border': 'cliffY column (17107, 13836)',
     'caves.biomes.noises.depth': CAVERNS_VIA,
   };
+  /**
+   * The search's figures for the two leaves dead on every class column (SP6b Task 29's full-tier audit): draws of
+   * 32,768, columns examined of 256, T columns hashed of 64. The abyss's cMin is the thinnest margin (229 of 256
+   * examined, about 1 examined per 93 draws, so its budget ends near draw 23,800): a retune of the abyss box or the
+   * floor that moves its witness re-pins it here.
+   */
+  const WITNESS_SCANS: Readonly<Partial<Record<(typeof BIOME_LEAVES)[number], { draws: number; examined: number; checks: number }>>> = {
+    'caves.biomes.lush.hMin': { draws: 83, examined: 4, checks: 1 },
+    'caves.biomes.abyss.cMin': { draws: 21291, examined: 229, checks: 1 },
+  };
   /** The cave biomes each leaf reads: its box's own; any of lush, dripstone and abyss for the border leaves and noises. */
   const reads = (path: string): number[] => path.includes('.lush.') ? [1] : path.includes('.dripstone.') ? [2] : path.includes('.abyss.') ? [3] : [1, 2, 3];
   /** The cave biomes the tagged air of `ctx`'s T column (cx, cz) holds. */
@@ -875,6 +888,8 @@ describe('the cave-biome leaves (SP6b Task 17; spec §12.7, Spec correction 5)',
       const w = biomeWitness(CTX, p, all);
       expect(w.via, p).toMatch(/^biome witness column \(-?\d+, -?\d+\)$/);
       if (r.cls === null) expect(w.via, p).toBe(r.via);
+      if (r.cls === null) expect([p, { draws: w.draws, examined: w.examined, checks: w.checks }]).toEqual([p, WITNESS_SCANS[p]]);
+      expect([p, r.cls === null]).toEqual([p, WITNESS_SCANS[p] !== undefined]);
       expect(w.checks, p).toBeLessThanOrEqual(64);
       expect(w.examined, p).toBeLessThanOrEqual(256);
       expect(w.draws, p).toBeLessThanOrEqual(32768);
@@ -931,6 +946,28 @@ describe('rule 4\'s noises (SP6b Task 22; spec §3.4, §12.7, Spec correction 5)
     }
     expect(() => caveRuleWitness(CTX, 'surface.noises.patch')).toThrow('not a rule-4 noise');
   }, 300_000);
+});
+
+describe('SP6b\'s leaves in U2 and U4 (SP6b spec §12.7, D15; Task 29)', () => {
+  const SP6B_LEAVES = [...BIOME_LEAVES, ...FLOOR_LEAVES, ...RULE4_NOISES];
+
+  test('U2 covers SP6a\'s 172 leaves and SP6b\'s 21: the 15 cave-biome leaves, the rock floor\'s 4 and rule 4\'s 2 noises', () => {
+    const covered = new Set(u2Leaves().map((l) => l.path));
+    for (const p of SP6B_LEAVES) expect([p, covered.has(p)]).toEqual([p, true]);
+    expect([SP6B_LEAVES.length, covered.size]).toEqual([21, U2_LEAVES]);
+    expect(U2_LEAVES - SP6B_LEAVES.length).toBe(172);
+  });
+
+  test('U4\'s registry check accepts the unchanged stage list: every SP6b leaf is homed in, and first hashed by, the terrain stage (D15)', () => {
+    // D15: the leaves live under caves.* and surface.*, which the terrain stage already hashes; no stage is added.
+    expect(STAGES.map((s) => s.id)).toEqual(['climate', 'shape', 'surfaceEst', 'biome2d', 'terrain', 'decorate', 'light', 'mesh', 'lod', 'map']);
+    expect(STAGES.find((s) => s.id === 'terrain')?.params).toEqual(['density', 'surface', 'caves']);
+    for (const p of SP6B_LEAVES) {
+      const first = STAGES.find((s) => s.params.some((q) => prefixCovers(q, p)));
+      expect([p, leaf(p).meta.scope, leaf(p).meta.stage, first?.id]).toEqual([p, 'terrain', 'terrain', 'terrain']);
+    }
+    expect(checkRegistry(SCHEMA, STAGES)).toEqual([]);
+  });
 });
 
 describe('the depth-band leaves (SP6a Task 8; rulings P3, P4, R5)', () => {

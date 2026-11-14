@@ -159,7 +159,8 @@
  * Rule 4 (Task 22) lands item 12's order sentence (`root.rules[2]`; the deepslate gradient `root.rules[3]`), rule 4's
  * text as built with its under-water branches handed to SP7, and the "As built by SP6b" paragraph (the terrain stage's
  * version 5, `GENERATOR_VERSION` 9), moving the SP6a describe's "SP6b inserts rule 4 before rule 2" pin here; §6.4's
- * U2 row counts 193 leaves with rule 4's two noises.
+ * U2 row counts 193 leaves with rule 4's two noises. U2's full-tier audit (Task 29) words that row as built: each new
+ * leaf on the class columns, the cave columns first, else on its bounded witness.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2706,15 +2707,18 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(SCHEMA.leaves.find((l) => l.path === 'caves.noises.floor')?.leaf.dims, 'Nf is 2D, as the line says').toBe(2);
   });
 
-  test('§6.4\'s U2 row covers the schema\'s U2 leaves (SP6b spec §15 item 20)', () => {
-    // Moved from the SP6a describe (the schema's count); SP6b's leaves join it.
+  test('§6.4\'s U2 row as built (SP6b spec §15 item 20)', () => {
+    // Moved from the SP6a describe (the schema's count); SP6b's leaves join it. Task 29 words the row as built after the
+    // full-tier audit (SP6b §12.7): each new leaf is tried on the class columns, the cave columns first, and only those
+    // dead there go to a bounded witness (at seed 42 lush's hMin and the abyss's cMin; the floor leaves and rule 4's
+    // noises decide on the cave columns).
     const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
     expect(u2, 'no U2 row in §6.4').toBeDefined();
     const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
     // 187 with the 15 caves.biomes.* leaves (Task 17), 191 with the rock floor's four (Task 19), 193 with rule 4's two
     // noises (Task 22).
     expect(n).toBe(193);
-    expect(u2).toContain(`; SP6b: the caves.biomes.* leaves are decided on a bounded biome witness (stream columns whose tagged air holds a cave biome the leaf reads, where a step changes the T column) where the class columns leave them dead, the rock floor's leaves (\`caves.noises.floor\`, \`caves.floor.*\`) on the default base's cave class columns, at the bottom, rule 4's noises (\`surface.noises.cavePatch\`, \`strataOffset\`) on the cave class columns or a bounded biome witness (stream columns whose tagged air holds a cave biome rule 4 reads the noise in, where a step changes the T column); U2 covers ${n} leaves (amended by SP6b)`);
+    expect(u2).toContain(`; SP6b: the caves.biomes.* leaves are decided on the class columns, the cave columns first, else on a bounded biome witness (stream columns whose tagged air holds a cave biome the leaf reads, where a step changes the T column), the floor leaves (\`caves.noises.floor\`, \`caves.floor.*\`) on the default base's cave class columns, at the bottom, \`surface.noises.cavePatch\` and \`strataOffset\` on the cave class columns, else on a bounded biome witness (stream columns whose tagged air holds a cave biome rule 4 reads the noise in, where a step changes the T column); U2 covers ${n} leaves (amended by SP6b) |`);
   });
 
   test('§6.4\'s DT2 row gains caveBiomeProbe (SP6b spec §15 item 20)', () => {
