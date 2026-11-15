@@ -832,7 +832,7 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
             if (out.field === 'blocks') {
               out.values.set(new Uint16Array(r.values), from * n);
               out.fluid.set(new Uint8Array(r.fluid!), from * n);
-            } else if (out.field === 'rule' || out.field === 'caves') out.values.set(new Uint8Array(r.values), from * n);
+            } else if (out.field === 'rule' || out.field === 'caves' || out.field === 'biome3d') out.values.set(new Uint8Array(r.values), from * n);
             else out.values.set(new Float64Array(r.values), from * n);
             if (--left === 0) { done = true; resolve(out); }
           }).catch((err: unknown) => fail(err instanceof Error ? err : new Error(String(err))));

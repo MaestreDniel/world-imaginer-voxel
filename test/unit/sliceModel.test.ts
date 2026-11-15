@@ -31,7 +31,9 @@ import {
   SLICE_DRAFT_N, SLICE_DRAFT_PRIORITY, SLICE_FULL_N, SLICE_FULL_PRIORITY, type ConfiguredDraft, type SliceWant,
   contourPath, createSlicePins, pinWant, PIN_DUPLICATE_TEXT, PIN_FULL_TEXT, PIN_MAX, sliceImage, createCaveGestureHold, widestCaveExtent,
   CAVES_LABEL, CAVES_SOLID, CAVES_SOLID_RGB, cavesRgba, fieldOptionLabel,
+  BIOME3D_LABEL, biome3dCodeText, biome3dLegend, biome3dRgba, sliceHoverText,
 } from '../../src/ui/inspector/sliceModel';
+import { CAVE_BIOME_COLORS } from '../../src/core/constants';
 import { VOXEL_COLORS } from '../../src/ui/crossSection/voxels';
 import { XRAY_COLORS } from '../../src/render/xrayPalette';
 import { planFieldSlice, type FieldSliceSpec } from '../../src/workers/protocol';
@@ -271,14 +273,14 @@ describe('blocks and rule fields', () => {
 });
 
 describe('field select', () => {
-  test('density, selected, blocks and caves; blocks and a rule node have no horizontal slice', () => {
-    expect(FIELD_CHOICES).toEqual(['density', 'selected', 'blocks', 'caves']);
+  test('density, selected, blocks, caves and biome3d; blocks and a rule node have no horizontal slice', () => {
+    expect(FIELD_CHOICES).toEqual(['density', 'selected', 'blocks', 'caves', 'biome3d']);
     const on = (o: ReturnType<typeof fieldOptions>) => o.map((x) => [x.value, x.disabled]);
-    expect(on(fieldOptions('vertical', DENSITY_SEL))).toEqual([['density', false], ['selected', false], ['blocks', false], ['caves', false]]);
-    expect(on(fieldOptions('vertical', RULE_SEL))).toEqual([['density', false], ['selected', false], ['blocks', false], ['caves', false]]);
-    expect(on(fieldOptions('horizontal', DENSITY_SEL))).toEqual([['density', false], ['selected', false], ['blocks', true], ['caves', false]]);
+    expect(on(fieldOptions('vertical', DENSITY_SEL))).toEqual([['density', false], ['selected', false], ['blocks', false], ['caves', false], ['biome3d', false]]);
+    expect(on(fieldOptions('vertical', RULE_SEL))).toEqual([['density', false], ['selected', false], ['blocks', false], ['caves', false], ['biome3d', false]]);
+    expect(on(fieldOptions('horizontal', DENSITY_SEL))).toEqual([['density', false], ['selected', false], ['blocks', true], ['caves', false], ['biome3d', false]]);
     const hr = fieldOptions('horizontal', RULE_SEL);
-    expect(on(hr)).toEqual([['density', false], ['selected', true], ['blocks', true], ['caves', false]]);
+    expect(on(hr)).toEqual([['density', false], ['selected', true], ['blocks', true], ['caves', false], ['biome3d', false]]);
     expect(hr[1]!.note).toBe('a rule node has a mask on vertical planes only');
     expect(hr[2]!.note).toBe('blocks have no horizontal slice');
     expect(fieldOptions('vertical', DENSITY_SEL).every((o) => o.note === null)).toBe(true);
@@ -311,6 +313,48 @@ describe('field select', () => {
     const st: SliceState = { plane: 'horizontal', field: 'caves', y: 30, extent: 256, cx: 0, cz: 0 };
     expect(sliceRequestKey(st, null, 'caves', 'root.a')).toBe(sliceRequestKey(st, null, 'caves', ''));
     expect(sliceRequestKey(st, null, 'caves', '')).toBe('horizontal|caves||0,0,256,30');
+  });
+
+  test('"Cave biome" (SP6b §9.2, D10): the biome3d field on both planes, whatever the selection, with the path \'\'', () => {
+    expect(BIOME3D_LABEL).toBe('Cave biome');
+    const sels: Selection[] = [DENSITY_SEL, RULE_SEL, { leaf: 'surface.rules', path: 'root.rules[1].if.if' }, { leaf: 'density.defs', path: 'defs.base' }];
+    for (const plane of ['vertical', 'horizontal'] as const) {
+      for (const sel of sels) {
+        expect(resolveField('biome3d', plane, sel)).toEqual({ ok: true, field: 'biome3d', path: '' });
+        const o = fieldOptions(plane, sel).find((x) => x.value === 'biome3d')!;
+        expect(o).toEqual({ value: 'biome3d', label: 'Cave biome', disabled: false, note: null });
+        expect(fieldOptionLabel('biome3d', sel)).toBe('Cave biome');
+        // The other labels as before.
+        expect(fieldOptions(plane, sel).map((x) => x.label).slice(2)).toEqual(['blocks', 'Cave type', 'Cave biome']);
+      }
+    }
+    const st: SliceState = { plane: 'horizontal', field: 'biome3d', y: 30, extent: 256, cx: 0, cz: 0 };
+    expect(sliceRequestKey(st, null, 'biome3d', '')).toBe('horizontal|biome3d||0,0,256,30');
+    expect(sliceRequestKey(st, null, 'biome3d', 'root.a')).toBe(sliceRequestKey(st, null, 'biome3d', ''));
+  });
+
+  test('the biome3d image: cave air in its biome\'s colour (CAVE_BIOME_COLORS), other solid pale grey, open air the sky; a legend of the biomes present; the hover names the biome', () => {
+    const hex = (h: string): number[] => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    // 1 + biome: plain 1, lush 2, dripstone 3, abyss 4.
+    const v = Uint8Array.from([0, 2, CAVES_SOLID, 4]);
+    const h = biome3dRgba(v, 2, 'horizontal');
+    expect([rgb(h, 0), rgb(h, 1), rgb(h, 2), rgb(h, 3)]).toEqual([[...VOXEL_COLORS.sky], hex('#4dff7a'), [216, 216, 216], hex(CAVE_BIOME_COLORS[3]!)]);
+    for (let b = 0; b < 4; b++) expect(rgb(biome3dRgba(Uint8Array.of(1 + b), 1, 'horizontal'), 0)).toEqual(hex(CAVE_BIOME_COLORS[b]!));
+    const vt = biome3dRgba(v, 2, 'vertical');
+    expect([rgb(vt, 0), rgb(vt, 1), rgb(vt, 2), rgb(vt, 3)]).toEqual([rgb(h, 0), rgb(h, 2), rgb(h, 1), rgb(h, 3)]);
+    const img = sliceImage({ n: 2, field: 'biome3d', values: v, fluid: null }, 'horizontal', null);
+    expect([img.rgba, img.contour, img.stats]).toEqual([h, [], null]);
+    // The legend: the biomes present in id order, then other solid and open air.
+    expect(biome3dLegend(Uint8Array.from([4, 0, 2, CAVES_SOLID, 2]))).toEqual([
+      { label: 'Lush', rgb: hex('#4dff7a') }, { label: 'Abyss', rgb: hex(CAVE_BIOME_COLORS[3]!) },
+      { label: 'other solid', rgb: [216, 216, 216] }, { label: 'open air', rgb: [...VOXEL_COLORS.sky] },
+    ]);
+    expect(biome3dLegend(Uint8Array.from([1, 3]))).toEqual([{ label: 'Plain cave', rgb: hex(CAVE_BIOME_COLORS[0]!) }, { label: 'Dripstone', rgb: hex(CAVE_BIOME_COLORS[2]!) }]);
+    expect([0, 1, 2, 3, 4, CAVES_SOLID, 9].map(biome3dCodeText)).toEqual(['open air', 'Plain cave', 'Lush', 'Dripstone', 'Abyss', 'other solid', 'code 9']);
+    const g = sliceGeometryOf({ plane: 'horizontal', field: 'biome3d', y: 30, extent: 256, cx: 0, cz: 0 }, null, 32);
+    if (!g.ok) throw new Error(g.problem);
+    const values = new Uint8Array(32 * 32).fill(2);
+    expect(sliceHoverText({ sessionEpoch: 1, key: 'k', geometry: g.geometry, result: { n: 32, field: 'biome3d', values, fluid: null } }, 0, 0).text).toMatch(/ · biome3d Lush$/);
   });
 
   test('the caves image: each kind in the X-ray\'s colours, other solid pale grey, open air the sky; a vertical slice transposed', () => {
@@ -1054,6 +1098,60 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
       s.inGesture = false;
       r.request(want(CAVES_V));
       expect(calls.slice(2).map((c) => [c.req.field, c.req.n, c.opts.columnCost])).toEqual([['caves', 32, sliceCostOf(dragged, 'caves', '', 'vertical', 32)]]);
+      expect(r.pending?.sessionEpoch).toBe(8);
+    });
+  });
+
+  describe('the biome3d field\'s requests (SP6b §9.2, D10: refusable like caves, held during a cave drag so it redraws on release)', () => {
+    const BIOME_V: SliceState = { ...VERT, field: 'biome3d' };
+    const BIOME_H: SliceState = { ...HORI, field: 'biome3d', extent: 256 };
+    const biomes = (n: number): FieldSliceResult => ({ n, field: 'biome3d', values: new Uint8Array(n * n).fill(2), fluid: null });
+
+    test('vertical: a 32² draft, then the 128² slice, with sliceCostOf\'s biome3d costs (caves\' plus the picker term) and the two budgets', async () => {
+      const { r, calls } = harness(DEFAULTS);
+      r.request(want(BIOME_V));
+      expect(calls.map((c) => [c.req.field, c.req.path, c.req.n, c.opts])).toEqual([
+        ['biome3d', '', 32, { priority: 2, columnCost: sliceCostOf(DEFAULTS, 'biome3d', '', 'vertical', 32), budget: DRAFT_BUDGET }],
+      ]);
+      // The picker term: n picks of 2 and one chunk column's pass of 16,384.
+      expect(sliceCostOf(DEFAULTS, 'biome3d', '', 'vertical', 128)).toBe(sliceCostOf(DEFAULTS, 'caves', '', 'vertical', 128) + 128 * 2 + 16384);
+      calls[0]!.resolve(biomes(32));
+      await flush();
+      expect(calls.slice(1).map((c) => [c.req.n, c.opts])).toEqual([[128, { priority: 500, columnCost: sliceCostOf(DEFAULTS, 'biome3d', '', 'vertical', 128), budget: REQUEST_BUDGET }]]);
+      calls[1]!.resolve(biomes(128));
+      await flush();
+      expect([r.shown?.result.field, r.shown?.result.n, r.notice, r.pending]).toEqual(['biome3d', 128, null, null]);
+    });
+
+    test('horizontal: the 128² slice at the Caves tab\'s 256 blocks is admitted (the passes shared by a chunk row\'s 8 rows); 256 is the widest extent; wider ones read "cave biome too heavy …"', () => {
+      // 128 picks of 2, and 17 chunk columns' passes shared by 8 rows: ⌈17 × 16,384 / 8⌉ = 34,816.
+      expect(sliceCostOf(DEFAULTS, 'biome3d', '', 'horizontal', 128, 256)).toBe(sliceCostOf(DEFAULTS, 'caves', '', 'horizontal', 128, 256) + 256 + 34816);
+      const { r, calls } = harness(DEFAULTS);
+      r.request(want(BIOME_H));
+      expect(calls.map((c) => [c.req.field, c.req.n, c.opts])).toEqual([['biome3d', 128, { priority: 500, columnCost: sliceCostOf(DEFAULTS, 'biome3d', '', 'horizontal', 128, 256), budget: REQUEST_BUDGET }]]);
+      expect(widestCaveExtent(DEFAULTS, 'biome3d')).toBe(256);
+      expect(widestCaveExtent(DEFAULTS)).toBe(512);
+      const wide = harness(DEFAULTS);
+      wide.r.request(want({ ...BIOME_H, extent: 512 }));
+      expect(wide.calls).toHaveLength(0);
+      expect(wide.r.notice).toMatch(/^cave biome too heavy to slice \(cost [\d ]+, limit 16 384\) — narrow the extent to 256 or less$/);
+    });
+
+    test('a cave-leaf drag requests no biome3d slice until the gesture ends (the hold of density, node and caves): it redraws on release', async () => {
+      const s = { inGesture: false, state: { params: SLICED } };
+      const dragged = paramsWith({ density: { defs: caveFreeTree() }, caves: { biomes: { lush: { hMin: 0.2 } } } } as never);
+      const { r, calls, h } = harness(SLICED, createCaveGestureHold(s));
+      r.request(want(BIOME_V));
+      expect(calls.map((c) => [c.req.field, c.req.n])).toEqual([['biome3d', 32]]);
+      s.inGesture = true;
+      s.state.params = dragged;
+      h.session.state.epoch = 8;
+      h.cfg = { poolEpoch: 4, sessionEpoch: 8, params: dragged };
+      r.request(want(BIOME_V));
+      expect([calls.length, calls[0]!.cancelled, r.pending]).toEqual([1, true, null]);
+      s.inGesture = false;
+      r.request(want(BIOME_V));
+      expect(calls.slice(1).map((c) => [c.req.field, c.req.n, c.opts.columnCost])).toEqual([['biome3d', 32, sliceCostOf(dragged, 'biome3d', '', 'vertical', 32)]]);
       expect(r.pending?.sessionEpoch).toBe(8);
     });
   });

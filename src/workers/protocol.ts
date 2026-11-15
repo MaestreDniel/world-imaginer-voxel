@@ -324,7 +324,7 @@ const VOXEL_KEYS = ['x', 'y', 'z'] as const;
 const FIND_KEYS = ['kind', 'x', 'y', 'z', 'radius', 'budgetMs'] as const;
 /** The longest node path a fieldSlice or fieldProbe message may carry. */
 export const FIELD_PATH_MAX = 512;
-const SLICE_FIELDS: readonly string[] = ['density', 'node', 'blocks', 'rule', 'caves'];
+const SLICE_FIELDS: readonly string[] = ['density', 'node', 'blocks', 'rule', 'caves', 'biome3d'];
 const PROBE_FIELDS: readonly string[] = ['density', 'node', 'rule'];
 const PLANE_KEYS = { vertical: ['ax', 'az', 'bx', 'bz'], horizontal: ['cx', 'cz', 'extent'] } as const;
 const FIELD_SLICE_KEYS = ['y', 'n', 'from', 'to'] as const;
@@ -345,16 +345,16 @@ export function fieldSliceBytes(n: number, field: SliceField, columns: number): 
   switch (field) {
     case 'density': case 'node': return { values: 8 * samples, fluid: 0 };
     case 'blocks': return { values: 2 * samples, fluid: samples };
-    // rule, and SP6a's caves (spec §7.4): one byte per sample.
+    // rule, SP6a's caves (spec §7.4) and SP6b's biome3d (spec §9.2): one byte per sample.
     default: return { values: samples, fluid: 0 };
   }
 }
 
 /**
- * Whether a field's slices can be refused by the work bound (density, node, and SP6a's caves, spec §7.4); blocks and rule
- * never are (spec §5.2).
+ * Whether a field's slices can be refused by the work bound (density, node, SP6a's caves, spec §7.4, and SP6b's biome3d,
+ * spec §9.2); blocks and rule never are (spec §5.2).
  */
-export const isRefusableField = (field: SliceField): boolean => field === 'density' || field === 'node' || field === 'caves';
+export const isRefusableField = (field: SliceField): boolean => field === 'density' || field === 'node' || field === 'caves' || field === 'biome3d';
 
 /** Sample columns a part may hold: max(1, ⌊PART_BUDGET / columnCost⌋). */
 const partColumns = (columnCost: number): number => Math.max(1, Math.floor(PART_BUDGET / columnCost));

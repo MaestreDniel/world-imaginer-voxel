@@ -5,7 +5,7 @@ import {
   absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, CALIBRATION_SPREAD_MAX, calibrationSpread, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS,
   D31_LIT_P50_MAX_MS, D31_MAX_P99_MAX_MS, gateFailures, ISLANDS_COLUMNS, ISLANDS_P50_MAX_MS, ISLANDS_P99_MAX_MS, ISLANDS_RUN, KILL_RATIO_MAX,
   LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, LIGHT_RUN, MESH_P50_MAX_MS, MESH_P99_MAX_MS, MESH_RUN, measureBracketed, P1_MAX_REGRESSION, parseBenchExempt,
-  PASTE_LIT_P99_MAX_MS, PASTE_LIT_RUN, PASTE_MAX_P99_MAX_MS, PASTE_RUN, PERSIST_FLUSH_P99_MAX_MS, PERSIST_RUN, ratioOf, RELIGHT_P95_MAX_MS, RELIGHT_RUN, ROW_ATTEMPTS_MAX, SESSION_COMMIT_P50_MAX_MS, SLICE_CAVES_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS,
+  PASTE_LIT_P99_MAX_MS, PASTE_LIT_RUN, PASTE_MAX_P99_MAX_MS, PASTE_RUN, PERSIST_FLUSH_P99_MAX_MS, PERSIST_RUN, ratioOf, RELIGHT_P95_MAX_MS, RELIGHT_RUN, ROW_ATTEMPTS_MAX, SESSION_COMMIT_P50_MAX_MS, SLICE_BIOME3D_P50_MAX_MS, SLICE_CAVES_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS,
   CARVER_PATH_SOURCES, spiralCells, TERRAIN_WARM_RUN, WARM_SPIRAL, type Baselines,
 } from '../bench/gates';
 
@@ -23,6 +23,8 @@ test('constants', () => {
   expect([SLICE_V128_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SESSION_COMMIT_P50_MAX_MS]).toEqual([300, 250, 4]);
   // SP6a §7.4, §10.5 (D13): the horizontal 128² caves slice, 256 blocks across, p50 ≤ 300 ms.
   expect(SLICE_CAVES_P50_MAX_MS).toBe(300);
+  // SP6b §9.2 (D10): the same plane in the biome3d field ("Cave biome"), p50 ≤ 300 ms.
+  expect(SLICE_BIOME3D_P50_MAX_MS).toBe(300);
   // SP4a §9.3 (master §7's L and Mesh rows): one light job per column, one non-trivial section's copy and mesh.
   expect([LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P99_MAX_MS]).toEqual([4, 8, 1.0, 2.5]);
   // SP5a §6.2: one edit's relight, p95 ≤ 3 ms (gated through p99).
@@ -39,6 +41,7 @@ test('constants', () => {
 const AT_GATES = {
   columnP50: 0.7, columnP95: 1.2, terrainP50: 13, terrainP99: 20, sliceV128P50: 300, slicePartP50: 250, sessionCommitP50: 4, islandsP50: 14.5, islandsP99: 26.5,
   lightP50: 4, lightP99: 8, meshP50: 1.0, meshP99: 2.5, relightP95: 3, persistFlushP99: 2, pasteMaxP99: 800, pasteLitP99: 1600, sliceCaves128P50: 300,
+  sliceBiome3d128P50: 300,
 };
 
 test('absolute gates: column p50 / p95 (P1, SP2a) and the real T column p50 (SP3b §10; 10 ms since SP6a, 13 ms since R14), inclusive', () => {
@@ -88,6 +91,17 @@ test('absolute gate (SP6a §7.4, §10.5): slice.caves128 p50 ≤ 300 ms (SLICE_C
     'slice.vertical128 p50 301.000 ms > 300 ms',
     'paste.maxLit p99 1601.000 ms > 1600 ms',
     'slice.caves128 p50 301.000 ms > 300 ms',
+  ]);
+});
+
+test('absolute gate (SP6b §9.2): slice.biome3d128 p50 ≤ 300 ms (SLICE_BIOME3D_P50_MAX_MS), inclusive, on its own line after slice.caves128\'s', () => {
+  expect(absoluteGateFailures({ ...AT_GATES, sliceBiome3d128P50: 300 })).toEqual([]);
+  expect(absoluteGateFailures({ ...AT_GATES, sliceBiome3d128P50: 300.1 })).toEqual(['slice.biome3d128 p50 300.100 ms > 300 ms']);
+  expect(absoluteGateFailures({ ...AT_GATES, sliceBiome3d128P50: 140 })).toEqual([]);
+  // slice.caves128's gate does not cover it.
+  expect(absoluteGateFailures({ ...AT_GATES, sliceCaves128P50: 301, sliceBiome3d128P50: 301 })).toEqual([
+    'slice.caves128 p50 301.000 ms > 300 ms',
+    'slice.biome3d128 p50 301.000 ms > 300 ms',
   ]);
 });
 
@@ -281,7 +295,7 @@ test('parseBenchExempt: a comma-separated list of BENCH_ROWS names, empty when u
   expect(parseBenchExempt([...BENCH_ROWS].reverse().join(','))).toEqual([...BENCH_ROWS].reverse());
 });
 
-test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, SP5b\'s persist.flush, SP5c\'s paste.max and paste.maxLit, then SP6a\'s terrain.caves.warm, carver.paths, mesh.xray and slice.caves128, then SP6b\'s cull.walk.rd12 and cull.walk.rd16, with SP6a\'s density.cornerInlined right after density.corner and SP6b\'s caveBiome.column right after terrain.real', () => {
+test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, SP5b\'s persist.flush, SP5c\'s paste.max and paste.maxLit, then SP6a\'s terrain.caves.warm, carver.paths, mesh.xray and slice.caves128, then SP6b\'s slice.biome3d128, cull.walk.rd12 and cull.walk.rd16, with SP6a\'s density.cornerInlined right after density.corner and SP6b\'s caveBiome.column right after terrain.real', () => {
   expect(BENCH_ROWS).toEqual([
     'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
     'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
@@ -289,9 +303,9 @@ test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner a
     'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'caveBiome.column', 'surface.column',
     'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
     'light.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
-    'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128', 'cull.walk.rd12', 'cull.walk.rd16',
+    'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128', 'slice.biome3d128', 'cull.walk.rd12', 'cull.walk.rd16',
   ]);
-  expect(BENCH_ROWS.slice(-12, -8)).toEqual(['light.column', 'mesh.section', 'relight.edit', 'persist.flush']);
+  expect(BENCH_ROWS.slice(-13, -9)).toEqual(['light.column', 'mesh.section', 'relight.edit', 'persist.flush']);
   expect(BENCH_ROWS.slice(BENCH_ROWS.indexOf('density.corner'), BENCH_ROWS.indexOf('density.corner') + 3)).toEqual(['density.corner', 'density.cornerInlined', 'terrain.real']);
   // SP6b §12.5 (D25): the cave-biome step of T alone (the column pass and the picks at T's tagged voxels), measured
   // right after terrain.real.
@@ -300,9 +314,11 @@ test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner a
   expect(new Set(BENCH_ROWS).size).toBe(BENCH_ROWS.length);
 });
 
-test('`BENCH_ROWS` ends `\'relight.edit\', \'persist.flush\', \'paste.max\', \'paste.maxLit\'`, then SP6a §10.5\'s `\'terrain.caves.warm\', \'carver.paths\', \'mesh.xray\', \'slice.caves128\'`, then SP6b §12.5\'s `\'cull.walk.rd12\', \'cull.walk.rd16\'` (SP5b §6.2 appends one flush\'s synchronous part, SP5c §10.3 the two maximum pastes, SP6a §10.5 the streaming T, the carver paths, the X-ray pass and the caves slice, SP6b D25 one full cave-culling walk at RD 12 and RD 16, measured last)', () => {
-  expect(BENCH_ROWS.slice(-10, -6)).toEqual(['relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit']);
-  expect(BENCH_ROWS.slice(-6, -2)).toEqual(['terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128']);
+test('`BENCH_ROWS` ends `\'relight.edit\', \'persist.flush\', \'paste.max\', \'paste.maxLit\'`, then SP6a §10.5\'s `\'terrain.caves.warm\', \'carver.paths\', \'mesh.xray\', \'slice.caves128\'`, then SP6b §9.2\'s `\'slice.biome3d128\'` and §12.5\'s `\'cull.walk.rd12\', \'cull.walk.rd16\'` (SP5b §6.2 appends one flush\'s synchronous part, SP5c §10.3 the two maximum pastes, SP6a §10.5 the streaming T, the carver paths, the X-ray pass and the caves slice, SP6b the cave-biome slice right after the caves slice, where it is measured, and D25 one full cave-culling walk at RD 12 and RD 16, measured last)', () => {
+  expect(BENCH_ROWS.slice(-11, -7)).toEqual(['relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit']);
+  expect(BENCH_ROWS.slice(-7, -3)).toEqual(['terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128']);
+  // SP6b §9.2 (D10): the biome3d slice of slice.caves128's plane, right after it.
+  expect(BENCH_ROWS.slice(-4, -2)).toEqual(['slice.caves128', 'slice.biome3d128']);
   // SP6b §12.5 (D25's culling checkpoint): after slice.caves128, so the region they walk (generated and meshed on four
   // threads before them) heats nothing the absolute gates measure.
   expect(BENCH_ROWS.slice(-2)).toEqual(['cull.walk.rd12', 'cull.walk.rd16']);

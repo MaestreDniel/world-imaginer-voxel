@@ -30,6 +30,11 @@ export const SESSION_COMMIT_P50_MAX_MS = 4;
  */
 export const SLICE_CAVES_P50_MAX_MS = 300;
 /**
+ * SP6b §9.2 (D10): the same plane in the `biome3d` field ("Cave biome": the cave tags, then T's cave-biome step), on one
+ * thread (`slice.biome3d128`), p50 in ms.
+ */
+export const SLICE_BIOME3D_P50_MAX_MS = 300;
+/**
  * SP4a §9.3 (master §7's L and Mesh rows): one column's light job (`light.column`: the region copy, the BFS and the
  * 24 output sections) and one non-trivial section's padded copy and mesh (`mesh.section`), p50 and p99 in ms (p99 as
  * the upper bound of p95, the `column.sample` precedent).
@@ -146,7 +151,8 @@ export function spiralCells(n: number): Array<readonly [number, number]> {
  * (the kill criterion's hand-inlined default expression over `density.corner`'s corners, test/bench/inlined.ts) right
  * after `density.corner`, where it is measured, and appends `slice.caves128` (§7.4: the horizontal 128² `caves` slice,
  * measured last). SP6b §12.5 (D25) inserts `caveBiome.column` (T's cave-biome step alone: the column pass and the picks
- * at T's tagged voxels) right after `terrain.real`, where it is measured, and appends `cull.walk.rd12` and
+ * at T's tagged voxels) right after `terrain.real`, where it is measured, `slice.biome3d128` (§9.2: the same plane as
+ * `slice.caves128` in the `biome3d` field) right after `slice.caves128`, where it is measured, and appends `cull.walk.rd12` and
  * `cull.walk.rd16` (D25's culling checkpoint: one full walk of cave culling, §8.2, from a cave pose over the RD 12 and
  * RD 16 discs' `connectivity15` as meshed in Node), measured last, after the region they walk is generated and meshed.
  */
@@ -157,7 +163,7 @@ export const BENCH_ROWS = [
   'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'caveBiome.column', 'surface.column',
   'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
   'light.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
-  'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128', 'cull.walk.rd12', 'cull.walk.rd16',
+  'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128', 'slice.biome3d128', 'cull.walk.rd12', 'cull.walk.rd16',
 ] as const;
 
 export interface BenchKernel {
@@ -328,12 +334,14 @@ export interface AbsoluteLatencies {
   readonly pasteLitP99: number;
   /** SP6a §7.4, §10.5: `slice.caves128` p50, gated at SLICE_CAVES_P50_MAX_MS (ruling P51). */
   readonly sliceCaves128P50: number;
+  /** SP6b §9.2: `slice.biome3d128` p50, gated at SLICE_BIOME3D_P50_MAX_MS. */
+  readonly sliceBiome3d128P50: number;
 }
 
 /**
  * The absolute gates (P1 column budget, SP2a; the real T budget, SP3b, its p50 and p99 with caves, SP6a; the slice and
  * session commit budgets, SP3d; the light and mesh budgets, SP4a; the relight budget, SP5a; the flush's synchronous part,
- * SP5b; the maximum pastes, SP5c; the caves slice, SP6a): checked by
+ * SP5b; the maximum pastes, SP5c; the caves slice, SP6a; the cave-biome slice, SP6b): checked by
  * `npm run bench` and before `npm run bench:record` writes, so a record refuses to write when one fails.
  */
 export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
@@ -356,5 +364,6 @@ export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
   if (l.pasteMaxP99 > PASTE_MAX_P99_MAX_MS) out.push(`paste.max p99 ${l.pasteMaxP99.toFixed(3)} ms > ${PASTE_MAX_P99_MAX_MS} ms`);
   if (l.pasteLitP99 > PASTE_LIT_P99_MAX_MS) out.push(`paste.maxLit p99 ${l.pasteLitP99.toFixed(3)} ms > ${PASTE_LIT_P99_MAX_MS} ms`);
   if (l.sliceCaves128P50 > SLICE_CAVES_P50_MAX_MS) out.push(`slice.caves128 p50 ${l.sliceCaves128P50.toFixed(3)} ms > ${SLICE_CAVES_P50_MAX_MS} ms`);
+  if (l.sliceBiome3d128P50 > SLICE_BIOME3D_P50_MAX_MS) out.push(`slice.biome3d128 p50 ${l.sliceBiome3d128P50.toFixed(3)} ms > ${SLICE_BIOME3D_P50_MAX_MS} ms`);
   return out;
 }

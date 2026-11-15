@@ -5694,6 +5694,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             notices: { show: (text, ms) => notices.show(text, { timeoutMs: ms }) },
           }),
           camera: () => fly,
+          // SP6b spec §9.2 (D10): the Cross-section's Voxels mode follows C; C's `changed` (pushXray) reaches the map's
+          // `setXray`, which refreshes it.
+          xrayColorMode: () => pageXray.mode,
         },
         xray: () => ({ on: pageXray.on, band: pageXray.band, radius: xrayRadiusOf(liveRd) }),
       },

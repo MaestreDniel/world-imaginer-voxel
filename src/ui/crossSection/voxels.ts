@@ -5,14 +5,15 @@
  *   §1.3), water blue darkening with depth below its surface, lava's colour; the legend's block keys (every registry
  *   state in state order);
  * - the slice image: one RGBA pixel per sample of a `pool.slice` result (512 × 384, row 0 at y 319), dry air with a cave
- *   tag ≠ 0 tinted by kind in the X-ray's colours (`caveRgb`, SP6a spec §7.4, D13);
+ *   tag ≠ 0 tinted by kind in the X-ray's colours (`caveRgb`, SP6a spec §7.4, D13), or by cave biome in the X-ray's biome
+ *   mode (`caveBiomeRgb`, SP6b spec §9.2, D10); the painter that repaints it when the slice or that mode changes;
  * - the plot: sample cells over the drawer, a distance axis whose point i sits at the centre of pixel column i,
  *   and the hover mapping from a pixel to the sample (i, y) under it;
  * - the hover readout (the integer (⌊xᵢ⌋, y, ⌊zᵢ⌋), the block's canonical key and the fluid) and the summary line;
  * - the hover rule id (SP3c spec §6): one `surfaceProbe` job at a time for the hovered voxel, the latest hovered voxel
  *   wins, and the readout's ` · rule …` suffix becomes ` · rule <leaf id>` or ` · rule none` when the probe answers.
  */
-import { CAVE_KIND, caveKindOf, MIN_Y, SEA_LEVEL } from '../../core/constants';
+import { CAVE_BIOME_COLORS, CAVE_KIND, caveBiomeOf, caveKindOf, MIN_Y, SEA_LEVEL } from '../../core/constants';
 import { MAX_Y } from '../../core/coords';
 import { JobCancelled, type SliceResult, type SurfaceProbeResult } from '../../engine/workerPool';
 import { segmentLength, segmentPointAt, type Segment } from '../../metrics/crossSection';
@@ -159,15 +160,24 @@ export function caveRgb(kind: number): Rgb {
   return Number.isInteger(kind) && kind >= 1 && kind <= KIND_MAX ? CAVE_RGB[kind]! : VOXEL_COLORS.unknown;
 }
 
+/** The cave biomes' colours by biome (0-3), the table the X-ray, the map's layer and the slice field read (`CAVE_BIOME_COLORS`). */
+const CAVE_BIOME_RGB: readonly Rgb[] = Object.freeze(CAVE_BIOME_COLORS.map(hexRgb));
+
+/** A cave biome's colour (SP6b spec §1.1, §9.2: `CAVE_BIOME_COLORS`); `unknown` for any other value (4-15 are reserved). */
+export function caveBiomeRgb(biome: number): Rgb {
+  return Number.isInteger(biome) && biome >= 0 && biome < CAVE_BIOME_RGB.length ? CAVE_BIOME_RGB[biome]! : VOXEL_COLORS.unknown;
+}
+
 /**
  * The slice as an RGBA image, 512 × 384, pixel (i, row) at `sliceIndex(i, y)` (row 0 is y 319). A water voxel's depth
  * counts from the top of its run of water in the sample column (the voxel under air or a block), which equals the
  * harness's `worldSurfaceWG − 1 − y` except under an overhang (SP3b's T fills air under stone near the water line) and in
  * a flooded cave under the water's floor (SP6a). Dry air (no fluid) whose cave byte is a kind (≠ 0) takes the kind's
  * colour (`caveRgb(caveKindOf(byte))`, SP6a spec §7.4: the cave air of the slice's proto set, as T tagged it; the slice
- * job copies the whole byte, whose bits 4-7 hold the cave biome, SP6b spec §2.1); other air stays sky.
+ * job copies the whole byte, whose bits 4-7 hold the cave biome, SP6b spec §2.1), or with `mode` 1 (the X-ray's colour
+ * mode by cave biome, SP6b spec §9.2, D10) its biome's (`caveBiomeRgb(caveBiomeOf(byte))`); other air stays sky.
  */
-export function sliceRgba(s: SliceResult): Uint8ClampedArray<ArrayBuffer> {
+export function sliceRgba(s: SliceResult, mode: 0 | 1 = 0): Uint8ClampedArray<ArrayBuffer> {
   const out = new Uint8ClampedArray(4 * SLICE_SAMPLES);
   for (let i = 0; i < SLICE_POINTS; i++) {
     let surface = 0;
@@ -180,8 +190,11 @@ export function sliceRgba(s: SliceResult): Uint8ClampedArray<ArrayBuffer> {
       const water = isWater(state, fluid);
       if (water && !wet) surface = y;
       wet = water;
-      const kind = caveKindOf(s.cave[k]!);
-      const c = kind !== 0 && state === AIR && fluidType(fluid) === FLUID_NONE ? caveRgb(kind) : voxelRgb(state, fluid, water ? surface - y : 0);
+      const byte = s.cave[k]!;
+      const kind = caveKindOf(byte);
+      const c = kind !== 0 && state === AIR && fluidType(fluid) === FLUID_NONE
+        ? (mode === 1 ? caveBiomeRgb(caveBiomeOf(byte)) : caveRgb(kind))
+        : voxelRgb(state, fluid, water ? surface - y : 0);
       out[4 * k] = c[0];
       out[4 * k + 1] = c[1];
       out[4 * k + 2] = c[2];
@@ -189,6 +202,38 @@ export function sliceRgba(s: SliceResult): Uint8ClampedArray<ArrayBuffer> {
     }
   }
   return out;
+}
+
+/** The Voxels canvas's painter (SP6b spec §9.2): what was painted last and in which colour mode. */
+export interface VoxelPainter {
+  /**
+   * Paints `s` (`put(sliceRgba(s, mode))`, mode the X-ray's colour mode now) unless the last paint was this slice in this
+   * mode; returns whether it painted.
+   */
+  paint(s: SliceResult): boolean;
+  /** The colour mode of the last paint (0 before the first). */
+  readonly mode: 0 | 1;
+}
+
+/**
+ * The painter of the Voxels mode's canvas (SP6b spec §9.2, D10): dry cave air by kind, or by cave biome while the
+ * X-ray's colour mode (`colorMode`, read at each paint) is 1. Absent (`?map`, which has no X-ray) the mode is 0. A C press
+ * with a slice shown repaints it once; the same slice in the same mode is never repainted.
+ */
+export function createVoxelPainter(put: (rgba: Uint8ClampedArray<ArrayBuffer>) => void, colorMode?: () => 0 | 1): VoxelPainter {
+  let painted: SliceResult | null = null;
+  let paintedMode: 0 | 1 = 0;
+  return {
+    paint(s) {
+      const mode = colorMode?.() ?? 0;
+      if (painted === s && paintedMode === mode) return false;
+      put(sliceRgba(s, mode));
+      painted = s;
+      paintedMode = mode;
+      return true;
+    },
+    get mode() { return paintedMode; },
+  };
 }
 
 /** The plots of the Voxels mode over `box`: sample cells, and distance from A in blocks along a line of `length`. */

@@ -159,6 +159,10 @@
       "nsPerEval": 268853628,
       "ratio": 375716293.597
     },
+    "slice.biome3d128": {
+      "nsPerEval": 301527922,
+      "ratio": 382607920.687
+    },
     "cull.walk.rd12": {
       "nsPerEval": 390379.5,
       "ratio": 561543.26

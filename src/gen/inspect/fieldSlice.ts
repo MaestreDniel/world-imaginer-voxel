@@ -26,9 +26,12 @@
  * an injected T-column source, since gen cannot reach the worker's store) and `rule` (1 when the voxel's rule path
  * passes through the selected rule, or the selected condition holds there; 0 otherwise; `SLICE_RULE_NA` on voxels the
  * rules never evaluate) on vertical planes only; `caves` (SP6a spec §7.4, D13: the cave type, both planes) through
- * `caveTagRun` on the stage's compile, one chunk column at a time (`caveTagBatch`'s codes). A part covers the sample columns [from, to) and
+ * `caveTagRun` on the stage's compile, one chunk column at a time (`caveTagBatch`'s codes); `biome3d` (SP6b spec §9.2,
+ * D10: the cave biome, both planes) through the same runs, then T's cave-biome step over each run's tags: the column's
+ * picker pass (`fillCaveColumnPass`) once per chunk column holding a tagged sample, and `caveBiomeOfPass` at each tagged
+ * sample, so a value is 1 + the nibble T stores there. A part covers the sample columns [from, to) and
  * holds each sample column's n samples in row order (index (c − from)·n + k), so parts concatenate into the whole.
- * `stop()` is polled once per sample (once per chunk column the part visits for `caves`). `probeField` evaluates one voxel exactly as a slice sample (full ColumnSamples, which the corner
+ * `stop()` is polled once per sample (once per chunk column the part visits for `caves` and `biome3d`). `probeField` evaluates one voxel exactly as a slice sample (full ColumnSamples, which the corner
  * samples equal bit for bit), polling `stop()` before acquiring its column and before evaluating. The DensityReferences
  * are memoised per GenContext: one for `density`, and an LRU of 8 node paths for `node`.
  *
@@ -39,11 +42,12 @@
  * Follows the gen determinism rules; every lookup keyed by tree content is own-property only.
  */
 import {
-  COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, HEIGHT, MIN_Y, SLICE_EXTENTS, SLICE_NS, SLICE_RULE_NA,
+  CAVE_SLICE_SOLID, COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, HEIGHT, MIN_Y, SLICE_EXTENTS, SLICE_NS, SLICE_RULE_NA,
 } from '../../core/constants';
 import { inWindow, MAX_Y, WINDOW_HALF } from '../../core/coords';
 import type { Params } from '../../core/params/schema';
 import type { ColumnView } from '../../world/store/api';
+import { cavePickerOf, caveBiomeOfPass, fillCaveColumnPass, newCaveColumnPass } from '../biomes/cavePicker';
 import { newPointRecord, samplePoint, type ColumnPoint, type PointRecord } from '../column/columnPoint';
 import { buildCornerSample, newColumnSample, type ColumnSample, type SampleField } from '../column/columnStage';
 import { caveTagRun, chunkColumnOrder } from '../caves/tags';
@@ -84,6 +88,13 @@ const T_COLUMN_COST = tColumnCost;
 const RULE_NODES = ruleNodeCount;
 const CAVE_RUN = caveTagRun;
 const COLUMN_ORDER = chunkColumnOrder;
+const CAVE_SOLID = CAVE_SLICE_SOLID;
+const PICKER_OF = cavePickerOf;
+const FILL_PASS = fillCaveColumnPass;
+const BIOME_OF_PASS = caveBiomeOfPass;
+const NEW_PASS = newCaveColumnPass;
+/** The `biome3d` field's column pass (refilled for each chunk column of a part that holds a tagged sample). */
+const PASS = NEW_PASS();
 
 /** A line point (xᵢ, zᵢ) in blocks. */
 export type SlicePoint = readonly [x: number, z: number];
@@ -268,12 +279,15 @@ export function createCornerSampler(ctx: GenContext, withSteep: boolean): Corner
 // ---------------------------------------------------------------------------------------------------------------------
 // Field evaluation (§4.1, §5.1, §5.3)
 
-/** A slice field (§4.1): `node` is the `selected` field on a density node, `rule` on a rule or condition. */
-export type SliceField = 'density' | 'node' | 'blocks' | 'rule' | 'caves';
+/**
+ * A slice field (§4.1): `node` is the `selected` field on a density node, `rule` on a rule or condition; `caves` the cave
+ * type (SP6a), `biome3d` the cave biome (SP6b spec §9.2).
+ */
+export type SliceField = 'density' | 'node' | 'blocks' | 'rule' | 'caves' | 'biome3d';
 /** The fields `probeField` answers (§5.3). */
 export type ProbeField = 'density' | 'node' | 'rule';
 
-/** One part of a slice: the plane, the field, the node path inside its leaf ('' for density, blocks and caves), [from, to). */
+/** One part of a slice: the plane, the field, the node path inside its leaf ('' for density, blocks, caves and biome3d), [from, to). */
 export interface FieldSliceRequest {
   readonly geometry: SliceGeometry;
   readonly field: SliceField;
@@ -291,13 +305,15 @@ export type TColumnSource = (cx: number, cz: number, stop: () => boolean) => Col
 /**
  * A part's values, each sample column's n samples in row order at (c − from)·n + k: Float64 values for `density` and
  * `node`; u16 block states plus u8 fluid for `blocks`; u8 for `rule` (0, 1 or `SLICE_RULE_NA`); u8 for `caves` (0 open
- * air, the cave kinds 1-9, `CAVE_SLICE_SOLID` other solid: `caveTagBatch`).
+ * air, the cave kinds 1-9, `CAVE_SLICE_SOLID` other solid: `caveTagBatch`); u8 for `biome3d` (0 open air, 1 + the cave
+ * biome of `CAVE_BIOME` for cave air, `CAVE_SLICE_SOLID` other solid; SP6b spec §9.2).
  */
 export type FieldSliceValues =
   | { readonly field: 'density' | 'node'; readonly values: Float64Array<ArrayBuffer>; readonly fluid: null }
   | { readonly field: 'blocks'; readonly values: Uint16Array<ArrayBuffer>; readonly fluid: Uint8Array<ArrayBuffer> }
   | { readonly field: 'rule'; readonly values: Uint8Array<ArrayBuffer>; readonly fluid: null }
-  | { readonly field: 'caves'; readonly values: Uint8Array<ArrayBuffer>; readonly fluid: null };
+  | { readonly field: 'caves'; readonly values: Uint8Array<ArrayBuffer>; readonly fluid: null }
+  | { readonly field: 'biome3d'; readonly values: Uint8Array<ArrayBuffer>; readonly fluid: null };
 
 /** A DensityReference with the way a horizontal plane samples its expression. */
 interface RefEntry {
@@ -360,14 +376,15 @@ export function nodeReferenceOf(ctx: GenContext, path: string): DensityReference
 
 /**
  * Why `field` at `path` has no slice or probe on `plane` in `ctx`, or null (the worker's BAD_ARGS, §5.1): `blocks` and
- * `rule` exist on vertical planes only; `density`, `blocks` and `caves` (SP6a spec §7.4, both planes) take the path '';
+ * `rule` exist on vertical planes only; `density`, `blocks`, `caves` (SP6a spec §7.4, both planes) and `biome3d` (SP6b
+ * spec §9.2, both planes) take the path '';
  * `node` a path naming a node of the source tree `density.defs` (own properties only); `rule` the id of a rule or
  * condition of `surface.rules`.
  */
 export function fieldSliceProblem(ctx: GenContext, field: SliceField, path: string, plane: SliceGeometry['plane']): string | null {
   if ((field === 'blocks' || field === 'rule') && plane !== 'vertical') return `field ${field} has no ${plane} slice`;
   switch (field) {
-    case 'density': case 'blocks': case 'caves':
+    case 'density': case 'blocks': case 'caves': case 'biome3d':
       return path === '' ? null : `field ${field} takes no node path (got ${JSON.stringify(path)})`;
     case 'node':
       try {
@@ -402,7 +419,9 @@ function ruleValue(sc: SurfaceContext, node: RuleNodeRef, id: string, c: Surface
  * Vertical `density`/`node` samples read the ColumnCache's ColumnSample of each chunk column; horizontal ones corner
  * samples memoised over this part (or full samples, `horizontalSampling`); `rule` the SurfaceContext's probe column, whose
  * build polls `stop()` too (`surfaceProbeColumn`'s density fill); `caves` visits its samples grouped by chunk column
- * (`chunkColumnOrder`, then `caveTagRun` per column, `caveTagBatch`'s codes), polling `stop()` before each.
+ * (`chunkColumnOrder`, then `caveTagRun` per column, `caveTagBatch`'s codes), polling `stop()` before each; `biome3d`
+ * visits them alike and turns each run's tags into 1 + T's nibble (the column's picker pass filled once, at its first
+ * tagged sample).
  */
 export function evaluateFieldSlice(ctx: GenContext, req: FieldSliceRequest, stop: () => boolean, tColumns?: TColumnSource): FieldSliceValues | null {
   const g = req.geometry;
@@ -474,10 +493,13 @@ export function evaluateFieldSlice(ctx: GenContext, req: FieldSliceRequest, stop
     return { field, values, fluid: null };
   }
 
-  if (field === 'caves') {
+  if (field === 'caves' || field === 'biome3d') {
     // SP6a spec §7.4: the stage's own compile (`sc.density`, as T), through `caveTagRun` one chunk column at a time: the
     // part's samples in row order, grouped by chunk column (`chunkColumnOrder`, the grouping `caveTagBatch` uses; Task 52,
-    // minors-13), each column's run of the order tagged into `values`; stop() is polled before each column.
+    // minors-13), each column's run of the order tagged into `values`; stop() is polled before each column. SP6b spec
+    // §9.2: `biome3d` then runs T's cave-biome step over the run's tags (`columnCaveBiomes`' rule: a tagged sample takes
+    // `caveBiomeOfPass` over its column's pass, here 1 + it; open air and other solid keep their codes), the pass filled
+    // from the column's ColumnSample at the run's first tagged sample, so once per chunk column that holds one.
     const xv = new Int32Array(size), yv = new Int32Array(size), zv = new Int32Array(size);
     for (let c = from; c < to; c++) {
       const base = (c - from) * n;
@@ -492,12 +514,26 @@ export function evaluateFieldSlice(ctx: GenContext, req: FieldSliceRequest, stop
     const { keys, order } = COLUMN_ORDER(xv, zv);
     const values = new Uint8Array(size);
     const dc = sc.density;
+    const inp = field === 'biome3d' ? PICKER_OF(ctx) : null;
     for (let t = 0; t < size;) {
       if (stop()) return null;
       const key = keys[order[t]!]!;
       let u = t + 1;
       while (u < size && keys[order[u]!] === key) u++;
       CAVE_RUN(dc, xv, yv, zv, order, t, u, values);
+      if (inp !== null) {
+        let filled = false;
+        for (let r = t; r < u; r++) {
+          const q = order[r]!;
+          const code = values[q]!;
+          if (code === 0 || code === CAVE_SOLID) continue;
+          if (!filled) {
+            FILL_PASS(inp, dc.columns.get(xv[q]! >> 4, zv[q]! >> 4), PASS);
+            filled = true;
+          }
+          values[q] = 1 + BIOME_OF_PASS(inp, PASS, xv[q]!, yv[q]!, zv[q]!);
+        }
+      }
       t = u;
     }
     return { field, values, fluid: null };
@@ -682,6 +718,25 @@ function rowChunks(extent: number, n: number): number {
 const CAVE_SAMPLE_COST = 64;
 const CARVER_WINDOW_COST = 32768;
 const PLANE_CORNERS = 50;
+/**
+ * The `biome3d` field's picker term (SP6b spec §9.2; measured in Task 46 on the reference machine, default `edgeJitter`
+ * 2): one chunk column's picker pass (`fillCaveColumnPass` over its (16 + 2J)² positions, about 212 µs) and one sample's
+ * pick (`caveBiomeOfPass`: the jitter hash and the box choice, about 20 ns).
+ */
+const CAVE_PASS_COST = 16384;
+const CAVE_PICK_COST = 2;
+
+/**
+ * `biome3d`'s picker term per sample column (`sliceCostOf`): n picks (a bound: only tagged samples pick), plus the passes
+ * of the chunk columns it visits, counted as `caveAcquisition` counts their visits: one on a vertical plane; on a
+ * horizontal plane the row's chunk columns shared by the r = max(1, ⌊16n / E⌋) rows of one chunk row.
+ */
+function pickerTerm(plane: SliceGeometry['plane'], n: number, extent?: number): number {
+  const picks = satCost(n * CAVE_PICK_COST);
+  if (plane === 'vertical') return satCost(picks + CAVE_PASS_COST);
+  const rows = Math.max(1, Math.floor((16 * n) / extent!));
+  return satCost(picks + Math.ceil(satCost(rowChunks(extent!, n) * CAVE_PASS_COST) / rows));
+}
 
 /**
  * The `caves` field's acquisition per sample column (SP6a spec §7.4): the chunk columns it visits, each made current
@@ -712,9 +767,10 @@ function caveAcquisition(cornerWork: number, plane: SliceGeometry['plane'], n: n
  * tree, so with the `density` field's `memoWorkCost` w, n × (the compile's voxel work, `compiledVoxelWork`, each def
  * once per sample, SP6b ruling U2, + one sample's tag), plus on a vertical plane
  * K × w.corner as `density`'s, plus `caveAcquisition` (the chunk columns visited: ColumnSample, carver window, and on a
- * horizontal plane its corners). The UI passes it to the pool and the worker recomputes it from its configured params.
+ * horizontal plane its corners). `biome3d` (SP6b spec §9.2, refusable like `caves`): `caves`' cost plus the picker term
+ * (`pickerTerm`: n picks and the visited chunk columns' passes). The UI passes it to the pool and the worker recomputes it from its configured params.
  * `extent` is the horizontal square's side (ignored on a vertical plane). Throws a RangeError for n ∉ SLICE_NS, a
- * horizontal density, node or caves slice without an extent of SLICE_EXTENTS, `blocks` / `rule` on a horizontal plane,
+ * horizontal density, node, caves or biome3d slice without an extent of SLICE_EXTENTS, `blocks` / `rule` on a horizontal plane,
  * and as `evaluatedExpression` for a bad node path.
  */
 export function sliceCostOf(params: Params, field: SliceField, path: string, plane: SliceGeometry['plane'], n: number, extent?: number): number {
@@ -727,12 +783,13 @@ export function sliceCostOf(params: Params, field: SliceField, path: string, pla
       const k = sliceColumnCorners(plane, n, extent);
       return satCost(satCost(satCost(n * w.voxel) + satCost(k * w.corner)) + acquisitionOf(e, plane, n, extent));
     }
-    case 'caves': {
+    case 'caves': case 'biome3d': {
       const e = evaluatedExpression(params, 'density', '');
       const w = MEMO_WORK(e, params);
       const voxels = satCost(n * satCost(COMPILED_VOXEL_WORK(e, params) + CAVE_SAMPLE_COST));
       const corners = plane === 'vertical' ? satCost(sliceColumnCorners(plane, n) * w.corner) : 0;
-      return satCost(satCost(voxels + corners) + caveAcquisition(w.corner, plane, n, extent));
+      const caves = satCost(satCost(voxels + corners) + caveAcquisition(w.corner, plane, n, extent));
+      return field === 'caves' ? caves : satCost(caves + pickerTerm(plane, n, extent));
     }
     case 'blocks': case 'rule': {
       if (plane !== 'vertical') throw new RangeError(`sliceCostOf: field ${field} has no ${plane} slice`);

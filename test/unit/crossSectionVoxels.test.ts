@@ -1,12 +1,13 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { CAVE_KIND, caveKindOf, SEA_LEVEL } from '../../src/core/constants';
+import { CAVE_BIOME, CAVE_BIOME_COLORS, CAVE_KIND, caveKindOf, SEA_LEVEL } from '../../src/core/constants';
 import { XRAY_COLORS } from '../../src/render/xrayPalette';
 import { JobCancelled, type SliceResult, type SurfaceProbeResult, type WorkerPool } from '../../src/engine/workerPool';
 import { segmentPointAt, type Segment } from '../../src/metrics/crossSection';
 import { genRegionInProcess } from '../../src/metrics/region';
 import { createSliceRequests, sectionStatus, SECTION_MODES } from '../../src/ui/crossSection/model';
 import {
-  blockName, caveRgb, createRuleReadout, fluidText, RULE_WAITING, ruleSuffix, sliceRgba, sliceSummary, SEA_LEVEL_Y, VOXEL_COLORS, voxelCell, voxelLegend, voxelPlots,
+  blockName, caveBiomeRgb, caveRgb, createRuleReadout, createVoxelPainter, fluidText, RULE_WAITING, ruleSuffix, sliceRgba, sliceSummary, SEA_LEVEL_Y, VOXEL_COLORS, voxelCell, voxelLegend, voxelPlots,
   voxelPosition, voxelReadout, voxelRgb, type Rgb, type RuleCell,
 } from '../../src/ui/crossSection/voxels';
 import { toPx } from '../../src/ui/splineEditor/model';
@@ -595,4 +596,91 @@ describe('the Voxels mode reads the cave kind (SP6b spec §2.1, Spec correction 
     expect(diff).toEqual([]);
     expect(got).toEqual(want);
   }, 120_000); // the slice job across the fixture region: about 0.3 s alone, more under load
+});
+
+describe('the Voxels mode by cave biome (SP6b spec §9.2, D10): it follows the X-ray\'s colour mode', () => {
+  const hex = (h: string): number[] => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const LUSH_CHEESE = CAVE_KIND.cheese | (CAVE_BIOME.lush << 4);
+  /** Column 2: a lush cheese room 10 … 20, an abyss worm 30 … 32, a flooded lush cave 40 … 42, lush-tagged stone at 50. */
+  const biomeSlice = (): SliceResult => slice({
+    2: (y) => (y >= 10 && y <= 20 ? [AIR, 0, LUSH_CHEESE] : y >= 30 && y <= 32 ? [AIR, 0, CAVE_KIND.worm | (CAVE_BIOME.abyss << 4)]
+      : y >= 40 && y <= 42 ? [AIR, WATER_SOURCE, LUSH_CHEESE] : y === 50 ? [STONE, 0, LUSH_CHEESE] : y < 60 ? [STONE, 0] : [AIR, 0]),
+  });
+
+  test('in biome mode a lush cave voxel is #4dff7a\'s colour, in type mode its kind\'s; water, blocks and sky alike in both', () => {
+    expect(CAVE_BIOME_COLORS[CAVE_BIOME.lush]).toBe('#4dff7a');
+    const s = biomeSlice();
+    const byType = sliceRgba(s, 0);
+    const byBiome = sliceRgba(s, 1);
+    expect(sliceRgba(s)).toEqual(byType);
+    for (const y of [10, 15, 20]) {
+      expect(pixel(byBiome, 2, y)).toEqual([0x4d, 0xff, 0x7a, 255]);
+      expect(pixel(byType, 2, y)).toEqual([...hex(XRAY_COLORS[CAVE_KIND.cheese]!), 255]);
+    }
+    expect(pixel(byBiome, 2, 31)).toEqual([...hex(CAVE_BIOME_COLORS[CAVE_BIOME.abyss]!), 255]);
+    expect(pixel(byType, 2, 31)).toEqual([...hex(XRAY_COLORS[CAVE_KIND.worm]!), 255]);
+    for (const [i, y] of [[2, 41], [2, 50], [2, 55], [2, 100], [3, 15]] as const) expect(pixel(byBiome, i, y)).toEqual(pixel(byType, i, y));
+    for (let b = 0; b < 4; b++) expect([...caveBiomeRgb(b)]).toEqual(hex(CAVE_BIOME_COLORS[b]!));
+    for (const b of [4, 15, -1, 1.5]) expect(caveBiomeRgb(b)).toBe(VOXEL_COLORS.unknown);
+  });
+
+  test('the painter (the Cross-section\'s canvas): pressing C with a slice shown repaints once; the same slice in the same mode never; a new slice once', () => {
+    const puts: Uint8ClampedArray[] = [];
+    let mode: 0 | 1 = 0;
+    const painter = createVoxelPainter((rgba) => { puts.push(rgba); }, () => mode);
+    const s = biomeSlice();
+    expect(painter.paint(s)).toBe(true);
+    expect([puts.length, painter.mode]).toEqual([1, 0]);
+    expect(puts[0]).toEqual(sliceRgba(s, 0));
+    // A redraw of the same slice (a resize, a session change) repaints nothing.
+    expect(painter.paint(s)).toBe(false);
+    expect(puts.length).toBe(1);
+    // C: the mode flips, the next paint of the shown slice repaints it once, in biome mode.
+    mode = 1;
+    expect(painter.paint(s)).toBe(true);
+    expect(painter.paint(s)).toBe(false);
+    expect([puts.length, painter.mode]).toEqual([2, 1]);
+    expect(puts[1]).toEqual(sliceRgba(s, 1));
+    expect(pixel(puts[1]!, 2, 15)).toEqual([0x4d, 0xff, 0x7a, 255]);
+    // A new slice is painted once in the mode of the moment; C back, once more.
+    const t = biomeSlice();
+    expect(painter.paint(t)).toBe(true);
+    mode = 0;
+    expect(painter.paint(t)).toBe(true);
+    expect(painter.paint(t)).toBe(false);
+    expect(puts.length).toBe(4);
+    expect(puts[3]).toEqual(sliceRgba(t, 0));
+  });
+
+  test('the wiring: the Cross-section paints through the painter with its `xrayColorMode` dep and redraws when the mode changed; the world\'s map hands it the page\'s mode and refreshes it at every X-ray change (C\'s `changed`)', () => {
+    const src = (path: string): string => readFileSync(new URL(`../../src/${path}`, import.meta.url), 'utf8');
+    const section = src('ui/crossSection/section.ts');
+    expect(section).toContain('xrayColorMode?(): 0 | 1;');
+    expect(section).toMatch(/createVoxelPainter\(\s*\(rgba\) => canvas\.getContext\('2d'\)\?\.putImageData\(new ImageData\(rgba, SLICE_POINTS, SLICE_ROWS\), 0, 0\),\s*deps\.xrayColorMode,\s*\)/);
+    expect(section).toContain('painter.paint(s);');
+    expect(section).not.toContain('sliceRgba(');
+    // The draw key holds the colour mode, so a refresh after C reaches the painter; `refresh` is that redraw.
+    expect(section).toContain("const colors = mode === 'voxels' ? deps.xrayColorMode?.() ?? 0 : 0;");
+    expect(section).toContain('drawn.colors === colors');
+    expect(section).toContain('refresh: () => render(),');
+    const tool = src('ui/map/mapTool.ts');
+    expect(tool).toContain("export type MapCaves = Omit<CavesTabDeps, 'openSlice' | 'revealParameters'> & { xrayColorMode?(): 0 | 1 };");
+    expect(tool).toContain('...(mapCaves?.xrayColorMode === undefined ? {} : { xrayColorMode: () => mapCaves.xrayColorMode!() }),');
+    expect(tool).toMatch(/setXray: \(on, band, radius\) => \{\s*cavesTab\?\.set\(on, band, radius\);[^}]*section\.refresh\(\);\s*\}/);
+    const page = src('ui/world/worldPage.ts');
+    expect(page).toContain('xrayColorMode: () => pageXray.mode,');
+    // C calls `changed` (pushXray), which reaches the map's setXray.
+    expect(page).toContain('const pushXray = (): void => mapRef?.setXray(pageXray.on, pageXray.band, xrayRadiusOf(liveRd));');
+    expect(page).toMatch(/case 'xrayColor':[\s\S]*?o\.changed\?\.\(\);\s*break;/);
+  });
+
+  test('on ?map (no colour-mode dep) the mode is 0: by kind', () => {
+    const puts: Uint8ClampedArray[] = [];
+    const painter = createVoxelPainter((rgba) => { puts.push(rgba); });
+    const s = biomeSlice();
+    expect(painter.paint(s)).toBe(true);
+    expect(painter.paint(s)).toBe(false);
+    expect([puts.length, painter.mode]).toEqual([1, 0]);
+    expect(puts[0]).toEqual(sliceRgba(s, 0));
+  });
 });

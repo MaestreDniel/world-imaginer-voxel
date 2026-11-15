@@ -2686,6 +2686,23 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(boxes).not.toContain('the 3 cave biomes arrive in SP6b.');
   });
 
+  test('§5.5: biome3d delivered as the Cave biome field (SP6b spec §15 item 18)', () => {
+    const at55 = text.indexOf('### 5.5 Density inspector');
+    const s55 = text.slice(at55, text.indexOf('### 5.6 ', at55));
+    const lines = s55.split('\n');
+    const fields = lines.find((l) => l.startsWith('  - The SP3d slice fields are '));
+    expect(fields, 'no `- The SP3d slice fields are …` line in §5.5').toBeDefined();
+    expect(fields).toContain('biome3d is delivered as the "Cave biome" field (SP6b) on both planes');
+    expect(fields).toContain('with a legend of the biomes present, redrawn on release as cave type is (amended by SP6b)');
+    const view = lines.find((l) => l.startsWith('- **Slice view (L):**'));
+    expect(view, 'no `- **Slice view (L):**` line in §5.5').toBeDefined();
+    expect(view).toContain('biome3d (the "Cave biome" field, SP6b)');
+    // The probe's cave biome is handed to SP10 (its full probe, master :1982).
+    const probe = lines.find((l) => l.startsWith('- **Probe:**'));
+    expect(probe, 'no `- **Probe:**` line in §5.5').toBeDefined();
+    expect(probe).toContain('biome 2D and 3D (the probe\'s cave biome → SP10, amended by SP6b)');
+  });
+
   test('§5.6: the cave-biome layer at a chosen y (SP6b spec §15 item 18)', () => {
     const at56 = text.indexOf('### 5.6 Map view');
     const s56 = text.slice(at56, text.indexOf('### 5.7 ', at56));

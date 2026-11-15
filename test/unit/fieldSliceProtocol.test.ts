@@ -220,3 +220,23 @@ describe('planFieldSlice: the one split and refusal math (SP3d spec §5.2, P3)',
     }
   });
 });
+
+describe('the biome3d field on the wire (SP6b spec §9.2, D10): a slice field like caves', () => {
+  test('a fieldSlice message of biome3d parses on both planes; a fieldProbe of it does not (no probe field)', () => {
+    for (const m of [{ ...V, field: 'biome3d', path: '' }, { ...H, field: 'biome3d', path: '' }]) expect(parseToWorker(m), JSON.stringify(m)).not.toBeNull();
+    expect(parseToWorker({ ...P, field: 'biome3d', path: '' })).toBeNull();
+  });
+  test('its reply is one byte per sample with no fluid, checked as caves\'s', () => {
+    expect(fieldSliceBytes(128, 'biome3d', 7)).toEqual({ values: 896, fluid: 0 });
+    const reply = (values: unknown, fluid: unknown = null) => ({ type: 'fieldSliceResult', jobId: 7, epoch: 2, n: 32, field: 'biome3d', from: 0, to: 2, values, fluid });
+    expect(parseFromWorker(reply(new ArrayBuffer(64)))).toMatchObject({ type: 'fieldSliceResult', field: 'biome3d' });
+    for (const m of [reply(new ArrayBuffer(63)), reply(new ArrayBuffer(512)), reply(new ArrayBuffer(64), new ArrayBuffer(64))]) {
+      expect((parseFromWorker(m) as { bad?: boolean } | null)?.bad, JSON.stringify(m)).toBe(true);
+    }
+  });
+  test('refusable, and bounded per part as a caves part', () => {
+    expect(isRefusableField('biome3d')).toBe(true);
+    expect(fieldSlicePartProblem(29, 287_668, 'biome3d')).toBeNull();
+    expect(fieldSlicePartProblem(30, 287_668, 'biome3d')).toBe(`too heavy: 30 × 287668 work units exceed the part budget ${PART_BUDGET}`);
+  });
+});

@@ -107,7 +107,8 @@ describe('the tool mounts the Caves tab in the world\'s map only (SP6a spec §7.
 
   test('`setXray` hands the page\'s X-ray state to the tab, and does nothing without one', () => {
     const src = SRC();
-    expect(src).toMatch(/^ {4}setXray: \(on, band, radius\) => cavesTab\?\.set\(on, band, radius\),$/m);
+    // SP6b §9.2 (Task 46): it also refreshes the Cross-section, so a C press repaints a shown Voxels slice by biome.
+    expect(src).toMatch(/^ {4}setXray: \(on, band, radius\) => \{\n {6}cavesTab\?\.set\(on, band, radius\);\n(?: {6}\/\/.*\n)* {6}section\.refresh\(\);\n {4}\},$/m);
   });
 
   test('the standalone `?map` page passes no caves (nor places)', () => {

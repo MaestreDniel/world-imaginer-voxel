@@ -135,6 +135,25 @@ describe('pool.fieldSlice: split, merge and refusals (SP3d spec §5.1, §5.2)', 
     expect([e instanceof SliceTooHeavy, log.filter((m) => m.type === 'fieldSlice').length]).toEqual([true, 0]);
     pool.terminate();
   }, 120_000);
+  test('a biome3d slice (SP6b §9.2) of 2 parts reassembles as Uint8Array, byte-equal to its parts and to the single evaluation', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(2, () => fakeWorker(log));
+    await pool.configure('42', DEFAULTS);
+    const req: FieldSliceSpec = vReq({ ax: 3200, az: 7480, bx: 3231, bz: 7480 }, 'biome3d');
+    const r = await pool.fieldSlice(req, { priority: 500, columnCost: costOf(req), budget: 2 ** 40 }).promise;
+    const ranges = partsOf(log);
+    expect(ranges).toHaveLength(2);
+    expect([r.n, r.field, r.fluid]).toEqual([32, 'biome3d', null]);
+    expect(r.values).toBeInstanceOf(Uint8Array);
+    // Each part evaluated alone in-process, laid end to end, and the whole in one piece.
+    const parts = ranges.map(([from, to]) => evaluateFieldSlice(ctxFor('42'), { geometry: geometryOf(req), field: 'biome3d', path: '', from: from!, to: to! }, NEVER)!.values);
+    expect(bytes(r.values).equals(Buffer.concat(parts.map((v) => bytes(v))))).toBe(true);
+    expect(bytes(r.values).equals(bytes(single(req).values))).toBe(true);
+    // Cave biome codes beside other solid and open air (the lush columns hold tagged voxels).
+    expect([...new Set(r.values)].some((v) => v >= 1 && v <= 4)).toBe(true);
+    pool.terminate();
+  }, 120_000);
+
   test('a 128² vertical density slice at the defaults: admitted by REQUEST_BUDGET since SP6a Task 13\'s memo-aware bound (289,864 per sample column since SP6b\'s rock floor, 272,456 since the user\'s check\'s noodle threshold, 272,064 from D25\'s lever 5, 274,416 before it, limit 1,048,576; 2,278,784 and refused at Tasks 7-12), 6 parts on 6 workers, k = 28 sample columns (30 before SP6b\'s floor, 6 of k = 78 before SP6a)', async () => {
     const log: ToWorker[] = [];
     const pool = createWorkerPool(6, () => fakeWorker(log));

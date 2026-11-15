@@ -19,13 +19,15 @@
  *   "constant v".
  * - **Blocks** use the Voxels palette and legend; **rule** masks two colours, grey for n/a, and the share of 1s among
  *   the solid voxels; **caves** ("Cave type", SP6a spec §7.4, D13, both planes) colours each kind in the X-ray's palette,
- *   other solid pale grey and open air the sky, with a legend of the kinds present.
+ *   other solid pale grey and open air the sky, with a legend of the kinds present; **biome3d** ("Cave biome", SP6b spec
+ *   §9.2, D10, both planes) colours cave air by its cave biome (`CAVE_BIOME_COLORS`), other solid and open air alike,
+ *   with a legend of the biomes present.
  * - **Requests** (`createFieldSliceRequests`, §4.5): per (session epoch, request key), a 32² draft at priority 2 then the
  *   128² slice at priority 500, on the draft the pool's last resolved configure holds; a new request supersedes the
  *   previous one (its queued parts dropped, its running parts' results discarded: P1); a density or node slice refused
  *   by the work bound (`planFieldSlice`, never re-derived: P3) keeps the draft with its notice. While a gesture drags a
- *   `caves.*` leaf, or any leaf over a tree with SP6a's cave terms (`createCaveGestureHold`), density, node and caves
- *   slices are not requested: the gesture's end asks for the draft it ended on (SP6a D13, §7.4; kept always over the
+ *   `caves.*` leaf, or any leaf over a tree with SP6a's cave terms (`createCaveGestureHold`), density, node, caves and
+ *   biome3d slices are not requested: the gesture's end asks for the draft it ended on (SP6a D13, §7.4; kept always over the
  *   cave tree, SP6a ruling R16).
  * - **Pinned slices** (§11's cut line, built; master §5.5: up to 3 side by side): a pin is a frozen copy of the live
  *   slice's want (its plane with the line or the square and y, its field, its node) with a request stream of its own,
@@ -35,7 +37,7 @@
  *   window, the y control, the map's square, the status and hover lines, and the params of the configured draft.
  */
 import {
-  CAVE_KIND, CAVE_SLICE_SOLID, DRAFT_BUDGET, HEIGHT, MIN_Y, REQUEST_BUDGET, SEA_LEVEL, SLICE_EXTENTS, SLICE_NS, SLICE_RULE_NA,
+  CAVE_BIOME, CAVE_KIND, CAVE_SLICE_SOLID, DRAFT_BUDGET, HEIGHT, MIN_Y, REQUEST_BUDGET, SEA_LEVEL, SLICE_EXTENTS, SLICE_NS, SLICE_RULE_NA,
 } from '../../core/constants';
 import { MAX_Y, WINDOW_HALF } from '../../core/coords';
 import type { Params } from '../../core/params/schema';
@@ -44,12 +46,12 @@ import {
   sliceAcquisitionCost, sliceCostOf, sliceGeometryProblem, sliceRowY, sliceSampleVoxel, type SliceField, type SliceGeometry,
 } from '../../gen/inspect/fieldSlice';
 import { segmentLength, segmentPointAt, segmentProblem, type Segment } from '../../metrics/crossSection';
-import { XRAY_LABELS } from '../../render/xrayPalette';
+import { XRAY_BIOME_LABELS, XRAY_LABELS } from '../../render/xrayPalette';
 import { fluidType } from '../../world/blocks/fluid';
 import { AIR, REGISTRY } from '../../world/blocks/index';
 import { isRefusableField, planFieldSlice, type FieldSliceSpec } from '../../workers/protocol';
 import { countText } from '../biomeTable/model';
-import { caveRgb, VOXEL_COLORS, voxelRgb, type Rgb } from '../crossSection/voxels';
+import { caveBiomeRgb, caveRgb, VOXEL_COLORS, voxelRgb, type Rgb } from '../crossSection/voxels';
 import type { SlicePlane } from '../map/clickAction';
 import type { MapSquare } from '../map/mapView';
 import type { HoverVoxel } from './hoverModel';
@@ -57,17 +59,24 @@ import type { Selection } from './model';
 
 // ---------------------------------------------------------------- fields
 
-/** The field select's choices (§4.1): `selected` follows the tree's selection; `caves` is SP6a's "Cave type" (§7.4). */
-export type FieldChoice = 'density' | 'selected' | 'blocks' | 'caves';
-export const FIELD_CHOICES: readonly FieldChoice[] = Object.freeze(['density', 'selected', 'blocks', 'caves']);
+/**
+ * The field select's choices (§4.1): `selected` follows the tree's selection; `caves` is SP6a's "Cave type" (§7.4),
+ * `biome3d` SP6b's "Cave biome" (SP6b spec §9.2).
+ */
+export type FieldChoice = 'density' | 'selected' | 'blocks' | 'caves' | 'biome3d';
+export const FIELD_CHOICES: readonly FieldChoice[] = Object.freeze(['density', 'selected', 'blocks', 'caves', 'biome3d']);
 
-/** A choice resolved on a plane: the field and its node path ('' for density, blocks and caves), or why it has no slice. */
+/** A choice resolved on a plane: the field and its node path ('' for density, blocks, caves and biome3d), or why it has no slice. */
 export type ResolvedField =
   | { readonly ok: true; readonly field: SliceField; readonly path: string }
   | { readonly ok: false; readonly note: string };
 
 /** The `caves` choice's label (SP6a spec §7.4). */
 export const CAVES_LABEL = 'Cave type';
+/** The `biome3d` choice's label (SP6b spec §9.2). */
+export const BIOME3D_LABEL = 'Cave biome';
+/** The choices whose option reads a label of its own; the others read their value (`selected` names its node). */
+const FIELD_LABELS: Readonly<Partial<Record<FieldChoice, string>>> = Object.freeze({ caves: CAVES_LABEL, biome3d: BIOME3D_LABEL });
 export const RULE_HORIZONTAL_NOTE = 'a rule node has a mask on vertical planes only';
 export const BLOCKS_HORIZONTAL_NOTE = 'blocks have no horizontal slice';
 
@@ -82,11 +91,12 @@ export interface FieldOption {
 /**
  * `density` is the resolved tree's root; `selected` a density node's value (`node`) or a rule node's or condition's
  * mask (`rule`, vertical planes only); `blocks` the T stage's states (vertical planes only); `caves` the cave type of
- * each voxel (SP6a spec §7.4, both planes, whatever the selection). Selecting a node never changes the choice.
+ * each voxel (SP6a spec §7.4, both planes, whatever the selection), `biome3d` its cave biome (SP6b spec §9.2, likewise).
+ * Selecting a node never changes the choice.
  */
 export function resolveField(choice: FieldChoice, plane: SlicePlane, sel: Selection): ResolvedField {
   if (choice === 'density') return { ok: true, field: 'density', path: '' };
-  if (choice === 'caves') return { ok: true, field: 'caves', path: '' };
+  if (choice === 'caves' || choice === 'biome3d') return { ok: true, field: choice, path: '' };
   if (choice === 'blocks') return plane === 'vertical' ? { ok: true, field: 'blocks', path: '' } : { ok: false, note: BLOCKS_HORIZONTAL_NOTE };
   if (sel.leaf === 'density.defs') return { ok: true, field: 'node', path: sel.path };
   return plane === 'vertical' ? { ok: true, field: 'rule', path: sel.path } : { ok: false, note: RULE_HORIZONTAL_NOTE };
@@ -95,7 +105,7 @@ export function resolveField(choice: FieldChoice, plane: SlicePlane, sel: Select
 export function fieldOptions(plane: SlicePlane, sel: Selection): FieldOption[] {
   return FIELD_CHOICES.map((value) => {
     const r = resolveField(value, plane, sel);
-    return { value, label: value === 'caves' ? CAVES_LABEL : value, disabled: !r.ok, note: r.ok ? null : r.note };
+    return { value, label: FIELD_LABELS[value] ?? value, disabled: !r.ok, note: r.ok ? null : r.note };
   });
 }
 
@@ -564,6 +574,45 @@ export function cavesLegend(values: Uint8Array): BlocksLegendKey[] {
   return keys;
 }
 
+// ---------------------------------------------------------------- biome3d (SP6b spec §9.2, D10)
+
+/** The cave biomes in id order (`CAVE_BIOME`). */
+const BIOMES: readonly number[] = Object.values(CAVE_BIOME).sort((a, b) => a - b);
+
+/**
+ * A `biome3d` code's colour: 0 open air the sky, 1 + a cave biome that biome's colour (`CAVE_BIOME_COLORS`, the X-ray's,
+ * the map's), other solid pale grey (`CAVES_SOLID`, as the `caves` field).
+ */
+export function biome3dCodeRgb(code: number): Rgb {
+  if (code === 0) return VOXEL_COLORS.sky;
+  if (code === CAVES_SOLID) return CAVES_SOLID_RGB;
+  return caveBiomeRgb(code - 1);
+}
+
+/** A `biome3d` code as the hover and the legend name it: the biome's X-ray legend name, `other solid`, `open air`. */
+export function biome3dCodeText(code: number): string {
+  if (code === 0) return 'open air';
+  if (code === CAVES_SOLID) return 'other solid';
+  return BIOMES.includes(code - 1) ? XRAY_BIOME_LABELS[code - 1]! : `code ${code}`;
+}
+
+/** A `biome3d` slice (sample order) as an n × n RGBA image (`biome3dCodeRgb`). */
+export function biome3dRgba(values: Uint8Array, n: number, plane: SlicePlane): Uint8ClampedArray<ArrayBuffer> {
+  const img = imageOrder(values, n, plane);
+  return rgbaOf(n, (i) => biome3dCodeRgb(img[i]!));
+}
+
+/**
+ * The `biome3d` legend (in the histogram's place): the cave biomes present in id order, each with its colour and name,
+ * then other solid and open air when present.
+ */
+export function biome3dLegend(values: Uint8Array): BlocksLegendKey[] {
+  const present = new Set<number>(values);
+  const keys: BlocksLegendKey[] = BIOMES.filter((b) => present.has(1 + b)).map((b) => ({ label: biome3dCodeText(1 + b), rgb: biome3dCodeRgb(1 + b) }));
+  for (const code of [CAVES_SOLID, 0]) if (present.has(code)) keys.push({ label: biome3dCodeText(code), rgb: biome3dCodeRgb(code) });
+  return keys;
+}
+
 // ---------------------------------------------------------------- requests (§4.5)
 
 /** The draft's and the full slice's sizes (SLICE_NS) and priorities: the draft follows the preview tiles at distance 0 and 1, the full slice queues behind every preview tile. */
@@ -610,32 +659,34 @@ export function fieldSliceSpec(s: SliceState, line: Segment | null, field: Slice
  * `interpolated`, and less with one, whose corners the memo shares, SP6a §7.4), and L = the largest c accepted,
  * ⌊(limit − a) / n⌋. The draft's (`draft`) reads "node too heavy to slice", the full slice's "node too heavy for a 128²
  * slice". A caves slice (SP6a §7.4) reads "cave type too heavy …" with c = ⌈columnCost / n⌉ and L = ⌊limit / n⌋, its
- * acquisition included (the chunk columns a wide horizontal plane visits are most of it); given `narrowTo` (a horizontal
- * caves slice's `widestCaveExtent`), it ends "— narrow the extent to `narrowTo` or less" (Task 52, minors-16).
+ * acquisition included (the chunk columns a wide horizontal plane visits are most of it), a biome3d slice (SP6b §9.2)
+ * "cave biome too heavy …" alike; given `narrowTo` (a horizontal caves or biome3d slice's `widestCaveExtent`), it ends
+ * "— narrow the extent to `narrowTo` or less" (Task 52, minors-16).
  */
 export function tooHeavyText(
-  stage: 'draft' | 'full', params: Params, field: 'density' | 'node' | 'caves', path: string, plane: SliceGeometry['plane'], n: number, columnCost: number, limit: number,
+  stage: 'draft' | 'full', params: Params, field: 'density' | 'node' | 'caves' | 'biome3d', path: string, plane: SliceGeometry['plane'], n: number, columnCost: number, limit: number,
   narrowTo: number | null = null, extent?: number,
 ): string {
-  const a = field === 'caves' ? 0 : sliceAcquisitionCost(params, field, path, plane, n, extent);
+  const a = field === 'caves' || field === 'biome3d' ? 0 : sliceAcquisitionCost(params, field, path, plane, n, extent);
   const c = Math.ceil((columnCost - a) / n);
   const l = Math.floor((limit - a) / n);
-  const who = field === 'caves' ? 'cave type' : 'node';
+  const who = field === 'caves' ? 'cave type' : field === 'biome3d' ? 'cave biome' : 'node';
   const what = stage === 'draft' ? `${who} too heavy to slice` : `${who} too heavy for a ${SLICE_FULL_N}² slice`;
   const hint = narrowTo === null ? '' : ` — narrow the extent to ${narrowTo} or less`;
   return `${what} (cost ${countText(c)}, limit ${countText(l)})${hint}`;
 }
 
 /**
- * The widest of `SLICE_EXTENTS` at which a horizontal `caves` slice under `params` is requested (SP6a §7.4): its draft
- * admitted by the work bound, or (ruling R9) its 128² slice; null when none is. A caves slice's cost grows with the extent
- * (the chunk columns it visits), so every narrower extent is admitted too. 512 at the defaults (Task 52, minors-16).
+ * The widest of `SLICE_EXTENTS` at which a horizontal `caves` (or SP6b's `biome3d`, §9.2) slice under `params` is
+ * requested (SP6a §7.4): its draft admitted by the work bound, or (ruling R9) its 128² slice; null when none is. Its cost
+ * grows with the extent (the chunk columns it visits), so every narrower extent is admitted too. 512 for `caves` at the
+ * defaults (Task 52, minors-16), 256 for `biome3d` (its picker pass per chunk column visited).
  */
-export function widestCaveExtent(params: Params): number | null {
+export function widestCaveExtent(params: Params, field: 'caves' | 'biome3d' = 'caves'): number | null {
   let widest: number | null = null;
   for (const e of SLICE_EXTENTS) {
-    const draft = planFieldSlice(SLICE_DRAFT_N, sliceCostOf(params, 'caves', '', 'horizontal', SLICE_DRAFT_N, e), 1, DRAFT_BUDGET);
-    const full = planFieldSlice(SLICE_FULL_N, sliceCostOf(params, 'caves', '', 'horizontal', SLICE_FULL_N, e), 1, REQUEST_BUDGET);
+    const draft = planFieldSlice(SLICE_DRAFT_N, sliceCostOf(params, field, '', 'horizontal', SLICE_DRAFT_N, e), 1, DRAFT_BUDGET);
+    const full = planFieldSlice(SLICE_FULL_N, sliceCostOf(params, field, '', 'horizontal', SLICE_FULL_N, e), 1, REQUEST_BUDGET);
     if (!draft.refused || !full.refused) widest = e;
   }
   return widest;
@@ -659,7 +710,7 @@ export interface FieldSliceSource {
   /** The shown result, the request in flight, the key or the notice changed. */
   changed(): void;
   /**
-   * True while density, node and caves slices wait for a gesture's end (SP6a D13, §7.4: a drag over a `caves.*` leaf,
+   * True while density, node, caves and biome3d slices wait for a gesture's end (SP6a D13, §7.4: a drag over a `caves.*` leaf,
    * `createCaveGestureHold`); absent, never held.
    */
   held?(): boolean;
@@ -754,10 +805,10 @@ export function createFieldSliceRequests(src: FieldSliceSource): FieldSliceReque
     }
     const budget = draft ? DRAFT_BUDGET : REQUEST_BUDGET;
     const heavy = (limit: number): string => {
-      // A horizontal caves slice names the widest extent it is admitted at, when narrower (Task 52, minors-16).
-      const widest = field === 'caves' && state.plane === 'horizontal' ? widestCaveExtent(cfg.params) : null;
+      // A horizontal caves or biome3d slice names the widest extent it is admitted at, when narrower (Task 52, minors-16).
+      const widest = (field === 'caves' || field === 'biome3d') && state.plane === 'horizontal' ? widestCaveExtent(cfg.params, field) : null;
       const narrowTo = widest !== null && widest < state.extent ? widest : null;
-      return tooHeavyText(draft ? 'draft' : 'full', cfg.params, field as 'density' | 'node' | 'caves', path, state.plane, n, cost, limit, narrowTo, state.extent);
+      return tooHeavyText(draft ? 'draft' : 'full', cfg.params, field as 'density' | 'node' | 'caves' | 'biome3d', path, state.plane, n, cost, limit, narrowTo, state.extent);
     };
     if (isRefusableField(field)) {
       const plan = planFieldSlice(n, cost, src.pool.size, budget);
@@ -827,10 +878,11 @@ export function createFieldSliceRequests(src: FieldSliceSource): FieldSliceReque
         if (moved) src.changed();
         return;
       }
-      // SP6a D13 (§7.4, D25): a density, node or caves slice over the cave tree is not asked per configure while a cave
-      // leaf is dragged (kept always, ruling R16); a request of an older epoch still in flight is dropped, the last image
-      // shows stale, and the gesture's end (a session change, so the view asks again) requests the draft it ended on.
-      if ((f.field === 'density' || f.field === 'node' || f.field === 'caves') && src.held?.() === true) {
+      // SP6a D13 (§7.4, D25): a density, node, caves or biome3d (SP6b §9.2) slice over the cave tree is not asked per
+      // configure while a cave leaf is dragged (kept always, ruling R16); a request of an older epoch still in flight is
+      // dropped, the last image shows stale, and the gesture's end (a session change, so the view asks again) requests the
+      // draft it ended on.
+      if ((f.field === 'density' || f.field === 'node' || f.field === 'caves' || f.field === 'biome3d') && src.held?.() === true) {
         const had = run !== null;
         supersede();
         if (moved || had) src.changed();
@@ -929,7 +981,8 @@ export interface SliceImage {
 /**
  * The image of a slice result on its plane, as the live view and every pin draw it: density and node through the
  * diverging colormap at `scaleOf(stats, fixed)` (one fixed scale for all, else each image's own auto scale) with the
- * 0-contour; blocks in the Voxels palette; rule masks in their two colours and grey; caves by kind (`cavesRgba`).
+ * 0-contour; blocks in the Voxels palette; rule masks in their two colours and grey; caves by kind (`cavesRgba`); biome3d
+ * by cave biome (`biome3dRgba`).
  */
 export function sliceImage(r: FieldSliceResult, plane: SlicePlane, fixed: number | null): SliceImage {
   switch (r.field) {
@@ -944,6 +997,7 @@ export function sliceImage(r: FieldSliceResult, plane: SlicePlane, fixed: number
     case 'blocks': return { rgba: blocksRgba(r.values, r.fluid, r.n), contour: [], stats: null };
     case 'rule': return { rgba: ruleRgba(r.values, r.n, plane), contour: [], stats: null };
     case 'caves': return { rgba: cavesRgba(r.values, r.n, plane), contour: [], stats: null };
+    case 'biome3d': return { rgba: biome3dRgba(r.values, r.n, plane), contour: [], stats: null };
   }
 }
 
@@ -1086,6 +1140,7 @@ function sampleText(r: FieldSliceResult, i: number): string {
     case 'blocks': return isWater(r.values[i]!, r.fluid[i]!) ? 'water' : REGISTRY.stateKey(r.values[i]!);
     case 'rule': return r.values[i] === 1 ? 'yes' : r.values[i] === 0 ? 'no' : r.values[i] === RULE_NA ? 'n/a' : String(r.values[i]);
     case 'caves': return cavesCodeText(r.values[i]!);
+    case 'biome3d': return biome3dCodeText(r.values[i]!);
   }
 }
 
@@ -1133,9 +1188,12 @@ export function sliceSquare(s: SliceState | null): MapSquare | null {
   return s === null || s.plane !== 'horizontal' ? null : { cx: s.cx, cz: s.cz, extent: s.extent };
 }
 
-/** The field select's label: `selected` names the selected node's path (§4.1); `caves` reads "Cave type" (SP6a §7.4). */
+/**
+ * The field select's label: `selected` names the selected node's path (§4.1); `caves` reads "Cave type" (SP6a §7.4),
+ * `biome3d` "Cave biome" (SP6b §9.2).
+ */
 export function fieldOptionLabel(choice: FieldChoice, sel: Selection): string {
-  return choice === 'selected' ? `selected (${sel.path})` : choice === 'caves' ? CAVES_LABEL : choice;
+  return choice === 'selected' ? `selected (${sel.path})` : FIELD_LABELS[choice] ?? choice;
 }
 
 /** The status line: the shown slice (its size when fresh, "stale" otherwise), then the stage in flight. */

@@ -102,11 +102,11 @@ function slice(params: Params, spec: FieldSliceSpec, ranges: readonly (readonly 
     const msg: FieldSliceMsg = { ...spec, type: 'fieldSlice', jobId: 0, epoch: 0, scope: 0, from, to };
     const r = runFieldSlice(ctx, msg, NEVER, NO_T_COLUMNS);
     if (r === null || 'badArgs' in r) throw new Error(`slice part [${from}, ${to}) refused: ${r === null ? 'stopped' : r.badArgs}`);
-    s += r.msg.field === 'caves' ? new Uint8Array(r.msg.values)[0]! : new Float64Array(r.msg.values)[0]!;
+    s += r.msg.field === 'caves' || r.msg.field === 'biome3d' ? new Uint8Array(r.msg.values)[0]! : new Float64Array(r.msg.values)[0]!;
   }
   return s;
 }
-/** The pool's split at pool size 1 of a whole n × n density or caves slice (`planFieldSlice` with REQUEST_BUDGET): its ranges. */
+/** The pool's split at pool size 1 of a whole n × n density, caves or biome3d slice (`planFieldSlice` with REQUEST_BUDGET): its ranges. */
 function poolOfOne(params: Params, spec: FieldSliceSpec): readonly (readonly [number, number])[] {
   const plan = planFieldSlice(spec.n, sliceCostOf(params, spec.field, spec.path, spec.plane, spec.n, spec.plane === 'horizontal' ? spec.extent : undefined), 1, REQUEST_BUDGET);
   if (plan.refused) throw new Error(`the ${spec.plane} ${spec.n}² slice is refused (limit ${plan.limit})`);
@@ -730,6 +730,12 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   const cSpec: FieldSliceSpec = { plane: 'horizontal', cx: 0, cz: 0, extent: 256, y: 30, n: 128, field: 'caves', path: '' };
   const cRanges = poolOfOne(DEFAULTS, cSpec);
   const cRun = await measure('slice.caves128', 1, () => { sink += slice(DEFAULTS, cSpec, cRanges); }, 9);
+  // SP6b §9.2 (D10): slice.biome3d128 — the same plane in the `biome3d` field (the cave tags, then T's cave-biome step:
+  // each chunk column's picker pass at its first tagged sample and a pick per tagged sample), measured as slice.caves128
+  // right after it. Gated p50 ≤ SLICE_BIOME3D_P50_MAX_MS.
+  const bSpec: FieldSliceSpec = { ...cSpec, field: 'biome3d' };
+  const bRanges = poolOfOne(DEFAULTS, bSpec);
+  const bRun = await measure('slice.biome3d128', 1, () => { sink += slice(DEFAULTS, bSpec, bRanges); }, 9);
 
   // SP6b §12.5 (D25's culling checkpoint): cull.walk.rd12 and cull.walk.rd16 — one full walk of cave culling (§8.2:
   // `startWalk`, then `stepWalk` with no pop budget until the queue empties) from a cave pose, over the discs'
@@ -1079,6 +1085,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   console.log(`carver.paths ${ms(pathsRun)} (one worm, one ravine and one underground worm per call; each alone: ${perKind.join('; ')})`);
   console.log(`mesh.xray ${ms(xrayRun)} (meshXray alone on mesh.section's ${meshSections.length} sections; ${xc} calls, ${xrayQuads} pass-3 quads; mesh.section with pass 3: p50 ${meshRun.latency.p50.toFixed(3)} ms)`);
   console.log(`slice.caves128 ${ms(cRun)} (${cRanges.length} parts at pool size 1: ${JSON.stringify(cRanges)}; slice.vertical128 ${ms(vRun)})`);
+  console.log(`slice.biome3d128 ${ms(bRun)} (${bRanges.length} parts at pool size 1: ${JSON.stringify(bRanges)}; slice.caves128 p50 ${cRun.latency.p50.toFixed(3)} ms)`);
   for (const [name, c] of [['cull.walk.rd12', cull12], ['cull.walk.rd16', cull16]] as const) {
     console.log(
       `${name} ${ms(c.run)} (one full walk from the cave pose (${cullPose.join(', ')}), section (${s0x}, ${s0y}, ${s0z}); ${c.disc} disc columns, `
@@ -1125,6 +1132,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
     lightP50: lightRun.latency.p50, lightP99: lightRun.latency.p99, meshP50: meshRun.latency.p50, meshP99: meshRun.latency.p99,
     relightP95: relightRun.latency.p99, persistFlushP99: persistRun.latency.p99,
     pasteMaxP99: pasteMax.run.latency.p99, pasteLitP99: pasteLit.run.latency.p99, sliceCaves128P50: cRun.latency.p50,
+    sliceBiome3d128P50: bRun.latency.p50,
   }), 'absolute gates').toEqual([]);
   expect(Number.isFinite(sink)).toBe(true);
   if (process.env.BENCH_RECORD === '1') {

@@ -13,6 +13,8 @@
  *   appends the surface rule that made it (SP3c spec §6: ` · rule …` while one `surfaceProbe` job runs, the latest
  *   hovered voxel wins, then ` · rule <leaf id>` or ` · rule none`; none for a stale slice).
  *   Its legend keys every registry state (air, stone, bedrock and the SP3c terrain palette), water and the sea line.
+ *   Dry cave air follows the world's X-ray colour mode (SP6b spec §9.2, D10: `xrayColorMode`, by kind or by cave biome;
+ *   `?map` has none, so by kind): `refresh` (the world's C) repaints a shown slice when the mode changed.
  * - The current mode's result is requested (model.ts createSectionRequests, createSliceRequests) when the preview
  *   driver settles while the tab is on screen, when the tab or the mode comes on screen while it is settled and
  *   when a new line is set, so it always runs on the draft the map shows. It is stale (dimmed, with its status)
@@ -39,7 +41,7 @@ import {
   sectionView, segmentText, waterRuns, SECTION_MODES, type Run, type SectionMode,
 } from './model';
 import {
-  createRuleReadout, sameRuleCell, sliceRgba, sliceSummary, SEA_LEVEL_Y, VOXEL_COLORS, voxelCell, voxelLegend, voxelPlots, voxelPosition, voxelReadout, voxelRgb,
+  createRuleReadout, createVoxelPainter, sameRuleCell, sliceSummary, SEA_LEVEL_Y, VOXEL_COLORS, voxelCell, voxelLegend, voxelPlots, voxelPosition, voxelReadout, voxelRgb,
   type Rgb, type RuleCell,
 } from './voxels';
 
@@ -58,6 +60,11 @@ export interface SectionDeps {
   clear(): void;
   /** Closes the drawer (Close). */
   close(): void;
+  /**
+   * The X-ray's colour mode (SP6b spec §9.2, D10): the Voxels mode colours dry cave air by kind (0) or by cave biome (1).
+   * Absent on `?map` (no X-ray): 0.
+   */
+  xrayColorMode?(): 0 | 1;
 }
 
 export interface CrossSection {
@@ -72,6 +79,11 @@ export interface CrossSection {
   /** Profile or Voxels (the header's toggle). */
   readonly mode: SectionMode;
   setMode(mode: SectionMode): void;
+  /**
+   * The X-ray's colour mode may have changed (C, SP6b spec §9.2): a shown Voxels slice is repainted once in the new mode;
+   * nothing otherwise (the next draw reads the mode).
+   */
+  refresh(): void;
   /** Stops following the session and the driver (the DOM stays). */
   dispose(): void;
 }
@@ -189,8 +201,14 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
   let cursor: SVGLineElement | null = null;
   /** The Voxels mode's horizontal cursor. */
   let cursorY: SVGLineElement | null = null;
-  /** The slice whose pixels the canvas holds. */
-  let painted: SliceResult | null = null;
+  /**
+   * The canvas's painter: the slice whose pixels it holds and the X-ray colour mode it painted them in (SP6b spec §9.2),
+   * repainted when either changes.
+   */
+  const painter = createVoxelPainter(
+    (rgba) => canvas.getContext('2d')?.putImageData(new ImageData(rgba, SLICE_POINTS, SLICE_ROWS), 0, 0),
+    deps.xrayColorMode,
+  );
   const summaries = new WeakMap<SliceResult, string>();
 
   const requests = createSectionRequests({
@@ -320,10 +338,7 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
     const length = segmentLength(line);
     const { cells, distance } = voxelPlots({ left: MARGIN.left, top: MARGIN.top, width, height }, length);
     plot = cells;
-    if (painted !== s) {
-      canvas.getContext('2d')?.putImageData(new ImageData(sliceRgba(s), SLICE_POINTS, SLICE_ROWS), 0, 0);
-      painted = s;
-    }
+    painter.paint(s);
     Object.assign(canvas.style, { left: `${cells.left}px`, top: `${cells.top}px`, width: `${width}px`, height: `${height}px` });
     canvas.hidden = false;
     root.setAttribute('viewBox', `0 0 ${w} ${h}`);
@@ -356,7 +371,9 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
   }
 
   /** What was drawn last, so that a session change that leaves it as it was does not redraw it. */
-  let drawn: { readonly mode: SectionMode; readonly value: unknown; readonly stale: boolean; readonly w: number; readonly h: number } | null = null;
+  let drawn: {
+    readonly mode: SectionMode; readonly value: unknown; readonly stale: boolean; readonly w: number; readonly h: number; readonly colors: 0 | 1;
+  } | null = null;
 
   const sliceText = (s: SliceResult): string => {
     let t = summaries.get(s);
@@ -396,8 +413,10 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
     if (!deps.visible()) return;
     const stale = view === 'stale';
     const value = profile ?? slice;
-    if (drawn !== null && drawn.mode === mode && drawn.value === value && drawn.stale === stale && drawn.w === w && drawn.h === h) return;
-    drawn = { mode, value, stale, w, h };
+    // The X-ray's colour mode reaches only the Voxels mode's pixels (SP6b spec §9.2): the profile never redraws for it.
+    const colors = mode === 'voxels' ? deps.xrayColorMode?.() ?? 0 : 0;
+    if (drawn !== null && drawn.mode === mode && drawn.value === value && drawn.stale === stale && drawn.w === w && drawn.h === h && drawn.colors === colors) return;
+    drawn = { mode, value, stale, w, h, colors };
     if (mode === 'profile') draw(profile, stale);
     else drawVoxels(slice, line, stale);
     hint();
@@ -501,6 +520,7 @@ export function createCrossSection(host: HTMLElement, deps: SectionDeps): CrossS
     },
     get mode() { return mode; },
     setMode,
+    refresh: () => render(),
     dispose() {
       offSession();
       offSettled();

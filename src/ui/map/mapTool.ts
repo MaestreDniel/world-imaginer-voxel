@@ -75,8 +75,11 @@ export interface MapPlaces {
   addAt(x: number, z: number): void;
 }
 
-/** What the page gives the world's map for its Caves tab (SP6a spec §7.3): the tab's deps but the two links the tool makes. */
-export type MapCaves = Omit<CavesTabDeps, 'openSlice' | 'revealParameters'>;
+/**
+ * What the page gives the world's map for its Caves tab (SP6a spec §7.3): the tab's deps but the two links the tool makes,
+ * and the page's X-ray colour mode, which the Cross-section's Voxels mode follows (SP6b spec §9.2, D10; absent: 0).
+ */
+export type MapCaves = Omit<CavesTabDeps, 'openSlice' | 'revealParameters'> & { xrayColorMode?(): 0 | 1 };
 
 /**
  * The Caves tab's deps in the world's map (SP6a spec §7.3): the page's `caves`, with the tool's two links. "Cave slice" at
@@ -175,7 +178,8 @@ export interface MapTool {
   onPin(f: (p: readonly [number, number] | null) => void): () => void;
   /**
    * The page's X-ray state for the Caves tab (SP6a spec §7.3): on or off, its band and its radius in blocks, at the mount
-   * and at every change; nothing without the tab (`?map`).
+   * and at every change (C included); nothing without the tab (`?map`). The Cross-section repaints a shown Voxels slice
+   * when the X-ray's colour mode changed (SP6b spec §9.2).
    */
   setXray(on: boolean, band: XrayBand, radius: number): void;
   /** Runs every disposer once, in reverse order of creation; later calls do nothing. */
@@ -396,6 +400,8 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   // while the tab is on screen, when it comes on screen and when a line is drawn.
   const section = createCrossSection(layout.drawerTabs.section, {
     session, notices, pool, driver,
+    // SP6b spec §9.2 (D10): the Voxels mode follows the world's X-ray colour mode; `?map` has no Caves deps, so by kind.
+    ...(mapCaves?.xrayColorMode === undefined ? {} : { xrayColorMode: () => mapCaves.xrayColorMode!() }),
     visible: () => drawerTabOnScreen(shown, layout, 'section'),
     arm: () => setCut(CUT_ARMED),
     clear: () => {
@@ -596,7 +602,11 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
     },
     pin: () => pin,
     onPin,
-    setXray: (on, band, radius) => cavesTab?.set(on, band, radius),
+    setXray: (on, band, radius) => {
+      cavesTab?.set(on, band, radius);
+      // C reaches here too (the page's `changed`): a shown Voxels slice repaints in the new colour mode (SP6b spec §9.2).
+      section.refresh();
+    },
     dispose: () => disposers.dispose(),
   };
 }
