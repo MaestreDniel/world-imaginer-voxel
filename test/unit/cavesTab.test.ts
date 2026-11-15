@@ -7,14 +7,16 @@
  * saved world. SP6b's additions (SP6b spec §9.3, D11; rulings P51, P53): "Colour by" in step with C both ways, the band
  * line and the legend following the mode, "Cave slice" opening `caves` or `biome3d` by the mode, "Show cave biomes on
  * the map" at `caveSliceY`, "Cave biome parameters" (`caves.biomes.lush.hMin`) and the biome legend's rows driving the
- * map's cave-biome highlight.
+ * map's cave-biome highlight; the second Find row (SP6b spec §9.3, D11; Task 48): "Nearest lush cave", "Nearest dripstone
+ * cave", "Nearest abyss", with the kinds' result line, cancel rules and "Save as place".
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { CAVE_BIOME, CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
 import { XRAY_BIOME_COLORS, XRAY_BIOME_LABELS, XRAY_COLORS, XRAY_LABELS } from '../../src/render/xrayPalette';
 import {
-  CAVE_BIOME_PARAMETERS_LEAF, CAVE_PARAMETERS_LEAF, CAVE_SLICE_EXTENT, caveSliceY, createCavesTab, FIND_KINDS, findButtonText, findText,
+  CAVE_BIOME_PARAMETERS_LEAF, CAVE_PARAMETERS_LEAF, CAVE_SLICE_EXTENT, caveSliceY, createCavesTab, FIND_BIOMES, FIND_KINDS, findBiomeButtonText,
+  findBiomeText, findButtonText, findText,
   radiusText, sliderBand, type CaveSliceField, type CavesTabDeps, type FindHit, type FindOutcome,
 } from '../../src/ui/map/cavesTab';
 import { panelTree, type SectionSpec } from '../../src/ui/paramPanel/model';
@@ -55,8 +57,8 @@ function mount(camera = { x: 100.5, y: 80.9, z: -40.5 }, saved = false) {
     revealParameters: () => { calls.push('reveal'); },
     revealBiomeParameters: () => { calls.push('reveal biomes'); },
     highlightCaveBiome: (id) => { highlights.push(id); },
-    find: (kind) => {
-      calls.push(`find ${kind}`);
+    find: (kind, biome) => {
+      calls.push(biome === undefined ? `find ${kind}` : `find ${kind} biome ${biome}`);
       return new Promise<FindOutcome>((resolve, reject) => { searches.push({ kind, resolve, reject }); });
     },
     cancelFind: () => {
@@ -655,5 +657,86 @@ describe('the Find row (SP6a spec §7.3, D12, D16; Task 44)', () => {
     saved.searches[1]!.resolve({ hit: null, reason: 'radius' });
     await settle();
     expect(save.hidden).toBe(true);
+  });
+});
+
+describe('the biome Find row (SP6b spec §9.3, D11; Task 48)', () => {
+  const HIT: FindHit = { x: 120, y: 30, z: -52, yaw: 90 };
+
+  test('three buttons, "Nearest lush cave", "Nearest dripstone cave", "Nearest abyss", after the kinds\' and before the shared result line', () => {
+    const t = mount();
+    expect(FIND_BIOMES).toEqual([CAVE_BIOME.lush, CAVE_BIOME.dripstone, CAVE_BIOME.abyss]);
+    expect(FIND_BIOMES.map((b) => t.$(`map-caves-find-biome-${b}`).textContent)).toEqual(['Nearest lush cave', 'Nearest dripstone cave', 'Nearest abyss']);
+    expect(FIND_BIOMES.map(findBiomeButtonText)).toEqual(['Nearest lush cave', 'Nearest dripstone cave', 'Nearest abyss']);
+    expect(() => t.$(`map-caves-find-biome-${CAVE_BIOME.plain}`)).toThrow();
+    const ids = t.$('map-caves-find').children.flatMap((c) => [c.id, ...c.children.map((d) => d.id)]).filter((id) => id !== '');
+    expect(ids.indexOf('map-caves-find-8')).toBeLessThan(ids.indexOf('map-caves-find-biome-1'));
+    expect(ids.indexOf('map-caves-find-biome-3')).toBeLessThan(ids.indexOf('map-caves-find-result'));
+  });
+
+  test('the result lines: "Lush cave at x, y, z · d blocks away", "No lush cave found within 1024 blocks", "No lush cave found in 2 s"', () => {
+    const from = { x: 100.5, y: 80.9, z: -40.5 };
+    expect(findBiomeText(CAVE_BIOME.lush, { hit: HIT, reason: 'found' }, from)).toBe('Lush cave at 120, 30, -52 · 55 blocks away');
+    expect(findBiomeText(CAVE_BIOME.lush, { hit: null, reason: 'radius' }, from)).toBe('No lush cave found within 1024 blocks');
+    expect(findBiomeText(CAVE_BIOME.lush, { hit: null, reason: 'budget' }, from)).toBe('No lush cave found in 2 s');
+    expect(findBiomeText(CAVE_BIOME.dripstone, { hit: HIT, reason: 'found' }, from)).toBe('Dripstone cave at 120, 30, -52 · 55 blocks away');
+    expect(findBiomeText(CAVE_BIOME.abyss, { hit: null, reason: 'radius' }, from)).toBe('No abyss found within 1024 blocks');
+    expect(findBiomeText(CAVE_BIOME.abyss, { hit: null, reason: 'budget' }, from)).toBe('No abyss found in 2 s');
+    expect(findBiomeText(CAVE_BIOME.dripstone, { hit: null, reason: 'stopped' }, from)).toBe('Dripstone cave search stopped');
+  });
+
+  test('a press searches that biome from the camera (`find(0, biome)`); the outcome writes the shared result line', async () => {
+    const t = mount();
+    t.$('map-caves-find-biome-1').click();
+    expect(t.calls).toEqual(['find 0 biome 1']);
+    expect(t.$('map-caves-find-result').textContent).toBe('Searching for lush cave…');
+    t.searches[0]!.resolve({ hit: HIT, reason: 'found' });
+    await settle();
+    expect(t.$('map-caves-find-result').textContent).toBe('Lush cave at 120, 30, -52 · 55 blocks away');
+    t.$('map-caves-find-biome-3').click();
+    t.searches[1]!.resolve({ hit: null, reason: 'radius' });
+    await settle();
+    expect(t.$('map-caves-find-result').textContent).toBe('No abyss found within 1024 blocks');
+    t.$('map-caves-find-biome-2').click();
+    t.searches[2]!.resolve({ hit: null, reason: 'budget' });
+    await settle();
+    expect(t.$('map-caves-find-result').textContent).toBe('No dripstone cave found in 2 s');
+    t.$('map-caves-find-biome-2').click();
+    t.searches[3]!.reject(new Error('BAD_ARGS: biome'));
+    await settle();
+    expect(t.$('map-caves-find-result').textContent).toBe('Dripstone cave search failed');
+  });
+
+  test('the same cancel rules: a second press cancels; a press of a kind\'s button or another biome\'s cancels and starts that search; closing the tab cancels', async () => {
+    const t = mount();
+    t.$('map-caves-find-biome-1').click();
+    t.$('map-caves-find-biome-1').click();
+    expect(t.calls).toEqual(['find 0 biome 1', 'cancel']);
+    expect(t.$('map-caves-find-result').textContent).toBe('Lush cave search cancelled');
+    t.searches[0]!.resolve({ hit: HIT, reason: 'found' });
+    await settle();
+    expect(t.$('map-caves-find-result').textContent).toBe('Lush cave search cancelled');
+    // A biome search, then a kind's button; a kind search, then a biome's button; then another biome's.
+    t.$('map-caves-find-biome-3').click();
+    t.$('map-caves-find-1').click();
+    t.$('map-caves-find-biome-2').click();
+    t.$('map-caves-find-biome-3').click();
+    expect(t.calls).toEqual(['find 0 biome 1', 'cancel', 'find 0 biome 3', 'cancel', 'find 1', 'cancel', 'find 0 biome 2', 'cancel', 'find 0 biome 3']);
+    expect(t.$('map-caves-find-result').textContent).toBe('Searching for abyss…');
+    t.tab.cancel();
+    expect(t.calls.at(-1)).toBe('cancel');
+    expect(t.$('map-caves-find-result').textContent).toBe('Abyss search cancelled');
+    await settle();
+  });
+
+  test('"Save as place" after a biome hit in a saved world saves that hit', async () => {
+    const t = mount(undefined, true);
+    t.$('map-caves-find-biome-2').click();
+    t.searches[0]!.resolve({ hit: HIT, reason: 'found' });
+    await settle();
+    const save = t.$('map-caves-save-place');
+    expect(save.hidden).toBe(false);
+    save.click();
+    expect(t.savedHits).toEqual([HIT]);
   });
 });

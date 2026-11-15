@@ -1768,16 +1768,18 @@ export function cavePlace(hit: FindHit): Place {
 
 /**
  * The Caves tab's Find on the page (SP6a spec §7.3, D12, D16): `find(kind)` asks the pool's `findCave` from the camera's
- * voxel (⌊x⌋, ⌊y⌋, ⌊z⌋), cancelling a search still in flight; a hit calls `arrive` with its pose (`cavePlace`: the page
- * moves the camera there in flight) and resolves with the outcome; a cancelled search rejects (JobCancelled), also when
- * `cancelFind` comes after the pool answered but before the outcome was handled, and then nothing moves. A search the
- * pool cancelled on its own (a configure or an Apply moved its epoch cells) resolves `stopped`; any other failure rejects.
+ * voxel (⌊x⌋, ⌊y⌋, ⌊z⌋), and `find(0, biome)` its biome form (SP6b spec §9.3, D11: kind 0 with `biome`, no radius,
+ * so the pool's 1,024 applies), cancelling a search still in flight; a hit calls `arrive` with its pose (`cavePlace`:
+ * the page moves the camera there in flight) and resolves with the outcome; a cancelled search rejects (JobCancelled),
+ * also when `cancelFind` comes after the pool answered but before the outcome was handled, and then nothing moves. A
+ * search the pool cancelled on its own (a configure or an Apply moved its epoch cells) resolves `stopped`; any other
+ * failure rejects.
  */
 export function createCaveFind(o: {
   readonly pool: Pick<WorkerPool, 'findCave'>;
   readonly camera: Pick<FlyState, 'x' | 'y' | 'z'>;
   arrive(p: Place): void;
-}): { find(kind: number): Promise<FindOutcome>; cancelFind(): void } {
+}): { find(kind: number, biome?: number): Promise<FindOutcome>; cancelFind(): void } {
   let current: FindCaveHandle | null = null;
   const cancelFind = (): void => {
     const h = current;
@@ -1785,10 +1787,11 @@ export function createCaveFind(o: {
     h?.cancel();
   };
   return {
-    find(kind) {
+    find(kind, biome) {
       cancelFind();
       const c = o.camera;
-      const h = o.pool.findCave({ kind, x: Math.floor(c.x), y: Math.floor(c.y), z: Math.floor(c.z) });
+      const x = Math.floor(c.x), y = Math.floor(c.y), z = Math.floor(c.z);
+      const h = o.pool.findCave(biome === undefined ? { kind, x, y, z } : { kind, biome, x, y, z });
       current = h;
       return h.promise.then((r) => {
         if (current !== h) throw new JobCancelled();
@@ -5689,7 +5692,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           onXray: (on) => { if (on !== pageXray.on) pageXray.action('xray'); },
           onBand: (b) => pageXray.setBand(b),
           onColorMode: (mode) => { if (mode !== pageXray.mode) pageXray.action('xrayColor'); },
-          find: (kind) => caveFind.find(kind),
+          find: (kind, biome) => caveFind.find(kind, biome),
           cancelFind: () => caveFind.cancelFind(),
           savePlace: places === null ? null : (hit) => savePlaceKey({
             palette, help, settings: settingsPanel, dialog: placeDialog, places, camera: cavePlace(hit),

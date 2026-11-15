@@ -21,13 +21,16 @@
  * at the press, rounded), "No <kind> found within 512 blocks", "No <kind> found in 2 s" or "<kind> search stopped" (the
  * world changed under it); a second press of the button searching, a press of another kind's (which then searches),
  * `cancel()` (the tool's: the tab closed, another tab shown or the map hidden) and `dispose` cancel it (`cancelFind`),
- * "<kind> search cancelled". "Save as place" shows after a hit in a saved world only (`savePlace` non-null) and saves
- * that hit's pose. `set` writes only what changed and calls no dep. Text only through `textContent`; no browser
- * dialog.
+ * "<kind> search cancelled". The biome Find row (SP6b spec §9.3, D11; the cut line, §17) follows: "Nearest lush cave",
+ * "Nearest dripstone cave", "Nearest abyss" (`FIND_BIOMES`), whose press asks `find(0, biome)` from the camera, with the
+ * same result line ("Lush cave at x, y, z · d blocks away", "No lush cave found within 1024 blocks", "No lush cave found
+ * in 2 s", `findBiomeText`), the same cancel rules (one search at a time across both rows) and the same "Save as place".
+ * "Save as place" shows after a hit in a saved world only (`savePlace` non-null) and saves that hit's pose. `set` writes
+ * only what changed and calls no dep. Text only through `textContent`; no browser dialog.
  */
 import { CAVE_BIOME, CAVE_KIND, HEIGHT, MIN_Y } from '../../core/constants';
 import { XRAY_BIOME_COLORS, XRAY_BIOME_LABELS, XRAY_COLORS, XRAY_LABELS } from '../../render/xrayPalette';
-import { FIND_BUDGET_MS, FIND_RADIUS } from '../../workers/protocol';
+import { FIND_BIOME_RADIUS, FIND_BUDGET_MS, FIND_RADIUS } from '../../workers/protocol';
 import { el } from '../common/dom';
 import { bandSet, stripText, XRAY_ALL, type XrayBand } from '../world/xrayStrip';
 
@@ -52,10 +55,11 @@ export interface CavesTabDeps {
   /** The biome legend's row under the pointer: the map's cave-biome highlight (a `CAVE_BIOME` id; null ends it; P51). */
   highlightCaveBiome(id: number | null): void;
   /**
-   * "Nearest <kind>" (SP6a spec §7.3): the search from the camera, which moves the camera into the hit in flight; its
-   * hit (null unless `reason` is `found`) and why it ended. Rejected when cancelled (`cancelFind`).
+   * "Nearest <kind>" (SP6a spec §7.3), or with `biome` (kind 0) "Nearest lush cave" and the other cave biomes' (SP6b spec
+   * §9.3): the search from the camera, which moves the camera into the hit in flight; its hit (null unless `reason` is
+   * `found`) and why it ended. Rejected when cancelled (`cancelFind`).
    */
-  find(kind: number): Promise<FindOutcome>;
+  find(kind: number, biome?: number): Promise<FindOutcome>;
   /** Cancels the search in flight: its `find` promise rejects. */
   cancelFind(): void;
   /** "Save as place": saves a hit's pose as a place (the place dialog); null in an unsaved world, which has no places. */
@@ -108,21 +112,50 @@ export const kindWord = (kind: number): string => {
 /** A Find button's text: "Nearest <kind>". */
 export const findButtonText = (kind: number): string => `Nearest ${kindWord(kind)}`;
 
+/** A camera position (the search's start). */
+type From = { readonly x: number; readonly y: number; readonly z: number };
+
 /**
- * The result line of a search of `kind` from the camera at `from`: "<Kind> at x, y, z · d blocks away" (d the distance
- * from `from` to the hit voxel's centre, rounded), "No <kind> found within 512 blocks", "No <kind> found in 2 s", or
- * "<Kind> search stopped".
+ * A search's result line, its target named `label` at a sentence's start and `word` inside one: "<Label> at x, y, z ·
+ * d blocks away" (d the distance from `from` to the hit voxel's centre, rounded), "No <word> found within <radius>
+ * blocks", "No <word> found in 2 s", or "<Label> search stopped".
  */
-export function findText(kind: number, r: FindOutcome, from: { readonly x: number; readonly y: number; readonly z: number }): string {
-  const label = XRAY_LABELS[kind] ?? '';
+function outcomeText(label: string, word: string, radius: number, r: FindOutcome, from: From): string {
   if (r.hit !== null) {
     const h = r.hit;
     const d = Math.round(Math.hypot(h.x + 0.5 - from.x, h.y + 0.5 - from.y, h.z + 0.5 - from.z));
     return `${label} at ${h.x}, ${h.y}, ${h.z} · ${d} blocks away`;
   }
-  if (r.reason === 'radius') return `No ${kindWord(kind)} found within ${FIND_RADIUS} blocks`;
-  if (r.reason === 'budget') return `No ${kindWord(kind)} found in ${FIND_BUDGET_MS / 1000} s`;
+  if (r.reason === 'radius') return `No ${word} found within ${radius} blocks`;
+  if (r.reason === 'budget') return `No ${word} found in ${FIND_BUDGET_MS / 1000} s`;
   return `${label} search stopped`;
+}
+
+/**
+ * The result line of a search of `kind` from the camera at `from`: "<Kind> at x, y, z · d blocks away" (d the distance
+ * from `from` to the hit voxel's centre, rounded), "No <kind> found within 512 blocks", "No <kind> found in 2 s", or
+ * "<Kind> search stopped".
+ */
+export function findText(kind: number, r: FindOutcome, from: From): string {
+  return outcomeText(XRAY_LABELS[kind] ?? '', kindWord(kind), FIND_RADIUS, r, from);
+}
+
+/** The cave biomes with a Find button (SP6b spec §9.3, D11), in id order: lush, dripstone, abyss. */
+export const FIND_BIOMES: readonly number[] = [CAVE_BIOME.lush, CAVE_BIOME.dripstone, CAVE_BIOME.abyss];
+/** A cave biome's name at a sentence's start in the biome Find row, by id ('' for plain, which has no button). */
+const FIND_BIOME_LABELS: readonly string[] = ['', 'Lush cave', 'Dripstone cave', 'Abyss'];
+/** A cave biome's name inside a sentence: "lush cave", "dripstone cave", "abyss". */
+const biomeWord = (biome: number): string => (FIND_BIOME_LABELS[biome] ?? '').toLowerCase();
+
+/** A biome Find button's text: "Nearest lush cave", "Nearest dripstone cave", "Nearest abyss". */
+export const findBiomeButtonText = (biome: number): string => `Nearest ${biomeWord(biome)}`;
+
+/**
+ * The result line of a search of cave biome `biome` from the camera at `from` (SP6b spec §9.3): "Lush cave at x, y, z ·
+ * d blocks away", "No lush cave found within 1024 blocks", "No lush cave found in 2 s", or "Lush cave search stopped".
+ */
+export function findBiomeText(biome: number, r: FindOutcome, from: From): string {
+  return outcomeText(FIND_BIOME_LABELS[biome] ?? '', biomeWord(biome), FIND_BIOME_RADIUS, r, from);
 }
 
 /** The cave slice's width in blocks (SP6a spec §7.3): a 128² `caves` slice 256 blocks across (`slice.caves128`). */
@@ -249,6 +282,16 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
     findButtons.set(kind, b);
     findRow.append(b);
   }
+  // The biome Find row (SP6b spec §9.3): a button per cave biome, before the shared result line and "Save as place".
+  const biomeRow = el('div', 'caves-find-biomes');
+  biomeRow.id = 'map-caves-find-biomes';
+  const biomeButtons = new Map<number, HTMLButtonElement>();
+  for (const biome of FIND_BIOMES) {
+    const b = button(`map-caves-find-biome-${biome}`, findBiomeButtonText(biome));
+    biomeButtons.set(biome, b);
+    biomeRow.append(b);
+  }
+  findRow.append(biomeRow);
   const resultLine = el('div', 'caves-find-result');
   resultLine.id = 'map-caves-find-result';
   const saveButton = button('map-caves-save-place', 'Save as place');
@@ -305,52 +348,63 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
   paramsButton.addEventListener('click', () => deps.revealParameters());
   biomeParamsButton.addEventListener('click', () => deps.revealBiomeParameters());
 
-  // The search in flight: its kind (null: none) and its number, so a cancelled search's late outcome is dropped.
-  let searching: number | null = null;
+  // The search in flight: its target (null: none) and its number, so a cancelled search's late outcome is dropped.
+  let searching: Target | null = null;
   let search = 0;
   let lastHit: FindHit | null = null;
   const showHit = (hit: FindHit | null): void => {
     lastHit = hit;
     saveButton.hidden = hit === null || deps.savePlace === null;
   };
-  /** Cancels the search in flight: the dep, then "<Kind> search cancelled". */
+  /** Cancels the search in flight: the dep, then "<Label> search cancelled". */
   const cancel = (): void => {
     if (searching === null) return;
-    const kind = searching;
+    const target = searching;
     searching = null;
     search++;
     deps.cancelFind();
-    resultLine.textContent = `${XRAY_LABELS[kind] ?? ''} search cancelled`;
+    resultLine.textContent = `${target.label} search cancelled`;
   };
   /** The tab closes: the search in flight cancelled and a held highlight ended (P51: the legend drives it only shown). */
   const close = (): void => {
     cancel();
     unhighlight();
   };
-  const start = (kind: number): void => {
+  const start = (target: Target): void => {
     const c = deps.camera();
     const from = { x: c.x, y: c.y, z: c.z };
     const mine = ++search;
-    searching = kind;
+    searching = target;
     showHit(null);
-    resultLine.textContent = `Searching for ${kindWord(kind)}…`;
-    deps.find(kind).then((r) => {
+    resultLine.textContent = `Searching for ${target.word}…`;
+    target.find().then((r) => {
       if (mine !== search) return;
       searching = null;
-      resultLine.textContent = findText(kind, r, from);
+      resultLine.textContent = target.text(r, from);
       showHit(r.hit);
     }, () => {
       if (mine !== search) return;
       searching = null;
-      resultLine.textContent = `${XRAY_LABELS[kind] ?? ''} search failed`;
+      resultLine.textContent = `${target.label} search failed`;
     });
   };
+  /** A Find button's press: a second press of the searching target's cancels it; any other cancels and searches its own. */
+  const press = (target: Target): void => {
+    const again = searching === target;
+    cancel();
+    if (!again) start(target);
+  };
   for (const [kind, b] of findButtons) {
-    b.addEventListener('click', () => {
-      const again = searching === kind;
-      cancel();
-      if (!again) start(kind);
-    });
+    const target: Target = {
+      label: XRAY_LABELS[kind] ?? '', word: kindWord(kind), find: () => deps.find(kind), text: (r, from) => findText(kind, r, from),
+    };
+    b.addEventListener('click', () => press(target));
+  }
+  for (const [biome, b] of biomeButtons) {
+    const target: Target = {
+      label: FIND_BIOME_LABELS[biome] ?? '', word: biomeWord(biome), find: () => deps.find(0, biome), text: (r, from) => findBiomeText(biome, r, from),
+    };
+    b.addEventListener('click', () => press(target));
   }
   saveButton.addEventListener('click', () => {
     if (lastHit !== null && deps.savePlace !== null) deps.savePlace(lastHit);
@@ -386,6 +440,14 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
       root.remove();
     },
   };
+}
+
+/** A Find button's target (a kind or a cave biome): its names, its search and its result line. */
+interface Target {
+  readonly label: string;
+  readonly word: string;
+  find(): Promise<FindOutcome>;
+  text(r: FindOutcome, from: From): string;
 }
 
 /** A tab button: `type="button"`, with its id. */

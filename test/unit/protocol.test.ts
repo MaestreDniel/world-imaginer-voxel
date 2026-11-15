@@ -4,7 +4,9 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import { flattenKnot } from '../../src/core/spline/edit';
 import type { KnotPath } from '../../src/core/spline/types';
 import { caveBiomeAtPoint, cavePickerOf } from '../../src/gen/biomes/cavePicker';
+import { nearestCaveBiome } from '../../src/gen/caves/tags';
 import { columnPoint } from '../../src/gen/column/columnPoint';
+import { createDensityContext } from '../../src/gen/density/context';
 import { caveBiomeIdAt } from '../../src/gen/map/layers';
 import { findSpawn, landingSurface, ringOffsets } from '../../src/gen/column/spawn';
 import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../../src/metrics/biomeShares';
@@ -17,7 +19,7 @@ import { surfaceProbe } from '../../src/gen/surface/probe';
 import { MAX_STEP_EDITS } from '../../src/sim/edits';
 import { AIR, BEDROCK, DEEPSLATE, REGISTRY, SNOW_BLOCK } from '../../src/world/blocks/index';
 import { leafOpts } from '../../src/ui/splineEditor/model';
-import { cellOf, packEdits, parseFromSim, parseFromWorker, parseSpikeStoreFromWorker, parseSpikeStoreToWorker, parseToSim, parseToWorker, pointInWindow, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow, unpackEdits, type Edit, type FromWorker, type ScopedJobType } from '../../src/workers/protocol';
+import { cellOf, FIND_BIOME_RADIUS, FIND_RADIUS, findCaveProblem, packEdits, parseFromSim, parseFromWorker, parseSpikeStoreFromWorker, parseSpikeStoreToWorker, parseToSim, parseToWorker, pointInWindow, SLICE_ROWS, SLICE_SAMPLES, sliceIndex, slicePartIndex, tileInWindow, unpackEdits, type Edit, type FromWorker, type ScopedJobType } from '../../src/workers/protocol';
 import { createSliceJob } from '../../src/workers/sliceJob';
 import { createTaskHandler } from '../../src/workers/taskHandler';
 import { createStore } from '../../src/world/store/store';
@@ -1160,3 +1162,44 @@ describe('the packed `edits` form (SP5c spec §10.4, D28\'s lever 1)', () => {
   });
 });
 
+
+describe('findCave with a cave biome (SP6b spec §9.3, D11; Task 48)', () => {
+  const ok = { kind: 0, biome: 3, x: 20400, y: 222, z: -4800, radius: 1024, budgetMs: 2000 };
+  const kindOk = { kind: 5, x: 20400, y: 222, z: -4800, radius: 512, budgetMs: 2000 };
+
+  test('findCaveProblem: with `biome` set, kind 0, biome an integer 1-3 and radius 1 … 1024 (`FIND_BIOME_RADIUS`); kind searches still capped at 512', () => {
+    expect([FIND_RADIUS, FIND_BIOME_RADIUS]).toEqual([512, 1024]);
+    expect(findCaveProblem(ok)).toBeNull();
+    expect(findCaveProblem({ ...ok, biome: 1, radius: 1 })).toBeNull();
+    expect(findCaveProblem({ ...ok, biome: 2, radius: 513 })).toBeNull();
+    for (const bad of [{ biome: 4 }, { biome: 0 }, { biome: 1.5 }, { radius: 1025 }, { radius: 0 }, { kind: 1 }, { kind: 9 }, { budgetMs: 2001 }, { x: 524288 }]) {
+      expect(findCaveProblem({ ...ok, ...bad }), JSON.stringify(bad)).not.toBeNull();
+    }
+    expect(findCaveProblem(kindOk)).toBeNull();
+    expect(findCaveProblem({ ...kindOk, radius: 513 })).not.toBeNull();
+    expect(findCaveProblem({ ...kindOk, radius: 1024 })).not.toBeNull();
+    expect(findCaveProblem({ ...kindOk, kind: 0 })).not.toBeNull();
+  });
+
+  test('parseToWorker: a findCave may carry `biome`, a number when present', () => {
+    const m = { type: 'findCave', jobId: 18, epoch: 3, scope: 5, ...ok };
+    expect(parseToWorker(m)).toMatchObject({ type: 'findCave', kind: 0, biome: 3, radius: 1024 });
+    expect(parseToWorker({ ...m, biome: '3' })).toBeNull();
+    expect(parseToWorker({ ...m, biome: null })).toBeNull();
+    expect(parseToWorker({ type: 'findCave', jobId: 18, epoch: 3, scope: 5, ...kindOk })).not.toBeNull();
+  });
+
+  test('the task handler runs the biome finder (`nearestCaveBiome`) for a findCave with `biome`, and refuses a biome search past 1024 blocks (BAD_ARGS)', () => {
+    // A clock that never reaches the deadline, so the reply is the search's whatever the machine's speed.
+    const h = createTaskHandler(undefined, () => 0);
+    h.handle(configure(0));
+    const at = { biome: 1, x: -1600, y: 0, z: 1600, radius: 64 };
+    const r = h.handle({ type: 'findCave', jobId: 2, epoch: 0, scope: 0, ...ok, ...at }).msg;
+    const want = nearestCaveBiome(createDensityContext(ctxFor('42')), at.biome, at.x, at.y, at.z, {
+      radius: at.radius, deadline: 1, now: () => 0, stop: () => false, loaded: () => null,
+    });
+    expect(want.reason).toBe('found');
+    expect(r).toEqual({ type: 'caveFound', jobId: 2, epoch: 0, hit: want.hit, reason: want.reason });
+    expect(h.handle({ type: 'findCave', jobId: 3, epoch: 0, scope: 0, ...ok, radius: 1025 }).msg).toMatchObject({ type: 'error', code: 'BAD_ARGS' });
+  });
+});

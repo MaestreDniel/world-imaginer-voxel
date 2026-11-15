@@ -4,16 +4,20 @@
  * columns injected: every kind with a button found within 512 blocks; a carver kind found from its paths' centres with
  * density read only in the columns of the candidates it tried, skipping a centre in density air or above the ground;
  * the loaded columns read from their stored tags with no density; the deadline (`budget`), `stop` (`stopped`) and an
- * absent kind (`radius`), with no ring past the radius.
+ * absent kind (`radius`), with no ring past the radius. SP6b (spec §9.3, D11; Task 48): `nearestCaveBiome`, the biome
+ * finder on the same rings: the loaded columns' stored nibbles first, then beyond them a tagged lattice voxel whose
+ * `caveBiomeAt` is the biome.
  */
 import { describe, expect, test } from 'vitest';
 import { CARVER_WINDOW_R, CAVE_BIOME, CAVE_KIND } from '../../src/core/constants';
+import { caveBiomeAt } from '../../src/gen/biomes/cavePicker';
 import { carverCacheOf } from '../../src/gen/caves/carverCache';
 import type { CarverKind } from '../../src/gen/caves/carvers';
-import { caveTagAt, nearestCave, type FindOptions } from '../../src/gen/caves/tags';
+import { caveTagAt, nearestCave, nearestCaveBiome, type FindOptions } from '../../src/gen/caves/tags';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import { solidAt } from '../../src/gen/density/probe';
 import type { ColumnView } from '../../src/world/store/api';
+import { BIOMES_WINDOW } from '../../src/metrics/sp6bGoldens';
 import { NIBBLE_REGION, nibbleRegion } from '../harness/caveNibbles';
 import { ctxFor } from '../harness/gen';
 import type { RegionView } from '../harness/regionView';
@@ -235,4 +239,65 @@ describe('nearestCave over stored bytes with the cave biome in bits 4-7 (SP6b sp
     expect(u).toEqual({ hit: { x: X, y: 40, z: Z, yaw: 90 }, reason: 'found' });
     expect(at(uniform(CAVE_KIND.spaghetti2d | (CAVE_BIOME.abyss << 4)))).toEqual(u);
   }, 120_000); // the nibble fixture (a 5 × 5 region, once per file) and its readers: about 1 s alone, more under load
+});
+
+describe('nearestCaveBiome: the biome finder (SP6b spec §9.3, D11; Task 48)', () => {
+  /** The centre of `sp6b.region.T.biomes`' window (seed '42'), which holds every cave biome (`BIOMES_WINDOW`), at y 0. */
+  const W = [16 * BIOMES_WINDOW[0] + 64, 0, 16 * BIOMES_WINDOW[1] + 64] as const;
+  const far = (o: Partial<FindOptions> = {}): FindOptions => opts({ radius: 1024, ...o });
+  const byte = (kind: number, biome: number): number => kind | (biome << 4);
+
+  test('in loaded columns the nearest voxel of that nibble wins, read from the stored bytes with no density; a uniform section of the biome holds it at every voxel; the yaw follows the longer run of the biome', () => {
+    // Column (1275, −300) holds the start at its (0, 0) corner: dripstone at the start, a lush run along +z from (1, 222, 0) to (1, 222, 5).
+    const tags = new Map<string, number>();
+    tags.set('0,222,0', byte(CAVE_KIND.cheese, CAVE_BIOME.dripstone));
+    for (let lz = 0; lz <= 5; lz++) tags.set(`1,222,${lz}`, byte(CAVE_KIND.cheese, CAVE_BIOME.lush));
+    tags.set('2,222,0', byte(CAVE_KIND.noodle, CAVE_BIOME.lush));
+    tags.set('3,222,0', byte(CAVE_KIND.cheese, CAVE_BIOME.plain));
+    const view = storedColumn(1275, -300, tags);
+    const seen = new Set<string>();
+    const loaded = (cx: number, cz: number): ColumnView | null => (cx === 1275 && cz === -300 ? view : null);
+    expect(nearestCaveBiome(counting(dc, seen), CAVE_BIOME.lush, X, Y, Z, far({ loaded }))).toEqual({ hit: { x: X + 1, y: 222, z: Z, yaw: 180 }, reason: 'found' });
+    expect(nearestCaveBiome(counting(dc, seen), CAVE_BIOME.dripstone, X, Y, Z, far({ loaded }))).toEqual({ hit: { x: X, y: 222, z: Z, yaw: 90 }, reason: 'found' });
+    expect(seen.size).toBe(0);
+    // Uniform: a whole section (y 32 … 47) of spaghetti 2D in the abyss; the nearest voxel to (X, 40, Z) is (X, 40, Z).
+    const b = byte(CAVE_KIND.spaghetti2d, CAVE_BIOME.abyss);
+    const uniform: ColumnView = { ...view, sectionCave: (sy) => (sy === 6 ? b : 0), cave: (_lx, y) => (y >= 32 && y < 48 ? b : 0) };
+    const u = nearestCaveBiome(counting(dc, seen), CAVE_BIOME.abyss, X, 40, Z, far({ loaded: (cx, cz) => (cx === 1275 && cz === -300 ? uniform : null) }));
+    expect(u).toEqual({ hit: { x: X, y: 40, z: Z, yaw: 90 }, reason: 'found' });
+    expect(seen.size).toBe(0);
+  });
+
+  test.each([CAVE_BIOME.lush, CAVE_BIOME.dripstone, CAVE_BIOME.abyss])('biome %i beyond the loaded columns: a tagged air voxel whose caveBiomeAt is the biome, within 1024 blocks, with a yaw along an axis; the same answer twice', (biome) => {
+    const r = nearestCaveBiome(dc, biome, W[0], W[1], W[2], far());
+    expect(r.reason).toBe('found');
+    const h = r.hit!;
+    expect(caveTagAt(dc, h.x, h.y, h.z)).not.toBe(0);
+    expect(caveBiomeAt(dc, h.x, h.y, h.z)).toBe(biome);
+    expect(solidAt(dc, h.x, h.y, h.z)).toBe(false);
+    expect(Math.hypot(h.x - W[0], h.z - W[2])).toBeLessThan(1024);
+    expect([0, 90, 180, 270]).toContain(h.yaw);
+    expect(nearestCaveBiome(dc, biome, W[0], W[1], W[2], far())).toEqual(r);
+  }, 60_000);
+
+  test('the deadline returns `budget` on an advancing clock, polled every column; `stop` returns `stopped`', () => {
+    let t = 0;
+    expect(nearestCaveBiome(dc, CAVE_BIOME.abyss, X, Y, Z, far({ deadline: 10, now: () => t++ }))).toEqual({ hit: null, reason: 'budget' });
+    expect(t).toBe(11);
+    expect(nearestCaveBiome(dc, CAVE_BIOME.lush, X, Y, Z, far({ stop: () => true }))).toEqual({ hit: null, reason: 'stopped' });
+  });
+
+  test('a biome absent within the radius (abyss.depthMin 2 at depthScale 256: 512 blocks under every surface, below the world) returns `radius`, with no density read', () => {
+    const noAbyss = createDensityContext(ctxFor('42', { caves: { biomes: { depthScale: 256, abyss: { depthMin: 2 } } } }));
+    const seen = new Set<string>();
+    expect(nearestCaveBiome(counting(noAbyss, seen), CAVE_BIOME.abyss, X, Y, Z, far({ radius: 256 }))).toEqual({ hit: null, reason: 'radius' });
+    expect(seen.size).toBe(0);
+  });
+
+  test('arguments outside the rule throw a RangeError', () => {
+    expect(() => nearestCaveBiome(dc, 0, X, Y, Z, far())).toThrow(RangeError);
+    expect(() => nearestCaveBiome(dc, 4, X, Y, Z, far())).toThrow(RangeError);
+    expect(() => nearestCaveBiome(dc, 1, X + 0.5, Y, Z, far())).toThrow(RangeError);
+    expect(() => nearestCaveBiome(dc, 1, X, Y, Z, far({ radius: 0 }))).toThrow(RangeError);
+  });
 });

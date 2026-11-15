@@ -29,8 +29,9 @@
  * outside the world window; it runs to the end, as a point (a few milliseconds: the 2D estimate and about 10 probes).
  * SP5a (spec §2.5, D21): a `decorate` carrying `diff` (checked by `parseToWorker`) passes it to `decorateReply`, which
  * overlays the column's edit entries on its final set.
- * SP6a (spec §7.3, D12, D16): a `findCave` job runs `nearestCave` on the configured context's DensityContext (memoised
- * per GenContext, `densityContextOf`), BAD_ARGS for `findCaveProblem`; its loaded columns are the attached store's (a
+ * SP6a (spec §7.3, D12, D16): a `findCave` job runs `nearestCave` (with `biome`, `nearestCaveBiome`: SP6b spec §9.3,
+ * D11) on the configured context's DensityContext (memoised per GenContext, `densityContextOf`), BAD_ARGS for
+ * `findCaveProblem`; its loaded columns are the attached store's (a
  * column's final set, else its proto set; none without a store), each read inside its own read section, which ends at
  * the search's next poll of `stop` (every column and candidate) or its next column, so no slot stays held while it
  * evaluates density or for its whole 2 s; its clock is `now` (the
@@ -44,7 +45,7 @@ import { SCHEMA, type Params } from '../core/params/schema';
 import { seedFromInput } from '../core/seed';
 import { genKey, stageHashes } from '../core/stage/hash';
 import { caveBiomeAtPoint, cavePickerOf } from '../gen/biomes/cavePicker';
-import { nearestCave } from '../gen/caves/tags';
+import { nearestCave, nearestCaveBiome } from '../gen/caves/tags';
 import { createGenContext, type GenContext } from '../gen/context';
 import { columnPoint, type ColumnPoint } from '../gen/column/columnPoint';
 import { createDensityContext, type DensityContext } from '../gen/density/context';
@@ -87,6 +88,7 @@ const LANDING = landingSurface;
 const LANDING_PROBLEM = landingProblem;
 const FIND_PROBLEM = findCaveProblem;
 const NEAREST_CAVE = nearestCave;
+const NEAREST_CAVE_BIOME = nearestCaveBiome;
 const CREATE_DC = createDensityContext;
 const GOLDEN = computeAnyGolden;
 const PARSE = parseToWorker;
@@ -377,9 +379,9 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB(), now: ()
               return stopped();
             };
             try {
-              const r = NEAREST_CAVE(densityContextOf(ctx), m.kind, m.x, m.y, m.z, {
-                radius: m.radius, deadline: now() + m.budgetMs, now, stop, loaded,
-              });
+              const o = { radius: m.radius, deadline: now() + m.budgetMs, now, stop, loaded };
+              const dc = densityContextOf(ctx);
+              const r = m.biome === undefined ? NEAREST_CAVE(dc, m.kind, m.x, m.y, m.z, o) : NEAREST_CAVE_BIOME(dc, m.biome, m.x, m.y, m.z, o);
               return { msg: { type: 'caveFound', jobId: m.jobId, epoch, hit: r.hit, reason: r.reason }, transfer: [] };
             } finally {
               leave();

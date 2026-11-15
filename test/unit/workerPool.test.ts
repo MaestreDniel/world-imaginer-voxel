@@ -1193,6 +1193,32 @@ describe('worker pool: the finder\'s findCave job (SP6a spec §7.3, D12; Task 44
   });
 });
 
+describe('worker pool: the biome finder\'s findCave (SP6b spec §9.3, D11; Task 48)', () => {
+  const AT = { x: 20400, y: 222, z: -4800 } as const;
+
+  test('a biome request posts `biome` with the radius 1024 by default; a kind request still posts 512 and no biome', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(3, () => silentWorker(log));
+    const h = pool.findCave({ kind: 0, biome: 2, ...AT });
+    const k = pool.findCave({ kind: 3, ...AT });
+    const finds = log.flatMap((m) => (m.type === 'findCave' ? [m] : []));
+    expect(finds).toMatchObject([
+      { type: 'findCave', kind: 0, biome: 2, ...AT, radius: 1024, budgetMs: 2000 },
+      { type: 'findCave', kind: 3, ...AT, radius: 512, budgetMs: 2000 },
+    ]);
+    expect('biome' in finds[1]!).toBe(false);
+    // An explicit radius is posted as asked.
+    const r = pool.findCave({ kind: 0, biome: 1, ...AT, radius: 64 });
+    expect(log.at(-1)).toMatchObject({ type: 'findCave', kind: 0, biome: 1, radius: 64 });
+    const ends = [settle(h.promise), settle(k.promise), settle(r.promise)];
+    h.cancel();
+    k.cancel();
+    r.cancel();
+    for (const e of ends) expect(await e).toBeInstanceOf(JobCancelled);
+    pool.terminate();
+  });
+});
+
 describe('worker pool: the world and aux lanes and the aux policy (SP4c spec §6.1, §6.2; D11)', () => {
   /** A 32-bit LCG in [0, 1), so every run draws the same queues. */
   const lcg = (seed: number) => {

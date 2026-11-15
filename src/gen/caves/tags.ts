@@ -31,12 +31,15 @@
  * without reading its taps; otherwise each is tagged by `tagVoxel`. The comparisons that decide are strict where the
  * rule's are, so no voxel is a tie, and the kind is `tagVoxel`'s.
  * `nearestCave` is the Caves tab's finder (SP6a spec §7.3, D12, D16): the search core of the pool's `findCave` job, its
- * clock, its stop and its loaded columns injected.
+ * clock, its stop and its loaded columns injected; `nearestCaveBiome` is its biome form (SP6b spec §9.3, D11), on the
+ * same rings (`searchRings`), the core of a `findCave` with a `biome`.
  * Follows the gen determinism rules.
  */
-import { CARVER_WINDOW_R, CAVE_KIND, CAVE_SLICE_SOLID, caveKindOf } from '../../core/constants';
+import { CARVER_WINDOW_R, CAVE_BIOME, CAVE_KIND, CAVE_SLICE_SOLID, caveBiomeOf, caveKindOf } from '../../core/constants';
 import { inWindow } from '../../core/coords';
 import type { ColumnView } from '../../world/store/api';
+import { caveBiomeAt, caveBiomeInputsAt, caveY0, cavePickerOf } from '../biomes/cavePicker';
+import { newPointRecord, samplePoint } from '../column/columnPoint';
 import type { DensityBounds } from '../density/bounds';
 import type { CompiledDensity } from '../density/compile';
 import type { DensityContext } from '../density/context';
@@ -48,6 +51,7 @@ import type { CarverKind } from './carvers';
 
 const KIND = CAVE_KIND;
 const KIND_OF = caveKindOf;
+const CAVE_BIOME_OF = caveBiomeOf;
 const K_CHEESE: number = KIND.cheese;
 const K_SPAG3D: number = KIND.spaghetti3d;
 const K_SPAG2D: number = KIND.spaghetti2d;
@@ -392,11 +396,11 @@ export interface FindResult {
 }
 
 /**
- * What a search is given: its `radius` in blocks (an integer ≥ 1; the Caves tab's is 512); its `deadline` on the clock
- * `now` (the job's is the time it started plus 2 s); `stop`, true once the search must end (the job's epoch cell moved);
- * and `loaded`, the stored view of a column the world holds, or null (the job's shared store: its final set, else its
- * proto set). A view `loaded` returns is read only until the next call of `loaded` or `stop` (the job's read section
- * ends there).
+ * What a search is given: its `radius` in blocks (an integer ≥ 1; the Caves tab's is 512 for a kind, 1,024 for a cave
+ * biome); its `deadline` on the clock `now` (the job's is the time it started plus 2 s); `stop`, true once the search
+ * must end (the job's epoch cell moved); and `loaded`, the stored view of a column the world holds, or null (the job's
+ * shared store: its final set, else its proto set). A view `loaded` returns is read only until the next call of `loaded`
+ * or `stop` (the job's read section ends there).
  */
 export interface FindOptions {
   readonly radius: number;
@@ -428,11 +432,141 @@ function ringOf(d2: number): number {
   return k;
 }
 
+/** The best hit of a ring search so far: its squared 3D distance from the start (Infinity: none yet) and its voxel. */
+interface Best {
+  d2: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * One ring of a search (`searchRings`): its index, its outer radius (cut at the search's), its squared bounds and its
+ * columns nearest first, as triples (the column's nearest squared horizontal distance to the start, cx, cz).
+ */
+interface Ring {
+  readonly index: number;
+  readonly rOut: number;
+  readonly in2: number;
+  readonly out2: number;
+  readonly cols: readonly number[];
+}
+
+/** What a ring's search beyond the loaded columns asks of `searchRings`: go on, end `stopped`, or end at the deadline. */
+const GO = 0;
+const HALT = 1;
+const LATE = 2;
+type Step = typeof GO | typeof HALT | typeof LATE;
+
+/**
+ * The finders' rings (SP6a spec §7.3; SP6b spec §9.3): outward from the voxel (x, y, z) in rings of 64 blocks of
+ * horizontal distance (ring k holds the voxels whose horizontal distance d from (x, z) lies in [64k, 64k + 64), the last
+ * ring cut at `o.radius`), and in each ring 1. its loaded columns' stored cave bytes (`sectionCave`; a voxel matches
+ * where `(byte >> shift) & 15` is `want`: the kind at shift 0, the cave biome at shift 4; a uniform section's byte holds
+ * at every voxel), then 2. `beyond`, the ring's other columns (the start's searcher; it reads and writes `best` and skips
+ * the columns in `loadedCols`). The columns are visited nearest first, and nothing farther than the best hit so far is
+ * read. The first ring with a hit returns the hit nearest (x, y, z) (ties keep the first found) with its `yaw` (given the
+ * hit's stored view when its column is loaded, else null). `now()` and `stop()` are polled every loaded column: `stop()`
+ * true returns `stopped`; `now() ≥ deadline` returns the best hit so far, else `budget`; `beyond` asks the same through its
+ * Step. No ring reaches past `radius`: no hit returns `radius`.
+ */
+function searchRings(
+  x: number, y: number, z: number, o: FindOptions, shift: number, want: number,
+  beyond: (g: Ring, best: Best, loadedCols: ReadonlySet<number>) => Step,
+  yaw: (hx: number, hy: number, hz: number, view: ColumnView | null) => number,
+): FindResult {
+  const radius = o.radius;
+  const loadedCols = new Set<number>();
+  const best: Best = { d2: Infinity, x: 0, y: 0, z: 0 };
+
+  /** The best hit so far as a result, with its yaw. */
+  const found = (): FindResult => {
+    const { x: bx, y: by, z: bz } = best;
+    return { hit: { x: bx, y: by, z: bz, yaw: yaw(bx, by, bz, loadedCols.has(colKey(bx >> 4, bz >> 4)) ? o.loaded(bx >> 4, bz >> 4) : null) }, reason: 'found' };
+  };
+  /** The result once the deadline passed: the ring's best hit so far, else `budget`. */
+  const late = (): FindResult => (best.d2 < Infinity ? found() : BUDGET);
+
+  for (let r = 0, ring = 0; r < radius; r += RING, ring++) {
+    const rOut = r + RING < radius ? r + RING : radius;
+    const in2 = r * r, out2 = rOut * rOut;
+    // The ring's columns: those holding a voxel at a horizontal distance in [r, rOut), with their nearest squared distance.
+    const found3: number[] = [];
+    for (let cz = (z - rOut + 1) >> 4; cz <= (z + rOut - 1) >> 4; cz++) {
+      const z0 = 16 * cz, z1 = z0 + 15;
+      const dzMin = z < z0 ? z0 - z : z > z1 ? z - z1 : 0;
+      const dzMax = z - z0 > z1 - z ? z - z0 : z1 - z;
+      for (let cx = (x - rOut + 1) >> 4; cx <= (x + rOut - 1) >> 4; cx++) {
+        const x0 = 16 * cx, x1 = x0 + 15;
+        if (!IN_WINDOW(x0, z0) || !IN_WINDOW(x1, z1)) continue;
+        const dxMin = x < x0 ? x0 - x : x > x1 ? x - x1 : 0;
+        const dxMax = x - x0 > x1 - x ? x - x0 : x1 - x;
+        const dMin = dxMin * dxMin + dzMin * dzMin;
+        if (dMin < out2 && dxMax * dxMax + dzMax * dzMax >= in2) found3.push(dMin, cx, cz);
+      }
+    }
+    const n = found3.length / 3;
+    const order: number[] = [];
+    for (let q = 0; q < n; q++) order.push(q);
+    order.sort((a, b) => found3[3 * a]! - found3[3 * b]! || a - b);
+    const cols: number[] = [];
+    for (let t = 0; t < n; t++) {
+      const q = 3 * order[t]!;
+      cols.push(found3[q]!, found3[q + 1]!, found3[q + 2]!);
+    }
+
+    // 1. The loaded columns' stored bytes.
+    for (let q = 0; q < cols.length; q += 3) {
+      const dMin = cols[q]!;
+      if (dMin >= best.d2) break;
+      if (o.stop()) return STOPPED;
+      if (o.now() >= o.deadline) return late();
+      const cx = cols[q + 1]!, cz = cols[q + 2]!;
+      const v = o.loaded(cx, cz);
+      if (v === null) continue;
+      loadedCols.add(colKey(cx, cz));
+      for (let sy = 0; sy < 24; sy++) {
+        const y0 = -64 + 16 * sy;
+        const dyMin = y < y0 ? y0 - y : y > y0 + 15 ? y - y0 - 15 : 0;
+        if (dMin + dyMin * dyMin >= best.d2) continue;
+        const sec = v.sectionCave(sy);
+        if (typeof sec === 'number' && ((sec >> shift) & 15) !== want) continue;
+        const arr = typeof sec === 'number' ? null : sec;
+        for (let i = sy === 0 ? 256 : 0; i < 4096; i++) {
+          if (arr !== null && ((arr[i]! >> shift) & 15) !== want) continue;
+          const vx = 16 * cx + (i & 15), vz = 16 * cz + ((i >> 4) & 15), vy = y0 + (i >> 8);
+          const dx = vx - x, dz = vz - z;
+          const dh2 = dx * dx + dz * dz;
+          if (dh2 < in2 || dh2 >= out2) continue;
+          const dy = vy - y;
+          const d2 = dh2 + dy * dy;
+          if (d2 < best.d2) { best.d2 = d2; best.x = vx; best.y = vy; best.z = vz; }
+        }
+      }
+    }
+
+    // 2. The ring's other columns.
+    const step = beyond({ index: ring, rOut, in2, out2, cols }, best, loadedCols);
+    if (step === HALT) return STOPPED;
+    if (step === LATE) return late();
+    if (best.d2 < Infinity) return found();
+  }
+  return RADIUS;
+}
+
+/** Throws the finders' RangeError unless (x, y, z) is an integer voxel with (x, z) in the world window and the radius an integer ≥ 1. */
+function checkStart(name: string, x: number, y: number, z: number, o: FindOptions): void {
+  if (!Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(z) || !IN_WINDOW(x, z)) {
+    throw new RangeError(`${name}: (${x}, ${y}, ${z}) is not an integer voxel with (x, z) in the world window`);
+  }
+  if (!Number.isInteger(o.radius) || o.radius < 1) throw new RangeError(`${name}: radius ${o.radius} is not an integer ≥ 1`);
+}
+
 /**
  * The nearest cave of kind `kind` (1-9, `CAVE_KIND`) from the voxel (x, y, z) (integers, (x, z) in the world window), the
  * Caves tab's finder (SP6a spec §7.3, D12, D16). It searches outward in rings of 64 blocks of horizontal distance (ring
  * k holds the voxels whose horizontal distance d from (x, z), d² = (vx − x)² + (vz − z)², lies in [64k, 64k + 64), the
- * last ring cut at `radius`), and in each ring:
+ * last ring cut at `radius`; `searchRings`), and in each ring:
  * 1. the ring's loaded columns (`loaded`): their stored tags (`sectionCave`, the kind read through `caveKindOf`: bits
  *    4-7 hold the cave biome, SP6b spec §2.1; a uniform section of the kind holds it at every voxel);
  * 2. for a carver kind (worm, ravine, underground worm), candidates from the paths of the path cache with no density
@@ -452,26 +586,17 @@ function ringOf(d2: number): number {
  */
 export function nearestCave(dc: DensityContext, kind: number, x: number, y: number, z: number, o: FindOptions): FindResult {
   if (!Number.isInteger(kind) || kind < 1 || kind > 9) throw new RangeError(`nearestCave: kind ${kind} is not a cave kind 1-9`);
-  if (!Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(z) || !IN_WINDOW(x, z)) {
-    throw new RangeError(`nearestCave: (${x}, ${y}, ${z}) is not an integer voxel with (x, z) in the world window`);
-  }
-  if (!Number.isInteger(o.radius) || o.radius < 1) throw new RangeError(`nearestCave: radius ${o.radius} is not an integer ≥ 1`);
+  checkStart('nearestCave', x, y, z, o);
   const radius = o.radius;
   const carver = carverOf(kind);
   const cache = carver === null ? null : CACHE_OF(dc.ctx);
-  const loadedCols = new Set<number>();
   const scx = x >> 4, scz = z >> 4;
   const r2Max = radius * radius;
   // The carver candidates per ring: d², x, y, z.
   const pending: number[][] = [];
   for (let r = 0; r < radius; r += RING) pending.push([]);
   let shells = -1;
-  let bestD2 = Infinity, bx = 0, by = 0, bz = 0;
 
-  /** The best hit so far as a result, with its yaw. */
-  const found = (): FindResult => ({ hit: { x: bx, y: by, z: bz, yaw: yawAt(dc, kind, bx, by, bz, loadedCols.has(colKey(bx >> 4, bz >> 4)) ? o.loaded(bx >> 4, bz >> 4) : null) }, reason: 'found' });
-  /** The result once the deadline passed: the ring's best hit so far, else `budget`. */
-  const late = (): FindResult => (bestD2 < Infinity ? found() : BUDGET);
   /** Visits the sources of shell `s` (Chebyshev chunk distance s from (x, z)'s chunk), queueing their centres. */
   const visitShell = (s: number): void => {
     for (let sz = scz - s; sz <= scz + s; sz++) {
@@ -493,133 +618,187 @@ export function nearestCave(dc: DensityContext, kind: number, x: number, y: numb
     }
   };
 
-  for (let r = 0, ring = 0; r < radius; r += RING, ring++) {
-    const rOut = r + RING < radius ? r + RING : radius;
-    const in2 = r * r, out2 = rOut * rOut;
-    // The ring's columns: those holding a voxel at a horizontal distance in [r, rOut), with their nearest squared distance.
-    const cols: number[] = [];
-    for (let cz = (z - rOut + 1) >> 4; cz <= (z + rOut - 1) >> 4; cz++) {
-      const z0 = 16 * cz, z1 = z0 + 15;
-      const dzMin = z < z0 ? z0 - z : z > z1 ? z - z1 : 0;
-      const dzMax = z - z0 > z1 - z ? z - z0 : z1 - z;
-      for (let cx = (x - rOut + 1) >> 4; cx <= (x + rOut - 1) >> 4; cx++) {
-        const x0 = 16 * cx, x1 = x0 + 15;
-        if (!IN_WINDOW(x0, z0) || !IN_WINDOW(x1, z1)) continue;
-        const dxMin = x < x0 ? x0 - x : x > x1 ? x - x1 : 0;
-        const dxMax = x - x0 > x1 - x ? x - x0 : x1 - x;
-        const dMin = dxMin * dxMin + dzMin * dzMin;
-        if (dMin < out2 && dxMax * dxMax + dzMax * dzMax >= in2) cols.push(dMin, cx, cz);
-      }
-    }
-    const n = cols.length / 3;
-    const order: number[] = [];
-    for (let q = 0; q < n; q++) order.push(q);
-    order.sort((a, b) => cols[3 * a]! - cols[3 * b]! || a - b);
-
-    // 1. The loaded columns' stored tags.
-    for (let t = 0; t < n; t++) {
-      const q = 3 * order[t]!;
-      const dMin = cols[q]!;
-      if (dMin >= bestD2) break;
-      if (o.stop()) return STOPPED;
-      if (o.now() >= o.deadline) return late();
-      const cx = cols[q + 1]!, cz = cols[q + 2]!;
-      const v = o.loaded(cx, cz);
-      if (v === null) continue;
-      loadedCols.add(colKey(cx, cz));
-      for (let sy = 0; sy < 24; sy++) {
-        const y0 = -64 + 16 * sy;
-        const dyMin = y < y0 ? y0 - y : y > y0 + 15 ? y - y0 - 15 : 0;
-        if (dMin + dyMin * dyMin >= bestD2) continue;
-        const sec = v.sectionCave(sy);
-        if (typeof sec === 'number' && KIND_OF(sec) !== kind) continue;
-        const arr = typeof sec === 'number' ? null : sec;
-        for (let i = sy === 0 ? 256 : 0; i < 4096; i++) {
-          if (arr !== null && KIND_OF(arr[i]!) !== kind) continue;
-          const vx = 16 * cx + (i & 15), vz = 16 * cz + ((i >> 4) & 15), vy = y0 + (i >> 8);
-          const dx = vx - x, dz = vz - z;
-          const dh2 = dx * dx + dz * dz;
-          if (dh2 < in2 || dh2 >= out2) continue;
-          const dy = vy - y;
-          const d2 = dh2 + dy * dy;
-          if (d2 < bestD2) { bestD2 = d2; bx = vx; by = vy; bz = vz; }
-        }
-      }
-    }
-
+  const beyond = (g: Ring, best: Best, loadedCols: ReadonlySet<number>): Step => {
     if (carver !== null) {
       // 2. The carver candidates: every source that can reach this ring visited, then its centres nearest first.
-      const need = ((rOut + 15) >> 4) + 1 + WINDOW_R;
+      const need = ((g.rOut + 15) >> 4) + 1 + WINDOW_R;
       while (shells < need) {
-        if (o.stop()) return STOPPED;
-        if (o.now() >= o.deadline) return late();
+        if (o.stop()) return HALT;
+        if (o.now() >= o.deadline) return LATE;
         visitShell(++shells);
       }
-      const cand = pending[ring]!;
+      const cand = pending[g.index]!;
       const m = cand.length / 4;
       const byDist: number[] = [];
       for (let q = 0; q < m; q++) byDist.push(q);
       byDist.sort((a, b) => cand[4 * a]! - cand[4 * b]! || a - b);
       for (let t = 0; t < m; t++) {
         const q = 4 * byDist[t]!;
-        if (cand[q]! >= bestD2) break;
+        if (cand[q]! >= best.d2) break;
         const vx = cand[q + 1]!, vy = cand[q + 2]!, vz = cand[q + 3]!;
         // A loaded column's stored tags were read in 1.
         if (loadedCols.has(colKey(vx >> 4, vz >> 4))) continue;
-        if (o.stop()) return STOPPED;
-        if (o.now() >= o.deadline) return late();
+        if (o.stop()) return HALT;
+        if (o.now() >= o.deadline) return LATE;
         if (caveTagAt(dc, vx, vy, vz) === kind) {
-          bestD2 = cand[q]!;
-          bx = vx; by = vy; bz = vz;
+          best.d2 = cand[q]!;
+          best.x = vx; best.y = vy; best.z = vz;
           break;
         }
       }
-    } else {
-      // 3. The noise kinds: one voxel per density cell of the columns not loaded.
-      for (let t = 0; t < n; t++) {
-        const q = 3 * order[t]!;
-        if (cols[q]! >= bestD2) break;
-        const cx = cols[q + 1]!, cz = cols[q + 2]!;
-        if (loadedCols.has(colKey(cx, cz))) continue;
-        if (o.stop()) return STOPPED;
-        if (o.now() >= o.deadline) return late();
-        for (let cj = 0; cj < 4; cj++) {
-          const vz = 16 * cz + 4 * cj + 2;
-          for (let ci = 0; ci < 4; ci++) {
-            const vx = 16 * cx + 4 * ci + 2;
-            const dx = vx - x, dz = vz - z;
-            const dh2 = dx * dx + dz * dz;
-            if (dh2 < in2 || dh2 >= out2 || dh2 >= bestD2) continue;
-            for (let vy = -60; vy < 320; vy += 8) {
-              const dy = vy - y;
-              const d2 = dh2 + dy * dy;
-              if (d2 >= bestD2) continue;
-              if (caveTagAt(dc, vx, vy, vz) === kind) { bestD2 = d2; bx = vx; by = vy; bz = vz; }
-            }
+      return GO;
+    }
+    // 3. The noise kinds: one voxel per density cell of the columns not loaded.
+    const { cols, in2, out2 } = g;
+    for (let q = 0; q < cols.length; q += 3) {
+      if (cols[q]! >= best.d2) break;
+      const cx = cols[q + 1]!, cz = cols[q + 2]!;
+      if (loadedCols.has(colKey(cx, cz))) continue;
+      if (o.stop()) return HALT;
+      if (o.now() >= o.deadline) return LATE;
+      for (let cj = 0; cj < 4; cj++) {
+        const vz = 16 * cz + 4 * cj + 2;
+        for (let ci = 0; ci < 4; ci++) {
+          const vx = 16 * cx + 4 * ci + 2;
+          const dx = vx - x, dz = vz - z;
+          const dh2 = dx * dx + dz * dz;
+          if (dh2 < in2 || dh2 >= out2 || dh2 >= best.d2) continue;
+          for (let vy = -60; vy < 320; vy += 8) {
+            const dy = vy - y;
+            const d2 = dh2 + dy * dy;
+            if (d2 >= best.d2) continue;
+            if (caveTagAt(dc, vx, vy, vz) === kind) { best.d2 = d2; best.x = vx; best.y = vy; best.z = vz; }
           }
         }
       }
     }
-    if (bestD2 < Infinity) return found();
-  }
-  return RADIUS;
+    return GO;
+  };
+
+  // The yaw: runs of the same kind, read from the stored view through `caveKindOf`, else through `caveTagAt`.
+  return searchRings(x, y, z, o, 0, kind, beyond, (hx, hy, hz, view) => yawAt(hx, hz, (px, pz) =>
+    (view !== null ? KIND_OF(view.cave(px & 15, hy, pz & 15)) : caveTagAt(dc, px, hy, pz)) === kind));
 }
 
 /**
- * The finder's yaw at hit (x, y, z) of kind `kind` (`nearestCave`): the runs of the same kind from the hit along ±x and
- * ±z inside its column (read from `view`, the column's stored view, through `caveKindOf`, else through `caveTagAt`), the
- * axis with the longer total run (x on a tie), facing its longer side (the positive one on a tie): +x 90, −x 270, +z
- * 180, −z 0.
+ * The biome finder's prefilter slack in the perturbed climate's uniform units, beside `borderWarp` × 2 (the border
+ * noises' whole range): the most C, E or H moves between a column's centre and any position within 4 blocks of the
+ * column (J's limit) is 0.24 (measured at seed '42' over 600 columns spread over ±32,000 blocks; p99 0.17).
  */
-function yawAt(dc: DensityContext, kind: number, x: number, y: number, z: number, view: ColumnView | null): number {
+const FIND_CLIMATE_SLACK = 0.25;
+/**
+ * The prefilter's slack in blocks on the depth window, beside depthWarp × 2 (the depth noise's whole range) and
+ * edgeJitter (the voxel's jy): the most surfaceEst moves between a column's centre and any position within 4 blocks of
+ * the column is 43.5 (measured with `FIND_CLIMATE_SLACK`; p99 36.5).
+ */
+const FIND_SURFACE_SLACK = 48;
+const PICKER_OF = cavePickerOf;
+const INPUTS_AT = caveBiomeInputsAt;
+const Y0_OF = caveY0;
+const BIOME_AT = caveBiomeAt;
+const SAMPLE = samplePoint;
+const NEW_POINT = newPointRecord;
+const BIOME = CAVE_BIOME;
+const B_LUSH: number = BIOME.lush;
+const B_DRIPSTONE: number = BIOME.dripstone;
+const B_ABYSS: number = BIOME.abyss;
+/** The prefilter's point and noise scratch. */
+const FIND_POINT = NEW_POINT();
+const FIND_NB = new Float64Array(4);
+
+/**
+ * The nearest cave voxel of cave biome `biome` (1 lush, 2 dripstone, 3 abyss; `CAVE_BIOME`) from the voxel (x, y, z)
+ * (integers, (x, z) in the world window), the Caves tab's biome finder (SP6b spec §9.3, D11), on `nearestCave`'s rings
+ * (`searchRings`, with its polls, its `budget`, `stopped` and `radius`), and in each ring:
+ * 1. the ring's loaded columns: their stored bytes whose bits 4-7 (`caveBiomeOf`) hold the biome (T writes it only at
+ *    tagged voxels; a uniform section of it holds it at every voxel);
+ * 2. beyond them, a 2D prefilter on a 16-block grid of column-stage points: each column's centre (16·cx + 8, 16·cz + 8),
+ *    a quart corner where `samplePoint` equals the column's ColumnSample, with the border and depth noises
+ *    (`caveBiomeInputsAt`) and Y0 (`caveY0`); the column is kept when its perturbed climate meets the biome's box (lush
+ *    H′ ≥ hMin, dripstone C′ ≥ cMin, abyss E′ ≤ eMax and C′ > cMin) within `FIND_CLIMATE_SLACK` + 2·borderWarp, and its
+ *    depth window [Y0 − D·depthMax, Y0 − D·depthMin] (the abyss: below Y0 − D·depthMin), widened by
+ *    `FIND_SURFACE_SLACK` + 2·depthWarp + edgeJitter blocks, meets −64 … 319; then, at the density-cell lattice voxels
+ *    (4i + 2, −60 + 8k, 4j + 2) of a kept column inside that window and the ring, a hit is a voxel whose `caveBiomeAt` is
+ *    the biome (the nibble T writes at a tagged voxel) and whose `caveTagAt` is not 0 (tagged).
+ * The hit's yaw follows the runs of the biome from it inside its column (the stored nibble, else a tagged voxel with that
+ * `caveBiomeAt`), as `nearestCave`'s. Throws a RangeError on other arguments.
+ */
+export function nearestCaveBiome(dc: DensityContext, biome: number, x: number, y: number, z: number, o: FindOptions): FindResult {
+  if (!Number.isInteger(biome) || biome < B_LUSH || biome > B_ABYSS) throw new RangeError(`nearestCaveBiome: biome ${biome} is not a cave biome 1-3`);
+  checkStart('nearestCaveBiome', x, y, z, o);
+  const inp = PICKER_OF(dc.ctx);
+  const st = inp.settings;
+  const w = st.borderWarp;
+  const climateSlack = FIND_CLIMATE_SLACK + 2 * w;
+  const ySlack = FIND_SURFACE_SLACK + 2 * st.depthWarp + st.edgeJitter;
+  // The depth window's bounds below Y0, in blocks, widened by the slack: the top at D·depthMin, the bottom at D·depthMax
+  // (the abyss: none).
+  const depthMin = biome === B_LUSH ? st.lush.depthMin : biome === B_DRIPSTONE ? st.dripstone.depthMin : st.abyss.depthMin;
+  const depthMax = biome === B_LUSH ? st.lush.depthMax : biome === B_DRIPSTONE ? st.dripstone.depthMax : Infinity;
+  const belowTop = st.depthScale * depthMin - ySlack;
+  const belowBottom = st.depthScale * depthMax + ySlack;
+  /** Whether a perturbed climate (C′, E′, H′) meets the biome's box within the slack. */
+  const climateMeets = (c: number, e: number, h: number): boolean =>
+    biome === B_LUSH ? h >= st.lush.hMin - climateSlack
+      : biome === B_DRIPSTONE ? c >= st.dripstone.cMin - climateSlack
+        : e <= st.abyss.eMax + climateSlack && c > st.abyss.cMin - climateSlack;
+  /** Whether voxel (vx, vy, vz) is a tagged voxel of the biome. */
+  const isBiome = (vx: number, vy: number, vz: number): boolean => BIOME_AT(dc, vx, vy, vz) === biome && caveTagAt(dc, vx, vy, vz) !== 0;
+
+  const beyond = (g: Ring, best: Best, loadedCols: ReadonlySet<number>): Step => {
+    const { cols, in2, out2 } = g;
+    for (let q = 0; q < cols.length; q += 3) {
+      if (cols[q]! >= best.d2) break;
+      const cx = cols[q + 1]!, cz = cols[q + 2]!;
+      if (loadedCols.has(colKey(cx, cz))) continue;
+      if (o.stop()) return HALT;
+      if (o.now() >= o.deadline) return LATE;
+      // The prefilter at the column's centre.
+      const px = 16 * cx + 8, pz = 16 * cz + 8;
+      const p = SAMPLE(dc.ctx, px, pz, false, FIND_POINT);
+      INPUTS_AT(inp, px, pz, FIND_NB);
+      if (!climateMeets(p.C + w * FIND_NB[0]!, p.E + w * FIND_NB[1]!, p.H + w * FIND_NB[2]!)) continue;
+      const y0 = Y0_OF(st, p.surfaceEst, FIND_NB[3]!);
+      const top = y0 - belowTop, bottom = y0 - belowBottom;
+      if (top < -64 || bottom > 319) continue;
+      for (let cj = 0; cj < 4; cj++) {
+        const vz = 16 * cz + 4 * cj + 2;
+        for (let ci = 0; ci < 4; ci++) {
+          const vx = 16 * cx + 4 * ci + 2;
+          const dx = vx - x, dz = vz - z;
+          const dh2 = dx * dx + dz * dz;
+          if (dh2 < in2 || dh2 >= out2 || dh2 >= best.d2) continue;
+          for (let vy = -60; vy < 320; vy += 8) {
+            if (vy < bottom || vy > top) continue;
+            const dy = vy - y;
+            const d2 = dh2 + dy * dy;
+            if (d2 >= best.d2) continue;
+            if (isBiome(vx, vy, vz)) { best.d2 = d2; best.x = vx; best.y = vy; best.z = vz; }
+          }
+        }
+      }
+    }
+    return GO;
+  };
+
+  // The yaw: runs of the biome, read from the stored view's nibbles, else tagged voxels with that `caveBiomeAt`.
+  return searchRings(x, y, z, o, 4, biome, beyond, (hx, hy, hz, view) => yawAt(hx, hz, (px, pz) =>
+    (view !== null ? CAVE_BIOME_OF(view.cave(px & 15, hy, pz & 15)) === biome : isBiome(px, hy, pz))));
+}
+
+/**
+ * The finders' yaw at hit (x, ·, z) (`nearestCave`, `nearestCaveBiome`): the runs from the hit along ±x and ±z inside its
+ * column of the voxels at the hit's height where `is(px, pz)` holds, the axis with the longer total run (x on a tie),
+ * facing its longer side (the positive one on a tie): +x 90, −x 270, +z 180, −z 0.
+ */
+function yawAt(x: number, z: number, is: (px: number, pz: number) => boolean): number {
   const cx = x >> 4, cz = z >> 4;
   const run = (sx: number, sz: number): number => {
     let n = 0;
     for (let s = 1; s < 16; s++) {
       const px = x + s * sx, pz = z + s * sz;
       if (px >> 4 !== cx || pz >> 4 !== cz) break;
-      const k = view !== null ? KIND_OF(view.cave(px & 15, y, pz & 15)) : caveTagAt(dc, px, y, pz);
-      if (k !== kind) break;
+      if (!is(px, pz)) break;
       n++;
     }
     return n;

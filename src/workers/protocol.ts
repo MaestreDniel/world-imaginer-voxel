@@ -33,10 +33,11 @@
  * is not malformed, the sim answers it `outside`), answered `copied`; an `edits` batch holds at most `MAX_STEP_EDITS`, and a
  * bulk one comes packed in four transferred typed arrays (`PackedEditsMsg`, D28's lever 1).
  * SP6a (spec §7.3, D12, D16): a `findCave` job searches for the nearest cave of one kind from a voxel (`nearestCave` on
- * the attached store's loaded columns, within `radius` blocks and `budgetMs` ms) and answers `caveFound`, its hit (null
- * unless the reason is `found`) and the reason it ended; there is no cancel message (the pool cancels its promise, and a
- * running search stops when its epoch cell moves). Only the shape is checked here; the ranges are the handler's
- * BAD_ARGS (`findCaveProblem`).
+ * the attached store's loaded columns, within `radius` blocks and `budgetMs` ms; with `biome`, SP6b spec §9.3, D11, the
+ * nearest cave voxel of that cave biome, `nearestCaveBiome`) and answers `caveFound`, its hit (null unless the reason
+ * is `found`) and the reason it ended; there is no cancel message (the pool cancels its promise, and a running search
+ * stops when its epoch cell moves). Only the shape is checked here; the ranges are the handler's BAD_ARGS
+ * (`findCaveProblem`).
  */
 import { MAP_LEVELS, MAP_TILE_PX, PART_BUDGET, SLICE_NS, type MapLevel } from '../core/constants';
 import type { StageId } from '../core/ids';
@@ -157,18 +158,21 @@ export interface WorldJobMsg extends Scoped {
  * caller asks at the clicked block ⌊x⌋, ⌊z⌋); a position outside the half-open world window is the handler's BAD_ARGS.
  */
 export type LandingMsg = Scoped & { readonly type: 'landing'; readonly x: number; readonly z: number };
-/** The finder's radius in blocks (SP6a spec §7.3): the largest a `findCave` may ask, and the Caves tab's. */
+/** The finder's radius in blocks (SP6a spec §7.3): the largest a `findCave` of a kind may ask, and the Caves tab's. */
 export const FIND_RADIUS = 512;
+/** The biome finder's radius in blocks (SP6b spec §9.3, D11): the largest a `findCave` with a `biome` may ask, and the tab's. */
+export const FIND_BIOME_RADIUS = 1024;
 /** The finder's time budget in ms (SP6a spec §7.3): the Caves tab's, and the largest a `findCave` may ask. */
 export const FIND_BUDGET_MS = 2000;
 /**
- * The nearest cave of kind `kind` from voxel (x, y, z) (SP6a spec §7.3, D12): numbers here; `findCaveProblem`'s ranges
- * (kind 1-9, integers with (x, z) in the world window, radius 1 … `FIND_RADIUS`, budgetMs in (0, `FIND_BUDGET_MS`]) are
- * the handler's BAD_ARGS.
+ * The nearest cave of kind `kind` from voxel (x, y, z) (SP6a spec §7.3, D12), or with `biome` the nearest cave voxel of
+ * that cave biome (SP6b spec §9.3, D11; kind 0): numbers here; `findCaveProblem`'s ranges (kind 1-9, or kind 0 with
+ * biome 1-3; integers with (x, z) in the world window; radius 1 … `FIND_RADIUS`, with a biome 1 … `FIND_BIOME_RADIUS`;
+ * budgetMs in (0, `FIND_BUDGET_MS`]) are the handler's BAD_ARGS.
  */
 export interface FindCaveMsg extends Scoped {
   readonly type: 'findCave'; readonly kind: number; readonly x: number; readonly y: number; readonly z: number;
-  readonly radius: number; readonly budgetMs: number;
+  readonly radius: number; readonly budgetMs: number; readonly biome?: number;
 }
 export type ToWorker = ConfigureMsg | MapTileMsg | PointMsg | SpawnMsg | StatsMsg | SliceMsg | SurfaceProbeMsg | SelftestMsg | FieldSliceMsg | FieldProbeMsg
   | AttachMsg | WorldJobMsg | LandingMsg | FindCaveMsg;
@@ -426,16 +430,22 @@ export const pointInWindow = (x: number, z: number): boolean => x >= -WINDOW && 
 export const landingProblem = (x: number, z: number): string | null =>
   Number.isInteger(x) && Number.isInteger(z) && pointInWindow(x, z) ? null : `(x, z) = (${x}, ${z}) is not an integer position in the world window`;
 /**
- * Why a `findCave` is not a search the handler runs (SP6a spec §7.3), or null: `kind` an integer 1-9, (x, y, z) integers
- * with (x, z) in the half-open world window, `radius` an integer in 1 … `FIND_RADIUS`, `budgetMs` a number in
+ * Why a `findCave` is not a search the handler runs (SP6a spec §7.3), or null: `kind` an integer 1-9, or with `biome`
+ * set (SP6b spec §9.3, D11) `kind` 0 and `biome` an integer 1-3; (x, y, z) integers with (x, z) in the half-open world
+ * window; `radius` an integer in 1 … `FIND_RADIUS`, with `biome` 1 … `FIND_BIOME_RADIUS`; `budgetMs` a number in
  * (0, `FIND_BUDGET_MS`].
  */
-export const findCaveProblem = (m: Pick<FindCaveMsg, 'kind' | 'x' | 'y' | 'z' | 'radius' | 'budgetMs'>): string | null =>
-  !(Number.isInteger(m.kind) && m.kind >= 1 && m.kind <= 9) ? `kind ${m.kind} is not a cave kind 1-9`
-    : !(Number.isInteger(m.x) && Number.isInteger(m.y) && Number.isInteger(m.z) && pointInWindow(m.x, m.z)) ? `(x, y, z) = (${m.x}, ${m.y}, ${m.z}) is not an integer voxel in the world window`
-      : !(Number.isInteger(m.radius) && m.radius >= 1 && m.radius <= FIND_RADIUS) ? `radius ${m.radius} is not an integer in 1 … ${FIND_RADIUS}`
-        : !(m.budgetMs > 0 && m.budgetMs <= FIND_BUDGET_MS) ? `budgetMs ${m.budgetMs} is not in (0, ${FIND_BUDGET_MS}]`
-          : null;
+export const findCaveProblem = (m: Pick<FindCaveMsg, 'kind' | 'x' | 'y' | 'z' | 'radius' | 'budgetMs' | 'biome'>): string | null => {
+  const biome = m.biome;
+  const maxRadius = biome === undefined ? FIND_RADIUS : FIND_BIOME_RADIUS;
+  return biome === undefined && !(Number.isInteger(m.kind) && m.kind >= 1 && m.kind <= 9) ? `kind ${m.kind} is not a cave kind 1-9`
+    : biome !== undefined && m.kind !== 0 ? `kind ${m.kind} is not 0 in a search of a cave biome`
+      : biome !== undefined && !(Number.isInteger(biome) && biome >= 1 && biome <= 3) ? `biome ${biome} is not a cave biome 1-3`
+        : !(Number.isInteger(m.x) && Number.isInteger(m.y) && Number.isInteger(m.z) && pointInWindow(m.x, m.z)) ? `(x, y, z) = (${m.x}, ${m.y}, ${m.z}) is not an integer voxel in the world window`
+          : !(Number.isInteger(m.radius) && m.radius >= 1 && m.radius <= maxRadius) ? `radius ${m.radius} is not an integer in 1 … ${maxRadius}`
+            : !(m.budgetMs > 0 && m.budgetMs <= FIND_BUDGET_MS) ? `budgetMs ${m.budgetMs} is not in (0, ${FIND_BUDGET_MS}]`
+              : null;
+};
 /**
  * Why (x, y, z) is not a voxel a surfaceProbe can read (integers, (x, z) in the half-open world window, y in −64 … 319),
  * or null when it is.
@@ -549,7 +559,8 @@ export function parseToWorker(m: unknown): ToWorker | null {
     case 'landing':
       return scopedOk(m) && isInt(m['x']) && isInt(m['z']) ? (m as unknown as LandingMsg) : null;
     case 'findCave':
-      return scopedOk(m) && FIND_KEYS.every((k) => typeof m[k] === 'number') ? (m as unknown as FindCaveMsg) : null;
+      return scopedOk(m) && FIND_KEYS.every((k) => typeof m[k] === 'number') && (m['biome'] === undefined || typeof m['biome'] === 'number')
+        ? (m as unknown as FindCaveMsg) : null;
     default:
       return null;
   }

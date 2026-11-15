@@ -7219,9 +7219,28 @@ describe('the Caves tab\'s Find on the page (SP6a spec §7.3, D12, D16; Task 44)
     expect(t.arrived).toEqual([cavePlace(HIT)]);
   });
 
+  test('a biome search (SP6b spec §9.3, D11; Task 48) asks kind 0 with its biome and no radius (the pool\'s 1024) from the camera\'s voxel; a hit moves the camera into the cave (arrive, in flight)', async () => {
+    const t = finder();
+    const p = t.f.find(0, 3);
+    expect(t.reqs).toEqual([{ kind: 0, biome: 3, x: 20400, y: 222, z: -4800 }]);
+    expect('radius' in t.reqs[0]!).toBe(false);
+    t.ends[0]!.resolve({ hit: HIT, reason: 'found' });
+    await expect(p).resolves.toEqual({ hit: HIT, reason: 'found' });
+    expect(t.arrived).toEqual([cavePlace(HIT)]);
+    // A kind search carries no biome; a new biome search cancels the one in flight.
+    const k = t.f.find(2);
+    expect('biome' in t.reqs[1]!).toBe(false);
+    const q = t.f.find(0, 1);
+    expect(t.ends[1]!.cancelled).toBe(true);
+    await expect(k).rejects.toBeInstanceOf(JobCancelled);
+    t.ends[2]!.resolve({ hit: null, reason: 'radius' });
+    await expect(q).resolves.toEqual({ hit: null, reason: 'radius' });
+    expect(t.arrived).toHaveLength(1);
+  });
+
   test('the page wires Find, its cancel and "Save as place" (saved worlds only), and arrives in flight', () => {
     const src = SRC();
-    expect(src).toContain('          find: (kind) => caveFind.find(kind),');
+    expect(src).toContain('          find: (kind, biome) => caveFind.find(kind, biome),');
     expect(src).toContain('          cancelFind: () => caveFind.cancelFind(),');
     expect(src).toContain('          savePlace: places === null ? null : (hit) => savePlaceKey({');
     expect(src).toContain('            palette, help, settings: settingsPanel, dialog: placeDialog, places, camera: cavePlace(hit),');
