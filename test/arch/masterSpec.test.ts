@@ -2862,4 +2862,13 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(cell).toBe('0 / 0; `xrayBiome` 0 |');
     expect(THRESHOLDS.R1?.xrayBiome).toEqual({ max: 0, activeFrom: 'SP6b' });
   });
+
+  test('§4.5: the X-ray pass coloured by kind or by cave biome by a uniform (SP6b spec §15 item 16)', () => {
+    const at = text.indexOf('### 4.5 Render structure');
+    const s45 = text.slice(at, text.indexOf('### 4.6 ', at));
+    const order = s45.slice(s45.indexOf('**Pass order:**'), s45.indexOf('**Draw calls:**'));
+    const xray = order.split('\n').find((l) => l.startsWith('8. The X-ray pass (SP6a):'));
+    expect(xray, 'no X-ray item in §4.5\'s pass order').toBeDefined();
+    expect(xray).toContain('Its walls are coloured by cave kind (`xrayPalette[kind]`) or by cave biome (`xrayBiomePalette[biome]`, the `xray` word\'s `biome` bits), switched by one uniform, `xrayColorMode`, with no remesh; the film keeps its own colour in both (amended by SP6b).');
+  });
 });

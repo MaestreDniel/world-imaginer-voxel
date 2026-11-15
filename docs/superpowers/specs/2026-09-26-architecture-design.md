@@ -1088,7 +1088,7 @@ In AO, smooth light and connectivity15, "opaque" means PASS opaque with `FULL_FA
 5. Translucent (blending with depthWrite on; `customSort` back to front by section centre; double-sided water top).
 6. Clouds.
 7. Selection box, and with the selection tool (SP5c) its volume box and the ghost, drawn after the translucent pass.
-8. The X-ray pass (SP6a): cave walls and the surface film, additive, drawn alone while the X-ray is on (in the transparent list after every translucent region and before the ghost; the terrain and water passes collapse, the sky dome and clouds are hidden).
+8. The X-ray pass (SP6a): cave walls and the surface film, additive, drawn alone while the X-ray is on (in the transparent list after every translucent region and before the ghost; the terrain and water passes collapse, the sky dome and clouds are hidden). Its walls are coloured by cave kind (`xrayPalette[kind]`) or by cave biome (`xrayBiomePalette[biome]`, the `xray` word's `biome` bits), switched by one uniform, `xrayColorMode`, with no remesh; the film keeps its own colour in both (amended by SP6b).
 
 On Ultra, passes 2-4 (after the LOD depth clear) render into a `WebGLRenderTarget` with a `DepthTexture` for Fabulous water.
 

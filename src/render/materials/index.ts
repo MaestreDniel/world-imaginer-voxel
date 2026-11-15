@@ -61,6 +61,11 @@ export interface MaterialSystem {
    * radius in blocks from the eye; uniforms only, allocates nothing.
    */
   setXray(on: boolean, yMin: number, yMax: number, radius: number): void;
+  /**
+   * Writes the X-ray's `xrayColorMode` (SP6b spec §7.2): its walls by kind (0) or by cave biome (1); one uniform,
+   * allocates nothing.
+   */
+  setXrayColorMode(mode: 0 | 1): void;
   /** Frees the materials and the lightmap; the albedo array stays its owner's. */
   dispose(): void;
 }
@@ -193,6 +198,9 @@ export function createMaterialSystem(s: MaterialSettings, albedo: DataArrayTextu
       u.xrayYMin.value = yMin;
       u.xrayYMax.value = yMax;
       u.xrayRadius.value = radius;
+    },
+    setXrayColorMode(mode) {
+      u.xrayColorMode.value = mode;
     },
     dispose() {
       for (const m of materials) m.dispose();

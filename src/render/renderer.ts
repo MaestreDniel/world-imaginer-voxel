@@ -210,6 +210,11 @@ export interface WorldRenderer {
   /** The X-ray's depth band, world y `yMin` … `yMax` (its two uniforms only; SP6a spec §5.3). */
   setXrayBand(yMin: number, yMax: number): void;
   /**
+   * The X-ray's colour mode (SP6b spec §7.2, §7.3): its walls by cave type (0) or by cave biome (1); one uniform, no
+   * remesh, allocates nothing (`XrayControl.setColorMode`).
+   */
+  setXrayColorMode(mode: 0 | 1): void;
+  /**
    * Follows the host's size now (aspect, pixel ratio, drawing buffer; `applyViewport`), as the ResizeObserver does a
    * frame later: the map's mode B calls it at the switch, then `frame`, so the painted frame is drawn (SP4c spec §2.2).
    */
@@ -614,6 +619,11 @@ export interface XrayControl {
   /** The band `yMin` … `yMax` (world y), kept across toggles; writes the two band uniforms only. */
   setXrayBand(yMin: number, yMax: number): void;
   /**
+   * The colour mode (SP6b spec §7.2): the walls by kind (0) or by cave biome (1), kept across toggles; writes
+   * `xrayColorMode` only (no remesh). Allocates nothing.
+   */
+  setColorMode(mode: 0 | 1): void;
+  /**
    * The radius follows the fog end ((RD − 1)·16, which a live render distance moves), so the X-ray covers the render
    * distance; called once per frame after `setFrameUniforms`, it writes only when the fog end moved. Allocates nothing.
    */
@@ -626,7 +636,7 @@ export interface XrayControl {
  * while off, Task 48 lever 4c): off, every depth (−64 … 319), until `setXray`.
  */
 export function createXrayControl(
-  materials: Pick<MaterialSystem, 'setXray' | 'xray'>,
+  materials: Pick<MaterialSystem, 'setXray' | 'setXrayColorMode' | 'xray'>,
   sky: Pick<Object3D, 'visible'>,
   clear: Pick<WebGLRenderer, 'getClearColor' | 'getClearAlpha' | 'setClearColor'>,
   sections: Pick<SectionRenderer, 'setXray'>,
@@ -655,6 +665,9 @@ export function createXrayControl(
       state[0] = yMin;
       state[1] = yMax;
       write();
+    },
+    setColorMode(mode) {
+      materials.setXrayColorMode(mode);
     },
     syncRadius() {
       const end = fogEnd.value as number;
@@ -825,6 +838,9 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     },
     setXrayBand(yMin, yMax) {
       xray.setXrayBand(yMin, yMax);
+    },
+    setXrayColorMode(mode) {
+      xray.setColorMode(mode);
     },
     resize,
     gpuEstimate(out) {

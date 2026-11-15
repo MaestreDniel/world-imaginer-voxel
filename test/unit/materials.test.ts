@@ -9,7 +9,7 @@ import { packingGlsl } from '../../src/render/materials/glsl/packing.glsl';
 import { GHOST_LIGHT_FLOOR, TERRAIN_FRAGMENT, terrainVertex } from '../../src/render/materials/glsl/terrain.glsl';
 import { createMaterialSystem, fogRange, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
 import { GHOST_ALPHA } from '../../src/render/materials/uniforms';
-import { XRAY_COLORS } from '../../src/render/xrayPalette';
+import { XRAY_BIOME_COLORS, XRAY_COLORS } from '../../src/render/xrayPalette';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
 import type { FrameState } from '../../src/render/frameState';
 import { createFlatColorArray } from '../../src/render/textureArray';
@@ -459,6 +459,8 @@ describe('the X-ray material and the collapse uniform (SP6a spec §5.2, §5.3)',
       expect(x.vertexShader, v).toContain(packingGlsl());
       expect(x.vertexShader, v).toContain('vKind = pkX_kind(data);');
       expect(x.vertexShader, v).toContain('vFace = pkX_face(data);');
+      expect(x.vertexShader, v).toContain('flat out uint vBiome;');
+      expect(x.vertexShader, v).toContain('vBiome = pkX_biome(data);');
     }
     expect(SYSTEMS.mesh.xray.vertexShader).toContain('#define REGION_MESH');
     expect(SYSTEMS.mesh.xray.vertexShader).not.toContain('batching_vertex');
@@ -474,7 +476,7 @@ describe('the X-ray material and the collapse uniform (SP6a spec §5.2, §5.3)',
       expect(src).toContain('uniform vec3 xrayPalette[16];');
       expect(src).toContain('const float FACE_SHADE[6] = float[6](0.8, 0.6, 0.8, 0.6, 1.0, 0.5);');
       const body = mainOf(src);
-      expect(body).toContain('vec3 color = xrayPalette[vKind] * FACE_SHADE[min(vFace, 5u)];');
+      expect(body).toContain('vec3 color = (xrayColorMode > 0.5 && vKind != 15u ? xrayBiomePalette[vBiome] : xrayPalette[vKind]) * FACE_SHADE[min(vFace, 5u)];');
       expect(body).toContain('float alpha = vKind == 15u ? 0.05 : 0.14;');
       expect(body).toContain('float fade = 1.0 - smoothstep(fogStart, fogEnd, dist);');
       expect(body).toContain('gl_FragColor = vec4(color, alpha * fade);');
@@ -551,6 +553,54 @@ describe('the X-ray material and the collapse uniform (SP6a spec §5.2, §5.3)',
       // Stored linear (as every colour uniform): cheese's green 0xb0 converts below 0xb0 / 255.
       expect(palette[1]!.g).toBeLessThan(0xb0 / 255);
     }
+  });
+
+  test('by cave biome (SP6b spec §7.2): both variants declare xrayBiomePalette[16] and xrayColorMode; the film keeps its kind\'s colour in either mode; defaults: by kind (0), the palette XRAY_BIOME_COLORS in linear', () => {
+    for (const v of VARIANTS) {
+      const m = SYSTEMS[v];
+      const src = m.xray.fragmentShader;
+      expect(src, v).toContain('uniform vec3 xrayBiomePalette[16];');
+      expect(src, v).toContain('uniform float xrayColorMode;');
+      expect(src, v).toContain('flat in uint vBiome;');
+      // One selection, by mode and kind: the walls by biome in mode 1, the film (kind 15) by its kind in both.
+      const body = mainOf(src);
+      expect(body.split('xrayBiomePalette[').length - 1, v).toBe(1);
+      expect(body.split('xrayPalette[').length - 1, v).toBe(1);
+      expect(system(v).xray.uniforms['xrayColorMode']!.value, v).toBe(0);
+      const palette = m.xray.uniforms['xrayBiomePalette']!.value as Color[];
+      expect(palette, v).toHaveLength(16);
+      palette.forEach((c, i) => {
+        expect(c.isColor, `biome ${i}`).toBe(true);
+        expect(`#${c.getHexString(SRGBColorSpace)}`, `biome ${i}`).toBe(XRAY_BIOME_COLORS[i]);
+      });
+      // Stored linear: lush's red 0x4d converts below 0x4d / 255.
+      expect(palette[1]!.r).toBeLessThan(0x4d / 255);
+    }
+  });
+
+  test('setXrayColorMode(1) writes xrayColorMode 1 and nothing else; setXrayColorMode(0) writes it back to 0', () => {
+    const m = system('batch');
+    m.setXray(true, -40, -9, 176);
+    /** Every uniform of every material by value (colours as hex, vectors as arrays, textures by reference). */
+    const snapshot = (): Record<string, unknown> => {
+      const out: Record<string, unknown> = {};
+      for (const [name, mat] of Object.entries(all(m))) {
+        for (const [key, u] of Object.entries(mat.uniforms)) {
+          const val = u.value as unknown;
+          const of = (x: unknown): unknown =>
+            x instanceof Color ? x.getHex() : (x as { isVector3?: boolean })?.isVector3 ? (x as { toArray(): number[] }).toArray() : x;
+          out[`${name}.${key}`] = Array.isArray(val) ? val.map(of) : of(val);
+        }
+      }
+      return out;
+    };
+    const before = snapshot();
+    m.setXrayColorMode(1);
+    const after = snapshot();
+    expect(after['xray.xrayColorMode']).toBe(1);
+    expect({ ...after, 'xray.xrayColorMode': 0 }).toEqual(before);
+    m.setXrayColorMode(0);
+    expect(snapshot()).toEqual(before);
   });
 
   test('setXray writes xrayOn, the band and the radius', () => {

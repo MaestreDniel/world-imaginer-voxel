@@ -2,6 +2,9 @@ import {
   BoxGeometry, Color, Group, LinearMipmapLinearFilter, Mesh, MeshBasicMaterial, NearestFilter, PerspectiveCamera, Scene,
   ShaderMaterial, Vector3, type BatchedMesh, type InstancedMesh, type LineSegments, type Material, type Object3D, type RenderItem,
 } from 'three';
+import { readFileSync } from 'node:fs';
+import v8 from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { WebGLRenderList } from 'three/src/renderers/webgl/WebGLRenderLists.js';
 import { describe, expect, test } from 'vitest';
 import { MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY } from '../../src/mesh/column';
@@ -886,6 +889,76 @@ describe('the X-ray toggle and band (SP6a spec §5.3)', () => {
     materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 16.5, fogBand: 64, nightVision: 0 });
     x.syncRadius();
     expect(values()).toEqual([1, -64, 319, 248]);
+  });
+
+  test('setColorMode (SP6b spec §7.2, §7.3) reaches xrayColorMode and writes nothing else: the toggle, the band, the radius, the sky dome and the clear colour unchanged, and no remesh (no `stage` call)', () => {
+    const materials = createMaterialSystem({ variant: 'batch', ao: true, smoothLight: true }, createFlatColorArray());
+    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0 });
+    const sky = createSky(materials);
+    const clear = fakeClear(0x123456, 0.5);
+    const calls = { setXray: 0, stage: 0 };
+    const sections = { setXray: () => { calls.setXray++; }, stage: () => { calls.stage++; } };
+    const x = createXrayControl(materials, sky, clear as never, sections);
+    const u = materials.xray.uniforms;
+    const values = () => [u['xrayOn']!.value, u['xrayYMin']!.value, u['xrayYMax']!.value, u['xrayRadius']!.value];
+    x.setXray(true);
+    x.setXrayBand(-40, -9);
+    const writes = clear.s.writes;
+    expect(u['xrayColorMode']!.value).toBe(0);
+    x.setColorMode(1);
+    expect(u['xrayColorMode']!.value).toBe(1);
+    expect(values()).toEqual([1, -40, -9, 176]);
+    expect(sky.visible).toBe(false);
+    expect(clear.s.writes).toBe(writes);
+    expect(calls).toEqual({ setXray: 1, stage: 0 });
+    // The mode stays across a toggle: X writes the toggle's uniforms, never the mode.
+    x.setXray(false);
+    x.setXray(true);
+    expect(u['xrayColorMode']!.value).toBe(1);
+    x.setColorMode(0);
+    expect(u['xrayColorMode']!.value).toBe(0);
+    expect(calls.stage).toBe(0);
+  });
+
+  test('10,000 setColorMode calls grow the heap by less than 256 KB and stage nothing (a switch writes one uniform, SP6b spec §7.2)', () => {
+    const { x, materials } = setup();
+    let k = 0;
+    const call = (): void => {
+      x.setColorMode((k & 1) === 0 ? 1 : 0);
+      k++;
+    };
+    for (let i = 0; i < 100_000; i++) call();
+    v8.setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    const JIT_SPACE = /^(code|trusted|shared_trusted)_/;
+    const heapUsed = (): number => {
+      let b = 0;
+      for (const s of v8.getHeapSpaceStatistics()) if (!JIT_SPACE.test(s.space_name)) b += s.space_used_size;
+      return b;
+    };
+    const readings: number[] = [];
+    for (let t = 0; t < 3; t++) {
+      gc();
+      gc();
+      const before = heapUsed();
+      const profiler = new v8.GCProfiler();
+      profiler.start();
+      for (let i = 0; i < 10_000; i++) call();
+      const after = heapUsed();
+      const gcs = profiler.stop()?.statistics.length ?? 0;
+      if (gcs > 0) continue;
+      readings.push(after - before);
+      if (after - before < 256 * 1024) break;
+    }
+    expect(readings.length, 'every attempt saw a GC').toBeGreaterThan(0);
+    expect(readings[readings.length - 1]!, `heap growth over 10,000 calls (attempts: ${readings.join(', ')})`).toBeLessThan(256 * 1024);
+    expect(materials.xray.uniforms['xrayColorMode']!.value).toBe(k & 1);
+  });
+
+  test('WorldRenderer.setXrayColorMode is the X-ray control\'s setColorMode, nothing more (no GL context in Node: the source)', () => {
+    const src = readFileSync(new URL('../../src/render/renderer.ts', import.meta.url), 'utf8');
+    expect(src).toContain('  setXrayColorMode(mode: 0 | 1): void;');
+    expect(src).toContain('    setXrayColorMode(mode) {\n      xray.setColorMode(mode);\n    },');
   });
 
   test('XRAY_ORDER sorts after every water region and before the ghost, with nothing between them', () => {
