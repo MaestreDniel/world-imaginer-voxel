@@ -169,7 +169,8 @@
  * `render/culling/` row to `SP6B_MODULES` (`caveCulling.ts`, frustum culling being three's per instance). R3 (Task 39)
  * lands item 19 (§6.1's raycast reference as built; the SP6a describe's pin of its line moved here), item 20's R3 row
  * (`wronglyCulled` and `popIn` gated, `culledUnderground` recorded, cross-checked against THRESHOLDS) and item 6's test
- * entry (`harness/cull.ts`, an `SP6B_MODULES` row).
+ * entry (`harness/cull.ts`, an `SP6B_MODULES` row). D25's culling checkpoint (Task 40) gates `culledUnderground` ≥ 50 %
+ * and words the R3 row as built (item 20's R3 part).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2904,15 +2905,15 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(refs.some((l) => l.includes('it stays with cave culling'))).toBe(false);
   });
 
-  test('§6.4\'s R3 row: wronglyCulled and popIn gated, culledUnderground recorded, which THRESHOLDS holds activeFrom SP6b (SP6b spec §15 item 20)', () => {
+  test('§6.4\'s R3 row: wronglyCulled, popIn and culledUnderground gated as built, which THRESHOLDS holds activeFrom SP6b (SP6b spec §15 item 20)', () => {
     const [, def, cell] = row64('R3');
     expect(cell).toBe('0 / ≥ 50%; `popIn` 0 |');
-    sp6bParts('R3', def!, [['wronglyCulled', { max: 0 }], ['popIn', { max: 0 }]]);
+    sp6bParts('R3', def!, [['wronglyCulled', { max: 0 }], ['popIn', { max: 0 }], ['culledUnderground', { min: 0.5 }]]);
     expect(def).toContain('`wronglyCulled`, the sections the raycast reference (§6.1) sees from a pose that cave culling\'s settled walk does not draw, over the tier\'s poses (fast 8, quick 32, full 64)');
     expect(def).toContain('`popIn`, the sections the reference sees at a frame that the draw rule hides at that frame, over five pose paths replayed frame by frame with the walk sliced at 2,000 pops a frame (a walk through a doorway into a cavern, flight at two sections per walk, flight y 300 → 400 → 300, a teleport, a wall dug open into a sealed cave)');
-    // Recorded until D25's culling checkpoint (Task 40 gates it and rewords the row).
-    expect(def).toContain('`culledUnderground`, 1 − drawn non-empty sections / non-empty sections in range pooled over the underground poses, recorded until D25\'s culling checkpoint (SP6b, its spec §12.4; amended by SP6b)');
-    expect(THRESHOLDS.R3?.culledUnderground).toBeUndefined();
+    // Gated at D25's culling checkpoint (Task 40), which measured it on quick.
+    expect(def).toContain('`culledUnderground`, 1 − drawn non-empty sections / non-empty sections in range pooled over the underground poses, gated from D25\'s culling checkpoint on every tier (SP6b, its spec §12.4-§12.5; amended by SP6b)');
+    expect(def).not.toContain('recorded until D25');
   });
 
   test('§1\'s test entry names R3\'s files (SP6b spec §15 item 6)', () => {

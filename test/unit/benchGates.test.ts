@@ -281,7 +281,7 @@ test('parseBenchExempt: a comma-separated list of BENCH_ROWS names, empty when u
   expect(parseBenchExempt([...BENCH_ROWS].reverse().join(','))).toEqual([...BENCH_ROWS].reverse());
 });
 
-test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, SP5b\'s persist.flush, SP5c\'s paste.max and paste.maxLit, then SP6a\'s terrain.caves.warm, carver.paths, mesh.xray and slice.caves128, with SP6a\'s density.cornerInlined right after density.corner and SP6b\'s caveBiome.column right after terrain.real', () => {
+test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, SP5b\'s persist.flush, SP5c\'s paste.max and paste.maxLit, then SP6a\'s terrain.caves.warm, carver.paths, mesh.xray and slice.caves128, then SP6b\'s cull.walk.rd12 and cull.walk.rd16, with SP6a\'s density.cornerInlined right after density.corner and SP6b\'s caveBiome.column right after terrain.real', () => {
   expect(BENCH_ROWS).toEqual([
     'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
     'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
@@ -289,9 +289,9 @@ test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner a
     'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'caveBiome.column', 'surface.column',
     'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
     'light.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
-    'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128',
+    'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128', 'cull.walk.rd12', 'cull.walk.rd16',
   ]);
-  expect(BENCH_ROWS.slice(-10, -6)).toEqual(['light.column', 'mesh.section', 'relight.edit', 'persist.flush']);
+  expect(BENCH_ROWS.slice(-12, -8)).toEqual(['light.column', 'mesh.section', 'relight.edit', 'persist.flush']);
   expect(BENCH_ROWS.slice(BENCH_ROWS.indexOf('density.corner'), BENCH_ROWS.indexOf('density.corner') + 3)).toEqual(['density.corner', 'density.cornerInlined', 'terrain.real']);
   // SP6b §12.5 (D25): the cave-biome step of T alone (the column pass and the picks at T's tagged voxels), measured
   // right after terrain.real.
@@ -300,10 +300,12 @@ test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner a
   expect(new Set(BENCH_ROWS).size).toBe(BENCH_ROWS.length);
 });
 
-test('`BENCH_ROWS` ends `\'relight.edit\', \'persist.flush\', \'paste.max\', \'paste.maxLit\'`, then SP6a §10.5\'s `\'terrain.caves.warm\', \'carver.paths\', \'mesh.xray\', \'slice.caves128\'` (SP5b §6.2 appends one flush\'s synchronous part, SP5c §10.3 the two maximum pastes, SP6a §10.5 the streaming T, the carver paths, the X-ray pass and, measured last, the caves slice)', () => {
-  expect(BENCH_ROWS.slice(-8, -4)).toEqual(['relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit']);
-  expect(BENCH_ROWS.slice(-4)).toEqual(['terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128']);
-  expect(BENCH_ROWS.at(-1)).toBe('slice.caves128');
+test('`BENCH_ROWS` ends `\'relight.edit\', \'persist.flush\', \'paste.max\', \'paste.maxLit\'`, then SP6a §10.5\'s `\'terrain.caves.warm\', \'carver.paths\', \'mesh.xray\', \'slice.caves128\'`, then SP6b §12.5\'s `\'cull.walk.rd12\', \'cull.walk.rd16\'` (SP5b §6.2 appends one flush\'s synchronous part, SP5c §10.3 the two maximum pastes, SP6a §10.5 the streaming T, the carver paths, the X-ray pass and the caves slice, SP6b D25 one full cave-culling walk at RD 12 and RD 16, measured last)', () => {
+  expect(BENCH_ROWS.slice(-10, -6)).toEqual(['relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit']);
+  expect(BENCH_ROWS.slice(-6, -2)).toEqual(['terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128']);
+  // SP6b §12.5 (D25's culling checkpoint): after slice.caves128, so the region they walk (generated and meshed on four
+  // threads before them) heats nothing the absolute gates measure.
+  expect(BENCH_ROWS.slice(-2)).toEqual(['cull.walk.rd12', 'cull.walk.rd16']);
 });
 
 test('test/baselines.json records every bench row, so none is silently ungated', () => {

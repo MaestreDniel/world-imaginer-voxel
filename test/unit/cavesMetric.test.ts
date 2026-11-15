@@ -1310,7 +1310,7 @@ describe('the caves metric by group (SP6b spec §13 L4: `METRICS_CAVE_GROUPS`)',
       'C9:entrancesMax|thinRoof:C9.default',
       'C1:caveHeavyMin|caveHeavyMax:C1.caveHeavy',
       'B3:zonePeriodicDip:B3.zones',
-      'R3:wronglyCulled|popIn:R3',
+      'R3:wronglyCulled|popIn|culledUnderground:R3',
     ]);
     expect(coverageErrors(calls)).toEqual([]);
   });

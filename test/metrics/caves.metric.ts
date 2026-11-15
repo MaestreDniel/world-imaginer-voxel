@@ -57,7 +57,8 @@ import { THRESHOLDS } from '../thresholds';
  * - the biomes group (Task 39): R3 (SP6b spec §12.4, D22), cave culling's walk against the raycast reference over the
  *   job's regions (`cave_heavy`'s on quick and full, and the biome region), read again from their cached dumps
  *   (`r3Region`, `test/harness/cull.ts`): `R3.wronglyCulled` over `r3Poses`' poses, `R3.popIn` over `r3Paths`' five
- *   paths on the biome region, with the per-pose record in `.out/R3.poses.json`.
+ *   paths on the biome region, `R3.culledUnderground` pooled over the underground poses (gated from D25's culling
+ *   checkpoint, Task 40), with the per-pose record in `.out/R3.poses.json`.
  *
  * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
  * - `carverReference`: over every region of the run's groups (the preset regions included), the voxels of the region
@@ -1017,12 +1018,13 @@ if (BIOMES_GROUP) {
      * `R3.wronglyCulled` and `R3.popIn` (SP6b spec §12.4; master :1538; both max 0, every tier, holding by §8.2's
      * construction): the seen sections the culler does not draw once each pose's walk has settled, summed over the
      * tier's poses (fast 8, quick 32, full 64); the seen sections the draw rule hides frame by frame over the five
-     * paths, summed. Recorded: per pose its counts (`.out/R3.poses.json`); the culled share of non-empty sections
-     * (`culledUnderground`, 1 − drawn / non-empty pooled over the underground poses, gated after D25's culling
-     * checkpoint, Task 40), its p10 and median per underground pose, the surface poses' pooled share; the walk's
-     * over-draw (stamped / seen, pooled over the poses a walk culls); the pops per walk (median, max).
+     * paths, summed. `R3.culledUnderground` (§12.4-§12.5, min 0.5, every tier, gated from D25's culling checkpoint,
+     * Task 40): the culled share of non-empty sections, 1 − drawn / non-empty pooled over the underground poses.
+     * Recorded: per pose its counts (`.out/R3.poses.json`); the culled share's p10 and median per underground pose, the
+     * surface poses' pooled share; the walk's over-draw (stamped / seen, pooled over the poses a walk culls); the pops
+     * per walk (median, max).
      */
-    metricTest('R3', ['wronglyCulled', 'popIn'], async () => {
+    metricTest('R3', ['wronglyCulled', 'popIn', 'culledUnderground'], async () => {
       const run = await measureR3();
       const under = run.poses.filter((p) => p.underground);
       const surface = run.poses.filter((p) => p.kind === 'surface');

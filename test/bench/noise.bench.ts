@@ -44,11 +44,13 @@ import { fluidDepths, meshFluid } from '../../src/mesh/fluid';
 import { meshSolid, type MeshOptions } from '../../src/mesh/greedy';
 import type { NeighborhoodReader } from '../../src/world/store/api';
 import { copyLightRegion, copyPaddedSection } from '../../src/world/store/padded';
-import { CAVE_KIND, PART_BUDGET, REQUEST_BUDGET } from '../../src/core/constants';
+import { CAVE_KIND, caveKindOf, PART_BUDGET, REQUEST_BUDGET } from '../../src/core/constants';
 import { caveReadersOf, nearestCave, tagColumn } from '../../src/gen/caves/tags';
 import { carverParamsOf, carverPath, type CarverKind } from '../../src/gen/caves/carvers';
 import { carverCacheOf } from '../../src/gen/caves/carverCache';
 import { meshXray } from '../../src/mesh/xray';
+import { newCaveWalk, setColumnConn, startWalk, stepWalk } from '../../src/render/culling/caveCulling';
+import { BIOME_SCAN_REGION } from '../../src/metrics/sp6bGoldens';
 import { fillDensityColumn } from '../../src/gen/density/bounds';
 import type { Params } from '../../src/core/params/schema';
 import { sliceCostOf } from '../../src/gen/inspect/fieldSlice';
@@ -58,6 +60,7 @@ import { DEFAULT_MAP_STATE, openMapSession, type MapState } from '../../src/ui/m
 import { pasteLitBlock, pasteMaxBlock, type PasteBlock } from '../../src/ui/world/pasteBlocks';
 import { capDensityTree, capSurfaceRules } from '../harness/capTrees';
 import { persistFlushFixture } from '../harness/persistFixture';
+import { genRegion } from '../harness/region';
 import { PART_WORST_LEAVES, partWorstParams } from '../harness/sliceTrees';
 import {
   absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, CARVER_PATH_SOURCES, D31_LIT_P50_MAX_MS, D31_MAX_P99_MAX_MS, gateFailures,
@@ -77,6 +80,8 @@ const GENKEY = genKey;
 const CARVER_PATH = carverPath;
 const MESH_XRAY = meshXray;
 const CAVE_BIOMES = columnCaveBiomes;
+const START_WALK = startWalk;
+const STEP_WALK = stepWalk;
 const BASELINE_PATH = fileURLToPath(new URL('../baselines.json', import.meta.url));
 const N = 4096;
 let sink = 0;
@@ -726,6 +731,73 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   const cRanges = poolOfOne(DEFAULTS, cSpec);
   const cRun = await measure('slice.caves128', 1, () => { sink += slice(DEFAULTS, cSpec, cRanges); }, 9);
 
+  // SP6b §12.5 (D25's culling checkpoint): cull.walk.rd12 and cull.walk.rd16 — one full walk of cave culling (§8.2:
+  // `startWalk`, then `stepWalk` with no pop budget until the queue empties) from a cave pose, over the discs'
+  // `connectivity15` as the mesh job computes it (`genRegion` up to 'MESH' on four threads: T, D, L, then each
+  // column's mesh payload, the staging's connectivity). One window of 36 × 36 chunks centred on the biome region's centre
+  // (seed '42', default profile; RD 16's disc is 33 columns wide, 35 with the meshing ring) is generated once, before
+  // the rows and outside their timing, and measured last so its heat reaches no gated row. cull.walk.rd12's walk holds
+  // the biome region's 32 × 32 columns (`BIOME_SCAN_REGION`, inside the window; a column is the same whichever region
+  // generates it, DT1), whose middle holds RD 12's 25-column disc; cull.walk.rd16's holds the whole window. The pose is
+  // the first tagged cave voxel (air, no fluid, at least 16 below the pre-cave top) of a spiral over the columns from
+  // the biome region's centre column, each column's positions in order, each from 16 below its top downwards. Each call
+  // starts a new walk (a new id, so nothing is cleared) on the same connectivity, so a re-run needs no reset; every disc
+  // column is revealed. 256 timed walks after tinybench's warm-up.
+  const CULL_WINDOW = 36;
+  const [brx, brz] = BIOME_SCAN_REGION;
+  const cullCx = brx + 16, cullCz = brz + 16;
+  const cullWin = await genRegion({
+    seed: '42', params: resolveProfile('default'), cx0: cullCx - CULL_WINDOW / 2, cz0: cullCz - CULL_WINDOW / 2, w: CULL_WINDOW, h: CULL_WINDOW,
+    upTo: 'MESH', order: 'spiral', threads: 4, workerDir: 'regionWorker-bench',
+  });
+  const cv = cullWin.view;
+  let cullPose: readonly [number, number, number] | null = null;
+  for (const [dx, dz] of spiralCells(8)) {
+    for (let p = 0; p < 256 && cullPose === null; p++) {
+      const x = 16 * (cullCx + dx) + (p & 15), z = 16 * (cullCz + dz) + (p >> 4);
+      for (let y = cv.preCaveTop(x, z) - 16; y >= -63; y--) {
+        if (caveKindOf(cv.tag(x, y, z)) !== 0 && cv.block(x, y, z) === AIR && cv.fluid(x, y, z) === NO_FLUID) {
+          cullPose = [x, y, z];
+          break;
+        }
+      }
+    }
+    if (cullPose !== null) break;
+  }
+  if (cullPose === null) throw new Error('cull.walk: no cave pose near the biome region\'s centre');
+  const s0x = Math.floor(cullPose[0] / 16), s0y = Math.floor((cullPose[1] + 64) / 16), s0z = Math.floor(cullPose[2] / 16);
+  const cullRow = async (name: string, rd: number, cx0: number, cz0: number, size: number) => {
+    const walk = newCaveWalk();
+    for (let k = 0; k < size; k++) {
+      for (let i = 0; i < size; i++) {
+        const m = cv.mesh(cx0 + i, cz0 + k);
+        if (m === null) throw new Error(`${name}: column (${cx0 + i}, ${cz0 + k}) has no mesh payload`);
+        setColumnConn(walk, (cx0 + i) * 65536 + (cz0 + k), cx0 + i, cz0 + k, m.connectivity);
+      }
+    }
+    const r2 = (rd + 0.5) * (rd + 0.5);
+    let disc = 0;
+    for (let dz = -rd; dz <= rd; dz++) {
+      for (let dx = -rd; dx <= rd; dx++) {
+        if (dx * dx + dz * dz > r2) continue;
+        disc++;
+        const cx = s0x + dx, cz = s0z + dz;
+        if (cx < cx0 || cx >= cx0 + size || cz < cz0 || cz >= cz0 + size) throw new Error(`${name}: disc column (${cx}, ${cz}) outside the walk's columns`);
+      }
+    }
+    const inRange = (cx: number, cz: number): boolean => (cx - s0x) * (cx - s0x) + (cz - s0z) * (cz - s0z) <= r2;
+    const revealed = (): boolean => true;
+    const run = await measure(name, 1, () => {
+      START_WALK(walk, s0x, s0y, s0z, inRange);
+      if (!STEP_WALK(walk, Number.POSITIVE_INFINITY, inRange, revealed)) throw new Error(`${name}: the walk did not complete`);
+    }, 256);
+    let stamped = 0;
+    for (let c = 0; c < walk.stamp.length; c++) if (walk.stamp[c] === walk.walkId) stamped++;
+    return { run, disc, stamped };
+  };
+  const cull12 = await cullRow('cull.walk.rd12', 12, brx, brz, 32);
+  const cull16 = await cullRow('cull.walk.rd16', 16, cv.cx0, cv.cz0, CULL_WINDOW);
+
   // SP6a D25's prototype (Task 14; spec §1.6, §1.4, §3.3): figures printed beside the rows, measured after every row and
   // outside their timing. On terrain.real's first D25_COLUMNS candidate columns, each on a GenContext and a store of
   // their own (so no cache is warm from the rows): the column's T time (fillColumnT, as the row runs it) and the cave
@@ -1007,6 +1079,12 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   console.log(`carver.paths ${ms(pathsRun)} (one worm, one ravine and one underground worm per call; each alone: ${perKind.join('; ')})`);
   console.log(`mesh.xray ${ms(xrayRun)} (meshXray alone on mesh.section's ${meshSections.length} sections; ${xc} calls, ${xrayQuads} pass-3 quads; mesh.section with pass 3: p50 ${meshRun.latency.p50.toFixed(3)} ms)`);
   console.log(`slice.caves128 ${ms(cRun)} (${cRanges.length} parts at pool size 1: ${JSON.stringify(cRanges)}; slice.vertical128 ${ms(vRun)})`);
+  for (const [name, c] of [['cull.walk.rd12', cull12], ['cull.walk.rd16', cull16]] as const) {
+    console.log(
+      `${name} ${ms(c.run)} (one full walk from the cave pose (${cullPose.join(', ')}), section (${s0x}, ${s0y}, ${s0z}); ${c.disc} disc columns, `
+      + `${24 * c.disc} sections, ${c.stamped} stamped; the window generated and meshed in ${(cullWin.timings.totalMs / 1000).toFixed(1)} s)`,
+    );
+  }
   // finder.nearest (SP6a spec §7.3, §10.5; Task 44): recorded, no gate, not in BENCH_ROWS. The Caves tab's search of each
   // kind with a button from L10's hover point at seed 42 (L13's start), cold (a fresh context per search, as a worker's
   // search from a new place), with the job's 2 s budget and nothing loaded; the worst kind's median of FINDER_RUNS, over

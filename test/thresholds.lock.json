@@ -1,5 +1,5 @@
 {
-  "sha256": "be58ec132f04c23082642df4f4b545c5dfbada59997d877364ab4cd701a15381",
+  "sha256": "18a9d244d49447338e8649663f136db39c08e06946a8e683e1068e2216a7ae30",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -867,6 +867,10 @@
         }
       },
       "R3": {
+        "culledUnderground": {
+          "activeFrom": "SP6b",
+          "min": 0.5
+        },
         "popIn": {
           "activeFrom": "SP6b",
           "max": 0

@@ -146,7 +146,9 @@ export function spiralCells(n: number): Array<readonly [number, number]> {
  * (the kill criterion's hand-inlined default expression over `density.corner`'s corners, test/bench/inlined.ts) right
  * after `density.corner`, where it is measured, and appends `slice.caves128` (§7.4: the horizontal 128² `caves` slice,
  * measured last). SP6b §12.5 (D25) inserts `caveBiome.column` (T's cave-biome step alone: the column pass and the picks
- * at T's tagged voxels) right after `terrain.real`, where it is measured.
+ * at T's tagged voxels) right after `terrain.real`, where it is measured, and appends `cull.walk.rd12` and
+ * `cull.walk.rd16` (D25's culling checkpoint: one full walk of cave culling, §8.2, from a cave pose over the RD 12 and
+ * RD 16 discs' `connectivity15` as meshed in Node), measured last, after the region they walk is generated and meshed.
  */
 export const BENCH_ROWS = [
   'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
@@ -155,7 +157,7 @@ export const BENCH_ROWS = [
   'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'caveBiome.column', 'surface.column',
   'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
   'light.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
-  'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128',
+  'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128', 'cull.walk.rd12', 'cull.walk.rd16',
 ] as const;
 
 export interface BenchKernel {
