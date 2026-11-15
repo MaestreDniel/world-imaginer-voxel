@@ -165,7 +165,8 @@
  * C1's, C6's and C7's threshold cells move here from the SP6a describe, ruling P27) and item 5 (SP12's line); its
  * follow-up with the user's answers (rulings U4-U6) adds B3's zone part (`zonePeriodicDip`) and C7's `bottomFlatRatio`
  * (quick and full) to those rows, and item 14 (§3.15's cave_heavy row with the tuned cheese offset, cross-checked
- * against `DEFAULTS.caves` and `resolveProfile('cave_heavy')`).
+ * against `DEFAULTS.caves` and `resolveProfile('cave_heavy')`). Cave culling's walk (Task 37) adds item 6's
+ * `render/culling/` row to `SP6B_MODULES` (`caveCulling.ts`, frustum culling being three's per instance).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2529,6 +2530,7 @@ describe('master spec amendments (SP6b §15)', () => {
   const SP6B_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+biomes\/registry\.ts /, 'caveRegistry.ts cavePicker.ts (SP6b)', 'src/gen/biomes/caveRegistry.ts'],
     [/^\s+biomes\/registry\.ts /, 'cavePicker.ts', 'src/gen/biomes/cavePicker.ts'],
+    [/^\s+lod\/rings\.ts /, 'caveCulling.ts (SP6b; frustum culling is three\'s per instance)', 'src/render/culling/caveCulling.ts'],
   ];
 
   test('§1 names each SP6b module in its entry, which exists (SP6b spec §15 item 6)', () => {

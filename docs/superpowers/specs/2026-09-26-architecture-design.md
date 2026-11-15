@@ -179,7 +179,7 @@ world-imaginer-voxel/          (repository root)
                                 and bench behind `?spike=batch`)
       materials/index.ts uniforms.ts glsl/*.glsl.ts   THE ONLY module that creates ShaderMaterial/GLSL (TSL port seam) (SP5c: the ghost material, a GHOST define) (SP6a: the X-ray material, glsl/xray.glsl.ts)
       lightmap.ts sky.ts clouds.ts shadows.ts textureArray.ts tintTexture.ts colormap.ts
-      lod/rings.ts fillMask.ts  culling/frustum.ts caveCulling.ts
+      lod/rings.ts fillMask.ts  culling/caveCulling.ts (SP6b; frustum culling is three's per instance)
     player/fly.ts keymap.ts input.ts walk.ts physics.ts raycast.ts interaction.ts hotbar.ts sprintTap.ts (SP5a)   (SP4a: fly.ts, the
                                 spectator controller; keymap.ts, the key map as data; input.ts, the DOM input; SP5a: sprintTap.ts,
                                 the double-tapped W's sprint, since Ctrl+W closes the tab)
