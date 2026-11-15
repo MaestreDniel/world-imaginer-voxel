@@ -40,6 +40,13 @@ import { XRAY_ORDER } from './selection';
  * at its next upload, so a long session with the X-ray off holds no growing range list. Before Task 52, the GPU ran
  * the X-ray vertex shader over every arena's whole range each frame only to collapse it (spec D23): at RD 12, 892,634
  * triangles beside the opaque 1,835,658 on Firefox.
+ *
+ * SP6b (spec §7.4, §8.4, D24): while the X-ray is on the terrain and water arenas (passes 0-2) draw nothing: their draw
+ * range is (0, 0), never `visible = false`, so three keeps listing and uploading them (a draw call is still issued, as
+ * above) and their rows keep being written; the materials' vertex collapse stays as a second guard. Every draw-range
+ * write goes through one function, `applyDrawRange`, which derives the range from the X-ray's state and the high-water
+ * mark, so no span writer (the upload's first row, a compaction, a growth, the last row's release) can undo it for a
+ * frame; a reveal or a hide writes no draw range. `rowVisible` reads the high-water mark, not the draw range.
  */
 
 /** A region's half extent in blocks: 8 columns across, 24 sections (384 blocks) high. */
@@ -224,7 +231,8 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
   let needPass = 0;
   let needVertices = 0;
   let needIndices = 0;
-  // The X-ray's state (`setXray`): off, the X-ray arenas are invisible (three skips them: no draw call).
+  // The X-ray's state (`setXray`): off, the X-ray arenas are invisible (three skips them: no draw call); on, the terrain
+  // and water arenas draw nothing (`applyDrawRange`).
   let xrayShown = false;
 
   const passOf = (c: Column, r: number): number => c.p.rows[r * ROW_INTS + 1]!;
@@ -315,11 +323,20 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
       a.box.union(s.box);
     }
   };
+  /**
+   * The arena's draw range, its one writer (SP6b spec §8.4): (0, 0) for a terrain or water arena while the X-ray is on
+   * (D24), else (0, the high-water mark). An X-ray arena keeps its high-water range; its toggle is `mesh.visible`.
+   * Region culling (Task 43) joins as a third input.
+   */
+  const applyDrawRange = (a: Arena): void => {
+    const drawsNothing = xrayShown && a.mesh.userData['pass'] !== MESH_PASS_XRAY;
+    a.mesh.geometry.setDrawRange(0, drawsNothing ? 0 : a.highWater);
+  };
   const setHighWater = (a: Arena): void => {
     let hw = 0;
     for (const s of a.spans) hw = Math.max(hw, s.i0 + s.iN);
     a.highWater = hw;
-    a.mesh.geometry.setDrawRange(0, hw);
+    applyDrawRange(a);
   };
 
   /** A new arena of the pass's reservation in the column's region (structural). */
@@ -477,7 +494,7 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
         a.spans.push(s);
         if (i0 + needIndices > a.highWater) {
           a.highWater = i0 + needIndices;
-          a.mesh.geometry.setDrawRange(0, a.highWater);
+          applyDrawRange(a);
         }
       }
       const vertexStart = p.rows[o + 2]!;
@@ -619,9 +636,11 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
     },
     setXray(on) {
       xrayShown = on;
+      // The X-ray arenas' toggle; the terrain and water arenas' draw ranges re-derived (D24).
       for (let i = 0; i < built.length; i++) {
         const a = built[i]!;
         if (a.mesh.userData['pass'] === MESH_PASS_XRAY) a.mesh.visible = on;
+        else applyDrawRange(a);
       }
     },
     sortTranslucent(camX, camY, camZ) {

@@ -2879,4 +2879,14 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(xray, 'no X-ray item in §4.5\'s pass order').toBeDefined();
     expect(xray).toContain('Its walls are coloured by cave kind (`xrayPalette[kind]`) or by cave biome (`xrayBiomePalette[biome]`, the `xray` word\'s `biome` bits), switched by one uniform, `xrayColorMode`, with no remesh; the film keeps its own colour in both (amended by SP6b).');
   });
+
+  test('§4.5: the terrain and water passes draw nothing while the X-ray is on (SP6b spec §15 item 16)', () => {
+    const at = text.indexOf('### 4.5 Render structure');
+    const s45 = text.slice(at, text.indexOf('### 4.6 ', at));
+    const order = s45.slice(s45.indexOf('**Pass order:**'), s45.indexOf('**Draw calls:**'));
+    const xray = order.split('\n').find((l) => l.startsWith('8. The X-ray pass (SP6a):')) ?? '';
+    expect(xray).toContain('(in the transparent list after every translucent region and before the ghost; the sky dome and clouds are hidden)');
+    expect(xray).toContain('While it is on the terrain and water passes draw nothing: RegionBatch\'s opaque, cutout and translucent batches list no instance (a zero multi-draw count in their `onBeforeRender`) and RegionMesh\'s terrain and water arenas take the draw range (0, 0) from its one draw-range writer, `applyDrawRange`, never `visible = false`; their rows keep uploading, and the vertex collapse stays as a second guard (amended by SP6b; SP6a collapsed them).');
+    expect(xray).not.toContain('the terrain and water passes collapse');
+  });
 });

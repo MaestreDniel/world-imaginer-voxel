@@ -390,7 +390,7 @@ describe('RegionMesh (SP4a spec §6.2, D2; SP4b spec §4.3)', () => {
     expect((x.geometry.getAttribute('position') as BufferAttribute).version).toBeGreaterThan(version);
     expect(x.geometry.drawRange.count).toBe(42);
     expect(listed()).toEqual([o]);
-    // On: listed (a draw call over (0, 42)); the terrain's arena still drawn.
+    // On: listed (a draw call over (0, 42)); the terrain's arena still listed (over (0, 0) while the X-ray is on, SP6b D24).
     r.setXray(true);
     expect(x.visible).toBe(true);
     expect(listed()).toEqual([o, x]);
@@ -756,6 +756,114 @@ describe('RegionMesh\'s arena (SP4b spec §4.3, D15)', () => {
     step(fakePayload(5, 0, big(12)), 'grow');
     expect(r.isRevealed(5, 0)).toBe(true);
     r.dispose();
+  });
+});
+
+describe('RegionMesh\'s draw range under the X-ray (SP6b spec §7.4, §8.4, D24)', () => {
+  test('X on alone puts the terrain and water arenas at (0, 0) in the same call; every writer (an upload taking a new span, a release, a compaction, a growth) and a reveal during the X-ray leave them there and the X-ray arenas visible over their high water; after X off each arena is back at (0, high water); `rowVisible` ignores the X-ray state', () => {
+    const make = (): SectionRenderer => createSectionRenderer('mesh', system('mesh'));
+    // `r` turns the X-ray on; its twin `t`, driven identically with the X-ray off, holds each arena's high water.
+    const r = make();
+    const t = make();
+    const both = (f: (s: SectionRenderer) => void): void => {
+      f(r);
+      f(t);
+    };
+    const range = (m: Mesh): [number, number] => [m.geometry.drawRange.start, m.geometry.drawRange.count];
+    const twinCount = (pass: number): number => arenaOf(t, pass)!.geometry.drawRange.count;
+    const probe = (s: SectionRenderer): RevealProbe => s.probe(createRevealProbe());
+    const xrayCheck = (step: string): void => {
+      for (const pass of [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT]) {
+        const m = arenaOf(r, pass)!;
+        expect(range(m), `${step}: pass ${pass}`).toEqual([0, 0]);
+        // Never hidden by visibility: three keeps listing and uploading it.
+        expect(m.visible, `${step}: pass ${pass}`).toBe(true);
+      }
+      const x = arenaOf(r, MESH_PASS_XRAY)!;
+      expect(x.visible, `${step}: X-ray`).toBe(true);
+      expect(range(x), `${step}: X-ray`).toEqual(range(arenaOf(t, MESH_PASS_XRAY)!));
+      expect(range(x)[1], `${step}: X-ray`).toBeGreaterThan(0);
+      // rowVisible reads reveals, not the X-ray: a revealed column of terrain and X-ray rows is never partial.
+      expect(probe(r), `${step}: probe`).toEqual(probe(t));
+      expect(probe(r).partial, `${step}: probe`).toBe(0);
+    };
+    const PASSES_ALL = [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY];
+    const xray = (sy: number): FakeRow => ({ sy, pass: 3, quads: 1 + (sy % 3) });
+    // A, B, C, D of 8, 10, 6 and 8 opaque rows fill the opaque reservation; A and D hold water, cutout and X-ray rows.
+    both((s) => {
+      s.stage(fakePayload(0, 0, [...big(8), water(0), { sy: 0, pass: 1, quads: 1 }, xray(0)]), 1);
+      s.stage(fakePayload(1, 0, [...big(10), xray(1)]), 1);
+      s.stage(fakePayload(2, 0, big(6)), 1);
+      s.stage(fakePayload(3, 0, [...big(8), water(3, 2), { sy: 3, pass: 1, quads: 2 }, xray(3)]), 1);
+      pumpAll(s);
+    });
+    for (const pass of PASSES_ALL) expect(range(arenaOf(r, pass)!)).toEqual(range(arenaOf(t, pass)!));
+    expect(twinCount(MESH_PASS_OPAQUE)).toBe(32 * ROW_I);
+
+    // X on alone: the same call.
+    r.setXray(true);
+    xrayCheck('X on');
+
+    // An upload taking new spans (water, cutout and X-ray rows of a new column), one row per pump: each raises its
+    // arena's high water; the reveal comes with the last row.
+    const raised = [MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT].map(twinCount);
+    both((s) => s.stage(fakePayload(5, 0, [water(2, 2), { sy: 2, pass: 1, quads: 1 }, xray(2)]), 1));
+    for (let k = 0; k < 2; k++) {
+      both((s) => expect(s.pump(fakeGate(1), 0, 0, 0)).toBe(1));
+      expect(r.isRevealed(5, 0)).toBe(false);
+      xrayCheck(`upload ${k}`);
+    }
+    expect([MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT].map(twinCount).map((n, k) => n - raised[k]!)).toEqual([6, 12]);
+    both((s) => pumpAll(s));
+    expect(r.isRevealed(5, 0)).toBe(true);
+    xrayCheck('reveal');
+
+    // A release of each pass's highest span (D's last row frees its ranges and lowers the high water).
+    both((s) => {
+      s.remove(3, 0);
+      pumpAll(s);
+    });
+    expect(twinCount(MESH_PASS_OPAQUE)).toBe(24 * ROW_I);
+    xrayCheck('release');
+
+    // A's release frees 8 rows at 0 beside the 8 at 24: E's 12 rows fit in neither, so its first pump compacts the
+    // arena; a gate with no rows makes the compaction the pump's only write.
+    both((s) => {
+      s.remove(0, 0);
+      pumpAll(s);
+      s.stage(fakePayload(4, 0, big(12)), 1);
+      expect(s.pump(fakeGate(0), 0, 0, 0)).toBe(0);
+      expect(counts(s).lastStructural).toBe('compact');
+    });
+    expect(twinCount(MESH_PASS_OPAQUE)).toBe(16 * ROW_I);
+    xrayCheck('compaction');
+    both((s) => pumpAll(s));
+    expect(twinCount(MESH_PASS_OPAQUE)).toBe(28 * ROW_I);
+    xrayCheck('compaction, then E');
+
+    // 4 rows free (12.5 %): G's 5 rows grow the arena into a new geometry, again the pump's only write.
+    const geometry = arenaOf(r, MESH_PASS_OPAQUE)!.geometry;
+    both((s) => {
+      s.stage(fakePayload(6, 0, big(5)), 1);
+      expect(s.pump(fakeGate(0), 0, 0, 0)).toBe(0);
+      expect(counts(s).lastStructural).toBe('grow');
+    });
+    expect(arenaOf(r, MESH_PASS_OPAQUE)!.geometry).not.toBe(geometry);
+    xrayCheck('growth');
+    both((s) => pumpAll(s));
+    expect(r.isRevealed(6, 0)).toBe(true);
+    xrayCheck('growth, then G');
+
+    // X off: every arena back at (0, its high water), the X-ray arena invisible again; on again: (0, 0) at once.
+    r.setXray(false);
+    for (const pass of PASSES_ALL) expect(range(arenaOf(r, pass)!), `X off: pass ${pass}`).toEqual(range(arenaOf(t, pass)!));
+    expect(twinCount(MESH_PASS_OPAQUE)).toBe(33 * ROW_I);
+    expect(arenaOf(r, MESH_PASS_XRAY)!.visible).toBe(false);
+    expect(visibleIndices(r.root)).toBe(visibleIndices(t.root));
+    r.setXray(true);
+    xrayCheck('X on again');
+    r.dispose();
+    t.dispose();
   });
 });
 

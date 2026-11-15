@@ -39,6 +39,10 @@ import { XRAY_ORDER } from './selection';
  * nothing: their `onBeforeRender` leaves three's multi-draw count at 0 instead of culling and listing every instance
  * (0.19-0.26 ms of main thread a frame at RD 12, 48i), and they stay in the scene, so three keeps uploading their rows
  * and the first toggle uploads nothing.
+ *
+ * SP6b (spec §7.4, D24): the opaque, cutout and translucent batches mirror them, drawing nothing while the X-ray is on
+ * (`terrainBeforeRender`: a zero multi-draw count instead of three's cull and list), their rows still uploading; the
+ * materials' vertex collapse stays as a second guard, and `rowVisible` reads neither.
  */
 
 /** Instances a batch starts with: a mountain region holds up to 64 columns × 24 opaque rows. */
@@ -177,6 +181,17 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
     }
     BatchedMesh.prototype.onBeforeRender.call(this, renderer, scene, camera, geometry, material, group);
   };
+  /**
+   * A terrain or water batch's `onBeforeRender` (SP6b spec §7.4, D24): the mirror of `xrayBeforeRender`, a zero
+   * multi-draw count while the X-ray is on (its rows keep uploading: the batch stays in the scene), three's own after.
+   */
+  const terrainBeforeRender: BatchedMesh['onBeforeRender'] = function (this: BatchedMesh, renderer, scene, camera, geometry, material, group) {
+    if (xrayShown) {
+      (this as unknown as { _multiDrawCount: number })._multiDrawCount = 0;
+      return;
+    }
+    BatchedMesh.prototype.onBeforeRender.call(this, renderer, scene, camera, geometry, material, group);
+  };
 
   const place = (bp: BatchPass): void => {
     bp.mesh.position.set(bp.rx * REGION_XZ - origin[0]!, -64 - origin[1]!, bp.rz * REGION_XZ - origin[2]!);
@@ -278,7 +293,7 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
           if (pass === MESH_PASS_XRAY) {
             mesh.renderOrder = XRAY_ORDER;
             mesh.onBeforeRender = xrayBeforeRender;
-          }
+          } else mesh.onBeforeRender = terrainBeforeRender;
           mesh.boundingSphere = new Sphere(new Vector3(REGION_XZ / 2, REGION_Y / 2, REGION_XZ / 2), Math.hypot(REGION_XZ / 2, REGION_Y / 2, REGION_XZ / 2));
           mesh.boundingBox = new Box3(new Vector3(0, 0, 0), new Vector3(REGION_XZ, REGION_Y, REGION_XZ));
           bp = { mesh, rx: region.rx, rz: region.rz, liveVertices: 0, liveIndices: 0, unculled: false, lastWrite: pumpNo };

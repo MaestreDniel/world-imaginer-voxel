@@ -517,6 +517,65 @@ describe('RegionBatch (SP4b spec §4.2, D14)', () => {
     r.dispose();
   });
 
+  test('while the X-ray is on the opaque, cutout and translucent batches draw nothing (a zero multi-draw count after `onBeforeRender`, no per-instance cull or sort) and their rows keep uploading; off, three\'s own `onBeforeRender` lists them (SP6b spec §7.4, D24)', () => {
+    const r = make();
+    r.stage(fakePayload(0, 0, [opaque(4), { sy: 4, pass: 1, quads: 2 }, water(5), { sy: 4, pass: 3, quads: 2 }]), 1);
+    pumpAll(r);
+    const terrain = [0, 1, 2].map((pass) => batchOf(r, pass)!);
+    const x = batchOf(r, MESH_PASS_XRAY)!;
+    const camera = new PerspectiveCamera(90, 1, 0.1, 10_000);
+    camera.position.set(64, 600, 64);
+    camera.lookAt(64, 0, 64);
+    camera.updateMatrixWorld();
+    r.root.updateMatrixWorld(true);
+    const drawCount = (b: BatchedMesh): number => (b as unknown as { _multiDrawCount: number })._multiDrawCount;
+    /** What three's `renderObject` calls before drawing the batch. */
+    const beforeRender = (b: BatchedMesh): void => {
+      b.onBeforeRender(null as never, null as never, camera, b.geometry, b.material as Material, null as never);
+    };
+    const cull = vi.spyOn(BatchedMesh.prototype, 'onBeforeRender');
+    // Off (the page's start): three's own list, one instance per batch.
+    for (const b of terrain) beforeRender(b);
+    expect(cull).toHaveBeenCalledTimes(3);
+    expect(terrain.map(drawCount)).toEqual([1, 1, 1]);
+    // On: nothing listed and three's per-instance pass never runs for them; the X-ray batch is three's.
+    r.setXray(true);
+    cull.mockClear();
+    for (const b of terrain) beforeRender(b);
+    expect(cull).not.toHaveBeenCalled();
+    expect(terrain.map(drawCount)).toEqual([0, 0, 0]);
+    beforeRender(x);
+    expect(cull).toHaveBeenCalledTimes(1);
+    expect(drawCount(x)).toBe(1);
+    // Still in the scene and visible: a column staged while it is on uploads and reveals its rows into them.
+    for (const b of terrain) expect([b.parent, b.visible]).toEqual([r.root, true]);
+    const before = terrain.map((b) => visibleIndices(b));
+    r.stage(fakePayload(1, 0, [opaque(6, 3), { sy: 6, pass: 1, quads: 1 }, water(6, 2)]), 1);
+    pumpAll(r);
+    expect(r.isRevealed(1, 0)).toBe(true);
+    expect(terrain.map((b, k) => visibleIndices(b) - before[k]!)).toEqual([18, 6, 12]);
+    cull.mockClear();
+    for (const b of terrain) beforeRender(b);
+    expect(cull).not.toHaveBeenCalled();
+    expect(terrain.map(drawCount)).toEqual([0, 0, 0]);
+    // Off: three's own list again, the new rows included.
+    r.setXray(false);
+    cull.mockClear();
+    for (const b of terrain) beforeRender(b);
+    expect(cull).toHaveBeenCalledTimes(3);
+    expect(terrain.map(drawCount)).toEqual([2, 2, 2]);
+    // A batch created while the X-ray is on draws nothing at once.
+    r.setXray(true);
+    r.stage(fakePayload(9, 0, [opaque(2)]), 1);
+    pumpAll(r);
+    const o1 = batchOf(r, 0, 1, 0)!;
+    cull.mockClear();
+    beforeRender(o1);
+    expect(cull).not.toHaveBeenCalled();
+    expect(drawCount(o1)).toBe(0);
+    r.dispose();
+  });
+
   test('a column whose pass-3 rows exceed the pass-3 reservation makes columnNeed ask for \'grow\' (or \'optimize\') before its first row, so the pump takes it as its structural operation', () => {
     const r = make();
     // The region's pass-3 batch exists (one small row), then a column with 5 × 4,096 = 20,480 X-ray vertices.

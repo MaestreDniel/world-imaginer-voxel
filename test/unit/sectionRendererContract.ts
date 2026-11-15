@@ -746,7 +746,7 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       s.dispose();
     });
 
-    test('setXray (SP6a, Task 48; Task 52 on RegionMesh) changes no count, byte, revealed index, reveal or probe, on or off; in three\'s render call the X-ray objects draw nothing while it is off (RegionBatch: listed with a zero multi-draw count; RegionMesh: invisible, so not listed, Task 52c) and draw while it is on, and the other passes draw either way', () => {
+    test('setXray (SP6a, Task 48; Task 52 on RegionMesh) changes no count, byte, revealed index, reveal or probe, on or off; in three\'s render call the X-ray objects draw nothing while it is off (RegionBatch: listed with a zero multi-draw count; RegionMesh: invisible, so not listed, Task 52c) and draw while it is on; the other passes draw while it is off and nothing while it is on (SP6b spec §7.4, D24: RegionBatch\'s zero multi-draw count, RegionMesh\'s draw range (0, 0)), their revealed indices unchanged', () => {
       const r = make();
       r.stage(fakePayload(1, 1, [opaque(3), { sy: 3, pass: 3, quads: 2 }, water(4)]), 1);
       pumpAll(r);
@@ -767,12 +767,18 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
         m.onAfterRender(null as never, null as never, camera, m.geometry, m.material as Material, null as never);
         return n;
       };
-      /** `visibleIndices` of `m` as if it were visible: its revealed indices, whatever the X-ray's state. */
+      /**
+       * `visibleIndices` of `m` as if it were visible over its whole index array: its revealed indices, whatever the
+       * X-ray's state (a hidden arena's visibility, a terrain arena's (0, 0) draw range; free index space holds zeros).
+       */
       const revealedIndices = (m: Mesh): number => {
         const visible = m.visible;
+        const { start, count } = m.geometry.drawRange;
         m.visible = true;
+        if (!isBatch(m)) m.geometry.setDrawRange(0, Number.POSITIVE_INFINITY);
         const n = visibleIndices(m);
         m.visible = visible;
+        if (!isBatch(m)) m.geometry.setDrawRange(start, count);
         return n;
       };
       const objects = regionObjects(r.root);
@@ -781,11 +787,12 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
       expect([xray.length, others.length]).toEqual([1, 2]);
       const state = () => ({
         counts: { ...counts(r) }, bytes: r.gpuBytes(), probe: { ...probe(r) },
-        drawn: others.reduce((n, m) => n + visibleIndices(m), 0), xray: revealedIndices(xray[0]!),
+        revealed: others.reduce((n, m) => n + revealedIndices(m), 0), xray: revealedIndices(xray[0]!),
       });
       const before = state();
       expect(before.probe).toMatchObject({ partial: 0, mixed: 0 });
       expect(before.xray).toBeGreaterThan(0);
+      expect(before.revealed).toBe(others.reduce((n, m) => n + visibleIndices(m), 0));
       // Off until called (the page's start).
       expect(xray.map(drawnInCall)).toEqual([0]);
       expect(state()).toEqual(before);
@@ -793,7 +800,7 @@ export function sectionRendererContract(kind: SectionRendererKind): void {
         r.setXray(on);
         expect(state()).toEqual(before);
         expect(drawnInCall(xray[0]!) > 0, `X-ray ${on ? 'on' : 'off'}`).toBe(on);
-        for (const m of others) expect(drawnInCall(m)).toBeGreaterThan(0);
+        for (const m of others) expect(drawnInCall(m) > 0, `pass ${m.userData['pass'] as number}, X-ray ${on ? 'on' : 'off'}`).toBe(!on);
         expect(state()).toEqual(before);
         expect(r.isRevealed(1, 1)).toBe(true);
       }
