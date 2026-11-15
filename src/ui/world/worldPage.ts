@@ -194,7 +194,7 @@ import type { FloatingOrigin } from '../../render/floatingOrigin';
 import type { FrameState } from '../../render/frameState';
 import { NEAR_FLY, NEAR_WALK, createWorldRenderer, type GpuEstimate, type WorldRenderer } from '../../render/renderer';
 import { REPLACED_MAX } from '../../render/ghost';
-import { createSectionRendererCounts, selectSectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
+import { createSectionRendererCounts, selectSectionRenderer, type SectionRenderer, type SectionRendererKind } from '../../render/sectionRenderer';
 import { GHOST_CYAN, REFUSED_RED, SELECTION_YELLOW, outlineBounds } from '../../render/selection';
 import type { CopiedMsg, Edit, FlushedMsg, LoadedMsg, LoadMsg } from '../../workers/protocol';
 import { SIM_THREAD } from '../../world/store/reclaim';
@@ -453,13 +453,15 @@ function voxelValue(store: VoxelStore, x: number, y: number, z: number): number 
  * pool's `findCave` with `CAVE_KIND.entrance`, its default radius and budget), and the main thread's reads of the
  * loaded store that `caveRoute` walks: the cave byte's kind at a voxel of a Published column's final set (0 where the
  * column is not Published or y is outside the world) and whether the voxel collides (`physics.ts`' `solidAt`: false
- * where not Published), each inside a read section.
+ * where not Published), each inside a read section; the culling-off segment's switch, the section renderer's
+ * `setCulling` (SP6b spec §12.6).
  */
 export function benchCaves(o: {
   readonly store: Pick<VoxelStore, 'enterRead' | 'exitRead' | 'final' | 'publishedAt' | 'blockAt' | 'fluidAt'>;
   readonly pool: Pick<WorkerPool, 'findCave'>;
+  readonly sections: Pick<SectionRenderer, 'setCulling'>;
 }): BenchCaveHooks {
-  const { store, pool } = o;
+  const { store, pool, sections } = o;
   return {
     find: (x, y, z) => pool.findCave({ kind: CAVE_KIND.entrance, x, y, z }).promise,
     tagAt(x, y, z) {
@@ -481,14 +483,16 @@ export function benchCaves(o: {
         store.exitRead();
       }
     },
+    setCulling: (on) => sections.setCulling(on),
   };
 }
 
 /**
- * L14's hooks as the bench route composes them (SP6a spec §10.6, D10, D29): X and PageDown through the page's X-ray
- * (`PageXray.action`), the map side by side (`map`: the overlay opened in mode B, whether its tool is mounted, its
- * close), the edit and its refill through the live legs' `set` and `settled`, the RD disc's fill around the camera, the
- * renderer's X-ray draws and vertex bytes of the last frame and the X-ray's radius in force.
+ * L14's hooks as the bench route composes them (SP6a spec §10.6, D10, D29): X, C (SP6b spec §12.6's biome segment) and
+ * PageDown through the page's X-ray (`PageXray.action`), the map side by side (`map`: the overlay opened in mode B,
+ * whether its tool is mounted, its close), the edit and its refill through the live legs' `set` and `settled`, the RD
+ * disc's fill around the camera, the renderer's X-ray draws and vertex bytes of the last frame and the X-ray's radius in
+ * force.
  */
 export function benchXray(o: {
   readonly xray: Pick<PageXray, 'action'>;
@@ -500,6 +504,7 @@ export function benchXray(o: {
 }): BenchXrayHooks {
   return {
     toggle: () => o.xray.action('xray'),
+    colorToggle: () => o.xray.action('xrayColor'),
     bandDown: () => o.xray.action('xrayDown'),
     openMap: () => o.map.open(),
     mapReady: () => o.map.ready(),
@@ -4804,8 +4809,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           },
           save: benchSaving.hooks,
           paste: benchPaste.hooks,
-          // L13 (SP6a spec §10.6): the finder's job over the bench's pool and the store's cave tags for its route.
-          caves: benchCaves({ store, pool: workers }),
+          // L13 (SP6a spec §10.6): the finder's job over the bench's pool and the store's cave tags for its route; the
+          // section renderer's culling switch for its culling-off segment (SP6b spec §12.6).
+          caves: benchCaves({ store, pool: workers, sections }),
           // L14 (SP6a spec §10.6): the page's X-ray, the map side by side, the edit through the live legs' session, RD 16.
           xray: benchXray({
             xray: benchPageXray,

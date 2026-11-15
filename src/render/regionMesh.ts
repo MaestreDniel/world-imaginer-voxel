@@ -56,7 +56,10 @@ import { XRAY_ORDER } from './selection';
  * plan's Spec correction 23), in `sortTranslucent`, the renderer's step after the culler's and before three's render,
  * and every terrain and water arena's range is re-applied then; between such frames no span writer and no reveal
  * changes it. O(arenas × columns × 24) on such a frame, nothing otherwise; no allocation. `rowVisible` ignores it, and
- * the reveal state (the indices) is untouched.
+ * the reveal state (the indices) is untouched. The frame's figures (SP6b spec §8.5, §12.6; ruling P58), written by
+ * `sortTranslucent` into a preallocated pair: the rows of the shown spans in the terrain and water arenas region culling
+ * set to (0, 0) (`culledSections`, counted while any region is culled) and the re-apply's ms on the clock
+ * `createRegionMesh` is given (`cullFilterMs`; none: untimed).
  */
 
 /** A region's half extent in blocks: 8 columns across, 24 sections (384 blocks) high. */
@@ -230,7 +233,8 @@ function arenaGeometry(vertices: number, indices: number): BufferGeometry {
 const scratchSphere = new Sphere();
 const scratchBox = new Box3();
 
-export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
+/** RegionMesh over `materials`; `clock` (ms) times region culling's re-apply (`cullFilterMs`), null leaves it untimed. */
+export function createRegionMesh(materials: MaterialSystem, clock: (() => number) | null = null): SectionRenderer {
   if (materials.variant !== 'mesh') throw new Error(`RegionMesh needs the 'mesh' material variant, got '${materials.variant}'`);
   const materialOf: Record<number, MaterialSystem['terrainOpaque']> = {
     [MESH_PASS_OPAQUE]: materials.terrainOpaque,
@@ -257,6 +261,10 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
   let cullShown = 0;
   let cullDrawAll = true;
   let cullPass = 0;
+  // Whether the last re-apply culled any region, and the frame's figures written by `sortTranslucent`: [the culled
+  // arenas' rows, the re-apply's ms] (a typed array: a double kept in a closure would be boxed on each write).
+  let anyCulled = false;
+  const cullStats = new Float64Array(2);
 
   const passOf = (c: Column, r: number): number => c.p.rows[r * ROW_INTS + 1]!;
 
@@ -376,6 +384,7 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
     cullShown = k.shown;
     cullDrawAll = k.drawAll;
     cullPass++;
+    anyCulled = false;
     for (let i = 0; i < built.length; i++) {
       const a = built[i]!;
       if (a.mesh.userData['pass'] === MESH_PASS_XRAY) continue;
@@ -384,8 +393,20 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
         g.data.cullPass = cullPass;
         g.data.culled = !k.drawAll && !regionDrawn(g, k);
       }
+      if (g.data.culled) anyCulled = true;
       applyDrawRange(a);
     }
+  };
+  /** The rows of the shown spans in the terrain and water arenas of culled regions (`culledSections`). */
+  const culledRows = (): number => {
+    let n = 0;
+    for (let i = 0; i < built.length; i++) {
+      const a = built[i]!;
+      if (a.mesh.userData['pass'] === MESH_PASS_XRAY || !a.region.data.culled) continue;
+      const spans = a.spans;
+      for (let j = 0; j < spans.length; j++) if (spans[j]!.shown) n += spans[j]!.held;
+    }
+    return n;
   };
   const setHighWater = (a: Arena): void => {
     let hw = 0;
@@ -703,14 +724,19 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
       // Judged again at the next frame's re-apply; detached, every region is drawn at once.
       cullShown = -1;
       if (k !== null) return;
+      anyCulled = false;
       for (let i = 0; i < built.length; i++) {
         built[i]!.region.data.culled = false;
         applyDrawRange(built[i]!);
       }
     },
     sortTranslucent(camX, camY, camZ) {
-      // The renderer's step before three's render, every frame after the culler's (SP6b spec §8.4): region culling first.
+      // The renderer's step before three's render, every frame after the culler's (SP6b spec §8.4): region culling first,
+      // timed, then the frame's culled rows.
+      const t0 = clock === null ? 0 : clock();
       applyCulling();
+      cullStats[1] = clock === null ? 0 : clock() - t0;
+      cullStats[0] = anyCulled ? culledRows() : 0;
       // Region centres in the camera's frame: regionOrigin + (64, 192, 64) − floatingOrigin (ruling P17).
       for (let i = 0; i < translucent.length; i++) {
         const a = translucent[i]!;
@@ -731,6 +757,12 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
       // three draws the transparent list by ascending renderOrder before depth: the farthest region gets 0. Only the
       // water's arenas are listed: the X-ray's keep `XRAY_ORDER`, above every one of them (SP6a spec §5.2).
       for (let k = 0; k < translucent.length; k++) translucent[k]!.mesh.renderOrder = k;
+    },
+    culledSections() {
+      return cullStats[0]!;
+    },
+    cullFilterMs() {
+      return cullStats[1]!;
     },
     gpuBytes() {
       let n = 0;

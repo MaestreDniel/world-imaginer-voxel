@@ -59,14 +59,15 @@ describe('the bench script (SP4b spec §8.3, D22)', () => {
     expect(BENCH_FRAME_CAPACITY).toBeGreaterThan(95 * 240);
   });
 
-  test('`BENCH_FRAME_CAPACITY` is 164,448 (SP6a spec §10.6: SP5c\'s 123,168, L13\'s 90 s and L14\'s 82 s at 240 Hz)', () => {
-    expect(BENCH_FRAME_CAPACITY).toBe(164_448);
+  test('`BENCH_FRAME_CAPACITY` is 173,568 (SP6b spec §12.6: SP6a\'s 164,448, L13\'s culling-off 20 s and L14\'s biome segment\'s 18 s at 240 Hz)', () => {
+    expect(BENCH_FRAME_CAPACITY).toBe(173_568);
     expect(87_168 + 150 * 240).toBe(123_168);
     expect(123_168 + 90 * 240).toBe(144_768);
     expect(144_768 + 82 * 240).toBe(164_448);
+    expect(164_448 + (20 + 18) * 240).toBe(173_568);
   });
 
-  test('the capacity holds the script\'s 683 s at 240 Hz (SP4c\'s 150 s, L10\'s 91 s at its caps, L11\'s four 30 s parts, L12\'s 150 s, L13\'s 90 s, L14\'s 82 s): 685 s', () => {
+  test('the capacity holds the script\'s 721 s at 240 Hz (SP4c\'s 150 s, L10\'s 91 s at its caps, L11\'s four 30 s parts, L12\'s 150 s, L13\'s 110 s, L14\'s 100 s): 723 s', () => {
     expect(BENCH_EDIT).toEqual({ count: 100, everyMs: 250, radius: 8, hoverMaxS: 60, streamingCount: 20, streamingFlightS: 6, streamingSpeed: 20 });
     const liveS = BENCH_LIVE_LEGS.reduce((s, l) => s + l.seconds, 0);
     const l10S = BENCH_EDIT.hoverMaxS + (BENCH_EDIT.count * BENCH_EDIT.everyMs) / 1000 + BENCH_EDIT.streamingFlightS;
@@ -76,17 +77,20 @@ describe('the bench script (SP4b spec §8.3, D22)', () => {
     expect(BENCH_PASTE).toEqual({ fillMaxS: 60, hoverS: 10, houseMaxS: 80, maxMaxS: 50, sweepS: 10 });
     expect(l12S).toBe(150);
     expect(BENCH_PASTE_LEG).toEqual({ name: 'L12', seconds: l12S, speed: 0, headings: [], rdSteps: [] });
-    // L13's caps: the find's 20 s, the flight's 10 s and the walk's 60 s.
-    const l13S = BENCH_CAVES.findMaxS + BENCH_CAVES.flyMaxS + BENCH_CAVES.walkS;
+    // L13's caps: the find's 20 s, the flight's 10 s, the walk's 60 s with culling on and its first 20 s again with
+    // culling off (SP6b spec §12.6).
+    const l13S = BENCH_CAVES.findMaxS + BENCH_CAVES.flyMaxS + BENCH_CAVES.walkS + BENCH_CAVES.offS;
+    expect(BENCH_CAVES).toEqual({ findMaxS: 20, flyMaxS: 10, walkS: 60, offS: 20 });
     expect(BENCH_CAVES_LEG).toEqual({ name: 'L13', seconds: l13S, speed: 0, headings: [], rdSteps: [] });
-    // L14's caps: the hold's 10 s, the sweep's 8 s, the band's 4 s, the map and the refill's 20 s, RD 16's 40 s.
-    const l14S = BENCH_XRAY.holdS + BENCH_XRAY.sweepS + BENCH_XRAY.bandS + BENCH_XRAY.refillMaxS + BENCH_XRAY.rd16MaxS;
+    // L14's caps: the hold's 10 s, the biome segment's hold and sweep (18 s, SP6b spec §12.6), the sweep's 8 s, the
+    // band's 4 s, the map and the refill's 20 s, RD 16's 40 s.
+    const l14S = BENCH_XRAY.holdS + (BENCH_XRAY.holdS + BENCH_XRAY.sweepS) + BENCH_XRAY.sweepS + BENCH_XRAY.bandS + BENCH_XRAY.refillMaxS + BENCH_XRAY.rd16MaxS;
     expect(BENCH_XRAY_LEG).toEqual({ name: 'L14', seconds: l14S, speed: 0, headings: [], rdSteps: [] });
-    expect([95 + liveS, l10S, l11S, l12S, l13S, l14S]).toEqual([150, 91, 120, 150, 90, 82]);
-    expect(95 + liveS + l10S + l11S + l12S + l13S + l14S).toBe(683);
-    expect(BENCH_FRAME_CAPACITY).toBeGreaterThanOrEqual(683 * 240);
-    // 685 s at 240 Hz.
-    expect(Math.floor(BENCH_FRAME_CAPACITY / 240)).toBe(685);
+    expect([95 + liveS, l10S, l11S, l12S, l13S, l14S]).toEqual([150, 91, 120, 150, 110, 100]);
+    expect(95 + liveS + l10S + l11S + l12S + l13S + l14S).toBe(721);
+    expect(BENCH_FRAME_CAPACITY).toBeGreaterThanOrEqual(721 * 240);
+    // 723 s at 240 Hz.
+    expect(Math.floor(BENCH_FRAME_CAPACITY / 240)).toBe(723);
   });
 
   test('the capacity holds 150 s at 240 Hz (36,000 frames): the 95 s script and the live legs at their caps (SP4c spec §8.4)', () => {
@@ -200,6 +204,10 @@ interface Frame {
   mixed?: number;
   genCap?: number;
   calls?: number;
+  triangles?: number;
+  cullMs?: number;
+  culled?: number;
+  walks?: number;
 }
 
 function recordOf(frames: readonly Frame[]): BenchRecord {
@@ -217,7 +225,7 @@ function recordOf(frames: readonly Frame[]): BenchRecord {
     rec.structuralMB[i] = f.structuralMB ?? 0;
     rec.gpuMs[i] = f.gpuMs ?? Number.NaN;
     rec.calls[i] = f.calls ?? 40;
-    rec.triangles[i] = 1e6;
+    rec.triangles[i] = f.triangles ?? 1e6;
     rec.geometryMB[i] = f.geometryMB ?? 30;
     rec.texturesMB[i] = f.texturesMB ?? 10;
     rec.drawingBufferMB[i] = f.drawingBufferMB ?? 15.8;
@@ -232,6 +240,9 @@ function recordOf(frames: readonly Frame[]): BenchRecord {
     rec.revealed4[i] = f.revealed4 ?? 0;
     rec.revealedRd[i] = f.revealedRd ?? 0;
     rec.playerMs[i] = f.playerMs ?? 0;
+    rec.cullMs[i] = f.cullMs ?? 0;
+    rec.culled[i] = f.culled ?? 0;
+    rec.walks[i] = f.walks ?? 0;
   }
   return rec;
 }
@@ -674,6 +685,8 @@ function sources(over: { kind?: 'create' | 'grow' | 'instances' | 'optimize' | '
         out.mixed = 0;
         return out;
       },
+      // The cave culler's last completed walk (SP6b spec §12.6: L13's walks per second).
+      culler: { shown: 7 },
     },
     world: {
       renderer: { info: { render: { calls: 42, triangles: 123_456 } } },
@@ -686,6 +699,9 @@ function sources(over: { kind?: 'create' | 'grow' | 'instances' | 'optimize' | '
         return out;
       },
       gpuTimer: () => gpu.timer,
+      // The last frame's culled sections and its walk and filter ms (SP6b spec §8.5, §12.6).
+      culledSections: () => 31,
+      cullMainMs: () => 0.375,
     },
     heapMB() {
       s.heapReads++;
@@ -715,6 +731,9 @@ describe('createBenchRecorder: one frame\'s fields, nothing allocated per frame 
       tMs: 0, mark: 0, revealed2: 0, revealed4: 0, revealedRd: 0,
       // The frame step's input, walk step and aim, written by the page's timing before the recorder (SP5a spec §6.2).
       playerMs: 0,
+      // The world renderer's walk and filter ms and culled sections of the frame, the culler's last completed walk (SP6b
+      // spec §8.5, §12.6).
+      cullMs: 0.375, culled: 31, walks: 7,
     });
     src.gpu.draw();
     recorder.frame(HZ240, 1, 0, 0, 0, 4);
@@ -2285,6 +2304,7 @@ async function runL12(save: NonNullable<BenchWorld['save']>, paste: BenchPasteHo
 } = {}) {
   const { driver, p, published } = await toL11(save, paste);
   o.bind?.(driver);
+  scriptClock.t = 129.05;
   driver.pose(129.05, p, 12);
   await flush();
   const t0 = 129.1;
@@ -2856,11 +2876,11 @@ const pointsOf = (r: Float64Array): Array<[number, number, number]> =>
   Array.from({ length: r.length / 3 }, (_, k) => [r[3 * k]!, r[3 * k + 1]!, r[3 * k + 2]!]);
 
 describe('caveRoute: L13\'s walk through cave air (SP6a spec §10.6, D29; plan)', () => {
-  test('the constants: 258 blocks, 4.3 × 60, at 4.3 blocks per second; the flight at 64; the caps 20, 10 and 60 s', () => {
-    expect(BENCH_CAVES).toEqual({ findMaxS: 20, flyMaxS: 10, walkS: 60 });
+  test('the constants: 258 blocks, 4.3 × 60, at 4.3 blocks per second; the flight at 64; the caps 20, 10 and 60 s, and the culling-off segment\'s 20 s (SP6b spec §12.6)', () => {
+    expect(BENCH_CAVES).toEqual({ findMaxS: 20, flyMaxS: 10, walkS: 60, offS: 20 });
     expect(BENCH_CAVE_ROUTE).toEqual({ flySpeed: 64, walkSpeed: 4.3, blocks: 258 });
     expect(Math.round(BENCH_CAVE_ROUTE.walkSpeed * BENCH_CAVES.walkS)).toBe(BENCH_CAVE_ROUTE.blocks);
-    expect(BENCH_CAVES_LEG.seconds).toBe(90);
+    expect(BENCH_CAVES_LEG.seconds).toBe(110);
   });
 
   test('on the fixture cave the route is the same twice, starts on the floor under the hit, and prefers cheese, then spaghetti 3D, then 2D', () => {
@@ -2997,12 +3017,17 @@ function shaftCave(ox: number) {
   return w;
 }
 
+/** The script time of `runL13`'s current frame, for the fake hooks' logs. */
+const scriptClock = { t: 0 };
+
 /**
  * L13's hooks on a fake page: `find` answers with `answer` (or never), each call's voxel logged; the store's reads a slab
- * of cheese air at y 40 … 41 around (x, z), rock under and over it.
+ * of cheese air at y 40 … 41 around (x, z), rock under and over it; the bench's culling switch, each call logged with
+ * its script time (`scriptClock`).
  */
 function fakeCaves(answer: (() => Promise<Awaited<ReturnType<BenchCaveHooks['find']>>>) | null) {
   const finds: Array<[number, number, number]> = [];
+  const culling: Array<{ readonly on: boolean; readonly t: number }> = [];
   const hooks: BenchCaveHooks = {
     find(x, y, z) {
       finds.push([x, y, z]);
@@ -3010,8 +3035,11 @@ function fakeCaves(answer: (() => Promise<Awaited<ReturnType<BenchCaveHooks['fin
     },
     tagAt: (_x, y) => (y === 40 || y === 41 ? CAVE_KIND.cheese : 0),
     solidAt: (_x, y) => y < 40 || y > 41,
+    setCulling(on) {
+      culling.push({ on, t: scriptClock.t });
+    },
   };
-  return { hooks, finds };
+  return { hooks, finds, culling };
 }
 const found = (x: number, y: number, z: number) => () => Promise.resolve({ hit: { x, y, z, yaw: 90 }, reason: 'found' });
 
@@ -3037,6 +3065,7 @@ async function runL13(
   const t0 = 129.1;
   for (let i = 0; i < 2400; i++) {
     t = t0 + i * 0.05;
+    scriptClock.t = t;
     driver.pose(t, p, 12);
     if (i % 100 === 99) await flush();
   }
@@ -3048,6 +3077,7 @@ async function runL13(
   let end = Number.NaN;
   for (let i = 0; i < 8000; i++) {
     t = t0 + 120 + i * stepS;
+    scriptClock.t = t;
     const rd = driver.pose(t, p, 12);
     if (rd === null) {
       end = t;
@@ -3072,7 +3102,7 @@ async function runL13(
 }
 
 describe('createBenchDriver: the cave leg L13 (SP6a spec §10.6, D29; plan)', () => {
-  test('L13 follows L12: the find from the camera\'s voxel at L13\'s start (L10\'s hover point), the flight to the route at 64 blocks/s, the walk at 4.3 for 60 s', async () => {
+  test('L13 follows L12: the find from the camera\'s voxel at L13\'s start (L10\'s hover point), the flight to the route at 64 blocks/s, the walk at 4.3 for 60 s with culling on, then the route\'s first 20 s again with culling off (SP6b spec §12.6)', async () => {
     const f = fakeCaves(found(20010, 41, 0));
     const run = await runL13(f.hooks);
     expect(run.result.paste.timedOut).toEqual([]);
@@ -3101,14 +3131,28 @@ describe('createBenchDriver: the cave leg L13 (SP6a spec §10.6, D29; plan)', ()
     }
     expect(walk[0]!.t - tf).toBeGreaterThanOrEqual(dist / BENCH_CAVE_ROUTE.flySpeed - 1e-9);
     expect(walk[0]!.t - tf).toBeLessThan(dist / BENCH_CAVE_ROUTE.flySpeed + 0.1 + 1e-9);
-    // The walk: 4.3 blocks/s west along the route, the eye EYE above the floor, level, for 60 s.
+    // The walk: 4.3 blocks/s west along the route, the eye EYE above the floor, level, for 60 s, culling on.
     const w0 = walk[0]!.t;
-    for (const q of walk) {
+    const off0 = firstAt(walk, w0 + BENCH_CAVES.walkS).t;
+    const on = walk.filter((q) => q.t < off0);
+    expect(on.length).toBeGreaterThan(590);
+    for (const q of on) {
       expect(q.x).toBeCloseTo(20010.5 - (q.t - w0) * BENCH_CAVE_ROUTE.walkSpeed, 6);
       expect([q.y, q.z, q.yaw]).toEqual([40 + EYE, 0.5, 270]);
     }
-    expect(run.end - w0).toBeGreaterThanOrEqual(BENCH_CAVES.walkS - 1e-9);
-    expect(run.end - w0).toBeLessThan(BENCH_CAVES.walkS + 0.1 + 1e-9);
+    // Then culling off (the bench's `setCulling(false)`) from the first frame at or after the walk's 60 s, which is posed
+    // back at the route's start, and the route's first 20 s walked again; culling on again at L13's end.
+    expect(f.culling).toEqual([{ on: false, t: off0 }, { on: true, t: run.end }]);
+    const off = walk.filter((q) => q.t >= off0);
+    expect(off.length).toBeGreaterThan(190);
+    for (const q of off) {
+      expect(q.x).toBeCloseTo(20010.5 - (q.t - off0) * BENCH_CAVE_ROUTE.walkSpeed, 6);
+      expect([q.y, q.z, q.yaw]).toEqual([40 + EYE, 0.5, 270]);
+    }
+    expect(off0 - w0).toBeGreaterThanOrEqual(BENCH_CAVES.walkS - 1e-9);
+    expect(off0 - w0).toBeLessThan(BENCH_CAVES.walkS + 0.1 + 1e-9);
+    expect(run.end - off0).toBeGreaterThanOrEqual(BENCH_CAVES.offS - 1e-9);
+    expect(run.end - off0).toBeLessThan(BENCH_CAVES.offS + 0.1 + 1e-9);
   });
 
   test('a route shorter than 258 blocks (its search exhausted, walked back to its start) is walked again from its start until the 60 s end; a fall moves the eye at walking speed', async () => {
@@ -3117,33 +3161,38 @@ describe('createBenchDriver: the cave leg L13 (SP6a spec §10.6, D29; plan)', ()
     const moves = route.length - 1;
     expect(moves).toBeLessThan(258);
     expect(route[moves]).toEqual(route[0]);
-    const run = await runL13({ find: found(20011, 31, 0), tagAt: w.tagAt, solidAt: w.solidAt });
+    const run = await runL13({ find: found(20011, 31, 0), tagAt: w.tagAt, solidAt: w.solidAt, setCulling() {} });
     const c = run.result.caves;
     expect([c.routeBlocks, c.timedOut, c.stoppedBy]).toEqual([moves, [], null]);
     const walk = run.l13.filter((q) => q.pitch === 0);
     const w0 = walk[0]!.t;
-    expect(run.end - w0).toBeGreaterThanOrEqual(BENCH_CAVES.walkS - 1e-9);
+    // The 60 s with culling on, then the route's first 20 s again with culling off, from its start.
+    const off0 = firstAt(walk, w0 + BENCH_CAVES.walkS).t;
+    expect(run.end - w0).toBeGreaterThanOrEqual(BENCH_CAVES.walkS + BENCH_CAVES.offS - 1e-9);
     expect(moves / BENCH_CAVE_ROUTE.walkSpeed).toBeLessThan(BENCH_CAVES.walkS / 2);
     // Each point's eye: EYE above its voxel's bottom on a floor, one lower in the air (a step or a fall).
     const eye = route.map(([x, y, z]) => (w.solidAt(x, y - 1, z) ? y : y - 1) + EYE);
-    for (const q of walk) {
-      // `s` blocks along the route, lap after lap.
-      const s = ((q.t - w0) * BENCH_CAVE_ROUTE.walkSpeed) % moves;
-      const k = Math.min(Math.floor(s), moves - 1);
-      const f = s - k;
-      const [a, b] = [route[k]!, route[k + 1]!];
-      expect(q.x, `${q.t}`).toBeCloseTo(a[0] + 0.5 + f * (b[0] - a[0]), 6);
-      expect(q.z, `${q.t}`).toBeCloseTo(a[2] + 0.5 + f * (b[2] - a[2]), 6);
-      expect(q.y, `${q.t}`).toBeCloseTo(eye[k]! + f * (eye[k + 1]! - eye[k]!), 6);
-    }
-    // The camera moves at most at walking speed on each axis, and never stands still for 0.5 s, laps included (a move
-    // up into a step or down out of one keeps the eye: at most one such move in a row).
-    for (let k = 1; k < walk.length; k++) {
-      const [a, b] = [walk[k - 1]!, walk[k]!];
-      for (const v of [b.x - a.x, b.y - a.y, b.z - a.z]) expect(Math.abs(v), `${b.t}`).toBeLessThanOrEqual(BENCH_CAVE_ROUTE.walkSpeed * 0.1 + 1e-6);
-      if (k >= 5) {
-        const c = walk[k - 5]!;
-        expect(Math.abs(b.x - c.x) + Math.abs(b.z - c.z) + Math.abs(b.y - c.y), `${b.t}`).toBeGreaterThan(0);
+    for (const [part, from] of [[walk.filter((q) => q.t < off0), w0], [walk.filter((q) => q.t >= off0), off0]] as const) {
+      expect(part.length).toBeGreaterThan(100);
+      for (const q of part) {
+        // `s` blocks along the route, lap after lap.
+        const s = ((q.t - from) * BENCH_CAVE_ROUTE.walkSpeed) % moves;
+        const k = Math.min(Math.floor(s), moves - 1);
+        const f = s - k;
+        const [a, b] = [route[k]!, route[k + 1]!];
+        expect(q.x, `${q.t}`).toBeCloseTo(a[0] + 0.5 + f * (b[0] - a[0]), 6);
+        expect(q.z, `${q.t}`).toBeCloseTo(a[2] + 0.5 + f * (b[2] - a[2]), 6);
+        expect(q.y, `${q.t}`).toBeCloseTo(eye[k]! + f * (eye[k + 1]! - eye[k]!), 6);
+      }
+      // The camera moves at most at walking speed on each axis, and never stands still for 0.5 s, laps included (a move
+      // up into a step or down out of one keeps the eye: at most one such move in a row).
+      for (let k = 1; k < part.length; k++) {
+        const [a, b] = [part[k - 1]!, part[k]!];
+        for (const v of [b.x - a.x, b.y - a.y, b.z - a.z]) expect(Math.abs(v), `${b.t}`).toBeLessThanOrEqual(BENCH_CAVE_ROUTE.walkSpeed * 0.1 + 1e-6);
+        if (k >= 5) {
+          const c = part[k - 5]!;
+          expect(Math.abs(b.x - c.x) + Math.abs(b.z - c.z) + Math.abs(b.y - c.y), `${b.t}`).toBeGreaterThan(0);
+        }
       }
     }
     // The eye spans the corridor (30 + EYE) and the room's floor at the shaft's foot (15 + EYE).
@@ -3182,44 +3231,79 @@ describe('createBenchDriver: the cave leg L13 (SP6a spec §10.6, D29; plan)', ()
     expect(rock.result.caves.stoppedBy).toBe('the route from the entrance at (20010, 30, 0) has no move');
   });
 
-  test('the `caves` block\'s fields and shapes: the walk\'s frames, its main thread, the leg\'s growth events', () => {
+  test('the `caves` block\'s fields and shapes: the walk\'s frames, its main thread, its culling (the walk\'s and the filter\'s ms, culled sections, triangles, GPU ms, walks per second), the culling-off segment\'s, the leg\'s growth events (SP6b spec §8.5, §12.6)', () => {
     const long = 8 * HZ240;
     const frames: Frame[] = [];
-    // L13: 10 frames of the find and flight (one grow, one long frame), 40 of the walk at [10, 50) s (2 grows, 2 long).
-    for (let i = 0; i < 10; i++) frames.push({ leg: 13, tMs: 1000 * i, structuralKind: i === 4 ? 2 : 0, snappedMs: i === 5 ? 20 * HZ240 : HZ240 });
+    // L13: 10 frames of the find and flight (one grow, one long frame), 40 of the walk at [10, 50) s (2 grows, 2 long),
+    // 20 of the culling-off segment at [50, 70) s (one long).
+    for (let i = 0; i < 10; i++) frames.push({ leg: 13, tMs: 1000 * i, structuralKind: i === 4 ? 2 : 0, snappedMs: i === 5 ? 20 * HZ240 : HZ240, cullMs: 7, culled: 999 });
     for (let i = 0; i < 40; i++) {
-      frames.push({ leg: 13, tMs: 10_000 + 1000 * i, structuralKind: i === 7 || i === 30 ? 2 : i === 8 ? 1 : 0, snappedMs: i < 2 ? long : HZ240, mainMs: i === 39 ? 9 : 1 });
+      frames.push({
+        leg: 13, tMs: 10_000 + 1000 * i, structuralKind: i === 7 || i === 30 ? 2 : i === 8 ? 1 : 0, snappedMs: i < 2 ? long : HZ240, mainMs: i === 39 ? 9 : 1,
+        // The walk and filter ms (one 1.25 ms frame), the culled sections 100 … 139, the triangles, the GPU ms, the
+        // culler's last completed walk (a walk completed every 4 frames: 9 in the window).
+        cullMs: i === 10 ? 1.25 : 0.25, culled: 100 + i, triangles: i < 20 ? 2e6 : 1e6, gpuMs: i >= 37 ? 9 : 2, walks: Math.floor(i / 4),
+      });
+    }
+    for (let i = 0; i < 20; i++) {
+      frames.push({ leg: 13, tMs: 50_000 + 1000 * i, snappedMs: i === 5 ? long : HZ240, mainMs: 1.5, cullMs: 0.125, culled: 0, triangles: 3e6, gpuMs: 4, walks: 9 });
     }
     const run: BenchCaveRun = {
       find: { reason: 'found', ms: 412, hit: { x: 5, y: 40, z: -7 } },
       routeBlocks: 258,
       routeKinds: { cheese: 200, spaghetti3d: 59 },
       walk: { tS0: 10, tS1: 50 },
+      cullOff: { tS0: 50, tS1: 70 },
       timedOut: [],
       stoppedBy: null,
     };
     const r = summarizeBench(recordOf(frames), FIXED, null, undefined, undefined, undefined, run).caves;
-    expect(Object.keys(r)).toEqual(['routeBlocks', 'routeKinds', 'p50', 'p95', 'p99', 'max', 'over33', 'mainP95', 'growthEvents', 'find', 'timedOut', 'stoppedBy']);
+    expect(Object.keys(r)).toEqual([
+      'routeBlocks', 'routeKinds', 'p50', 'p95', 'p99', 'max', 'over33', 'mainP95', 'cullMainMeanMs', 'cullMainMaxMs', 'culledSections', 'triangles',
+      'gpuMs', 'walksPerS', 'growthEvents', 'cullOff', 'find', 'timedOut', 'stoppedBy',
+    ]);
     expect([r.routeBlocks, r.routeKinds]).toEqual([258, { cheese: 200, spaghetti3d: 59 }]);
     // The walk's 40 frames (nearest rank: p95 the 38th smallest, p99 the 40th): 2 long; the find's 20-interval frame not.
     expect([r.p50, r.p95, r.p99, r.max, r.over33]).toEqual([HZ240, HZ240, long, long, 2]);
     expect(r.mainP95).toBe(1);
+    // Culling over the walk's frames: the mean and the largest per-frame walk plus filter ms (§8.5's `cullMainMeanMs`,
+    // `cullMainMaxMs`), the culled sections and triangles drawn (nearest-rank p50, max), the GPU ms, the walks completed
+    // per second over the window's frames (9 over 39 s).
+    expect(r.cullMainMeanMs).toBeCloseTo(11 / 40, 12);
+    expect(r.cullMainMaxMs).toBe(1.25);
+    expect([r.culledSections, r.triangles, r.gpuMs]).toEqual([{ p50: 119, max: 139 }, { p50: 1e6, max: 2e6 }, { p50: 2, p95: 9 }]);
+    expect(r.walksPerS).toBeCloseTo(9 / 39, 12);
     // Every frame of L13 counts its buffer growths (3), not the other structural operations.
     expect(r.growthEvents).toBe(3);
+    // The culling-off segment's 20 frames, the same figures (nearest rank: p95 the 19th, p99 the 20th).
+    expect(Object.keys(r.cullOff)).toEqual(['p50', 'p95', 'p99', 'max', 'over33', 'mainP95', 'cullMainMeanMs', 'cullMainMaxMs', 'culledSections', 'triangles', 'gpuMs', 'walksPerS']);
+    expect(r.cullOff).toEqual({
+      p50: HZ240, p95: HZ240, p99: long, max: long, over33: 1, mainP95: 1.5, cullMainMeanMs: 0.125, cullMainMaxMs: 0.125,
+      culledSections: { p50: 0, max: 0 }, triangles: { p50: 3e6, max: 3e6 }, gpuMs: { p50: 4, p95: 4 }, walksPerS: 0,
+    });
     expect(r.find).toEqual({ reason: 'found', ms: 412, hit: { x: 5, y: 40, z: -7 } });
     expect([r.timedOut, r.stoppedBy]).toEqual([[], null]);
-    expect(summarizeBench(recordOf(frames), FIXED).legs.L13.frames.count).toBe(50);
+    expect(summarizeBench(recordOf(frames), FIXED).legs.L13.frames.count).toBe(70);
     const json = JSON.stringify(r);
     expect(json).not.toContain('NaN');
-    expect(Object.keys(JSON.parse(json) as object)).toEqual(Object.keys(r));
+    expect(JSON.parse(json)).toEqual(r);
     // No L13: nothing recorded.
     const none = summarizeBench(recordOf([{ leg: 1 }]), FIXED).caves;
     expect([none.routeBlocks, none.routeKinds, none.p95, none.over33, none.mainP95, none.growthEvents, none.find, none.timedOut, none.stoppedBy])
       .toEqual([0, {}, null, 0, null, 0, { reason: null, ms: null, hit: null }, [], null]);
+    const empty = {
+      p50: null, p95: null, p99: null, max: null, over33: 0, mainP95: null, cullMainMeanMs: null, cullMainMaxMs: null, culledSections: null,
+      triangles: null, gpuMs: null, walksPerS: null,
+    };
+    expect(none.cullOff).toEqual(empty);
+    expect([none.cullMainMeanMs, none.cullMainMaxMs, none.culledSections, none.triangles, none.gpuMs, none.walksPerS]).toEqual([null, null, null, null, null, null]);
+    // A walk that never reached its culling-off segment: that segment's figures are empty.
+    expect(summarizeBench(recordOf(frames), FIXED, null, undefined, undefined, undefined, { ...run, cullOff: null }).caves.cullOff).toEqual(empty);
   });
 
-  test('the page\'s cave hooks (`benchCaves`): the finder\'s job for the nearest entrance; the cave kind and the collision of a Published voxel, each in a read section', async () => {
+  test('the page\'s cave hooks (`benchCaves`): the finder\'s job for the nearest entrance; the cave kind and the collision of a Published voxel, each in a read section; the culling switch is the section renderer\'s `setCulling`', async () => {
     const asked: unknown[] = [];
+    const switched: boolean[] = [];
     let sections = 0;
     const published = (x: number): boolean => x >= 0;
     const hooks = benchCaves({
@@ -3237,6 +3321,7 @@ describe('createBenchDriver: the cave leg L13 (SP6a spec §10.6, D29; plan)', ()
           return { promise: Promise.resolve({ hit: { x: 1, y: 2, z: 3, yaw: 0 }, reason: 'found' as const }), cancel() {} };
         },
       },
+      sections: { setCulling: (on) => { switched.push(on); } },
     });
     await expect(hooks.find(10, 90, -4)).resolves.toEqual({ hit: { x: 1, y: 2, z: 3, yaw: 0 }, reason: 'found' });
     expect(asked).toEqual([{ kind: CAVE_KIND.entrance, x: 10, y: 90, z: -4 }]);
@@ -3245,6 +3330,9 @@ describe('createBenchDriver: the cave leg L13 (SP6a spec §10.6, D29; plan)', ()
       .toEqual([CAVE_KIND.noodle, CAVE_KIND.ravine, 0, 0, 0, 0]);
     expect([hooks.solidAt(5, 39, 5), hooks.solidAt(5, 40, 5), hooks.solidAt(-1, 39, 5)]).toEqual([true, false, false]);
     expect(sections).toBe(0);
+    hooks.setCulling(false);
+    hooks.setCulling(true);
+    expect(switched).toEqual([false, true]);
   });
 });
 
@@ -3252,13 +3340,15 @@ describe('createBenchDriver: the cave leg L13 (SP6a spec §10.6, D29; plan)', ()
  * L14's hooks on a fake page, each call logged with the script time (`at`): the map's tool mounted `readyAfterS` s after
  * the open (null: never), the refill settled `settleAfterS` s after the edit (null: never), the RD 16 disc filled
  * `fillAfterS` s after it is first asked (null: never); the renderer's X-ray draws and vertex bytes and the radius in
- * force: 8, 1,000,000 and 176 with the X-ray on before RD 16 is asked for, 12, 2,000,000 and 240 after; 3 and 500,000 off.
+ * force: 8, 1,000,000 and 176 with the X-ray on before RD 16 is asked for, 12, 2,000,000 and 240 after; 3 and 500,000 off;
+ * by cave biome (C, SP6b spec §7.3) the fake's own 9 and 1,100,000, so the segments can be told apart.
  */
 function fakeXray(at: () => number, o: { readyAfterS?: number | null; settleAfterS?: number | null; fillAfterS?: number | null } = {}) {
   const events: Array<{ readonly what: string; readonly t: number }> = [];
   const filledAsked: number[] = [];
   const since = Float64Array.of(Number.NaN, Number.NaN, Number.NaN);
   let on = false;
+  let biome = false;
   const after = (k: number, s: number | null | undefined, otherwise: number): boolean => {
     const d = s === undefined ? otherwise : s;
     return d !== null && !Number.isNaN(since[k]!) && at() - since[k]! >= d - 1e-9;
@@ -3268,6 +3358,10 @@ function fakeXray(at: () => number, o: { readyAfterS?: number | null; settleAfte
     toggle() {
       on = !on;
       events.push({ what: on ? 'X on' : 'X off', t: at() });
+    },
+    colorToggle() {
+      biome = !biome;
+      events.push({ what: 'C', t: at() });
     },
     bandDown() { events.push({ what: 'PageDown', t: at() }); },
     openMap() {
@@ -3286,8 +3380,8 @@ function fakeXray(at: () => number, o: { readyAfterS?: number | null; settleAfte
       filledAsked.push(rd);
       return after(2, o.fillAfterS, 1);
     },
-    drawCalls: () => (!on ? 3 : rd16() ? 12 : 8),
-    vertexBytes: () => (!on ? 500_000 : rd16() ? 2_000_000 : 1_000_000),
+    drawCalls: () => (!on ? 3 : rd16() ? 12 : biome ? 9 : 8),
+    vertexBytes: () => (!on ? 500_000 : rd16() ? 2_000_000 : biome ? 1_100_000 : 1_000_000),
     radius: () => (rd16() ? 240 : 176),
   };
   return { hooks, events, filledAsked };
@@ -3297,9 +3391,9 @@ function fakeXray(at: () => number, o: { readyAfterS?: number | null; settleAfte
 const firstAt = <F extends { readonly t: number }>(frames: readonly F[], t: number): F => frames.find((q) => q.t >= t - 1e-9)!;
 
 describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan)', () => {
-  test('the leg\'s constants: 82 s at its caps; the edit takes `caves.cheese.offset` from its default to cave_heavy\'s 0.20 (ruling P44)', () => {
+  test('the leg\'s constants: 100 s at its caps (the biome segment\'s hold and sweep, 18 s, SP6b spec §12.6); the edit takes `caves.cheese.offset` from its default to cave_heavy\'s 0.20 (ruling P44)', () => {
     expect(BENCH_XRAY).toEqual({ holdS: 10, sweepS: 8, bandS: 4, refillMaxS: 20, rd16MaxS: 40 });
-    expect(BENCH_XRAY_LEG.seconds).toBe(82);
+    expect(BENCH_XRAY_LEG.seconds).toBe(100);
     // RD 16's part: the X-ray off at RD 12 for 2 s, the RD 16 disc awaited at most 20 s, the hold and the sweep again.
     expect([BENCH_XRAY_SCRIPT.bandSteps, BENCH_XRAY_SCRIPT.offS, BENCH_XRAY_SCRIPT.rd16FillMaxS]).toEqual([4, 2, 20]);
     expect(BENCH_XRAY_SCRIPT.offS + BENCH_XRAY_SCRIPT.rd16FillMaxS + BENCH_XRAY.holdS + BENCH_XRAY.sweepS).toBe(BENCH_XRAY.rd16MaxS);
@@ -3316,7 +3410,7 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     expect(e.to).toBe(DEFAULTS.caves.cheese.offset === 0.2 ? DEFAULTS.caves.cheese.offset - 0.07 : 0.2);
   });
 
-  test('L14 follows L13 at RD 12 from L13\'s end: X on, hold 10 s, a 360° sweep over 8 s, PageDown × 4, the map side by side and the edit, the refill, X off; then RD 16 filled, X on, hold and sweep', async () => {
+  test('L14 follows L13 at RD 12 from L13\'s end: X on, hold 10 s, the biome segment (C, hold 10 s, a 360° sweep over 8 s, C; SP6b spec §12.6), a 360° sweep over 8 s, PageDown × 4, the map side by side and the edit, the refill, X off; then RD 16 filled, X on, hold and sweep', async () => {
     let x: ReturnType<typeof fakeXray> | null = null;
     const run = await runL13(fakeCaves(found(20010, 41, 0)).hooks, (at) => (x = fakeXray(at)).hooks);
     const f = x!;
@@ -3327,7 +3421,8 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     const last13 = run.l13[run.l13.length - 1]!;
     const base = { x: last13.x, y: last13.y, z: last13.z, yaw: last13.yaw, pitch: BENCH_PITCH };
     expect(f.events.map((e) => e.what)).toEqual([
-      'X on', 'PageDown', 'PageDown', 'PageDown', 'PageDown', 'map open', `set caves.cheese.offset ${BENCH_XRAY_SCRIPT.edit.to}`, 'X off', 'map close', 'X on',
+      'X on', 'C', 'C', 'PageDown', 'PageDown', 'PageDown', 'PageDown', 'map open', `set caves.cheese.offset ${BENCH_XRAY_SCRIPT.edit.to}`, 'X off',
+      'map close', 'X on',
     ]);
     const at = (k: number): number => f.events[k]!.t;
     expect(at(0)).toBe(t14);
@@ -3335,8 +3430,22 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     for (const q of run.l14.filter((q) => q.t < t14 + BENCH_XRAY.holdS - 1e-9)) {
       expect([q.x, q.y, q.z, q.yaw, q.pitch, q.rd]).toEqual([base.x, base.y, base.z, base.yaw, base.pitch, 12]);
     }
-    // The sweep: the yaw turns 360° over 8 s from the first frame at 10 s, the position held.
-    const s0 = firstAt(run.l14, t14 + BENCH_XRAY.holdS).t;
+    // The biome segment between the hold and the sweep: C at the first frame at 10 s, a hold of 10 s at the start pose, a
+    // 360° sweep over 8 s, C again (by cave type), where the sweep starts.
+    expect(at(1)).toBe(firstAt(run.l14, t14 + BENCH_XRAY.holdS).t);
+    for (const q of run.l14.filter((q) => q.t >= at(1) && q.t < at(1) + BENCH_XRAY.holdS - 1e-9)) {
+      expect([q.x, q.y, q.z, q.yaw, q.pitch, q.rd]).toEqual([base.x, base.y, base.z, base.yaw, base.pitch, 12]);
+    }
+    const c0 = firstAt(run.l14, at(1) + BENCH_XRAY.holdS).t;
+    const biomeSweep = run.l14.filter((q) => q.t >= c0 && q.t < c0 + BENCH_XRAY.sweepS - 1e-9);
+    expect(biomeSweep.length).toBeGreaterThan(70);
+    for (const q of biomeSweep) {
+      expect(q.yaw).toBeCloseTo((base.yaw + (360 * (q.t - c0)) / BENCH_XRAY.sweepS) % 360, 6);
+      expect([q.x, q.y, q.z, q.pitch]).toEqual([base.x, base.y, base.z, base.pitch]);
+    }
+    expect(at(2)).toBe(firstAt(run.l14, c0 + BENCH_XRAY.sweepS).t);
+    // The sweep: the yaw turns 360° over 8 s from the second C's frame, the position held.
+    const s0 = at(2);
     const sweep = run.l14.filter((q) => q.t >= s0 && q.t < s0 + BENCH_XRAY.sweepS - 1e-9);
     expect(sweep.length).toBeGreaterThan(70);
     for (const q of sweep) {
@@ -3345,39 +3454,41 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     }
     // PageDown four times, one a second from the band's start; the map opened at its end.
     const b0 = firstAt(run.l14, s0 + BENCH_XRAY.sweepS).t;
-    for (let k = 0; k < 4; k++) expect(at(1 + k)).toBe(firstAt(run.l14, b0 + k).t);
-    expect(at(5)).toBe(firstAt(run.l14, b0 + BENCH_XRAY.bandS).t);
+    for (let k = 0; k < 4; k++) expect(at(3 + k)).toBe(firstAt(run.l14, b0 + k).t);
+    expect(at(7)).toBe(firstAt(run.l14, b0 + BENCH_XRAY.bandS).t);
     // The edit once the map's tool is mounted (0.5 s), the X-ray off once the refill settled (3 s); the map closed 0.5 s
     // later, more than the toggle's frames after it (its resize and extra frame outside `toggleMaxMs`).
-    expect(at(6)).toBe(firstAt(run.l14, at(5) + 0.5).t);
-    expect(at(7)).toBe(firstAt(run.l14, at(6) + 3).t);
-    expect(at(8)).toBe(firstAt(run.l14, at(7) + BENCH_XRAY_SCRIPT.closeS).t);
-    expect(run.l14.filter((q) => q.t >= at(7) && q.t < at(8)).length).toBeGreaterThan(BENCH_TOGGLE_FRAMES);
+    expect(at(8)).toBe(firstAt(run.l14, at(7) + 0.5).t);
+    expect(at(9)).toBe(firstAt(run.l14, at(8) + 3).t);
+    expect(at(10)).toBe(firstAt(run.l14, at(9) + BENCH_XRAY_SCRIPT.closeS).t);
+    expect(run.l14.filter((q) => q.t >= at(9) && q.t < at(10)).length).toBeGreaterThan(BENCH_TOGGLE_FRAMES);
     // From the release to the frame that swapped the last column (the frame before the first that finds it settled).
     expect(run.result.xray.xrayApplyRefillMs).toBeCloseTo(2900, 6);
     // RD 16 asked for after 2 s with the X-ray off; its disc's fill awaited (1 s), then the X-ray on.
     const r16 = run.l14.find((q) => q.rd === 16)!;
-    expect(r16.t).toBe(firstAt(run.l14, at(7) + BENCH_XRAY_SCRIPT.offS).t);
+    expect(r16.t).toBe(firstAt(run.l14, at(9) + BENCH_XRAY_SCRIPT.offS).t);
     expect(run.l14.filter((q) => q.t < r16.t).every((q) => q.rd === 12)).toBe(true);
     expect(run.l14.filter((q) => q.t >= r16.t).every((q) => q.rd === 16)).toBe(true);
     expect(new Set(f.filledAsked)).toEqual(new Set([16]));
-    expect(at(9)).toBe(firstAt(run.l14, r16.t + 0.1 + 1).t);
+    expect(at(11)).toBe(firstAt(run.l14, r16.t + 0.1 + 1).t);
     // RD 16's hold and sweep, then the end.
-    for (const q of run.l14.filter((q) => q.t >= r16.t && q.t < at(9) + BENCH_XRAY.holdS - 1e-9)) {
+    for (const q of run.l14.filter((q) => q.t >= r16.t && q.t < at(11) + BENCH_XRAY.holdS - 1e-9)) {
       expect([q.x, q.y, q.z, q.yaw, q.pitch]).toEqual([base.x, base.y, base.z, base.yaw, base.pitch]);
     }
-    const s16 = firstAt(run.l14, at(9) + BENCH_XRAY.holdS).t;
+    const s16 = firstAt(run.l14, at(11) + BENCH_XRAY.holdS).t;
     for (const q of run.l14.filter((q) => q.t >= s16)) expect(q.yaw).toBeCloseTo((base.yaw + (360 * (q.t - s16)) / BENCH_XRAY.sweepS) % 360, 6);
     expect(run.end).toBeCloseTo(s16 + BENCH_XRAY.sweepS, 6);
-    // The block: the edit, the segments' RDs and the renderer's figures read with the X-ray on.
+    // The block: the edit, the segments' RDs and the renderer's figures read with the X-ray on, the biome segment's in
+    // its own (both modes' vertex bytes).
     const r = run.result.xray;
     expect(r.timedOut).toEqual([]);
     expect(r.edit).toEqual({ path: 'caves.cheese.offset', from: DEFAULTS.caves.cheese.offset, to: BENCH_XRAY_SCRIPT.edit.to });
     expect([r.rd12.rd, r.rd12.xrayDrawCallsMax, r.rd12.xrayVertexBytes, r.rd12.radius]).toEqual([12, 8, 1_000_000, 176]);
+    expect([r.biome.rd, r.biome.xrayDrawCallsMax, r.biome.xrayVertexBytes, r.biome.radius]).toEqual([12, 9, 1_100_000, 176]);
     expect([r.rd16.rd, r.rd16.xrayDrawCallsMax, r.rd16.xrayVertexBytes, r.rd16.radius]).toEqual([16, 12, 2_000_000, 240]);
   });
 
-  test('L14 ends at its caps, `timedOut` naming the part: a map never mounted (no edit), a refill never settled, an RD 16 disc never filled; the leg stays within its 82 s', async () => {
+  test('L14 ends at its caps, `timedOut` naming the part: a map never mounted (no edit), a refill never settled, an RD 16 disc never filled; the leg stays within its 100 s', async () => {
     const run = async (o: Parameters<typeof fakeXray>[1]) => {
       let x: ReturnType<typeof fakeXray> | null = null;
       const r = await runL13(fakeCaves(found(20010, 41, 0)).hooks, (at) => (x = fakeXray(at, o)).hooks);
@@ -3493,13 +3604,14 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     const run: BenchXrayRun = {
       edit: { path: 'caves.cheese.offset', from: 0.5, to: 0.2 },
       rd12: seg(12, [0, 20], [20, 22], [0, 20], 9, 1_234_567, 176),
+      biome: null,
       rd16: seg(16, [25, 35], [22, 25], [25], 14, 2_345_678, 240),
       applyRefillMs: 4321,
       mapOpenS: null,
       timedOut: ['rd16'],
     };
     const r = summarizeBench(recordOf(frames), FIXED, null, undefined, undefined, undefined, undefined, run).xray;
-    expect(Object.keys(r)).toEqual(['rd12', 'rd16', 'xrayApplyRefillMs', 'xrayMapOpenMaxMs', 'edit', 'timedOut']);
+    expect(Object.keys(r)).toEqual(['rd12', 'biome', 'rd16', 'xrayApplyRefillMs', 'xrayMapOpenMaxMs', 'xrayCulledSections', 'edit', 'timedOut']);
     expect(Object.keys(r.rd12)).toEqual([
       'rd', 'p50', 'p95', 'p99', 'max', 'over33', 'mainP95', 'gpuMs', 'gpuMB', 'drawCallsMax', 'xrayDrawCallsMax', 'toggleMaxMs',
       'xrayVertexBytes', 'radius', 'growthEvents',
@@ -3521,6 +3633,9 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     expect([r.xrayApplyRefillMs, r.timedOut, r.edit]).toEqual([4321, ['rd16'], { path: 'caves.cheese.offset', from: 0.5, to: 0.2 }]);
     // No map open in the run: nothing left out of the frame figures, no `xrayMapOpenMaxMs`.
     expect(r.xrayMapOpenMaxMs).toBeNull();
+    // Nothing culled with the X-ray on; no biome segment in this run: its figures empty.
+    expect(r.xrayCulledSections).toBe(0);
+    expect(r.biome).toEqual(summarizeBench(recordOf([{ leg: 1 }]), FIXED).xray.rd12);
     expect(summarizeBench(recordOf(frames), FIXED).legs.L14.frames.count).toBe(35);
     const json = JSON.stringify(r);
     expect(json).not.toContain('NaN');
@@ -3533,7 +3648,8 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
       drawCallsMax: null, xrayDrawCallsMax: null, toggleMaxMs: null, xrayVertexBytes: null, radius: null, growthEvents: 0,
     });
     expect(none.rd16).toEqual(none.rd12);
-    expect([none.xrayApplyRefillMs, none.xrayMapOpenMaxMs, none.timedOut]).toEqual([null, null, []]);
+    expect(none.biome).toEqual(none.rd12);
+    expect([none.xrayApplyRefillMs, none.xrayMapOpenMaxMs, none.xrayCulledSections, none.timedOut]).toEqual([null, null, null, []]);
     expect(none.edit).toEqual(BENCH_XRAY_SCRIPT.edit);
   });
 
@@ -3550,6 +3666,7 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     const run: BenchXrayRun = {
       edit: { path: 'caves.cheese.offset', from: 0.5, to: 0.2 },
       rd12: seg(12, [0, 20], [20, 22], [0, 20]),
+      biome: null,
       rd16: seg(16, [25, 35], [22, 25], [25]),
       applyRefillMs: 4321,
       mapOpenS: 10.5,
@@ -3575,7 +3692,61 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     expect([late.rd12.over33, late.xrayMapOpenMaxMs]).toEqual([5, null]);
   });
 
-  test('the page\'s X-ray hooks (`benchXray`): X and PageDown through the page\'s X-ray, the renderer\'s X-ray draws, the rest as given', () => {
+  test('the biome segment\'s figures (SP6b spec §12.6): its frames by cave biome, between its two C presses, are its own and leave RD 12\'s; `toggleMaxMs` the longest of the three frames from each C (`xrayColorToggleMaxMs`); `xrayCulledSections` the most sections culled in a frame with the X-ray on', () => {
+    const frames: Frame[] = [];
+    // L14 at 1 s a frame: RD 12 on [0, 30) with the biome segment [10, 20) inside it (C at 10 and 20), off [30, 32);
+    // RD 16 off [32, 34), on [34, 40).
+    for (let i = 0; i < 40; i++) {
+      const biome = i >= 10 && i < 20;
+      const on = i < 30 || i >= 34;
+      frames.push({
+        leg: 14, tMs: 1000 * i,
+        // A long frame by cave type (3), one by cave biome (15), one right after the second C (21).
+        snappedMs: i === 3 ? 9 * HZ240 : i === 15 ? 11 * HZ240 : i === 21 ? 10 * HZ240 : HZ240,
+        mainMs: biome ? 2.5 : 1,
+        gpuMs: !on ? 1 : i >= 34 ? 5 : biome ? 3 : 2,
+        calls: biome ? 44 : 40,
+        geometryMB: i === 14 ? 90 : 30,
+        structuralKind: i === 13 || i === 25 ? 2 : 0,
+        // Sections culled: none with the X-ray on but one RD 16 frame (a regression would read so); 50 with it off.
+        culled: !on ? 50 : i === 36 ? 3 : 0,
+      });
+    }
+    const seg = (rd: number, on: [number, number], off: [number, number] | null, toggles: number[], draws: number, bytes: number): BenchXrayRun['rd12'] => ({
+      rd, on: { tS0: on[0], tS1: on[1] }, off: off === null ? null : { tS0: off[0], tS1: off[1] }, toggles, drawCallsMax: draws, vertexBytesMax: bytes, radius: 176,
+    });
+    const run: BenchXrayRun = {
+      edit: { path: 'caves.cheese.offset', from: 0.5, to: 0.2 },
+      rd12: seg(12, [0, 30], [30, 32], [0, 30], 8, 1_000_000),
+      biome: seg(12, [10, 20], null, [10, 20], 8, 1_000_000),
+      rd16: seg(16, [34, 40], [32, 34], [34], 12, 2_000_000),
+      applyRefillMs: null,
+      mapOpenS: null,
+      timedOut: [],
+    };
+    const r = summarizeBench(recordOf(frames), FIXED, null, undefined, undefined, undefined, undefined, run).xray;
+    // The biome segment's 10 frames (nearest rank: p95 and p99 the 10th): its own long frame; the GPU ms with the X-ray
+    // on and no off window; its draws, GPU estimate and growth; its C frames and the two after each (10-12, 20-22).
+    expect(r.biome).toEqual({
+      rd: 12, p50: HZ240, p95: 11 * HZ240, p99: 11 * HZ240, max: 11 * HZ240, over33: 1, mainP95: 2.5, gpuMs: { on: { p50: 3, p95: 3 }, off: null },
+      gpuMB: 90 + 10 + 15.8, drawCallsMax: 44, xrayDrawCallsMax: 8, toggleMaxMs: 10 * HZ240, xrayVertexBytes: 1_000_000, radius: 176, growthEvents: 1,
+    });
+    // RD 12's 20 other frames with the X-ray on (by cave type: nearest rank p95 the 19th, p99 the 20th); X on and off
+    // frames all at the display interval.
+    expect([r.rd12.p50, r.rd12.p95, r.rd12.p99, r.rd12.max, r.rd12.over33, r.rd12.mainP95]).toEqual([HZ240, 9 * HZ240, 10 * HZ240, 10 * HZ240, 2, 1]);
+    expect([r.rd12.gpuMs, r.rd12.gpuMB, r.rd12.drawCallsMax, r.rd12.toggleMaxMs, r.rd12.growthEvents])
+      .toEqual([{ on: { p50: 2, p95: 2 }, off: { p50: 1, p95: 1 } }, 30 + 10 + 15.8, 40, HZ240, 1]);
+    // The most sections culled in a frame with the X-ray on, over every segment (the off frames not counted).
+    expect(r.xrayCulledSections).toBe(3);
+    const json = JSON.stringify(r);
+    expect(json).not.toContain('NaN');
+    expect(JSON.parse(json)).toEqual(r);
+    // Without the biome segment RD 12 reads every frame of its window.
+    const without = summarizeBench(recordOf(frames), FIXED, null, undefined, undefined, undefined, undefined, { ...run, biome: null }).xray;
+    expect([without.rd12.max, without.rd12.over33, without.rd12.mainP95, without.rd12.growthEvents]).toEqual([11 * HZ240, 3, 2.5, 2]);
+  });
+
+  test('the page\'s X-ray hooks (`benchXray`): X, C and PageDown through the page\'s X-ray, the renderer\'s X-ray draws, the rest as given', () => {
     const actions: string[] = [];
     const calls: string[] = [];
     const hooks = benchXray({
@@ -3587,9 +3758,11 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
       radius: () => 176,
     });
     hooks.toggle();
+    hooks.colorToggle();
     hooks.bandDown();
+    hooks.colorToggle();
     hooks.toggle();
-    expect(actions).toEqual(['xray', 'xrayDown', 'xray']);
+    expect(actions).toEqual(['xray', 'xrayColor', 'xrayDown', 'xrayColor', 'xray']);
     hooks.openMap();
     hooks.set('caves.cheese.offset', 0.2);
     hooks.closeMap();

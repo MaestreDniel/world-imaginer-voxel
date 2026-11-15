@@ -3,8 +3,8 @@
  * §8.7; SP5b spec §6.2; not in CI): drives the spike page (`?spike=batch`), the flight route (`?flight=sp4a`), the
  * streaming bench (`?bench=medium`: SP4c's live legs, SP5a's edit, SP5b's save, SP5c's paste, SP6a's cave and X-ray legs) or the
  * enter bench (`?bench=enter`, `runEnter`) in our own headful Chrome on a hardware GPU, reads the page's JSON over CDP
- * and writes it into `docs/superpowers/specs/assets/sp6a/` (every route since SP6a, D29; SP4a's-SP5c's files stay in
- * `assets/sp4a/` … `assets/sp5c/`). With `--shot` the bench freezes at a review shot's moment and the
+ * and writes it into `docs/superpowers/specs/assets/sp6b/` (every route since SP6b, D31; SP4a's-SP6a's files stay in
+ * `assets/sp4a/` … `assets/sp6a/`). With `--shot` the bench freezes at a review shot's moment and the
  * tool saves a 1920 × 1080 PNG there instead (§8.7, amended while planning: the shots need the GPU). A page cannot write
  * files, which is why this tool exists; the Firefox cells are the user's, by hand (the enter bench's `&auto=1` form).
  *
@@ -65,10 +65,11 @@ const WINDOW_READS = 8;
 /** The pause between two steps of the sequence, so the window manager applies each one before the next. */
 const WINDOW_STEP_MS = 300;
 /**
- * Where every route writes (SP6a spec §10.6, D29: SP6a's assets, every route re-measured there with caves; SP4a's-SP5c's
- * files stay in `assets/sp4a/`, `assets/sp4b/`, `assets/sp4c/`, `assets/sp5a/`, `assets/sp5b/` and `assets/sp5c/`).
+ * Where every route writes (SP6b spec §12.6, D31: SP6b's assets, every route re-measured there with cave culling and the
+ * X-ray's biome mode; SP4a's-SP6a's files stay in `assets/sp4a/`, `assets/sp4b/`, `assets/sp4c/`, `assets/sp5a/`,
+ * `assets/sp5b/`, `assets/sp5c/` and `assets/sp6a/`).
  */
-export const ASSETS = 'docs/superpowers/specs/assets/sp6a';
+export const ASSETS = 'docs/superpowers/specs/assets/sp6b';
 
 /**
  * The bench's review shots (SP4b spec §8.7; SP4c spec §8.7's `apply-before`, `apply-mid`, `apply-after`, `teleport`;

@@ -93,9 +93,9 @@ describe('measureChrome: the bench route (SP4b spec §8.3, §8.7)', () => {
     expect(routePath(args({ route: 'bench', workers: 4, renderer: 'mesh', shot: 'rd8' }))).toBe('/?bench=medium&workers=4&renderer=mesh&shot=rd8');
   });
 
-  test('every route writes to assets/sp6a since SP6a (SP6a spec §10.6, D29); SP4a\'s-SP5c\'s files stay where they are', () => {
-    expect(ASSETS).toBe('docs/superpowers/specs/assets/sp6a');
-    expect(ASSETS.endsWith('assets/sp6a')).toBe(true);
+  test('every route writes to assets/sp6b since SP6b (SP6b spec §12.6, D31); SP4a\'s-SP6a\'s files stay where they are', () => {
+    expect(ASSETS).toBe('docs/superpowers/specs/assets/sp6b');
+    expect(ASSETS.endsWith('assets/sp6b')).toBe(true);
   });
 
   test('the bench summary line, read defensively', () => {
@@ -145,10 +145,10 @@ describe('measureChrome: the enter route (SP5b spec §6.2)', () => {
     expect(enterSummary([], { gpu: 'iris', renderer: IRIS, shaderCache: 'cold', newWorldRevealMs: ms }).newWorldRevealMs).toBe(2345.5);
   });
 
-  test('`outputName({ route: \'enter\', gpu: \'iris\' })` is `enter-iris-chrome.json` in `assets/sp6a/`', () => {
+  test('`outputName({ route: \'enter\', gpu: \'iris\' })` is `enter-iris-chrome.json` in `assets/sp6b/`', () => {
     expect(outputName(args({ route: 'enter', gpu: 'iris' }))).toBe('enter-iris-chrome.json');
     expect(outputName(args({ route: 'enter', gpu: 'rtx' }))).toBe('enter-rtx-chrome.json');
-    expect(ASSETS).toBe('docs/superpowers/specs/assets/sp6a');
+    expect(ASSETS).toBe('docs/superpowers/specs/assets/sp6b');
   });
 
   test('`enterRatio` of pairs whose first is 10× slower is the median of the five kept pairs\' ratios (the first discarded)', () => {

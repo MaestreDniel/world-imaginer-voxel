@@ -804,8 +804,73 @@ describe('cave culling in the renderer\'s frame step (SP6b spec §8.2)', () => {
     const src = readFileSync(RENDERER_SRC, 'utf8');
     expect(src).toContain('\nconst NOW = (): number => performance.now();\n');
     expect(src).toContain('  const cull = createCullStep(sections.culler, origin, camera);\n');
-    expect(src).toContain('    frame(state) {\n      cull();\n      draw(state);\n    },');
+    expect(src).toContain('    frame(state) {\n      const t0 = NOW();\n      cull();\n      cullWalkMs[0] = NOW() - t0;\n      draw(state);\n    },');
     expect(src).toContain('      sections.culler.setHold(true);\n      try {\n        withSectionsShown(sections.root, () => withRegionsUnculled(sections.root, () => draw(state)));\n      } finally {\n        sections.culler.setHold(!sections.root.visible);\n      }');
+  });
+});
+
+describe('the culled sections and the culling\'s main-thread time of the last frame (SP6b spec §8.5, §12.6: L13\'s `cullMainMeanMs`, `cullMainMaxMs` and culled sections; rulings P41, P55, P58)', () => {
+  const RENDERER_SRC = new URL('../../src/render/renderer.ts', import.meta.url);
+  /** The section renderer's region objects of passes 0-2. */
+  const terrainOf = (root: Object3D): Mesh[] => {
+    const out: Mesh[] = [];
+    root.traverse((o) => { if ((o as Mesh).isMesh === true && typeof o.userData['pass'] === 'number' && o.userData['pass'] < 3) out.push(o as Mesh); });
+    return out;
+  };
+  const camera = new PerspectiveCamera(90, 1, 0.1, 10_000);
+  camera.position.set(128, 600, 64);
+  camera.lookAt(128, 0, 64);
+  camera.updateMatrixWorld();
+  /** The culler showing walk 5, which stamped exactly `drawn` (sections `torusSlot(cx, cz)·24 + sy`). */
+  const showOnly = (s: ReturnType<typeof createSectionRenderer>, drawn: readonly number[]): void => {
+    s.culler.walk.stamp.fill(0);
+    for (const k of drawn) s.culler.walk.stamp[k] = 5;
+    s.culler.shown = 5;
+    s.culler.drawAll = false;
+  };
+
+  for (const kind of ['batch', 'mesh'] as const) {
+    test(`${kind}: \`culledSections()\` counts the sections (one per section and pass) culling dropped from passes 0-2 in the last frame: ${kind === 'batch' ? 'the filter\'s dropped entries' : 'the rows of the arenas set to (0, 0)'}; 0 with everything drawn`, () => {
+      const materials = createMaterialSystem({ variant: kind, ao: true, smoothLight: true }, createFlatColorArray());
+      const sections = createSectionRenderer(kind, materials);
+      // Region (0, 0): column (0, 0) with opaque rows at sy 4 and 6 and a water row at 4. Region (1, 0): column (9, 0)
+      // with opaque rows at sy 4 and 10, a water row at 10 and an X-ray row (never culled).
+      sections.stage(fakePayload(0, 0, [{ sy: 4, pass: 0, quads: 2 }, { sy: 6, pass: 0, quads: 1 }, { sy: 4, pass: 2, quads: 1 }]), 1);
+      sections.stage(fakePayload(9, 0, [{ sy: 4, pass: 0, quads: 1 }, { sy: 10, pass: 0, quads: 3 }, { sy: 10, pass: 2, quads: 1 }, { sy: 10, pass: 3, quads: 1 }]), 1);
+      pumpAll(sections);
+      sections.root.updateMatrixWorld(true);
+      // The renderer's frame: the step before three's render, then three's `renderObject` on each region object it draws.
+      const frame = (): void => {
+        sections.sortTranslucent(camera.position.x, camera.position.y, camera.position.z);
+        for (const o of terrainOf(sections.root)) o.onBeforeRender(null as never, null as never, camera, o.geometry, o.material as Material, null as never);
+      };
+      expect(sections.culledSections()).toBe(0);
+      // Before any walk (`drawAll`): nothing culled.
+      frame();
+      expect(sections.culledSections()).toBe(0);
+      // Only section (0, 4, 0) drawn: column (0, 0)'s sy 6 opaque row is culled on RegionBatch (its arena still draws on
+      // RegionMesh), and every terrain row of region (1, 0), 3 of them.
+      showOnly(sections, [torusSlot(0, 0) * 24 + 4]);
+      frame();
+      expect(sections.culledSections()).toBe(kind === 'batch' ? 4 : 3);
+      frame();
+      expect(sections.culledSections()).toBe(kind === 'batch' ? 4 : 3);
+      // Everything drawn again (`drawAll`, as culling off, the X-ray or the eye out of range set it): 0 in the next frame.
+      sections.culler.drawAll = true;
+      frame();
+      expect(sections.culledSections()).toBe(0);
+      sections.dispose();
+      materials.dispose();
+    });
+  }
+
+  test('the WorldRenderer reads them per frame (no GL context in Node: the source): `culledSections()` is the section renderer\'s, `cullMainMs()` the frame\'s walk slice timed on the module\'s clock plus the section renderer\'s filter ms; the section renderer times its filter on that clock; `warmUp` walks nothing', () => {
+    const src = readFileSync(RENDERER_SRC, 'utf8');
+    expect(src).toContain('    sections = createSectionRenderer(o.kind, materials, NOW);\n');
+    expect(src).toContain('    frame(state) {\n      const t0 = NOW();\n      cull();\n      cullWalkMs[0] = NOW() - t0;\n      draw(state);\n    },');
+    expect(src).toContain('    culledSections() {\n      return sections.culledSections();\n    },');
+    expect(src).toContain('    cullMainMs() {\n      return cullWalkMs[0]! + sections.cullFilterMs();\n    },');
+    expect(src).toContain('      cullWalkMs[0] = 0;\n      sections.culler.setHold(true);');
   });
 });
 

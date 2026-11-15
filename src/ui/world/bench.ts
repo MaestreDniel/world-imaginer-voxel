@@ -27,13 +27,17 @@
  * 2f. then the cave leg L13 (SP6a spec §10.6, D29; `BENCH_CAVES`) from L10's hover point, whose RD 12 disc is loaded: the
  *    finder's job (`BenchCaveHooks.find`) for the nearest entrance from the camera, a route through the loaded store's
  *    cave tags from it (`caveRoute`), a flight to the route's start at 64 blocks per second and the route walked at
- *    4.3 blocks per second for 60 s, no physics, while the world streams; the `caves` block holds the walk's figures;
+ *    4.3 blocks per second for 60 s with cave culling on, then its first 20 s again with culling off (SP6b spec §12.6,
+ *    `BenchCaveHooks.setCulling`), no physics, while the world streams; the `caves` block holds the walk's figures, its
+ *    culling's (the walk's and the filter's main-thread ms, culled sections, triangles, GPU ms, walks per second) and
+ *    the culling-off segment's;
  * 2g. then the X-ray leg L14 (SP6a spec §10.6, D10, D29; `BENCH_XRAY`) where L13 left the camera, at RD 12: the page's X
- *    (`BenchXrayHooks`), a hold, a 360° sweep, PageDown four times, the map opened side by side and a cave parameter
- *    changed through the apply control (`BENCH_XRAY_SCRIPT.edit`), the refill awaited, X off, the map closed after
+ *    (`BenchXrayHooks`), a hold, the biome segment (SP6b spec §12.6: C, a hold, a 360° sweep, C), a 360° sweep, PageDown
+ *    four times, the map opened side by side and a cave parameter changed through the apply control (`BENCH_XRAY_SCRIPT.edit`), the refill awaited, X off, the map closed after
  *    the toggle's frames; then RD 16 (`RD_MAX`)
  *    filled, X on, the hold and the sweep again; the `xray` block holds each segment's figures (the map's open frames
- *    left out, `BENCH_MAP_OPEN_FRAMES`), the open's longest frame and the refill's time;
+ *    left out, `BENCH_MAP_OPEN_FRAMES`; the biome segment's frames its own), the open's longest frame, the most sections
+ *    culled with the X-ray on and the refill's time;
  * 3. hands the driver the run's fixed figures (`done`); the driver publishes `summarizeBench`'s JSON as
  *    `window.__wiBench.result` (read by `measureChrome.ts --route bench`) and a "Download JSON" button (the Firefox
  *    cells, by hand).
@@ -111,9 +115,10 @@ export const BENCH_IDLE_FRAMES = 120;
  * L12's 150 s at its caps (`BENCH_PASTE_LEG`), 36,000 frames: 123,168 holds 513 s, the script's 511 (its fill, as L11's
  * hover, uses that slack). SP6a spec §10.6 adds L13's 90 s at its caps (`BENCH_CAVES_LEG`), 21,600 frames: 144,768 holds
  * 603 s, the script's 601; and L14's 82 s at its caps (`BENCH_XRAY_LEG`), 19,680 frames: 164,448 holds 685 s, the
- * script's 683.
+ * script's 683. SP6b spec §12.6 adds L13's culling-off 20 s and L14's biome segment's 18 s, 9,120 frames: 173,568 holds
+ * 723 s, the script's 721.
  */
-export const BENCH_FRAME_CAPACITY = 164_448;
+export const BENCH_FRAME_CAPACITY = 173_568;
 
 export interface BenchLeg {
   readonly name: 'L0' | 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6' | 'L7' | 'L8' | 'L9' | 'L10' | 'L11' | 'L12' | 'L13' | 'L14';
@@ -268,9 +273,11 @@ export const BENCH_PASTE_LEG: BenchLeg = {
  * (a route shorter than its blocks, the cave air run out, lap after lap from its first point, where it ends), the eye
  * `EYE` above the floor, no physics, while the world streams. A find or a flight still running at its cap is
  * named in the `caves` block's `timedOut` (`'find'`, `'fly'`) and ends the script, as L12's time-outs do; a find with no
- * hit, or a hit with no route, ends it with `stoppedBy`.
+ * hit, or a hit with no route, ends it with `stoppedBy`. SP6b spec §12.6: the walk's `walkS` s run with cave culling on;
+ * then culling is switched off (`BenchCaveHooks.setCulling(false)`, a bench-only call), the camera back at the route's
+ * start, and the route's first `offS` s are walked again; culling is switched on again at L13's end.
  */
-export const BENCH_CAVES = { findMaxS: 20, flyMaxS: 10, walkS: 60 } as const;
+export const BENCH_CAVES = { findMaxS: 20, flyMaxS: 10, walkS: 60, offS: 20 } as const;
 
 /**
  * L13's route (SP6a spec §10.6): the flight's speed, blocks per second (plan); the steady walking speed that
@@ -279,10 +286,13 @@ export const BENCH_CAVES = { findMaxS: 20, flyMaxS: 10, walkS: 60 } as const;
  */
 export const BENCH_CAVE_ROUTE = { flySpeed: 64, walkSpeed: 4.3, blocks: 258 } as const;
 
-/** L13 as a leg (`seconds` its caps: the find's, the flight's and the walk's); it ends on its own, not on a timeline. */
+/**
+ * L13 as a leg (`seconds` its caps: the find's, the flight's, the walk's and the culling-off segment's); it ends on its
+ * own, not on a timeline.
+ */
 export const BENCH_CAVES_LEG: BenchLeg = {
   name: 'L13',
-  seconds: BENCH_CAVES.findMaxS + BENCH_CAVES.flyMaxS + BENCH_CAVES.walkS,
+  seconds: BENCH_CAVES.findMaxS + BENCH_CAVES.flyMaxS + BENCH_CAVES.walkS + BENCH_CAVES.offS,
   speed: 0,
   headings: [],
   rdSteps: [],
@@ -290,9 +300,10 @@ export const BENCH_CAVES_LEG: BenchLeg = {
 
 /**
  * The X-ray leg L14 (SP6a spec §10.6, D10, D29), after L13 where it left the camera (its x, y, z and yaw; the live legs'
- * pitch −15), at RD 12: X on (the page's X, `BenchXrayHooks.toggle`); a hold of `holdS` s; a 360° sweep of the yaw over
- * `sweepS` s; PageDown `BENCH_XRAY_SCRIPT.bandSteps` times, one a second, over `bandS` s; the map opened side by side
- * (mode B) and, once its tool is mounted and the open's `BENCH_MAP_OPEN_FRAMES` frames are past (ruling R27; they leave
+ * pitch −15), at RD 12: X on (the page's X, `BenchXrayHooks.toggle`); a hold of `holdS` s; the biome segment (SP6b spec
+ * §12.6): C (the page's, `BenchXrayHooks.colorToggle`: by cave biome), a hold of `holdS` s, a 360° sweep over `sweepS`
+ * s, C (by cave type); a 360° sweep of the yaw over `sweepS` s; PageDown `BENCH_XRAY_SCRIPT.bandSteps` times, one a
+ * second, over `bandS` s; the map opened side by side (mode B) and, once its tool is mounted and the open's `BENCH_MAP_OPEN_FRAMES` frames are past (ruling R27; they leave
  * the frame figures), `BENCH_XRAY_SCRIPT.edit` set through the session and the apply control (the release); the refill awaited (every column of the RD 12 disc swapped since the Apply); X off, at most `refillMaxS` s
  * after the map opened; then, at most `rd16MaxS` s: the X-ray off at RD 12 for `BENCH_XRAY_SCRIPT.offS` s, the map
  * closed in it `BENCH_XRAY_SCRIPT.closeS` s and at least `closeFrames` frames after X off (mode B's close resizes the
@@ -338,10 +349,11 @@ export const BENCH_XRAY_SCRIPT = {
   rd16FillMaxS: 20,
 } as const;
 
-/** L14 as a leg (`seconds` its caps); it ends on its own, not on a timeline. */
+/** L14 as a leg (`seconds` its caps, the biome segment's hold and sweep included); it ends on its own, not on a timeline. */
 export const BENCH_XRAY_LEG: BenchLeg = {
   name: 'L14',
-  seconds: BENCH_XRAY.holdS + BENCH_XRAY.sweepS + BENCH_XRAY.bandS + BENCH_XRAY.refillMaxS + BENCH_XRAY.rd16MaxS,
+  seconds: BENCH_XRAY.holdS + (BENCH_XRAY.holdS + BENCH_XRAY.sweepS) + BENCH_XRAY.sweepS + BENCH_XRAY.bandS + BENCH_XRAY.refillMaxS
+    + BENCH_XRAY.rd16MaxS,
   speed: 0,
   headings: [],
   rdSteps: [],
@@ -637,12 +649,15 @@ export function caveRoute(
  * `revealed2`, `revealed4`, `revealedRd` (the columns within 2 columns of the camera's, of the RD 4 disc and of the live
  * RD's disc revealed since that mark), written by the page (`createLiveReveals`) before the recorder. SP5a (spec §6.2)
  * adds `playerMs`: the frame step's input, walk step and aim (the DDA, the queued clicks, the outline) on the bench's
- * clock, written by the page from the frame step's `timing` before the recorder; L10's `mainP95Ms` is its p95.
+ * clock, written by the page from the frame step's `timing` before the recorder; L10's `mainP95Ms` is its p95. SP6b
+ * (spec §8.5, §12.6) adds `cullMs` (the frame's cave-culling walk and filter, main thread, `WorldRenderer.cullMainMs`),
+ * `culled` (the sections culling left undrawn, `WorldRenderer.culledSections`) and `walks` (the culler's last completed
+ * walk, `shown`), read by the recorder.
  */
 export const BENCH_FIELDS = [
   'leg', 'rawMs', 'snappedMs', 'mainMs', 'coordinatorMs', 'uploadMs', 'rows', 'structuralKind', 'structuralMB', 'gpuMs', 'calls',
   'triangles', 'geometryMB', 'texturesMB', 'drawingBufferMB', 'heapMB', 'sabMB', 'partial', 'mixed', 'genCap',
-  'tMs', 'mark', 'revealed2', 'revealed4', 'revealedRd', 'playerMs',
+  'tMs', 'mark', 'revealed2', 'revealed4', 'revealedRd', 'playerMs', 'cullMs', 'culled', 'walks',
 ] as const;
 export type BenchField = (typeof BENCH_FIELDS)[number];
 
@@ -669,12 +684,13 @@ const MEMORY_SAMPLE_FRAMES = 30;
 
 /** What the recorder reads each frame: structural views of the page's section renderer and world renderer. */
 export interface BenchSources {
-  readonly sections: Pick<SectionRenderer, 'counts' | 'probe'>;
+  /** The section renderer; its cave culler's last completed walk (`shown`, SP6b spec §12.6: walks per second). */
+  readonly sections: Pick<SectionRenderer, 'counts' | 'probe'> & { readonly culler: { readonly shown: number } };
   /**
    * The world renderer; `renderer.info.render` is read in place: `WorldRenderer.info()` returns a new object per call
    * (Task 23's notes), which the bench would otherwise measure as its own garbage.
    */
-  readonly world: Pick<WorldRenderer, 'gpuEstimate' | 'gpuTimer'> & {
+  readonly world: Pick<WorldRenderer, 'gpuEstimate' | 'gpuTimer' | 'culledSections' | 'cullMainMs'> & {
     readonly renderer: { readonly info: { readonly render: { readonly calls: number; readonly triangles: number } } };
   };
   /** The JS heap in MiB, NaN where it is not exposed (read every 30 frames). */
@@ -688,7 +704,8 @@ export interface BenchSources {
  * `pose`); a full record takes no more. `rawMs` is snapped to `intervalMs` (`snapFrameTime`). Read after the render:
  * the pump's last structural operation (`counts(out).lastStructural`, `lastStructuralBytes`), the probe, the GPU
  * estimate grouped as geometry (the sections and the sky), textures (the texture array and the lightmap) and the
- * drawing buffer (plan), the draw calls and triangles; every 30 frames the memory. The GPU timer's samples finish 1-3
+ * drawing buffer (plan), the draw calls and triangles, the cave culling's ms, culled sections and last completed walk
+ * (SP6b spec §12.6); every 30 frames the memory. The GPU timer's samples finish 1-3
  * frames after their draw: each frame keeps its draw's tag (`timer.draws() − 1`, the page renders once per recorded
  * frame) and every finished sample is written to the row of the draw it timed (Task 26b), so a structural frame's
  * `gpuMs` is its own; a sample of a draw before the first row (the warm-up, the reveal) has no row and is dropped.
@@ -751,6 +768,9 @@ export function createBenchRecorder(rec: BenchRecord, src: BenchSources, interva
       rec.partial[i] = probe.partial;
       rec.mixed[i] = probe.mixed;
       rec.genCap[i] = genCap;
+      rec.cullMs[i] = src.world.cullMainMs();
+      rec.culled[i] = src.world.culledSections();
+      rec.walks[i] = src.sections.culler.shown;
       rec.n = i + 1;
     },
   };
@@ -1112,23 +1132,42 @@ export type PasteFigures = { readonly [K in PastePartName]: PastePartFigures } &
 };
 
 /**
- * L13's block (SP6a spec §10.6, D29): the route's moves (`routeBlocks`, below `BENCH_CAVE_ROUTE.blocks` when the cave
- * air ran out and the walk went round it in laps) and its points per kind (`routeKinds`); over the walk's frames (its
- * script window) the snapped frames' nearest-rank p50, p95, p99, max and the count over 33 ms (`caveP95`,
- * `caveOver33`) and the main thread's p95 (`caveMainP95`); `growthEvents`, the frames of L13 (find, flight and walk)
- * whose structural operation grew a region's buffers (`'grow'`); the finder's answer; `timedOut` (`'find'`, `'fly'`)
- * and `stoppedBy`. A figure with no sample is null.
+ * The figures of one stretch of L13's walk (SP6a spec §10.6; SP6b spec §8.5, §12.6) over its frames: the snapped frames'
+ * nearest-rank p50, p95, p99, max and the count over 33 ms (`caveP95`, `caveOver33`) and the main thread's p95
+ * (`caveMainP95`); the cave culling's main-thread ms per frame, its walk's slice plus its filter, mean and max
+ * (`cullMainMeanMs`, `cullMainMaxMs`); the sections culling left undrawn and the triangles drawn per frame (nearest-rank
+ * p50, max); `gpuMs` p50 and p95 over the timer's samples; the culler's walks completed per second over the frames'
+ * span. A figure with no sample is null.
  */
-export interface CaveFigures {
-  readonly routeBlocks: number;
-  readonly routeKinds: Readonly<Record<string, number>>;
+export interface CaveWalkFigures {
   readonly p50: number | null;
   readonly p95: number | null;
   readonly p99: number | null;
   readonly max: number | null;
   readonly over33: number;
   readonly mainP95: number | null;
+  readonly cullMainMeanMs: number | null;
+  readonly cullMainMaxMs: number | null;
+  readonly culledSections: { readonly p50: number; readonly max: number } | null;
+  readonly triangles: { readonly p50: number; readonly max: number } | null;
+  readonly gpuMs: { readonly p50: number; readonly p95: number } | null;
+  readonly walksPerS: number | null;
+}
+
+/**
+ * L13's block (SP6a spec §10.6, D29): the route's moves (`routeBlocks`, below `BENCH_CAVE_ROUTE.blocks` when the cave
+ * air ran out and the walk went round it in laps) and its points per kind (`routeKinds`); the walk's figures over its
+ * 60 s with culling on (`CaveWalkFigures`; SP6b spec §12.6: G1's `caveP95`, `caveOver33`, `caveMainP95`, §8.5's
+ * `cullMainMeanMs`, `cullMainMaxMs`); `growthEvents`, the frames of L13 (find, flight, walk and the culling-off segment)
+ * whose structural operation grew a region's buffers (`'grow'`); `cullOff`, the same figures over the culling-off
+ * segment (the route's first 20 s again, every section drawn; empty without it); the finder's answer; `timedOut`
+ * (`'find'`, `'fly'`) and `stoppedBy`.
+ */
+export interface CaveFigures extends CaveWalkFigures {
+  readonly routeBlocks: number;
+  readonly routeKinds: Readonly<Record<string, number>>;
   readonly growthEvents: number;
+  readonly cullOff: CaveWalkFigures;
   readonly find: BenchCaveRun['find'];
   readonly timedOut: readonly string[];
   readonly stoppedBy: string | null;
@@ -1168,17 +1207,24 @@ export interface XraySegmentFigures {
 }
 
 /**
- * L14's block (SP6a spec §10.6, D10, D29): the RD 12 segment (`rd12`, gated by G1.xray) and the RD 16 one (`rd16`,
- * recorded); `xrayApplyRefillMs`, from the edit's release to the frame that swapped the last column of the RD 12 disc
- * (null when it never did); `xrayMapOpenMaxMs`, the longest snapped frame of the map open's `BENCH_MAP_OPEN_FRAMES`
- * rows, which the segments' frame figures leave out (recorded, not gated: ruling R27; null without an open or a row at
- * or after it); the edit made; `timedOut` (`'map'`, `'refill'`, `'rd16'`).
+ * L14's block (SP6a spec §10.6, D10, D29): the RD 12 segment (`rd12`, gated by G1.xray; by cave type: the biome
+ * segment's frames left out) and the RD 16 one (`rd16`, recorded); the biome segment (`biome`, SP6b spec §12.6: at RD
+ * 12 between its two C presses, by cave biome: G1's `xrayBiomeP95`, `xrayBiomeOver33`, and its `toggleMaxMs` over the
+ * three frames from each C, `xrayColorToggleMaxMs`; its `xrayVertexBytes` beside RD 12's, both modes; no frames with
+ * the X-ray off); `xrayApplyRefillMs`, from the edit's release to the frame that swapped the last column of the RD 12
+ * disc (null when it never did); `xrayMapOpenMaxMs`, the longest snapped frame of the map open's
+ * `BENCH_MAP_OPEN_FRAMES` rows, which the segments' frame figures leave out (recorded, not gated: ruling R27; null
+ * without an open or a row at or after it); `xrayCulledSections`, the most sections culling left undrawn in a frame
+ * with the X-ray on (recorded; 0 by design: nothing is culled while the X-ray is on, SP6b spec §8.2; null without such
+ * a frame); the edit made; `timedOut` (`'map'`, `'refill'`, `'rd16'`).
  */
 export interface XrayFigures {
   readonly rd12: XraySegmentFigures;
+  readonly biome: XraySegmentFigures;
   readonly rd16: XraySegmentFigures;
   readonly xrayApplyRefillMs: number | null;
   readonly xrayMapOpenMaxMs: number | null;
+  readonly xrayCulledSections: number | null;
   readonly edit: BenchXrayRun['edit'];
   readonly timedOut: readonly string[];
 }
@@ -1524,7 +1570,8 @@ const NO_PASTE_RUN: BenchPasteRun = { parts: [], ops: [], log: NO_PASTE_LOG, poo
  * L13's hooks (SP6a spec §10.6): the finder's job for the nearest entrance from voxel (x, y, z) (the pool's `findCave`
  * with `CAVE_KIND.entrance`, its default radius and budget: its hit, an air voxel, null unless `reason` is `found`), and
  * the loaded store's reads for `caveRoute`: the cave byte at a voxel (0 where its column is not Published) and whether
- * the voxel collides (`physics.ts`' `solidAt`; false where not Published).
+ * the voxel collides (`physics.ts`' `solidAt`; false where not Published); the bench's switch for cave culling (the
+ * section renderer's `setCulling`, SP6b spec §12.6: off for the culling-off segment).
  */
 export interface BenchCaveHooks {
   find(x: number, y: number, z: number): Promise<{
@@ -1533,6 +1580,7 @@ export interface BenchCaveHooks {
   }>;
   tagAt(x: number, y: number, z: number): number;
   solidAt(x: number, y: number, z: number): boolean;
+  setCulling(on: boolean): void;
 }
 
 /** What the driver knows of L13 (SP6a spec §10.6) and hands `summarizeBench`. */
@@ -1544,6 +1592,8 @@ export interface BenchCaveRun {
   readonly routeKinds: Readonly<Record<string, number>>;
   /** The walk's script window [tS0, tS1), s; null when the walk never started. */
   readonly walk: { readonly tS0: number; readonly tS1: number } | null;
+  /** The culling-off segment's script window [tS0, tS1), s (SP6b spec §12.6); null when it never started. */
+  readonly cullOff: { readonly tS0: number; readonly tS1: number } | null;
   /** `'find'` and `'fly'` for a part still running at its cap. */
   readonly timedOut: readonly string[];
   /** Why L13 ended before its walk (no hit, no route); null when it did not. */
@@ -1552,11 +1602,12 @@ export interface BenchCaveRun {
 
 /** No L13 (a run that ended before it, or a driver bound without the cave hooks). */
 const NO_CAVE_RUN: BenchCaveRun = {
-  find: { reason: null, ms: null, hit: null }, routeBlocks: 0, routeKinds: {}, walk: null, timedOut: [], stoppedBy: null,
+  find: { reason: null, ms: null, hit: null }, routeBlocks: 0, routeKinds: {}, walk: null, cullOff: null, timedOut: [], stoppedBy: null,
 };
 
 /**
- * L14's hooks (SP6a spec §10.6): the page's X and PageDown (its `PageXray`: the renderer's X-ray, the strip); the map
+ * L14's hooks (SP6a spec §10.6): the page's X, C (SP6b spec §7.3, §12.6: the colour mode) and PageDown (its `PageXray`:
+ * the renderer's X-ray, the strip); the map
  * overlay opened side by side (mode B, its tool mounted on the first open), whether its tool is mounted and shown, and
  * its close; the edit through the session (the apply control applies it) and whether every column of the RD 12 disc was
  * swapped since its Apply (the live legs' reveals); whether the disc of `rd` around the camera's column is revealed;
@@ -1564,6 +1615,7 @@ const NO_CAVE_RUN: BenchCaveRun = {
  */
 export interface BenchXrayHooks {
   toggle(): void;
+  colorToggle(): void;
   bandDown(): void;
   openMap(): void;
   mapReady(): boolean;
@@ -1594,8 +1646,12 @@ export interface BenchXraySegment {
 /** What the driver knows of L14 (SP6a spec §10.6) and hands `summarizeBench`. */
 export interface BenchXrayRun {
   readonly edit: { readonly path: string; readonly from: number; readonly to: number };
-  /** The segments that ran (null for one that did not start). */
+  /**
+   * The segments that ran (null for one that did not start); `biome` (SP6b spec §12.6) by cave biome at RD 12, its on
+   * window and toggles its two C presses, no off window.
+   */
   readonly rd12: BenchXraySegment | null;
+  readonly biome: BenchXraySegment | null;
   readonly rd16: BenchXraySegment | null;
   /** From the edit's release to the frame that swapped the last column, ms; null without one. */
   readonly applyRefillMs: number | null;
@@ -1606,7 +1662,7 @@ export interface BenchXrayRun {
 
 /** No L14 (a run that ended before it, or a driver bound without the X-ray hooks). */
 const NO_XRAY_RUN: BenchXrayRun = {
-  edit: BENCH_XRAY_SCRIPT.edit, rd12: null, rd16: null, applyRefillMs: null, mapOpenS: null, timedOut: [],
+  edit: BENCH_XRAY_SCRIPT.edit, rd12: null, biome: null, rd16: null, applyRefillMs: null, mapOpenS: null, timedOut: [],
 };
 
 /** The bench's JSON (spec §8.3; SP4c spec §8.4's `live`; SP5a spec §6.2's `edit`). */
@@ -1960,21 +2016,50 @@ function pasteFiguresOf(rec: BenchRecord, idx: readonly number[], run: BenchPast
 /** `structuralKind`'s code of a region buffer's growth (`'grow'`). */
 const GROW_CODE = STRUCTURAL_KINDS.indexOf('grow');
 
-/** L13's block (SP6a spec §10.6) over its rows `idx`: the walk's frames are its script window's. */
-function caveFiguresOf(rec: BenchRecord, idx: readonly number[], run: BenchCaveRun): CaveFigures {
-  const w = run.walk;
-  const rows = w === null ? [] : idx.filter((i) => rec.tMs[i]! >= w.tS0 * 1000 && rec.tMs[i]! < w.tS1 * 1000);
+/** A stretch of L13's walk (SP6a spec §10.6; SP6b spec §8.5, §12.6) over its rows `rows`, in order. */
+function caveWalkOf(rec: BenchRecord, rows: readonly number[]): CaveWalkFigures {
   const snapped = pick(rec.snappedMs, rows);
+  const cull = pick(rec.cullMs, rows);
+  const culled = pick(rec.culled, rows);
+  const triangles = pick(rec.triangles, rows);
+  const gpu = finite(pick(rec.gpuMs, rows));
+  let cullSum = 0;
+  for (let k = 0; k < cull.length; k++) cullSum += cull[k]!;
+  // The walks completed: the rows whose culler's last completed walk moved on from the row before.
+  let walks = 0;
+  for (let k = 1; k < rows.length; k++) if (rec.walks[rows[k]!]! !== rec.walks[rows[k - 1]!]!) walks++;
+  const spanS = rows.length < 2 ? 0 : (rec.tMs[rows[rows.length - 1]!]! - rec.tMs[rows[0]!]!) / 1000;
+  const p50Max = (v: Float64Array): { readonly p50: number; readonly max: number } | null =>
+    v.length === 0 ? null : { p50: percentile(v, 50), max: maxOf(v) };
   return {
-    routeBlocks: run.routeBlocks,
-    routeKinds: { ...run.routeKinds },
     p50: percentileOrNull(snapped, 50),
     p95: percentileOrNull(snapped, 95),
     p99: percentileOrNull(snapped, 99),
     max: snapped.length === 0 ? null : maxOf(snapped),
     over33: countIf(snapped, (v) => v > LONG_FRAME_MS),
     mainP95: percentileOrNull(pick(rec.mainMs, rows), 95),
+    cullMainMeanMs: cull.length === 0 ? null : cullSum / cull.length,
+    cullMainMaxMs: cull.length === 0 ? null : maxOf(cull),
+    culledSections: p50Max(culled),
+    triangles: p50Max(triangles),
+    gpuMs: gpu.length === 0 ? null : { p50: percentile(gpu, 50), p95: percentile(gpu, 95) },
+    walksPerS: spanS > 0 ? walks / spanS : null,
+  };
+}
+
+/**
+ * L13's block (SP6a spec §10.6) over its rows `idx`: the walk's frames are its script window's, the culling-off
+ * segment's its own window's (SP6b spec §12.6).
+ */
+function caveFiguresOf(rec: BenchRecord, idx: readonly number[], run: BenchCaveRun): CaveFigures {
+  const within = (w: { readonly tS0: number; readonly tS1: number } | null): number[] =>
+    w === null ? [] : idx.filter((i) => rec.tMs[i]! >= w.tS0 * 1000 && rec.tMs[i]! < w.tS1 * 1000);
+  return {
+    routeBlocks: run.routeBlocks,
+    routeKinds: { ...run.routeKinds },
+    ...caveWalkOf(rec, within(run.walk)),
     growthEvents: countIf(pick(rec.structuralKind, idx), (v) => v === GROW_CODE),
+    cullOff: caveWalkOf(rec, within(run.cullOff)),
     find: { reason: run.find.reason, ms: run.find.ms, hit: run.find.hit === null ? null : { ...run.find.hit } },
     timedOut: [...run.timedOut],
     stoppedBy: run.stoppedBy,
@@ -1983,12 +2068,16 @@ function caveFiguresOf(rec: BenchRecord, idx: readonly number[], run: BenchCaveR
 
 /**
  * An L14 segment's figures (SP6a spec §10.6) over L14's rows `idx`, the snapped frame figures without the map open's
- * rows `opening` (ruling R27); every figure null without the segment.
+ * rows `opening` (ruling R27), and every figure of its frames with the X-ray on without those in the window `skip` (RD
+ * 12's without the biome segment's, SP6b spec §12.6); every figure null without the segment.
  */
-function xraySegmentOf(rec: BenchRecord, idx: readonly number[], seg: BenchXraySegment | null, opening: readonly number[]): XraySegmentFigures {
-  const within = (w: { readonly tS0: number; readonly tS1: number } | null): number[] =>
-    w === null ? [] : idx.filter((i) => rec.tMs[i]! >= w.tS0 * 1000 && rec.tMs[i]! < w.tS1 * 1000);
-  const on = seg === null ? [] : within(seg.on);
+function xraySegmentOf(
+  rec: BenchRecord, idx: readonly number[], seg: BenchXraySegment | null, opening: readonly number[],
+  skip: { readonly tS0: number; readonly tS1: number } | null = null,
+): XraySegmentFigures {
+  const inside = (i: number, w: { readonly tS0: number; readonly tS1: number }): boolean => rec.tMs[i]! >= w.tS0 * 1000 && rec.tMs[i]! < w.tS1 * 1000;
+  const within = (w: { readonly tS0: number; readonly tS1: number } | null): number[] => (w === null ? [] : idx.filter((i) => inside(i, w)));
+  const on = seg === null ? [] : within(seg.on).filter((i) => skip === null || !inside(i, skip));
   const off = seg === null ? [] : within(seg.off);
   const snapped = pick(rec.snappedMs, on.filter((i) => !opening.includes(i)));
   const gpuOf = (rows: readonly number[]): { readonly p50: number; readonly p95: number } | null => {
@@ -2030,11 +2119,17 @@ function xrayFiguresOf(rec: BenchRecord, idx: readonly number[], run: BenchXrayR
   const open = run.mapOpenS;
   const k = open === null ? -1 : idx.findIndex((i) => rec.tMs[i]! >= open * 1000);
   const opening = k < 0 ? [] : idx.slice(k, k + BENCH_MAP_OPEN_FRAMES);
+  // Every row with the X-ray on, in any segment's window (each row once), for the most sections culled.
+  const segments = [run.rd12, run.biome, run.rd16];
+  const onRows = idx.filter((i) => segments.some((g) => g !== null && rec.tMs[i]! >= g.on.tS0 * 1000 && rec.tMs[i]! < g.on.tS1 * 1000));
   return {
-    rd12: xraySegmentOf(rec, idx, run.rd12, opening),
+    // The biome segment's window leaves RD 12's figures (SP6b spec §12.6).
+    rd12: xraySegmentOf(rec, idx, run.rd12, opening, run.biome?.on ?? null),
+    biome: xraySegmentOf(rec, idx, run.biome, opening),
     rd16: xraySegmentOf(rec, idx, run.rd16, opening),
     xrayApplyRefillMs: run.applyRefillMs,
     xrayMapOpenMaxMs: opening.length === 0 ? null : maxOf(pick(rec.snappedMs, opening)),
+    xrayCulledSections: onRows.length === 0 ? null : maxOf(pick(rec.culled, onRows)),
     edit: { ...run.edit },
     timedOut: [...run.timedOut],
   };
@@ -2516,25 +2611,33 @@ const L11_PARTS = 2;
 const PASTE_CAPS: readonly number[] = [BENCH_PASTE.hoverS, BENCH_PASTE.houseMaxS, BENCH_PASTE.maxMaxS, BENCH_PASTE.sweepS];
 /** The leg index after the last leg: the script has ended. */
 const DONE_LEG = XRAY_LEG + 1;
-/** L13's phases: the finder's answer awaited, the flight to the route's start, the walk. */
+/** L13's phases: the finder's answer awaited, the flight to the route's start, the walk, the culling-off segment. */
 const L13_FIND = 0;
 const L13_FLY = 1;
 const L13_WALK = 2;
+const L13_OFF = 3;
 /**
- * L14's phases: at RD 12 the hold, the sweep, the band steps, the map and the edit's refill, the X-ray off; RD 16's
- * fill, its hold and its sweep.
+ * L14's phases: at RD 12 the hold, the biome segment's hold and sweep (SP6b spec §12.6), the sweep, the band steps, the
+ * map and the edit's refill, the X-ray off; RD 16's fill, its hold and its sweep.
  */
 const L14_HOLD = 0;
-const L14_SWEEP = 1;
-const L14_BAND = 2;
-const L14_MAP = 3;
-const L14_OFF = 4;
-const L14_FILL = 5;
-const L14_HOLD16 = 6;
-const L14_SWEEP16 = 7;
+const L14_BIOME_HOLD = 1;
+const L14_BIOME_SWEEP = 2;
+const L14_SWEEP = 3;
+const L14_BAND = 4;
+const L14_MAP = 5;
+const L14_OFF = 6;
+const L14_FILL = 7;
+const L14_HOLD16 = 8;
+const L14_SWEEP16 = 9;
+/** L14's segments in the driver's `xraySeg`: RD 12 (by cave type), RD 16, the biome segment (SP6b spec §12.6). */
+const SEG_RD12 = 0;
+const SEG_RD16 = 1;
+const SEG_BIOME = 2;
+const SEGMENTS = 3;
 /** The tolerance L14's schedule allows the script's float times, s (as L11's). */
 const XRAY_EPS_S = 1e-6;
-/** One L14 segment's slots in the driver's `xraySeg` (two segments): see `BenchXraySegment`. */
+/** One L14 segment's slots in the driver's `xraySeg` (`SEGMENTS` segments): see `BenchXraySegment`. */
 const SEG_RD = 0;
 const SEG_ON0 = 1;
 const SEG_ON1 = 2;
@@ -2659,14 +2762,14 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let lastOpS = Number.NEGATIVE_INFINITY;
   // L13 (SP6a spec §10.6): its hooks (null until `bind`, and without them no L13), its phase, whether the find was
   // posted, its answer (null until it comes) and the script times of the find's post, the flight's and the walk's
-  // starts and the walk's end; the flight's ends (x y z from, x y z to); the route (x y z per point), each point's
-  // eye y, whether it is walked in laps (shorter than its blocks) and the walk's yaw; what `summarizeBench` reads
-  // (BenchCaveRun).
+  // starts, the walk's end (the culling-off segment's start, SP6b spec §12.6) and the culling-off segment's end; the
+  // flight's ends (x y z from, x y z to); the route (x y z per point), each point's eye y, whether it is walked in laps
+  // (shorter than its blocks) and the walk's yaw; what `summarizeBench` reads (BenchCaveRun).
   let caves: BenchCaveHooks | null = null;
   let cavePhase = L13_FIND;
   let caveAsked = false;
   let caveAnswer: { readonly hit: { readonly x: number; readonly y: number; readonly z: number } | null; readonly reason: string } | null = null;
-  const caveTimes = Float64Array.of(Number.NaN, Number.NaN, Number.NaN, Number.NaN);
+  const caveTimes = Float64Array.of(Number.NaN, Number.NaN, Number.NaN, Number.NaN, Number.NaN);
   const flyEnds = new Float64Array(6);
   let route: Float64Array = new Float64Array(0);
   let routeEye = new Float64Array(0);
@@ -2680,8 +2783,8 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   // the phase's start (s), the X-ray's state, the band steps pressed, the camera's pose at its start (x y z yaw pitch),
   // the edit's release (s, NaN before), the last pose's time (s), the refill's time (ms, NaN without one), the map's
   // open (s, NaN before), the frames posed since the open, the frames posed since X off and the one the map closed in
-  // (−1 before), the RD the script wants (12, then RD 16's), each segment's slots (`SEG_*`, NaN where not reached)
-  // and the time-outs.
+  // (−1 before), the RD the script wants (12, then RD 16's), each segment's slots (`SEG_*`, NaN where not reached; the
+  // biome segment's, SP6b spec §12.6, in `SEG_BIOME`) and the time-outs.
   let xray: BenchXrayHooks | null = null;
   let xrayStarted = false;
   let xrayPhase = L14_HOLD;
@@ -2694,7 +2797,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   // [the phase's start, the release, the last pose's time, the refill ms, the map's open (s)]
   const xrayTimes = Float64Array.of(0, Number.NaN, Number.NaN, Number.NaN, Number.NaN);
   let scriptRd = BENCH_RD;
-  const xraySeg = new Float64Array(2 * SEG_SLOTS).fill(Number.NaN);
+  const xraySeg = new Float64Array(SEGMENTS * SEG_SLOTS).fill(Number.NaN);
   const xrayTimedOut: string[] = [];
   const capped = (rd: number): number => Math.min(rd, rdMax);
 
@@ -3291,8 +3394,10 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   /**
    * One frame of L13 at `tS` (SP6a spec §10.6), after `livePose`: the find posted at its first frame from the camera's
    * voxel, the camera kept at L10's hover point until the answer (at most `findMaxS`); the route planned from the hit;
-   * the flight to the route's start, straight, at `flySpeed` (at most `flyMaxS`); the walk for `walkS`. False once the
-   * leg has ended (a part at its cap is named in `timedOut`).
+   * the flight to the route's start, straight, at `flySpeed` (at most `flyMaxS`); the walk for `walkS`; then (SP6b spec
+   * §12.6) culling off from the frame at the walk's end, posed back at the route's start, and the route walked again
+   * for `offS`, culling on again at the frame that ends the leg. False once the leg has ended (a part at its cap is
+   * named in `timedOut`).
    */
   const caveStep = (tS: number, out: BenchPose): boolean => {
     const hooks = caves!;
@@ -3352,9 +3457,21 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       caveTimes[2] = tS;
       walkYaw = out.yaw;
     }
-    const into = tS - caveTimes[2]!;
-    if (into >= BENCH_CAVES.walkS) {
+    if (cavePhase === L13_WALK) {
+      const into = tS - caveTimes[2]!;
+      if (into < BENCH_CAVES.walkS) {
+        routePose(into * BENCH_CAVE_ROUTE.walkSpeed, out);
+        return true;
+      }
+      // Culling off for the route's first `offS` s again, from this frame (the bench-only switch, SP6b spec §12.6).
+      cavePhase = L13_OFF;
       caveTimes[3] = tS;
+      hooks.setCulling(false);
+    }
+    const into = tS - caveTimes[3]!;
+    if (into >= BENCH_CAVES.offS) {
+      caveTimes[4] = tS;
+      hooks.setCulling(true);
       return false;
     }
     routePose(into * BENCH_CAVE_ROUTE.walkSpeed, out);
@@ -3369,6 +3486,14 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     xrayOn = !xrayOn;
     segSet(g, k, tS);
   };
+  /** C (the page's colour mode, SP6b spec §7.3), its time kept as the biome segment's toggle slot `k`. */
+  const xrayColor = (k: number, tS: number): void => {
+    xray!.colorToggle();
+    segSet(SEG_BIOME, k, tS);
+  };
+  /** The segment whose figures phase `phase`'s frames are. */
+  const segOfPhase = (phase: number): number =>
+    (phase === L14_BIOME_HOLD || phase === L14_BIOME_SWEEP ? SEG_BIOME : phase < L14_OFF ? SEG_RD12 : SEG_RD16);
   /** With the X-ray on, the renderer's X-ray figures of the last frame into segment `g`'s maxima. */
   const xraySample = (g: number): void => {
     const h = xray!;
@@ -3392,7 +3517,8 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   };
   /**
    * One frame of L14 at `tS` (SP6a spec §10.6), after `livePose`: X on at its first frame, where the camera is; the hold,
-   * the sweep, the band steps, the map and the edit, the refill (at most `refillMaxS` from the map's open), X off; the
+   * the biome segment (SP6b spec §12.6: C at the hold's end, a hold, a sweep, C where the next sweep starts), the sweep,
+   * the band steps, the map and the edit, the refill (at most `refillMaxS` from the map's open), X off; the
    * X-ray off at RD 12 and the map closed past the toggle's frames, RD 16 asked for and its fill awaited, X on, the
    * hold and the sweep. False
    * once the leg has ended (a part at its cap is named in `timedOut`, and the leg goes on to its next part).
@@ -3414,14 +3540,39 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     }
     const prevS = xrayTimes[2]!;
     xrayTimes[2] = tS;
-    if (xrayOn) xraySample(xrayPhase < L14_OFF ? 0 : 1);
+    if (xrayOn) xraySample(segOfPhase(xrayPhase));
     let into = tS - xrayTimes[0]!;
     if (xrayPhase === L14_HOLD || xrayPhase === L14_HOLD16) {
       if (into < BENCH_XRAY.holdS - XRAY_EPS_S) {
         xrayPose(out, 0);
         return true;
       }
+      if (xrayPhase === L14_HOLD) {
+        // The biome segment: C, by cave biome from this frame, at RD 12.
+        segSet(SEG_BIOME, SEG_RD, segAt(SEG_RD12, SEG_RD));
+        segSet(SEG_BIOME, SEG_ON0, tS);
+        xrayColor(SEG_TOGGLE0, tS);
+      }
       xrayNext(xrayPhase + 1, tS);
+      into = 0;
+    }
+    if (xrayPhase === L14_BIOME_HOLD) {
+      if (into < BENCH_XRAY.holdS - XRAY_EPS_S) {
+        xrayPose(out, 0);
+        return true;
+      }
+      xrayNext(L14_BIOME_SWEEP, tS);
+      into = 0;
+    }
+    if (xrayPhase === L14_BIOME_SWEEP) {
+      if (into < BENCH_XRAY.sweepS - XRAY_EPS_S) {
+        xrayPose(out, into);
+        return true;
+      }
+      // C again, by cave type from this frame, where the sweep starts.
+      segSet(SEG_BIOME, SEG_ON1, tS);
+      xrayColor(SEG_TOGGLE1, tS);
+      xrayNext(L14_SWEEP, tS);
       into = 0;
     }
     if (xrayPhase === L14_SWEEP || xrayPhase === L14_SWEEP16) {
@@ -3699,10 +3850,12 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
           {
             find: caveFind, routeBlocks: Math.max(0, route.length / 3 - 1), routeKinds: { ...routeKinds },
             walk: Number.isNaN(caveTimes[2]!) ? null : { tS0: caveTimes[2]!, tS1: Number.isNaN(caveTimes[3]!) ? Number.POSITIVE_INFINITY : caveTimes[3]! },
+            cullOff: Number.isNaN(caveTimes[3]!) ? null : { tS0: caveTimes[3]!, tS1: Number.isNaN(caveTimes[4]!) ? Number.POSITIVE_INFINITY : caveTimes[4]! },
             timedOut: [...caveTimedOut], stoppedBy: caveStopped,
           },
           {
-            edit: BENCH_XRAY_SCRIPT.edit, rd12: xraySegment(0, Number.POSITIVE_INFINITY), rd16: xraySegment(1, Number.POSITIVE_INFINITY),
+            edit: BENCH_XRAY_SCRIPT.edit, rd12: xraySegment(SEG_RD12, Number.POSITIVE_INFINITY), biome: xraySegment(SEG_BIOME, Number.POSITIVE_INFINITY),
+            rd16: xraySegment(SEG_RD16, Number.POSITIVE_INFINITY),
             applyRefillMs: Number.isNaN(xrayTimes[3]!) ? null : xrayTimes[3]!,
             mapOpenS: Number.isNaN(xrayTimes[4]!) ? null : xrayTimes[4]!, timedOut: [...xrayTimedOut],
           },

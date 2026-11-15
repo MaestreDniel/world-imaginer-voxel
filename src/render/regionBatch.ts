@@ -49,7 +49,10 @@ import { XRAY_ORDER } from './selection';
  * section `torusSlot(cx, cz)·24 + sy` (written in `upload`, regrown with the instance table); with the X-ray off its
  * `onBeforeRender` runs three's own (cull, sort, list), then `cullDrawList` drops the entries of sections the culler
  * (`setCuller`, the staging's) does not draw, in place and in order, so the translucent sort holds. The reveal state
- * (`setVisibleAt`) is never touched, so R7's probe and `rowVisible` read the same; draw calls do not change.
+ * (`setVisibleAt`) is never touched, so R7's probe and `rowVisible` read the same; draw calls do not change. The frame's
+ * figures (SP6b spec §8.5, §12.6; rulings P41, P55): the entries the filter dropped and its main-thread ms on the clock
+ * `createRegionBatch` is given (none: untimed), summed over the frame's batches into a preallocated pair, which
+ * `sortTranslucent`, the renderer's step before three's render, zeroes (`culledSections`, `cullFilterMs`).
  */
 
 /** Instances a batch starts with: a mountain region holds up to 64 columns × 24 opaque rows. */
@@ -88,10 +91,10 @@ export interface BatchDrawList {
 
 /**
  * The cave-culling draw filter (SP6b spec §8.3): keeps entry k of `list` only if `culler.drawnAt(sectionOf[instance])`,
- * compacting the starts, counts and indirect ids in place in their order, and sets the count. O(entries listed); writes
- * the batch's own arrays only (no allocation).
+ * compacting the starts, counts and indirect ids in place in their order, and sets the count; returns the entries it
+ * dropped. O(entries listed); writes the batch's own arrays only (no allocation).
  */
-export function cullDrawList(list: BatchDrawList, sectionOf: Int32Array, culler: Pick<CaveCuller, 'drawnAt'>): void {
+export function cullDrawList(list: BatchDrawList, sectionOf: Int32Array, culler: Pick<CaveCuller, 'drawnAt'>): number {
   const n = list._multiDrawCount;
   const starts = list._multiDrawStarts;
   const counts = list._multiDrawCounts;
@@ -108,6 +111,7 @@ export function cullDrawList(list: BatchDrawList, sectionOf: Int32Array, culler:
     w++;
   }
   list._multiDrawCount = w;
+  return n - w;
 }
 
 interface BatchPass {
@@ -192,7 +196,8 @@ function sectionGeometry(p: ColumnMeshPayload, o: number, r: number): BufferGeom
   return g;
 }
 
-export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
+/** RegionBatch over `materials`; `clock` (ms) times the cave-culling filter (`cullFilterMs`), null leaves it untimed. */
+export function createRegionBatch(materials: MaterialSystem, clock: (() => number) | null = null): SectionRenderer {
   if (materials.variant !== 'batch') throw new Error(`RegionBatch needs the 'batch' material variant, got '${materials.variant}'`);
   const materialOf: Record<number, MaterialSystem['terrainOpaque']> = {
     [MESH_PASS_OPAQUE]: materials.terrainOpaque,
@@ -221,6 +226,9 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
   let xrayShown = false;
   // The staging's cave culler (`setCuller`): null draws every listed entry.
   let culler: CaveCuller | null = null;
+  // The frame's filter figures, zeroed by `sortTranslucent`: [the entries dropped, the filter's ms] (a typed array: a
+  // double kept in a closure would be boxed on each write).
+  const cullStats = new Float64Array(2);
   /** An X-ray batch's `onBeforeRender`: three's own (cull, list) while the X-ray is on, else a zero multi-draw count. */
   const xrayBeforeRender: BatchedMesh['onBeforeRender'] = function (this: BatchedMesh, renderer, scene, camera, geometry, material, group) {
     if (!xrayShown) {
@@ -233,8 +241,9 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
   /**
    * A terrain or water batch's `onBeforeRender` (SP6b spec §7.4, D24, §8.3): the mirror of `xrayBeforeRender`, a zero
    * multi-draw count while the X-ray is on (its rows keep uploading: the batch stays in the scene; no compaction), else
-   * three's own, then the cave-culling filter over its list. three rebuilds the list on every call here (the batch is
-   * `perObjectFrustumCulled`), so a compacted list never carries over to the next frame. One per batch (its `sectionOf`).
+   * three's own, then the cave-culling filter over its list, its dropped entries and its time added to the frame's
+   * figures. three rebuilds the list on every call here (the batch is `perObjectFrustumCulled`), so a compacted list
+   * never carries over to the next frame. One per batch (its `sectionOf`).
    */
   const terrainBeforeRenderOf = (bp: BatchPass): BatchedMesh['onBeforeRender'] =>
     function (this: BatchedMesh, renderer, scene, camera, geometry, material, group) {
@@ -243,7 +252,10 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
         return;
       }
       BatchedMesh.prototype.onBeforeRender.call(this, renderer, scene, camera, geometry, material, group);
-      if (culler !== null) cullDrawList(this as unknown as BatchDrawList, bp.sectionOf, culler);
+      if (culler === null) return;
+      const t0 = clock === null ? 0 : clock();
+      cullStats[0] += cullDrawList(this as unknown as BatchDrawList, bp.sectionOf, culler);
+      if (clock !== null) cullStats[1] += clock() - t0;
     };
 
   const place = (bp: BatchPass): void => {
@@ -520,7 +532,16 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
       culler = c;
     },
     sortTranslucent() {
-      // BatchedMesh sorts its translucent instances itself (sortObjects).
+      // BatchedMesh sorts its translucent instances itself (sortObjects). The renderer's step before three's render opens
+      // the frame's filter figures.
+      cullStats[0] = 0;
+      cullStats[1] = 0;
+    },
+    culledSections() {
+      return cullStats[0]!;
+    },
+    cullFilterMs() {
+      return cullStats[1]!;
     },
     gpuBytes() {
       // An indexed loop: the bench reads this every frame (SP4b spec §3.10).

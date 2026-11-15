@@ -164,6 +164,19 @@ export interface SectionRenderer {
    * `BatchedMesh` sorts its instances itself; RegionMesh orders its regions by centre.
    */
   sortTranslucent(camX: number, camY: number, camZ: number): void;
+  /**
+   * The sections cave culling left undrawn in the last frame (SP6b spec §8.5, §12.6: L13's culled sections; rulings P55,
+   * P58), one per section and pass of passes 0-2: on RegionBatch the entries its filter dropped from three's lists
+   * (after three's frustum culling) since the frame's `sortTranslucent`; on RegionMesh the rows of the arenas region
+   * culling gives the draw range (0, 0). 0 while the X-ray is on or culling is off.
+   */
+  culledSections(): number;
+  /**
+   * The cave-culling filter's main-thread ms in the last frame on the clock `createSectionRenderer` was given (0 without
+   * one): RegionBatch's filter over its batches' lists, RegionMesh's re-apply of region culling (`cullMainMeanMs`'s and
+   * `cullMainMaxMs`' filter part, SP6b spec §8.5).
+   */
+  cullFilterMs(): number;
   counts(out: SectionRendererCounts): SectionRendererCounts;
   /** The allocated geometry bytes: every live region object's attribute and index arrays (SP4b spec §8.4). */
   gpuBytes(): number;
@@ -182,10 +195,13 @@ export function selectSectionRenderer(report: { readonly multiDraw: boolean }, o
   return override ?? (report.multiDraw ? 'batch' : 'mesh');
 }
 
-/** The section renderer of `kind`; `materials` must be the system of the same variant. */
-export function createSectionRenderer(kind: SectionRendererKind, materials: MaterialSystem): SectionRenderer {
+/**
+ * The section renderer of `kind`; `materials` must be the system of the same variant. `cullClock` (ms) times its
+ * cave-culling filter (`cullFilterMs`); null leaves it untimed.
+ */
+export function createSectionRenderer(kind: SectionRendererKind, materials: MaterialSystem, cullClock: (() => number) | null = null): SectionRenderer {
   if (materials.variant !== kind) {
     throw new Error(`a '${kind}' section renderer needs the '${kind}' material variant, got '${materials.variant}'`);
   }
-  return kind === 'mesh' ? createRegionMesh(materials) : createRegionBatch(materials);
+  return kind === 'mesh' ? createRegionMesh(materials, cullClock) : createRegionBatch(materials, cullClock);
 }

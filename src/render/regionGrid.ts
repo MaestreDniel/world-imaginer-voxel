@@ -224,6 +224,12 @@ export interface RegionBackend<R> {
    */
   setCuller?(c: CaveCuller | null): void;
   sortTranslucent(camX: number, camY: number, camZ: number): void;
+  /**
+   * The last frame's cave-culling figures (`SectionRenderer.culledSections`, `cullFilterMs`; SP6b spec §8.5, §12.6): a
+   * backend without them reads 0.
+   */
+  culledSections?(): number;
+  cullFilterMs?(): number;
   gpuBytes(): number;
 }
 
@@ -644,6 +650,12 @@ export function createStreamingRenderer<R>(
     },
     sortTranslucent(camX, camY, camZ) {
       b.sortTranslucent(camX, camY, camZ);
+    },
+    culledSections() {
+      return b.culledSections?.() ?? 0;
+    },
+    cullFilterMs() {
+      return b.cullFilterMs?.() ?? 0;
     },
     counts(out: SectionRendererCounts) {
       out.columnsStaged = liveList.length;

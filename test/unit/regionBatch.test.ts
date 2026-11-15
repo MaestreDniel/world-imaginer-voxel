@@ -2,6 +2,8 @@ import {
   BatchedMesh, Matrix4, PerspectiveCamera, Quaternion, REVISION, Vector3, type Box3, type BufferAttribute, type BufferGeometry,
   type Material, type Object3D, type Sphere,
 } from 'three';
+import v8 from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { MESH_PASS_XRAY, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
 import { torusSlot } from '../../src/render/culling/caveCulling';
@@ -640,9 +642,12 @@ describe('RegionBatch\'s cave-culling draw filter (SP6b spec §8.3)', () => {
     const p = new Vector3().setFromMatrixPosition(b.getMatrixAt(instance, new Matrix4()));
     return sectionAt(p.x / 16, p.z / 16, p.y / 16);
   };
-  /** Two columns of region (0, 0): opaque rows in sections 2, 4, 6 and 2, 4, 9, water rows at 4 and 2, a cutout row at 6. */
-  const twoColumns = (): SectionRenderer => {
-    const r = make();
+  /**
+   * Two columns of region (0, 0): opaque rows in sections 2, 4, 6 and 2, 4, 9, water rows at 4 and 2, a cutout row at 6;
+   * `clock` times the filter (none: untimed).
+   */
+  const twoColumns = (clock: (() => number) | null = null): SectionRenderer => {
+    const r = createSectionRenderer('batch', system('batch'), clock);
     r.stage(fakePayload(0, 0, [opaque(2), opaque(4, 2), water(4), opaque(6), { sy: 6, pass: 1, quads: 1 }]), 1);
     r.stage(fakePayload(1, 0, [opaque(2, 3), water(2), opaque(4), opaque(9)]), 1);
     pumpAll(r);
@@ -751,6 +756,114 @@ describe('RegionBatch\'s cave-culling draw filter (SP6b spec §8.3)', () => {
     // No per-instance pass and no compaction ran (D24).
     expect(cull).not.toHaveBeenCalled();
     r.dispose();
+  });
+
+  test('the frame\'s culled sections (`culledSections`): the entries the filter dropped since the frame\'s `sortTranslucent`, over passes 0-2; the filter\'s main-thread ms on the section renderer\'s clock (`cullFilterMs`, 0 untimed); the X-ray on drops and times nothing (SP6b spec §8.5; rulings P41, P55, P58)', () => {
+    // A clock 0.25 ms on at each read: each filter call reads it twice.
+    let now = 0;
+    const r = twoColumns(() => (now += 0.25));
+    const terrain = [0, 1, 2].map((pass) => batchOf(r, pass)!);
+    const frame = (): void => {
+      r.sortTranslucent(0, 0, 0);
+      for (const b of terrain) beforeRender(b);
+    };
+    // Nothing drawn yet.
+    expect([r.culledSections(), r.cullFilterMs()]).toEqual([0, 0]);
+    // `drawAll`: three's own 6 + 1 + 2 entries kept, nothing dropped; the three filter calls timed.
+    frame();
+    expect([r.culledSections(), r.cullFilterMs()]).toEqual([0, 0.75]);
+    // Sections (0, 4, 0) and (1, 2, 0) drawn: 2 + 0 + 2 entries kept, 5 dropped, the frame's own (not a running total).
+    showOnly(r, [sectionAt(0, 0, 4), sectionAt(1, 0, 2)]);
+    frame();
+    expect([r.culledSections(), r.cullFilterMs()]).toEqual([5, 0.75]);
+    frame();
+    expect([r.culledSections(), r.cullFilterMs()]).toEqual([5, 0.75]);
+    // The next frame's `sortTranslucent` starts its count: read before the batches are drawn, 0.
+    r.sortTranslucent(0, 0, 0);
+    expect([r.culledSections(), r.cullFilterMs()]).toEqual([0, 0]);
+    // Two batches drawn this frame (three culled the cutout one): their drops only, the opaque batch's 4 and the water's 0.
+    beforeRender(terrain[0]!);
+    beforeRender(terrain[2]!);
+    expect([r.culledSections(), r.cullFilterMs()]).toEqual([4, 0.5]);
+    // X-ray on: the terrain batches draw nothing and filter nothing.
+    r.setXray(true);
+    frame();
+    expect([r.culledSections(), r.cullFilterMs()]).toEqual([0, 0]);
+    r.setXray(false);
+    frame();
+    expect(r.culledSections()).toBe(5);
+    r.dispose();
+    // Untimed (no clock): the count still, 0 ms.
+    const u = twoColumns();
+    showOnly(u, [sectionAt(0, 0, 4), sectionAt(1, 0, 2)]);
+    u.sortTranslucent(0, 0, 0);
+    for (const pass of [0, 1, 2]) beforeRender(batchOf(u, pass)!);
+    expect([u.culledSections(), u.cullFilterMs()]).toEqual([5, 0]);
+    u.dispose();
+  });
+
+  test('10,000 frames of the filter with its count and its clock grow the heap by less than 256 KB (no allocation per frame; ruling P55)', () => {
+    // Pre-boxed timestamps (a tagged array, never doubles): the clock itself allocates nothing.
+    const times: unknown[] = new Array(200_000);
+    times[0] = {};
+    for (let i = 0; i < times.length; i++) times[i] = 0.5 + i / 64;
+    let k = 0;
+    const r = twoColumns(() => (times as number[])[k++ % times.length]!);
+    const terrain = [0, 1, 2].map((pass) => batchOf(r, pass)!);
+    showOnly(r, [sectionAt(0, 0, 4), sectionAt(1, 0, 2)]);
+    // three's own list, recorded once per batch and replayed into its arrays: three builds it with a sort and a render
+    // list that allocate (as the zero-allocation fixture does), so the filter is measured on its own.
+    const own = BatchedMesh.prototype.onBeforeRender;
+    const recorded = new Map<BatchedMesh, { starts: Int32Array; counts: Int32Array; ids: Uint32Array; n: number }>();
+    for (const b of terrain) {
+      own.call(b, null as never, null as never, camera, b.geometry, b.material as Material, null as never);
+      const l = listOf(b);
+      recorded.set(b, { starts: l._multiDrawStarts.slice(), counts: l._multiDrawCounts.slice(), ids: l._indirectTexture.image.data.slice(), n: l._multiDrawCount });
+    }
+    BatchedMesh.prototype.onBeforeRender = function (this: BatchedMesh) {
+      const rec = recorded.get(this)!;
+      const l = listOf(this);
+      l._multiDrawStarts.set(rec.starts);
+      l._multiDrawCounts.set(rec.counts);
+      l._indirectTexture.image.data.set(rec.ids);
+      l._multiDrawCount = rec.n;
+    };
+    const frame = (): void => {
+      r.sortTranslucent(0.5, 100.5, 0.5);
+      for (let i = 0; i < terrain.length; i++) beforeRender(terrain[i]!);
+    };
+    try {
+      for (let i = 0; i < 20_000; i++) frame();
+      expect(r.culledSections()).toBe(5);
+      expect(r.cullFilterMs()).toBeGreaterThan(0);
+      v8.setFlagsFromString('--expose-gc');
+      const gc = runInNewContext('gc') as () => void;
+      const JIT_SPACE = /^(code|trusted|shared_trusted)_/;
+      const heapUsed = (): number => {
+        let b = 0;
+        for (const s of v8.getHeapSpaceStatistics()) if (!JIT_SPACE.test(s.space_name)) b += s.space_used_size;
+        return b;
+      };
+      const readings: number[] = [];
+      for (let t = 0; t < 3; t++) {
+        gc();
+        gc();
+        const before = heapUsed();
+        const profiler = new v8.GCProfiler();
+        profiler.start();
+        for (let i = 0; i < 10_000; i++) frame();
+        const after = heapUsed();
+        const gcs = profiler.stop()?.statistics.length ?? 0;
+        if (gcs > 0) continue;
+        readings.push(after - before);
+        if (after - before < 256 * 1024) break;
+      }
+      expect(readings.length, 'every attempt saw a GC').toBeGreaterThan(0);
+      expect(readings[readings.length - 1]!, `heap growth over 10,000 frames (attempts: ${readings.join(', ')})`).toBeLessThan(256 * 1024);
+    } finally {
+      BatchedMesh.prototype.onBeforeRender = own;
+      r.dispose();
+    }
   });
 
   test('the reveal state (`setVisibleAt`) is untouched by the filter, so R7\'s probe reads the same; an instance id past the first table (after `setInstanceCount`) is filtered by its own section', () => {

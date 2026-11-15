@@ -36,7 +36,8 @@ import { createFlatColorArray } from './textureArray';
  * dome is hidden and the clear colour is `XRAY_CLEAR` (`createXrayControl`).
  * SP6b (spec §8.2): each frame gives the section renderer's cave culler the camera's world position and a 0.5 ms slice
  * of its walk (`createCullStep`) before drawing; the render distance sets its range (`applyRenderDistance`), and `warmUp`
- * holds it so everything draws.
+ * holds it so everything draws. The last frame's culled sections and the walk's and the filter's main-thread ms
+ * (`culledSections`, `cullMainMs`; spec §8.5, §12.6: L13's figures) are read per frame, as `toolDrawCalls` is.
  */
 
 /** The camera's near plane walking and flying, in blocks (SP5a spec §3.5; flying as SP4a spec §6.1). */
@@ -242,6 +243,18 @@ export interface WorldRenderer {
    * reservation and its growths included (SP6a spec §5.1, §10.6: L14's `xrayVertexBytes`).
    */
   xrayVertexBytes(): number;
+  /**
+   * The sections cave culling left undrawn in the last `frame`, one per section and pass of passes 0-2
+   * (`SectionRenderer.culledSections`; SP6b spec §12.6: L13's culled sections, L14's `xrayCulledSections`), read per frame
+   * as `toolDrawCalls` is.
+   */
+  culledSections(): number;
+  /**
+   * The cave culling's main-thread ms in the last `frame` (SP6b spec §8.5: L13's `cullMainMeanMs`, `cullMainMaxMs`): its
+   * walk's slice (`createCullStep`) and the section renderer's filter (`cullFilterMs`), both on `performance.now`; 0
+   * walk ms after a `warmUp`.
+   */
+  cullMainMs(): number;
   /**
    * Shows the blocks a paste would replace (SP5c spec §6.3, D11): the first `count` (at most `REPLACED_MAX`) cells of
    * `cells`, x, y, z offset triples from (x0, y0, z0), relative to the floating origin (scene coordinates, as
@@ -734,7 +747,7 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   const materials = createMaterialSystem({ variant: o.kind, ao: o.ao, smoothLight: o.smoothLight }, albedo);
   let sections: SectionRenderer;
   try {
-    sections = createSectionRenderer(o.kind, materials);
+    sections = createSectionRenderer(o.kind, materials, NOW);
   } catch (e) {
     materials.dispose();
     albedo.dispose();
@@ -771,6 +784,9 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   // The load's RD reaches the cave culler too (SP6b spec §8.2), as `setRenderDistance` later.
   applyRenderDistance(camera, o.rd, sections.culler);
   const cull = createCullStep(sections.culler, origin, camera);
+  // The last frame's walk slice, ms (`cullMainMs`), in a typed array: a double kept in a closure would be boxed on each
+  // write.
+  const cullWalkMs = new Float64Array(1);
   const timer = createGpuTimer(renderer.getContext() as WebGL2RenderingContext);
 
   const resize = (): void =>
@@ -824,11 +840,14 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
       await compileWorldScene(renderer, world, camera, sections);
     },
     frame(state) {
+      const t0 = NOW();
       cull();
+      cullWalkMs[0] = NOW() - t0;
       draw(state);
     },
     warmUp(state) {
       // Held, everything draws (SP6b spec §8.2, ruling P45); the hold stays while the reveals are held (the root hidden).
+      cullWalkMs[0] = 0;
       sections.culler.setHold(true);
       try {
         withSectionsShown(sections.root, () => withRegionsUnculled(sections.root, () => draw(state)));
@@ -883,6 +902,12 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     },
     xrayVertexBytes() {
       return xrayDraws.vertexBytes();
+    },
+    culledSections() {
+      return sections.culledSections();
+    },
+    cullMainMs() {
+      return cullWalkMs[0]! + sections.cullFilterMs();
     },
     setReplaced(x0, y0, z0, cells, count) {
       replaced.set(x0, y0, z0, cells, count);
