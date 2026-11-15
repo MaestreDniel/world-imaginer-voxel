@@ -349,7 +349,7 @@ A pure fluid voxel is AIR plus a fluid byte. Waterlogging comes free: a state wh
 | blocks | block-pool slot ≥ 0, or `-1-uniformStateId` |
 | light | slot, or `-1-uniformByte` (all 0 in sealed rock and dark caves, all 0xF0 in open sky) |
 | fluid | slot, or `-1-uniformByte`; -1 is "no fluid" (byte 0), so a full water section of an ocean costs no slot (amended by SP3a) |
-| meta | bits 0-12 nonAir (0-4096), 13 hasOpaque, 14 hasCutout, 15 hasTranslucent (any voxel whose `PASS` is that pass), 16 hasFluid (any fluid type ≠ 0), 17-31 face-to-face connectivity (0; SP4a computes connectivity15 in the mesh job and carries it in the mesh result; SP6b decides whether the meta holds it) (amended by SP3a) |
+| meta | bits 0-12 nonAir (0-4096), 13 hasOpaque, 14 hasCutout, 15 hasTranslucent (any voxel whose `PASS` is that pass), 16 hasFluid (any fluid type ≠ 0), bits 17-31 stay 0: cave culling reads `connectivity15` from the staging (SP6b), which the mesh job computes and carries in the mesh result (SP4a) (amended by SP3a and SP6b) |
 | cave | slot, or `-1-uniformByte`: `cave` (u8 per voxel: the cave kind in bits 0-3; bits 4-7: the cave biome (`CAVE_BIOME`), written by T at tagged voxels (SP6b); written by T, shared from the proto set, never persisted; SP6a; amended by SP6b); -1 is "no cave" (kind 0), so a section with no carved voxel costs no slot; it leaves the meta word alone (amended by SP6a) |
 
 Each channel is stored on its own: uniform when every value of that channel is equal (no slot), dense otherwise; rewriting a descriptor releases what it held. Unwritten descriptors are −1 (uniform air, light byte 0, no fluid). The connectivity bits and `padded.ts` are SP4a's (amended by SP3a).
@@ -1248,7 +1248,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from th
 ### 4.15 Culling
 
 - **Frustum:** per instance via BatchedMesh `perObjectFrustumCulled`, using the precomputed spheres.
-- **Cave culling (Checchi):** a main-thread BFS from the camera section through connected faces with `dot(face, fromCamera) ≥ 0`, inside the frustum. The result drives `setVisibleAt`. It re-runs on a section change or a turn of more than 10°, with a budget of 1.5 ms, time-sliced across frames.
+- **Cave culling (SP6b, its spec §8; amended by SP6b):** a main-thread walk over the shown columns' `connectivity15` (copied from the staging on a reveal or a swap; `render/culling/caveCulling.ts`), from a seed box of the 3 × 3 × 3 sections around the camera's section, each entered by every face, monotone relative to the box (+x only from a section at x ≥ the camera's − 1, likewise on each axis and side), keeping each section's entry faces (a section is popped again when an entry face it lacks arrives), so every section a straight ray from any eye in the box reaches is drawn; no frustum. A column within RD that is not revealed is walked as fully open; nothing above y 319 or below y −64 is stepped into. A section is drawn when `drawAll` is set or the last completed walk, or the one in progress, reached it; `drawAll` (everything drawn) holds while no completed walk covers the eye, after a wall is opened, while the eye is outside y −64 … 319 and through `warmUp`, until a walk that covers the eye and started after it completes. It re-runs on a section change, on a connectivity change and after reveals (at most every 250 ms while they arrive), in 0.5 ms slices per frame. RegionBatch filters its terrain and water batches' multi-draw lists per section in their `onBeforeRender`; RegionMesh gives a region arena (passes 0-2) none of whose columns has a drawn section the draw range (0, 0), re-applied on each frame where the culler's `shown` or `drawAll` changed. Never while the X-ray is on (its pass is never culled; no walk, `drawAll`); the reveal state (`setVisibleAt`, RegionMesh's indices) is untouched, so the reveal probe reads the same.
 
 ### 4.16 Graphics presets
 
@@ -1691,7 +1691,7 @@ Metric values are written to `test/metrics/.out/*.json` for trends. The harness 
 | result intake and dispatch | 0.3 ms |
 | uploads (`setGeometryAt` / `addUpdateRange`) | ≤ 2.0 ms |
 | BatchedMesh per-instance culling (about 3k) | 0.6 ms |
-| cave BFS (on change, time-sliced) | ≤ 1.0 ms amortised |
+| cave culling: the walk (on change, 0.5 ms slices) and RegionBatch's draw filter (SP6b; `cullMainMeanMs`, its spec §8.5) | ≤ 1.0 ms amortised |
 | three.js submit (about 60 draws) | 1.5 ms |
 | lightmap, uniforms, HUD | 0.2 ms |
 | **total** | **≈ 6 ms**, with no per-frame allocation in hot paths |

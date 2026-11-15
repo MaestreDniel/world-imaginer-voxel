@@ -170,7 +170,9 @@
  * lands item 19 (§6.1's raycast reference as built; the SP6a describe's pin of its line moved here), item 20's R3 row
  * (`wronglyCulled` and `popIn` gated, `culledUnderground` recorded, cross-checked against THRESHOLDS) and item 6's test
  * entry (`harness/cull.ts`, an `SP6B_MODULES` row). D25's culling checkpoint (Task 40) gates `culledUnderground` ≥ 50 %
- * and words the R3 row as built (item 20's R3 part).
+ * and words the R3 row as built (item 20's R3 part). RegionMesh's region culling (Task 43) lands item 8's meta line
+ * (§2.3: bits 17-31 stay 0; the SP6a describe's "SP6b decides whether the meta holds it" pin moved here) and item 17
+ * (§4.15's cave culling as built and §7's main-thread row as worded; the measured cost comes with the master pins).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2008,7 +2010,7 @@ describe('master spec amendments (SP6a §13)', () => {
       expect(l, `no line starting ${head}`).toBeDefined();
       return l!;
     };
-    expect(line('| meta |')).toContain('SP6b decides whether the meta holds it');
+    // §2.3's meta line moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 8 rewords it).
     // §2.3's aux B line moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 8 rewords it).
     expect(line('- **Ops.**')).toContain('caves add their ops on the same base in SP6a.');
     // Item 11's early-out line (Task 9) and item 7's D19 sentence as ruling R8 words it (the wet roof reads `wetMask`).
@@ -2924,5 +2926,58 @@ describe('master spec amendments (SP6b §15)', () => {
     }
     // SP6a's list still reads alone.
     expect(/\(SP6a: ([^)]*)\)/.exec(entry)![1]).toBe('metrics/caves.metric.ts, bench/inlined.ts');
+  });
+
+  test('§2.3\'s meta line: bits 17-31 stay 0 (SP6b spec §15 item 8)', () => {
+    const lines = text.split('\n');
+    const from = lines.findIndex((l) => l.startsWith('### 2.3 '));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('### 2.4 '));
+    expect(from, 'no §2.3').toBeGreaterThanOrEqual(0);
+    const metas = lines.slice(from, to).filter((l) => l.startsWith('| meta |'));
+    expect(metas, 'one `| meta |` row in §2.3').toHaveLength(1);
+    expect(metas[0]).toContain('16 hasFluid (any fluid type ≠ 0), bits 17-31 stay 0: cave culling reads `connectivity15` from the staging (SP6b)');
+    expect(metas[0]).toContain('(amended by SP3a and SP6b) |');
+    // Moved from the SP6a describe ("SP6b decides whether the meta holds it").
+    expect(metas[0]).not.toContain('SP6b decides whether the meta holds it');
+  });
+
+  test('§4.15 and §7\'s main-thread row: cave culling as built (SP6b spec §15 item 17)', () => {
+    const at = text.indexOf('### 4.15 Culling');
+    expect(at, 'no §4.15').toBeGreaterThanOrEqual(0);
+    const s415 = text.slice(at, text.indexOf('### 4.16 ', at));
+    // Frustum culling stays three's, per instance.
+    expect(s415).toContain('- **Frustum:** per instance via BatchedMesh `perObjectFrustumCulled`, using the precomputed spheres.');
+    const cave = s415.split('\n').find((l) => l.startsWith('- **Cave culling'));
+    expect(cave, 'no cave culling item in §4.15').toBeDefined();
+    expect(cave!.startsWith('- **Cave culling (SP6b, its spec §8; amended by SP6b):** a main-thread walk over the shown columns\' `connectivity15`')).toBe(true);
+    for (const part of [
+      // The monotone walk with entry faces from a 3 × 3 × 3 seed box, no frustum.
+      'from a seed box of the 3 × 3 × 3 sections around the camera\'s section, each entered by every face',
+      'monotone relative to the box',
+      'keeping each section\'s entry faces (a section is popped again when an entry face it lacks arrives)',
+      'so every section a straight ray from any eye in the box reaches is drawn; no frustum.',
+      // Unrevealed columns open.
+      'A column within RD that is not revealed is walked as fully open',
+      // `drawAll`.
+      'A section is drawn when `drawAll` is set or the last completed walk, or the one in progress, reached it;',
+      '`drawAll` (everything drawn) holds while no completed walk covers the eye, after a wall is opened',
+      // 0.5 ms slices.
+      'It re-runs on a section change, on a connectivity change and after reveals (at most every 250 ms while they arrive), in 0.5 ms slices per frame.',
+      // RegionBatch's filter and RegionMesh's arenas, re-applied when `shown` or `drawAll` changes.
+      'RegionBatch filters its terrain and water batches\' multi-draw lists per section in their `onBeforeRender`;',
+      'RegionMesh gives a region arena (passes 0-2) none of whose columns has a drawn section the draw range (0, 0), re-applied on each frame where the culler\'s `shown` or `drawAll` changed.',
+      // Never while the X-ray is on; the reveal state untouched.
+      'Never while the X-ray is on',
+      'the reveal state (`setVisibleAt`, RegionMesh\'s indices) is untouched',
+    ]) expect(cave, part).toContain(part);
+    // The pre-SP6b design: a frustum-bounded BFS driving `setVisibleAt`, re-run on a turn, 1.5 ms.
+    expect(s415).not.toContain('dot(face, fromCamera)');
+    expect(s415).not.toContain('The result drives `setVisibleAt`.');
+    expect(s415).not.toContain('a turn of more than 10°');
+    expect(s415).not.toContain('1.5 ms');
+    // §7's main-thread row as worded (its measured cost lands with the master pins, SP6b spec §15 item 17).
+    const s7 = text.slice(text.indexOf('**Main thread per frame (Medium):**'), text.indexOf('**GPU per frame'));
+    const rows = s7.split('\n').filter((l) => l.startsWith('| cave '));
+    expect(rows).toEqual(['| cave culling: the walk (on change, 0.5 ms slices) and RegionBatch\'s draw filter (SP6b; `cullMainMeanMs`, its spec §8.5) | ≤ 1.0 ms amortised |']);
   });
 });

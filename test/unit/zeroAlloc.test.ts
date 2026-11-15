@@ -1437,4 +1437,45 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     materials.dispose();
     albedo.dispose();
   }, TIMEOUT_MS);
+
+  test(`${N} frames on a RegionMesh with cave culling, \`drawAll\` changing every other frame so every terrain and water arena is re-applied, grow the heap by less than the boxing budget of 256 B per tick (SP6b spec §8.4; ruling P46)`, () => {
+    const albedo = createFlatColorArray();
+    const materials = createMaterialSystem({ variant: 'mesh', ao: true, smoothLight: true }, albedo);
+    const sections = createSectionRenderer('mesh', materials);
+    // A (0, 0) in region (0, 0) and B (12, 0) in region (1, 0), every pass at sy 10, every section closed; the camera in
+    // A's section with RD 1: each walk reaches A and never region (1, 0).
+    const rows = (): Array<{ sy: number; pass: 0 | 1 | 2 | 3; quads: number }> =>
+      [0, 1, 2, 3].map((pass) => ({ sy: 10, pass: pass as 0 | 1 | 2 | 3, quads: 1 }));
+    sections.stage(fakePayload(0, 0, rows()), 1);
+    sections.stage(fakePayload(12, 0, rows()), 1);
+    const unbounded = { exhausted: () => false, spend() {}, structural: () => true };
+    for (let i = 0; i < 100 && sections.pump(unbounded, 0, 0, 0) > 0; i++);
+    expect(sections.root.children.filter((o) => o.userData['pass'] !== 3)).toHaveLength(6);
+    const culled = sections.root.children.find((o) => o.userData['pass'] === 0 && o.userData['rx'] === 1) as Mesh;
+    const drawn = sections.root.children.find((o) => o.userData['pass'] === 0 && o.userData['rx'] === 0) as Mesh;
+    const c = sections.culler;
+    c.setRadius(1);
+    c.setCamera(8.5, 100.5, 8.5);
+    // A frame: culling switched every other frame (the bench's switch: off sets `drawAll`; on owes a walk, which completes
+    // in the frame and clears it, `shown` moving), the culler's step, then `sortTranslucent`, where RegionMesh re-applies.
+    let k = 0;
+    let culledFrames = 0;
+    const frame = (): void => {
+      sections.setCulling((k++ & 2) === 0);
+      c.frame(0, Number.POSITIVE_INFINITY, null, 0);
+      sections.sortTranslucent(0.5, 100.5, 0.5);
+      if (culled.geometry.drawRange.count === 0) culledFrames++;
+    };
+    const walks = c.walk.walkId;
+    const g = allocationOver(frame, WARM_UP, FRAME_STEP_ALLOC_MAX);
+    expectAtRest(g, FRAME_STEP_ALLOC_MAX);
+    // Half the frames culled region (1, 0) (a walk each time culling came back on); region (0, 0) was always drawn.
+    expect(culledFrames).toBeGreaterThan(g.calls / 4);
+    expect(culledFrames).toBeLessThan((3 * g.calls) / 4);
+    expect(c.walk.walkId - walks).toBeGreaterThan(g.calls / 8);
+    expect(drawn.geometry.drawRange.count).toBe(6);
+    sections.dispose();
+    materials.dispose();
+    albedo.dispose();
+  }, TIMEOUT_MS);
 });

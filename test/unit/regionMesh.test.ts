@@ -867,6 +867,217 @@ describe('RegionMesh\'s draw range under the X-ray (SP6b spec §7.4, §8.4, D24)
   });
 });
 
+describe('RegionMesh\'s region culling (SP6b spec §8.4, D23)', () => {
+  const PASSES_ALL = [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY];
+  const TERRAIN = [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT];
+  const range = (m: Mesh): [number, number] => [m.geometry.drawRange.start, m.geometry.drawRange.count];
+  const probe = (s: SectionRenderer): RevealProbe => s.probe(createRevealProbe());
+  /** A column of every pass at sy 10 (fakePayload's connectivity is 0: every section closed). */
+  const column = (cx: number, cz: number, quads = 1): ColumnMeshPayload =>
+    fakePayload(cx, cz, [opaque(10, quads), { sy: 10, pass: 1, quads }, water(10, quads), { sy: 10, pass: 3, quads }]);
+
+  interface Culling {
+    readonly r: SectionRenderer;
+    readonly t: SectionRenderer;
+    both(f: (s: SectionRenderer) => void): void;
+    /** The renderer's frame: the culler's step (`pops` pops, unsliced), then `sortTranslucent`, its step before the draw. */
+    frame(pops?: number): void;
+    /** The twin's range of the arena of `pass` in region (rx, 0). */
+    twin(pass: number, rx: number): [number, number];
+  }
+
+  /**
+   * `r` culls; its twin `t`, driven identically with culling off (`setCulling(false)`: `drawAll` always), holds each
+   * arena's unculled range. A (0, 0) in region (0, 0) and B (12, 0) in region (1, 0), every pass, the camera in A's
+   * section (0, 10, 0) with RD 2: the walk floods the open (unrevealed) columns within 2 of A and never reaches region
+   * (1, 0).
+   */
+  function culling(): Culling {
+    const r = createSectionRenderer('mesh', system('mesh'));
+    const t = createSectionRenderer('mesh', system('mesh'));
+    t.setCulling(false);
+    const both = (f: (s: SectionRenderer) => void): void => {
+      f(r);
+      f(t);
+    };
+    both((s) => {
+      s.stage(column(0, 0), 1);
+      s.stage(column(12, 0, 2), 1);
+      pumpAll(s);
+      s.culler.setRadius(2);
+      s.culler.setCamera(8.5, 100.5, 8.5);
+    });
+    let now = 0;
+    const frame = (pops = Number.POSITIVE_INFINITY): void => {
+      now += 16;
+      both((s) => {
+        s.culler.frame(now, pops, null, 0);
+        s.sortTranslucent(0, 0, 0);
+      });
+    };
+    return { r, t, both, frame, twin: (pass, rx) => range(arenaOf(t, pass, rx)!) };
+  }
+
+  /** Each arena of `r` against its twin's range: region 1's terrain and water arenas at (0, 0) when `culled1`. */
+  function expectRanges(c: Culling, culled1: boolean, step: string): void {
+    for (const rx of [0, 1]) {
+      for (const pass of PASSES_ALL) {
+        const m = arenaOf(c.r, pass, rx)!;
+        const want = rx === 1 && culled1 && pass !== MESH_PASS_XRAY ? [0, 0] : c.twin(pass, rx);
+        expect(range(m), `${step}: region ${rx} pass ${pass}`).toEqual(want);
+        expect(c.twin(pass, rx)[1], `${step}: region ${rx} pass ${pass}`).toBeGreaterThan(0);
+        // Never hidden by visibility (but the X-ray arena while it is off): three keeps listing and uploading it.
+        expect(m.visible, `${step}: region ${rx} pass ${pass}`).toBe(pass !== MESH_PASS_XRAY);
+      }
+    }
+    // rowVisible reads reveals, not culling.
+    expect(probe(c.r), `${step}: probe`).toEqual(probe(c.t));
+    expect(probe(c.r).partial, `${step}: probe`).toBe(0);
+  }
+
+  test('an arena whose region holds no drawn section gets (0, 0) the frame the walk completes and keeps uploading; a reveal during culling does not undo it; the X-ray arenas are never culled; `rowVisible` ignores culling', () => {
+    const c = culling();
+    const { r, t, both, frame } = c;
+    // Before any walk completes (`drawAll`), nothing is culled.
+    expectRanges(c, false, 'before the walk');
+    frame();
+    expect(r.culler.drawAll).toBe(false);
+    expect(r.culler.shown).toBeGreaterThan(0);
+    expect(r.culler.drawn(0, 10, 0)).toBe(true);
+    for (let sy = 0; sy < 24; sy++) expect(r.culler.drawn(12, sy, 0)).toBe(false);
+    expectRanges(c, true, 'walked');
+
+    // C (13, 0) in region (1, 0), one row per pump: each upload writes its rows into the culled arena (three uploads
+    // them: the update ranges, the arena listed) and raises its high water, which the draw range does not follow.
+    const opaqueArena = arenaOf(r, MESH_PASS_OPAQUE, 1)!;
+    const before = (opaqueArena.geometry.getAttribute('position') as BufferAttribute).version;
+    const twinBefore = c.twin(MESH_PASS_OPAQUE, 1)[1];
+    both((s) => s.stage(fakePayload(13, 0, [opaque(4, 1), opaque(10, 3), water(10, 2)]), 1));
+    for (let k = 0; k < 2; k++) {
+      both((s) => expect(s.pump(fakeGate(1), 0, 0, 0)).toBe(1));
+      expect(r.isRevealed(13, 0)).toBe(false);
+      expectRanges(c, true, `upload ${k}`);
+    }
+    const position = opaqueArena.geometry.getAttribute('position') as BufferAttribute;
+    expect(position.version).toBeGreaterThan(before);
+    expect(position.updateRanges.length).toBeGreaterThan(0);
+    // C's opaque span (4 quads: 24 indices) raised the high water.
+    expect(c.twin(MESH_PASS_OPAQUE, 1)[1]).toBe(twinBefore + 24);
+    expect(threeDrawList(r.root, new PerspectiveCamera())).toContain(opaqueArena);
+    // The reveal (with the last row) writes no draw range.
+    both((s) => pumpAll(s));
+    expect(r.isRevealed(13, 0)).toBe(true);
+    expectRanges(c, true, 'reveal');
+    // C draws by the culler's rule (a revealed column draws until a walk that saw it completes), but neither `shown` nor
+    // `drawAll` moved: the arena stays culled. The reveals' walk (once a frame passes with none) completes: C unreached.
+    expect(r.culler.drawn(13, 10, 0)).toBe(true);
+    const shown = r.culler.shown;
+    frame();
+    expectRanges(c, true, 'reveal, a frame');
+    frame();
+    expect(r.culler.shown).toBeGreaterThan(shown);
+    expect(r.culler.drawAll).toBe(false);
+    expect(r.culler.drawn(13, 10, 0)).toBe(false);
+    expectRanges(c, true, 'reveal, walked');
+    r.dispose();
+    t.dispose();
+  });
+
+  test('`drawAll` set (the eye above y 319, the X-ray on, culling off): every culled arena back at (0, high water) the same frame, culled again the frame a walk that covers the eye completes', () => {
+    const c = culling();
+    const { r, t, both, frame } = c;
+    frame();
+    expectRanges(c, true, 'walked');
+    // The eye at y 400: `drawAll`, no walk.
+    both((s) => s.culler.setCamera(8.5, 400.5, 8.5));
+    frame();
+    expect(r.culler.drawAll).toBe(true);
+    expectRanges(c, false, 'eye y 400');
+    // Back at y 100: the walk completes in the frame.
+    both((s) => s.culler.setCamera(8.5, 100.5, 8.5));
+    frame();
+    expect(r.culler.drawAll).toBe(false);
+    expectRanges(c, true, 'eye y 100');
+    // The X-ray on (D24: every terrain arena at (0, 0)) and off again before the next frame: the arenas are back at once,
+    // region 1's included, since the culler set `drawAll` (no walk while the X-ray was on).
+    r.setXray(true);
+    for (const pass of TERRAIN) expect(range(arenaOf(r, pass, 0)!)).toEqual([0, 0]);
+    frame();
+    expect(r.culler.drawAll).toBe(true);
+    for (const pass of TERRAIN) for (const rx of [0, 1]) expect(range(arenaOf(r, pass, rx)!)).toEqual([0, 0]);
+    expect(arenaOf(r, MESH_PASS_XRAY, 1)!.visible).toBe(true);
+    expect(range(arenaOf(r, MESH_PASS_XRAY, 1)!)).toEqual(c.twin(MESH_PASS_XRAY, 1));
+    r.setXray(false);
+    expectRanges(c, false, 'X off');
+    frame();
+    expectRanges(c, true, 'X off, walked');
+    // Culling off (the bench's switch): `drawAll`, back the same frame.
+    r.setCulling(false);
+    frame();
+    expectRanges(c, false, 'culling off');
+    r.setCulling(true);
+    frame();
+    expectRanges(c, true, 'culling on');
+    r.dispose();
+    t.dispose();
+  });
+
+  test('a completed walk that stamps a section of a culled arena restores it the same frame', () => {
+    const c = culling();
+    const { r, t, frame } = c;
+    frame();
+    expectRanges(c, true, 'RD 2');
+    // RD 16: the walk crosses the open columns to x 11 and enters B; until it completes, B stays culled.
+    r.culler.setRadius(16);
+    frame(1);
+    expect(r.culler.walk.running).toBe(true);
+    expectRanges(c, true, 'RD 16, walking');
+    frame();
+    expect(r.culler.walk.running).toBe(false);
+    expect(r.culler.drawAll).toBe(false);
+    expect(r.culler.drawn(12, 10, 0)).toBe(true);
+    expectRanges(c, false, 'RD 16, walked');
+    r.dispose();
+    t.dispose();
+  });
+
+  test('a frame where neither `shown` nor `drawAll` changed re-applies nothing (no walk owed, or a walk in progress stamping sections); a frame where one changed re-applies each terrain and water arena once and no X-ray arena', () => {
+    const c = culling();
+    const { r, t, frame } = c;
+    frame();
+    expectRanges(c, true, 'walked');
+    const writes = new Map<Mesh, number>();
+    for (const m of regionObjects(r.root)) {
+      const g = m.geometry;
+      const own = g.setDrawRange.bind(g);
+      writes.set(m, 0);
+      g.setDrawRange = (start: number, count: number): void => {
+        writes.set(m, writes.get(m)! + 1);
+        own(start, count);
+      };
+    }
+    const total = (): number => [...writes.values()].reduce((a, b) => a + b, 0);
+    // Nothing owed: no walk, no write.
+    for (let k = 0; k < 5; k++) frame();
+    expect(total()).toBe(0);
+    // A walk owed (RD 3), sliced at 1 pop a frame: it stamps sections (the walk in progress passes the draw rule), but
+    // `shown` and `drawAll` stay, so no write.
+    r.culler.setRadius(3);
+    const shown = r.culler.shown;
+    for (let k = 0; k < 5; k++) frame(1);
+    expect(r.culler.walk.running).toBe(true);
+    expect(r.culler.shown).toBe(shown);
+    expect(total()).toBe(0);
+    // It completes: `shown` moved, one write per terrain and water arena.
+    frame();
+    expect(r.culler.shown).toBeGreaterThan(shown);
+    for (const [m, n] of writes) expect(n, m.name).toBe(passOf(m) === MESH_PASS_XRAY ? 0 : 1);
+    expectRanges(c, true, 'RD 3, walked');
+    r.dispose();
+    t.dispose();
+  });
+});
+
 describe('RegionMesh\'s swap (SP4c spec §5.3, D9)', () => {
   const make = (): SectionRenderer => createSectionRenderer('mesh', system('mesh'));
   const probe = (r: SectionRenderer): RevealProbe => r.probe(createRevealProbe());

@@ -1,9 +1,10 @@
 import { Box3, BufferAttribute, BufferGeometry, DynamicDrawUsage, Group, Mesh, Sphere } from 'three';
 import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, ROW_INTS } from '../mesh/column';
+import { torusSlot, type CaveCuller } from './culling/caveCulling';
 import type { MaterialSystem } from './materials/index';
 import {
   createStreamingRenderer, GROWTH, regionOrigin, RESERVATION, rowBounds, rowIsEmpty, SECTION_UNITS, UNITS,
-  type RegionBackend, type StagedColumn,
+  type RegionBackend, type StagedColumn, type StagingRegion,
 } from './regionGrid';
 import type { SectionRenderer, StructuralKind } from './sectionRenderer';
 import { XRAY_ORDER } from './selection';
@@ -47,6 +48,15 @@ import { XRAY_ORDER } from './selection';
  * write goes through one function, `applyDrawRange`, which derives the range from the X-ray's state and the high-water
  * mark, so no span writer (the upload's first row, a compaction, a growth, the last row's release) can undo it for a
  * frame; a reveal or a hide writes no draw range. `rowVisible` reads the high-water mark, not the draw range.
+ *
+ * SP6b (spec §8.4, D23): region culling. A terrain or water arena whose region holds no live column with a section the
+ * staging's cave culler draws (`setCuller`; its draw rule, spec §8.1) gets the draw range (0, 0) through
+ * `applyDrawRange`, never `visible = false` (three keeps uploading its rows; D23); the X-ray arenas keep their toggle and
+ * are never culled. The verdict is taken per region on each frame where the culler's `shown` or `drawAll` changed (the
+ * plan's Spec correction 23), in `sortTranslucent`, the renderer's step after the culler's and before three's render,
+ * and every terrain and water arena's range is re-applied then; between such frames no span writer and no reveal
+ * changes it. O(arenas × columns × 24) on such a frame, nothing otherwise; no allocation. `rowVisible` ignores it, and
+ * the reveal state (the indices) is untouched.
  */
 
 /** A region's half extent in blocks: 8 columns across, 24 sections (384 blocks) high. */
@@ -61,6 +71,8 @@ const COMPACT_AT = 0.4;
 export const HIDDEN_RANGES_MAX = 256;
 
 const PASSES = [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY] as const;
+/** Sections per column: a section's index in the culler is `torusSlot(cx, cz)·24 + sy`. */
+const SECTIONS = 24;
 
 /**
  * A first-fit free list (SP4b spec §4.3): the free ranges `[starts[k], starts[k] + sizes[k])`, sorted by start, never
@@ -165,6 +177,8 @@ interface Span {
 
 interface Arena {
   readonly mesh: Mesh;
+  /** The staging's region it draws: its live columns decide region culling. */
+  readonly region: StagingRegion<MeshRegion>;
   /** The region origin in blocks: `(rx·128, −64, rz·128)`. */
   readonly origin: readonly [number, number, number];
   position: BufferAttribute;
@@ -193,6 +207,9 @@ interface Arena {
 interface MeshRegion {
   /** By pass; null until the region's first row of that pass. */
   readonly passes: Array<Arena | null>;
+  /** Region culling (SP6b spec §8.4): its terrain and water arenas draw nothing; taken in re-apply `cullPass`. */
+  culled: boolean;
+  cullPass: number;
 }
 
 /** The geometry's position, data and index buffers in bytes. */
@@ -234,6 +251,12 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
   // The X-ray's state (`setXray`): off, the X-ray arenas are invisible (three skips them: no draw call); on, the terrain
   // and water arenas draw nothing (`applyDrawRange`).
   let xrayShown = false;
+  // The staging's cave culler (`setCuller`), the `shown` and `drawAll` the regions' culling was last taken from (a fresh
+  // culler's: no walk completed, everything drawn), and the re-apply's count (`MeshRegion.cullPass`).
+  let culler: CaveCuller | null = null;
+  let cullShown = 0;
+  let cullDrawAll = true;
+  let cullPass = 0;
 
   const passOf = (c: Column, r: number): number => c.p.rows[r * ROW_INTS + 1]!;
 
@@ -325,12 +348,44 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
   };
   /**
    * The arena's draw range, its one writer (SP6b spec §8.4): (0, 0) for a terrain or water arena while the X-ray is on
-   * (D24), else (0, the high-water mark). An X-ray arena keeps its high-water range; its toggle is `mesh.visible`.
-   * Region culling (Task 43) joins as a third input.
+   * (D24) or its region is culled (D23), else (0, the high-water mark). An X-ray arena keeps its high-water range; its
+   * toggle is `mesh.visible`.
    */
   const applyDrawRange = (a: Arena): void => {
-    const drawsNothing = xrayShown && a.mesh.userData['pass'] !== MESH_PASS_XRAY;
+    const drawsNothing = a.mesh.userData['pass'] !== MESH_PASS_XRAY && (xrayShown || a.region.data.culled);
     a.mesh.geometry.setDrawRange(0, drawsNothing ? 0 : a.highWater);
+  };
+  /** Some live column of region `g` has a section `k` draws (SP6b spec §8.1's rule): at most 64 × 24 reads. */
+  const regionDrawn = (g: StagingRegion<MeshRegion>, k: CaveCuller): boolean => {
+    const columns = g.columns;
+    for (let i = 0; i < columns.length; i++) {
+      const c = columns[i]!;
+      const base = torusSlot(c.cx, c.cz) * SECTIONS;
+      for (let sy = 0; sy < SECTIONS; sy++) if (k.drawnAt(base + sy)) return true;
+    }
+    return false;
+  };
+  /**
+   * Region culling's re-apply (SP6b spec §8.4, the plan's Spec correction 23): on a frame where the culler's `shown` or
+   * `drawAll` changed, each region with a terrain or water arena is judged again (once) and every such arena's draw
+   * range re-applied, so a culled arena comes back the frame a walk reaches it or `drawAll` is set; otherwise nothing.
+   */
+  const applyCulling = (): void => {
+    const k = culler;
+    if (k === null || (k.shown === cullShown && k.drawAll === cullDrawAll)) return;
+    cullShown = k.shown;
+    cullDrawAll = k.drawAll;
+    cullPass++;
+    for (let i = 0; i < built.length; i++) {
+      const a = built[i]!;
+      if (a.mesh.userData['pass'] === MESH_PASS_XRAY) continue;
+      const g = a.region;
+      if (g.data.cullPass !== cullPass) {
+        g.data.cullPass = cullPass;
+        g.data.culled = !k.drawAll && !regionDrawn(g, k);
+      }
+      applyDrawRange(a);
+    }
   };
   const setHighWater = (a: Arena): void => {
     let hw = 0;
@@ -359,7 +414,7 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
     }
     mesh.scale.setScalar(1 / UNITS);
     const a: Arena = {
-      mesh, origin: regionOrigin(g.rx, g.rz),
+      mesh, region: g, origin: regionOrigin(g.rx, g.rz),
       position: geometry.getAttribute('position') as BufferAttribute,
       data: geometry.getAttribute('data') as BufferAttribute,
       index: geometry.getIndex()!,
@@ -451,7 +506,7 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
   };
 
   const backend: RegionBackend<MeshRegion> = {
-    newRegion: () => ({ passes: [null, null, null, null] }),
+    newRegion: () => ({ passes: [null, null, null, null], culled: false, cullPass: 0 }),
     columnNeed(c) {
       for (const pass of PASSES) {
         let any = false;
@@ -643,15 +698,36 @@ export function createRegionMesh(materials: MaterialSystem): SectionRenderer {
         else applyDrawRange(a);
       }
     },
+    setCuller(k) {
+      culler = k;
+      // Judged again at the next frame's re-apply; detached, every region is drawn at once.
+      cullShown = -1;
+      if (k !== null) return;
+      for (let i = 0; i < built.length; i++) {
+        built[i]!.region.data.culled = false;
+        applyDrawRange(built[i]!);
+      }
+    },
     sortTranslucent(camX, camY, camZ) {
+      // The renderer's step before three's render, every frame after the culler's (SP6b spec §8.4): region culling first.
+      applyCulling();
       // Region centres in the camera's frame: regionOrigin + (64, 192, 64) − floatingOrigin (ruling P17).
-      for (const a of translucent) {
+      for (let i = 0; i < translucent.length; i++) {
+        const a = translucent[i]!;
         const dx = a.origin[0] + REGION_HALF_XZ - origin[0]! - camX;
         const dy = a.origin[1] + REGION_HALF_Y - origin[1]! - camY;
         const dz = a.origin[2] + REGION_HALF_XZ - origin[2]! - camZ;
         a.d2 = dx * dx + dy * dy + dz * dz;
       }
-      translucent.sort(fartherFirst);
+      // An insertion sort in place, stable as `Array.prototype.sort`, over an order that is mostly the last frame's:
+      // `Array.prototype.sort` allocates its merge state on every call (about 840 B a frame on Node 24), which the frame
+      // step at rest may not (SP4b D25; ruling P46's case runs this step).
+      for (let i = 1; i < translucent.length; i++) {
+        const a = translucent[i]!;
+        let j = i - 1;
+        for (; j >= 0 && fartherFirst(translucent[j]!, a) > 0; j--) translucent[j + 1] = translucent[j]!;
+        translucent[j + 1] = a;
+      }
       // three draws the transparent list by ascending renderOrder before depth: the farthest region gets 0. Only the
       // water's arenas are listed: the X-ray's keep `XRAY_ORDER`, above every one of them (SP6a spec §5.2).
       for (let k = 0; k < translucent.length; k++) translucent[k]!.mesh.renderOrder = k;

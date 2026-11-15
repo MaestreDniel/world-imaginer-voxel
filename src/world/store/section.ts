@@ -18,8 +18,8 @@
  * (`reclaim.ts`), so a slot a reader may hold is freed only after it; the default frees at once.
  *
  * Meta word: bits 0-12 nonAir (voxels whose state is not air, state 0), bit 13 hasOpaque, 14 hasCutout,
- * 15 hasTranslucent (any voxel whose PASS is that pass), bit 16 hasFluid (any fluid type ≠ 0), bits 17-31 the
- * connectivity bits (0 until SP4).
+ * 15 hasTranslucent (any voxel whose PASS is that pass), bit 16 hasFluid (any fluid type ≠ 0), bits 17-31 stay 0:
+ * cave culling reads `connectivity15` from the staging (SP6b).
  */
 import type { SlabPool } from './pool';
 import { FREE_NOW, type Retire } from './reclaim';
