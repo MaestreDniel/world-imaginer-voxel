@@ -119,7 +119,7 @@ describe('the Caves tab (SP6a spec §7.3, D12)', () => {
       expect([s.type, s.min, s.max, s.step, s.value], id).toEqual(['range', '-64', '319', '1', v]);
       expect(s.parentElement!.textContent, id).toBe(label);
     }
-    expect(m.$('map-caves-band').textContent).toBe(stripText(XRAY_ALL));
+    expect(m.$('map-caves-band').textContent).toBe(stripText(XRAY_ALL, 0));
     expect(m.$('map-caves-all').textContent).toBe('All depths');
     expect(m.$('map-caves-slice').textContent).toBe('Cave slice');
     expect(m.$('map-caves-params').textContent).toBe('Cave parameters');
@@ -170,7 +170,7 @@ describe('the Caves tab (SP6a spec §7.3, D12)', () => {
     expect(m.bands.at(-1)).toBe(XRAY_ALL);
     m.tab.set(false, XRAY_ALL, 176);
     expect([m.$('map-caves-low').value, m.$('map-caves-high').value]).toEqual(['-64', '319']);
-    expect(m.$('map-caves-band').textContent).toBe(stripText(XRAY_ALL));
+    expect(m.$('map-caves-band').textContent).toBe(stripText(XRAY_ALL, 0));
   });
 
   test('the radius readout follows `set`', () => {
@@ -275,7 +275,9 @@ describe('the Caves tab over the page\'s X-ray (SP6a spec §7.3; worldPage.ts wi
     const radius = 176;
     const push = (): void => tab?.set(xray.on, xray.band, radius);
     const xray = createPageXray({
-      renderer: { setXray: (on) => { calls.push(`setXray ${on}`); }, setXrayBand: (a, b) => { calls.push(`band ${a} ${b}`); } },
+      renderer: {
+        setXray: (on) => { calls.push(`setXray ${on}`); }, setXrayBand: (a, b) => { calls.push(`band ${a} ${b}`); }, setXrayColorMode: () => {},
+      },
       strip,
       notices: { show: () => {} },
       cameraY: () => cameraY,
@@ -308,7 +310,7 @@ describe('the Caves tab over the page\'s X-ray (SP6a spec §7.3; worldPage.ts wi
     expect(w.stripLine()).toBe('X-ray · y 200 … 200 · by cave type');
     w.$('map-caves-all').click();
     expect(w.xray.band).toBe(XRAY_ALL);
-    expect(w.stripLine()).toBe(stripText(XRAY_ALL));
+    expect(w.stripLine()).toBe(stripText(XRAY_ALL, 0));
   });
 
   test('the checkbox mirrors X both ways', () => {

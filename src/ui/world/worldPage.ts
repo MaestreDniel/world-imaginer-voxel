@@ -2200,38 +2200,55 @@ export const XRAY_NOTICE_MS = 6_000;
  */
 export const xrayRadiusOf = (rd: number): number => (rd - 1) * 16;
 
-/** The first X's notice (SP6a spec §7.2), its key names from the key map's labels (`pageKeyName`). */
+/**
+ * The first X's notice (SP6a spec §7.2), its key names from the key map's labels (`pageKeyName`); it names C, the
+ * colours, since SP6b (spec §9.4).
+ */
 export const xrayNotice = (keyName: (a: Action) => string): string =>
-  `X-ray: ${keyName('xrayDown')} and ${keyName('xrayUp')} move the depth band, ${keyName('xrayAll')} shows every depth`;
+  `X-ray: ${keyName('xrayColor')} colours it by cave type or cave biome; ${keyName('xrayDown')} and ${keyName('xrayUp')} move the depth band, ${keyName('xrayAll')} shows every depth`;
 
-/** The X-ray's keys (SP6a spec §7.1). */
-export type XrayAction = Extract<Action, 'xray' | 'xrayDown' | 'xrayUp' | 'xrayAll'>;
+/** How long L's notice shows, ms (SP6a spec §7.2); C's too (SP6b spec §7.3). */
+export const NIGHT_VISION_NOTICE_MS = 1_500;
 
-/** The page's X-ray (SP6a spec §5.3, §7.1, §7.2; D10, D11): on or off and its depth band. */
+/** C's notice (SP6b spec §7.3, D7): "X-ray by cave biome" (mode 1) or "X-ray by cave type" (0). */
+export const xrayColorNotice = (mode: 0 | 1): string => (mode === 1 ? 'X-ray by cave biome' : 'X-ray by cave type');
+
+/** C's notice options, made once: a press allocates nothing (SP6b spec §7.3). */
+const XRAY_COLOR_NOTICE: NoticeOptions = Object.freeze({ timeoutMs: NIGHT_VISION_NOTICE_MS });
+
+/** The X-ray's keys (SP6a spec §7.1), with SP6b's C (SP6b spec §9.4). */
+export type XrayAction = Extract<Action, 'xray' | 'xrayDown' | 'xrayUp' | 'xrayAll' | 'xrayColor'>;
+
+/** The page's X-ray (SP6a spec §5.3, §7.1, §7.2; D10, D11): on or off, its depth band and its colour mode (SP6b D7). */
 export interface PageXray {
   readonly on: boolean;
   readonly band: XrayBand;
+  /** The colour mode (SP6b spec §7.3): by cave type (0, a page's start) or by cave biome (1); page state, never saved. */
+  readonly mode: 0 | 1;
   /**
    * X toggles it (the renderer's `setXray`, the strip shown or hidden; the first X in a page shows the notice once);
-   * PageDown and PageUp move the band (`bandStep` from the camera's y), Home sets every depth (`setBand`).
+   * PageDown and PageUp move the band (`bandStep` from the camera's y), Home sets every depth (`setBand`); C flips the
+   * colour mode (the renderer's `setXrayColorMode`, the strip's line and legend, its notice), with the X-ray off too.
    */
   action(a: XrayAction): void;
   /** Sets the band: the renderer's band uniforms and the strip's text (the Caves tab's sliders, Home). */
   setBand(b: XrayBand): void;
-  /** The band while the X-ray is on, null off: the F3 HUD's line (SP6a spec §7.2). */
-  hud(): XrayBand | null;
+  /** The band and the colour mode while the X-ray is on, null off: the F3 HUD's line (SP6a spec §7.2; SP6b §7.3). */
+  hud(): { readonly band: XrayBand; readonly mode: 0 | 1 } | null;
 }
 
 /**
- * The page's X-ray over the renderer (`setXray`, `setXrayBand`: uniforms, the sky dome and the clear colour only), the
- * strip and the notices, with the camera's y for a first band step. Off at every depth at a page's start. A band key
- * acts with the X-ray off too: the band shows at the next X. A toggle allocates nothing (spec §5.3): the strip writes
- * only what changed; a band step returns a new band and the strip's new text (a user action, not a frame). `changed`,
- * when given, is called after every toggle and band change (the page keeps the map's Caves tab in step, SP6a spec §7.3).
+ * The page's X-ray over the renderer (`setXray`, `setXrayBand`, `setXrayColorMode`: uniforms, the sky dome and the clear
+ * colour only), the strip and the notices, with the camera's y for a first band step. Off at every depth, by cave type,
+ * at a page's start. A band key and C act with the X-ray off too: the band and the mode show at the next X. A toggle
+ * and a C press allocate nothing (SP6a spec §5.3; SP6b spec §7.3): the strip writes only what changed, and C's notice is
+ * a constant text with constant options; a band step returns a new band and the strip's new text (a user action, not a
+ * frame). `changed`, when given, is called after every toggle, band change and C (the page keeps the map's Caves tab in
+ * step, SP6a spec §7.3).
  */
 export function createPageXray(o: {
-  readonly renderer: Pick<WorldRenderer, 'setXray' | 'setXrayBand'>;
-  readonly strip: { set(on: boolean, b: XrayBand): void };
+  readonly renderer: Pick<WorldRenderer, 'setXray' | 'setXrayBand' | 'setXrayColorMode'>;
+  readonly strip: { set(on: boolean, b: XrayBand, mode: 0 | 1): void };
   readonly notices: Pick<WorldNotices, 'show'>;
   cameraY(): number;
   keyName(a: Action): string;
@@ -2239,22 +2256,24 @@ export function createPageXray(o: {
 }): PageXray {
   let on = false;
   let band = XRAY_ALL;
+  let mode: 0 | 1 = 0;
   let noticed = false;
   const setBand = (b: XrayBand): void => {
     band = b;
     o.renderer.setXrayBand(b.yMin, b.yMax);
-    o.strip.set(on, b);
+    o.strip.set(on, b, mode);
     o.changed?.();
   };
   return {
     get on() { return on; },
     get band() { return band; },
+    get mode() { return mode; },
     action(a) {
       switch (a) {
         case 'xray':
           on = !on;
           o.renderer.setXray(on);
-          o.strip.set(on, band);
+          o.strip.set(on, band, mode);
           if (on && !noticed) {
             noticed = true;
             o.notices.show(xrayNotice(o.keyName), { timeoutMs: XRAY_NOTICE_MS });
@@ -2264,15 +2283,19 @@ export function createPageXray(o: {
         case 'xrayDown': setBand(bandStep(band, -1, o.cameraY())); break;
         case 'xrayUp': setBand(bandStep(band, 1, o.cameraY())); break;
         case 'xrayAll': setBand(XRAY_ALL); break;
+        case 'xrayColor':
+          mode = mode === 0 ? 1 : 0;
+          o.renderer.setXrayColorMode(mode);
+          o.strip.set(on, band, mode);
+          o.notices.show(xrayColorNotice(mode), XRAY_COLOR_NOTICE);
+          o.changed?.();
+          break;
       }
     },
     setBand,
-    hud: () => (on ? band : null),
+    hud: () => (on ? { band, mode } : null),
   };
 }
-
-/** How long L's notice shows, ms (SP6a spec §7.2). */
-export const NIGHT_VISION_NOTICE_MS = 1_500;
 
 /** L's notice (SP6a spec §7.2): "Night vision on" or "Night vision off". */
 export const nightVisionNotice = (on: boolean): string => (on ? 'Night vision on' : 'Night vision off');
@@ -5211,7 +5234,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     const limiter: FpsLimiter = createFpsLimiter(settings.fpsCap);
     const frames = createFrameStats();
     // The X-ray (SP6a spec §5.3, §7.2): its strip beside the build HUD and its state, which X, PageDown, PageUp and Home
-    // change through `onAction`, and the map's Caves tab through its checkbox and sliders (§7.3); the HUD shows its line
+    // (and SP6b's C, its colours) change through `onAction`, and the map's Caves tab through its checkbox and sliders (§7.3); the HUD shows its line
     // while it is on. Every change, and every render distance (the radius), is pushed into the Caves tab once the map's
     // tool is mounted (the mount reads the state itself).
     const xrayStrip = createXrayStrip(host);
@@ -5476,8 +5499,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           selectToolAction(a, selectActions);
           break;
         // The X-ray's keys (SP6a spec §7.1, D10, D11): X toggles it, PageDown and PageUp move its band, Home shows every
-        // depth; the band moves with the X-ray off too.
-        case 'xray': case 'xrayDown': case 'xrayUp': case 'xrayAll': pageXray.action(a); break;
+        // depth; C switches its colours by cave type or cave biome (SP6b spec §7.3, D7); the band and the colours move
+        // with the X-ray off too.
+        case 'xray': case 'xrayDown': case 'xrayUp': case 'xrayAll': case 'xrayColor': pageXray.action(a); break;
         // L flips night vision, saves it, the Settings checkbox follows and the notice shows (SP6a spec §6.2, §7.1,
         // §7.2; D15): the frame eases toward it; no worker message.
         case 'nightVision':

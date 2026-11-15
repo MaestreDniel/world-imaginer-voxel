@@ -18,14 +18,17 @@ const SELECT: readonly Action[] = ['selectTool', 'copy', 'cut', 'paste', 'move',
 /** SP6a's view keys (SP6a spec §7.1, D10, D11, D15): X, PageDown, PageUp, Home and L, each without Ctrl. */
 const SP6A: readonly Action[] = ['xray', 'xrayDown', 'xrayUp', 'xrayAll', 'nightVision'];
 
+/** SP6b's view key (SP6b spec §9.4, D7): C without Ctrl, the X-ray's colours. */
+const SP6B: readonly Action[] = ['xrayColor'];
+
 /**
  * Every action of SP4a spec §7.3 but R's loadHere (removed by SP4b spec §6.2), SP4c's M (SP4c spec §2.4), SP5a's build group
- * (SP5a spec §4.1), SP5b's B and G (SP5b spec §3.7), SP5c's selection tool (SP5c spec §1.1) and SP6a's view keys (SP6a
- * spec §7.1), spelled out so that a missing map entry fails here.
+ * (SP5a spec §4.1), SP5b's B and G (SP5b spec §3.7), SP5c's selection tool (SP5c spec §1.1), SP6a's view keys (SP6a
+ * spec §7.1) and SP6b's C (SP6b spec §9.4), spelled out so that a missing map entry fails here.
  */
 const ACTIONS: readonly Action[] = [
   'forward', 'back', 'left', 'right', 'up', 'down', 'sprint', 'speedUp', 'speedDown',
-  'timeSpeed', 'help', 'hud', 'releasePointer', 'map', ...BUILD, ...SP5B, ...SELECT, ...SP6A,
+  'timeSpeed', 'help', 'hud', 'releasePointer', 'map', ...BUILD, ...SP5B, ...SELECT, ...SP6A, ...SP6B,
 ];
 
 /** A code binding's Ctrl: absent (with or without), `+ctrl` (only with Ctrl or Cmd), `-ctrl` (only without). */
@@ -51,22 +54,25 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
       expect(entries[0]!.label, a).not.toBe('');
     }
     expect(DEFAULT_KEYMAP).toHaveLength(ACTIONS.length);
-    expect(DEFAULT_KEYMAP).toHaveLength(43);
+    expect(DEFAULT_KEYMAP).toHaveLength(44);
     // Esc is listed (the help names it) but the browser owns it: the input layer never resolves it.
     expect([...LISTED_ONLY]).toEqual(['releasePointer']);
     expect(resolveKey({ code: 'Escape', key: 'Escape' })).toBeNull();
     // Every entry is SP4a's except SP4c's map (SP4c spec §2.4), SP5a's build group (SP5a spec §4.1), SP5b's B and G
-    // (SP5b spec §3.7), SP5c's selection tool (SP5c spec §1.1) and SP6a's view keys (SP6a spec §7.1).
+    // (SP5b spec §3.7), SP5c's selection tool (SP5c spec §1.1), SP6a's view keys (SP6a spec §7.1) and SP6b's C (SP6b
+    // spec §9.4).
     const since = (a: Action) =>
       (a === 'map' ? 'SP4c' : BUILD.includes(a) ? 'SP5a' : SP5B.includes(a) ? 'SP5b' : SELECT.includes(a) ? 'SP5c'
-        : SP6A.includes(a) ? 'SP6a' : 'SP4a');
+        : SP6A.includes(a) ? 'SP6a' : SP6B.includes(a) ? 'SP6b' : 'SP4a');
     for (const e of DEFAULT_KEYMAP) expect(e.since, e.action).toBe(since(e.action));
     for (const e of DEFAULT_KEYMAP) expect(e.group === 'build', e.action).toBe(BUILD.includes(e.action));
     for (const e of DEFAULT_KEYMAP) expect(e.group === 'select', e.action).toBe(SELECT.includes(e.action));
-    // The selection tool appended after slotPrev, then SP6a's view keys after lower, each in its spec's order.
-    expect(DEFAULT_KEYMAP.slice(-14, -5).map((e) => e.action)).toEqual(SELECT);
-    expect(DEFAULT_KEYMAP.slice(-5).map((e) => e.action)).toEqual(SP6A);
-    for (const a of SP6A) expect(DEFAULT_KEYMAP.find((e) => e.action === a)!.group, a).toBe('view');
+    // The selection tool appended after slotPrev, then SP6a's view keys after lower, then SP6b's C after night vision,
+    // each in its spec's order.
+    expect(DEFAULT_KEYMAP.slice(-15, -6).map((e) => e.action)).toEqual(SELECT);
+    expect(DEFAULT_KEYMAP.slice(-6, -1).map((e) => e.action)).toEqual(SP6A);
+    expect(DEFAULT_KEYMAP.slice(-1).map((e) => e.action)).toEqual(SP6B);
+    for (const a of [...SP6A, ...SP6B]) expect(DEFAULT_KEYMAP.find((e) => e.action === a)!.group, a).toBe('view');
   });
 
   test('M opens the map: KeyM resolves to map, in the view group (SP4c spec §2.4, D15)', () => {
@@ -112,9 +118,10 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
     expect([...PLACING_ACTIONS].sort()).toEqual(['lower', 'raise', 'turn', 'turnBack']);
   });
 
-  test('Ctrl+C resolves copy, plain C nothing; Ctrl+Alt+C nothing; Cmd+C copy; Ctrl+Q and Ctrl+N nothing; plain Q selectTool, plain N move; plain W still resolves forward with Ctrl', () => {
+  test('Ctrl+C resolves copy, plain C xrayColor (SP6b); Ctrl+Alt+C nothing; Cmd+C copy; Ctrl+Q and Ctrl+N nothing; plain Q selectTool, plain N move; plain W still resolves forward with Ctrl', () => {
     expect(resolveKey({ code: 'KeyC', key: 'c', ctrlKey: true })).toBe('copy');
-    expect(resolveKey({ code: 'KeyC', key: 'c' })).toBeNull();
+    // Plain C is the X-ray's colours since SP6b (SP6b spec §9.4); Ctrl+C stays the copy above.
+    expect(resolveKey({ code: 'KeyC', key: 'c' })).toBe('xrayColor');
     // AltGr sets both Ctrl and Alt (the user's Spanish layout): never a copy or a paste.
     expect(resolveKey({ code: 'KeyC', key: 'c', ctrlKey: true, altKey: true })).toBeNull();
     expect(resolveKey({ code: 'KeyV', key: 'v', ctrlKey: true, altKey: true })).toBeNull();
@@ -149,6 +156,29 @@ describe('the key map as data (SP4a spec §7.3, D19)', () => {
     ]);
     // None is a placing action: they act in both contexts.
     for (const a of SP6A) expect(PLACING_ACTIONS.has(a), a).toBe(false);
+  });
+
+  test('SP6b\'s C is spec §9.4\'s, without Ctrl: plain C resolves xrayColor in both contexts, Ctrl+C and Cmd+C still copy only (D7)', () => {
+    expect(DEFAULT_KEYMAP.find((e) => e.action === 'xrayColor')).toEqual({
+      action: 'xrayColor', bindings: [{ kind: 'code', code: 'KeyC', ctrl: false }], label: 'X-ray colours: cave type or cave biome', group: 'view', since: 'SP6b',
+    });
+    expect(PLACING_ACTIONS.has('xrayColor')).toBe(false);
+    for (const placing of [false, true]) {
+      const active = placingContext(placing);
+      expect(resolveKey({ code: 'KeyC', key: 'c' }, DEFAULT_KEYMAP, active)).toBe('xrayColor');
+      expect(resolveKey({ code: 'KeyC', key: 'c', ctrlKey: true }, DEFAULT_KEYMAP, active)).toBe('copy');
+      expect(resolveKey({ code: 'KeyC', key: 'c', metaKey: true }, DEFAULT_KEYMAP, active)).toBe('copy');
+      // Ctrl+C never falls through to the X-ray's colours: with copy skipped it resolves nothing.
+      expect(resolveKey({ code: 'KeyC', key: 'c', ctrlKey: true }, DEFAULT_KEYMAP, (a) => a !== 'copy' && active(a))).toBeNull();
+    }
+    // The physical key: a layout typing something else at KeyC still switches the colours.
+    expect(resolveKey({ code: 'KeyC', key: 'ç' })).toBe('xrayColor');
+    // C without Ctrl and copy's Ctrl+C never overlap; no other binding shares C.
+    const c = DEFAULT_KEYMAP.find((e) => e.action === 'xrayColor')!;
+    for (const other of DEFAULT_KEYMAP) {
+      if (other === c) continue;
+      for (const o of other.bindings) expect(overlaps(c.bindings[0]!, o), other.action).toBe(false);
+    }
   });
 
   test('no SP6a binding shares a code with another context-free binding: X without Ctrl and cut\'s Ctrl+X never overlap', () => {

@@ -1900,12 +1900,12 @@ describe('UI smoke test: the caves step, SP6a\'s review links and its review scr
     expect(clearColour([168, 204, 255])).toBe(false);
   });
 
-  test('the strip\'s line is stripText\'s; a first PageDown from every depth gives 32 blocks around the eye, as bandStep does', () => {
+  test('the strip\'s line is stripText\'s by cave type (the smoke never presses C); a first PageDown from every depth gives 32 blocks around the eye, as bandStep does', () => {
     for (const [a, b] of [[-64, 319], [68, 99], [-12, 19], [0, 0], [-1, 5]] as const) {
-      expect(xrayStripText(a, b)).toBe(stripText(bandSet(a, b)));
+      expect(xrayStripText(a, b)).toBe(stripText(bandSet(a, b), 0));
       expect(parseStripBand(xrayStripText(a, b))).toEqual({ yMin: a, yMax: b });
     }
-    expect(XRAY_ALL_TEXT).toBe(stripText(XRAY_ALL));
+    expect(XRAY_ALL_TEXT).toBe(stripText(XRAY_ALL, 0));
     expect(parseStripBand('X-ray · y 1 … 2')).toBeNull();
     for (const eye of [CAVE_POSES.entrance.y, -63.5, 318.9, 0, -0.5]) {
       const b = bandStep(XRAY_ALL, -1, eye);

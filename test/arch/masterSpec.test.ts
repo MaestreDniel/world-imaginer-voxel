@@ -2679,6 +2679,14 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(boxes).not.toContain('the 3 cave biomes arrive in SP6b.');
   });
 
+  test('§5.9 gains C (SP6b spec §15 item 18)', () => {
+    const at59 = text.indexOf('### 5.9 Controls');
+    const s59 = text.slice(at59, text.indexOf('## 6. ', at59));
+    expect(s59).toContain('C (X-ray colours: cave type or cave biome; SP6b)');
+    // After SP6a's view keys, as the key map appends it after night vision.
+    expect(s59).toContain('L (night vision; SP6a); C (X-ray colours: cave type or cave biome; SP6b);');
+  });
+
   test('§3.6 and §3.8: the floor as built, DEFAULTS.caves cross-checked (SP6b spec §15 item 15)', () => {
     const c = DEFAULTS.caves;
     const f = c.floor;

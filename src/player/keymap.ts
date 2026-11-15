@@ -16,7 +16,7 @@ export type Action =
   | 'savePlace' | 'settings'
   | 'slot1' | 'slot2' | 'slot3' | 'slot4' | 'slot5' | 'slot6' | 'slot7' | 'slot8' | 'slot9' | 'slotNext' | 'slotPrev'
   | 'selectTool' | 'copy' | 'cut' | 'paste' | 'move' | 'turn' | 'turnBack' | 'raise' | 'lower'
-  | 'xray' | 'xrayDown' | 'xrayUp' | 'xrayAll' | 'nightVision';
+  | 'xray' | 'xrayDown' | 'xrayUp' | 'xrayAll' | 'nightVision' | 'xrayColor';
 
 /**
  * A wheel binding names its Ctrl modifier: Ctrl+wheel and the plain wheel are two bindings (SP5a spec §4.1, D9). A code
@@ -56,7 +56,8 @@ const wheel = (dir: 'up' | 'down', ctrl: boolean): Binding => ({ kind: 'wheel', 
  * (`slotNext`, `slotPrev`), and ↑ and ↓ raise and lower it. SP6a adds five view keys (SP6a spec §7.1, D10, D11, D15):
  * X, the X-ray; PageDown and PageUp, its depth band; Home, every depth; L, night vision. All five are `ctrl: false`, so
  * Ctrl+X stays the cut and the browser keeps Ctrl+PageDown, Ctrl+PageUp (the tabs), Ctrl+Home and Ctrl+L (the address
- * bar): a binding without `ctrl` would match them and have their default prevented.
+ * bar): a binding without `ctrl` would match them and have their default prevented. SP6b adds C, the X-ray's colours by
+ * cave type or cave biome (SP6b spec §9.4, D7), `ctrl: false` so Ctrl+C stays the copy.
  */
 export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   { action: 'forward', bindings: [code('KeyW')], label: 'Forward (at your height)', group: 'move', since: 'SP4a' },
@@ -102,6 +103,7 @@ export const DEFAULT_KEYMAP: readonly KeyEntry[] = [
   { action: 'xrayUp', bindings: [code('PageUp', false)], label: 'Move the X-ray band up', group: 'view', since: 'SP6a' },
   { action: 'xrayAll', bindings: [code('Home', false)], label: 'Show every depth in the X-ray', group: 'view', since: 'SP6a' },
   { action: 'nightVision', bindings: [code('KeyL', false)], label: 'Night vision on or off', group: 'view', since: 'SP6a' },
+  { action: 'xrayColor', bindings: [code('KeyC', false)], label: 'X-ray colours: cave type or cave biome', group: 'view', since: 'SP6b' },
 ];
 
 /**

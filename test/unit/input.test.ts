@@ -129,7 +129,7 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
       input.dispose();
     });
 
-    test('AltGr+V and AltGr+C, Ctrl+N and Ctrl+Q resolve nothing and are not prevented; Ctrl+↑ while placing resolves nothing; Ctrl+C resolves copy and is prevented', () => {
+    test('AltGr+V and AltGr+C, Ctrl+N and Ctrl+Q resolve nothing and are not prevented; Ctrl+↑ while placing resolves nothing; Ctrl+C resolves copy and is prevented; plain C resolves xrayColor (SP6b spec §9.4)', () => {
       const { doc, actions, input, setPlacing } = setup();
       for (const placing of [false, true]) {
         setPlacing(placing);
@@ -157,12 +157,15 @@ describe('input (SP4a spec §7.1, master §4.17)', () => {
       doc.dispatchEvent(key('keydown', 'KeyQ', 'q'));
       doc.dispatchEvent(key('keydown', 'KeyN', 'n'));
       expect(actions).toEqual(['copy', 'copy', 'cut', 'paste', 'selectTool', 'move']);
-      // Plain C and V are nobody's: not prevented (plain X is the X-ray since SP6a, SP6a spec §7.1).
-      for (const [code, k] of [['KeyC', 'c'], ['KeyV', 'v']] as const) {
-        const e = key('keydown', code, k);
-        doc.dispatchEvent(e);
-        expect(e.defaultPrevented, code).toBe(false);
-      }
+      // Plain V is nobody's: not prevented (plain X is the X-ray since SP6a, SP6a spec §7.1; plain C its colours since
+      // SP6b, spec §9.4: resolved and prevented, never a copy).
+      const v = key('keydown', 'KeyV', 'v');
+      doc.dispatchEvent(v);
+      expect(v.defaultPrevented).toBe(false);
+      const c = key('keydown', 'KeyC', 'c');
+      doc.dispatchEvent(c);
+      expect(c.defaultPrevented).toBe(true);
+      expect(actions).toEqual(['copy', 'copy', 'cut', 'paste', 'selectTool', 'move', 'xrayColor']);
       expect(input.held.size).toBe(0);
       input.dispose();
     });

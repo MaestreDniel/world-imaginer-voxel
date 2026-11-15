@@ -12,9 +12,15 @@
  * U+2212, as the spec writes it) above the legend, the nine cave kinds and the surface in the X-ray's colours
  * (`render/xrayPalette.ts`). It shows while the X-ray is on; `set` writes the element only when the state changed, never
  * per frame, and its text only when the band changed. Text only through `textContent`.
+ *
+ * SP6b's colour mode (SP6b spec §7.3, D7): C switches the X-ray between by cave type (0) and by cave biome (1). The line
+ * ends "· by cave type" or "· by cave biome", and the strip holds two prebuilt legends, the kinds' and the biomes' (Plain
+ * cave, Lush, Dripstone, Abyss, Surface), and shows one. A switch writes the two legends' `hidden` and the line's own
+ * text node from the two lines kept for the band (made when the band changes), so it builds no node and allocates
+ * nothing (SP6a spec §5.3's rule).
  */
 import { HEIGHT, MIN_Y } from '../../core/constants';
-import { XRAY_COLORS, XRAY_LABELS } from '../../render/xrayPalette';
+import { XRAY_BIOME_COLORS, XRAY_BIOME_LABELS, XRAY_COLORS, XRAY_LABELS } from '../../render/xrayPalette';
 import { el } from '../common/dom';
 
 /** The X-ray's depth band, world y: `all` (every depth, −64 … 319) or the band `yMin` … `yMax`, both inclusive. */
@@ -63,49 +69,76 @@ export function bandSet(yMin: number, yMax: number): XrayBand {
 /** A y as the strip writes it: a negative one with the minus sign U+2212. */
 const yText = (y: number): string => (y < 0 ? `−${-y}` : String(y));
 
-/** The strip's line (SP6a spec §7.2), also the F3 HUD's while the X-ray is on: "X-ray · y −64 … 319 · by cave type". */
-export function stripText(b: XrayBand): string {
-  return `X-ray · y ${yText(b.yMin)} … ${yText(b.yMax)} · by cave type`;
+/**
+ * The strip's line (SP6a spec §7.2), also the F3 HUD's while the X-ray is on: "X-ray · y −64 … 319 · by cave type", or
+ * "… · by cave biome" in the biome mode (`mode` 1, SP6b spec §7.3).
+ */
+export function stripText(b: XrayBand, mode: 0 | 1): string {
+  return `X-ray · y ${yText(b.yMin)} … ${yText(b.yMax)} · ${mode === 1 ? 'by cave biome' : 'by cave type'}`;
 }
 
-/** The legend's kinds, in kind order: the nine cave kinds and the surface film (the kinds with a label). */
-const LEGEND_KINDS: readonly number[] = XRAY_LABELS.flatMap((label, kind) => (label === '' ? [] : [kind]));
+/** A legend's entries in index order: those with a label (the kinds 1-9 and 15; the biomes 0-3 and 15). */
+const labelled = (labels: readonly string[]): readonly number[] => labels.flatMap((label, i) => (label === '' ? [] : [i]));
+
+/** A legend: a swatch and a label per labelled entry, in the X-ray's colours. */
+function legendOf(colors: readonly string[], labels: readonly string[]): HTMLElement {
+  const legend = el('div', 'world-xray-legend');
+  for (const i of labelled(labels)) {
+    const key = el('span', 'world-xray-key');
+    const swatch = el('span', 'world-xray-swatch');
+    swatch.style.background = colors[i]!;
+    key.append(swatch, el('span', '', labels[i]!));
+    legend.append(key);
+  }
+  return legend;
+}
 
 /**
- * Mounts the strip in `host`, hidden (the X-ray is off at a page's start) with every depth's text and the legend.
- * `set(on, b)` shows or hides it and writes the band's text, each only when it changed; `dispose` removes it.
+ * Mounts the strip in `host`, hidden (the X-ray is off at a page's start) with every depth's text by cave type, the
+ * kinds' legend shown and the biomes' hidden. `set(on, b, mode)` shows or hides it, writes the band's text and switches
+ * the legend, each only when it changed; `dispose` removes it.
  */
-export function createXrayStrip(host: HTMLElement): { set(on: boolean, b: XrayBand): void; dispose(): void } {
+export function createXrayStrip(host: HTMLElement): { set(on: boolean, b: XrayBand, mode: 0 | 1): void; dispose(): void } {
   const box = el('div', 'world-xray-strip');
   box.id = 'world-xray-strip';
   box.hidden = true;
-  const line = el('div', 'world-xray-line', stripText(XRAY_ALL));
-  const legend = el('div', 'world-xray-legend');
-  for (const kind of LEGEND_KINDS) {
-    const key = el('span', 'world-xray-key');
-    const swatch = el('span', 'world-xray-swatch');
-    swatch.style.background = XRAY_COLORS[kind]!;
-    key.append(swatch, el('span', '', XRAY_LABELS[kind]!));
-    legend.append(key);
-  }
-  box.append(line, legend);
+  // The band's line in each mode, made when the band changes, so a mode switch only picks one.
+  const lines: [string, string] = [stripText(XRAY_ALL, 0), stripText(XRAY_ALL, 1)];
+  const line = el('div', 'world-xray-line', lines[0]);
+  const kinds = legendOf(XRAY_COLORS, XRAY_LABELS);
+  const biomes = legendOf(XRAY_BIOME_COLORS, XRAY_BIOME_LABELS);
+  biomes.hidden = true;
+  box.append(line, kinds, biomes);
   host.append(box);
   let on = false;
   let all = XRAY_ALL.all;
   let yMin = XRAY_ALL.yMin;
   let yMax = XRAY_ALL.yMax;
+  let mode: 0 | 1 = 0;
   return {
-    set(nextOn, b) {
+    set(nextOn, b, nextMode) {
       if (nextOn !== on) {
         on = nextOn;
         box.hidden = !on;
       }
-      if (b.all !== all || b.yMin !== yMin || b.yMax !== yMax) {
+      const banded = b.all !== all || b.yMin !== yMin || b.yMax !== yMax;
+      const switched = nextMode !== mode;
+      if (banded) {
         all = b.all;
         yMin = b.yMin;
         yMax = b.yMax;
-        line.textContent = stripText(b);
+        lines[0] = stripText(b, 0);
+        lines[1] = stripText(b, 1);
       }
+      if (switched) {
+        mode = nextMode;
+        kinds.hidden = mode === 1;
+        biomes.hidden = mode === 0;
+      }
+      if (banded) line.textContent = lines[mode];
+      // A switch alone: the line's own text node takes the other line (a Text node's `textContent` is its data), so no
+      // node is built.
+      else if (switched) line.lastChild!.textContent = lines[mode];
     },
     dispose() {
       box.remove();

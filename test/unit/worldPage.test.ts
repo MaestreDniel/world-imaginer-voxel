@@ -13,11 +13,12 @@ import { createMaterialSystem, fogRange } from '../../src/render/materials/index
 import { createXrayControl } from '../../src/render/renderer';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { createEpochs } from '../../src/ui/world/applyControl';
-import { cavePlace, createCaveFind, createPageXray, NIGHT_VISION_NOTICE_MS, nightVisionNotice, toggleNightVision, XRAY_NOTICE_MS, xrayNotice, xrayRadiusOf } from '../../src/ui/world/worldPage';
+import { cavePlace, createCaveFind, createPageXray, NIGHT_VISION_NOTICE_MS, nightVisionNotice, toggleNightVision, xrayColorNotice, XRAY_NOTICE_MS, xrayNotice, xrayRadiusOf } from '../../src/ui/world/worldPage';
 import type { FindCaveRequest, FindCaveResult } from '../../src/engine/workerPool';
 import { easeNightVision } from '../../src/ui/world/frameStep';
 import { bandSet, createXrayStrip, XRAY_ALL } from '../../src/ui/world/xrayStrip';
 import { createCavesTab } from '../../src/ui/map/cavesTab';
+import { createToolbar } from '../../src/ui/map/toolbar';
 import { evaluateWorldCapabilities, type CapabilityReport } from '../../src/engine/capabilityRules';
 import type { StreamEvent } from '../../src/engine/coordinator';
 import { defaultRenderDistance, lowerRd } from '../../src/engine/renderDistance';
@@ -6543,6 +6544,7 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
       renderer: {
         setXray: (on) => { calls.push(`setXray ${on}`); },
         setXrayBand: (a, b) => { calls.push(`band ${a} ${b}`); },
+        setXrayColorMode: (m) => { calls.push(`mode ${m}`); },
       },
       strip,
       notices: { show: (text, o) => { shown.push([text, o?.timeoutMs]); } },
@@ -6552,6 +6554,8 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     const box = dom.body.querySelector('#world-xray-strip')!;
     return { xray, calls, shown, camera, box, line: () => box.children[0]!.textContent, strip };
   };
+  /** The strip's two legends' `hidden`: [the kinds', the biomes'] (SP6b spec §7.3). */
+  const legends = (box: { children: Array<{ hidden: boolean }> }): [boolean, boolean] => [box.children[1]!.hidden, box.children[2]!.hidden];
 
   test('X toggles `setXray`, the strip and the HUD line; off at the start, at every depth', () => {
     const p = page();
@@ -6559,7 +6563,8 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     p.xray.action('xray');
     expect(p.calls).toEqual(['setXray true']);
     expect([p.xray.on, p.box.hidden, p.line()]).toEqual([true, false, 'X-ray · y −64 … 319 · by cave type']);
-    expect(p.xray.hud()).toBe(XRAY_ALL);
+    expect(p.xray.hud()).toEqual({ band: XRAY_ALL, mode: 0 });
+    expect(p.xray.hud()!.band).toBe(XRAY_ALL);
     p.xray.action('xray');
     expect(p.calls).toEqual(['setXray true', 'setXray false']);
     expect([p.xray.on, p.box.hidden, p.xray.hud()]).toEqual([false, true, null]);
@@ -6568,13 +6573,13 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     expect(s).toMatch(/const xrayStrip = createXrayStrip\(host\);/);
     expect(s).toMatch(/teardown\.push\(\(\) => xrayStrip\.dispose\(\)\);/);
     expect(s).toMatch(/xray: pageXray\.hud\(\),/);
-    expect(s).toMatch(/case 'xray': case 'xrayDown': case 'xrayUp': case 'xrayAll': pageXray\.action\(a\); break;/);
+    expect(s).toMatch(/case 'xray': case 'xrayDown': case 'xrayUp': case 'xrayAll': case 'xrayColor': pageXray\.action\(a\); break;/);
     expect(s).toMatch(/renderer: world,\n\s+strip: xrayStrip,/);
     expect(s).toMatch(/cameraY: \(\) => fly\.y,/);
   });
 
   test('the first X in a page shows the notice once (6 s), its key names from the key map; another page shows it again', () => {
-    expect(xrayNotice(pageKeyName)).toBe('X-ray: Page Down and Page Up move the depth band, Home shows every depth');
+    expect(xrayNotice(pageKeyName)).toBe('X-ray: C colours it by cave type or cave biome; Page Down and Page Up move the depth band, Home shows every depth');
     expect(XRAY_NOTICE_MS).toBe(6000);
     const p = page();
     for (let i = 0; i < 5; i++) p.xray.action('xray');
@@ -6598,7 +6603,7 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     p.xray.action('xray');
     expect(p.calls).toEqual(['band 64 95', 'setXray true']);
     expect([p.box.hidden, p.line()]).toEqual([false, 'X-ray · y 64 … 95 · by cave type']);
-    expect(p.xray.hud()).toBe(p.xray.band);
+    expect(p.xray.hud()).toEqual({ band: p.xray.band, mode: 0 });
     // The camera moved: a band that is not all moves by 8 from where it is.
     p.camera.y = -200;
     p.xray.action('xrayUp');
@@ -6610,6 +6615,62 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     // From all again, the first press centres on the camera, clamped inside the world.
     p.xray.action('xrayUp');
     expect(p.calls.at(-1)).toBe('band -64 -33');
+  });
+
+  test('C toggles the colour mode with the X-ray off (shown at the next X) and on: `setXrayColorMode`, the strip\'s line and legend, the HUD line, the 1.5 s notice "X-ray by cave biome" / "X-ray by cave type" (SP6b spec §7.3, D7)', () => {
+    expect([xrayColorNotice(1), xrayColorNotice(0)]).toEqual(['X-ray by cave biome', 'X-ray by cave type']);
+    let changes = 0;
+    const calls: string[] = [];
+    const shown: Array<[string, number | undefined]> = [];
+    const strip = createXrayStrip(dom.body as unknown as HTMLElement);
+    const xray = createPageXray({
+      renderer: {
+        setXray: (on) => { calls.push(`setXray ${on}`); },
+        setXrayBand: (a, b) => { calls.push(`band ${a} ${b}`); },
+        setXrayColorMode: (m) => { calls.push(`mode ${m}`); },
+      },
+      strip,
+      notices: { show: (text, o) => { shown.push([text, o?.timeoutMs]); } },
+      cameraY: () => 80.5,
+      keyName: pageKeyName,
+      changed: () => { changes++; },
+    });
+    const box = dom.body.querySelector('#world-xray-strip')!;
+    const line = (): string => box.children[0]!.textContent;
+    // By cave type at a page's start.
+    expect([xray.mode, legends(box)]).toEqual([0, [false, true]]);
+    // C with the X-ray off: the mode and the uniform switch, the notice shows, the strip stays hidden; no X-ray toggle.
+    xray.action('xrayColor');
+    expect(calls).toEqual(['mode 1']);
+    expect(shown).toEqual([['X-ray by cave biome', NIGHT_VISION_NOTICE_MS]]);
+    expect(NIGHT_VISION_NOTICE_MS).toBe(1500);
+    expect([xray.mode, xray.on, box.hidden, xray.hud(), changes]).toEqual([1, false, true, null, 1]);
+    // The next X shows it: the line and the biome legend.
+    xray.action('xray');
+    expect(calls).toEqual(['mode 1', 'setXray true']);
+    expect([box.hidden, line(), legends(box)]).toEqual([false, 'X-ray · y −64 … 319 · by cave biome', [true, false]]);
+    expect(xray.hud()).toEqual({ band: XRAY_ALL, mode: 1 });
+    // C with the X-ray on: back to by cave type at once.
+    xray.action('xrayColor');
+    expect(calls).toEqual(['mode 1', 'setXray true', 'mode 0']);
+    expect(shown.at(-1)).toEqual(['X-ray by cave type', 1500]);
+    expect([xray.mode, xray.on, line(), legends(box)]).toEqual([0, true, 'X-ray · y −64 … 319 · by cave type', [false, true]]);
+    expect(xray.hud()).toEqual({ band: XRAY_ALL, mode: 0 });
+    // A band step keeps the mode; Home too.
+    xray.action('xrayColor');
+    xray.action('xrayDown');
+    expect([line(), legends(box)]).toEqual(['X-ray · y 64 … 95 · by cave biome', [true, false]]);
+    xray.action('xrayAll');
+    expect([xray.mode, line()]).toEqual([1, 'X-ray · y −64 … 319 · by cave biome']);
+    // X off and on keeps it (the mode is page state, never saved).
+    xray.action('xray');
+    xray.action('xray');
+    expect([xray.mode, line(), legends(box)]).toEqual([1, 'X-ray · y −64 … 319 · by cave biome', [true, false]]);
+    expect(calls.filter((c) => c.startsWith('mode'))).toEqual(['mode 1', 'mode 0', 'mode 1']);
+    // Two notices after the first X's: one per C.
+    expect(shown.map(([t]) => t)).toEqual(['X-ray by cave biome', xrayNotice(pageKeyName), 'X-ray by cave type', 'X-ray by cave biome']);
+    // The page wires C into the X-ray's keys (pinned in the first test); no setting stores the mode (as the band).
+    expect(Object.keys(SETTINGS_DEFAULTS).filter((k) => /xray/i.test(k))).toEqual([]);
   });
 
   test('keys act only while the world owns the controls: with the map owning, X and PageDown are neither acted on nor prevented (SP6a spec §7.1)', () => {
@@ -6696,11 +6757,59 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     expect(s).toMatch(/isTextFocus: \(\) => worldIgnoresKeys\(document\.activeElement as HTMLElement \| null, keyPanels\),/);
   });
 
+  test('Review Focus 5: with the map split and a map toolbar input focused (owner map, `ownerOf`), C is neither acted on nor prevented (input.ts:132); with the world owning, C acts and is prevented (SP6b spec §7.3; Task 45 re-pins it on the caveBiome y field)', () => {
+    const p = page();
+    // Until Task 45's caveBiome y field, the toolbar's biome-size slider stands in: a map input that is not text entry.
+    const bar = dom.document.createElement('div');
+    dom.body.append(bar);
+    createToolbar(bar as unknown as HTMLElement, {
+      session: { state: { seedText: '42', profile: 'default', params: { climate: { scaleMul: 1 } } }, canUndo: false, canRedo: false } as unknown as WorldSession,
+      notices: {} as never, layer: 'biome', edit: (_e, fn) => fn(), onLayer: () => {}, onGrid: () => {}, onCut: () => {},
+      open3dHref: () => '/?at=0,0', embedded: null,
+    });
+    const target = Object.assign(new EventTarget(), { requestPointerLock: () => Promise.resolve() });
+    const actions: string[] = [];
+    let owner: 'world' | 'map' = ownerOf('split', true, false);
+    expect(owner).toBe('map');
+    const input = attachInput(target as unknown as HTMLElement, {
+      onAction: (a) => {
+        actions.push(a);
+        if (a === 'xray' || a === 'xrayDown' || a === 'xrayUp' || a === 'xrayAll' || a === 'xrayColor') p.xray.action(a);
+      },
+      onLook() {},
+      onButton() {},
+      wheelCtrlAsSlot: () => false,
+      placing: () => false,
+      // As the page: the map is no panel of `keyPanels`, so a focused map input is not text entry (the owner guards it).
+      isTextFocus: () => worldIgnoresKeys(dom.document.activeElement, []),
+      active: () => owner === 'world',
+      doc: dom.document as unknown as Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>,
+      win: new EventTarget() as unknown as Pick<Window, 'addEventListener' | 'removeEventListener'>,
+    });
+    const press = (): Event => {
+      const e = Object.assign(new Event('keydown', { cancelable: true }), { code: 'KeyC', key: 'c', ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, repeat: false });
+      dom.document.dispatchEvent(e);
+      dom.document.dispatchEvent(Object.assign(new Event('keyup'), { code: 'KeyC', key: 'c' }));
+      return e;
+    };
+    const field = bar.querySelectorAll('input').find((i) => i.type === 'range')!;
+    field.focus();
+    expect(dom.document.activeElement).toBe(field);
+    expect(worldIgnoresKeys(dom.document.activeElement, [])).toBe(false);
+    expect(press().defaultPrevented).toBe(false);
+    expect([actions, p.calls, p.shown, p.xray.mode, legends(p.box)]).toEqual([[], [], [], 0, [false, true]]);
+    // The world owns again (the pointer locked over the 3D side): C switches the colours and is prevented.
+    owner = 'world';
+    expect(press().defaultPrevented).toBe(true);
+    expect([actions, p.calls, p.xray.mode]).toEqual([['xrayColor'], ['mode 1'], 1]);
+    input.dispose();
+  });
+
   test('the Caves tab in step with the page\'s X-ray (SP6a spec §7.3): `changed` after every toggle and band change; the overlay gets the tab\'s deps and the state; the radius is the fog end', () => {
     let changes = 0;
     const strip = createXrayStrip(dom.body as unknown as HTMLElement);
     const xray = createPageXray({
-      renderer: { setXray: () => {}, setXrayBand: () => {} }, strip, notices: { show: () => {} }, cameraY: () => 80, keyName: pageKeyName,
+      renderer: { setXray: () => {}, setXrayBand: () => {}, setXrayColorMode: () => {} }, strip, notices: { show: () => {} }, cameraY: () => 80, keyName: pageKeyName,
       changed: () => { changes++; },
     });
     xray.action('xray');
@@ -6725,10 +6834,30 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     expect(args).toMatch(/xray: \(\) => \(\{ on: pageXray\.on, band: pageXray\.band, radius: xrayRadiusOf\(liveRd\) \}\),/);
   });
 
-  test('Review Focus 1: X on, an Apply of `caves.cheese.offset` 0.5 → 0.20 settling over 30 fake frames with PageDown at frame 5 and X twice at frames 10 and 11: the strip reads the moved band, `xrayOn` is 1 at the end, every column\'s shown seq is the Apply\'s, the stale count reaches 0', async () => {
+  /**
+   * Review Focus 1's run (SP6a's and SP6b's): the renderer's X-ray over a real material system (`xrayColorMode`'s writes
+   * counted), the real strip and the page's X-ray over it, a world at RD 4 filled at epoch 1 and shown; `before` acts on
+   * the X-ray before the Apply, `edit` changes the draft's params (asserting the default it moves), then the Apply
+   * regenerates from T at epoch 2 over 30 fake frames of 12 updates each, `key(frame)` pressing the X-ray's keys at the
+   * frame's start (they must stage, drop or remove nothing). Returns what each test asserts on.
+   */
+  const regenUnderXray = async (o: {
+    before(xray: ReturnType<typeof createPageXray>): void;
+    edit(params: Record<string, unknown>): void;
+    key(frame: number, xray: ReturnType<typeof createPageXray>): void;
+  }) => {
     const flush = (): Promise<void> => new Promise((r) => { setImmediate(r); });
     // The renderer's X-ray over a real material system, the sky dome and a clear colour (no GL context in Node).
     const materials = createMaterialSystem({ variant: 'batch', ao: true, smoothLight: true }, createFlatColorArray());
+    // `xrayColorMode`'s writes counted (the X-ray material's uniform is the system's own object).
+    const modeUniform = materials.xray.uniforms['xrayColorMode']!;
+    let modeValue = modeUniform.value as number;
+    let modeWrites = 0;
+    Object.defineProperty(modeUniform, 'value', {
+      get: () => modeValue,
+      set: (v: number) => { modeWrites++; modeValue = v; },
+      enumerable: true,
+    });
     const sky = { visible: true };
     const clearColor = new Color(0x87ceeb);
     let clearAlpha = 1;
@@ -6743,7 +6872,9 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     const shownNotices: string[] = [];
     const strip = createXrayStrip(dom.body as unknown as HTMLElement);
     const xray = createPageXray({
-      renderer: control, strip, notices: { show: (text) => { shownNotices.push(text); } }, cameraY: () => fly.y, keyName: pageKeyName,
+      // The renderer forwards the colour mode to the control (`WorldRenderer.setXrayColorMode`).
+      renderer: { ...control, setXrayColorMode: (m) => control.setColorMode(m) },
+      strip, notices: { show: (text) => { shownNotices.push(text); } }, cameraY: () => fly.y, keyName: pageKeyName,
     });
 
     // A world at RD 4 filled at the first draft (epoch 1) and shown.
@@ -6768,15 +6899,13 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     expect(c.firstFill()).toBe(true);
     expect([counts.stale, w.shown.size]).toEqual([0, counts.MESH.needed]);
 
-    // X on, before the Apply.
-    xray.action('xray');
-    // The Apply: the draft with `caves.cheese.offset` 0.20 regenerates from T (`regenFrom`), at epoch 2 under the pool's
-    // next generation, as the apply control does it.
+    o.before(xray);
+    // The Apply: the edited draft regenerates from T (`regenFrom`), at epoch 2 under the pool's next generation, as the
+    // apply control does it.
     const session = openMapSession(DEFAULT_MAP_STATE, () => [1, 2]);
     const s0 = session.state;
-    expect((s0.params as unknown as { caves: { cheese: { offset: number } } }).caves.cheese.offset).toBe(0.5);
-    const next = structuredClone(s0.params) as unknown as { caves: { cheese: { offset: number } } };
-    next.caves.cheese.offset = 0.2;
+    const next = structuredClone(s0.params) as unknown as Record<string, unknown>;
+    o.edit(next);
     const draft = (params: unknown) => {
       const h = stageHashes(params);
       const hex: Record<string, string> = {};
@@ -6799,8 +6928,7 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     // frame 4 and done before frame 30 (stale 64, 33 and 26 at frames 5, 10 and 11 when written).
     for (let frame = 0; frame < 30; frame++) {
       const ops = w.ops;
-      if (frame === 5) xray.action('xrayDown');
-      if (frame === 10 || frame === 11) xray.action('xray');
+      o.key(frame, xray);
       // The X-ray's keys write uniforms and the strip only: nothing staged, dropped or removed.
       expect(w.ops, `frame ${frame}`).toBe(ops);
       staleAt.push(c.counts(counts).stale);
@@ -6812,21 +6940,71 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
 
     // The keys acted while the world regenerated.
     for (const f of [5, 10, 11]) expect(staleAt[f], `stale at frame ${f}`).toBeGreaterThan(0);
-    // The strip reads the moved band (PageDown from all at y 80.5: [64, 95]), shown; one notice, at the first X.
-    expect([xray.on, xray.band.all, xray.band.yMin, xray.band.yMax]).toEqual([true, false, 64, 95]);
-    const box = dom.body.querySelector('#world-xray-strip')!;
-    expect([box.hidden, box.children[0]!.textContent]).toEqual([false, 'X-ray · y 64 … 95 · by cave type']);
-    expect(shownNotices).toEqual([xrayNotice(pageKeyName)]);
-    // `xrayOn` 1 with the band, the sky hidden and the X-ray's clear colour.
-    const u = materials.xray.uniforms;
-    expect([u['xrayOn']!.value, u['xrayYMin']!.value, u['xrayYMax']!.value]).toEqual([1, 64, 95]);
-    expect(sky.visible).toBe(false);
-    expect(clearColor.getHex()).toBe(new Color().setHex(0x0b0e14, 'srgb').getHex());
     // Every column shows the Apply's payload, whole: its last staged seq, at epoch 2; nothing waits.
     expect(w.pending.size).toBe(0);
     expect(w.shown.size).toBe(counts.MESH.needed);
     for (const [k, v] of w.shown) expect(v, `column ${k}`).toEqual({ seq: w.lastSeq.get(k), epoch: 2 });
     expect([counts.stale, counts.epoch, counts.MESH.done]).toEqual([0, 2, counts.MESH.needed]);
+    const box = dom.body.querySelector('#world-xray-strip')!;
+    return { xray, uniforms: materials.xray.uniforms, modeWrites: () => modeWrites, sky, clearColor, shownNotices, box };
+  };
+
+  test('Review Focus 1: X on, an Apply of `caves.cheese.offset` 0.5 → 0.20 settling over 30 fake frames with PageDown at frame 5 and X twice at frames 10 and 11: the strip reads the moved band, `xrayOn` is 1 at the end, every column\'s shown seq is the Apply\'s, the stale count reaches 0', async () => {
+    const r = await regenUnderXray({
+      // X on, before the Apply.
+      before: (xray) => { xray.action('xray'); },
+      edit: (params) => {
+        const caves = params['caves'] as { cheese: { offset: number } };
+        expect(caves.cheese.offset).toBe(0.5);
+        caves.cheese.offset = 0.2;
+      },
+      key: (frame, xray) => {
+        if (frame === 5) xray.action('xrayDown');
+        if (frame === 10 || frame === 11) xray.action('xray');
+      },
+    });
+    const { xray } = r;
+    // The strip reads the moved band (PageDown from all at y 80.5: [64, 95]), shown; one notice, at the first X.
+    expect([xray.on, xray.band.all, xray.band.yMin, xray.band.yMax]).toEqual([true, false, 64, 95]);
+    expect([r.box.hidden, r.box.children[0]!.textContent]).toEqual([false, 'X-ray · y 64 … 95 · by cave type']);
+    expect(r.shownNotices).toEqual([xrayNotice(pageKeyName)]);
+    // `xrayOn` 1 with the band, the sky hidden and the X-ray's clear colour; no key wrote the colour mode.
+    const u = r.uniforms;
+    expect([u['xrayOn']!.value, u['xrayYMin']!.value, u['xrayYMax']!.value]).toEqual([1, 64, 95]);
+    expect(r.modeWrites()).toBe(0);
+    expect(r.sky.visible).toBe(false);
+    expect(r.clearColor.getHex()).toBe(new Color().setHex(0x0b0e14, 'srgb').getHex());
+  });
+
+  test('Review Focus 1 (SP6b spec §7.3): X on in biome mode, an Apply of `caves.biomes.lush.hMin` 0.4 → 0.2 settling over 30 fake frames with C at frame 5 and X twice at frames 10 and 11: the strip ends \'· by cave type\', `xrayColorMode` is 0 and `xrayOn` 1 at the end, the uniform written once per C, every column\'s shown seq is the Apply\'s', async () => {
+    const r = await regenUnderXray({
+      // X on, then C: biome mode, before the Apply.
+      before: (xray) => {
+        xray.action('xray');
+        xray.action('xrayColor');
+        expect([xray.on, xray.mode]).toEqual([true, 1]);
+      },
+      edit: (params) => {
+        const biomes = (params['caves'] as { biomes: { lush: { hMin: number } } }).biomes;
+        expect(biomes.lush.hMin).toBe(0.4);
+        biomes.lush.hMin = 0.2;
+      },
+      key: (frame, xray) => {
+        if (frame === 5) xray.action('xrayColor');
+        if (frame === 10 || frame === 11) xray.action('xray');
+      },
+    });
+    const { xray } = r;
+    // The mode stays as C set it at frame 5 (by cave type) through the two X presses; the band every depth.
+    expect([xray.on, xray.mode, xray.band]).toEqual([true, 0, XRAY_ALL]);
+    expect(r.box.hidden).toBe(false);
+    expect(r.box.children[0]!.textContent.endsWith('· by cave type')).toBe(true);
+    expect([r.box.children[1]!.hidden, r.box.children[2]!.hidden]).toEqual([false, true]);
+    // `xrayColorMode` 0 and `xrayOn` 1; the uniform written once per C (two Cs), never by X.
+    const u = r.uniforms;
+    expect([u['xrayColorMode']!.value, u['xrayOn']!.value]).toEqual([0, 1]);
+    expect(r.modeWrites()).toBe(2);
+    expect(r.shownNotices).toEqual([xrayNotice(pageKeyName), 'X-ray by cave biome', 'X-ray by cave type']);
   });
 });
 

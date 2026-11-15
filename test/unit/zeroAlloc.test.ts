@@ -279,8 +279,8 @@ interface AtRest {
   readonly xray: PageXray;
   /** The night-vision setting the frame step eases toward (SP6a spec §6.2), off until its test. */
   setNightVision(on: boolean): void;
-  /** The X-ray's uniforms, the sky dome's visibility, the clear colour and the strip's element. */
-  xrayState(): { on: number; yMin: number; yMax: number; sky: boolean; clear: number; strip: ReturnType<ReturnType<typeof installDom>['el']> };
+  /** The X-ray's uniforms (SP6b's colour mode included), the sky dome's visibility, the clear colour and the strip's element. */
+  xrayState(): { on: number; yMin: number; yMax: number; mode: number; sky: boolean; clear: number; strip: ReturnType<ReturnType<typeof installDom>['el']> };
 }
 
 /**
@@ -547,7 +547,9 @@ async function buildAtRest(): Promise<AtRest> {
   // strip beside the build HUD; nothing of it runs per frame but the control's radius sync above.
   const xrayStrip = createXrayStrip(app as unknown as HTMLElement);
   const pageXray = createPageXray({
-    renderer: xrayControl, strip: xrayStrip, notices: { show() {} }, cameraY: () => fly.y, keyName: pageKeyName,
+    // The renderer forwards the colour mode to the control (`WorldRenderer.setXrayColorMode`, SP6b spec §7.3).
+    renderer: { ...xrayControl, setXrayColorMode: (m) => xrayControl.setColorMode(m) },
+    strip: xrayStrip, notices: { show() {} }, cameraY: () => fly.y, keyName: pageKeyName,
   });
 
   const step = createFrameStep({
@@ -598,6 +600,7 @@ async function buildAtRest(): Promise<AtRest> {
       on: materials.xray.uniforms['xrayOn']!.value as number,
       yMin: materials.xray.uniforms['xrayYMin']!.value as number,
       yMax: materials.xray.uniforms['xrayYMax']!.value as number,
+      mode: materials.xray.uniforms['xrayColorMode']!.value as number,
       sky: sky.visible,
       clear: clearColor.getHex(),
       strip: app.querySelector('#world-xray-strip')!,
@@ -1115,6 +1118,36 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     expect([x.yMin, x.yMax]).toEqual([band.yMin, band.yMax]);
     expect(x.strip.children[0]!.childNodes[0]).toBe(text);
     f.xray.action('xrayAll');
+  }, TIMEOUT_MS);
+
+  test(`${N} presses of C at a fixed band grow the heap by less than 256 KB (SP6b §7.3)`, async () => {
+    const f = await atRest();
+    expect([f.xray.on, f.xray.mode]).toEqual([false, 0]);
+    // X on (the page's one notice behind the measurement) at PageDown's band; no Cross-section slice is shown (ruling
+    // P52: a shown Voxels slice's repaint on C is an event outside this budget).
+    f.xray.action('xray');
+    f.xray.action('xrayDown');
+    const band = f.xray.band;
+    const strip = f.xrayState().strip;
+    // A press writes one uniform, two legends' `hidden` and the line's own text node: no node is built.
+    const nodes = [strip.children[0]!.childNodes[0], strip.children[1], strip.children[2]];
+    try {
+      const g = allocationOver(() => f.xray.action('xrayColor'), WARM_UP, ZERO_ALLOC_MAX);
+      expectAtRest(g);
+      if (f.xray.mode === 1) f.xray.action('xrayColor');
+      const x = f.xrayState();
+      expect([f.xray.on, f.xray.band, f.xray.mode, x.mode, x.on, x.yMin, x.yMax, strip.hidden]).toEqual([true, band, 0, 0, 1, band.yMin, band.yMax, false]);
+      const after = [strip.children[0]!.childNodes[0], strip.children[1], strip.children[2]];
+      nodes.forEach((n, i) => expect(after[i], `node ${i}`).toBe(n));
+      expect([strip.children[1]!.hidden, strip.children[2]!.hidden]).toEqual([false, true]);
+      expect(strip.children[0]!.textContent.endsWith('· by cave type')).toBe(true);
+    } finally {
+      if (f.xray.mode === 1) f.xray.action('xrayColor');
+      f.xray.action('xrayAll');
+      f.xray.action('xray');
+    }
+    const off = f.xrayState();
+    expect([off.on, off.mode, off.yMin, off.yMax, off.strip.hidden]).toEqual([0, 0, -64, 319, true]);
   }, TIMEOUT_MS);
 
   test(`${N} frame-clock ticks (a cap of 144 on a 144 Hz display, the slow-frame notice past its 300 frames) grow the heap by less than 256 KB`, () => {

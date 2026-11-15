@@ -1,9 +1,11 @@
 /**
- * The X-ray's depth band and its strip (SP6a spec §5.3, §7.2; D11; Review Focus 3; ruling P24).
+ * The X-ray's depth band and its strip (SP6a spec §5.3, §7.2; D11; Review Focus 3; ruling P24), with SP6b's colour mode:
+ * the line's "· by cave type" or "· by cave biome" and the two prebuilt legends (SP6b spec §7.3, D7).
  */
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
-import { XRAY_COLORS, XRAY_LABELS } from '../../src/render/xrayPalette';
+import { CAVE_BIOME, CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
+import { XRAY_BIOME_COLORS, XRAY_BIOME_LABELS, XRAY_COLORS, XRAY_LABELS } from '../../src/render/xrayPalette';
 import { bandSet, bandStep, createXrayStrip, stripText, XRAY_ALL, type XrayBand } from '../../src/ui/world/xrayStrip';
 import { installDom } from './fixtures/domShim';
 
@@ -26,7 +28,7 @@ describe('the X-ray band (SP6a spec §5.3, D11; Review Focus 3)', () => {
     expect(up.yMax - up.yMin + 1).toBe(32);
     // Home.
     expect(XRAY_ALL).toEqual({ all: true, yMin: -64, yMax: 319 });
-    expect(stripText(XRAY_ALL)).toBe('X-ray · y −64 … 319 · by cave type');
+    expect(stripText(XRAY_ALL, 0)).toBe('X-ray · y −64 … 319 · by cave type');
   });
 
   test('from all, the first press is the 32 blocks centred on ⌊cameraY⌋ whatever its direction; then each press moves the band 8', () => {
@@ -69,9 +71,14 @@ describe('the X-ray band (SP6a spec §5.3, D11; Review Focus 3)', () => {
   });
 
   test('the strip of [−40, −9] reads `X-ray · y −40 … −9 · by cave type`; of [12, 43] `X-ray · y 12 … 43 · by cave type`', () => {
-    expect(stripText(bandSet(-40, -9))).toBe('X-ray · y −40 … −9 · by cave type');
-    expect(stripText(bandSet(12, 43))).toBe('X-ray · y 12 … 43 · by cave type');
-    expect(stripText(bandSet(-64, 319))).toBe(stripText(XRAY_ALL));
+    expect(stripText(bandSet(-40, -9), 0)).toBe('X-ray · y −40 … −9 · by cave type');
+    expect(stripText(bandSet(12, 43), 0)).toBe('X-ray · y 12 … 43 · by cave type');
+    expect(stripText(bandSet(-64, 319), 0)).toBe(stripText(XRAY_ALL, 0));
+  });
+
+  test('by cave biome (SP6b spec §7.3, D7): stripText({all}, 1) is `X-ray · y −64 … 319 · by cave biome`; a band ends the same', () => {
+    expect(stripText(XRAY_ALL, 1)).toBe('X-ray · y −64 … 319 · by cave biome');
+    expect(stripText(bandSet(-40, -9), 1)).toBe('X-ray · y −40 … −9 · by cave biome');
   });
 });
 
@@ -85,7 +92,9 @@ describe('the strip #world-xray-strip (SP6a spec §7.2)', () => {
     mount();
     const box = dom.el('world-xray-strip');
     expect(box.hidden).toBe(true);
-    const [line, legend] = box.children;
+    const [line, legend, biomes] = box.children;
+    // The kinds' legend shows (by cave type, the default); the biomes' is built and hidden (SP6b spec §7.3).
+    expect([legend!.hidden, biomes!.hidden]).toEqual([false, true]);
     expect(line!.textContent).toBe('X-ray · y −64 … 319 · by cave type');
     const kinds = [
       CAVE_KIND.cheese, CAVE_KIND.spaghetti3d, CAVE_KIND.spaghetti2d, CAVE_KIND.noodle, CAVE_KIND.entrance, CAVE_KIND.worm,
@@ -104,25 +113,68 @@ describe('the strip #world-xray-strip (SP6a spec §7.2)', () => {
     const line = box.children[0]!;
     const textNode = line.childNodes[0];
     // Off at every depth: nothing changed, nothing written.
-    strip.set(false, XRAY_ALL);
+    strip.set(false, XRAY_ALL, 0);
     expect([box.hidden, line.childNodes[0]]).toEqual([true, textNode]);
-    strip.set(true, XRAY_ALL);
+    strip.set(true, XRAY_ALL, 0);
     expect(box.hidden).toBe(false);
     expect(line.childNodes[0]).toBe(textNode);
     const b = bandSet(-40, -9);
-    strip.set(true, b);
+    strip.set(true, b, 0);
     expect(line.textContent).toBe('X-ray · y −40 … −9 · by cave type');
     const moved = line.childNodes[0];
     expect(moved).not.toBe(textNode);
     // The same band again (an equal value too): the text node is kept.
-    strip.set(true, b);
-    strip.set(true, bandSet(-40, -9));
+    strip.set(true, b, 0);
+    strip.set(true, bandSet(-40, -9), 0);
     expect(line.childNodes[0]).toBe(moved);
     // Off keeps the band's text for the next on.
-    strip.set(false, b);
+    strip.set(false, b, 0);
     expect([box.hidden, line.childNodes[0]]).toEqual([true, moved]);
-    strip.set(true, XRAY_ALL);
+    strip.set(true, XRAY_ALL, 0);
     expect([box.hidden, line.textContent]).toEqual([false, 'X-ray · y −64 … 319 · by cave type']);
+  });
+
+  test('the biome legend (SP6b spec §7.3, D7): Plain cave, Lush, Dripstone, Abyss and Surface, each in the X-ray\'s biome colour', () => {
+    mount();
+    const biomes = dom.el('world-xray-strip').children[2]!;
+    const ids = [CAVE_BIOME.plain, CAVE_BIOME.lush, CAVE_BIOME.dripstone, CAVE_BIOME.abyss, CAVE_FILM_KIND];
+    expect(biomes.children.map((k) => k.textContent)).toEqual(ids.map((i) => XRAY_BIOME_LABELS[i]));
+    expect(biomes.children.map((k) => k.textContent)).toEqual(['Plain cave', 'Lush', 'Dripstone', 'Abyss', 'Surface']);
+    expect(biomes.children.map((k) => k.children[0]!.style['background'])).toEqual(ids.map((i) => XRAY_BIOME_COLORS[i]));
+  });
+
+  test('a mode switch flips the two legends\' `hidden` and the line\'s mode, and rebuilds no node (SP6b spec §7.3: a switch allocates nothing)', () => {
+    const strip = mount();
+    const box = dom.el('world-xray-strip');
+    const [line, legend, biomes] = box.children;
+    const nodes = (): unknown[] => [
+      ...box.children, line!.childNodes[0],
+      ...legend!.children.flatMap((k) => [k, ...k.childNodes]), ...biomes!.children.flatMap((k) => [k, ...k.childNodes]),
+    ];
+    strip.set(true, XRAY_ALL, 0);
+    const before = nodes();
+    strip.set(true, XRAY_ALL, 1);
+    expect([legend!.hidden, biomes!.hidden, line!.textContent]).toEqual([true, false, 'X-ray · y −64 … 319 · by cave biome']);
+    expect(nodes()).toEqual(before);
+    nodes().forEach((n, i) => expect(n, `node ${i}`).toBe(before[i]));
+    // The same mode again writes nothing; back to by cave type.
+    strip.set(true, XRAY_ALL, 1);
+    strip.set(true, XRAY_ALL, 0);
+    expect([legend!.hidden, biomes!.hidden, line!.textContent]).toEqual([false, true, 'X-ray · y −64 … 319 · by cave type']);
+    nodes().forEach((n, i) => expect(n, `node ${i}`).toBe(before[i]));
+    // With the strip off the mode still switches (shown at the next on), and a band change keeps the mode.
+    strip.set(false, XRAY_ALL, 1);
+    expect([box.hidden, legend!.hidden, biomes!.hidden]).toEqual([true, true, false]);
+    strip.set(true, bandSet(-40, -9), 1);
+    expect([box.hidden, line!.textContent]).toEqual([false, 'X-ray · y −40 … −9 · by cave biome']);
+    strip.set(true, bandSet(-40, -9), 0);
+    expect(line!.textContent).toBe('X-ray · y −40 … −9 · by cave type');
+  });
+
+  test('a hidden legend is not drawn: styles.css gives `.world-xray-legend[hidden]` display none over its flex (SP6b spec §7.3)', () => {
+    const css = readFileSync(new URL('../../src/ui/styles.css', import.meta.url), 'utf8');
+    expect(css).toMatch(/\.world-xray-legend \{ display: flex;/);
+    expect(css).toMatch(/(^|, )\.world-xray-legend\[hidden\](, [^{]*)? \{ display: none; \}/m);
   });
 
   test('dispose removes it', () => {

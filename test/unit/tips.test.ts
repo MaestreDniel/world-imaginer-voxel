@@ -10,7 +10,7 @@ describe('loading-screen tips (SP4a spec §8.3, §7.3; ruling P45)', () => {
     const named = new Set(TIP_TEMPLATES.flatMap(placeholders));
     const missing = DEFAULT_KEYMAP.map((e) => e.action).filter((a) => !named.has(a));
     expect(missing).toEqual([]);
-    expect(DEFAULT_KEYMAP.length).toBe(43);
+    expect(DEFAULT_KEYMAP.length).toBe(44);
     expect(named.has('map')).toBe(true);
     // SP5b's B and G (SP5b spec §3.7).
     expect(named.has('savePlace')).toBe(true);
@@ -21,11 +21,13 @@ describe('loading-screen tips (SP4a spec §8.3, §7.3; ruling P45)', () => {
     for (const a of ['selectTool', 'copy', 'cut', 'paste', 'move', 'turn', 'turnBack', 'raise', 'lower']) expect(named.has(a), a).toBe(true);
     // SP6a's view keys (SP6a spec §7.1, §7.5).
     for (const a of ['xray', 'xrayDown', 'xrayUp', 'xrayAll', 'nightVision']) expect(named.has(a), a).toBe(true);
+    // SP6b's C (SP6b spec §9.4).
+    expect(named.has('xrayColor')).toBe(true);
   });
 
-  test('one tip names the X-ray\'s keys and night vision (SP6a spec §7.5)', () => {
-    expect(TIP_TEMPLATES).toContain('{xray} shows the caves through the rock; {xrayDown} and {xrayUp} move the depth band, {xrayAll} shows every depth; {nightVision} is night vision.');
-    expect(tips(DEFAULT_KEYMAP)).toContain('X shows the caves through the rock; Page Down and Page Up move the depth band, Home shows every depth; L is night vision.');
+  test('one tip names the X-ray\'s keys, C\'s colours and night vision (SP6a spec §7.5; SP6b spec §9.4)', () => {
+    expect(TIP_TEMPLATES).toContain('{xray} shows the caves through the rock; {xrayColor} colours them by cave type or cave biome; {xrayDown} and {xrayUp} move the depth band, {xrayAll} shows every depth; {nightVision} is night vision.');
+    expect(tips(DEFAULT_KEYMAP)).toContain('X shows the caves through the rock; C colours them by cave type or cave biome; Page Down and Page Up move the depth band, Home shows every depth; L is night vision.');
   });
 
   test('two tips name the selection tool\'s keys (SP5c spec §1.1, D4)', () => {

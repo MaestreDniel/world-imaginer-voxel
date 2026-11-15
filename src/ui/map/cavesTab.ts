@@ -1,7 +1,8 @@
 /**
  * The Caves tab of the world's map (SP6a spec §7.3, D12), after Presets (`layoutTabs`); `?map` has none (it has no 3D).
  * From the top: "X-ray (X)", a checkbox that mirrors X both ways (a change calls `onXray`; the page's state comes back
- * through `set`); the band's line (`stripText`, as the strip writes it); the "Lowest y" and "Highest y" sliders (−64 …
+ * through `set`); the band's line (`stripText`, as the strip writes it, by cave type: SP6b's colour mode reaches the tab
+ * with its "Colour by", SP6b spec §9.3); the "Lowest y" and "Highest y" sliders (−64 …
  * 319, step 1), which keep lowest ≤ highest by moving the other slider (`sliderBand`) and call `onBand` on every move;
  * "All depths" (`XRAY_ALL`); the legend (the nine cave kinds and the surface film in the X-ray's colours); the radius
  * readout; "Cave slice", which opens the Density tab's horizontal `caves` slice at `caveSliceY` (the band's middle y, or
@@ -136,7 +137,7 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
   xrayBox.id = 'map-caves-xray';
   xrayBox.checked = false;
   xrayLabel.append(xrayBox, 'X-ray (X)');
-  const bandLine = el('div', 'caves-band', stripText(XRAY_ALL));
+  const bandLine = el('div', 'caves-band', stripText(XRAY_ALL, 0));
   bandLine.id = 'map-caves-band';
   const slider = (id: string, label: string, value: number): { row: HTMLLabelElement; input: HTMLInputElement } => {
     const row = el('label', 'caves-slider');
@@ -202,7 +203,7 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
     high.input.value = String(b.yMax);
     lowAt = b.yMin;
     highAt = b.yMax;
-    if (changed) bandLine.textContent = stripText(b);
+    if (changed) bandLine.textContent = stripText(b, 0);
   };
 
   xrayBox.addEventListener('change', () => deps.onXray(xrayBox.checked));

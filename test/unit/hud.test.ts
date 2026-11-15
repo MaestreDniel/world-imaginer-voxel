@@ -128,19 +128,34 @@ describe('mountWorldHud (SP4a spec §6.9, D30)', () => {
     const rows = (): string[] => dom.body.children[0]!.children.map((r) => r.textContent);
     expect(dom.body.textContent).not.toContain('X-ray');
     const before = rows().length;
-    xray = XRAY_ALL;
+    xray = { band: XRAY_ALL, mode: 0 };
     vi.advanceTimersByTime(250);
     expect(rows()).toHaveLength(before + 1);
     const at = rows().indexOf('X-ray · y \u221264 … 319 · by cave type');
     expect(at).toBeGreaterThan(0);
     expect(rows()[at - 1]).toBe('stale 12 / 349');
-    xray = bandSet(-40, -9);
+    xray = { band: bandSet(-40, -9), mode: 0 };
     vi.advanceTimersByTime(250);
     expect(rows()).toContain('X-ray · y \u221240 … \u22129 · by cave type');
     xray = null;
     vi.advanceTimersByTime(250);
     expect(dom.body.textContent).not.toContain('X-ray');
     expect(rows()).toHaveLength(before);
+  });
+
+  test('the X-ray\'s line names its mode (SP6b spec §7.3, D7): `· by cave biome` in biome mode, in the same row, back to `· by cave type`', () => {
+    let xray: HudData['xray'] = { band: XRAY_ALL, mode: 1 };
+    mount(() => ({ ...DATA, xray }));
+    const rows = (): string[] => dom.body.children[0]!.children.map((r) => r.textContent);
+    const at = rows().indexOf('X-ray · y \u221264 … 319 · by cave biome');
+    expect(at).toBeGreaterThan(0);
+    expect(rows().some((r) => r.endsWith('· by cave type'))).toBe(false);
+    xray = { band: bandSet(-40, -9), mode: 1 };
+    vi.advanceTimersByTime(250);
+    expect(rows()[at]).toBe('X-ray · y \u221240 … \u22129 · by cave biome');
+    xray = { band: bandSet(-40, -9), mode: 0 };
+    vi.advanceTimersByTime(250);
+    expect(rows()[at]).toBe('X-ray · y \u221240 … \u22129 · by cave type');
   });
 
   test('position and column; mesh, paused and an unreported renderer string', () => {
