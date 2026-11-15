@@ -5679,14 +5679,16 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           pool: workers, palette, help, settings: settingsPanel, dialog: placeDialog, places, camera: fly, notices,
         }, x, z),
       },
-      // The world's Caves tab (SP6a spec §7.3, D12): its checkbox toggles the page's X-ray as X does, its sliders and All
-      // depths set the band, the camera places the cave slice; the mount shows the page's X-ray state as it is. Find
+      // The world's Caves tab (SP6a spec §7.3, D12): its checkbox toggles the page's X-ray as X does, its Colour by radios
+      // set the colour mode as C does (SP6b spec §9.3, D11; C's `changed` brings the mode back to them), its sliders and
+      // All depths set the band, the camera places the cave slice; the mount shows the page's X-ray state as it is. Find
       // searches from the camera and moves it into the hit in flight; "Save as place" (a saved world) opens B's dialog
       // with the hit's pose.
       caves: {
         tab: {
           onXray: (on) => { if (on !== pageXray.on) pageXray.action('xray'); },
           onBand: (b) => pageXray.setBand(b),
+          onColorMode: (mode) => { if (mode !== pageXray.mode) pageXray.action('xrayColor'); },
           find: (kind) => caveFind.find(kind),
           cancelFind: () => caveFind.cancelFind(),
           savePlace: places === null ? null : (hit) => savePlaceKey({

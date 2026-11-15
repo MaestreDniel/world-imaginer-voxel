@@ -4,14 +4,18 @@
  * legend, the radius readout, "Cave slice" (at the band's middle y, the camera's y at all) and "Cave parameters" (the
  * Caves section's first leaf, `caves.cheese.offset`, since `reveal` takes a leaf path); the Find row (SP6a Task 44, D12,
  * D16): a button per kind 1-8, the result lines, the cancel on a second press and on closing, "Save as place" only in a
- * saved world.
+ * saved world. SP6b's additions (SP6b spec §9.3, D11; rulings P51, P53): "Colour by" in step with C both ways, the band
+ * line and the legend following the mode, "Cave slice" opening `caves` or `biome3d` by the mode, "Show cave biomes on
+ * the map" at `caveSliceY`, "Cave biome parameters" (`caves.biomes.lush.hMin`) and the biome legend's rows driving the
+ * map's cave-biome highlight.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
-import { XRAY_COLORS, XRAY_LABELS } from '../../src/render/xrayPalette';
+import { readFileSync } from 'node:fs';
+import { CAVE_BIOME, CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
+import { XRAY_BIOME_COLORS, XRAY_BIOME_LABELS, XRAY_COLORS, XRAY_LABELS } from '../../src/render/xrayPalette';
 import {
-  CAVE_PARAMETERS_LEAF, CAVE_SLICE_EXTENT, caveSliceY, createCavesTab, FIND_KINDS, findButtonText, findText, radiusText, sliderBand,
-  type CavesTabDeps, type FindHit, type FindOutcome,
+  CAVE_BIOME_PARAMETERS_LEAF, CAVE_PARAMETERS_LEAF, CAVE_SLICE_EXTENT, caveSliceY, createCavesTab, FIND_KINDS, findButtonText, findText,
+  radiusText, sliderBand, type CaveSliceField, type CavesTabDeps, type FindHit, type FindOutcome,
 } from '../../src/ui/map/cavesTab';
 import { panelTree, type SectionSpec } from '../../src/ui/paramPanel/model';
 import { createPageXray, pageKeyName } from '../../src/ui/world/worldPage';
@@ -37,13 +41,20 @@ function mount(camera = { x: 100.5, y: 80.9, z: -40.5 }, saved = false) {
   const calls: string[] = [];
   const bands: XrayBand[] = [];
   const slices: number[] = [];
+  const fields: CaveSliceField[] = [];
+  const mapYs: number[] = [];
+  const highlights: (number | null)[] = [];
   const searches: Search[] = [];
   const savedHits: FindHit[] = [];
   const deps: CavesTabDeps = {
     onXray: (on) => { calls.push(`xray ${on}`); },
+    onColorMode: (mode) => { calls.push(`mode ${mode}`); },
     onBand: (b) => { bands.push(b); },
-    openSlice: (y) => { slices.push(y); },
+    openSlice: (y, field) => { slices.push(y); fields.push(field); },
+    showCaveBiomes: (y) => { mapYs.push(y); },
     revealParameters: () => { calls.push('reveal'); },
+    revealBiomeParameters: () => { calls.push('reveal biomes'); },
+    highlightCaveBiome: (id) => { highlights.push(id); },
     find: (kind) => {
       calls.push(`find ${kind}`);
       return new Promise<FindOutcome>((resolve, reject) => { searches.push({ kind, resolve, reject }); });
@@ -60,7 +71,7 @@ function mount(camera = { x: 100.5, y: 80.9, z: -40.5 }, saved = false) {
   dom.body.append(host);
   const tab = createCavesTab(host as unknown as HTMLElement, deps);
   const $ = (id: string): FakeElement => dom.el(id);
-  return { tab, deps, calls, bands, slices, camera, host, searches, savedHits, $ };
+  return { tab, deps, calls, bands, slices, fields, mapYs, highlights, camera, host, searches, savedHits, $ };
 }
 
 /** Lets the tab's promise handlers run. */
@@ -109,7 +120,7 @@ describe('the band rules (SP6a spec §7.3; Review Focus 3)', () => {
 });
 
 describe('the Caves tab (SP6a spec §7.3, D12)', () => {
-  test('its controls, in order: the X-ray (X) checkbox, the band line, Lowest y and Highest y (−64 … 319, step 1), All depths, the legend, the radius, Cave slice, Cave parameters', () => {
+  test('its controls, in order: the X-ray (X) checkbox, Colour by, the band line, Lowest y and Highest y (−64 … 319, step 1), All depths, the two legends, the radius, Cave slice, Show cave biomes on the map, Cave parameters, Cave biome parameters (SP6b spec §9.3)', () => {
     const m = mount();
     const box = m.$('map-caves-xray');
     expect(box.type).toBe('checkbox');
@@ -123,14 +134,36 @@ describe('the Caves tab (SP6a spec §7.3, D12)', () => {
     expect(m.$('map-caves-all').textContent).toBe('All depths');
     expect(m.$('map-caves-slice').textContent).toBe('Cave slice');
     expect(m.$('map-caves-params').textContent).toBe('Cave parameters');
+    expect(m.$('map-caves-show-map').textContent).toBe('Show cave biomes on the map');
+    expect(m.$('map-caves-biome-params').textContent).toBe('Cave biome parameters');
+    // Colour by: two radios of one group, Cave type checked at the mount (the page starts by cave type).
+    const colour = m.$('map-caves-color');
+    expect(colour.children[0]!.textContent).toBe('Colour by');
+    for (const [id, label, value, on] of [['map-caves-color-type', 'Cave type', '0', true], ['map-caves-color-biome', 'Cave biome', '1', false]] as const) {
+      const r = m.$(id) as FakeElement & { name: string };
+      expect([r.type, r.name, r.value, checked(r)], id).toEqual(['radio', 'map-caves-color', value, on]);
+      expect(r.parentElement!.textContent, id).toBe(label);
+      expect(r.parentElement!.parentElement, id).toBe(colour);
+    }
     // The legend: the nine cave kinds and the surface film, in the X-ray's colours.
     const legend = m.$('map-caves-legend');
     const kinds = [...Object.values(CAVE_KIND).filter((k) => k !== CAVE_KIND.none).sort((a, b) => a - b), CAVE_FILM_KIND];
     expect(kinds).toHaveLength(10);
     expect(legend.children.map((k) => k.textContent)).toEqual(kinds.map((k) => XRAY_LABELS[k]));
     expect(legend.children.map((k) => k.children[0]!.style['background'])).toEqual(kinds.map((k) => XRAY_COLORS[k]));
+    expect(legend.hidden).toBe(false);
+    // The biomes' legend, hidden by cave type: Plain cave, Lush, Dripstone, Abyss and the surface film.
+    const biomeLegend = m.$('map-caves-biome-legend');
+    const biomes = [CAVE_BIOME.plain, CAVE_BIOME.lush, CAVE_BIOME.dripstone, CAVE_BIOME.abyss, CAVE_FILM_KIND];
+    expect(biomeLegend.children.map((k) => k.textContent)).toEqual(['Plain cave', 'Lush', 'Dripstone', 'Abyss', 'Surface']);
+    expect(biomeLegend.children.map((k) => k.textContent)).toEqual(biomes.map((b) => XRAY_BIOME_LABELS[b]));
+    expect(biomeLegend.children.map((k) => k.children[0]!.style['background'])).toEqual(biomes.map((b) => XRAY_BIOME_COLORS[b]));
+    expect(biomeLegend.hidden).toBe(true);
     // The ids are in the tab's order.
-    const order = ['map-caves-xray', 'map-caves-band', 'map-caves-low', 'map-caves-high', 'map-caves-all', 'map-caves-legend', 'map-caves-radius', 'map-caves-slice', 'map-caves-params'];
+    const order = [
+      'map-caves-xray', 'map-caves-color', 'map-caves-band', 'map-caves-low', 'map-caves-high', 'map-caves-all', 'map-caves-legend',
+      'map-caves-biome-legend', 'map-caves-radius', 'map-caves-slice', 'map-caves-show-map', 'map-caves-params', 'map-caves-biome-params',
+    ];
     const ids: string[] = [];
     const walk = (e: FakeElement): void => {
       for (const c of e.children) {
@@ -168,17 +201,17 @@ describe('the Caves tab (SP6a spec §7.3, D12)', () => {
     slide(m.$('map-caves-low'), 12);
     m.$('map-caves-all').click();
     expect(m.bands.at(-1)).toBe(XRAY_ALL);
-    m.tab.set(false, XRAY_ALL, 176);
+    m.tab.set(false, XRAY_ALL, 176, 0);
     expect([m.$('map-caves-low').value, m.$('map-caves-high').value]).toEqual(['-64', '319']);
     expect(m.$('map-caves-band').textContent).toBe(stripText(XRAY_ALL, 0));
   });
 
   test('the radius readout follows `set`', () => {
     const m = mount();
-    m.tab.set(false, XRAY_ALL, 176);
+    m.tab.set(false, XRAY_ALL, 176, 0);
     expect(m.$('map-caves-radius').textContent).toBe(radiusText(176));
     expect(radiusText(176)).toBe('Radius 176 blocks');
-    m.tab.set(false, XRAY_ALL, 240);
+    m.tab.set(false, XRAY_ALL, 240, 0);
     expect(m.$('map-caves-radius').textContent).toBe('Radius 240 blocks');
   });
 
@@ -190,10 +223,10 @@ describe('the Caves tab (SP6a spec §7.3, D12)', () => {
     m.$('map-caves-slice').click();
     expect(m.slices).toEqual([80, -49]);
     // A band the page set (PageUp, PageDown) is the tab's too.
-    m.tab.set(true, bandSet(100, 315), 176);
+    m.tab.set(true, bandSet(100, 315), 176, 0);
     m.$('map-caves-slice').click();
     expect(m.slices).toEqual([80, -49, 207]);
-    m.tab.set(true, XRAY_ALL, 176);
+    m.tab.set(true, XRAY_ALL, 176, 0);
     m.camera.y = -20.5;
     m.$('map-caves-slice').click();
     expect(m.slices).toEqual([80, -49, 207, -21]);
@@ -209,12 +242,132 @@ describe('the Caves tab (SP6a spec §7.3, D12)', () => {
     const m = mount();
     const box = m.$('map-caves-xray');
     const band = m.$('map-caves-band');
-    m.tab.set(true, bandSet(10, 41), 176);
+    m.tab.set(true, bandSet(10, 41), 176, 0);
     expect([checked(box), m.$('map-caves-low').value, m.$('map-caves-high').value, band.textContent]).toEqual([true, '10', '41', 'X-ray · y 10 … 41 · by cave type']);
     const line = band.childNodes[0];
-    m.tab.set(true, bandSet(10, 41), 176);
+    m.tab.set(true, bandSet(10, 41), 176, 0);
     expect(band.childNodes[0]).toBe(line);
-    expect([m.calls, m.bands, m.slices]).toEqual([[], [], []]);
+    // The colour mode too: the radios, the legends and the line follow it, and no dep is called.
+    m.tab.set(true, bandSet(10, 41), 176, 1);
+    m.tab.set(true, bandSet(10, 41), 176, 1);
+    expect(band.textContent).toBe('X-ray · y 10 … 41 · by cave biome');
+    expect([m.calls, m.bands, m.slices, m.highlights]).toEqual([[], [], [], []]);
+  });
+});
+
+describe('Colour by and the links that follow it (SP6b spec §9.3, D11; rulings P51, P53)', () => {
+  const legends = (m: ReturnType<typeof mount>): [boolean, boolean] => [m.$('map-caves-legend').hidden, m.$('map-caves-biome-legend').hidden];
+
+  test('the radios, the band line and the legend follow `set`\'s colour mode: by cave biome checks Cave biome, writes "· by cave biome" and shows the biomes\' legend; back by cave type, the kinds\'', () => {
+    const m = mount();
+    const type = m.$('map-caves-color-type');
+    const biome = m.$('map-caves-color-biome');
+    m.tab.set(false, bandSet(10, 41), 176, 1);
+    expect([checked(type), checked(biome)]).toEqual([false, true]);
+    expect(m.$('map-caves-band').textContent).toBe(stripText(bandSet(10, 41), 1));
+    expect(legends(m)).toEqual([true, false]);
+    // The band line follows a band change in the biome mode too.
+    m.tab.set(false, bandSet(-64, -33), 176, 1);
+    expect(m.$('map-caves-band').textContent).toBe('X-ray · y −64 … −33 · by cave biome');
+    m.tab.set(false, bandSet(-64, -33), 176, 0);
+    expect([checked(type), checked(biome)]).toEqual([true, false]);
+    expect(m.$('map-caves-band').textContent).toBe('X-ray · y −64 … −33 · by cave type');
+    expect(legends(m)).toEqual([false, true]);
+    expect(m.calls).toEqual([]);
+  });
+
+  test('choosing a radio calls `onColorMode` with its mode; the tab waits for the page\'s `set` (the checkbox\'s rule)', () => {
+    const m = mount();
+    tick(m.$('map-caves-color-biome'), true);
+    expect(m.calls).toEqual(['mode 1']);
+    expect(legends(m)).toEqual([false, true]);
+    m.tab.set(false, XRAY_ALL, 176, 1);
+    expect(legends(m)).toEqual([true, false]);
+    tick(m.$('map-caves-color-type'), true);
+    expect(m.calls).toEqual(['mode 1', 'mode 0']);
+  });
+
+  test('"Cave slice" opens the `caves` field by cave type and the `biome3d` field by cave biome, at `caveSliceY`', () => {
+    const m = mount({ x: 0, y: 80.9, z: 0 });
+    m.$('map-caves-slice').click();
+    m.tab.set(false, XRAY_ALL, 176, 1);
+    m.$('map-caves-slice').click();
+    m.tab.set(false, bandSet(100, 315), 176, 1);
+    m.$('map-caves-slice').click();
+    m.tab.set(false, bandSet(100, 315), 176, 0);
+    m.$('map-caves-slice').click();
+    expect(m.slices).toEqual([80, 80, 207, 207]);
+    expect(m.fields).toEqual(['caves', 'biome3d', 'biome3d', 'caves']);
+  });
+
+  test('ruling P53: "Show cave biomes on the map" shows the caveBiome layer at `caveSliceY`, unrounded: the band\'s middle y, or the camera\'s y with the band at all', () => {
+    const m = mount({ x: 0, y: 80.9, z: 0 });
+    m.$('map-caves-show-map').click();
+    // A band whose middle y is no multiple of 4: ⌊(10 + 41) / 2⌋ = 25.
+    m.tab.set(false, bandSet(10, 41), 176, 0);
+    m.$('map-caves-show-map').click();
+    m.tab.set(false, XRAY_ALL, 176, 1);
+    m.camera.y = -20.5;
+    m.$('map-caves-show-map').click();
+    expect(m.mapYs).toEqual([80, 25, -21]);
+    expect(m.mapYs).toEqual([caveSliceY(XRAY_ALL, 80.9), caveSliceY(bandSet(10, 41), 0), caveSliceY(XRAY_ALL, -20.5)]);
+    expect([m.calls, m.slices]).toEqual([[], []]);
+  });
+
+  test('"Cave biome parameters" calls `revealBiomeParameters`; its leaf `caves.biomes.lush.hMin` is a control of the panel\'s Caves › Cave biomes section (reveal takes a leaf path)', () => {
+    const m = mount();
+    m.$('map-caves-biome-params').click();
+    expect(m.calls).toEqual(['reveal biomes']);
+    expect(CAVE_BIOME_PARAMETERS_LEAF).toBe('caves.biomes.lush.hMin');
+    const caves = panelTree().sections.find((s) => s.path === 'caves')!;
+    const biomes = caves.sections.find((s) => s.path === 'caves.biomes');
+    expect(biomes).toBeDefined();
+    const paths = (s: SectionSpec): string[] => [...s.controls.map((c) => c.path), ...s.sections.flatMap(paths)];
+    expect(paths(biomes!)).toContain(CAVE_BIOME_PARAMETERS_LEAF);
+  });
+
+  test('ruling P51: the biome legend\'s rows drive the map\'s cave-biome highlight (Plain cave, Lush, Dripstone, Abyss: their ids; the surface film\'s row ends it); leaving the legend ends it', () => {
+    const m = mount();
+    m.tab.set(false, XRAY_ALL, 176, 1);
+    const legend = m.$('map-caves-biome-legend');
+    for (const r of legend.children) r.dispatchEvent(new Event('pointerenter'));
+    expect(m.highlights).toEqual([CAVE_BIOME.plain, CAVE_BIOME.lush, CAVE_BIOME.dripstone, CAVE_BIOME.abyss, null]);
+    // Nothing held: leaving the legend calls nothing; held, it ends the highlight.
+    legend.dispatchEvent(new Event('pointerleave'));
+    expect(m.highlights).toHaveLength(5);
+    legend.children[2]!.dispatchEvent(new Event('pointerenter'));
+    legend.dispatchEvent(new Event('pointerleave'));
+    expect(m.highlights.slice(5)).toEqual([CAVE_BIOME.dripstone, null]);
+    // The kinds' legend drives nothing.
+    for (const r of m.$('map-caves-legend').children) r.dispatchEvent(new Event('pointerenter'));
+    expect(m.highlights).toHaveLength(7);
+  });
+
+  test('a highlight held when the mode goes back to cave type ends with the biomes\' legend (its rows are hidden; no pointerleave comes)', () => {
+    const m = mount();
+    m.tab.set(false, XRAY_ALL, 176, 1);
+    m.$('map-caves-biome-legend').children[1]!.dispatchEvent(new Event('pointerenter'));
+    m.tab.set(false, XRAY_ALL, 176, 0);
+    expect(m.highlights).toEqual([CAVE_BIOME.lush, null]);
+    // None held: the switch calls nothing.
+    m.tab.set(false, XRAY_ALL, 176, 1);
+    m.tab.set(false, XRAY_ALL, 176, 0);
+    expect(m.highlights).toEqual([CAVE_BIOME.lush, null]);
+  });
+
+  test('a highlight held when the tab closes (`cancel`: another tab shown, the panel or the map hidden) or is disposed ends there; none held, neither calls the dep', () => {
+    const m = mount();
+    m.tab.set(false, XRAY_ALL, 176, 1);
+    m.tab.cancel();
+    expect(m.highlights).toEqual([]);
+    m.$('map-caves-biome-legend').children[3]!.dispatchEvent(new Event('pointerenter'));
+    m.tab.cancel();
+    m.tab.cancel();
+    expect(m.highlights).toEqual([CAVE_BIOME.abyss, null]);
+    m.$('map-caves-biome-legend').children[0]!.dispatchEvent(new Event('pointerenter'));
+    m.tab.dispose();
+    expect(m.highlights).toEqual([CAVE_BIOME.abyss, null, CAVE_BIOME.plain, null]);
+    expect(m.calls).toEqual([]);
   });
 });
 
@@ -233,29 +386,29 @@ describe('`set` on an X toggle (SP6a spec §5.3: a toggle allocates nothing; Tas
 
   test('with the band and the radius unchanged, `set` reads and writes no slider value: an X toggle, on or off, compares numbers only', () => {
     const m = mount();
-    m.tab.set(false, bandSet(10, 41), 176);
+    m.tab.set(false, bandSet(10, 41), 176, 0);
     const low = spyValue(m.$('map-caves-low'));
     const high = spyValue(m.$('map-caves-high'));
-    for (const on of [true, false, true, false]) m.tab.set(on, bandSet(10, 41), 176);
+    for (const on of [true, false, true, false]) m.tab.set(on, bandSet(10, 41), 176, 0);
     expect([low, high]).toEqual([{ reads: 0, writes: 0 }, { reads: 0, writes: 0 }]);
     expect(checked(m.$('map-caves-xray'))).toBe(false);
     // A changed band writes both sliders.
-    m.tab.set(false, bandSet(12, 41), 176);
+    m.tab.set(false, bandSet(12, 41), 176, 0);
     expect([low.writes, high.writes, m.$('map-caves-low').value]).toEqual([1, 1, '12']);
   });
 
   test('a slider left where the band is not (a value the tab does not take) is put back by the next `set`, as before', () => {
     const m = mount();
-    m.tab.set(true, bandSet(10, 41), 176);
+    m.tab.set(true, bandSet(10, 41), 176, 0);
     slide(m.$('map-caves-low'), 10.5);
     expect(m.bands).toEqual([]);
-    m.tab.set(false, bandSet(10, 41), 176);
+    m.tab.set(false, bandSet(10, 41), 176, 0);
     expect([m.$('map-caves-low').value, m.$('map-caves-high').value]).toEqual(['10', '41']);
     // Moved by the user, the sliders are the band's: the page's echo of it writes nothing.
     slide(m.$('map-caves-high'), 60);
     expect(m.bands).toEqual([bandSet(10, 60)]);
     const low = spyValue(m.$('map-caves-low'));
-    m.tab.set(true, bandSet(10, 60), 176);
+    m.tab.set(true, bandSet(10, 60), 176, 0);
     expect(low).toEqual({ reads: 0, writes: 0 });
   });
 });
@@ -263,8 +416,9 @@ describe('`set` on an X toggle (SP6a spec §5.3: a toggle allocates nothing; Tas
 describe('the Caves tab over the page\'s X-ray (SP6a spec §7.3; worldPage.ts wires the same)', () => {
   /**
    * The page's X-ray, its strip and the tab, wired as the page wires them (worldPage.ts): the X-ray's `changed` hook pushes
-   * its state into the tab, the tab's `onXray` and `onBand` change the X-ray only (Task 52, minors-12: no push by hand,
-   * so a page whose hook stopped pushing fails here). The first push stands for the mount, which reads the state itself.
+   * its state into the tab, the tab's `onXray`, `onColorMode` and `onBand` change the X-ray only (Task 52, minors-12: no
+   * push by hand, so a page whose hook stopped pushing fails here). The first push stands for the mount, which reads the
+   * state itself.
    */
   function wired(cameraY = 80.5) {
     const calls: string[] = [];
@@ -273,7 +427,7 @@ describe('the Caves tab over the page\'s X-ray (SP6a spec §7.3; worldPage.ts wi
     dom.body.append(host);
     let tab: ReturnType<typeof createCavesTab> | null = null;
     const radius = 176;
-    const push = (): void => tab?.set(xray.on, xray.band, radius);
+    const push = (): void => tab?.set(xray.on, xray.band, radius, xray.mode);
     const xray = createPageXray({
       renderer: {
         setXray: (on) => { calls.push(`setXray ${on}`); }, setXrayBand: (a, b) => { calls.push(`band ${a} ${b}`); }, setXrayColorMode: () => {},
@@ -286,16 +440,20 @@ describe('the Caves tab over the page\'s X-ray (SP6a spec §7.3; worldPage.ts wi
     });
     tab = createCavesTab(host as unknown as HTMLElement, {
       onXray: (on) => { if (on !== xray.on) xray.action('xray'); },
+      onColorMode: (mode) => { if (mode !== xray.mode) xray.action('xrayColor'); },
       onBand: (b) => xray.setBand(b),
       openSlice: () => {},
+      showCaveBiomes: () => {},
       revealParameters: () => {},
+      revealBiomeParameters: () => {},
+      highlightCaveBiome: () => {},
       find: () => new Promise<FindOutcome>(() => {}),
       cancelFind: () => {},
       savePlace: null,
       camera: () => ({ x: 0, y: cameraY, z: 0 }),
     });
     push();
-    const key = (a: 'xray' | 'xrayDown' | 'xrayUp' | 'xrayAll'): void => xray.action(a);
+    const key = (a: 'xray' | 'xrayDown' | 'xrayUp' | 'xrayAll' | 'xrayColor'): void => xray.action(a);
     return { xray, calls, key, $: (id: string) => dom.el(id), stripLine: () => dom.el('world-xray-strip').children[0]!.textContent };
   }
 
@@ -326,6 +484,37 @@ describe('the Caves tab over the page\'s X-ray (SP6a spec §7.3; worldPage.ts wi
     expect([w.xray.on, checked(box)]).toEqual([true, true]);
     w.key('xray');
     expect([w.xray.on, checked(box)]).toEqual([false, false]);
+  });
+
+  test('Colour by is in step with C both ways (SP6b spec §9.3): C checks Cave biome and switches the tab\'s line and legend; the Cave type radio sets the page\'s mode back, the strip following', () => {
+    const w = wired();
+    const type = w.$('map-caves-color-type');
+    const biome = w.$('map-caves-color-biome');
+    w.key('xray');
+    w.key('xrayColor');
+    expect([w.xray.mode, checked(type), checked(biome)]).toEqual([1, false, true]);
+    expect(w.$('map-caves-band').textContent).toBe('X-ray · y −64 … 319 · by cave biome');
+    expect([w.$('map-caves-legend').hidden, w.$('map-caves-biome-legend').hidden]).toEqual([true, false]);
+    expect(w.stripLine()).toBe('X-ray · y −64 … 319 · by cave biome');
+    tick(type, true);
+    expect([w.xray.mode, checked(type), checked(biome)]).toEqual([0, true, false]);
+    expect(w.stripLine()).toBe('X-ray · y −64 … 319 · by cave type');
+    expect(w.$('map-caves-band').textContent).toBe('X-ray · y −64 … 319 · by cave type');
+    // The page's mode already set: choosing it again presses no C.
+    tick(type, true);
+    expect(w.xray.mode).toBe(0);
+    tick(biome, true);
+    expect([w.xray.mode, checked(biome), w.$('map-caves-legend').hidden]).toEqual([1, true, true]);
+    // C with the X-ray off still switches the tab (C acts with the X-ray off).
+    w.key('xray');
+    w.key('xrayColor');
+    expect([w.xray.on, w.xray.mode, checked(type)]).toEqual([false, 0, true]);
+  });
+
+  test('worldPage.ts wires the radios as the checkbox: `onColorMode` presses C only when the mode differs', () => {
+    const page = readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+    expect(page).toContain("          onColorMode: (mode) => { if (mode !== pageXray.mode) pageXray.action('xrayColor'); },");
+    expect(page).toContain("          onXray: (on) => { if (on !== pageXray.on) pageXray.action('xray'); },");
   });
 
   test('ruling P24: the slider band [100, 315] with PageUp gives [104, 319], with PageDown [92, 307]; the sliders follow the keys', () => {

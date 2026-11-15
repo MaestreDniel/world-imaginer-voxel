@@ -664,9 +664,10 @@ describe('the Voxels mode by cave biome (SP6b spec §9.2, D10): it follows the X
     expect(section).toContain('drawn.colors === colors');
     expect(section).toContain('refresh: () => render(),');
     const tool = src('ui/map/mapTool.ts');
-    expect(tool).toContain("export type MapCaves = Omit<CavesTabDeps, 'openSlice' | 'revealParameters'> & { xrayColorMode?(): 0 | 1 };");
+    // Task 47 (SP6b §9.3) adds the tool's three other links to the Omit and passes the mode to the Caves tab's `set`.
+    expect(tool).toContain("export type MapCaves = Omit<CavesTabDeps, 'openSlice' | 'showCaveBiomes' | 'revealParameters' | 'revealBiomeParameters' | 'highlightCaveBiome'> & { xrayColorMode?(): 0 | 1 };");
     expect(tool).toContain('...(mapCaves?.xrayColorMode === undefined ? {} : { xrayColorMode: () => mapCaves.xrayColorMode!() }),');
-    expect(tool).toMatch(/setXray: \(on, band, radius\) => \{\s*cavesTab\?\.set\(on, band, radius\);[^}]*section\.refresh\(\);\s*\}/);
+    expect(tool).toMatch(/setXray: \(on, band, radius\) => \{\s*cavesTab\?\.set\(on, band, radius, xrayColorMode\(\)\);[^}]*section\.refresh\(\);\s*\}/);
     const page = src('ui/world/worldPage.ts');
     expect(page).toContain('xrayColorMode: () => pageXray.mode,');
     // C calls `changed` (pushXray), which reaches the map's setXray.

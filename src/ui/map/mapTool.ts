@@ -18,9 +18,11 @@
  * D13): the canvas draws them as dots (`setPlaces`, redrawn at every change of the places) and a fifth side-panel tab,
  * Places, lists them (`placesTab.ts`); the pin is exposed (`pin`, `onPin`) for its "+ Add at the pin". The world's tool
  * is mounted with its `caves` (SP6a spec §7.3, D12; `?map` has none, it has no 3D): a Caves tab after Presets
- * (`cavesTab.ts`) with the page's X-ray controls, which the page keeps in step through `setXray`, and the tool's two
- * links (`caveTabDeps`): "Cave slice" opens the Density tab's horizontal `caves` slice, "Cave parameters" the Caves
- * section of Parameters; its search in flight (the Find row) is cancelled when the tab closes: another tab shown, the
+ * (`cavesTab.ts`) with the page's X-ray controls and colour mode, which the page keeps in step through `setXray`, and the
+ * tool's links (`caveTabDeps`): "Cave slice" opens the Density tab's horizontal `caves` slice (`biome3d` by cave biome),
+ * "Show cave biomes on the map" the caveBiome layer, "Cave parameters" and "Cave biome parameters" the Caves section of
+ * Parameters and its Cave biomes, and the biome legend highlights a cave biome on that layer (SP6b spec §9.3); its
+ * search in flight (the Find row) is cancelled, and its highlight ended, when the tab closes: another tab shown, the
  * panel hidden (`onPanelChange`) or the tool hidden (`hide`).
  */
 import './map.css';
@@ -48,7 +50,7 @@ import { createParamPanel } from '../paramPanel/panel';
 import { createPresetsTab } from '../presets/presetsTab';
 import { createSplineDrawer } from '../splineEditor/drawer';
 import { isSplineLeaf } from '../splineEditor/model';
-import { CAVE_PARAMETERS_LEAF, CAVE_SLICE_EXTENT, createCavesTab, type CavesTabDeps } from './cavesTab';
+import { CAVE_BIOME_PARAMETERS_LEAF, CAVE_PARAMETERS_LEAF, CAVE_SLICE_EXTENT, createCavesTab, type CavesTabDeps } from './cavesTab';
 import { mapClickAction } from './clickAction';
 import { createHoverReadout } from './hoverPanel';
 import { createLayout, drawerTabOnScreen, layoutTabs, tabOnScreen, type LayoutStorage } from './layout';
@@ -76,18 +78,23 @@ export interface MapPlaces {
 }
 
 /**
- * What the page gives the world's map for its Caves tab (SP6a spec §7.3): the tab's deps but the two links the tool makes,
- * and the page's X-ray colour mode, which the Cross-section's Voxels mode follows (SP6b spec §9.2, D10; absent: 0).
+ * What the page gives the world's map for its Caves tab (SP6a spec §7.3): the tab's deps but the links the tool makes,
+ * and the page's X-ray colour mode, which the Cross-section's Voxels mode and the tab's Colour by follow (SP6b spec §9.2,
+ * §9.3, D10, D11; absent: 0).
  */
-export type MapCaves = Omit<CavesTabDeps, 'openSlice' | 'revealParameters'> & { xrayColorMode?(): 0 | 1 };
+export type MapCaves = Omit<CavesTabDeps, 'openSlice' | 'showCaveBiomes' | 'revealParameters' | 'revealBiomeParameters' | 'highlightCaveBiome'> & { xrayColorMode?(): 0 | 1 };
 
 /**
- * The Caves tab's deps in the world's map (SP6a spec §7.3): the page's `caves`, with the tool's two links. "Cave slice" at
- * y opens the Density tab's horizontal `caves` slice at y, `CAVE_SLICE_EXTENT` blocks across, centred on the camera as
- * it is at the press, selects the tab's Slice pane (hidden in its narrow layouts while JSON is selected), then shows the
- * drawer on Density (which requests it; in the stacked layout it scrolls the drawer into view), and last scrolls the
- * slice cell into view inside the drawer (the Density tab stacks it under the tree and the form below 900 px; the SP6a
- * user's check, R32 c); "Cave parameters" shows Parameters and reveals `CAVE_PARAMETERS_LEAF`.
+ * The Caves tab's deps in the world's map (SP6a spec §7.3): the page's `caves`, with the tool's links. "Cave slice" at y
+ * opens the Density tab's horizontal slice of the tab's field (`caves`, or `biome3d` by cave biome, SP6b spec §9.3) at
+ * y, `CAVE_SLICE_EXTENT` blocks across, centred on the camera as it is at the press, selects the tab's Slice pane (hidden
+ * in its narrow layouts while JSON is selected), then shows the drawer on Density (which requests it; in the stacked
+ * layout it scrolls the drawer into view), and last scrolls the slice cell into view inside the drawer (the Density tab
+ * stacks it under the tree and the form below 900 px; the SP6a user's check, R32 c); "Show cave biomes on the map" at y
+ * sets the map's layer to caveBiome at `caveY` y, its centre and scale kept (ruling P53); "Cave parameters" shows
+ * Parameters and reveals `CAVE_PARAMETERS_LEAF`, "Cave biome parameters" `CAVE_BIOME_PARAMETERS_LEAF`; the biome
+ * legend's highlight reaches the canvas while the map shows the caveBiome layer, and on another layer ends any (ruling
+ * P51: the legend drives the highlight on that layer only).
  */
 export function caveTabDeps(caves: MapCaves, tool: {
   openSlice(s: SliceState): void;
@@ -96,19 +103,30 @@ export function caveTabDeps(caves: MapCaves, tool: {
   revealSlice(): void;
   showTab(tab: 'parameters'): void;
   reveal(path: string): void;
+  view(): MapView;
+  setView(v: MapView): void;
+  highlightCaveBiome(id: number | null): void;
 }): CavesTabDeps {
+  const showParameters = (leaf: string): void => {
+    tool.showTab('parameters');
+    tool.reveal(leaf);
+  };
   return {
     ...caves,
-    openSlice(y) {
+    openSlice(y, field) {
       const c = caves.camera();
-      tool.openSlice({ plane: 'horizontal', field: 'caves', y, cx: c.x, cz: c.z, extent: CAVE_SLICE_EXTENT });
+      tool.openSlice({ plane: 'horizontal', field, y, cx: c.x, cz: c.z, extent: CAVE_SLICE_EXTENT });
       tool.showSlice();
       tool.openDrawer('density');
       tool.revealSlice();
     },
-    revealParameters() {
-      tool.showTab('parameters');
-      tool.reveal(CAVE_PARAMETERS_LEAF);
+    showCaveBiomes(y) {
+      tool.setView({ ...tool.view(), layer: 'caveBiome', caveY: y });
+    },
+    revealParameters: () => showParameters(CAVE_PARAMETERS_LEAF),
+    revealBiomeParameters: () => showParameters(CAVE_BIOME_PARAMETERS_LEAF),
+    highlightCaveBiome(id) {
+      tool.highlightCaveBiome(tool.view().layer === 'caveBiome' ? id : null);
     },
   };
 }
@@ -200,6 +218,8 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   const mapPlaces = deps.places ?? null;
   const mapCaves = deps.caves ?? null;
   const layout = createLayout(host, deps.storage, { tabs: layoutTabs(mapPlaces !== null, mapCaves !== null) });
+  /** The page's X-ray colour mode (SP6b spec §9.3): the Caves tab's Colour by follows it; 0 without one. */
+  const xrayColorMode = (): 0 | 1 => mapCaves?.xrayColorMode?.() ?? 0;
   disposers.add(() => layout.dispose());
   const notices = createNotices(layout.notices);
   disposers.add(() => notices.dispose());
@@ -503,7 +523,9 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   disposers.add(() => presets.dispose());
 
   // The world's Caves tab (SP6a spec §7.3, D12): the page's X-ray controls, and the links to the Density tab's cave slice
-  // and to the Caves section of Parameters.
+  // and to the Caves section of Parameters; SP6b's (spec §9.3, D11): the caveBiome layer through the tool's own view
+  // writer (which reports the view, as the toolbar's layer choice), Cave biomes in Parameters and the canvas's
+  // cave-biome highlight.
   const cavesTab = mapCaves === null ? null : createCavesTab(layout.tabs.caves, caveTabDeps(mapCaves, {
     openSlice: (s) => slices.open(s),
     showSlice: () => densityTab.showSlice(),
@@ -511,6 +533,9 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
     revealSlice: () => densityTab.revealSlice(),
     showTab: (t) => layout.showTab(t),
     reveal: (path) => panel.reveal(path),
+    view: () => view,
+    setView: (v) => { setView(v); viewChanged(); },
+    highlightCaveBiome: (id) => canvas.highlightCaveBiome(id),
   }));
   if (cavesTab !== null) {
     disposers.add(() => cavesTab.dispose());
@@ -603,7 +628,7 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
     pin: () => pin,
     onPin,
     setXray: (on, band, radius) => {
-      cavesTab?.set(on, band, radius);
+      cavesTab?.set(on, band, radius, xrayColorMode());
       // C reaches here too (the page's `changed`): a shown Voxels slice repaints in the new colour mode (SP6b spec §9.2).
       section.refresh();
     },

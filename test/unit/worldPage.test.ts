@@ -6714,7 +6714,8 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
   test('with the map split and a band slider focused (the map owns, `ownerOf`), PageDown is neither acted on nor prevented, so only the slider moves (SP6a spec §7.1, §7.3)', () => {
     const p = page();
     const tab = createCavesTab(dom.body as unknown as HTMLElement, {
-      onXray: () => {}, onBand: (b) => p.xray.setBand(b), openSlice: () => {}, revealParameters: () => {},
+      onXray: () => {}, onColorMode: () => {}, onBand: (b) => p.xray.setBand(b), openSlice: () => {}, showCaveBiomes: () => {},
+      revealParameters: () => {}, revealBiomeParameters: () => {}, highlightCaveBiome: () => {},
       find: () => new Promise(() => {}), cancelFind: () => {}, savePlace: null, camera: () => ({ x: 0, y: 80, z: 0 }),
     });
     const target = Object.assign(new EventTarget(), { requestPointerLock: () => Promise.resolve() });

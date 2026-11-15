@@ -1,16 +1,22 @@
 /**
  * The Caves tab of the world's map (SP6a spec §7.3, D12), after Presets (`layoutTabs`); `?map` has none (it has no 3D).
  * From the top: "X-ray (X)", a checkbox that mirrors X both ways (a change calls `onXray`; the page's state comes back
- * through `set`); the band's line (`stripText`, as the strip writes it, by cave type: SP6b's colour mode reaches the tab
- * with its "Colour by", SP6b spec §9.3); the "Lowest y" and "Highest y" sliders (−64 …
+ * through `set`); "Colour by", two radios (Cave type, Cave biome) in step with C both ways (SP6b spec §9.3, D11: a
+ * choice calls `onColorMode`, and the page's mode comes back through `set`, as the checkbox's state); the band's line
+ * (`stripText`, as the strip writes it, in the page's colour mode); the "Lowest y" and "Highest y" sliders (−64 …
  * 319, step 1), which keep lowest ≤ highest by moving the other slider (`sliderBand`) and call `onBand` on every move;
- * "All depths" (`XRAY_ALL`); the legend (the nine cave kinds and the surface film in the X-ray's colours); the radius
- * readout; "Cave slice", which opens the Density tab's horizontal `caves` slice at `caveSliceY` (the band's middle y, or
- * the camera's y with the band at all), `CAVE_SLICE_EXTENT` blocks across, centred on the camera (the tool's
- * `openSlice`); and "Cave parameters", which opens Parameters at `CAVE_PARAMETERS_LEAF`, the Caves section's first leaf
- * (the panel's `reveal` takes a leaf path and does nothing for a group's, so it opens the section through its first
- * leaf). Then the Find row (SP6a spec §7.3, D12, D16; the cut line, §15): one button per kind 1-8, "Nearest <kind>"
- * (`FIND_KINDS`; kind 9 has none, the default tree yields none), whose press asks `find(kind)` from the camera; the
+ * "All depths" (`XRAY_ALL`); the legend following the mode, as the strip's: by cave type the nine cave kinds and the
+ * surface film, by cave biome Plain cave, Lush, Dripstone, Abyss and the surface film, in the X-ray's colours (the
+ * biomes' rows drive the map's cave-biome highlight, `highlightCaveBiome`, ruling P51: a row's biome under the pointer,
+ * null when it leaves the legend or the legend hides); the radius readout; "Cave slice", which opens the Density tab's
+ * horizontal slice at `caveSliceY` (the band's middle y, or the camera's y with the band at all), `CAVE_SLICE_EXTENT`
+ * blocks across, centred on the camera (the tool's `openSlice`), of the `caves` field by cave type and the `biome3d`
+ * field by cave biome; "Show cave biomes on the map", the map's caveBiome layer at `caveSliceY` (ruling P53: unrounded);
+ * "Cave parameters", which opens Parameters at `CAVE_PARAMETERS_LEAF`, the Caves section's first leaf (the panel's
+ * `reveal` takes a leaf path and does nothing for a group's, so it opens the section through its first leaf); and "Cave
+ * biome parameters", which opens it at `CAVE_BIOME_PARAMETERS_LEAF`, a leaf of Caves › Cave biomes. Then the Find row
+ * (SP6a spec §7.3, D12, D16; the cut line, §15): one button per kind 1-8, "Nearest <kind>" (`FIND_KINDS`; kind 9 has
+ * none, the default tree yields none), whose press asks `find(kind)` from the camera; the
  * result line reads "Searching for <kind>…", then `findText`'s "<kind> at x, y, z · d blocks away" (d from the camera
  * at the press, rounded), "No <kind> found within 512 blocks", "No <kind> found in 2 s" or "<kind> search stopped" (the
  * world changed under it); a second press of the button searching, a press of another kind's (which then searches),
@@ -19,21 +25,32 @@
  * that hit's pose. `set` writes only what changed and calls no dep. Text only through `textContent`; no browser
  * dialog.
  */
-import { CAVE_KIND, HEIGHT, MIN_Y } from '../../core/constants';
-import { XRAY_COLORS, XRAY_LABELS } from '../../render/xrayPalette';
+import { CAVE_BIOME, CAVE_KIND, HEIGHT, MIN_Y } from '../../core/constants';
+import { XRAY_BIOME_COLORS, XRAY_BIOME_LABELS, XRAY_COLORS, XRAY_LABELS } from '../../render/xrayPalette';
 import { FIND_BUDGET_MS, FIND_RADIUS } from '../../workers/protocol';
 import { el } from '../common/dom';
 import { bandSet, stripText, XRAY_ALL, type XrayBand } from '../world/xrayStrip';
 
+/** The field "Cave slice" opens (SP6b spec §9.3): `caves` by cave type, `biome3d` by cave biome. */
+export type CaveSliceField = 'caves' | 'biome3d';
+
 export interface CavesTabDeps {
   /** The checkbox changed: the X-ray on or off (the page's X). */
   onXray(on: boolean): void;
+  /** A "Colour by" radio was chosen: the page's colour mode, 0 by cave type, 1 by cave biome (the page's C). */
+  onColorMode(mode: 0 | 1): void;
   /** A slider moved or All depths was pressed: the page's band (its renderer and strip). */
   onBand(b: XrayBand): void;
-  /** "Cave slice": the Density tab's horizontal `caves` slice at world y `y`, centred on the camera. */
-  openSlice(y: number): void;
+  /** "Cave slice": the Density tab's horizontal slice of `field` at world y `y`, centred on the camera. */
+  openSlice(y: number, field: CaveSliceField): void;
+  /** "Show cave biomes on the map": the map's caveBiome layer at world y `y` (SP6b spec §9.3). */
+  showCaveBiomes(y: number): void;
   /** "Cave parameters": the Parameters tab at `CAVE_PARAMETERS_LEAF`. */
   revealParameters(): void;
+  /** "Cave biome parameters": the Parameters tab at `CAVE_BIOME_PARAMETERS_LEAF` (SP6b spec §9.3). */
+  revealBiomeParameters(): void;
+  /** The biome legend's row under the pointer: the map's cave-biome highlight (a `CAVE_BIOME` id; null ends it; P51). */
+  highlightCaveBiome(id: number | null): void;
   /**
    * "Nearest <kind>" (SP6a spec §7.3): the search from the camera, which moves the camera into the hit in flight; its
    * hit (null unless `reason` is `found`) and why it ended. Rejected when cancelled (`cancelFind`).
@@ -61,11 +78,18 @@ export interface FindOutcome {
 }
 
 export interface CavesTab {
-  /** The page's X-ray state: on or off, its band and its radius in blocks; writes only what changed. */
-  set(on: boolean, band: XrayBand, radius: number): void;
-  /** Cancels the search in flight, if any (the tab closed, another tab shown or the map hidden). */
+  /**
+   * The page's X-ray state: on or off, its band, its radius in blocks and its colour mode (0 by cave type, 1 by cave
+   * biome); writes only what changed and calls no dep, but for a cave-biome highlight held when the mode goes back to
+   * cave type, which it ends (`highlightCaveBiome(null)`: its legend hides, so no pointerleave comes).
+   */
+  set(on: boolean, band: XrayBand, radius: number, mode: 0 | 1): void;
+  /**
+   * Cancels the search in flight, if any (the tab closed, another tab shown or the map hidden), and ends a cave-biome
+   * highlight held (its legend leaves the screen, so no pointerleave comes).
+   */
   cancel(): void;
-  /** Cancels the search in flight and removes the tab's DOM. */
+  /** Cancels the search in flight, ends a held highlight and removes the tab's DOM. */
   dispose(): void;
 }
 
@@ -105,6 +129,8 @@ export function findText(kind: number, r: FindOutcome, from: { readonly x: numbe
 export const CAVE_SLICE_EXTENT = 256;
 /** The leaf "Cave parameters" reveals: the Caves section's first, which opens the section and its Cheese sub-section. */
 export const CAVE_PARAMETERS_LEAF = 'caves.cheese.offset';
+/** The leaf "Cave biome parameters" reveals (SP6b spec §9.3): it opens Caves › Cave biomes and its Lush sub-section. */
+export const CAVE_BIOME_PARAMETERS_LEAF = 'caves.biomes.lush.hMin';
 
 const WORLD_MIN = MIN_Y;
 const WORLD_MAX = MIN_Y + HEIGHT - 1;
@@ -126,8 +152,25 @@ export function caveSliceY(b: XrayBand, cameraY: number): number {
 /** The radius readout: "Radius r blocks". */
 export const radiusText = (radius: number): string => `Radius ${radius} blocks`;
 
-/** The legend's kinds, in kind order: the nine cave kinds and the surface film (the kinds with a label). */
-const LEGEND_KINDS: readonly number[] = XRAY_LABELS.flatMap((label, kind) => (label === '' ? [] : [kind]));
+/** A legend's entries in index order: those with a label (the kinds 1-9 and 15; the biomes 0-3 and 15). */
+const labelled = (labels: readonly string[]): readonly number[] => labels.flatMap((label, i) => (label === '' ? [] : [i]));
+/** The cave biomes a biome legend row highlights on the map: 0-3 (the surface film's row highlights none). */
+const HIGHLIGHT_BIOMES: readonly number[] = [CAVE_BIOME.plain, CAVE_BIOME.lush, CAVE_BIOME.dripstone, CAVE_BIOME.abyss];
+
+/** A legend: a swatch and a label per labelled entry, in the X-ray's colours; `row` sees each row and its entry. */
+function legendOf(id: string, colors: readonly string[], labels: readonly string[], row?: (key: HTMLElement, i: number) => void): HTMLElement {
+  const legend = el('div', 'caves-legend');
+  legend.id = id;
+  for (const i of labelled(labels)) {
+    const key = el('span', 'world-xray-key');
+    const swatch = el('span', 'world-xray-swatch');
+    swatch.style.background = colors[i]!;
+    key.append(swatch, el('span', '', labels[i]!));
+    row?.(key, i);
+    legend.append(key);
+  }
+  return legend;
+}
 
 export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab {
   const root = el('div', 'caves-tab');
@@ -137,6 +180,24 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
   xrayBox.id = 'map-caves-xray';
   xrayBox.checked = false;
   xrayLabel.append(xrayBox, 'X-ray (X)');
+  // Colour by (SP6b spec §9.3): one radio group, Cave type (0) checked at the mount (a page starts by cave type).
+  const colour = el('div', 'caves-colour');
+  colour.id = 'map-caves-color';
+  const radio = (id: string, label: string, mode: 0 | 1): HTMLInputElement => {
+    const row = el('label', 'caves-colour-choice');
+    const input = el('input');
+    input.type = 'radio';
+    input.name = 'map-caves-color';
+    input.id = id;
+    input.value = String(mode);
+    input.checked = mode === 0;
+    row.append(input, label);
+    colour.append(row);
+    return input;
+  };
+  colour.append(el('span', 'caves-colour-title', 'Colour by'));
+  const typeRadio = radio('map-caves-color-type', 'Cave type', 0);
+  const biomeRadio = radio('map-caves-color-biome', 'Cave biome', 1);
   const bandLine = el('div', 'caves-band', stripText(XRAY_ALL, 0));
   bandLine.id = 'map-caves-band';
   const slider = (id: string, label: string, value: number): { row: HTMLLabelElement; input: HTMLInputElement } => {
@@ -154,21 +215,30 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
   const low = slider('map-caves-low', 'Lowest y', XRAY_ALL.yMin);
   const high = slider('map-caves-high', 'Highest y', XRAY_ALL.yMax);
   const allButton = button('map-caves-all', 'All depths');
-  const legend = el('div', 'caves-legend');
-  legend.id = 'map-caves-legend';
-  for (const kind of LEGEND_KINDS) {
-    const key = el('span', 'world-xray-key');
-    const swatch = el('span', 'world-xray-swatch');
-    swatch.style.background = XRAY_COLORS[kind]!;
-    key.append(swatch, el('span', '', XRAY_LABELS[kind]!));
-    legend.append(key);
-  }
+  const legend = legendOf('map-caves-legend', XRAY_COLORS, XRAY_LABELS);
+  // The biomes' legend (hidden by cave type): a row of a cave biome highlights it on the map while under the pointer.
+  let highlighted: number | null = null;
+  const highlight = (id: number | null): void => {
+    highlighted = id;
+    deps.highlightCaveBiome(id);
+  };
+  const unhighlight = (): void => { if (highlighted !== null) highlight(null); };
+  const biomeLegend = legendOf('map-caves-biome-legend', XRAY_BIOME_COLORS, XRAY_BIOME_LABELS, (key, i) => {
+    // The surface film's row is no cave biome: entering it ends the highlight a biome's row left.
+    key.addEventListener('pointerenter', HIGHLIGHT_BIOMES.includes(i) ? () => highlight(i) : unhighlight);
+  });
+  biomeLegend.hidden = true;
+  biomeLegend.addEventListener('pointerleave', unhighlight);
   const radiusOut = el('div', 'caves-radius');
   radiusOut.id = 'map-caves-radius';
   const sliceButton = button('map-caves-slice', 'Cave slice');
-  sliceButton.title = `The Density tab's horizontal cave slice at the band's middle y, ${CAVE_SLICE_EXTENT} blocks across, centred on you`;
+  sliceButton.title = `The Density tab's horizontal cave slice, by type or biome, at the band's middle y, ${CAVE_SLICE_EXTENT} blocks across, centred on you`;
+  const mapButton = button('map-caves-show-map', 'Show cave biomes on the map');
+  mapButton.title = 'The map\'s cave biome layer at the band\'s middle y';
   const paramsButton = button('map-caves-params', 'Cave parameters');
   paramsButton.title = 'Parameters › Caves';
+  const biomeParamsButton = button('map-caves-biome-params', 'Cave biome parameters');
+  biomeParamsButton.title = 'Parameters › Caves › Cave biomes';
   // The Find row (SP6a spec §7.3): a button per kind, the result line and "Save as place".
   const findRow = el('div', 'caves-find');
   findRow.id = 'map-caves-find';
@@ -184,11 +254,16 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
   const saveButton = button('map-caves-save-place', 'Save as place');
   saveButton.hidden = true;
   findRow.append(resultLine, saveButton);
-  root.append(xrayLabel, bandLine, low.row, high.row, allButton, legend, radiusOut, sliceButton, paramsButton, findRow);
+  root.append(
+    xrayLabel, colour, bandLine, low.row, high.row, allButton, legend, biomeLegend, radiusOut, sliceButton, mapButton, paramsButton,
+    biomeParamsButton, findRow,
+  );
   host.append(root);
 
-  // The state as shown: the checkbox, the band (the sliders and the line) and the radius (NaN: none written yet).
+  // The state as shown: the checkbox, the colour mode (the radios, the legends), the band (the sliders and the line) and
+  // the radius (NaN: none written yet).
   let on = false;
+  let mode: 0 | 1 = 0;
   let band: XrayBand = XRAY_ALL;
   let radius = Number.NaN;
   // The sliders' values as numbers, as last written or moved to: `set` compares them, so a call with the band unchanged
@@ -203,10 +278,12 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
     high.input.value = String(b.yMax);
     lowAt = b.yMin;
     highAt = b.yMax;
-    if (changed) bandLine.textContent = stripText(b, 0);
+    if (changed) bandLine.textContent = stripText(b, mode);
   };
 
   xrayBox.addEventListener('change', () => deps.onXray(xrayBox.checked));
+  typeRadio.addEventListener('change', () => { if (typeRadio.checked) deps.onColorMode(0); });
+  biomeRadio.addEventListener('change', () => { if (biomeRadio.checked) deps.onColorMode(1); });
   const moved = (which: 'low' | 'high') => (): void => {
     const lo = Number(low.input.value);
     const hi = Number(high.input.value);
@@ -223,8 +300,10 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
     showBand(XRAY_ALL);
     deps.onBand(XRAY_ALL);
   });
-  sliceButton.addEventListener('click', () => deps.openSlice(caveSliceY(band, deps.camera().y)));
+  sliceButton.addEventListener('click', () => deps.openSlice(caveSliceY(band, deps.camera().y), mode === 1 ? 'biome3d' : 'caves'));
+  mapButton.addEventListener('click', () => deps.showCaveBiomes(caveSliceY(band, deps.camera().y)));
   paramsButton.addEventListener('click', () => deps.revealParameters());
+  biomeParamsButton.addEventListener('click', () => deps.revealBiomeParameters());
 
   // The search in flight: its kind (null: none) and its number, so a cancelled search's late outcome is dropped.
   let searching: number | null = null;
@@ -242,6 +321,11 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
     search++;
     deps.cancelFind();
     resultLine.textContent = `${XRAY_LABELS[kind] ?? ''} search cancelled`;
+  };
+  /** The tab closes: the search in flight cancelled and a held highlight ended (P51: the legend drives it only shown). */
+  const close = (): void => {
+    cancel();
+    unhighlight();
   };
   const start = (kind: number): void => {
     const c = deps.camera();
@@ -273,10 +357,22 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
   });
 
   return {
-    set(nextOn, b, r) {
+    set(nextOn, b, r, nextMode) {
       if (nextOn !== on) {
         on = nextOn;
         xrayBox.checked = on;
+      }
+      // The radios are put back too when a choice the page did not take left them apart from its mode.
+      if (typeRadio.checked !== (nextMode === 0) || biomeRadio.checked !== (nextMode === 1)) {
+        typeRadio.checked = nextMode === 0;
+        biomeRadio.checked = nextMode === 1;
+      }
+      if (nextMode !== mode) {
+        mode = nextMode;
+        legend.hidden = mode === 1;
+        biomeLegend.hidden = mode === 0;
+        bandLine.textContent = stripText(band, mode);
+        if (mode === 0) unhighlight();
       }
       if (b.all !== band.all || b.yMin !== band.yMin || b.yMax !== band.yMax || lowAt !== b.yMin || highAt !== b.yMax) showBand(b);
       if (r !== radius) {
@@ -284,9 +380,9 @@ export function createCavesTab(host: HTMLElement, deps: CavesTabDeps): CavesTab 
         radiusOut.textContent = radiusText(r);
       }
     },
-    cancel,
+    cancel: close,
     dispose() {
-      cancel();
+      close();
       root.remove();
     },
   };

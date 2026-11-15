@@ -1253,6 +1253,7 @@ describe('the world\'s Caves tab (SP6a spec §7.3, D12)', () => {
     const log: string[] = [];
     const tab: MapCaves = {
       onXray: (on) => { log.push(`xray ${on}`); },
+      onColorMode: (mode) => { log.push(`mode ${mode}`); },
       onBand: (b) => { log.push(`band ${b.yMin} ${b.yMax}`); },
       find: (kind) => {
         log.push(`find ${kind}`);
@@ -1275,7 +1276,7 @@ describe('the world\'s Caves tab (SP6a spec §7.3, D12)', () => {
     const t = await openMounted(overlay);
     // The page's deps, "Save as place" wrapped (below).
     const given = t.deps.caves!;
-    expect([given.onXray, given.onBand, given.find, given.cancelFind, given.camera]).toEqual([c.tab.onXray, c.tab.onBand, c.tab.find, c.tab.cancelFind, c.tab.camera]);
+    expect([given.onXray, given.onColorMode, given.onBand, given.find, given.cancelFind, given.camera]).toEqual([c.tab.onXray, c.tab.onColorMode, c.tab.onBand, c.tab.find, c.tab.cancelFind, c.tab.camera]);
     expect(t.calls.xray).toEqual([[true, bandSet(10, 41), 176]]);
     // Every later change of the page's X-ray reaches the tab, shown or hidden.
     overlay.setXray(false, XRAY_ALL, 176);
