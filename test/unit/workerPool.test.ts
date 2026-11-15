@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { createWorkerPool, EDIT_MESH_PRIORITY, JobCancelled, poolSize, WorkerFailed, type WorkerLike } from '../../src/engine/workerPool';
 import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../../src/metrics/biomeShares';
+import { caveBiomeAtPoint, cavePickerOf } from '../../src/gen/biomes/cavePicker';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import { landingSurface } from '../../src/gen/column/spawn';
 import { createSurfaceContext } from '../../src/gen/surface/context';
@@ -119,6 +120,25 @@ describe('worker pool', () => {
     const b = await pool.tile({ layer: 'biome', level: 256, tx: 0, tz: 0 }, 0);
     const c = await pool.tile(tile(0), 0);
     expect([b.rgba.byteLength, b.ids?.byteLength, c.rgba.byteLength, c.ids]).toEqual([262144, 65536, 262144, null]);
+  });
+  test('point(x, z, priority, y): y reaches the posted message and the reply\'s caveBiome the result; without y neither (SP6b ruling P49)', async () => {
+    const log: ToWorker[] = [];
+    const pool = createWorkerPool(1, () => fakeWorker(log));
+    await pool.configure('42', DEFAULTS);
+    const ctx = ctxFor('42');
+    const at = await pool.point(100.5, -20, undefined, -40);
+    const sent = log.filter((m) => m.type === 'point');
+    expect(sent.map((m) => (m as { y?: number }).y)).toEqual([-40]);
+    const p = columnPoint(ctx, 100.5, -20);
+    const pick = caveBiomeAtPoint(cavePickerOf(ctx), p.C, p.E, p.H, p.surfaceEst, p.x, p.z, -40);
+    expect(at).toEqual({ ...p, caveBiome: { id: pick.biome, depth: pick.depth } });
+    const bare = await pool.point(100.5, -20);
+    expect('y' in log.filter((m) => m.type === 'point')[1]!).toBe(false);
+    expect(bare).toEqual(p);
+    expect('caveBiome' in bare).toBe(false);
+    // A caveBiome tile request's y reaches its message (ruling P50).
+    await pool.tile({ layer: 'caveBiome', level: 256, tx: 0, tz: 0, y: 12 }, 0);
+    expect(log.filter((m) => m.type === 'mapTile').map((m) => (m as { y?: number }).y)).toEqual([12]);
   });
   test('a worker error rejects the job instead of hanging', async () => {
     const pool = createWorkerPool(1, () => {

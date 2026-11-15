@@ -2686,6 +2686,15 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(boxes).not.toContain('the 3 cave biomes arrive in SP6b.');
   });
 
+  test('§5.6: the cave-biome layer at a chosen y (SP6b spec §15 item 18)', () => {
+    const at56 = text.indexOf('### 5.6 Map view');
+    const s56 = text.slice(at56, text.indexOf('### 5.7 ', at56));
+    const layer = s56.split('\n').find((l) => l.startsWith('  - the cave slice at y'));
+    expect(layer, 'no `- the cave slice at y …` layer in §5.6').toBeDefined();
+    expect(layer).toMatch(/; the cave-biome layer at a chosen y \(SP6b\);$/);
+    expect(text).not.toContain('the cave-biome slice');
+  });
+
   test('§5.9 gains C (SP6b spec §15 item 18)', () => {
     const at59 = text.indexOf('### 5.9 Controls');
     const s59 = text.slice(at59, text.indexOf('## 6. ', at59));

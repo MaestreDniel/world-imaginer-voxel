@@ -43,11 +43,13 @@ import { checkParams } from '../core/params/kit';
 import { SCHEMA, type Params } from '../core/params/schema';
 import { seedFromInput } from '../core/seed';
 import { genKey, stageHashes } from '../core/stage/hash';
+import { caveBiomeAtPoint, cavePickerOf } from '../gen/biomes/cavePicker';
 import { nearestCave } from '../gen/caves/tags';
 import { createGenContext, type GenContext } from '../gen/context';
-import { columnPoint } from '../gen/column/columnPoint';
+import { columnPoint, type ColumnPoint } from '../gen/column/columnPoint';
 import { createDensityContext, type DensityContext } from '../gen/density/context';
 import { findSpawnAbortable, landingSurface } from '../gen/column/spawn';
+import { caveBiomeIdAt } from '../gen/map/layers';
 import { paintTileAbortable } from '../gen/map/tile';
 import { surfaceContextOf } from '../gen/surface/context';
 import { surfaceProbe } from '../gen/surface/probe';
@@ -63,7 +65,7 @@ import type { MeshOptions } from '../mesh/greedy';
 import { R_STORE_ID } from '../world/store/reclaim';
 import { attachStore, StoreCorrupt, StoreFull, type VoxelStore } from '../world/store/store';
 import { runFieldProbe, runFieldSlice, sliceJobColumns, type FieldJobReply } from './fieldSliceJob';
-import { cellOf, findCaveProblem, landingProblem, parseToWorker, sliceRangeProblem, surfaceProbeProblem, type ErrorCode, type FromWorker, type ScopedJobType, type StatsMsg } from './protocol';
+import { cellOf, findCaveProblem, landingProblem, parseToWorker, sliceRangeProblem, surfaceProbeProblem, type ErrorCode, type FromWorker, type PointCaveBiome, type ScopedJobType, type StatsMsg } from './protocol';
 import { createSliceJob, type SliceJob } from './sliceJob';
 import { decorateReply, lightReply, meshColumnReply, terrainReply, type WorldJobReply } from './worldJobs';
 
@@ -76,6 +78,9 @@ const GEN_KEY = genKey;
 const HASHES = stageHashes;
 const CREATE = createGenContext;
 const POINT = columnPoint;
+const CAVE_PICKER = cavePickerOf;
+const CAVE_AT = caveBiomeAtPoint;
+const CAVE_ID_AT = caveBiomeIdAt;
 const PAINT = paintTileAbortable;
 const SPAWN = findSpawnAbortable;
 const LANDING = landingSurface;
@@ -116,6 +121,16 @@ const LIGHT_REPLY = lightReply;
 const MESH_COLUMN_REPLY = meshColumnReply;
 /** The mesh options of the 3D page (SP4a spec §6.10: the Medium preset). */
 const MESH_OPTIONS: MeshOptions = { ao: MEDIUM.ao, smoothLight: MEDIUM.smoothLight };
+
+/**
+ * A point job's cave biome at height y (SP6b Spec correction 24), as the caveBiome layer's pixel at the point: the id
+ * `caveBiomeIdAt` paints (255 above the ground) and the depth of the same pick, from the point's C, E, H and surfaceEst
+ * and `cavePickerOf(ctx)`'s noises.
+ */
+function pointCaveBiome(ctx: GenContext, p: ColumnPoint, y: number): PointCaveBiome {
+  const picker = CAVE_PICKER(ctx);
+  return { id: CAVE_ID_AT(picker, p, y), depth: CAVE_AT(picker, p.C, p.E, p.H, p.surfaceEst, p.x, p.z, y).depth };
+}
 
 export interface Reply {
   readonly msg: FromWorker;
@@ -325,8 +340,12 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB(), now: ()
             const r = SURFACE_PROBE(SURFACE_CONTEXT(ctx), m.x, m.y, m.z);
             return { msg: { type: 'surfaceProbeResult', jobId: m.jobId, epoch, state: r.state, path: [...r.path] }, transfer: [] };
           }
-          case 'point':
-            return { msg: { type: 'pointResult', jobId: m.jobId, epoch, fields: POINT(ctx, m.x, m.z) }, transfer: [] };
+          case 'point': {
+            const fields = POINT(ctx, m.x, m.z);
+            return m.y === undefined
+              ? { msg: { type: 'pointResult', jobId: m.jobId, epoch, fields }, transfer: [] }
+              : { msg: { type: 'pointResult', jobId: m.jobId, epoch, fields, caveBiome: pointCaveBiome(ctx, fields, m.y) }, transfer: [] };
+          }
           case 'landing': {
             const problem = LANDING_PROBLEM(m.x, m.z);
             if (problem !== null) return err(m.jobId, m.epoch, 'BAD_ARGS', problem);

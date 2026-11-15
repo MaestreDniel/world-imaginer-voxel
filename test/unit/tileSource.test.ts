@@ -27,4 +27,18 @@ describe('tile source (final review: stale keys and partial invalidation)', () =
     src.set(3, '43.0', hashes());
     expect(src.keyFor('C', 64, 1, 2, 3)).not.toBe(c);
   });
+  test('the caveBiome layer\'s key gains `:y<n>`: two y values give two keys; no other layer\'s key holds a y (SP6b spec §9.1)', () => {
+    const src = createTileSource();
+    src.set(1, '42.0', hashes({ terrain: 't1' }));
+    const at0 = src.keyFor('caveBiome', 64, 1, 2, 1, 0);
+    const at40 = src.keyFor('caveBiome', 64, 1, 2, 1, 40);
+    expect(at0).toMatch(/^caveBiome\|64\|1\|2\|42\.0:t1:map\d+:y0$/);
+    expect(at40!.endsWith(':y40')).toBe(true);
+    expect(at40).not.toBe(at0);
+    expect(src.keyFor('caveBiome', 64, 1, 2, 1, -12)!.endsWith(':y-12')).toBe(true);
+    const biome = src.keyFor('biome', 64, 1, 2, 1);
+    expect([src.keyFor('biome', 64, 1, 2, 1, 0), src.keyFor('biome', 64, 1, 2, 1, 40)]).toEqual([biome, biome]);
+    expect(biome).not.toMatch(/:y/);
+    expect(() => src.keyFor('caveBiome', 64, 1, 2, 1)).toThrow(RangeError);
+  });
 });

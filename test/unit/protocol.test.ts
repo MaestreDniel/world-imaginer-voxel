@@ -3,7 +3,9 @@ import { colKey } from '../../src/core/coords';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { flattenKnot } from '../../src/core/spline/edit';
 import type { KnotPath } from '../../src/core/spline/types';
+import { caveBiomeAtPoint, cavePickerOf } from '../../src/gen/biomes/cavePicker';
 import { columnPoint } from '../../src/gen/column/columnPoint';
+import { caveBiomeIdAt } from '../../src/gen/map/layers';
 import { findSpawn, landingSurface, ringOffsets } from '../../src/gen/column/spawn';
 import { BIOME_SHARES_POINTS, biomeSharePoints, biomeSharesInto, biomeSharesLength } from '../../src/metrics/biomeShares';
 import { CROSS_SECTION_POINTS, crossSectionInto, crossSectionLength, segmentPointAt } from '../../src/metrics/crossSection';
@@ -51,6 +53,8 @@ describe('parseToWorker', () => {
     expect(parseToWorker(stats(8, 3, 'crossSection', 0, 512, line(5120, 3072, 6656, 3072)))).not.toBeNull();
     expect(parseToWorker({ type: 'slice', jobId: 9, epoch: 3, scope: 3, ax: 5120, az: 3072, bx: 6656, bz: 3072, from: 0, to: 512 })).not.toBeNull();
     for (const y of [0, -64, 319]) expect(parseToWorker({ ...tileMsg, layer: 'caveBiome', y })).not.toBeNull();
+    // A point's y (SP6b Spec correction 24): absent, or an integer in −64 … 319.
+    for (const y of [-64, 319, 0, undefined]) expect(parseToWorker({ type: 'point', jobId: 2, epoch: 3, scope: 3, x: 1.5, z: -7, y }), String(y)).not.toBeNull();
   });
   test('crossSection ends are only checked to be numbers: outside the window, NaN or A = B parse, and the handler answers BAD_ARGS', () => {
     for (const args of [line(524288, 0, 0, 0), line(Number.NaN, 0, 1, 1), line(0, Infinity, 1, 1), line(7, 7, 7, 7)]) {
@@ -78,6 +82,10 @@ describe('parseToWorker', () => {
     ['point on the window edge x = 2^19 (SP2a minor 1)', { type: 'point', jobId: 2, epoch: 3, scope: 3, x: 524288, z: 0 }],
     ['point on the window edge z = 2^19', { type: 'point', jobId: 2, epoch: 3, scope: 3, x: 0, z: 524288 }],
     ['non-finite point', { type: 'point', jobId: 2, epoch: 3, scope: 3, x: Number.NaN, z: 0 }],
+    ['point at y 320', { type: 'point', jobId: 2, epoch: 3, scope: 3, x: 1.5, z: -7, y: 320 }],
+    ['point at y −65', { type: 'point', jobId: 2, epoch: 3, scope: 3, x: 1.5, z: -7, y: -65 }],
+    ['point at a non-integer y', { type: 'point', jobId: 2, epoch: 3, scope: 3, x: 1.5, z: -7, y: 1.5 }],
+    ['point whose y is not a number', { type: 'point', jobId: 2, epoch: 3, scope: 3, x: 1.5, z: -7, y: '4' }],
     ['stats of an unknown kind', stats(6, 3, 'nope', 0, 10, { len: 31 })],
     ['stats with from > to', stats(6, 3, 'biomeShares', 10, 9, { len: 31 })],
     ['stats with a negative from', stats(6, 3, 'biomeShares', -1, 9, { len: 31 })],
@@ -156,6 +164,16 @@ describe('parseFromWorker', () => {
     expect(invalid({ type: 'tile', jobId: 1, epoch: 0, rgba: new ArrayBuffer(262144), ids: new ArrayBuffer(10) })).toBe(true);
     expect(invalid({ type: 'tile', jobId: 1, epoch: 0, rgba: new ArrayBuffer(262144), ids: null })).toBe(true);
   });
+  test('a point result may carry caveBiome: an id (0-255) and a finite depth (SP6b Spec correction 24)', () => {
+    const fields = columnPoint(ctxFor('42'), 1, 2);
+    const result = (extra: object) => ({ type: 'pointResult', jobId: 2, epoch: 3, fields, ...extra });
+    expect(valid(result({}))).toBe(true);
+    expect(valid(result({ caveBiome: { id: 1, depth: 0.42 } }))).toBe(true);
+    expect(valid(result({ caveBiome: { id: 255, depth: -0.9 } }))).toBe(true);
+    for (const caveBiome of [null, 1, { id: 1 }, { id: 1.5, depth: 0 }, { id: -1, depth: 0 }, { id: 256, depth: 0 }, { id: 1, depth: Number.NaN }, { id: 1, depth: '0.4' }]) {
+      expect(invalid(result({ caveBiome })), JSON.stringify(caveBiome)).toBe(true);
+    }
+  });
   test('errors carry an epoch (an integer or null)', () => {
     expect(valid({ type: 'error', jobId: null, epoch: null, code: 'BAD_MESSAGE', message: 'x' })).toBe(true);
     expect(valid({ type: 'error', jobId: 4, epoch: 3, code: 'ABORTED', message: 'x' })).toBe(true);
@@ -208,6 +226,25 @@ describe('task handler', () => {
     expect(sameBytes(r.msg.rgba, rgba)).toBe(true);
     expect(sameBytes(r.msg.ids!, ids)).toBe(true);
     expect(sameBytes(r.msg.rgba, paintTile(ctxFor('42'), 'caveBiome', 64, 2, -1, new Uint8ClampedArray(262144), 0))).toBe(false);
+  });
+  test('a point job with y replies the cave biome and depth at (x, y, z), as the caveBiome layer\'s pixel (255 above the ground); without y it carries no caveBiome (SP6b Spec correction 24)', () => {
+    const h = createTaskHandler();
+    h.handle(configure(3));
+    const ctx = ctxFor('42');
+    const picker = cavePickerOf(ctx);
+    const p = columnPoint(ctx, 100.5, -20);
+    for (const y of [-40, 0, 319]) {
+      const r = h.handle({ type: 'point', jobId: 9, epoch: 3, scope: 3, x: 100.5, z: -20, y }).msg;
+      const pick = caveBiomeAtPoint(picker, p.C, p.E, p.H, p.surfaceEst, p.x, p.z, y);
+      expect(r, `y ${y}`).toEqual({ type: 'pointResult', jobId: 9, epoch: 3, fields: p, caveBiome: { id: caveBiomeIdAt(picker, p, y), depth: pick.depth } });
+      if (r.type !== 'pointResult') return;
+      expect(r.caveBiome!.id, `y ${y}`).toBe(y > p.surfaceEst ? 255 : pick.biome);
+      expect(valid(r)).toBe(true);
+    }
+    expect(p.surfaceEst).toBeGreaterThan(-40);
+    expect(p.surfaceEst).toBeLessThan(319);
+    const bare = h.handle({ type: 'point', jobId: 10, epoch: 3, scope: 3, x: 100.5, z: -20 }).msg;
+    expect('caveBiome' in bare).toBe(false);
   });
   test('only biome and caveBiome tiles carry ids', () => {
     const h = createTaskHandler();

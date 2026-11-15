@@ -2,8 +2,9 @@
  * The map canvas (SP2a spec §6.1, §6.3; SP2b spec §2.5-2.7, §5.3): draws cached tiles (preview level
  * first, then the view's level on top), keeps showing the last drawn tile of each position until the
  * current source's tile lands there (fallback tiles), asks the pool for missing tiles coarse-first (only
- * preview tiles while interactive), reports preview progress to the preview driver, dims all biomes but a
- * highlighted one, pans by drag, zooms around the cursor, and draws the spawn marker, a grid, the pin, the
+ * preview tiles while interactive; the caveBiome layer's at the view's `caveYOf`, SP6b spec §9.1), reports preview
+ * progress to the preview driver, dims all biomes but a highlighted one (a surface biome on the biome layer, a cave
+ * biome on the caveBiome layer), pans by drag, zooms around the cursor, and draws the spawn marker, a grid, the pin, the
  * cross-section's cut line (SP2b spec §4.5) and the Density tab's horizontal-plane square (SP3d spec §3.7). In the
  * world (SP4c spec §1.3, §1.5) it draws the player's arrow on top, and while hidden it plans and draws nothing; in a
  * saved world, the places as coloured dots under the spawn, the pin and the arrow (SP5b spec §3.7, D13).
@@ -16,7 +17,7 @@ import { JobCancelled, WorkerFailed, type TileRequest, type WorkerPool } from '.
 import { tileCacheCapacity, TILE_CACHE_MIN } from './capacity';
 import { createFallbacks, type LevelTiles, type TileDraw } from './fallback';
 import { highlightMask } from './highlight';
-import { MAP_MAX_BPP, MAP_MIN_BPP, type MapView } from './mapState';
+import { caveYOf, MAP_MAX_BPP, MAP_MIN_BPP, type MapView } from './mapState';
 import { createTileCache } from './tileCache';
 import { createTileSource } from './tileSource';
 import { arrowGeometry, arrowRedrawWanted, clampCentre, drawPlaceDots, planTiles, screenToWorld, visibleTiles, worldToScreen } from './viewMath';
@@ -63,6 +64,11 @@ export interface MapCanvas {
   setGrid(on: boolean): void;
   /** Dims every biome but `id` on the biome layer's tiles (SP2b spec §5.3); null ends the highlight. */
   highlightBiome(id: number | null): void;
+  /**
+   * Dims every cave biome but `id` on the caveBiome layer's tiles (SP6b spec §9.1; the Caves tab's legend rows drive it,
+   * Task 47); null ends it. The surface-biome highlight never masks these tiles, nor this one the biome layer's.
+   */
+  highlightCaveBiome(id: number | null): void;
   /** The cut line A → B (SP2b spec §4.5), dashed while pending; null removes it. */
   setCutLine(line: CutOverlay | null): void;
   /** The horizontal slice plane's square with a centre mark (SP3d spec §3.7); null removes it. */
@@ -89,7 +95,10 @@ export interface MapCanvas {
   destroy(): void;
 }
 
-/** A cached tile: the bitmap, and for the biome layer the biome id of every pixel (SP2b spec §5.3). */
+/**
+ * A cached tile: the bitmap, and for the biome layer the biome id of every pixel (SP2b spec §5.3), for the caveBiome layer
+ * the cave-biome id (255 above the ground; SP6b spec §9.1).
+ */
 interface CachedTile { readonly bitmap: ImageBitmap; readonly ids: Uint8Array | null }
 
 /** The arrow's redraw clock (`arrowRedrawWanted` reads it only when the arrow moved). */
@@ -108,12 +117,13 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
   let raf = 0;
   let interactive = false;
   let highlight: number | null = null;
+  let caveHighlight: number | null = null;
   let cutLine: CutOverlay | null = null;
   let square: MapSquare | null = null;
   let places: readonly { x: number; z: number; colour: number }[] = [];
   let placeColours: readonly string[] = [];
   const fallbacks = createFallbacks();
-  /** Highlight masks of the highlighted biome only, by tile key. */
+  /** Highlight masks of the highlighted biome (or cave biome) only, by tile key. */
   const masks = new Map<string, OffscreenCanvas>();
   const cache = createTileCache<CachedTile>(TILE_CACHE_MIN, (t, key) => {
     t.bitmap.close();
@@ -138,7 +148,7 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
   const arrow = new Float64Array(6);
 
   const source = createTileSource();
-  const keyOf = (layer: MapView['layer'], level: MapLevel, tx: number, tz: number) => source.keyFor(layer, level, tx, tz, pool.epoch);
+  const keyOf = (layer: MapView['layer'], level: MapLevel, tx: number, tz: number, y: number | undefined) => source.keyFor(layer, level, tx, tz, pool.epoch, y);
   const fitCache = () => cache.setCapacity(tileCacheCapacity(view, canvas.width, canvas.height));
 
   const request = () => {
@@ -146,14 +156,15 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
     const w = canvas.width;
     const h = canvas.height;
     const plan = planTiles(view, w, h, interactive);
-    const wanted = new Set(plan.map((t) => keyOf(view.layer, t.level, t.tx, t.tz)));
-    pool.cancelTiles((r) => { const k = keyOf(r.layer, r.level, r.tx, r.tz); return k === null || !wanted.has(k); });
+    const y = caveYOf(view);
+    const wanted = new Set(plan.map((t) => keyOf(view.layer, t.level, t.tx, t.tz, y)));
+    pool.cancelTiles((r) => { const k = keyOf(r.layer, r.level, r.tx, r.tz, r.y); return k === null || !wanted.has(k); });
     for (const t of plan) {
-      const key = keyOf(view.layer, t.level, t.tx, t.tz);
+      const key = keyOf(view.layer, t.level, t.tx, t.tz, y);
       if (key === null) return;
       if (pending.has(key) || cache.get(key) !== undefined) continue;
       pending.add(key);
-      const req: TileRequest = { layer: view.layer, level: t.level, tx: t.tx, tz: t.tz };
+      const req: TileRequest = y === undefined ? { layer: view.layer, level: t.level, tx: t.tx, tz: t.tz } : { layer: view.layer, level: t.level, tx: t.tx, tz: t.tz, y };
       asked.add(req);
       pool.tile(req, t.priority)
         .then(async (r) => {
@@ -190,8 +201,10 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
     const y = Math.floor(sy);
     const size = Math.ceil(span / view.bpp) + 1;
     ctx2d.drawImage(d.tile.bitmap, x, y, size, size);
-    if (highlight === null || d.tile.ids === null) return;
-    const mask = maskFor(d.key, d.tile.ids, highlight);
+    // Every tile drawn is the view's layer (fallbacks are kept per layer).
+    const id = view.layer === 'caveBiome' ? caveHighlight : highlight;
+    if (id === null || d.tile.ids === null) return;
+    const mask = maskFor(d.key, d.tile.ids, id);
     if (mask !== null) ctx2d.drawImage(mask, x, y, size, size);
   };
 
@@ -309,7 +322,8 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
     const target = levelFor(view.bpp);
     const levels: LevelTiles[] = [{ level: 256, tiles: preview }];
     if (target !== 256) levels.push({ level: target, tiles: visibleTiles(view, w, h, target) });
-    const frame = fallbacks.frame(view.layer, levels, (level, tx, tz) => keyOf(view.layer, level, tx, tz), (k) => cache.get(k));
+    const y = caveYOf(view);
+    const frame = fallbacks.frame(view.layer, levels, (level, tx, tz) => keyOf(view.layer, level, tx, tz, y), (k) => cache.get(k));
     for (const d of frame.draws) drawTile(d);
     drawOverlays();
     drawArrow();
@@ -377,6 +391,12 @@ export function createMapCanvas(host: HTMLElement, pool: WorkerPool, initial: Ma
     highlightBiome(id) {
       if (id === highlight) return;
       highlight = id;
+      masks.clear();
+      schedule();
+    },
+    highlightCaveBiome(id) {
+      if (id === caveHighlight) return;
+      caveHighlight = id;
       masks.clear();
       schedule();
     },

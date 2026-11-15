@@ -54,7 +54,7 @@ import type { Segment } from '../metrics/crossSection';
 import type { ColumnMeshPayload } from '../mesh/column';
 import {
   cellOf, FIND_BUDGET_MS, FIND_RADIUS, isRefusableField, parseFromWorker, payloadOfMeshResult, planFieldSlice, SLICE_POINTS, SLICE_ROWS, SLICE_SAMPLES,
-  STATS_KINDS, type CaveFoundReason, type FieldProbeSpec, type FieldSliceMsg, type FieldSliceSpec, type FromWorker, type ReadyMsg, type StatsArgs, type StatsKind, type StatsMsg, type ToWorker,
+  STATS_KINDS, type CaveFoundReason, type FieldProbeSpec, type FieldSliceMsg, type FieldSliceSpec, type FromWorker, type PointCaveBiome, type ReadyMsg, type StatsArgs, type StatsKind, type StatsMsg, type ToWorker,
   type WorldJobType,
 } from '../workers/protocol';
 import type { ColumnDiff } from '../world/store/api';
@@ -73,8 +73,13 @@ export interface WorkerLike {
   terminate(): void;
 }
 
-export interface TileRequest { readonly layer: LayerId; readonly level: MapLevel; readonly tx: number; readonly tz: number }
-/** A painted tile: RGBA bytes, and for layer 'biome' the biome id of every pixel (SP2b spec §5.3). */
+/** `y`: the caveBiome layer's height, required for it and absent otherwise (SP6b spec §9.1; `MapTileMsg`). */
+export interface TileRequest { readonly layer: LayerId; readonly level: MapLevel; readonly tx: number; readonly tz: number; readonly y?: number }
+/**
+ * A point job's answer: the ColumnPoint, and with a y the cave biome and depth there (SP6b Spec correction 24; ruling P49).
+ */
+export type PointReply = ColumnPoint & { readonly caveBiome?: PointCaveBiome };
+/** A painted tile: RGBA bytes, and for layers 'biome' and 'caveBiome' the (cave-)biome id of every pixel (SP2b spec §5.3). */
 export interface TileResult { readonly rgba: ArrayBuffer; readonly ids: ArrayBuffer | null }
 
 /**
@@ -308,7 +313,8 @@ export interface WorkerPool {
   meshColumn(cx: number, cz: number, o?: { readonly edit: boolean }): Promise<MeshColumnDone>;
   /** Lower priority runs first. */
   tile(req: TileRequest, priority: number): Promise<TileResult>;
-  point(x: number, z: number, priority?: number): Promise<ColumnPoint>;
+  /** The point job at (x, z) (priority default −1); with `y` (an integer in −64 … 319) it also answers the cave biome there. */
+  point(x: number, z: number, priority?: number, y?: number): Promise<PointReply>;
   /** The spawn search at `priority` (default −2: before points; the world's post-settle search runs at 600, SP4c spec §4.7). */
   spawn(priority?: number): Promise<Spawn>;
   /**
@@ -709,11 +715,11 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
       if (r.type !== 'tile') throw new Error(`unexpected reply ${r.type}`);
       return { rgba: r.rgba, ids: r.ids ?? null };
     },
-    async point(x, z, priority = -1) {
+    async point(x, z, priority = -1, y) {
       const e = epoch;
-      const r = await enqueue(priority, 'point', (jobId, scope) => ({ type: 'point', jobId, epoch: e, scope, x, z }), null);
+      const r = await enqueue(priority, 'point', (jobId, scope) => (y === undefined ? { type: 'point', jobId, epoch: e, scope, x, z } : { type: 'point', jobId, epoch: e, scope, x, z, y }), null);
       if (r.type !== 'pointResult') throw new Error(`unexpected reply ${r.type}`);
-      return r.fields;
+      return r.caveBiome === undefined ? r.fields : { ...r.fields, caveBiome: r.caveBiome };
     },
     async spawn(priority = -2) {
       const e = epoch;

@@ -52,7 +52,7 @@ import { CAVE_PARAMETERS_LEAF, CAVE_SLICE_EXTENT, createCavesTab, type CavesTabD
 import { mapClickAction } from './clickAction';
 import { createHoverReadout } from './hoverPanel';
 import { createLayout, drawerTabOnScreen, layoutTabs, tabOnScreen, type LayoutStorage } from './layout';
-import { encodeMapState, type MapView } from './mapState';
+import { caveYOf, DEFAULT_CAVE_Y, encodeMapState, type MapView } from './mapState';
 import { createMapCanvas, type MapCanvas } from './mapView';
 import { mountPlacesTab } from './placesTab';
 import { draftOf, type DriverCanvas, type PreviewDriver } from './previewDriver';
@@ -224,7 +224,8 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
       `view x ${view.x.toFixed(0)} z ${view.z.toFixed(0)}  ${view.bpp.toFixed(2)} blocks/px`,
     ].join('\n');
   };
-  const hover = createHoverReadout(pool, (t) => { hoverOut.textContent = t; });
+  // While the map shows the caveBiome layer the hover reads the cave biome at the view's y (SP6b spec §9.1).
+  const hover = createHoverReadout(pool, (t) => { hoverOut.textContent = t; }, () => view);
   disposers.add(() => hover.dispose());
 
   /** The input event's timeStamp while a control's session call runs (§2.8: latency counts from it). */
@@ -315,15 +316,20 @@ export function createMapTool(host: HTMLElement, deps: MapToolDeps): MapTool {
   };
 
   const setView = (v: MapView) => {
+    const reread = caveYOf(v) !== caveYOf(view);
     view = v;
     canvas.setView(v);
     toolbar.setLayer(v.layer);
+    toolbar.setCaveY(v.caveY ?? DEFAULT_CAVE_Y);
     hoverBiome(hoveredBiome);
     renderStatus();
+    // The hover line follows the layer and its y.
+    if (reread) hover.refresh();
   };
   const toolbar = createToolbar(layout.toolbar, {
-    session, notices, layer: view.layer, edit,
+    session, notices, layer: view.layer, caveY: view.caveY ?? DEFAULT_CAVE_Y, edit,
     onLayer: (layer) => { setView({ ...view, layer }); viewChanged(); },
+    onCaveY: (caveY) => { setView({ ...view, caveY }); viewChanged(); },
     onGrid: (on) => canvas.setGrid(on),
     onCut: () => setCut(cut.mode === 'off' ? CUT_ARMED : CUT_OFF),
     open3dHref: () => open3dHref(pin, [view.x, view.z], `#${mapHash()}`),

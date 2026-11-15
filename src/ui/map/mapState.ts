@@ -1,6 +1,7 @@
 /**
  * The ?map URL state (SP2a spec §6.3, SP2b spec §1.4): {v: 1, seed, profile, patch, view: {x, z, bpp,
- * layer}} as canonical JSON in base64url, with the session's minimal patch. A bad hash opens the defaults
+ * layer, caveY?}} as canonical JSON in base64url, with the session's minimal patch. `caveY` (SP6b spec §9.1) is written
+ * only with the caveBiome layer and read as optional, so every earlier hash decodes and re-encodes byte-identical. A bad hash opens the defaults
  * with a notice; a `hashchange` applies the view, then loads the draft in one session step. The page's session comes
  * from `openMapSession`, which wires tier 2 of the trees (SP3d spec §1.8): `decodeMapState` checks tier 1 only, so
  * the session refuses a semantically invalid tree in a link, at the constructor (a fresh tab) or at `load` (a
@@ -23,6 +24,11 @@ export interface MapView {
   /** Display scale in blocks per screen pixel. */
   readonly bpp: number;
   readonly layer: LayerId;
+  /**
+   * The height the caveBiome layer is painted and hovered at (SP6b spec §9.1): an integer in −64 … 319; absent,
+   * `DEFAULT_CAVE_Y`. Kept across layer switches, written to the hash only while the layer is caveBiome.
+   */
+  readonly caveY?: number;
 }
 
 export interface MapState {
@@ -39,16 +45,25 @@ const WINDOW = 524288;
 /** A hash longer than this (1 MiB of text) is refused before it is decoded (SP3d spec §1.12). */
 export const MAP_HASH_READ_MAX = 1048576;
 export const DEFAULT_MAP_STATE: MapState = { v: 1, seed: '42', profile: 'default', patch: {}, view: { x: 0, z: 0, bpp: 64, layer: 'biome' } };
+/** The caveBiome layer's y when the view has none (SP6b spec §9.1). */
+export const DEFAULT_CAVE_Y = 0;
+export const CAVE_Y_MIN = -64;
+export const CAVE_Y_MAX = 319;
+
+/** The y the caveBiome layer is painted and hovered at, or undefined while the view shows another layer. */
+export const caveYOf = (v: Pick<MapView, 'layer' | 'caveY'>): number | undefined => (v.layer === 'caveBiome' ? v.caveY ?? DEFAULT_CAVE_Y : undefined);
 
 const q = (v: number) => q15(v) + 0;
 
 export function encodeMapState(s: MapState): string {
-  const view = { x: q(s.view.x), z: q(s.view.z), bpp: q(s.view.bpp), layer: s.view.layer };
+  const v = s.view;
+  const view = { x: q(v.x), z: q(v.z), bpp: q(v.bpp), layer: v.layer, ...(v.layer === 'caveBiome' && v.caveY !== undefined ? { caveY: v.caveY + 0 } : {}) };
   return base64urlEncode(utf8Bytes(canonicalJSON({ ...s, seed: s.seed.trim(), view })));
 }
 
 const KEYS = ['v', 'seed', 'profile', 'patch', 'view'];
-const VIEW_KEYS = ['x', 'z', 'bpp', 'layer'];
+/** `caveY` is optional (SP6b spec §9.1); the others are required. */
+const VIEW_KEYS = ['x', 'z', 'bpp', 'layer', 'caveY'];
 
 function reason(j: unknown): string | null {
   if (!isObj(j)) return 'not an object';
@@ -67,6 +82,8 @@ function reason(j: unknown): string | null {
   if (!fin(v['x']) || !fin(v['z']) || Math.abs(v['x']) > WINDOW || Math.abs(v['z']) > WINDOW) return 'view outside the window';
   if (!fin(v['bpp']) || v['bpp'] < MAP_MIN_BPP || v['bpp'] > MAP_MAX_BPP) return 'zoom out of range';
   if (!isLayerId(v['layer'])) return 'unknown layer';
+  const y = v['caveY'];
+  if ('caveY' in v && !(typeof y === 'number' && Number.isInteger(y) && y >= CAVE_Y_MIN && y <= CAVE_Y_MAX)) return 'caveY is not an integer in −64 … 319';
   return null;
 }
 

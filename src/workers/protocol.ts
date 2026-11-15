@@ -74,7 +74,11 @@ export interface ConfigureMsg { readonly type: 'configure'; readonly epoch: numb
 interface Scoped { readonly jobId: number; readonly epoch: number; readonly scope: number }
 /** `y` (an integer in −64 … 319): the height the caveBiome layer is painted at (SP6b spec §9.1); required for it, absent otherwise. */
 export interface MapTileMsg extends Scoped { readonly type: 'mapTile'; readonly layer: LayerId; readonly level: MapLevel; readonly tx: number; readonly tz: number; readonly y?: number }
-export interface PointMsg extends Scoped { readonly type: 'point'; readonly x: number; readonly z: number }
+/**
+ * `y` (absent, or an integer in −64 … 319): the height the map's hover reads the cave biome at, while the map shows the
+ * caveBiome layer (SP6b Spec correction 24); the reply then carries `caveBiome`.
+ */
+export interface PointMsg extends Scoped { readonly type: 'point'; readonly x: number; readonly z: number; readonly y?: number }
 export interface SpawnMsg extends Scoped { readonly type: 'spawn' }
 export interface SelftestMsg { readonly type: 'selftest'; readonly jobId: number; readonly key: string }
 /**
@@ -186,7 +190,12 @@ export const cellOf = (type: ScopedJobType): 0 | 1 | 2 | 3 => CELL_OF[type];
 export interface ReadyMsg { readonly type: 'ready'; readonly epoch: number; readonly stageHashes: Readonly<Partial<Record<StageId, string>>>; readonly genKey: string }
 /** `ids` (256·256 ids, one per pixel) comes with layers 'biome' (biome ids) and 'caveBiome' (cave-biome ids, 255 above the ground) only. */
 export interface TileMsg { readonly type: 'tile'; readonly jobId: number; readonly epoch: number; readonly rgba: ArrayBuffer; readonly ids?: ArrayBuffer }
-export interface PointResultMsg { readonly type: 'pointResult'; readonly jobId: number; readonly epoch: number; readonly fields: ColumnPoint }
+/**
+ * The cave biome a point job with a y answers (SP6b Spec correction 24), as the caveBiome layer's pixel there: `id` the
+ * cave biome (`CAVE_BIOME`), 255 where y is above the point's surfaceEst; `depth` the picker's depth (Y0 − y) / D.
+ */
+export interface PointCaveBiome { readonly id: number; readonly depth: number }
+export interface PointResultMsg { readonly type: 'pointResult'; readonly jobId: number; readonly epoch: number; readonly fields: ColumnPoint; readonly caveBiome?: PointCaveBiome }
 /**
  * ABORTED: the job's epoch cell moved from its scope (the pool reads it as JobCancelled). BAD_ARGS: a stats job's arguments do
  * not fit the configured params. NOT_ATTACHED: a world job before `attach`. STORE_FULL: a world job's store pool is at its
@@ -514,8 +523,11 @@ export function parseToWorker(m: unknown): ToWorker | null {
       if (m['layer'] === 'caveBiome' ? !(isInt(y) && y >= -64 && y <= 319) : y !== undefined) return null;
       return m as unknown as MapTileMsg;
     }
-    case 'point':
+    case 'point': {
+      const y = m['y'];
+      if (y !== undefined && !(isInt(y) && y >= -64 && y <= 319)) return null;
       return scopedOk(m) && isFiniteNum(m['x']) && isFiniteNum(m['z']) && pointInWindow(m['x'], m['z']) ? (m as unknown as PointMsg) : null;
+    }
     case 'spawn':
       return scopedOk(m) ? (m as unknown as SpawnMsg) : null;
     case 'stats':
@@ -626,10 +638,16 @@ const meshColumnCheck: ReplyCheck = (m) => {
     exactProblem('spheres', r.spheres, SPHERE_BYTES * (r.rows.byteLength / ROW_BYTES)))
     ?? payloadProblem(payloadOfMeshResult(r));
 };
+/** Why a point result's optional `caveBiome` is not `{ id: an integer 0-255, depth: a finite number }`, or null. */
+const caveBiomeProblem = (m: Record<string, unknown>): string | null => {
+  if (!('caveBiome' in m)) return null;
+  const c = m['caveBiome'];
+  return isObj(c) && isInt(c['id']) && c['id'] >= 0 && c['id'] <= 255 && isFiniteNum(c['depth']) ? null : 'caveBiome is not { id: an integer 0-255, depth: a finite number }';
+};
 /** Each job reply's body check; a reply type absent here (ready) has no job. */
 const REPLY_CHECKS: Readonly<Record<string, ReplyCheck>> = Object.freeze({
   tile: tileCheck,
-  pointResult: (m) => all(epochProblem(m), isObj(m['fields']) ? null : 'fields is not an object'),
+  pointResult: (m) => all(epochProblem(m), isObj(m['fields']) ? null : 'fields is not an object', caveBiomeProblem(m)),
   selftestResult: (m) => (typeof m['key'] === 'string' && (m['actual'] === null || typeof m['actual'] === 'string') && (m['error'] === null || typeof m['error'] === 'string')
     ? null : 'key, actual or error is not a string (or null)'),
   spawnResult: (m) => all(epochProblem(m), isObj(m['spawn']) ? null : 'spawn is not an object'),

@@ -1,5 +1,6 @@
 /**
- * The editor toolbar (SP2b spec §3.1): layer select; seed input with "Same seed" and "New seed"; profile
+ * The editor toolbar (SP2b spec §3.1): layer select, with the caveBiome layer its "y" slider and number field (SP6b spec
+ * §9.1); seed input with "Same seed" and "New seed"; profile
  * select (ready profiles) with the inline confirmation before a switch that clears modified parameters;
  * the biome-size slider (§6.4: a pointer drag is one gesture, a keyboard step one urgent edit); undo and
  * redo; the grid toggle; the cut-line button (§4.5); the preview status (§2.6); "Open in 3D" (SP4a spec §8.2). Every
@@ -15,6 +16,7 @@ import { setModeTip } from '../common/modeTip';
 import type { Notices } from '../common/notice';
 import { cutButton, CUT_OFF, type CutTool } from '../crossSection/model';
 import { BIOME_SIZE_SCALE, biomeSizePosition } from './biomeSize';
+import { CAVE_Y_MAX, CAVE_Y_MIN } from './mapState';
 import type { DriverStatus } from './previewDriver';
 
 /** "last edit → preview N ms" (input time to the drawn preview), then the pending state and the error. */
@@ -64,9 +66,13 @@ export interface ToolbarDeps {
   readonly session: WorldSession;
   readonly notices: Notices;
   readonly layer: LayerId;
+  /** The caveBiome layer's y shown at mount (the view's `caveY`, else `DEFAULT_CAVE_Y`; SP6b spec §9.1). */
+  readonly caveY: number;
   /** Runs a session call caused by the input event `e`, so the preview latency counts from `e.timeStamp`. */
   edit(e: Event, fn: () => void): void;
   onLayer(id: LayerId): void;
+  /** The y control moved: an integer in −64 … 319 (a view change, never a session edit). */
+  onCaveY(y: number): void;
   onGrid(on: boolean): void;
   /** The cut-line button: arms the map's two-click line tool, or cancels it while armed (§4.5). */
   onCut(): void;
@@ -82,13 +88,16 @@ export interface ToolbarDeps {
 export interface Toolbar {
   /** Shows the draft: seed text, profile, biome-size position and "≈", undo and redo availability. */
   sync(): void;
+  /** Shows the layer; the y control is shown only with the caveBiome layer. */
   setLayer(id: LayerId): void;
+  /** Shows the caveBiome layer's y (a hash's view) without reporting it. */
+  setCaveY(y: number): void;
   setStatus(s: DriverStatus): void;
   /** Shows the cut-line tool's state on its button. */
   setCut(tool: CutTool): void;
   /**
    * The world-modification mode (SP5b spec D10): false disables the seed, Same seed, New seed, the profile, the biome
-   * size, Undo and Redo; the layer, the grid and the cut line stay. Undo and Redo keep their own reason (no step). While
+   * size, Undo and Redo; the layer, its y, the grid and the cut line stay. Undo and Redo keep their own reason (no step). While
    * false, hovering a disabled control shows "Enable 'Modify terrain' to edit here" (SP5c spec §7.3, D19).
    */
   setEditable(on: boolean): void;
@@ -128,6 +137,17 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   for (const l of LAYERS) layerSelect.append(new Option(l, l));
   layerSelect.value = deps.layer;
   layerSelect.title = 'Map layer';
+  // The caveBiome layer's y (SP6b spec §9.1): a slider and a number field over −64 … 319, step 4.
+  const ySlider = el('input');
+  const yField = el('input');
+  for (const [input, type, label] of [[ySlider, 'range', 'Cave biome y'], [yField, 'number', 'Cave biome y value']] as const) {
+    input.type = type;
+    input.min = String(CAVE_Y_MIN);
+    input.max = String(CAVE_Y_MAX);
+    input.step = '4';
+    input.value = String(deps.caveY);
+    input.setAttribute('aria-label', label);
+  }
   const seedInput = el('input');
   seedInput.type = 'text';
   seedInput.placeholder = 'seed (empty = random)';
@@ -172,8 +192,12 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   const seedGroup = group('seed', seedInput, sameSeed, newSeed);
   const profileGroup = group('profile', profileSelect);
   const undoGroup = group('', undoBtn, redoBtn);
+  const yGroup = group('y', ySlider, yField);
+  yGroup.title = 'The height the cave-biome layer shows (y −64 … 319)';
+  const showY = (id: LayerId) => { yGroup.hidden = id !== 'caveBiome'; };
+  showY(deps.layer);
   host.append(
-    el('strong', 'map-title', 'world-imaginer-voxel · map'), layerSelect, seedGroup,
+    el('strong', 'map-title', 'world-imaginer-voxel · map'), layerSelect, yGroup, seedGroup,
     profileGroup, sizeGroup, undoGroup, gridLabel, cutBtn,
   );
   /**
@@ -200,6 +224,28 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   };
 
   layerSelect.addEventListener('change', () => { if (isLayerId(layerSelect.value)) deps.onLayer(layerSelect.value); });
+  /** The y shown (the slider snaps to its step; the field and the view keep the exact y). */
+  let shownY = deps.caveY;
+  const setY = (y: number) => {
+    shownY = y;
+    ySlider.value = String(y);
+    yField.value = String(y);
+  };
+  ySlider.addEventListener('input', () => {
+    shownY = Number(ySlider.value);
+    yField.value = String(shownY);
+    deps.onCaveY(shownY);
+  });
+  // A typed y commits on Enter or blur, rounded and clamped; a non-number restores the y shown.
+  yField.addEventListener('change', () => {
+    const typed = Number(yField.value);
+    if (yField.value.trim() === '' || !Number.isFinite(typed)) {
+      yField.value = String(shownY);
+      return;
+    }
+    setY(Math.min(CAVE_Y_MAX, Math.max(CAVE_Y_MIN, Math.round(typed))) + 0);
+    deps.onCaveY(shownY);
+  });
 
   // The seed commits on Enter, on blur and with "Same seed"; Escape restores the draft's text.
   const commitSeed = (e: Event) => {
@@ -263,7 +309,8 @@ export function createToolbar(host: HTMLElement, deps: ToolbarDeps): Toolbar {
   sync();
   return {
     sync,
-    setLayer(id) { layerSelect.value = id; },
+    setLayer(id) { layerSelect.value = id; showY(id); },
+    setCaveY: setY,
     setStatus(s) {
       status.textContent = previewStatusText(s);
       status.classList.toggle('map-status-error', s.error !== null);

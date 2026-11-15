@@ -221,7 +221,7 @@ export function instrumentPool(pool: WorkerPool, log: LatencyLog, now: () => num
       p.then(() => log.tileDone(e, req.level, now()), () => undefined);
       return p;
     },
-    point: (x, z, priority) => pool.point(x, z, priority),
+    point: (x, z, priority, y) => pool.point(x, z, priority, y),
     spawn: (priority) => pool.spawn(priority),
     landing: (x, z) => pool.landing(x, z),
     stats: (kind, n, args, priority) => pool.stats(kind, n, args, priority),

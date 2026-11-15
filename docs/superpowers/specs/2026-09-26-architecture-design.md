@@ -1386,7 +1386,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from th
   - biome, shaded relief (surfaceEst), rivers, lakes;
   - raw T/H/C/E/W/PV/R;
   - offset, σ, jag; `islandMask`, the floating_islands cluster mask (shape stage; amended by SP3e);
-  - the cave slice at y: the Density tab's horizontal cave-type field, its square on the map (SP6a); a tile layer and carver tunnels → SP10 (amended by SP6a); the cave-biome slice;
+  - the cave slice at y: the Density tab's horizontal cave-type field, its square on the map (SP6a); a tile layer and carver tunnels → SP10 (amended by SP6a); the cave-biome layer at a chosen y (SP6b);
   - structure starts and pieces; carver tunnels (→ SP10, amended by SP6a);
   - spawn, player with view cone, grid, column-status heatmap, saved places per saved world (SP5b: a section of each saved world's map, one map per saved world; coloured dots; a Places tab; B in the world and '+ Add at the pin' on the map).
 - **Hover** uses a sampler cached per epoch. **Click** teleports (3.7) (SP4c: in the world's map a plain click teleports, except while the cut tool is armed; Shift+click sets the pin or the slice centre; on `?map` a click sets the pin).

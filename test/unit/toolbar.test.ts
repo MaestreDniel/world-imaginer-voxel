@@ -59,7 +59,7 @@ describe('the toolbar in the world (SP4c spec §2.5, D17, D26)', () => {
     const host = document.createElement('div');
     createToolbar(host as unknown as HTMLElement, {
       session, notices, layer: 'biome', edit: (_e, fn) => fn(),
-      onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0',
+      caveY: 0, onCaveY: () => {}, onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0',
       embedded,
     });
     return host;
@@ -91,7 +91,7 @@ describe('the toolbar in the world (SP4c spec §2.5, D17, D26)', () => {
     const withSteps = { ...session, canUndo: true, canRedo: true } as unknown as WorldSession;
     const toolbar = createToolbar(host as unknown as HTMLElement, {
       session: withSteps, notices, layer: 'biome', edit: (_e, fn) => fn(),
-      onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0',
+      caveY: 0, onCaveY: () => {}, onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0',
       embedded: { slot: document.createElement('span') as unknown as HTMLElement, hint: 'Click: go here · Shift+click: pin' },
     });
     const inputs = host.querySelectorAll('input');
@@ -100,13 +100,16 @@ describe('the toolbar in the world (SP4c spec §2.5, D17, D26)', () => {
     const byText = (t: string) => buttons.find((b) => b.textContent === t)!;
     const terrain = [
       inputs.find((i) => i.type === 'text')!, byText('Same seed'), byText('New seed'), selects.find((s) => s.title === 'Profile')!,
-      inputs.find((i) => i.type === 'range')!, byText('Undo'), byText('Redo'),
+      inputs.find((i) => i.getAttribute('aria-label') === 'Biome size')!, byText('Undo'), byText('Redo'),
     ];
-    const looking = [selects.find((s) => s.title === 'Map layer')!, inputs.find((i) => i.type === 'checkbox')!, buttons.find((b) => b.className === 'map-cut')!];
+    const looking = [
+      selects.find((s) => s.title === 'Map layer')!, inputs.find((i) => i.type === 'checkbox')!, buttons.find((b) => b.className === 'map-cut')!,
+      inputs.find((i) => i.getAttribute('aria-label') === 'Cave biome y')!, inputs.find((i) => i.getAttribute('aria-label') === 'Cave biome y value')!,
+    ];
     expect([...terrain, ...looking].every((c) => c !== undefined && !c.disabled)).toBe(true);
     toolbar.setEditable(false);
     expect(terrain.map((c) => c.disabled)).toEqual([true, true, true, true, true, true, true]);
-    expect(looking.map((c) => c.disabled)).toEqual([false, false, false]);
+    expect(looking.map((c) => c.disabled)).toEqual([false, false, false, false, false]);
     // A sync (every session change) keeps Undo and Redo disabled while not editable.
     toolbar.sync();
     expect([byText('Undo').disabled, byText('Redo').disabled]).toEqual([true, true]);
@@ -128,7 +131,7 @@ describe('the toolbar in the world (SP4c spec §2.5, D17, D26)', () => {
     } as unknown as Notices;
     const toolbar = createToolbar(host as unknown as HTMLElement, {
       session: real, notices: confirmer, layer: 'biome', edit: (_e, fn) => fn(),
-      onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0',
+      caveY: 0, onCaveY: () => {}, onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0',
       embedded: { slot: document.createElement('span') as unknown as HTMLElement, hint: 'Click: go here · Shift+click: pin' },
     });
     const select = host.querySelectorAll('select').find((x) => x.title === 'Profile')!;
@@ -150,13 +153,13 @@ describe('the toolbar in the world (SP4c spec §2.5, D17, D26)', () => {
     const withSteps = { ...session, canUndo: true, canRedo: true } as unknown as WorldSession;
     const toolbar = createToolbar(host as unknown as HTMLElement, {
       session: withSteps, notices, layer: 'biome', edit: (_e, fn) => fn(),
-      onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0', embedded: null,
+      caveY: 0, onCaveY: () => {}, onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0', embedded: null,
     });
     const inputs = host.querySelectorAll('input');
     const buttons = host.querySelectorAll('button');
     const byText = (t: string) => buttons.find((b) => b.textContent === t)!;
     const profile = host.querySelectorAll('select').find((s) => s.title === 'Profile')!;
-    const terrain = [inputs.find((i) => i.type === 'text')!, byText('Same seed'), byText('New seed'), profile, inputs.find((i) => i.type === 'range')!, byText('Undo'), byText('Redo')];
+    const terrain = [inputs.find((i) => i.type === 'text')!, byText('Same seed'), byText('New seed'), profile, inputs.find((i) => i.getAttribute('aria-label') === 'Biome size')!, byText('Undo'), byText('Redo')];
     const has = (c: FakeElement): boolean => (shownTitle(c) ?? '').includes(MODE_OFF_TIP);
     const own = new Map([[byText('Same seed'), 'Use the typed seed (as Enter does)'], [profile, 'Profile']]);
     expect(terrain.map(has)).toEqual([false, false, false, false, false, false, false]);
@@ -181,11 +184,78 @@ describe('the toolbar in the world (SP4c spec §2.5, D17, D26)', () => {
     const host = document.createElement('div');
     const toolbar = createToolbar(host as unknown as HTMLElement, {
       session, notices, layer: 'biome', edit: (_e, fn) => fn(),
-      onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0', embedded: null,
+      caveY: 0, onCaveY: () => {}, onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0', embedded: null,
     });
     const buttons = host.querySelectorAll('button');
     toolbar.setEditable(false);
     toolbar.setEditable(true);
     expect(['Undo', 'Redo', 'New seed'].map((t) => buttons.find((b) => b.textContent === t)!.disabled)).toEqual([true, true, false]);
+  });
+});
+
+describe('the caveBiome layer\'s y control (SP6b spec §9.1)', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const session = {
+    state: { seedText: '42', profile: 'default', params: { climate: { scaleMul: 1 } } },
+    canUndo: false,
+    canRedo: false,
+  } as unknown as WorldSession;
+  const mount = (layer: ToolbarDeps['layer'], caveY: number) => {
+    const { document } = installDom();
+    const host = document.createElement('div');
+    const ys: number[] = [];
+    const toolbar = createToolbar(host as unknown as HTMLElement, {
+      session, notices: {} as unknown as Notices, layer, caveY, onCaveY: (y) => ys.push(y), edit: (_e, fn) => fn(),
+      onLayer: () => {}, onGrid: () => {}, onCut: () => {}, open3dHref: () => '/?at=0,0', embedded: null,
+    });
+    const inputs = host.querySelectorAll('input');
+    const slider = inputs.find((i) => i.getAttribute('aria-label') === 'Cave biome y')!;
+    const field = inputs.find((i) => i.getAttribute('aria-label') === 'Cave biome y value')!;
+    const group = slider.parentElement!;
+    return { host, toolbar, ys, slider, field, group };
+  };
+  const range = (e: FakeElement) => { const r = e as unknown as { min: string; max: string; step: string }; return [e.type, r.min, r.max, r.step]; };
+
+  test('a "y" slider and number field, −64 … 319, step 4, the view\'s y shown; one group after the layer select, with the label "y"', () => {
+    const { host, slider, field, group } = mount('caveBiome', 40);
+    expect(range(slider)).toEqual(['range', '-64', '319', '4']);
+    expect(range(field)).toEqual(['number', '-64', '319', '4']);
+    expect([slider.value, field.value]).toEqual(['40', '40']);
+    expect(field.parentElement).toBe(group);
+    expect(group.children[0]!.textContent).toBe('y');
+    const kids = host.children;
+    expect(kids[kids.indexOf(group) - 1]!.title).toBe('Map layer');
+    expect(group.hidden).toBe(false);
+  });
+
+  test('the control appears only with the caveBiome layer', () => {
+    const { toolbar, group } = mount('biome', 0);
+    expect(group.hidden).toBe(true);
+    toolbar.setLayer('caveBiome');
+    expect(group.hidden).toBe(false);
+    toolbar.setLayer('relief');
+    expect(group.hidden).toBe(true);
+  });
+
+  test('the slider and the field each report the y and move the other; a typed y is rounded and clamped to −64 … 319, a non-number restores the shown y', () => {
+    const { toolbar, ys, slider, field } = mount('caveBiome', 0);
+    slider.value = '-12';
+    slider.dispatchEvent(new Event('input'));
+    expect([ys, field.value]).toEqual([[-12], '-12']);
+    field.value = '101.4';
+    field.dispatchEvent(new Event('change'));
+    expect([ys, field.value, slider.value]).toEqual([[-12, 101], '101', '101']);
+    field.value = '400';
+    field.dispatchEvent(new Event('change'));
+    field.value = '-90';
+    field.dispatchEvent(new Event('change'));
+    expect([ys, field.value]).toEqual([[-12, 101, 319, -64], '-64']);
+    field.value = 'abc';
+    field.dispatchEvent(new Event('change'));
+    expect([ys, field.value, slider.value]).toEqual([[-12, 101, 319, -64], '-64', '-64']);
+    // A hash's y (`setCaveY`) is shown, not reported.
+    toolbar.setCaveY(8);
+    expect([ys.length, slider.value, field.value]).toEqual([4, '8', '8']);
   });
 });

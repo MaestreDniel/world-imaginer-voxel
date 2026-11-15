@@ -2,7 +2,8 @@
  * Cache keys of map tiles (SP2a spec §6.1). A key exists only while the pool runs the epoch the source
  * was set for, so tiles rendered for a new world never land under the previous world's keys. A layer's
  * key holds the seed words, the layer's own stage hash and the map stage *version*; the map stage hash
- * chains every upstream stage and would invalidate every layer on any edit.
+ * chains every upstream stage and would invalidate every layer on any edit. The caveBiome layer's key ends `:y<n>`, its
+ * height (SP6b spec §9.1); no other layer's key holds a y.
  */
 import type { MapLevel } from '../../core/constants';
 import { STAGES } from '../../core/stage/registry';
@@ -19,8 +20,11 @@ export interface TileSource {
    * a reconfigure runs, keyFor gives no key and the canvas draws fallback tiles.
    */
   readonly epoch: number | null;
-  /** The cache key of a tile, or null when no source matches the pool's current epoch. */
-  keyFor(layer: LayerId, level: MapLevel, tx: number, tz: number, poolEpoch: number): string | null;
+  /**
+   * The cache key of a tile, or null when no source matches the pool's current epoch. `y` is the caveBiome layer's height
+   * (required for it, a RangeError otherwise) and ignored for every other layer.
+   */
+  keyFor(layer: LayerId, level: MapLevel, tx: number, tz: number, poolEpoch: number, y?: number): string | null;
 }
 
 export function createTileSource(): TileSource {
@@ -30,9 +34,14 @@ export function createTileSource(): TileSource {
   return {
     set(e, s, h) { epoch = e; seedKey = s; hashes = h; },
     get epoch() { return hashes === null ? null : epoch; },
-    keyFor(layer, level, tx, tz, poolEpoch) {
+    keyFor(layer, level, tx, tz, poolEpoch, y) {
       if (hashes === null || poolEpoch !== epoch) return null;
-      return tileKey(layer, level, tx, tz, `${seedKey}:${hashes[layerStage(layer)] ?? ''}:map${MAP_VERSION}`);
+      let hash = `${seedKey}:${hashes[layerStage(layer)] ?? ''}:map${MAP_VERSION}`;
+      if (layer === 'caveBiome') {
+        if (y === undefined) throw new RangeError('the caveBiome layer\'s tile key needs its y');
+        hash += `:y${y}`;
+      }
+      return tileKey(layer, level, tx, tz, hash);
     },
   };
 }

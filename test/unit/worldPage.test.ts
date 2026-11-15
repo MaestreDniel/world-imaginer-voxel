@@ -6759,14 +6759,14 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     expect(s).toMatch(/isTextFocus: \(\) => worldIgnoresKeys\(document\.activeElement as HTMLElement \| null, keyPanels\),/);
   });
 
-  test('Review Focus 5: with the map split and a map toolbar input focused (owner map, `ownerOf`), C is neither acted on nor prevented (input.ts:132); with the world owning, C acts and is prevented (SP6b spec §7.3; Task 45 re-pins it on the caveBiome y field)', () => {
+  test('Review Focus 5: with the map split and the caveBiome layer\'s y number field focused (owner map, `ownerOf`), C is neither acted on nor prevented (input.ts:132) and the X-ray mode is unchanged; the y slider, which is no text entry, is guarded by the owner alone, and with the world owning C acts and is prevented (SP6b spec §7.3, §9.1)', () => {
     const p = page();
-    // Until Task 45's caveBiome y field, the toolbar's biome-size slider stands in: a map input that is not text entry.
     const bar = dom.document.createElement('div');
     dom.body.append(bar);
+    const ys: number[] = [];
     createToolbar(bar as unknown as HTMLElement, {
       session: { state: { seedText: '42', profile: 'default', params: { climate: { scaleMul: 1 } } }, canUndo: false, canRedo: false } as unknown as WorldSession,
-      notices: {} as never, layer: 'biome', edit: (_e, fn) => fn(), onLayer: () => {}, onGrid: () => {}, onCut: () => {},
+      notices: {} as never, layer: 'caveBiome', caveY: 0, onCaveY: (y) => ys.push(y), edit: (_e, fn) => fn(), onLayer: () => {}, onGrid: () => {}, onCut: () => {},
       open3dHref: () => '/?at=0,0', embedded: null,
     });
     const target = Object.assign(new EventTarget(), { requestPointerLock: () => Promise.resolve() });
@@ -6782,7 +6782,7 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
       onButton() {},
       wheelCtrlAsSlot: () => false,
       placing: () => false,
-      // As the page: the map is no panel of `keyPanels`, so a focused map input is not text entry (the owner guards it).
+      // As the page: the map is no panel of `keyPanels`, so only a text-entry control counts as text focus (the owner guards the rest).
       isTextFocus: () => worldIgnoresKeys(dom.document.activeElement, []),
       active: () => owner === 'world',
       doc: dom.document as unknown as Pick<Document, 'addEventListener' | 'removeEventListener' | 'pointerLockElement'>,
@@ -6794,12 +6794,25 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
       dom.document.dispatchEvent(Object.assign(new Event('keyup'), { code: 'KeyC', key: 'c' }));
       return e;
     };
-    const field = bar.querySelectorAll('input').find((i) => i.type === 'range')!;
+    const inputs = bar.querySelectorAll('input');
+    const field = inputs.find((i) => i.getAttribute('aria-label') === 'Cave biome y value')!;
+    const slider = inputs.find((i) => i.getAttribute('aria-label') === 'Cave biome y')!;
+    expect([field.type, slider.type, field.parentElement!.hidden]).toEqual(['number', 'range', false]);
     field.focus();
     expect(dom.document.activeElement).toBe(field);
+    // A number field is text entry: C types into it, whoever owns the keys.
+    expect(worldIgnoresKeys(dom.document.activeElement, [])).toBe(true);
+    expect(press().defaultPrevented).toBe(false);
+    expect([actions, p.calls, p.shown, p.xray.mode, legends(p.box), ys]).toEqual([[], [], [], 0, [false, true], []]);
+    owner = 'world';
+    expect(press().defaultPrevented).toBe(false);
+    expect([actions, p.calls, p.xray.mode]).toEqual([[], [], 0]);
+    // The y slider focused, the map owning: not text entry, so the owner alone keeps C from the world.
+    owner = 'map';
+    slider.focus();
     expect(worldIgnoresKeys(dom.document.activeElement, [])).toBe(false);
     expect(press().defaultPrevented).toBe(false);
-    expect([actions, p.calls, p.shown, p.xray.mode, legends(p.box)]).toEqual([[], [], [], 0, [false, true]]);
+    expect([actions, p.calls, p.xray.mode]).toEqual([[], [], 0]);
     // The world owns again (the pointer locked over the 3D side): C switches the colours and is prevented.
     owner = 'world';
     expect(press().defaultPrevented).toBe(true);

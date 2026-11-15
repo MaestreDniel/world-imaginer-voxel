@@ -348,7 +348,7 @@ describe('the caveBiome layer at a y (SP6b spec §9.1, D9)', () => {
     const hexHashes = (params: unknown) => Object.fromEntries(Object.entries(stageHashes(params)).map(([k, v]) => [k, hex64(v)]));
     const key = (params: unknown, epoch: number) => {
       src.set(epoch, '42.0', hexHashes(params));
-      return src.keyFor('caveBiome', 64, 0, 0, epoch);
+      return src.keyFor('caveBiome', 64, 0, 0, epoch, 0);
     };
     const base = key(DEFAULTS, 1);
     expect(base).toContain(`:${hexHashes(DEFAULTS)['terrain']}:`);

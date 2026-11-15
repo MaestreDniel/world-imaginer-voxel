@@ -6,8 +6,8 @@ import { DEFAULT_DENSITY_TREE, DEFAULT_SURFACE_RULES } from '../../src/core/para
 import { paramsHash } from '../../src/core/stage/hash';
 import { WorldSession, type SessionChange } from '../../src/engine/session';
 import { validateParamTrees } from '../../src/gen/trees';
-import { base64urlEncode } from '../../src/ui/common/base64url';
-import { applyMapHash, decodeMapState, DEFAULT_MAP_STATE, encodeMapState, MAP_HASH_READ_MAX, type MapState, type MapView } from '../../src/ui/map/mapState';
+import { base64urlDecode, base64urlEncode } from '../../src/ui/common/base64url';
+import { applyMapHash, caveYOf, decodeMapState, DEFAULT_CAVE_Y, DEFAULT_MAP_STATE, encodeMapState, MAP_HASH_READ_MAX, type MapState, type MapView } from '../../src/ui/map/mapState';
 import { createTileCache, tileKey } from '../../src/ui/map/tileCache';
 import { centredView, planTiles, screenToWorld, visibleTiles, worldToScreen } from '../../src/ui/map/viewMath';
 import { editedPatch } from './fixtures/editedTrees';
@@ -44,6 +44,51 @@ describe('map URL state', () => {
     const r = decodeMapState(hash);
     expect(r.state).toEqual(DEFAULT_MAP_STATE);
     expect(r.error).toMatch(/^map URL ignored: /);
+  });
+});
+
+describe('the caveBiome layer\'s y in the hash (SP6b spec §9.1)', () => {
+  /** A version-1 hash recorded at 9fababa (before the trees; the test below) and SP6a's review links' hash (its spec, "The review links and screenshots"). */
+  const V1 = 'eyJwYXRjaCI6eyJjbGltYXRlIjp7InNjYWxlTXVsIjoyfSwiZGVuc2l0eSI6eyJkZXRhaWxBbXBMbyI6MC44fSwic3VyZmFjZSI6eyJzbm93bGluZSI6LTAuNX19LCJwcm9maWxlIjoiZGVmYXVsdCIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo4LCJsYXllciI6ImJpb21lIiwieCI6LTEwMjQsInoiOjUxMn19';
+  const SP6A_REVIEW = 'eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19';
+  const json = (hash: string): string => new TextDecoder().decode(base64urlDecode(hash)!);
+
+  test('every existing hash, SP6a\'s review links\' included, decodes and re-encodes byte-identical', () => {
+    const relief: MapState = { v: 1, seed: '7', profile: 'large_biomes', patch: { rivers: { widthMin: 6 } }, view: { x: 512, z: -1024.5, bpp: 16, layer: 'relief' } };
+    for (const hash of [V1, SP6A_REVIEW, encodeMapState(DEFAULT_MAP_STATE), encodeMapState(relief)]) {
+      const d = decodeMapState(`#${hash}`);
+      expect(d.error).toBeNull();
+      expect('caveY' in d.state.view).toBe(false);
+      expect(encodeMapState(d.state)).toBe(hash);
+    }
+  });
+
+  test('a caveBiome view with caveY −12 round-trips, and the hash carries it', () => {
+    const s: MapState = { ...DEFAULT_MAP_STATE, view: { x: 96, z: -52, bpp: 4, layer: 'caveBiome', caveY: -12 } };
+    const hash = encodeMapState(s);
+    expect(json(hash)).toContain('"caveY":-12');
+    const back = decodeMapState(`#${hash}`);
+    expect(back).toEqual({ state: s, error: null });
+    expect(encodeMapState(back.state)).toBe(hash);
+    expect(caveYOf(back.state.view)).toBe(-12);
+  });
+
+  test('caveY on another layer is dropped on encode; a caveBiome view without caveY keeps no caveY and reads the default y 0', () => {
+    const biome: MapView = { ...DEFAULT_MAP_STATE.view, caveY: 40 };
+    expect(encodeMapState({ ...DEFAULT_MAP_STATE, view: biome })).toBe(encodeMapState(DEFAULT_MAP_STATE));
+    expect(caveYOf(biome)).toBeUndefined();
+    const bare: MapState = { ...DEFAULT_MAP_STATE, view: { ...DEFAULT_MAP_STATE.view, layer: 'caveBiome' } };
+    const hash = encodeMapState(bare);
+    expect(json(hash)).not.toContain('caveY');
+    expect(decodeMapState(`#${hash}`)).toEqual({ state: bare, error: null });
+    expect([DEFAULT_CAVE_Y, caveYOf(bare.view)]).toEqual([0, 0]);
+    // Read as optional on any layer (the hash only ever writes it with caveBiome).
+    expect(decodeMapState(enc({ ...DEFAULT_MAP_STATE, view: biome })).error).toBeNull();
+  });
+
+  test.each<[string, unknown]>([['320', 320], ['−65', -65], ['1.5', 1.5], ['a string', '4'], ['null', null]])('caveY %s falls back to the defaults with a notice', (_n, caveY) => {
+    const r = decodeMapState(enc({ ...DEFAULT_MAP_STATE, view: { ...DEFAULT_MAP_STATE.view, layer: 'caveBiome', caveY } }));
+    expect(r).toEqual({ state: DEFAULT_MAP_STATE, error: 'map URL ignored: caveY is not an integer in −64 … 319' });
   });
 });
 
