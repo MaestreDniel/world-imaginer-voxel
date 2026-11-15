@@ -3,8 +3,12 @@
  * invalidates its tiles. Relief and the relief-based layers also need the 4 neighbour heights.
  * `islandMask` (SP3e spec §2.6) is the floating_islands cluster mask, keyed by the shape hash (which
  * covers the `islands` group); it is uniformly 0 in every other profile.
+ * `caveBiome` (SP6b spec §9.1, D9) is the cave biome a cave at a chosen y would have: it needs the GenContext's
+ * picker inputs and y, so the tile painter paints it through `caveBiomeColor`, keyed by the terrain hash.
  */
+import { CAVE_BIOME_COLORS } from '../../core/constants';
 import type { StageId } from '../../core/ids';
+import { caveBiomeAtPoint, type CavePickerInputs } from '../biomes/cavePicker';
 import { biomeColor } from '../biomes/registry';
 import type { PointRecord } from '../column/columnPoint';
 import { blend, diverging, grey, hypsometric, sequential, shade, waterByDepth } from './palette';
@@ -17,8 +21,12 @@ const SEQ = sequential;
 const SHADE = shade;
 const GREY = grey;
 const BLEND = blend;
+const CAVE_AT = caveBiomeAtPoint;
+const CAVE_COLORS = CAVE_BIOME_COLORS;
+/** `CAVE_BIOME_COLORS` as 0xRRGGBB. */
+const CAVE_RGB: readonly number[] = CAVE_COLORS.map((c) => Number.parseInt(c.slice(1), 16));
 
-export const LAYERS = ['biome', 'relief', 'rivers', 'lakes', 'C', 'E', 'PV', 'W', 'T', 'H', 'R', 'offset', 'sigma', 'jag', 'islandMask'] as const;
+export const LAYERS = ['biome', 'relief', 'rivers', 'lakes', 'C', 'E', 'PV', 'W', 'T', 'H', 'R', 'offset', 'sigma', 'jag', 'islandMask', 'caveBiome'] as const;
 export type LayerId = (typeof LAYERS)[number];
 
 export function isLayerId(v: unknown): v is LayerId {
@@ -28,6 +36,7 @@ export function isLayerId(v: unknown): v is LayerId {
 /** The stage whose hash keys this layer's tiles. */
 export function layerStage(layer: LayerId): StageId {
   if (layer === 'biome') return 'biome2d';
+  if (layer === 'caveBiome') return 'terrain';
   if (layer === 'C' || layer === 'E' || layer === 'PV' || layer === 'W' || layer === 'T' || layer === 'H' || layer === 'R') return 'climate';
   return 'shape';
 }
@@ -81,5 +90,29 @@ export function layerColor(layer: LayerId, p: PointRecord, k: number): number {
     case 'sigma': return SEQ(p.sigma, 0, 16);
     case 'jag': return SEQ(p.jag, 0, 55);
     case 'islandMask': return SEQ(p.islandMask, 0, 1);
+    // Painted through caveBiomeColor (it needs the picker and y); this is its relief part.
+    case 'caveBiome': return GREY(reliefColor(p, k));
   }
+}
+
+/** The caveBiome layer's id of a pixel above the ground (y > surfaceEst): none. */
+const NONE = 255;
+
+/**
+ * The caveBiome layer's id at a sampled point and height y (§9.1): 255 (none) where y > surfaceEst, else §1.3's
+ * choice at (p.x, p.z) and y without jitter, from the point's C, E, H and surfaceEst plus the border and depth noises
+ * (`caveBiomeAtPoint`).
+ */
+export function caveBiomeIdAt(picker: CavePickerInputs, p: PointRecord, y: number): number {
+  return y > p.surfaceEst ? NONE : CAVE_AT(picker, p.C, p.E, p.H, p.surfaceEst, p.x, p.z, y).biome;
+}
+
+/** The colour of a caveBiome id at a point: `CAVE_BIOME_COLORS`, or the greyed relief (shaded by k) for none. */
+export function caveBiomeIdColor(id: number, p: PointRecord, k: number): number {
+  return id === NONE ? GREY(reliefColor(p, k)) : CAVE_RGB[id]!;
+}
+
+/** 0xRRGGBB of the caveBiome layer at a sampled point and height y: the cave biome's colour, the greyed relief above ground. */
+export function caveBiomeColor(picker: CavePickerInputs, p: PointRecord, y: number, k: number): number {
+  return caveBiomeIdColor(caveBiomeIdAt(picker, p, y), p, k);
 }

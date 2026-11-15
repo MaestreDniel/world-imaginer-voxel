@@ -289,8 +289,8 @@ export function createTaskHandler(slices: SliceJob = CREATE_SLICE_JOB(), now: ()
         switch (m.type) {
           case 'mapTile': {
             const rgba = new ArrayBuffer(256 * 256 * 4);
-            const ids = m.layer === 'biome' ? new ArrayBuffer(256 * 256) : null;
-            const done = PAINT(ctx, m.layer, m.level, m.tx, m.tz, new Uint8ClampedArray(rgba), stopFor(m.type, m.scope), ids === null ? undefined : new Uint8Array(ids));
+            const ids = m.layer === 'biome' || m.layer === 'caveBiome' ? new ArrayBuffer(256 * 256) : null;
+            const done = PAINT(ctx, m.layer, m.level, m.tx, m.tz, new Uint8ClampedArray(rgba), stopFor(m.type, m.scope), ids === null ? undefined : new Uint8Array(ids), m.y);
             if (done === null) return aborted();
             return ids === null
               ? { msg: { type: 'tile', jobId: m.jobId, epoch, rgba }, transfer: [rgba] }

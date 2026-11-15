@@ -50,6 +50,7 @@ describe('parseToWorker', () => {
     expect(parseToWorker(stats(7, 3, 'biomeShares', 5, 5, { len: 31 }))).not.toBeNull();
     expect(parseToWorker(stats(8, 3, 'crossSection', 0, 512, line(5120, 3072, 6656, 3072)))).not.toBeNull();
     expect(parseToWorker({ type: 'slice', jobId: 9, epoch: 3, scope: 3, ax: 5120, az: 3072, bx: 6656, bz: 3072, from: 0, to: 512 })).not.toBeNull();
+    for (const y of [0, -64, 319]) expect(parseToWorker({ ...tileMsg, layer: 'caveBiome', y })).not.toBeNull();
   });
   test('crossSection ends are only checked to be numbers: outside the window, NaN or A = B parse, and the handler answers BAD_ARGS', () => {
     for (const args of [line(524288, 0, 0, 0), line(Number.NaN, 0, 1, 1), line(0, Infinity, 1, 1), line(7, 7, 7, 7)]) {
@@ -68,6 +69,11 @@ describe('parseToWorker', () => {
     ['non-integer tile', { ...tileMsg, tx: 0.5 }],
     ['tile outside the window', { ...tileMsg, tx: 40 }],
     ['preview tile just past the window (SP2a minor 1)', { ...tileMsg, level: 256, tx: 8 }],
+    ['caveBiome tile without y', { ...tileMsg, layer: 'caveBiome' }],
+    ['caveBiome tile at y 320', { ...tileMsg, layer: 'caveBiome', y: 320 }],
+    ['caveBiome tile at y −65', { ...tileMsg, layer: 'caveBiome', y: -65 }],
+    ['caveBiome tile at a non-integer y', { ...tileMsg, layer: 'caveBiome', y: 0.5 }],
+    ['y on a tile of another layer', { ...tileMsg, y: 0 }],
     ['point outside the window', { type: 'point', jobId: 2, epoch: 3, scope: 3, x: 1e7, z: 0 }],
     ['point on the window edge x = 2^19 (SP2a minor 1)', { type: 'point', jobId: 2, epoch: 3, scope: 3, x: 524288, z: 0 }],
     ['point on the window edge z = 2^19', { type: 'point', jobId: 2, epoch: 3, scope: 3, x: 0, z: 524288 }],
@@ -190,7 +196,20 @@ describe('task handler', () => {
     expect(pt).toEqual({ type: 'pointResult', jobId: 9, epoch: 3, fields: columnPoint(ctxFor('42'), 100.5, -20) });
     expect(h.handle({ type: 'spawn', jobId: 10, epoch: 3, scope: 3 }).msg).toEqual({ type: 'spawnResult', jobId: 10, epoch: 3, spawn: findSpawn(ctxFor('42')) });
   });
-  test('only biome tiles carry ids', () => {
+  test('a caveBiome tile is painted at its y and carries its per-pixel cave-biome ids', () => {
+    const h = createTaskHandler();
+    h.handle(configure(3));
+    const r = h.handle({ ...tileMsg, layer: 'caveBiome', y: 40 });
+    expect(r.msg.type).toBe('tile');
+    if (r.msg.type !== 'tile') return;
+    expect(r.transfer).toEqual([r.msg.rgba, r.msg.ids]);
+    const ids = new Uint8Array(65536);
+    const rgba = paintTileAbortable(ctxFor('42'), 'caveBiome', 64, 2, -1, new Uint8ClampedArray(262144), () => false, ids, 40)!;
+    expect(sameBytes(r.msg.rgba, rgba)).toBe(true);
+    expect(sameBytes(r.msg.ids!, ids)).toBe(true);
+    expect(sameBytes(r.msg.rgba, paintTile(ctxFor('42'), 'caveBiome', 64, 2, -1, new Uint8ClampedArray(262144), 0))).toBe(false);
+  });
+  test('only biome and caveBiome tiles carry ids', () => {
     const h = createTaskHandler();
     h.handle(configure(3));
     const r = h.handle({ ...tileMsg, layer: 'relief', level: 256 });

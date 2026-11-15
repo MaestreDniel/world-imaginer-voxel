@@ -72,7 +72,8 @@ export interface ConfigureMsg { readonly type: 'configure'; readonly epoch: numb
  * phase's epoch cell (`cellOf`) when the pool issued it.
  */
 interface Scoped { readonly jobId: number; readonly epoch: number; readonly scope: number }
-export interface MapTileMsg extends Scoped { readonly type: 'mapTile'; readonly layer: LayerId; readonly level: MapLevel; readonly tx: number; readonly tz: number }
+/** `y` (an integer in −64 … 319): the height the caveBiome layer is painted at (SP6b spec §9.1); required for it, absent otherwise. */
+export interface MapTileMsg extends Scoped { readonly type: 'mapTile'; readonly layer: LayerId; readonly level: MapLevel; readonly tx: number; readonly tz: number; readonly y?: number }
 export interface PointMsg extends Scoped { readonly type: 'point'; readonly x: number; readonly z: number }
 export interface SpawnMsg extends Scoped { readonly type: 'spawn' }
 export interface SelftestMsg { readonly type: 'selftest'; readonly jobId: number; readonly key: string }
@@ -183,7 +184,7 @@ const CELL_OF: Readonly<Record<ScopedJobType, 0 | 1 | 2 | 3>> = Object.freeze({
 export const cellOf = (type: ScopedJobType): 0 | 1 | 2 | 3 => CELL_OF[type];
 
 export interface ReadyMsg { readonly type: 'ready'; readonly epoch: number; readonly stageHashes: Readonly<Partial<Record<StageId, string>>>; readonly genKey: string }
-/** `ids` (256·256 biome ids, one per pixel) comes with layer 'biome' only. */
+/** `ids` (256·256 ids, one per pixel) comes with layers 'biome' (biome ids) and 'caveBiome' (cave-biome ids, 255 above the ground) only. */
 export interface TileMsg { readonly type: 'tile'; readonly jobId: number; readonly epoch: number; readonly rgba: ArrayBuffer; readonly ids?: ArrayBuffer }
 export interface PointResultMsg { readonly type: 'pointResult'; readonly jobId: number; readonly epoch: number; readonly fields: ColumnPoint }
 /**
@@ -509,6 +510,8 @@ export function parseToWorker(m: unknown): ToWorker | null {
       const level = m['level'];
       if (!scopedOk(m) || !isLayerId(m['layer'])) return null;
       if (!isInt(level) || !LEVELS.includes(level) || !tileOk(m['tx'], level) || !tileOk(m['tz'], level)) return null;
+      const y = m['y'];
+      if (m['layer'] === 'caveBiome' ? !(isInt(y) && y >= -64 && y <= 319) : y !== undefined) return null;
       return m as unknown as MapTileMsg;
     }
     case 'point':

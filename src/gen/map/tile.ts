@@ -4,17 +4,23 @@
  * Level 256 is the preview (sampleCoarse: no rivers or lakes, one sample per 2 × 2 pixel block); finer
  * levels use samplePoint without steep. Shaded layers sample a one-pixel border so adjacent tiles shade seamlessly.
  * Painting polls a plain `stop` callback once per row of its sampling pass and gives up when it fires
- * (SP2b spec §2.2); the biome layer can also write each pixel's biome id (SP2b spec §5.3).
+ * (SP2b spec §2.2); the biome layer can also write each pixel's biome id (SP2b spec §5.3). The caveBiome layer
+ * (SP6b spec §9.1) is painted at a y with the context's picker inputs (`caveBiomeIdAt` and `caveBiomeIdColor`, the
+ * parts of `caveBiomeColor`), in the unshaded path (each pixel sampled whole), and writes each pixel's cave-biome id.
  */
 import { MAP_LEVELS, MAP_TILE_PX, type MapLevel } from '../../core/constants';
 import type { GenContext } from '../context';
+import { cavePickerOf, type CavePickerInputs } from '../biomes/cavePicker';
 import { newPointRecord, sampleCoarse, samplePoint, type PointRecord } from '../column/columnPoint';
-import { layerColor, needsRelief, slopeShade, type LayerId } from './layers';
+import { caveBiomeIdAt, caveBiomeIdColor, layerColor, needsRelief, slopeShade, type LayerId } from './layers';
 
 const POINT = samplePoint;
 const COARSE = sampleCoarse;
 const NEW_POINT = newPointRecord;
 const COLOR = layerColor;
+const CAVE_ID = caveBiomeIdAt;
+const CAVE_COLOR = caveBiomeIdColor;
+const PICKER_OF = cavePickerOf;
 const NEEDS_RELIEF = needsRelief;
 const SLOPE = slopeShade;
 const TILE = MAP_TILE_PX;
@@ -56,6 +62,16 @@ function put(out: Uint8ClampedArray, o: number, rgb: number): void {
 const HALF = TILE / 2;
 const NEVER = (): boolean => false;
 
+/** The caveBiome layer's picker inputs and height. */
+interface CaveAt { readonly picker: CavePickerInputs; readonly y: number }
+
+/** The caveBiome layer's picker inputs and y (an integer in −64 … 319, a RangeError otherwise); null for another layer. */
+function caveAtOf(ctx: GenContext, layer: LayerId, y: number | undefined): CaveAt | null {
+  if (layer !== 'caveBiome') return null;
+  if (y === undefined || !Number.isInteger(y) || y < -64 || y > 319) throw new RangeError(`caveBiome tile: y ${y} is not an integer in −64 … 319`);
+  return { picker: PICKER_OF(ctx), y };
+}
+
 /** Writes rgb, and the biome id when `ids` is given, into the 2 × 2 pixel block (bi, bj) of a preview tile. */
 function putBlock(out: Uint8ClampedArray, ids: Uint8Array | undefined, bi: number, bj: number, rgb: number, biome: number): void {
   for (let dj = 0; dj < 2; dj++) for (let di = 0; di < 2; di++) {
@@ -71,7 +87,7 @@ function putBlock(out: Uint8ClampedArray, ids: Uint8Array | undefined, bi: numbe
  * block once (SP2b spec §2.4): at this level their colour reads only surfaceEst and surfaceWaterLevel,
  * and every other field it reads is a constant of sampleCoarse (no river, no lake).
  */
-function paintPreview(ctx: GenContext, layer: LayerId, tx: number, tz: number, out: Uint8ClampedArray, stop: () => boolean, ids: Uint8Array | undefined): Uint8ClampedArray | null {
+function paintPreview(ctx: GenContext, layer: LayerId, tx: number, tz: number, out: Uint8ClampedArray, stop: () => boolean, ids: Uint8Array | undefined, cave: CaveAt | null): Uint8ClampedArray | null {
   const b = 256;
   const x0 = TILE * b * tx;
   const z0 = TILE * b * tz;
@@ -82,7 +98,8 @@ function paintPreview(ctx: GenContext, layer: LayerId, tx: number, tz: number, o
       if (stop()) return null;
       for (let bi = 0; bi < HALF; bi++) {
         const p = at(bi, bj);
-        putBlock(out, ids, bi, bj, COLOR(layer, p, 1), p.biome);
+        const id = cave === null ? p.biome : CAVE_ID(cave.picker, p, cave.y);
+        putBlock(out, ids, bi, bj, cave === null ? COLOR(layer, p, 1) : CAVE_COLOR(id, p, 1), id);
       }
     }
     return out;
@@ -112,11 +129,14 @@ function paintPreview(ctx: GenContext, layer: LayerId, tx: number, tz: number, o
  * as soon as `stop()` returns true (`out` is then partly written). `stop` is polled once per block row of
  * a preview tile's sampling pass, once per row of an unshaded fine tile and once per row of a shaded fine
  * tile's sampling pass. For layer 'biome', `ids` (256·256 entries) receives each pixel's biome id (at the
- * preview, the 2 × 2 block's sample); other layers leave it untouched.
+ * preview, the 2 × 2 block's sample); for layer 'caveBiome', painted at height `y` (an integer in −64 … 319, required
+ * for it, a RangeError otherwise), each pixel's cave-biome id (`caveBiomeIdAt`: 0-3, 255 above the ground); other
+ * layers leave it untouched.
  */
-export function paintTileAbortable(ctx: GenContext, layer: LayerId, b: Level, tx: number, tz: number, out: Uint8ClampedArray, stop: () => boolean, ids?: Uint8Array): Uint8ClampedArray | null {
-  const biomeIds = layer === 'biome' ? ids : undefined;
-  if (b === 256) return paintPreview(ctx, layer, tx, tz, out, stop, biomeIds);
+export function paintTileAbortable(ctx: GenContext, layer: LayerId, b: Level, tx: number, tz: number, out: Uint8ClampedArray, stop: () => boolean, ids?: Uint8Array, y?: number): Uint8ClampedArray | null {
+  const biomeIds = layer === 'biome' || layer === 'caveBiome' ? ids : undefined;
+  const cave = caveAtOf(ctx, layer, y);
+  if (b === 256) return paintPreview(ctx, layer, tx, tz, out, stop, biomeIds, cave);
   const x0 = TILE * b * tx;
   const z0 = TILE * b * tz;
   if (!NEEDS_RELIEF(layer)) {
@@ -124,8 +144,9 @@ export function paintTileAbortable(ctx: GenContext, layer: LayerId, b: Level, tx
       if (stop()) return null;
       for (let i = 0; i < TILE; i++) {
         const p = samplePixel(ctx, b, x0 + b * (i + 0.5), z0 + b * (j + 0.5), P);
-        put(out, 4 * (j * TILE + i), COLOR(layer, p, 1));
-        if (biomeIds !== undefined) biomeIds[j * TILE + i] = p.biome;
+        const id = cave === null ? p.biome : CAVE_ID(cave.picker, p, cave.y);
+        put(out, 4 * (j * TILE + i), cave === null ? COLOR(layer, p, 1) : CAVE_COLOR(id, p, 1));
+        if (biomeIds !== undefined) biomeIds[j * TILE + i] = id;
       }
     }
     return out;
@@ -159,7 +180,7 @@ export function paintTileAbortable(ctx: GenContext, layer: LayerId, b: Level, tx
   return out;
 }
 
-/** Paints tile (tx, tz) of `layer` at level b into `out` (256·256·4 bytes, alpha 255). */
-export function paintTile(ctx: GenContext, layer: LayerId, b: Level, tx: number, tz: number, out: Uint8ClampedArray): Uint8ClampedArray {
-  return paintTileAbortable(ctx, layer, b, tx, tz, out, NEVER)!;
+/** Paints tile (tx, tz) of `layer` at level b into `out` (256·256·4 bytes, alpha 255); `y` for layer 'caveBiome'. */
+export function paintTile(ctx: GenContext, layer: LayerId, b: Level, tx: number, tz: number, out: Uint8ClampedArray, y?: number): Uint8ClampedArray {
+  return paintTileAbortable(ctx, layer, b, tx, tz, out, NEVER, undefined, y)!;
 }

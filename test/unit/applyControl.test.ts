@@ -573,12 +573,14 @@ function mapShownRig() {
 describe('a cave-only Apply with the map shown (SP6a spec §4, §10.7)', () => {
   const CHEESE = 'caves.cheese.offset';
 
-  test('a cave leaf changes no map layer\'s stage hash (the map stage reads no cave leaf), and the terrain\'s', () => {
+  test('a cave leaf changes no map layer\'s stage hash (the map stage reads no cave leaf) but caveBiome\'s, and the terrain\'s', () => {
     const s = openMapSession(DEFAULT_MAP_STATE, () => [1, 2]);
     const a = readyOf(s.state);
     expect(s.set(CHEESE, 0.4).ok).toBe(true);
     const b = readyOf(s.state);
-    for (const layer of LAYERS) expect([layer, b.stageHashes[layerStage(layer)]]).toEqual([layer, a.stageHashes[layerStage(layer)]]);
+    for (const layer of LAYERS) if (layer !== 'caveBiome') expect([layer, b.stageHashes[layerStage(layer)]]).toEqual([layer, a.stageHashes[layerStage(layer)]]);
+    // By design (D9, D15): the caveBiome layer keys on the terrain hash, so a cave edit repaints it.
+    expect(b.stageHashes[layerStage('caveBiome')]).not.toBe(a.stageHashes[layerStage('caveBiome')]);
     expect(b.stageHashes['map']).toBe(a.stageHashes['map']);
     expect(b.stageHashes['terrain']).not.toBe(a.stageHashes['terrain']);
     expect(b.genKey).not.toBe(a.genKey);

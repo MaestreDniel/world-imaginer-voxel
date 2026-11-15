@@ -4,12 +4,14 @@ import { resolveProfile } from '../../src/core/params/profiles';
 import { hex64 } from '../../src/core/hash';
 import { seedFromInput } from '../../src/core/seed';
 import { stageHashes } from '../../src/core/stage/hash';
+import { CAVE_BIOME, CAVE_BIOME_COLORS } from '../../src/core/constants';
+import { caveBiomeAtPoint, caveBiomeInputsAt, cavePickerOf } from '../../src/gen/biomes/cavePicker';
 import { biomeColor } from '../../src/gen/biomes/registry';
 import { newPointRecord, sampleCoarse, samplePoint } from '../../src/gen/column/columnPoint';
 import { islandMaskAt } from '../../src/gen/column/islands';
 import { createGenContext, type GenContext } from '../../src/gen/context';
-import { isLayerId, layerColor, layerStage, LAYERS, needsRelief, slopeShade, type LayerId } from '../../src/gen/map/layers';
-import { diverging, hypsometric, sequential } from '../../src/gen/map/palette';
+import { caveBiomeColor, isLayerId, layerColor, layerStage, LAYERS, needsRelief, slopeShade, type LayerId } from '../../src/gen/map/layers';
+import { diverging, grey, hypsometric, sequential } from '../../src/gen/map/palette';
 import { isLevel, levelFor, paintTile, paintTileAbortable, samplePixel } from '../../src/gen/map/tile';
 import { createTileSource } from '../../src/ui/map/tileSource';
 import { ctxFor } from '../harness/gen';
@@ -59,8 +61,8 @@ function previewSampledTwice(ctx: GenContext, layer: LayerId, tx: number, tz: nu
 
 describe('layers and palette', () => {
   test('layer ids and their invalidating stage', () => {
-    expect(LAYERS.length).toBe(15);
-    expect(LAYERS.slice(-2)).toEqual(['jag', 'islandMask']);
+    expect(LAYERS.length).toBe(16);
+    expect(LAYERS.slice(-2)).toEqual(['islandMask', 'caveBiome']);
     expect(isLayerId('relief')).toBe(true);
     expect(isLayerId('islandMask')).toBe(true);
     expect(isLayerId('nope')).toBe(false);
@@ -256,5 +258,100 @@ describe('the islandMask layer (SP3e spec §2.6, D20)', () => {
     expect(key({ ...DEFAULTS, islands: { ...DEFAULTS.islands, lo: 0.5 } }, 3)).not.toBe(base);
     // A biome edit moves biome2d, not shape: the layer's tiles stay valid.
     expect(key({ ...DEFAULTS, biomes: { ...DEFAULTS.biomes, zoomJitter: 1.25 } }, 4)).toBe(base);
+  });
+});
+
+describe('the caveBiome layer at a y (SP6b spec §9.1, D9)', () => {
+  const ctx = ctxFor('42');
+  const picker = cavePickerOf(ctx);
+  const st = picker.settings;
+  const CAVE_RGB = CAVE_BIOME_COLORS.map((c) => Number.parseInt(c.slice(1), 16));
+  /** Fine tile (0, 0) at level 64: pixel (72, 0)'s point is in the lush box at the y where its depth is 0.5. */
+  const B = 64;
+  const LUSH_PIXEL = [72, 0] as const;
+  const at = (b: 64 | 16 | 4, tx: number, tz: number, i: number, j: number) => samplePoint(ctx, 256 * b * tx + b * (i + 0.5), 256 * b * tz + b * (j + 0.5), false, newPointRecord());
+  const lushY = (() => {
+    const p = at(B, 0, 0, ...LUSH_PIXEL);
+    return Math.round(caveBiomeAtPoint(picker, p.C, p.E, p.H, p.surfaceEst, p.x, p.z, 0).y0 - 0.5 * st.depthScale);
+  })();
+
+  test('unshaded and keyed by the terrain stage; layerColor paints its relief part, the greyed unshaded relief', () => {
+    expect(needsRelief('caveBiome')).toBe(false);
+    expect(layerStage('caveBiome')).toBe('terrain');
+    const p = at(B, 0, 0, 10, 10);
+    expect(layerColor('caveBiome', p, 1)).toBe(grey(layerColor('relief', p, 1)));
+  });
+
+  test('a pixel whose point is in the lush box at y with depth 0.5 is #4dff7a', () => {
+    const p = at(B, 0, 0, ...LUSH_PIXEL);
+    const nb = caveBiomeInputsAt(picker, p.x, p.z, new Float64Array(4));
+    const w = st.borderWarp;
+    const h = p.H + w * nb[2]!;
+    const c = p.C + w * nb[0]!;
+    const depth = (p.surfaceEst + st.depthWarp * nb[3]! - lushY) / st.depthScale;
+    // In the lush box (§1.3), not in the abyss's depth range, and lush's margin beats dripstone's when both hold.
+    expect([h >= st.lush.hMin, Math.abs(depth - 0.5) < 0.01, c < st.dripstone.cMin || h - st.lush.hMin > c - st.dripstone.cMin]).toEqual([true, true, true]);
+    expect(lushY).toBeLessThan(p.surfaceEst);
+    expect(caveBiomeColor(picker, p, lushY, 1)).toBe(0x4dff7a);
+    expect(rgbAt(paintTile(ctx, 'caveBiome', B, 0, 0, newTile(), lushY), ...LUSH_PIXEL)).toBe(0x4dff7a);
+  });
+
+  test('at y > surfaceEst the pixel is the greyed relief', () => {
+    const p = at(B, 0, 0, ...LUSH_PIXEL);
+    const y = Math.ceil(p.surfaceEst) + 1;
+    expect(caveBiomeColor(picker, p, y, 1)).toBe(grey(layerColor('relief', p, 1)));
+    expect(rgbAt(paintTile(ctx, 'caveBiome', B, 0, 0, newTile(), y), ...LUSH_PIXEL)).toBe(grey(layerColor('relief', p, 1)));
+  });
+
+  test('a fine tile paints caveBiomeColor of each pixel-centre point; two pixels with different climates differ', () => {
+    const t = paintTile(ctx, 'caveBiome', B, 0, 0, newTile(), lushY);
+    for (const [i, j] of PIX) expect(rgbAt(t, i, j)).toBe(caveBiomeColor(picker, at(B, 0, 0, i, j), lushY, 1));
+    const seen = colours(t);
+    expect([seen.has(CAVE_RGB[CAVE_BIOME.plain]!), seen.has(CAVE_RGB[CAVE_BIOME.lush]!), seen.has(CAVE_RGB[CAVE_BIOME.dripstone]!)]).toEqual([true, true, true]);
+  });
+
+  test('ids per pixel: the cave biome 0-3 below surfaceEst, 255 (none) above it, matching the colour, at fine levels and the preview', () => {
+    for (const [b, y] of [[64, 40], [256, 100]] as const) {
+      const ids = new Uint8Array(65536).fill(200);
+      const t = paintTileAbortable(ctx, 'caveBiome', b, 0, 0, newTile(), NEVER, ids, y)!;
+      const counts = new Map<number, number>();
+      for (let k = 0; k < 65536; k++) {
+        const id = ids[k]!;
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+        const rgb = rgbAt(t, k & 255, k >> 8);
+        if (id === 255 ? CAVE_RGB.includes(rgb) : rgb !== CAVE_RGB[id]) throw new Error(`level ${b} pixel ${k}: id ${id}, rgb ${rgb.toString(16)}`);
+      }
+      expect([b, [...counts.keys()].every((id) => id <= 3 || id === 255), counts.has(255), [...counts.keys()].some((id) => id <= 3)]).toEqual([b, true, true, true]);
+    }
+    const ids = new Uint8Array(65536);
+    paintTileAbortable(ctx, 'caveBiome', B, 0, 0, newTile(), NEVER, ids, lushY);
+    expect(ids[LUSH_PIXEL[1] * 256 + LUSH_PIXEL[0]]).toBe(CAVE_BIOME.lush);
+  });
+
+  test('the preview paints from its 2 × 2 block\'s sampleCoarse point', () => {
+    const t = paintTile(ctx, 'caveBiome', 256, 0, 0, newTile(), 0);
+    const rec = newPointRecord();
+    for (const [i, j] of PIX) {
+      const p = sampleCoarse(ctx, 256 * (2 * (i >> 1) + 1), 256 * (2 * (j >> 1) + 1), rec);
+      expect(rgbAt(t, i, j)).toBe(caveBiomeColor(picker, p, 0, 1));
+    }
+  });
+
+  test('a caveBiome tile needs an integer y in −64 … 319', () => {
+    expect(() => paintTile(ctx, 'caveBiome', B, 0, 0, newTile())).toThrow(RangeError);
+    expect(() => paintTile(ctx, 'caveBiome', B, 0, 0, newTile(), 320)).toThrow(RangeError);
+    expect(() => paintTile(ctx, 'caveBiome', B, 0, 0, newTile(), 0.5)).toThrow(RangeError);
+  });
+
+  test('its tiles are keyed by the terrain hash, which a cave leaf moves', () => {
+    const src = createTileSource();
+    const hexHashes = (params: unknown) => Object.fromEntries(Object.entries(stageHashes(params)).map(([k, v]) => [k, hex64(v)]));
+    const key = (params: unknown, epoch: number) => {
+      src.set(epoch, '42.0', hexHashes(params));
+      return src.keyFor('caveBiome', 64, 0, 0, epoch);
+    };
+    const base = key(DEFAULTS, 1);
+    expect(base).toContain(`:${hexHashes(DEFAULTS)['terrain']}:`);
+    expect(key({ ...DEFAULTS, caves: { ...DEFAULTS.caves, biomes: { ...DEFAULTS.caves.biomes, borderWarp: 0.1 } } }, 2)).not.toBe(base);
   });
 });
