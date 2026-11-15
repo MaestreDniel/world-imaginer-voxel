@@ -1,13 +1,16 @@
 import {
-  BatchedMesh, Matrix4, PerspectiveCamera, Quaternion, Vector3, type Box3, type BufferAttribute, type BufferGeometry, type Material,
-  type Object3D, type Sphere,
+  BatchedMesh, Matrix4, PerspectiveCamera, Quaternion, REVISION, Vector3, type Box3, type BufferAttribute, type BufferGeometry,
+  type Material, type Object3D, type Sphere,
 } from 'three';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { MESH_PASS_XRAY, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
+import { torusSlot } from '../../src/render/culling/caveCulling';
 import { createMaterialSystem, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
-import { BATCH_GROWTH, OPTIMIZE_AT, SHRINK_HEADROOM, SHRINK_IDLE_PUMPS, SHRINK_MIN_SLACK } from '../../src/render/regionBatch';
 import {
-  createSectionRenderer, createSectionRendererCounts, regionOf, selectSectionRenderer, type SectionRenderer,
+  BATCH_GROWTH, cullDrawList, OPTIMIZE_AT, SHRINK_HEADROOM, SHRINK_IDLE_PUMPS, SHRINK_MIN_SLACK, type BatchDrawList,
+} from '../../src/render/regionBatch';
+import {
+  createRevealProbe, createSectionRenderer, createSectionRendererCounts, regionOf, selectSectionRenderer, type SectionRenderer,
   type SectionRendererCounts,
 } from '../../src/render/sectionRenderer';
 import { GHOST_ORDER, XRAY_ORDER } from '../../src/render/selection';
@@ -598,6 +601,191 @@ describe('RegionBatch (SP4b spec §4.2, D14)', () => {
   test('the materials come from a batch material system', () => {
     expect(() => createSectionRenderer('batch', system('mesh'))).toThrow(/variant/);
     expect(createSectionRenderer('batch', system('batch')).kind).toBe('batch');
+  });
+});
+
+describe('RegionBatch\'s cave-culling draw filter (SP6b spec §8.3)', () => {
+  const listOf = (b: BatchedMesh): BatchDrawList => b as unknown as BatchDrawList;
+  /** The batch's listed entries: [start, count, instance] for k < `_multiDrawCount`. */
+  const entries = (b: BatchedMesh): Array<[number, number, number]> => {
+    const l = listOf(b);
+    const out: Array<[number, number, number]> = [];
+    for (let k = 0; k < l._multiDrawCount; k++) out.push([l._multiDrawStarts[k]!, l._multiDrawCounts[k]!, l._indirectTexture.image.data[k]!]);
+    return out;
+  };
+  const camera = new PerspectiveCamera(90, 1, 0.1, 10_000);
+  camera.position.set(64, 600, 64);
+  camera.lookAt(64, 0, 64);
+  camera.updateMatrixWorld();
+  /** What three's `renderObject` calls before drawing the batch. */
+  const beforeRender = (b: BatchedMesh): void => {
+    b.onBeforeRender(null as never, null as never, camera, b.geometry, b.material as Material, null as never);
+  };
+  /** three's own list for the batch, without the filter. */
+  const threes = (b: BatchedMesh): Array<[number, number, number]> => {
+    BatchedMesh.prototype.onBeforeRender.call(b, null as never, null as never, camera, b.geometry, b.material as Material, null as never);
+    return entries(b);
+  };
+  /** Section `torusSlot(cx, cz)·24 + sy`. */
+  const sectionAt = (cx: number, cz: number, sy: number): number => torusSlot(cx, cz) * 24 + sy;
+  /** The culler showing walk 5, which stamped exactly `drawn`; every other section was last stamped by walk 0. */
+  const showOnly = (r: SectionRenderer, drawn: readonly number[]): void => {
+    r.culler.walk.stamp.fill(0);
+    for (const s of drawn) r.culler.walk.stamp[s] = 5;
+    r.culler.shown = 5;
+    r.culler.drawAll = false;
+  };
+  /** The section of a batch's instance, from its matrix (the section's offset in region (0, 0)). */
+  const sectionOfInstance = (b: BatchedMesh, instance: number): number => {
+    const p = new Vector3().setFromMatrixPosition(b.getMatrixAt(instance, new Matrix4()));
+    return sectionAt(p.x / 16, p.z / 16, p.y / 16);
+  };
+  /** Two columns of region (0, 0): opaque rows in sections 2, 4, 6 and 2, 4, 9, water rows at 4 and 2, a cutout row at 6. */
+  const twoColumns = (): SectionRenderer => {
+    const r = make();
+    r.stage(fakePayload(0, 0, [opaque(2), opaque(4, 2), water(4), opaque(6), { sy: 6, pass: 1, quads: 1 }]), 1);
+    r.stage(fakePayload(1, 0, [opaque(2, 3), water(2), opaque(4), opaque(9)]), 1);
+    pumpAll(r);
+    r.root.updateMatrixWorld(true);
+    return r;
+  };
+
+  test('on a fake batch the filter keeps exactly the drawn sections\' entries, in order, compacting starts, counts and the indirect ids in place and setting the count', () => {
+    // Six entries listing instances 4, 0, 3, 1, 5, 2 (three's order), each instance in its own section.
+    const sectionOf = Int32Array.of(30, 31, 32, 33, 34, 35);
+    const list: BatchDrawList = {
+      _multiDrawStarts: Int32Array.of(400, 0, 300, 100, 500, 200, 77),
+      _multiDrawCounts: Int32Array.of(14, 10, 13, 11, 15, 12, 77),
+      _multiDrawCount: 6,
+      _indirectTexture: { image: { data: Uint32Array.of(4, 0, 3, 1, 5, 2, 77) } },
+    };
+    const drawn = new Set([30, 33, 35]);
+    const seen: number[] = [];
+    cullDrawList(list, sectionOf, {
+      drawnAt: (s) => {
+        seen.push(s);
+        return drawn.has(s);
+      },
+    });
+    expect(list._multiDrawCount).toBe(3);
+    expect([...list._multiDrawStarts.subarray(0, 3)]).toEqual([0, 300, 500]);
+    expect([...list._multiDrawCounts.subarray(0, 3)]).toEqual([10, 13, 15]);
+    expect([...list._indirectTexture.image.data.subarray(0, 3)]).toEqual([0, 3, 5]);
+    // Each listed entry asked once, in order; nothing past the count read.
+    expect(seen).toEqual([34, 30, 33, 31, 35, 32]);
+    // Everything drawn: the list as it was; nothing drawn: an empty one.
+    const all: BatchDrawList = {
+      _multiDrawStarts: Int32Array.of(5, 6), _multiDrawCounts: Int32Array.of(7, 8), _multiDrawCount: 2,
+      _indirectTexture: { image: { data: Uint32Array.of(1, 0) } },
+    };
+    cullDrawList(all, sectionOf, { drawnAt: () => true });
+    expect([all._multiDrawCount, [...all._multiDrawStarts], [...all._multiDrawCounts], [...all._indirectTexture.image.data]]).toEqual([2, [5, 6], [7, 8], [1, 0]]);
+    cullDrawList(all, sectionOf, { drawnAt: () => false });
+    expect(all._multiDrawCount).toBe(0);
+  });
+
+  test('three r186\'s private fields: `_multiDrawStarts`, `_multiDrawCounts`, `_multiDrawCount`, `_indirectTexture` exist on a BatchedMesh (as `xrayBeforeRender` relies on them), re-made by setInstanceCount', () => {
+    expect(REVISION).toBe('186');
+    const b = new BatchedMesh(16, 3, 3);
+    const l = listOf(b);
+    expect(l._multiDrawStarts).toBeInstanceOf(Int32Array);
+    expect(l._multiDrawCounts).toBeInstanceOf(Int32Array);
+    expect(typeof l._multiDrawCount).toBe('number');
+    expect(l._indirectTexture.image.data).toBeInstanceOf(Uint32Array);
+    for (const a of [l._multiDrawStarts, l._multiDrawCounts, l._indirectTexture.image.data]) expect(a.length).toBeGreaterThanOrEqual(16);
+    // Re-made on an instance growth: the filter reads them from the batch on every call, never a kept reference.
+    const before = [l._multiDrawStarts, l._multiDrawCounts, l._indirectTexture.image.data];
+    b.setInstanceCount(64);
+    const after = [l._multiDrawStarts, l._multiDrawCounts, l._indirectTexture.image.data];
+    after.forEach((a, i) => {
+      expect(a).not.toBe(before[i]);
+      expect(a.length).toBeGreaterThanOrEqual(64);
+    });
+    b.dispose();
+  });
+
+  test('passes 0-2 list three\'s own entries filtered by the culler, in three\'s order; with `drawAll` set the list is three\'s own; the X-ray batch is never filtered', () => {
+    const r = twoColumns();
+    const terrain = [0, 1, 2].map((pass) => batchOf(r, pass)!);
+    const own = terrain.map(threes);
+    expect(own.map((e) => e.length)).toEqual([6, 1, 2]);
+    // Before any walk the culler draws everything (`drawAll`): three's own list.
+    expect(r.culler.drawAll).toBe(true);
+    terrain.forEach((b, k) => {
+      beforeRender(b);
+      expect(entries(b)).toEqual(own[k]);
+    });
+    // Sections (0, 4, 0) and (1, 2, 0) drawn: the opaque, cutout and water entries of those sections only, in order.
+    const drawn = [sectionAt(0, 0, 4), sectionAt(1, 0, 2)];
+    showOnly(r, drawn);
+    terrain.forEach((b, k) => {
+      beforeRender(b);
+      expect(entries(b)).toEqual(own[k]!.filter(([, , i]) => drawn.includes(sectionOfInstance(b, i))));
+    });
+    expect(terrain.map((b) => entries(b).length)).toEqual([2, 0, 2]);
+    // The X-ray batch's list is three's own whatever the culler holds.
+    r.setXray(true);
+    r.stage(fakePayload(0, 0, [opaque(2), { sy: 4, pass: 3, quads: 1 }, { sy: 6, pass: 3, quads: 2 }]), 2);
+    pumpAll(r);
+    const x = batchOf(r, MESH_PASS_XRAY)!;
+    x.updateMatrixWorld(true);
+    const xOwn = threes(x);
+    expect(xOwn).toHaveLength(2);
+    showOnly(r, []);
+    beforeRender(x);
+    expect(entries(x)).toEqual(xOwn);
+    r.dispose();
+  });
+
+  test('X-ray on: the count stays 0 whatever the culler holds', () => {
+    const r = twoColumns();
+    const terrain = [0, 1, 2].map((pass) => batchOf(r, pass)!);
+    r.setXray(true);
+    const cull = vi.spyOn(BatchedMesh.prototype, 'onBeforeRender');
+    for (const state of ['drawAll', 'some', 'none'] as const) {
+      if (state === 'drawAll') r.culler.drawAll = true;
+      else showOnly(r, state === 'some' ? [sectionAt(0, 0, 2), sectionAt(1, 0, 4)] : []);
+      for (const b of terrain) beforeRender(b);
+      expect(terrain.map((b) => listOf(b)._multiDrawCount), state).toEqual([0, 0, 0]);
+    }
+    // No per-instance pass and no compaction ran (D24).
+    expect(cull).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  test('the reveal state (`setVisibleAt`) is untouched by the filter, so R7\'s probe reads the same; an instance id past the first table (after `setInstanceCount`) is filtered by its own section', () => {
+    const r = twoColumns();
+    const terrain = [0, 1, 2].map((pass) => batchOf(r, pass)!);
+    const visibility = (): boolean[][] => terrain.map((b) => {
+      const info = (b as unknown as { _instanceInfo: Array<{ active: boolean }> })._instanceInfo;
+      return info.map((_, i) => info[i]!.active && b.getVisibleAt(i));
+    });
+    const shown = visibility();
+    const probe = r.probe(createRevealProbe());
+    const setVisible = vi.spyOn(BatchedMesh.prototype, 'setVisibleAt');
+    showOnly(r, [sectionAt(1, 0, 9)]);
+    for (const b of terrain) beforeRender(b);
+    expect(terrain.map((b) => listOf(b)._multiDrawCount)).toEqual([1, 0, 0]);
+    expect(setVisible).not.toHaveBeenCalled();
+    expect(visibility()).toEqual(shown);
+    expect(r.probe(createRevealProbe())).toEqual(probe);
+    expect(counts(r).columnsRevealed).toBe(2);
+    r.dispose();
+
+    // 1,537 opaque rows in one column: the 1,537th instance (id 1,536) waits for the growth of the instance table, and
+    // the section table grows with it.
+    const g = make();
+    g.stage(fakePayload(0, 0, big(1537, 1)), 1);
+    pumpAll(g);
+    const b = batchOf(g, 0)!;
+    expect(b.maxInstanceCount).toBe(2304);
+    g.root.updateMatrixWorld(true);
+    expect(threes(b)).toHaveLength(1537);
+    // Row k sits at sy k % 24 and is instance k: keeping section 0 keeps instances 0, 24, …, 1,536.
+    showOnly(g, [sectionAt(0, 0, 0)]);
+    beforeRender(b);
+    expect(entries(b).map(([, , i]) => i).sort((a, c) => a - c)).toEqual(Array.from({ length: 65 }, (_, k) => 24 * k));
+    g.dispose();
   });
 });
 

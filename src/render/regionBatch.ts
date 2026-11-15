@@ -1,5 +1,6 @@
 import { BatchedMesh, Box3, BufferAttribute, BufferGeometry, Group, Matrix4, Sphere, Vector3 } from 'three';
 import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, ROW_INTS, type ColumnMeshPayload } from '../mesh/column';
+import { torusSlot, type CaveCuller } from './culling/caveCulling';
 import type { MaterialSystem } from './materials/index';
 import {
   createStreamingRenderer, GROWTH, RESERVATION, rowBounds, rowIsEmpty, SECTION_UNITS, UNITS, type RegionBackend,
@@ -41,8 +42,14 @@ import { XRAY_ORDER } from './selection';
  * and the first toggle uploads nothing.
  *
  * SP6b (spec §7.4, D24): the opaque, cutout and translucent batches mirror them, drawing nothing while the X-ray is on
- * (`terrainBeforeRender`: a zero multi-draw count instead of three's cull and list), their rows still uploading; the
+ * (`terrainBeforeRenderOf`: a zero multi-draw count instead of three's cull and list), their rows still uploading; the
  * materials' vertex collapse stays as a second guard, and `rowVisible` reads neither.
+ *
+ * SP6b (spec §8.3, D22): cave culling filters those batches' draw lists. Each batch keeps `sectionOf`, per instance its
+ * section `torusSlot(cx, cz)·24 + sy` (written in `upload`, regrown with the instance table); with the X-ray off its
+ * `onBeforeRender` runs three's own (cull, sort, list), then `cullDrawList` drops the entries of sections the culler
+ * (`setCuller`, the staging's) does not draw, in place and in order, so the translucent sort holds. The reveal state
+ * (`setVisibleAt`) is never touched, so R7's probe and `rowVisible` read the same; draw calls do not change.
  */
 
 /** Instances a batch starts with: a mountain region holds up to 64 columns × 24 opaque rows. */
@@ -64,11 +71,51 @@ const REGION_XZ = 128;
 const REGION_Y = 384;
 
 const PASSES = [MESH_PASS_OPAQUE, MESH_PASS_CUTOUT, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY] as const;
+/** Sections per column: a section's index in the culler is `torusSlot(cx, cz)·24 + sy`. */
+const SECTIONS = 24;
+
+/**
+ * three r186's multi-draw list on a `BatchedMesh` (private fields, `BatchedMesh.js:272-283`, written by its
+ * `onBeforeRender`, `:1523-1684`; a unit test pins them): entry k draws `_multiDrawCounts[k]` indices from byte
+ * `_multiDrawStarts[k]` as instance `_indirectTexture.image.data[k]`, for k < `_multiDrawCount`.
+ */
+export interface BatchDrawList {
+  readonly _multiDrawStarts: Int32Array;
+  readonly _multiDrawCounts: Int32Array;
+  _multiDrawCount: number;
+  readonly _indirectTexture: { readonly image: { readonly data: Uint32Array } };
+}
+
+/**
+ * The cave-culling draw filter (SP6b spec §8.3): keeps entry k of `list` only if `culler.drawnAt(sectionOf[instance])`,
+ * compacting the starts, counts and indirect ids in place in their order, and sets the count. O(entries listed); writes
+ * the batch's own arrays only (no allocation).
+ */
+export function cullDrawList(list: BatchDrawList, sectionOf: Int32Array, culler: Pick<CaveCuller, 'drawnAt'>): void {
+  const n = list._multiDrawCount;
+  const starts = list._multiDrawStarts;
+  const counts = list._multiDrawCounts;
+  const indirect = list._indirectTexture.image.data;
+  let w = 0;
+  for (let k = 0; k < n; k++) {
+    const instance = indirect[k]!;
+    if (!culler.drawnAt(sectionOf[instance]!)) continue;
+    if (w !== k) {
+      starts[w] = starts[k]!;
+      counts[w] = counts[k]!;
+      indirect[w] = instance;
+    }
+    w++;
+  }
+  list._multiDrawCount = w;
+}
 
 interface BatchPass {
   readonly mesh: BatchedMesh;
   readonly rx: number;
   readonly rz: number;
+  /** Per instance id, its section `torusSlot(cx, cz)·24 + sy` (`maxInstanceCount` long, regrown with the table). */
+  sectionOf: Int32Array;
   /** The vertices and indices of the rows it holds. */
   liveVertices: number;
   liveIndices: number;
@@ -172,6 +219,8 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
   let shrinkNext: BatchPass | null = null;
   // The X-ray's state (`setXray`): off, the X-ray batches draw nothing.
   let xrayShown = false;
+  // The staging's cave culler (`setCuller`): null draws every listed entry.
+  let culler: CaveCuller | null = null;
   /** An X-ray batch's `onBeforeRender`: three's own (cull, list) while the X-ray is on, else a zero multi-draw count. */
   const xrayBeforeRender: BatchedMesh['onBeforeRender'] = function (this: BatchedMesh, renderer, scene, camera, geometry, material, group) {
     if (!xrayShown) {
@@ -182,16 +231,20 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
     BatchedMesh.prototype.onBeforeRender.call(this, renderer, scene, camera, geometry, material, group);
   };
   /**
-   * A terrain or water batch's `onBeforeRender` (SP6b spec §7.4, D24): the mirror of `xrayBeforeRender`, a zero
-   * multi-draw count while the X-ray is on (its rows keep uploading: the batch stays in the scene), three's own after.
+   * A terrain or water batch's `onBeforeRender` (SP6b spec §7.4, D24, §8.3): the mirror of `xrayBeforeRender`, a zero
+   * multi-draw count while the X-ray is on (its rows keep uploading: the batch stays in the scene; no compaction), else
+   * three's own, then the cave-culling filter over its list. three rebuilds the list on every call here (the batch is
+   * `perObjectFrustumCulled`), so a compacted list never carries over to the next frame. One per batch (its `sectionOf`).
    */
-  const terrainBeforeRender: BatchedMesh['onBeforeRender'] = function (this: BatchedMesh, renderer, scene, camera, geometry, material, group) {
-    if (xrayShown) {
-      (this as unknown as { _multiDrawCount: number })._multiDrawCount = 0;
-      return;
-    }
-    BatchedMesh.prototype.onBeforeRender.call(this, renderer, scene, camera, geometry, material, group);
-  };
+  const terrainBeforeRenderOf = (bp: BatchPass): BatchedMesh['onBeforeRender'] =>
+    function (this: BatchedMesh, renderer, scene, camera, geometry, material, group) {
+      if (xrayShown) {
+        (this as unknown as { _multiDrawCount: number })._multiDrawCount = 0;
+        return;
+      }
+      BatchedMesh.prototype.onBeforeRender.call(this, renderer, scene, camera, geometry, material, group);
+      if (culler !== null) cullDrawList(this as unknown as BatchDrawList, bp.sectionOf, culler);
+    };
 
   const place = (bp: BatchPass): void => {
     bp.mesh.position.set(bp.rx * REGION_XZ - origin[0]!, -64 - origin[1]!, bp.rz * REGION_XZ - origin[2]!);
@@ -290,22 +343,30 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
           mesh.perObjectFrustumCulled = true;
           // The X-ray's additive, depth-test-free blend needs no order (SP6a spec §5.2); every other batch sorts.
           mesh.sortObjects = pass !== MESH_PASS_XRAY;
+          mesh.boundingSphere = new Sphere(new Vector3(REGION_XZ / 2, REGION_Y / 2, REGION_XZ / 2), Math.hypot(REGION_XZ / 2, REGION_Y / 2, REGION_XZ / 2));
+          mesh.boundingBox = new Box3(new Vector3(0, 0, 0), new Vector3(REGION_XZ, REGION_Y, REGION_XZ));
+          bp = {
+            mesh, rx: region.rx, rz: region.rz, sectionOf: new Int32Array(INSTANCES), liveVertices: 0, liveIndices: 0,
+            unculled: false, lastWrite: pumpNo,
+          };
           if (pass === MESH_PASS_XRAY) {
             mesh.renderOrder = XRAY_ORDER;
             mesh.onBeforeRender = xrayBeforeRender;
-          } else mesh.onBeforeRender = terrainBeforeRender;
-          mesh.boundingSphere = new Sphere(new Vector3(REGION_XZ / 2, REGION_Y / 2, REGION_XZ / 2), Math.hypot(REGION_XZ / 2, REGION_Y / 2, REGION_XZ / 2));
-          mesh.boundingBox = new Box3(new Vector3(0, 0, 0), new Vector3(REGION_XZ, REGION_Y, REGION_XZ));
-          bp = { mesh, rx: region.rx, rz: region.rz, liveVertices: 0, liveIndices: 0, unculled: false, lastWrite: pumpNo };
+          } else mesh.onBeforeRender = terrainBeforeRenderOf(bp);
           region.data.passes[pass] = bp;
           objects.push(bp);
           place(bp);
           root.add(mesh);
           break;
         }
-        case 'instances':
+        case 'instances': {
           bp!.mesh.setInstanceCount(Math.ceil(bp!.mesh.maxInstanceCount * GROWTH));
+          // The section table follows the instance table (ids are kept).
+          const sectionOf = new Int32Array(bp!.mesh.maxInstanceCount);
+          sectionOf.set(bp!.sectionOf);
+          bp!.sectionOf = sectionOf;
           break;
+        }
         case 'grow': {
           const mesh = bp!.mesh;
           const g = mesh.geometry;
@@ -340,6 +401,7 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
       matrix.setPosition((c.cx & 7) * SECTION_BLOCKS, c.p.rows[o]! * SECTION_BLOCKS, (c.cz & 7) * SECTION_BLOCKS);
       mesh.setMatrixAt(instance, matrix);
       mesh.setVisibleAt(instance, false);
+      bp.sectionOf[instance] = torusSlot(c.cx, c.cz) * SECTIONS + c.p.rows[o]!;
       c.ids[2 * r] = geometryId;
       c.ids[2 * r + 1] = instance;
       bp.liveVertices += c.p.rows[o + 3]!;
@@ -453,6 +515,9 @@ export function createRegionBatch(materials: MaterialSystem): SectionRenderer {
     },
     setXray(on) {
       xrayShown = on;
+    },
+    setCuller(c) {
+      culler = c;
     },
     sortTranslucent() {
       // BatchedMesh sorts its translucent instances itself (sortObjects).

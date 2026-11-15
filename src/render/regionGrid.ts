@@ -1,6 +1,7 @@
 import { Box3, Vector3, type Group, type Mesh, type Sphere } from 'three';
 import { STAGE_BONUS, streamScore } from '../core/streamScore';
 import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, ROW_INTS, type ColumnMeshPayload } from '../mesh/column';
+import { createCaveCuller, type CaveCuller } from './culling/caveCulling';
 import type {
   RevealProbe, SectionRenderer, SectionRendererCounts, SectionRendererKind, StructuralKind, UploadGate,
 } from './sectionRenderer';
@@ -217,6 +218,11 @@ export interface RegionBackend<R> {
    * skips, Task 52c).
    */
   setXray?(on: boolean): void;
+  /**
+   * The staging's cave culler (SP6b spec §8.1), handed over once at creation: RegionBatch filters its terrain batches'
+   * draw lists by it (§8.3); null detaches it.
+   */
+  setCuller?(c: CaveCuller | null): void;
   sortTranslucent(camX: number, camY: number, camZ: number): void;
   gpuBytes(): number;
 }
@@ -250,6 +256,13 @@ export const RELEASE_SHARE = 16;
  * column stays revealed (the counts' `revealed` does not change) and `prev`'s rows stay drawn until step (5) swaps;
  * `prev` then joins the release queue as a removal's rows do. A replacement with no non-empty row swaps in the `stage`
  * call. `unstage` retires a pending record and makes its `prev`, if any, the live record again; `remove` retires both.
+ *
+ * Cave culling (SP6b spec §8.1-§8.3): the staging owns a `CaveCuller` (`culler`), handed to the backend, and feeds it
+ * each shown column's 24 `connectivity15` values (`p.connectivity`): on a reveal (step 5) and on a swap (`swapIn`, the
+ * stage call's included). A retire reaches it only when no shown record remains for the key (a retired record that was
+ * revealed: `remove`'s), never for a pending record whose `prev` still shows (`stage`'s replacement, `unstage`; ruling
+ * P44). `holdReveals(true)` holds it and `revealAll` releases it (ruling P45); `setXray` and the bench's `setCulling`
+ * reach it. `onColumnRevealed` stays the bench's and the edit-latency probe's.
  */
 export function createStreamingRenderer<R>(
   kind: SectionRendererKind,
@@ -274,6 +287,8 @@ export function createStreamingRenderer<R>(
   let lastStructural: StructuralKind | null = null;
   let lastStructuralBytes = 0;
   let stamp = 0;
+  const culler = createCaveCuller();
+  b.setCuller?.(culler);
 
   const regionFor = (cx: number, cz: number): StagingRegion<R> => {
     const rx = cx >> 3;
@@ -338,10 +353,15 @@ export function createStreamingRenderer<R>(
     if (c.released < c.uploaded) removing.push(c);
   };
 
-  /** A detached column: hidden at once, its held rows queued for release. */
+  /**
+   * A detached column: hidden at once, its held rows queued for release; a shown record leaves the culler (the column
+   * shows nothing more: a pending record's retire leaves its shown `prev`'s connectivity in force).
+   */
   const retire = (c: StagedColumn<R>): void => {
+    const shown = c.revealed;
     b.hide(c);
     queueRelease(c);
+    if (shown) culler.onRetire(c.key, c.cx, c.cz);
   };
 
   /** The swap of a live record whose every row is uploaded: `prev` hidden and `c` shown in one call, `prev` released. */
@@ -351,6 +371,7 @@ export function createStreamingRenderer<R>(
     b.swap(prev, c);
     c.revealed = true;
     queueRelease(prev);
+    culler.onSwap(c.key, c.cx, c.cz, c.p.connectivity);
   };
 
   const nearest = (): StagedColumn<R> | null => {
@@ -429,6 +450,7 @@ export function createStreamingRenderer<R>(
   const self: SectionRenderer = {
     kind,
     root,
+    culler,
     onColumnRevealed: null,
     stage(p, seq) {
       const key = columnKey(p.cx, p.cz);
@@ -573,6 +595,7 @@ export function createStreamingRenderer<R>(
           c.revealed = true;
           revealed++;
           b.reveal(c);
+          culler.onReveal(c.key, c.cx, c.cz, c.p.connectivity);
         }
       }
       const hook = self.onColumnRevealed;
@@ -581,10 +604,13 @@ export function createStreamingRenderer<R>(
       return spent;
     },
     holdReveals(hold) {
-      if (hold) root.visible = false;
+      if (!hold) return;
+      root.visible = false;
+      culler.setHold(true);
     },
     revealAll() {
       root.visible = true;
+      culler.setHold(false);
     },
     addStandIns() {
       const made: Array<{ readonly object: Mesh; dispose(): void }> = [];
@@ -610,7 +636,11 @@ export function createStreamingRenderer<R>(
       b.setOrigin(x, y, z);
     },
     setXray(on) {
+      culler.setXray(on);
       b.setXray?.(on);
+    },
+    setCulling(on) {
+      culler.enabled = on;
     },
     sortTranslucent(camX, camY, camZ) {
       b.sortTranslucent(camX, camY, camZ);

@@ -44,7 +44,7 @@
  * the frame-step tests (rulings R7: the file stays under 25 s under the full suite's load).
  */
 import v8 from 'node:v8';
-import { Color, PerspectiveCamera, type Material, type Mesh } from 'three';
+import { BatchedMesh, Color, PerspectiveCamera, type Camera, type Material, type Mesh } from 'three';
 import { afterAll, describe, expect, test, vi } from 'vitest';
 import { colKey } from '../../src/core/coords';
 import { hex64 } from '../../src/core/hash';
@@ -65,7 +65,9 @@ import { firstOrigin } from '../../src/render/floatingOrigin';
 import { createFpsLimiter } from '../../src/render/fpsLimiter';
 import { createGhost, type Ghost } from '../../src/render/ghost';
 import { createMaterialSystem } from '../../src/render/materials/index';
-import { createXrayControl, gpuEstimateOf, XRAY_CLEAR, type GpuEstimate, type WorldRenderer } from '../../src/render/renderer';
+import {
+  applyRenderDistance, createCullStep, createXrayControl, gpuEstimateOf, XRAY_CLEAR, type GpuEstimate, type WorldRenderer,
+} from '../../src/render/renderer';
 import { createSectionRenderer, createSectionRendererCounts } from '../../src/render/sectionRenderer';
 import { REFUSED_RED, SELECTION_YELLOW, createSelection, createVolumeBox, type Selection } from '../../src/render/selection';
 import { createSky } from '../../src/render/sky';
@@ -281,6 +283,11 @@ interface AtRest {
   setNightVision(on: boolean): void;
   /** The X-ray's uniforms (SP6b's colour mode included), the sky dome's visibility, the clear colour and the strip's element. */
   xrayState(): { on: number; yMin: number; yMax: number; mode: number; sky: boolean; clear: number; strip: ReturnType<ReturnType<typeof installDom>['el']> };
+  /**
+   * The frame's render step as a test wants it (null: none, as `renderer.render` is outside Node): called by `frame` after
+   * the cave culler's step (SP6b's culling test lists its batches there, as three's `renderObject` does).
+   */
+  setRender(fn: (() => void) | null): void;
 }
 
 /**
@@ -290,7 +297,7 @@ interface AtRest {
  * Published (the eye light is a real `lightAt` read) over a stone floor at y 99, the FPS limiter at 144 on 144 Hz
  * ticks, the slow-frame notice, frame stats, the fog easing, the throttle and the upload budget; SP5a's additions
  * (`sp5a`) once a test switches them on. `frame` is `WorldRenderer.frame` minus `renderer.render` (no GL context in
- * Node): the translucent sort and the frame uniforms. Warmed up with `FRAME_WARM_UP` ticks, which also warms the
+ * Node): the cave culler's step (SP6b, on a stepped clock), the translucent sort and the frame uniforms. Warmed up with `FRAME_WARM_UP` ticks, which also warms the
  * coordinator's `update` and `counts`.
  */
 async function buildAtRest(): Promise<AtRest> {
@@ -318,14 +325,26 @@ async function buildAtRest(): Promise<AtRest> {
     },
   };
   const xrayControl = createXrayControl(materials, sky, clear as never, sections);
+  // The load's RD reaches the cave culler (SP6b spec §8.2), as `createWorldRenderer` applies it.
+  applyRenderDistance(camera, 12, sections.culler);
+  // The cave culler's clock (SP6b spec §8.2): Node's `performance.now()` allocates on each call (the upload budget's note
+  // below), so the boxed timestamps of this and the next ticks, one per call within a tick (`cullPolls`, reset by
+  // `tick`): the frame's time, the slice's start, then a poll 6.9 ms on, past the 0.5 ms slice, so a walk runs 256 pops a
+  // frame, sliced over frames.
+  let cullPolls = 0;
+  const cull = createCullStep(sections.culler, origin, camera, () => times[ticks + cullPolls++]!);
+  let render: (() => void) | null = null;
   const world: FrameStepDeps['world'] = {
     origin,
     camera,
     sections,
     frame(state) {
+      // `WorldRenderer.frame`: the cave culler's step before the draw (SP6b spec §8.2).
+      cull();
       sections.sortTranslucent(camera.position.x, camera.position.y, camera.position.z);
       materials.setFrameUniforms(state);
       xrayControl.syncRadius();
+      if (render !== null) render();
     },
   };
 
@@ -347,7 +366,8 @@ async function buildAtRest(): Promise<AtRest> {
   // timestamps for the warm-ups and each frame-step test's attempts.
   // SP5a's two tests warm up again and measure on their own (`sp5a`); so do SP5c's tool tests (the box, the ghost).
   // SP6a's X-ray test and its night-vision test warm up and measure on their own too.
-  const times = boxedTimes(1000 / 144, FRAME_WARM_UP + SHOWN_WARM_UP + 6 * FRAME_WARM_UP + 4 * ATTEMPTS * ATTEMPTS * N);
+  // SP6b's culling test warms up and measures on its own too (and a few polls past the last tick: `cullPolls`).
+  const times = boxedTimes(1000 / 144, FRAME_WARM_UP + SHOWN_WARM_UP + 7 * FRAME_WARM_UP + 5 * ATTEMPTS * ATTEMPTS * N + 1000);
   let ticks = 0;
   // The budget's clock is the tick's timestamp: Node's `performance.now()` allocates on each call (88 B measured),
   // the browser's does not concern this code.
@@ -589,12 +609,14 @@ async function buildAtRest(): Promise<AtRest> {
   const t0 = state.t;
   const tick = (): void => {
     clockNow = times[ticks++]!;
+    cullPolls = 0;
     step.tick(clockNow);
   };
   for (let i = 0; i < FRAME_WARM_UP; i++) tick();
   return {
     fly, coordinator, counts, tick, state, t0, sections, overlay, applied,
     xray: pageXray,
+    setRender(fn) { render = fn; },
     setNightVision(on) { nightVision = on; },
     xrayState: () => ({
       on: materials.xray.uniforms['xrayOn']!.value as number,
@@ -1099,6 +1121,95 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
       for (let i = 0; i < 100; i++) f.tick();
     }
     expect(f.state.nightVision).toBe(0);
+  }, TIMEOUT_MS);
+
+  test(`${N} frame steps at rest with culling on, walking and filtering, grow the heap by less than the boxing budget of 256 B per tick (SP6b §8.1, §8.3)`, async () => {
+    const f = await atRest();
+    const sections = f.sections;
+    const c = sections.culler;
+    // 5 × 5 columns around the camera's (0, 0), closed but for an open slab at sy 9-11 (the camera's section is sy 10),
+    // each with opaque rows at sy 10 and 2 and a water row at sy 10, in four regions: every walk floods the slab and the
+    // open (unrevealed) disc beyond, and never reaches sy 2 of these columns.
+    const cols: Array<[number, number]> = [];
+    for (let cz = -2; cz <= 2; cz++) for (let cx = -2; cx <= 2; cx++) cols.push([cx, cz]);
+    for (const [cx, cz] of cols) {
+      const p = fakePayload(cx, cz, [{ sy: 10, pass: 0, quads: 1 }, { sy: 2, pass: 0, quads: 1 }, { sy: 10, pass: 2, quads: 1 }]);
+      for (let sy = 9; sy <= 11; sy++) p.connectivity[sy] = 0x7fff;
+      sections.stage(p, 1);
+    }
+    const unbounded = { exhausted: () => false, spend() {}, structural: () => true };
+    for (let i = 0; i < 100 && sections.pump(unbounded, 0, 0, 0) > 0; i++);
+    const terrain = sections.root.children.filter((o) => o.userData['pass'] === 0 || o.userData['pass'] === 2) as BatchedMesh[];
+    expect(terrain).toHaveLength(8);
+    sections.root.updateMatrixWorld(true);
+    // The render step: three's `renderObject` calls each batch's `onBeforeRender` (three's own list, then the filter), from a
+    // camera above the columns that sees every row.
+    const view = new PerspectiveCamera(90, 1, 0.1, 10_000);
+    view.position.set(8, 600, 8);
+    view.lookAt(8, 0, 8);
+    view.updateMatrixWorld();
+    const listAll = (cam: Camera): void => {
+      for (let i = 0; i < terrain.length; i++) {
+        const b = terrain[i]!;
+        b.onBeforeRender(null as never, null as never, cam, b.geometry, b.material as Material, null as never);
+      }
+    };
+    type List = { _multiDrawStarts: Int32Array; _multiDrawCounts: Int32Array; _multiDrawCount: number; _indirectTexture: { image: { data: Uint32Array } } };
+    const listed = (): number => terrain.reduce((n, b) => n + (b as unknown as List)._multiDrawCount, 0);
+    // three's own list, recorded once per batch and replayed into its arrays in the measured frames: three builds it with
+    // an `Array.prototype.sort` and a render list that V8 reallocates each frame (about 10.7 KB a tick over these 8
+    // batches, three's code like `renderer.render`, which the fixture leaves out), so the filter is measured on its own.
+    const own = BatchedMesh.prototype.onBeforeRender;
+    const recorded = new Map<BatchedMesh, { starts: Int32Array; counts: Int32Array; ids: Uint32Array; n: number }>();
+    for (const b of terrain) {
+      own.call(b, null as never, null as never, view, b.geometry, b.material as Material, null as never);
+      const l = b as unknown as List;
+      recorded.set(b, {
+        starts: l._multiDrawStarts.slice(), counts: l._multiDrawCounts.slice(), ids: l._indirectTexture.image.data.slice(),
+        n: l._multiDrawCount,
+      });
+    }
+    expect(listed()).toBe(75);
+    BatchedMesh.prototype.onBeforeRender = function (this: BatchedMesh) {
+      const rec = recorded.get(this)!;
+      const l = this as unknown as List;
+      l._multiDrawStarts.set(rec.starts);
+      l._multiDrawCounts.set(rec.counts);
+      l._indirectTexture.image.data.set(rec.ids);
+      l._multiDrawCount = rec.n;
+    };
+    f.setRender(() => listAll(view));
+    // A walk owed every tick (the range toggled 12 ↔ 13): the next starts as soon as one completes.
+    let k = 0;
+    const tick = (): void => {
+      c.setRadius(12 + (k++ & 1));
+      f.tick();
+    };
+    try {
+      for (let i = 0; i < FRAME_WARM_UP; i++) tick();
+      expect(c.drawAll).toBe(false);
+      const walks = c.walk.walkId;
+      const before = f.stats();
+      const g = allocationOver(tick, 0, FRAME_STEP_ALLOC_MAX);
+      expectAtRest(g, FRAME_STEP_ALLOC_MAX);
+      expectSp4cAtRest(f);
+      expect(f.stats().rendered - before.rendered).toBe(g.calls);
+      // Walking: walks completed, each sliced over several frames.
+      const walked = c.walk.walkId - walks;
+      expect(walked).toBeGreaterThan(1);
+      expect(walked).toBeLessThan(g.calls / 4);
+      // Filtering: the 25 rows at sy 2 dropped from three's 75 entries (the real list again).
+      BatchedMesh.prototype.onBeforeRender = own;
+      listAll(view);
+      expect(listed()).toBe(50);
+    } finally {
+      BatchedMesh.prototype.onBeforeRender = own;
+      f.setRender(null);
+      for (const [cx, cz] of cols) sections.remove(cx, cz);
+      c.setRadius(12);
+      for (let i = 0; i < 200; i++) f.tick();
+    }
+    expect(sections.counts(createSectionRendererCounts())).toMatchObject({ columnsStaged: 0, columnsRemoving: 0, regions: 0 });
   }, TIMEOUT_MS);
 
   test(`${N} toggles of X at a fixed band grow the heap by less than 256 KB (SP6a spec §5.3: a toggle writes uniforms and the clear colour only)`, async () => {

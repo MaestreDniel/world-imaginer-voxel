@@ -6,12 +6,13 @@ import { readFileSync } from 'node:fs';
 import v8 from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import { WebGLRenderList } from 'three/src/renderers/webgl/WebGLRenderLists.js';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY } from '../../src/mesh/column';
+import { createCaveCuller, torusSlot } from '../../src/render/culling/caveCulling';
 import type { Ghost } from '../../src/render/ghost';
 import { createMaterialSystem } from '../../src/render/materials/index';
 import {
-  NEAR_FLY, NEAR_WALK, XRAY_CLEAR, applyNear, applyRenderDistance, compileScene, compileWorldScene, createGpuTimer,
+  CULL_SLICE_MS, NEAR_FLY, NEAR_WALK, XRAY_CLEAR, applyNear, applyRenderDistance, compileScene, compileWorldScene, createCullStep, createGpuTimer,
   createWorldScene, createXrayControl, createXrayDrawCounter, gpuEstimateOf, opaquePassSort, toolDrawCallsOf, withRegionsUnculled,
   withSectionsShown, type GpuEstimate,
 } from '../../src/render/renderer';
@@ -742,6 +743,69 @@ describe('applyRenderDistance (SP4b spec §5)', () => {
     expect(camera.far).toBe(288);
     const expected = new PerspectiveCamera(70, 16 / 9, 0.1, 288);
     expect(camera.projectionMatrix.elements).toEqual(expected.projectionMatrix.elements);
+  });
+});
+
+describe('cave culling in the renderer\'s frame step (SP6b spec §8.2)', () => {
+  const RENDERER_SRC = new URL('../../src/render/renderer.ts', import.meta.url);
+
+  test('applyRenderDistance(camera, rd, culler) reaches culler.setRadius(rd): a real culler walks a column 3 away at RD 3, not at RD 2; createWorldRenderer applies the load\'s RD at creation and every setRenderDistance (no GL context in Node: the source)', () => {
+    const camera = new PerspectiveCamera(70, 16 / 9, 0.1, 336);
+    const radii: number[] = [];
+    applyRenderDistance(camera, 10, { setRadius: (rd) => radii.push(rd) });
+    expect([radii, camera.far]).toEqual([[10], 288]);
+    // Section (3, 4, 0) lies 3 columns from the camera's (0, 4, 0), every column open (none revealed).
+    const reached = (rd: number): boolean => {
+      const c = createCaveCuller();
+      applyRenderDistance(camera, rd, c);
+      c.setCamera(8, 8, 8);
+      c.frame(0, Number.POSITIVE_INFINITY, null, 0);
+      expect([c.walk.walkId, c.walk.running]).toEqual([1, false]);
+      return c.walk.stamp[torusSlot(3, 0) * 24 + 4] === 1;
+    };
+    expect([reached(2), reached(3)]).toEqual([false, true]);
+    const src = readFileSync(RENDERER_SRC, 'utf8');
+    expect(src).toContain('  applyRenderDistance(camera, o.rd, sections.culler);');
+    expect(src).toContain('    setRenderDistance(rd) {\n      applyRenderDistance(camera, rd, sections.culler);\n    },');
+  });
+
+  test('the frame step\'s clock polls without throwing: the cull step gives the culler the camera\'s world position (origin + camera.position), again only when it moved, and slices its walk on `performance.now`, called bound; `performance.now` passed unbound throws when the slice polls', () => {
+    expect(CULL_SLICE_MS).toBe(0.5);
+    const c = createCaveCuller();
+    c.setRadius(4);
+    const camera = new PerspectiveCamera();
+    camera.position.set(8.5, 40.25, -7.5);
+    const origin = { x: 512, y: 0, z: -1024 };
+    const setCamera = vi.spyOn(c, 'setCamera');
+    const frame = vi.spyOn(c, 'frame');
+    const step = createCullStep(c, origin, camera);
+    const now = vi.spyOn(performance, 'now');
+    try {
+      expect(() => step()).not.toThrow();
+      // The frame's time, the slice's start and at least one poll after 256 pops (the walk reaches about 1,200 sections).
+      expect(now.mock.calls.length).toBeGreaterThanOrEqual(3);
+    } finally {
+      now.mockRestore();
+    }
+    expect(setCamera.mock.calls).toEqual([[520.5, 40.25, -1031.5]]);
+    expect(frame.mock.calls[0]!.slice(1)).toEqual([Number.POSITIVE_INFINITY, expect.any(Function), 0.5]);
+    expect(c.walk.walkId).toBe(1);
+    // At rest the culler's frame still runs, with no new camera; a move (the camera, or a rebase of the origin) gives it.
+    step();
+    expect([setCamera.mock.calls.length, frame.mock.calls.length]).toEqual([1, 2]);
+    camera.position.y = 41;
+    step();
+    origin.x = 0;
+    step();
+    expect(setCamera.mock.calls.slice(1)).toEqual([[520.5, 41, -1031.5], [8.5, 41, -1031.5]]);
+    expect(() => createCullStep(createCaveCuller(), origin, camera, performance.now)()).toThrow(TypeError);
+    // The page's frame runs it before the draw on the module's one clock; warmUp holds the culler (everything drawn) and
+    // keeps the hold while the reveals are held (no GL context in Node: the source).
+    const src = readFileSync(RENDERER_SRC, 'utf8');
+    expect(src).toContain('\nconst NOW = (): number => performance.now();\n');
+    expect(src).toContain('  const cull = createCullStep(sections.culler, origin, camera);\n');
+    expect(src).toContain('    frame(state) {\n      cull();\n      draw(state);\n    },');
+    expect(src).toContain('      sections.culler.setHold(true);\n      try {\n        withSectionsShown(sections.root, () => withRegionsUnculled(sections.root, () => draw(state)));\n      } finally {\n        sections.culler.setHold(!sections.root.visible);\n      }');
   });
 });
 

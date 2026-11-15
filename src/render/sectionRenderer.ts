@@ -1,5 +1,6 @@
 import type { Group } from 'three';
 import type { ColumnMeshPayload } from '../mesh/column';
+import type { CaveCuller } from './culling/caveCulling';
 import type { MaterialSystem } from './materials/index';
 import { createRegionBatch } from './regionBatch';
 import { createRegionMesh } from './regionMesh';
@@ -94,6 +95,12 @@ export interface SectionRenderer {
   /** Holds every region object; hidden by `holdReveals(true)` until `revealAll` (the first entry, SP4b spec §3.11). */
   readonly root: Group;
   /**
+   * The cave culler the staging owns and feeds (SP6b spec §8.1): the renderer's frame step gives it the camera and its
+   * walk's slice, `setRenderDistance` its range and `warmUp` its hold. RegionBatch filters its terrain batches' draw
+   * lists by it (§8.3).
+   */
+  readonly culler: CaveCuller;
+  /**
    * Queues a column's payload with the coordinator's `meshSeq` (SP4c spec §5.1, D9). On a revealed column it stages a
    * replacement whose `prev` is the shown payload: `prev` stays visible and counted in its region while the new rows
    * upload hidden, and the pump that uploads the last of them hides `prev` and shows them in one call (the swap), then
@@ -121,9 +128,9 @@ export interface SectionRenderer {
    * whose last row it uploaded (a replacement swaps with its `prev`). Returns the rows spent (released and uploaded).
    */
   pump(gate: UploadGate, cx: number, cz: number, yawDeg: number): number;
-  /** `true` hides the root: complete columns are revealed inside it, and `revealAll` shows it. */
+  /** `true` hides the root and holds the culler: complete columns are revealed inside it, and `revealAll` shows it. */
   holdReveals(hold: boolean): void;
-  /** Shows the root, in this one call. */
+  /** Shows the root and releases the culler's hold, in this one call. */
   revealAll(): void;
   /**
    * Whether column (cx, cz) shows: revealed, with the root visible (the fog's filled radius, SP4b spec §5); true through
@@ -145,9 +152,12 @@ export interface SectionRenderer {
    * off the X-ray objects draw nothing. RegionBatch's batches do it through a zero multi-draw count (no per-instance
    * cull or list); they stay visible, so three keeps uploading their rows and the first toggle uploads nothing.
    * RegionMesh's arenas are made invisible, so three skips them (no draw call); their rows are uploaded the first frame
-   * they are shown again. Changes no count, byte, reveal or probe; allocates nothing.
+   * they are shown again. Changes no count, byte, reveal or probe; allocates nothing. The culler walks nothing while it
+   * is on (SP6b spec §8.2).
    */
   setXray(on: boolean): void;
+  /** The bench's switch for cave culling (SP6b spec §8): off, everything draws and the culler walks nothing. */
+  setCulling(on: boolean): void;
   /**
    * Orders translucent geometry back to front from the camera at (camX, camY, camZ), given in the frame of
    * `camera.position`, that is relative to the current floating origin (ruling P17). A no-op on RegionBatch, where

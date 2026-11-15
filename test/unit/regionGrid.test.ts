@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
-import { Box3, Group, Sphere, type BatchedMesh, type Material, type Mesh, type Object3D } from 'three';
+import { BatchedMesh, Box3, Group, Matrix4, PerspectiveCamera, Sphere, Vector3, type Material, type Mesh, type Object3D } from 'three';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { MESH_PASS_CUTOUT, MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, ROW_INTS, type ColumnMeshPayload } from '../../src/mesh/column';
+import { torusSlot } from '../../src/render/culling/caveCulling';
 import { createMaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
 import { BATCH_GROWTH } from '../../src/render/regionBatch';
 import {
@@ -566,4 +567,233 @@ describe('regionGrid: the staging reservations kept, growth on demand over the c
       r.dispose();
     });
   }
+});
+
+describe('regionGrid: cave culling over the staging (SP6b spec §8.1-§8.3)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const ROWS2 = [{ sy: 1, pass: 0 as const, quads: 1 }, { sy: 2, pass: 0 as const, quads: 1 }];
+  const ROWS3 = [...ROWS2, { sy: 3, pass: 2 as const, quads: 1 }];
+  /** `p` with its 24 `connectivity15` values set from `conn(sy)`. */
+  const withConn = (p: ColumnMeshPayload, conn: (sy: number) => number): ColumnMeshPayload => {
+    for (let sy = 0; sy < 24; sy++) p.connectivity[sy] = conn(sy);
+    return p;
+  };
+  /** The culler's slot for column (cx, cz): its owning key and its 24 values. */
+  const held = (r: SectionRenderer, cx: number, cz: number): { key: number; conn: number[] } => {
+    const slot = torusSlot(cx, cz);
+    return { key: r.culler.walk.slotKey[slot]!, conn: [...r.culler.walk.conn.subarray(slot * 24, slot * 24 + 24)] };
+  };
+
+  test('the staging hands its culler to the backend once; reveals, swaps and retires reach it with the payload\'s 24 values, and a record never shown does not', () => {
+    const { backend } = recordingBackend();
+    const setCuller = vi.fn();
+    backend.setCuller = setCuller;
+    const r = createStreamingRenderer('batch', new Group(), backend);
+    expect(setCuller.mock.calls).toEqual([[r.culler]]);
+    const spy = { reveal: vi.spyOn(r.culler, 'onReveal'), swap: vi.spyOn(r.culler, 'onSwap'), retire: vi.spyOn(r.culler, 'onRetire') };
+    const p1 = withConn(fakePayload(3, -2, ROWS2), (sy) => 0x100 + sy);
+    r.stage(p1, 1);
+    expect(spy.reveal).not.toHaveBeenCalled();
+    pumpAll(r, 3, -2);
+    // The reveal (pump step 5): the payload's own array, copied into the column's slot.
+    expect(spy.reveal.mock.calls).toEqual([[expect.any(Number), 3, -2, p1.connectivity]]);
+    const key = spy.reveal.mock.calls[0]![0];
+    expect(held(r, 3, -2)).toEqual({ key, conn: [...p1.connectivity] });
+    // A replacement: the shown values stay until its swap, then the replacement's.
+    const p2 = withConn(fakePayload(3, -2, ROWS3), (sy) => 0x200 + sy);
+    r.stage(p2, 2);
+    r.pump(fakeGate(1), 3, -2, 0);
+    expect(held(r, 3, -2).conn).toEqual([...p1.connectivity]);
+    pumpAll(r, 3, -2);
+    expect(spy.swap.mock.calls).toEqual([[key, 3, -2, p2.connectivity]]);
+    expect(held(r, 3, -2).conn).toEqual([...p2.connectivity]);
+    // A replacement with no non-empty row swaps in the stage call.
+    const p3 = withConn(fakePayload(3, -2, []), (sy) => 0x300 + sy);
+    r.stage(p3, 3);
+    expect(spy.swap).toHaveBeenCalledTimes(2);
+    expect(held(r, 3, -2).conn).toEqual([...p3.connectivity]);
+    expect(spy.retire).not.toHaveBeenCalled();
+    // Remove: the slot dropped, its sections open again.
+    r.remove(3, -2);
+    expect(spy.retire.mock.calls).toEqual([[key, 3, -2]]);
+    expect(held(r, 3, -2)).toEqual({ key: Number.NaN, conn: Array<number>(24).fill(0x7fff) });
+    // A remove during a swap retires the shown record once; a column never shown reaches neither the reveal nor a retire.
+    r.stage(withConn(fakePayload(4, 4, ROWS2), () => 0x7fff), 1);
+    pumpAll(r, 4, 4);
+    r.stage(fakePayload(4, 4, ROWS3), 2);
+    r.pump(fakeGate(1), 4, 4, 0);
+    r.stage(fakePayload(9, 9, ROWS2), 1);
+    r.pump(fakeGate(1), 9, 9, 0);
+    spy.retire.mockClear();
+    spy.reveal.mockClear();
+    r.remove(4, 4);
+    r.remove(9, 9);
+    pumpAll(r);
+    expect(spy.retire.mock.calls).toEqual([[expect.any(Number), 4, 4]]);
+    expect(spy.reveal).not.toHaveBeenCalled();
+    expect(Number.isNaN(held(r, 4, 4).key)).toBe(true);
+  });
+
+  test('a column whose pending replacement is replaced twice before its swap, with a new conn that adds no bit to the shown one, leaves drawAll unset at the swap; after unstage the culler still holds the shown prev\'s conn (ruling P44)', () => {
+    const { backend } = recordingBackend();
+    const r = createStreamingRenderer('batch', new Group(), backend);
+    const c = r.culler;
+    r.stage(withConn(fakePayload(0, 0, ROWS3), () => 0x0f0f), 1);
+    pumpAll(r);
+    // A completed walk around section (0, 4, 0) covers the camera: culling in force.
+    c.setRadius(1);
+    c.setCamera(8, 8, 8);
+    c.frame(0, Number.POSITIVE_INFINITY, null, 0);
+    expect([c.drawAll, c.walk.running]).toEqual([false, false]);
+    const retire = vi.spyOn(c, 'onRetire');
+    r.stage(withConn(fakePayload(0, 0, ROWS3), () => 0x0f00), 2);
+    r.pump(fakeGate(1), 0, 0, 0);
+    r.stage(withConn(fakePayload(0, 0, ROWS3), () => 0x000f), 3);
+    r.pump(fakeGate(1), 0, 0, 0);
+    r.stage(withConn(fakePayload(0, 0, ROWS3), () => 0x0f0e), 4);
+    // The shown record's connectivity stays in force through the replaced pending records.
+    expect(retire).not.toHaveBeenCalled();
+    expect(held(r, 0, 0).conn).toEqual(Array<number>(24).fill(0x0f0f));
+    pumpAll(r);
+    expect(c.drawAll).toBe(false);
+    expect(held(r, 0, 0).conn).toEqual(Array<number>(24).fill(0x0f0e));
+    // Unstage a pending replacement: the shown record's values stay.
+    r.stage(withConn(fakePayload(0, 0, ROWS3), () => 0x7fff), 5);
+    r.pump(fakeGate(1), 0, 0, 0);
+    expect(r.unstage(0, 0)).toBe(true);
+    pumpAll(r);
+    expect(retire).not.toHaveBeenCalled();
+    const after = held(r, 0, 0);
+    expect(Number.isNaN(after.key)).toBe(false);
+    expect(after.conn).toEqual(Array<number>(24).fill(0x0f0e));
+    expect(c.drawAll).toBe(false);
+  });
+
+  test('holdReveals(true) holds the culler (everything drawn, no walk) and revealAll releases it (ruling P45); setCulling(false) draws everything and walks nothing, setCulling(true) culls again after a walk', () => {
+    const { backend } = recordingBackend();
+    const r = createStreamingRenderer('batch', new Group(), backend);
+    const c = r.culler;
+    r.holdReveals(true);
+    r.stage(fakePayload(0, 0, ROWS2), 1);
+    pumpAll(r);
+    c.setRadius(1);
+    c.setCamera(8, 8, 8);
+    c.frame(0, Number.POSITIVE_INFINITY, null, 0);
+    expect([c.walk.walkId, c.drawAll]).toEqual([0, true]);
+    r.revealAll();
+    c.frame(16, Number.POSITIVE_INFINITY, null, 0);
+    expect([c.walk.walkId, c.drawAll]).toEqual([1, false]);
+    r.setCulling(false);
+    expect([c.enabled, c.drawAll]).toEqual([false, true]);
+    c.setCamera(40, 8, 8);
+    c.frame(32, Number.POSITIVE_INFINITY, null, 0);
+    expect([c.walk.walkId, c.drawAll]).toEqual([1, true]);
+    r.setCulling(true);
+    c.frame(48, Number.POSITIVE_INFINITY, null, 0);
+    expect([c.walk.walkId, c.drawAll]).toEqual([2, false]);
+  });
+
+  test('Review Focus 1: X on: 12 swaps (an Apply\'s) over 30 frames start no walk, the terrain batches\' multi-draw counts stay 0 and the X-ray batches\' lists are three\'s own; X off at frame 20: `drawAll` is set until the first walk that started after it completes, the filtered list equals the unfiltered one meanwhile, and after it no section the walk stamped is dropped', () => {
+    const r = createSectionRenderer('batch', createMaterialSystem({ variant: 'batch', ao: true, smoothLight: true }, ALBEDO));
+    const c = r.culler;
+    // 12 closed columns (connectivity 0) of region (0, 0), cx 0-3 × cz 0-2: opaque rows at sy 4, 5, 6 and 12, water at 5,
+    // X-ray at 4 and 6. From the camera's section (1, 5, 1) the walk reaches sy 4-6 (the box and its +x neighbours) and
+    // never sy 12 of these columns.
+    const cols: Array<[number, number]> = [];
+    for (let cz = 0; cz < 3; cz++) for (let cx = 0; cx < 4; cx++) cols.push([cx, cz]);
+    const column = (cx: number, cz: number, quads: number): ColumnMeshPayload => fakePayload(cx, cz, [
+      { sy: 4, pass: 0, quads }, { sy: 5, pass: 0, quads: 1 }, { sy: 6, pass: 0, quads: 1 }, { sy: 12, pass: 0, quads: 1 },
+      { sy: 5, pass: 2, quads: 1 }, { sy: 4, pass: 3, quads: 1 }, { sy: 6, pass: 3, quads: 1 },
+    ]);
+    for (const [cx, cz] of cols) r.stage(column(cx, cz, 1), 1);
+    pumpAll(r);
+    r.root.updateMatrixWorld(true);
+    c.setRadius(3);
+    c.setCamera(24, 20, 24);
+    c.frame(0, Number.POSITIVE_INFINITY, null, 0);
+    expect(c.drawAll).toBe(false);
+    const batch = (pass: number): BatchedMesh =>
+      objects<BatchedMesh>(r.root, (o) => (o as BatchedMesh).isBatchedMesh === true && o.userData['pass'] === pass)[0]!;
+    const terrain = [MESH_PASS_OPAQUE, MESH_PASS_TRANSLUCENT].map(batch);
+    const xray = batch(MESH_PASS_XRAY);
+    const camera = new PerspectiveCamera(90, 1, 0.1, 10_000);
+    camera.position.set(64, 600, 64);
+    camera.lookAt(64, 0, 64);
+    camera.updateMatrixWorld();
+    type List = { _multiDrawStarts: Int32Array; _multiDrawCounts: Int32Array; _multiDrawCount: number; _indirectTexture: { image: { data: Uint32Array } } };
+    const entries = (b: BatchedMesh): Array<[number, number, number]> => {
+      const l = b as unknown as List;
+      return Array.from({ length: l._multiDrawCount }, (_, k) => [l._multiDrawStarts[k]!, l._multiDrawCounts[k]!, l._indirectTexture.image.data[k]!]);
+    };
+    const beforeRender = (b: BatchedMesh): void => {
+      b.onBeforeRender(null as never, null as never, camera, b.geometry, b.material as Material, null as never);
+    };
+    const threes = (b: BatchedMesh): Array<[number, number, number]> => {
+      BatchedMesh.prototype.onBeforeRender.call(b, null as never, null as never, camera, b.geometry, b.material as Material, null as never);
+      return entries(b);
+    };
+    const sectionOf = (b: BatchedMesh, instance: number): number => {
+      const p = new Vector3().setFromMatrixPosition(b.getMatrixAt(instance, new Matrix4()));
+      return torusSlot(p.x / 16, p.z / 16) * 24 + p.y / 16;
+    };
+
+    // Frame 0: X on; frames 1-12 each stage one column's replacement (the Apply), swapped by that frame's pump.
+    r.setXray(true);
+    const before = c.walk.walkId;
+    const onSwap = vi.spyOn(c, 'onSwap');
+    for (let f = 0; f < 20; f++) {
+      if (f >= 1 && f <= 12) {
+        const [cx, cz] = cols[f - 1]!;
+        r.stage(column(cx, cz, 2), 2);
+      }
+      for (let i = 0; i < 4 && r.pump(fakeGate(Number.POSITIVE_INFINITY), 1, 1, 0) > 0; i++);
+      c.frame(16 * f, 256, null, 0);
+      expect([c.walk.walkId, c.walk.running], `frame ${f}`).toEqual([before, false]);
+      for (const b of terrain) {
+        beforeRender(b);
+        expect((b as unknown as List)._multiDrawCount, `frame ${f}`).toBe(0);
+      }
+      const own = threes(xray);
+      beforeRender(xray);
+      expect(entries(xray), `frame ${f}`).toEqual(own);
+      expect(own.length).toBe(24);
+    }
+    expect(onSwap).toHaveBeenCalledTimes(12);
+    expect(terrain.map((b) => threes(b).length)).toEqual([48, 12]);
+
+    // Frame 20: X off. `drawAll` holds until the first walk started after it completes (256 pops a frame).
+    r.setXray(false);
+    let firstAfter = 0;
+    let completedAt = -1;
+    for (let f = 20; f < 30; f++) {
+      pumpAll(r, 1, 1);
+      c.frame(16 * f, 256, null, 0);
+      if (firstAfter === 0) firstAfter = c.walk.walkId;
+      expect(firstAfter).toBe(before + 1);
+      const own = terrain.map(threes);
+      for (const b of terrain) beforeRender(b);
+      const filtered = terrain.map(entries);
+      if (c.shown < firstAfter) {
+        expect(c.drawAll, `frame ${f}`).toBe(true);
+        expect(filtered, `frame ${f}`).toEqual(own);
+        continue;
+      }
+      if (completedAt < 0) completedAt = f;
+      expect([c.drawAll, c.shown], `frame ${f}`).toEqual([false, firstAfter]);
+      // Every entry of a section the walk stamped is kept, in three's order; the closed columns' sy 12 is dropped.
+      terrain.forEach((b, k) => {
+        const kept = own[k]!.filter(([, , i]) => c.walk.stamp[sectionOf(b, i)]! >= c.shown);
+        expect(filtered[k]).toEqual(kept);
+      });
+      expect(filtered[0]!.length).toBe(48 - 12);
+      expect(filtered[1]!.length).toBe(12);
+    }
+    // The walk took more than one frame, and completed before frame 30.
+    expect(completedAt).toBeGreaterThan(20);
+    expect(completedAt).toBeLessThan(30);
+    r.dispose();
+  });
 });

@@ -5,6 +5,7 @@ import {
 import { HEIGHT, MIN_Y } from '../core/constants';
 import { MEDIUM } from '../core/params/graphicsPresets';
 import { OPENING_T } from '../daynight/dayNight';
+import type { CaveCuller } from './culling/caveCulling';
 import { firstOrigin, type FloatingOrigin } from './floatingOrigin';
 import type { FrameState } from './frameState';
 import {
@@ -33,6 +34,9 @@ import { createFlatColorArray } from './textureArray';
  * water is in three's transparent list, which draws after it. SP6a (spec §5.2, §5.3): the X-ray pass (additive, in the
  * transparent list at `XRAY_ORDER`) draws alone while the X-ray is on: the terrain and water passes collapse, the sky
  * dome is hidden and the clear colour is `XRAY_CLEAR` (`createXrayControl`).
+ * SP6b (spec §8.2): each frame gives the section renderer's cave culler the camera's world position and a 0.5 ms slice
+ * of its walk (`createCullStep`) before drawing; the render distance sets its range (`applyRenderDistance`), and `warmUp`
+ * holds it so everything draws.
  */
 
 /** The camera's near plane walking and flying, in blocks (SP5a spec §3.5; flying as SP4a spec §6.1). */
@@ -44,10 +48,52 @@ export function cameraFar(rd: number): number {
   return (rd + 2) * 16 * 1.5;
 }
 
-/** Moves the camera's far plane to render distance `rd` (`cameraFar`) and updates its projection (SP4b spec §5). */
-export function applyRenderDistance(camera: PerspectiveCamera, rd: number): void {
+/**
+ * Moves the camera's far plane to render distance `rd` (`cameraFar`) and updates its projection (SP4b spec §5); with
+ * `culler`, its range follows (SP6b spec §8.2: a column within RD of the walk's centre is walked).
+ */
+export function applyRenderDistance(camera: PerspectiveCamera, rd: number, culler?: Pick<CaveCuller, 'setRadius'>): void {
   camera.far = cameraFar(rd);
   camera.updateProjectionMatrix();
+  culler?.setRadius(rd);
+}
+
+/**
+ * The cave culler's clock: one closure made once (no allocation per frame); `performance.now` passed unbound throws
+ * ("Illegal invocation") when the walk's slice polls it.
+ */
+const NOW = (): number => performance.now();
+/** The walk's slice per frame, ms (SP6b spec §8.2: lowered from the master's 1.5 for `live`'s main-thread p95). */
+export const CULL_SLICE_MS = 0.5;
+
+/**
+ * The frame step's cave culling (SP6b spec §8.2), made once: each call gives `culler` the camera's world position (the
+ * floating origin plus `camera.position`), then one slice of its walk, `CULL_SLICE_MS` on `clock` (`performance.now` by
+ * default; a test passes its own), with no pop limit. The frame calls it before the draw, so the batches' filter reads
+ * this frame's state. `setCamera` is called only when the position moved (a repeat changes nothing in the culler), so a
+ * frame at rest passes it no fresh double, which V8 would box (SP4b D25's boxing budget).
+ */
+export function createCullStep(
+  culler: Pick<CaveCuller, 'setCamera' | 'frame'>,
+  origin: Pick<FloatingOrigin, 'x' | 'y' | 'z'>,
+  camera: Pick<Camera, 'position'>,
+  clock: () => number = NOW,
+): () => void {
+  // The last position given, in a typed array: a double kept in a closure would be boxed on each write.
+  const last = new Float64Array([Number.NaN, Number.NaN, Number.NaN]);
+  return () => {
+    const p = camera.position;
+    const x = origin.x + p.x;
+    const y = origin.y + p.y;
+    const z = origin.z + p.z;
+    if (x !== last[0] || y !== last[1] || z !== last[2]) {
+      last[0] = x;
+      last[1] = y;
+      last[2] = z;
+      culler.setCamera(x, y, z);
+    }
+    culler.frame(clock(), Number.POSITIVE_INFINITY, clock, CULL_SLICE_MS);
+  };
 }
 
 /** Moves the camera's near plane to `near` blocks and updates its projection (SP5a spec §3.5). */
@@ -134,10 +180,14 @@ export interface WorldRenderer {
   /**
    * One frame behind the opaque loading overlay (spec §8.4 step 5's three frames): as `frame`, with every built section
    * drawn whether revealed or not and every region unculled (three uploads only what passes culling, SP4b spec §4.5),
-   * so its buffers reach the GPU before the reveal; the sections stay hidden and culling is restored after it.
+   * so its buffers reach the GPU before the reveal; the sections stay hidden and culling is restored after it. The cave
+   * culler is held through it (`drawAll`, no walk; SP6b spec §8.2, ruling P45), and stays held while reveals are.
    */
   warmUp(state: FrameState): void;
-  /** The live render distance's far plane: `camera.far = cameraFar(rd)`, projection updated (SP4b spec §5). */
+  /**
+   * The live render distance's far plane: `camera.far = cameraFar(rd)`, projection updated (SP4b spec §5); the cave
+   * culler's range follows (SP6b spec §8.2).
+   */
   setRenderDistance(rd: number): void;
   /**
    * Shows the block outline around x0 … x1, y0 … y1, z0 … z1, relative to the floating origin (scene coordinates),
@@ -718,6 +768,9 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   const xrayDraws = createXrayDrawCounter(materials.xray);
 
   const camera = new PerspectiveCamera(o.fov, 1, NEAR_FLY, cameraFar(o.rd));
+  // The load's RD reaches the cave culler too (SP6b spec §8.2), as `setRenderDistance` later.
+  applyRenderDistance(camera, o.rd, sections.culler);
+  const cull = createCullStep(sections.culler, origin, camera);
   const timer = createGpuTimer(renderer.getContext() as WebGL2RenderingContext);
 
   const resize = (): void =>
@@ -771,13 +824,20 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
       await compileWorldScene(renderer, world, camera, sections);
     },
     frame(state) {
+      cull();
       draw(state);
     },
     warmUp(state) {
-      withSectionsShown(sections.root, () => withRegionsUnculled(sections.root, () => draw(state)));
+      // Held, everything draws (SP6b spec §8.2, ruling P45); the hold stays while the reveals are held (the root hidden).
+      sections.culler.setHold(true);
+      try {
+        withSectionsShown(sections.root, () => withRegionsUnculled(sections.root, () => draw(state)));
+      } finally {
+        sections.culler.setHold(!sections.root.visible);
+      }
     },
     setRenderDistance(rd) {
-      applyRenderDistance(camera, rd);
+      applyRenderDistance(camera, rd, sections.culler);
     },
     setOutline(x0, y0, z0, x1, y1, z1) {
       selection.set(x0, y0, z0, x1, y1, z1);
