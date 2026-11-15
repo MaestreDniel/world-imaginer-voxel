@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import { CARVER_WINDOW_R, CAVE_BIOME_NAMES } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
@@ -19,7 +19,9 @@ import type { CaveRegionResult } from '../harness/caveRegionWorker';
 import { CARVER_DEFAULTS, CARVER_MAXIMA } from '../harness/carverParams';
 import { BIOME_REGION, biomeTiles, caveGroupOf, caveSites, firstBiomeTile, measureCaveRegions, type CaveGroup, type Site } from '../harness/caveSites';
 import { caveZoneGrid, caveZoneParts, ZONE_CELLS, ZONE_DEPTHS, ZONE_LAGS, ZONE_ORIGIN, ZONE_STEP, type ZoneParts } from '../harness/caveZones';
+import { r3PathCounts, r3Paths, r3PoseCounts, r3Poses, r3Region, R3_POSE_COUNTS, type CaveRegion, type R3PathCounts, type R3PoseCounts } from '../harness/cull';
 import { metricTest } from '../harness/metric';
+import { genRegion } from '../harness/region';
 import { THRESHOLDS } from '../thresholds';
 
 /**
@@ -51,7 +53,11 @@ import { THRESHOLDS } from '../thresholds';
  *   `B3_ABYSS_ROCK_GATED` names;
  * - the biomes group (Task 28): B3's regular-grid check (§12.2, pure, `test/harness/caveZones.ts`) in
  *   `.out/B3.zoneGrid.json`, its zone part gated (`B3.zones`: `zonePeriodicDip`, Task 30, ruling U4), and
- *   `cave_heavy`'s per-biome cave-air shares over its regions (§12.1) in `.out/B3.caveHeavy.json`.
+ *   `cave_heavy`'s per-biome cave-air shares over its regions (§12.1) in `.out/B3.caveHeavy.json`;
+ * - the biomes group (Task 39): R3 (SP6b spec §12.4, D22), cave culling's walk against the raycast reference over the
+ *   job's regions (`cave_heavy`'s on quick and full, and the biome region), read again from their cached dumps
+ *   (`r3Region`, `test/harness/cull.ts`): `R3.wronglyCulled` over `r3Poses`' poses, `R3.popIn` over `r3Paths`' five
+ *   paths on the biome region, with the per-pose record in `.out/R3.poses.json`.
  *
  * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
  * - `carverReference`: over every region of the run's groups (the preset regions included), the voxels of the region
@@ -951,4 +957,101 @@ if (BIOMES_GROUP) {
       zoneSizeSpread: parts.zoneSizeSpread,
     };
   }, 600_000, { outName: 'B3.zones' });
+}
+
+// ---------------------------------------------------------------- R3 (SP6b spec §12.4, D22; Task 39)
+
+/** R3's measurement: per pose and per path, with the times. */
+interface R3Run {
+  readonly poses: Array<{ label: string; kind: string; eye: readonly number[]; pitch: number; underground: boolean; caveKind: number; ms: number } & R3PoseCounts>;
+  readonly paths: Array<{ name: string; ms: number } & R3PathCounts>;
+  readonly regions: Array<{ label: string; ms: number }>;
+}
+
+/**
+ * R3 over the biomes group's regions (SP6b spec §12.4): each read again through the region cache (`genRegion` with
+ * the measurement's options, so a cache hit after `measureRegions`; R3 generates no region of its own) into an
+ * `r3Region` and released; the tier's poses (`r3Poses`) over them in the sites' order, the five paths (`r3Paths`) on
+ * the biome region.
+ */
+async function measureR3(): Promise<R3Run> {
+  const rs = sites().filter((s) => s.group === 'biomes');
+  const regions: CaveRegion[] = [];
+  const regionMs: R3Run['regions'] = [];
+  for (const s of rs) {
+    const t0 = performance.now();
+    const { view } = await genRegion({
+      seed: s.seed, params: resolveProfile(s.profile), cx0: s.cx0, cz0: s.cz0, w: s.size, h: s.size, upTo: 'T', order: 'spiral',
+      threads: 4, cache: true, workerDir: `cavesRegionWorker-${TIER}`,
+    });
+    regions.push(r3Region(view, s.label));
+    regionMs.push({ label: s.label, ms: Math.round(performance.now() - t0) });
+  }
+  const biome = rs.findIndex((s) => s.profile === 'default');
+  if (biome < 0) throw new Error('caves.metric R3: the biomes group has no biome region');
+  const poses = r3Poses(TIER, regions).map((p) => {
+    const t0 = performance.now();
+    const c = r3PoseCounts(regions[p.region]!, p);
+    return {
+      label: regions[p.region]!.label, kind: p.kind, eye: p.eye, pitch: p.pitch, underground: p.underground, caveKind: p.caveKind,
+      ms: Math.round(performance.now() - t0), ...c,
+    };
+  });
+  const paths = r3Paths(regions[biome]!).map((p) => {
+    const t0 = performance.now();
+    const c = r3PathCounts(regions[biome]!, p);
+    return { name: p.name, ms: Math.round(performance.now() - t0), ...c };
+  });
+  return { poses, paths, regions: regionMs };
+}
+
+/** The p-quantile (nearest rank) of finite values; NaN when none. */
+function quantile(values: readonly number[], p: number): number {
+  const v = values.filter(Number.isFinite).sort((a, b) => a - b);
+  return v.length === 0 ? Number.NaN : v[Math.min(v.length - 1, Math.max(0, Math.ceil(p * v.length) - 1))]!;
+}
+
+if (BIOMES_GROUP) {
+  describe('R3', () => {
+    /**
+     * `R3.wronglyCulled` and `R3.popIn` (SP6b spec §12.4; master :1538; both max 0, every tier, holding by §8.2's
+     * construction): the seen sections the culler does not draw once each pose's walk has settled, summed over the
+     * tier's poses (fast 8, quick 32, full 64); the seen sections the draw rule hides frame by frame over the five
+     * paths, summed. Recorded: per pose its counts (`.out/R3.poses.json`); the culled share of non-empty sections
+     * (`culledUnderground`, 1 − drawn / non-empty pooled over the underground poses, gated after D25's culling
+     * checkpoint, Task 40), its p10 and median per underground pose, the surface poses' pooled share; the walk's
+     * over-draw (stamped / seen, pooled over the poses a walk culls); the pops per walk (median, max).
+     */
+    metricTest('R3', ['wronglyCulled', 'popIn'], async () => {
+      const run = await measureR3();
+      const under = run.poses.filter((p) => p.underground);
+      const surface = run.poses.filter((p) => p.kind === 'surface');
+      const pooled = (ps: typeof run.poses): number => {
+        const n = ps.reduce((a, p) => a + p.nonEmpty, 0);
+        return n === 0 ? Number.NaN : 1 - ps.reduce((a, p) => a + p.nonEmptyDrawn, 0) / n;
+      };
+      const walked = run.poses.filter((p) => Number.isFinite(p.stamped));
+      const seenWalked = walked.reduce((a, p) => a + p.seen, 0);
+      mkdirSync(OUT_DIR, { recursive: true });
+      writeFileSync(join(OUT_DIR, 'R3.poses.json'), json({ id: 'R3.poses', tier: process.env.METRICS_TIER ?? null, ...run }));
+      expect(run.poses).toHaveLength(R3_POSE_COUNTS[TIER]);
+      expect(under.length, 'R3: underground poses').toBeGreaterThan(0);
+      return {
+        wronglyCulled: run.poses.reduce((a, p) => a + p.wronglyCulled, 0),
+        popIn: run.paths.reduce((a, p) => a + p.popIn, 0),
+        culledUnderground: pooled(under),
+        culledUndergroundP10: quantile(under.map((p) => p.culledShare), 0.1),
+        culledUndergroundMedian: quantile(under.map((p) => p.culledShare), 0.5),
+        culledSurface: pooled(surface),
+        overDraw: seenWalked === 0 ? Number.NaN : walked.reduce((a, p) => a + p.stamped, 0) / seenWalked,
+        popsPerWalkMedian: quantile(walked.map((p) => p.pops), 0.5),
+        popsPerWalkMax: quantile(walked.map((p) => p.pops), 1),
+        poses: run.poses.length,
+        undergroundPoses: under.length,
+        seen: run.poses.reduce((a, p) => a + p.seen, 0),
+        pathFrames: run.paths.reduce((a, p) => a + p.frames, 0),
+        pathCastFrames: run.paths.reduce((a, p) => a + p.castFrames, 0),
+      };
+    }, 900_000);
+  });
 }

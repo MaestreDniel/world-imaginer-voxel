@@ -7,7 +7,9 @@
  * share no code with `mesh/` beyond the block tables. SP6a (spec §5.1, §10.4): `bruteXrayFaces`, the X-ray's walls and
  * film voxel by voxel, against the X-ray rows (pass 3) `meshFaceCounts` files apart (R1.xray). SP6a (spec §10.1):
  * `referenceCarve`, the global carver reference of `C7.carverReference`: every path whose box meets a region, carved
- * into the region's box from `carverPath` directly, with no path cache and no per-column window.
+ * into the region's box from `carverPath` directly, with no path cache and no per-column window. SP6b (spec §12.4,
+ * D22): `raycastVisible`, R3's raycast visibility reference: 3D DDA rays in cube-map directions from the eye, the
+ * sections they enter; it shares no code with `render/culling/caveCulling.ts`.
  */
 import { CARVER_WINDOW_R, CAVE_FILM_KIND, CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import type { Params } from '../../src/core/params/schema';
@@ -408,4 +410,90 @@ export function referenceCarve(
   }
   for (let v = 0; v < out.length; v++) if (out[v] === NOT_SOLID) out[v] = 0;
   return out;
+}
+
+/** The world's y range: sections 0 … 23 span y −64 … 319. */
+const RAY_Y_MIN = -64;
+const RAY_Y_END = 320;
+
+/**
+ * R3's raycast visibility reference (SP6b spec §12.4, D22; master §6.1): from `eye`, one 3D DDA ray (Amanatides-Woo,
+ * one axis step at a time, so a ray visits a 6-connected chain of voxels) per cube-map texel centre, 6 × faceRes²
+ * directions (face axis ±1, the other two (2i + 1)/faceRes − 1), each out to `maxDist` blocks. A ray stops at the
+ * first voxel `opaqueAt` calls opaque (R3 passes connectivity's predicate, PASS opaque with `fullFaces` 63,
+ * `src/mesh/greedy.ts:151`, so cutout, partial shapes and water pass); a ray starting in an opaque voxel stops there.
+ * Every section a ray enters, the stopping one included, is reported to `onSection(cx, sy, cz)` (sy 0 … 23), once per
+ * entry of that ray, so a section seen by several rays is reported several times. Nothing outside y −64 … 319 is
+ * reported or asked: a ray there continues (an eye above the world looks down into it) until it leaves that range
+ * going away. A ray-sampled set is a lower bound of visibility (the rays are about 0.7° apart at faceRes 128).
+ */
+export function raycastVisible(
+  opaqueAt: (x: number, y: number, z: number) => boolean,
+  eye: readonly [number, number, number],
+  maxDist: number,
+  faceRes: number,
+  onSection: (cx: number, sy: number, cz: number) => void,
+): void {
+  if (!Number.isInteger(faceRes) || faceRes < 1) throw new RangeError(`raycastVisible: faceRes ${faceRes} (a positive integer)`);
+  const [ex, ey, ez] = eye;
+  const x0 = Math.floor(ex);
+  const y0 = Math.floor(ey);
+  const z0 = Math.floor(ez);
+  for (let face = 0; face < 6; face++) {
+    const axis = face >> 1;
+    const sign = (face & 1) === 0 ? 1 : -1;
+    for (let j = 0; j < faceRes; j++) {
+      const v = (2 * j + 1) / faceRes - 1;
+      for (let i = 0; i < faceRes; i++) {
+        const u = (2 * i + 1) / faceRes - 1;
+        let dx = axis === 0 ? sign : u;
+        let dy = axis === 1 ? sign : axis === 0 ? u : v;
+        let dz = axis === 2 ? sign : v;
+        const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        dx /= len;
+        dy /= len;
+        dz /= len;
+        const stepX = dx > 0 ? 1 : dx < 0 ? -1 : 0;
+        const stepY = dy > 0 ? 1 : dy < 0 ? -1 : 0;
+        const stepZ = dz > 0 ? 1 : dz < 0 ? -1 : 0;
+        const tDeltaX = stepX === 0 ? Infinity : Math.abs(1 / dx);
+        const tDeltaY = stepY === 0 ? Infinity : Math.abs(1 / dy);
+        const tDeltaZ = stepZ === 0 ? Infinity : Math.abs(1 / dz);
+        let x = x0;
+        let y = y0;
+        let z = z0;
+        let tMaxX = stepX > 0 ? (x + 1 - ex) / dx : stepX < 0 ? (x - ex) / dx : Infinity;
+        let tMaxY = stepY > 0 ? (y + 1 - ey) / dy : stepY < 0 ? (y - ey) / dy : Infinity;
+        let tMaxZ = stepZ > 0 ? (z + 1 - ez) / dz : stepZ < 0 ? (z - ez) / dz : Infinity;
+        let lastX = Number.NaN;
+        let lastY = Number.NaN;
+        let lastZ = Number.NaN;
+        for (;;) {
+          if (y >= RAY_Y_MIN && y < RAY_Y_END) {
+            const cx = x >> 4;
+            const sy = (y - RAY_Y_MIN) >> 4;
+            const cz = z >> 4;
+            if (cx !== lastX || sy !== lastY || cz !== lastZ) {
+              onSection(cx, sy, cz);
+              lastX = cx;
+              lastY = sy;
+              lastZ = cz;
+            }
+            if (opaqueAt(x, y, z)) break;
+          } else if ((y >= RAY_Y_END && stepY >= 0) || (y < RAY_Y_MIN && stepY <= 0)) {
+            break;
+          }
+          let t: number;
+          if (tMaxX < tMaxY) {
+            if (tMaxX < tMaxZ) { t = tMaxX; x += stepX; tMaxX += tDeltaX; } else { t = tMaxZ; z += stepZ; tMaxZ += tDeltaZ; }
+          } else if (tMaxY < tMaxZ) {
+            t = tMaxY; y += stepY; tMaxY += tDeltaY;
+          } else {
+            t = tMaxZ; z += stepZ; tMaxZ += tDeltaZ;
+          }
+          if (t > maxDist) break;
+        }
+      }
+    }
+  }
 }

@@ -168,6 +168,10 @@ export const THRESHOLDS: ThresholdTable = {
     xrayBiome: { max: 0, activeFrom: 'SP6b' },
   },
   R2: { quadsPerFaceAo: { max: 0.85, activeFrom: 'SP4a' }, quadsPerFaceNoAo: { max: 0.55, activeFrom: 'SP4a' } },
+  // SP6b spec §12.4 (D22; Task 39): cave culling's walk against the raycast reference (`caves.metric.ts`' biomes group,
+  // `.out/R3.json`), every tier, holding by §8.2's construction: the seen sections the settled walk does not draw over
+  // the poses, and the seen sections the draw rule hides frame by frame over the five pose paths.
+  R3: { wronglyCulled: { max: 0, activeFrom: 'SP6b' }, popIn: { max: 0, activeFrom: 'SP6b' } },
   R4: { medianQuads: { max: 2000, activeFrom: 'SP8b' }, p95Quads: { max: 4000, activeFrom: 'SP8b' } },
   R5: { waterQuadsPerFace: { max: 0.1, activeFrom: 'SP7' } },
   // SP4b spec §8.1-§8.2 (D24): the atomic reveal while streaming, from the scripted flight in Node over both section

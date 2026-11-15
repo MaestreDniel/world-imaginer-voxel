@@ -1,5 +1,5 @@
 {
-  "sha256": "1165f17262b2d3ed19e3d83363b9d7d3ecba0c31b1ca635a3b410570ba06e126",
+  "sha256": "be58ec132f04c23082642df4f4b545c5dfbada59997d877364ab4cd701a15381",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -864,6 +864,16 @@
         "quadsPerFaceNoAo": {
           "activeFrom": "SP4a",
           "max": 0.55
+        }
+      },
+      "R3": {
+        "popIn": {
+          "activeFrom": "SP6b",
+          "max": 0
+        },
+        "wronglyCulled": {
+          "activeFrom": "SP6b",
+          "max": 0
         }
       },
       "R4": {

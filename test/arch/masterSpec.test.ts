@@ -166,7 +166,10 @@
  * follow-up with the user's answers (rulings U4-U6) adds B3's zone part (`zonePeriodicDip`) and C7's `bottomFlatRatio`
  * (quick and full) to those rows, and item 14 (§3.15's cave_heavy row with the tuned cheese offset, cross-checked
  * against `DEFAULTS.caves` and `resolveProfile('cave_heavy')`). Cave culling's walk (Task 37) adds item 6's
- * `render/culling/` row to `SP6B_MODULES` (`caveCulling.ts`, frustum culling being three's per instance).
+ * `render/culling/` row to `SP6B_MODULES` (`caveCulling.ts`, frustum culling being three's per instance). R3 (Task 39)
+ * lands item 19 (§6.1's raycast reference as built; the SP6a describe's pin of its line moved here), item 20's R3 row
+ * (`wronglyCulled` and `popIn` gated, `culledUnderground` recorded, cross-checked against THRESHOLDS) and item 6's test
+ * entry (`harness/cull.ts`, an `SP6B_MODULES` row).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2313,9 +2316,7 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(debug).toContain('(amended by SP6a)');
     const refs = s61.slice(s61.indexOf('**References**'), s61.indexOf('**Region cache**')).split('\n');
     expect(refs).toContain('- 3D sky flood and components; a global carver reference (SP6a);');
-    // The raycast visibility reference stays with cave culling (SP6b).
-    const raycast = refs.find((l) => l.startsWith('- a raycast visibility reference for cave culling'));
-    expect(raycast).toContain('SP6b');
+    // The raycast reference's line moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 19 words it as built).
   });
 
   test('§6.4\'s C7 row holds the four construction parts with their 0 bounds, which THRESHOLDS holds activeFrom SP6a; MetricId names C7-C9 (SP6a spec §13 item 18, §10.1, D26)', () => {
@@ -2531,6 +2532,7 @@ describe('master spec amendments (SP6b §15)', () => {
     [/^\s+biomes\/registry\.ts /, 'caveRegistry.ts cavePicker.ts (SP6b)', 'src/gen/biomes/caveRegistry.ts'],
     [/^\s+biomes\/registry\.ts /, 'cavePicker.ts', 'src/gen/biomes/cavePicker.ts'],
     [/^\s+lod\/rings\.ts /, 'caveCulling.ts (SP6b; frustum culling is three\'s per instance)', 'src/render/culling/caveCulling.ts'],
+    [/^\s+test\/ unit\/ metrics\//, '(SP6b: R3 in metrics/caves.metric.ts\'s caves-biomes group, harness/cull.ts; the raycast reference in harness/refs.ts)', 'test/harness/cull.ts'],
   ];
 
   test('§1 names each SP6b module in its entry, which exists (SP6b spec §15 item 6)', () => {
@@ -2775,7 +2777,7 @@ describe('master spec amendments (SP6b §15)', () => {
     return cells;
   };
   /** The parts named in a row's definition cell in this order, each with its THRESHOLDS bound, activeFrom SP6b. */
-  const sp6bParts = (id: 'B3' | 'C7', def: string, parts: Array<[part: string, bound: { min?: number; max?: number; tiers?: readonly string[] }]>): void => {
+  const sp6bParts = (id: 'B3' | 'C7' | 'R3', def: string, parts: Array<[part: string, bound: { min?: number; max?: number; tiers?: readonly string[] }]>): void => {
     let from = 0;
     for (const [part, bound] of parts) {
       const i = def.indexOf(`\`${part}\``, from);
@@ -2890,5 +2892,36 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(xray).toContain('(in the transparent list after every translucent region and before the ghost; the sky dome and clouds are hidden)');
     expect(xray).toContain('While it is on the terrain and water passes draw nothing: RegionBatch\'s opaque, cutout and translucent batches list no instance (a zero multi-draw count in their `onBeforeRender`) and RegionMesh\'s terrain and water arenas take the draw range (0, 0) from its one draw-range writer, `applyDrawRange`, never `visible = false`; their rows keep uploading, and the vertex collapse stays as a second guard (amended by SP6b; SP6a collapsed them).');
     expect(xray).not.toContain('the terrain and water passes collapse');
+  });
+  test('§6.1\'s raycast reference as built (SP6b spec §15 item 19)', () => {
+    const at = text.indexOf('### 6.1 Harness and suites');
+    const s61 = text.slice(at, text.indexOf('### 6.2 ', at));
+    const refs = s61.slice(s61.indexOf('**References**'), s61.indexOf('**Region cache**')).split('\n');
+    // Moved from the SP6a describe: the line that said the reference stays with cave culling (SP6b).
+    const raycast = refs.find((l) => l.startsWith('- the raycast visibility reference:'));
+    expect(raycast, 'no raycast reference line under §6.1\'s References').toBeDefined();
+    expect(raycast).toContain('the raycast visibility reference: DDA rays in cube-map directions from the eye, the sections they enter (SP6b, `harness/refs.ts`)');
+    expect(refs.some((l) => l.includes('it stays with cave culling'))).toBe(false);
+  });
+
+  test('§6.4\'s R3 row: wronglyCulled and popIn gated, culledUnderground recorded, which THRESHOLDS holds activeFrom SP6b (SP6b spec §15 item 20)', () => {
+    const [, def, cell] = row64('R3');
+    expect(cell).toBe('0 / ≥ 50%; `popIn` 0 |');
+    sp6bParts('R3', def!, [['wronglyCulled', { max: 0 }], ['popIn', { max: 0 }]]);
+    expect(def).toContain('`wronglyCulled`, the sections the raycast reference (§6.1) sees from a pose that cave culling\'s settled walk does not draw, over the tier\'s poses (fast 8, quick 32, full 64)');
+    expect(def).toContain('`popIn`, the sections the reference sees at a frame that the draw rule hides at that frame, over five pose paths replayed frame by frame with the walk sliced at 2,000 pops a frame (a walk through a doorway into a cavern, flight at two sections per walk, flight y 300 → 400 → 300, a teleport, a wall dug open into a sealed cave)');
+    // Recorded until D25's culling checkpoint (Task 40 gates it and rewords the row).
+    expect(def).toContain('`culledUnderground`, 1 − drawn non-empty sections / non-empty sections in range pooled over the underground poses, recorded until D25\'s culling checkpoint (SP6b, its spec §12.4; amended by SP6b)');
+    expect(THRESHOLDS.R3?.culledUnderground).toBeUndefined();
+  });
+
+  test('§1\'s test entry names R3\'s files (SP6b spec §15 item 6)', () => {
+    const entry = layoutEntry(/^\s+test\/ unit\/ metrics\//);
+    expect(entry).toContain('(SP6b: R3 in metrics/caves.metric.ts\'s caves-biomes group, harness/cull.ts; the raycast reference in harness/refs.ts)');
+    for (const f of ['test/metrics/caves.metric.ts', 'test/harness/cull.ts', 'test/harness/refs.ts']) {
+      expect(existsSync(`${ROOT_DIR}${f}`), `${f} does not exist`).toBe(true);
+    }
+    // SP6a's list still reads alone.
+    expect(/\(SP6a: ([^)]*)\)/.exec(entry)![1]).toBe('metrics/caves.metric.ts, bench/inlined.ts');
   });
 });
