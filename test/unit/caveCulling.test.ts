@@ -2,12 +2,12 @@
  * Cave culling's walk (SP6b spec §8.1-§8.2, D22; §12.4's unit tests carrying the "0 wrongly culled" proof). Section
  * grids are synthetic `connectivity15` values, or computed from voxel worlds (air boxes in stone) through
  * `connectivity15` and checked against 3D DDA rays: every section a ray enters, the one where it stops included, must
- * be stamped by the walk.
+ * be stamped by the walk. Then the culler (§8.2's triggers, `drawAll` and the time slices) over synthetic grids.
  */
 import { describe, expect, test } from 'vitest';
 import { connectivity15, connectivityBit } from '../../src/mesh/connectivity';
 import {
-  clearColumn, newCaveWalk, setColumnConn, startWalk, stepWalk, torusSlot, type CaveWalk,
+  clearColumn, createCaveCuller, newCaveWalk, setColumnConn, startWalk, stepWalk, torusSlot, type CaveCuller, type CaveWalk,
 } from '../../src/render/culling/caveCulling';
 import { AIR, STONE } from '../../src/world/blocks/index';
 import { createPaddedSection, padIndex } from '../../src/world/store/padded';
@@ -429,3 +429,406 @@ describe('cave culling\'s walk (SP6b spec §8.1-§8.2, D22)', () => {
     expect(most).toBeLessThanOrEqual(5);
   });
 });
+
+// --- The culler (§8.2's triggers, `drawAll`, the slices; ruling P45's hold). ---
+
+/** World coordinates of section (sx, sy, sz)'s centre (voxel Y = y + 64). */
+const centre = (sx: number, sy: number, sz: number): [number, number, number] => [sx * 16 + 8, sy * 16 - 64 + 8, sz * 16 + 8];
+const camAt = (c: CaveCuller, sx: number, sy: number, sz: number): void => c.setCamera(...centre(sx, sy, sz));
+
+/** Reveals every column of [x0, x1] × [z0, z1] with `connAt`. */
+function reveal(c: CaveCuller, x0: number, x1: number, z0: number, z1: number, connAt: ConnAt): void {
+  for (let cz = z0; cz <= z1; cz++) {
+    for (let cx = x0; cx <= x1; cx++) {
+      const col = new Uint16Array(SECTIONS);
+      for (let sy = 0; sy < SECTIONS; sy++) col[sy] = connAt(cx, sy, cz);
+      c.onReveal(keyOf(cx, cz), cx, cz, col);
+    }
+  }
+}
+
+/** Every section of [x0, x1] × [z0, z1] the culler draws. */
+function drawnSet(c: CaveCuller, x0: number, x1: number, z0: number, z1: number): Set<string> {
+  const out = new Set<string>();
+  for (let cz = z0; cz <= z1; cz++) for (let cx = x0; cx <= x1; cx++) for (let sy = 0; sy < SECTIONS; sy++) if (c.drawn(cx, sy, cz)) out.add(id(cx, sy, cz));
+  return out;
+}
+
+/** A frame with no time limit: the walk in progress runs to completion. */
+const settle = (c: CaveCuller, nowMs: number): void => c.frame(nowMs, Infinity, null, 0);
+const stone = (): number => 0;
+
+/** A culler at RD 4 over stone columns in [−8, 8]², the camera at section (0, 12, 0), its first walk completed. */
+function settled(): CaveCuller {
+  const c = createCaveCuller();
+  c.setRadius(4);
+  reveal(c, -8, 8, -8, 8, stone);
+  camAt(c, 0, 12, 0);
+  settle(c, 0);
+  return c;
+}
+
+describe('the culler\'s triggers, drawAll and slices (SP6b spec §8.2)', () => {
+  test('before a camera and its first walk everything draws; the first walk culls', () => {
+    const c = createCaveCuller();
+    c.setRadius(4);
+    reveal(c, -8, 8, -8, 8, stone);
+    expect(c.drawAll).toBe(true);
+    settle(c, 0);
+    expect(c.walk.walkId, 'no camera, no walk').toBe(0);
+    camAt(c, 0, 12, 0);
+    expect(c.drawAll).toBe(true);
+    settle(c, 16);
+    expect(c.walk.walkId).toBe(1);
+    expect(c.shown).toBe(1);
+    expect(c.drawAll).toBe(false);
+    expect([...drawnSet(c, -8, 8, -8, 8)].sort()).toEqual([...boxAndShell([0, 12, 0])].sort());
+    settle(c, 32);
+    expect(c.walk.walkId, 'nothing owes a walk').toBe(1);
+  });
+
+  test('(1) a camera section change: a walk; drawAll only when the camera leaves the last completed walk\'s box', () => {
+    const c = settled();
+    const before = drawnSet(c, -8, 8, -8, 8);
+    // Inside the box: the set stays in force, a walk seeded at the new section starts.
+    camAt(c, 1, 12, 0);
+    expect(c.drawAll).toBe(false);
+    c.frame(16, 1, null, 0);
+    expect(c.walk.running).toBe(true);
+    expect([c.walk.s0x, c.walk.s0y, c.walk.s0z]).toEqual([1, 12, 0]);
+    // A half-done walk never hides what the previous one showed.
+    for (const s of before) {
+      const [x, y, z] = s.split(',').map(Number) as [number, number, number];
+      expect(c.drawn(x, y, z), s).toBe(true);
+    }
+    settle(c, 32);
+    expect(c.shown).toBe(2);
+    expect(c.drawAll).toBe(false);
+    expect([...drawnSet(c, -8, 8, -8, 8)].sort()).toEqual([...boxAndShell([1, 12, 0])].sort());
+    // A move during a walk does not abandon it: the walk completes, then one seeded at the new section starts.
+    camAt(c, 2, 12, 0);
+    c.frame(48, 1, null, 0);
+    expect(c.walk.walkId).toBe(3);
+    camAt(c, 1, 12, 0);
+    c.frame(64, Infinity, null, 0);
+    expect(c.shown).toBe(3);
+    expect(c.walk.walkId).toBe(4);
+    expect([c.walk.s0x, c.walk.s0y, c.walk.s0z]).toEqual([1, 12, 0]);
+    settle(c, 80);
+    expect(c.shown).toBe(4);
+    // Out of the box (two sections from the last completed walk's S0): drawAll at once, cleared by the walk around it.
+    camAt(c, 3, 12, 0);
+    expect(c.drawAll).toBe(true);
+    settle(c, 96);
+    expect(c.drawAll).toBe(false);
+    expect([c.walk.s0x, c.walk.s0y, c.walk.s0z]).toEqual([3, 12, 0]);
+    // Leaving the box while a walk seeded inside it runs: that walk's completion does not clear drawAll (it started
+    // before the trigger), even though its box holds the camera; the next one does.
+    camAt(c, 4, 12, 0);
+    c.frame(112, 1, null, 0);
+    const started = c.walk.walkId;
+    camAt(c, 5, 12, 0);
+    expect(c.drawAll).toBe(true);
+    c.frame(128, Infinity, null, 0);
+    expect(c.shown).toBe(started);
+    expect(c.drawAll).toBe(true);
+    settle(c, 144);
+    expect(c.shown).toBe(started + 1);
+    expect([c.walk.s0x, c.walk.s0y, c.walk.s0z]).toEqual([5, 12, 0]);
+    expect(c.drawAll).toBe(false);
+  });
+
+  test('a walk that completes after the camera left its box sets drawAll', () => {
+    const c = settled();
+    camAt(c, 1, 12, 0);
+    c.frame(16, 1, null, 0); // seeded at (1, 12, 0)
+    camAt(c, -1, 12, 0); // inside (0, 12, 0)'s box, outside (1, 12, 0)'s
+    expect(c.drawAll).toBe(false);
+    c.frame(32, Infinity, null, 0);
+    expect(c.shown).toBe(2);
+    expect(c.drawAll, 'the completed walk does not cover the eye').toBe(true);
+    settle(c, 48);
+    expect([c.walk.s0x, c.walk.s0y, c.walk.s0z]).toEqual([-1, 12, 0]);
+    expect(c.drawAll).toBe(false);
+  });
+
+  test('(2) a swap adding a bit sets drawAll and starts a walk; a swap only removing bits keeps the set', () => {
+    const c = settled();
+    // Column (2, 0) opens: its sections join everything, so (3, 0) beyond it is reached.
+    const open = new Uint16Array(SECTIONS).fill(OPEN);
+    c.onSwap(keyOf(2, 0), 2, 0, open);
+    expect(c.drawAll).toBe(true);
+    c.frame(16, 1, null, 0);
+    expect(c.walk.running).toBe(true);
+    expect(c.drawAll).toBe(true);
+    settle(c, 32);
+    expect(c.drawAll).toBe(false);
+    expect(c.drawn(3, 12, 0)).toBe(true);
+    // Closed again: only bits removed; the set stays in force (a superset) and drawAll stays clear.
+    c.onSwap(keyOf(2, 0), 2, 0, new Uint16Array(SECTIONS));
+    expect(c.drawAll).toBe(false);
+    expect(c.drawn(3, 12, 0)).toBe(true);
+    settle(c, 48);
+    expect(c.drawAll).toBe(false);
+    expect(c.drawn(3, 12, 0)).toBe(false);
+    // A gain while a walk runs: that walk (started before) does not clear drawAll; the next one does.
+    camAt(c, 1, 12, 0);
+    c.frame(64, 1, null, 0);
+    const running = c.walk.walkId;
+    c.onSwap(keyOf(-3, 0), -3, 0, open);
+    c.frame(80, Infinity, null, 0);
+    expect(c.shown).toBe(running);
+    expect(c.drawAll).toBe(true);
+    settle(c, 96);
+    expect(c.shown).toBe(running + 1);
+    expect(c.drawAll).toBe(false);
+  });
+
+  test('(3) reveals during a stand-still: a walk within 250 ms, at most every 250 ms while they arrive, one when they drain; never drawAll', () => {
+    const c = createCaveCuller();
+    c.setRadius(6);
+    camAt(c, 0, 12, 0);
+    settle(c, 0); // every column unrevealed: walked as open
+    expect(c.drawAll).toBe(false);
+    const starts: number[] = [];
+    let last = c.walk.walkId;
+    const tick = (t: number): void => {
+      c.frame(t, Infinity, null, 0);
+      expect(c.drawAll, `at ${t} ms`).toBe(false);
+      if (c.walk.walkId !== last) starts.push(t);
+      last = c.walk.walkId;
+    };
+    // One column revealed per frame, every 16 ms, for 40 frames; then 20 frames with none.
+    const order = discOffsetsOf(6);
+    for (let k = 0; k < 40; k++) {
+      const [dx, dz] = order[k]!;
+      c.onReveal(keyOf(dx, dz), dx, dz, new Uint16Array(SECTIONS));
+      expect(c.drawAll).toBe(false);
+      tick(1000 + 16 * k);
+    }
+    for (let k = 40; k < 60; k++) tick(1000 + 16 * k);
+    expect(starts).toEqual([1000, 1256, 1512, 1640]);
+    // The walk after the drain saw every reveal (the 37 columns with dx² + dz² ≤ 10 among them, as stone): the shell
+    // column (2, 0) is entered, (3, 0) behind it no longer.
+    expect(c.drawn(2, 12, 0)).toBe(true);
+    expect(c.drawn(3, 12, 0)).toBe(false);
+  });
+
+  test('a revealed column draws until a walk that saw it completes', () => {
+    const c = createCaveCuller();
+    c.setRadius(4);
+    camAt(c, 0, 12, 0);
+    settle(c, 0);
+    // A walk in progress when (3, 0) is revealed as stone, the columns around it too.
+    camAt(c, 1, 12, 0);
+    c.frame(16, 1, null, 0);
+    reveal(c, -6, 6, -6, 6, stone);
+    expect(c.drawn(-3, 12, 0)).toBe(true);
+    c.frame(32, Infinity, null, 0); // the walk in progress completes (it started before the reveals)
+    expect(c.drawn(-3, 12, 0)).toBe(true);
+    expect(c.drawAll).toBe(false);
+    settle(c, 48); // no reveal since the last frame: drained, a walk that saw them
+    expect(c.drawn(-3, 12, 0)).toBe(false);
+  });
+
+  test('Review Focus 3: eye y 400, then y 300, then a jump of 20,000 blocks', () => {
+    const c = settled();
+    // Eye y 400: drawAll and no walk (a walk in progress is dropped).
+    camAt(c, 1, 12, 0);
+    c.frame(16, 1, null, 0);
+    const before = c.walk.walkId;
+    c.setCamera(24, 400, 8);
+    expect(c.drawAll).toBe(true);
+    for (let f = 0; f < 10; f++) c.frame(32 + 16 * f, Infinity, null, 0);
+    expect(c.walk.walkId).toBe(before);
+    expect(c.walk.running).toBe(false);
+    expect(c.shown).toBe(before - 1);
+    // Eye y 300 (section 22): a walk starts and drawAll clears when it completes.
+    c.setCamera(24, 300, 8);
+    expect(c.drawAll).toBe(true);
+    c.frame(200, 1, null, 0);
+    expect(c.walk.running).toBe(true);
+    expect([c.walk.s0x, c.walk.s0y, c.walk.s0z]).toEqual([1, 22, 0]);
+    expect(c.drawAll).toBe(true);
+    settle(c, 216);
+    expect(c.drawAll).toBe(false);
+    // A walk in progress at the old place, then the jump.
+    camAt(c, 0, 12, 0);
+    c.frame(232, 1, null, 0);
+    const old = c.walk.walkId;
+    expect(c.walk.running).toBe(true);
+    c.setCamera(20_000 + 8, 12 * 16 - 64 + 8, 20_000 + 8);
+    expect(c.drawAll, 'drawAll at once').toBe(true);
+    const nx = 1250;
+    c.frame(248, Infinity, null, 0);
+    expect(c.shown).toBe(old);
+    expect(c.drawAll, 'the old place\'s walk completing does not clear it').toBe(true);
+    expect(c.walk.running).toBe(true);
+    expect([c.walk.s0x, c.walk.s0y, c.walk.s0z]).toEqual([nx, 12, nx]);
+    settle(c, 264);
+    expect(c.shown).toBe(old + 1);
+    expect(c.drawAll, 'cleared by the walk seeded around the new section').toBe(false);
+    // Every unrevealed column within RD walked as open: every section of the disc dx² + dz² ≤ 4.5² drawn by stamp.
+    const lim = 4.5 * 4.5;
+    for (let dz = -6; dz <= 6; dz++) {
+      for (let dx = -6; dx <= 6; dx++) {
+        for (let sy = 0; sy < SECTIONS; sy++) expect(c.drawn(nx + dx, sy, nx + dz), `(${dx}, ${sy}, ${dz})`).toBe(dx * dx + dz * dz <= lim);
+      }
+    }
+    // The disc streams in as stone: drawn until a walk that saw it completes.
+    reveal(c, nx - 6, nx + 6, nx - 6, nx + 6, stone);
+    expect(c.drawn(nx + 3, 12, nx)).toBe(true);
+    c.frame(280, 1, null, 0); // 280 ms after the last walk reveals started: a walk starts, half done
+    expect(c.walk.running).toBe(true);
+    expect(c.drawn(nx + 3, 12, nx)).toBe(true);
+    settle(c, 296);
+    expect(c.drawAll).toBe(false);
+    expect([...drawnSet(c, nx - 6, nx + 6, nx - 6, nx + 6)].sort()).toEqual([...boxAndShell([nx, 12, nx])].sort());
+  });
+
+  test('the eye\'s range: y −64 … 319', () => {
+    const c = settled();
+    for (const [y, inside] of [[-64, true], [-64.01, false], [319.99, true], [320, false], [Number.NaN, false]] as const) {
+      c.setCamera(8, y, 8);
+      settle(c, 0);
+      expect(c.drawAll, `y ${y}`).toBe(!inside);
+    }
+  });
+
+  test('X on: no walk across 30 frames whatever arrives; X off: drawAll until a walk started after it completes', () => {
+    const c = settled();
+    camAt(c, 1, 12, 0);
+    c.frame(16, 1, null, 0);
+    const id0 = c.walk.walkId;
+    const shown0 = c.shown;
+    c.setXray(true);
+    expect(c.drawAll).toBe(true);
+    for (let f = 0; f < 30; f++) {
+      if (f === 3) c.onSwap(keyOf(2, 0), 2, 0, new Uint16Array(SECTIONS).fill(OPEN));
+      if (f === 5) c.onReveal(keyOf(20, 0), 20, 0, new Uint16Array(SECTIONS));
+      if (f === 7) camAt(c, 3, 12, 0);
+      c.frame(32 + 16 * f, Infinity, null, 0);
+      expect(c.walk.walkId).toBe(id0);
+      expect(c.drawAll).toBe(true);
+    }
+    expect(c.shown).toBe(shown0);
+    for (const s of [[0, 0, 0], [8, 23, -8], [3, 12, 0]] as const) expect(c.drawn(s[0], s[1], s[2])).toBe(true);
+    c.setXray(false);
+    expect(c.drawAll).toBe(true);
+    c.frame(600, 1, null, 0);
+    expect(c.walk.walkId).toBe(id0 + 1);
+    expect(c.drawAll).toBe(true);
+    settle(c, 616);
+    expect(c.drawAll).toBe(false);
+  });
+
+  test('the hold (ruling P45): a walk that would complete during it hides nothing; drawAll survives until a walk started after the release completes', () => {
+    const c = settled();
+    const shown0 = c.shown;
+    camAt(c, 1, 12, 0);
+    c.frame(16, 1, null, 0);
+    const held = c.walk.walkId;
+    c.setHold(true);
+    for (let f = 0; f < 5; f++) c.frame(32 + 16 * f, Infinity, null, 0);
+    expect(c.shown).toBe(shown0);
+    expect(c.walk.walkId).toBe(held);
+    for (let cz = -8; cz <= 8; cz++) for (let cx = -8; cx <= 8; cx++) for (let sy = 0; sy < SECTIONS; sy++) expect(c.drawn(cx, sy, cz)).toBe(true);
+    c.setHold(false);
+    expect(c.drawAll).toBe(true);
+    c.frame(200, 1, null, 0);
+    expect(c.walk.walkId).toBe(held + 1);
+    expect(c.drawAll).toBe(true);
+    settle(c, 216);
+    expect(c.shown).toBe(held + 1);
+    expect(c.drawAll).toBe(false);
+  });
+
+  test('enabled false (the bench\'s switch): drawAll, no walk; true again: a walk, then culling', () => {
+    const c = settled();
+    c.enabled = false;
+    expect(c.enabled).toBe(false);
+    expect(c.drawAll).toBe(true);
+    camAt(c, 1, 12, 0);
+    settle(c, 16);
+    expect(c.walk.walkId).toBe(1);
+    c.enabled = true;
+    expect(c.drawAll).toBe(true);
+    settle(c, 32);
+    expect(c.walk.walkId).toBe(2);
+    expect(c.drawAll).toBe(false);
+  });
+
+  test('the slice stops at the first poll past 0.5 ms (polled every 256 pops); with no clock it runs maxPops', () => {
+    // RD 16, every column unrevealed: a walk of thousands of pops.
+    const rangeOf = (s0x: number, s0z: number) => (cx: number, cz: number): boolean =>
+      (cx - s0x) * (cx - s0x) + (cz - s0z) * (cz - s0z) <= 16.5 * 16.5;
+    const reference = (pops: number): CaveWalk => {
+      const w = newCaveWalk();
+      startWalk(w, 3, 12, -2, rangeOf(3, -2));
+      stepWalk(w, pops, rangeOf(3, -2), () => false);
+      return w;
+    };
+    const c = createCaveCuller();
+    c.setRadius(16);
+    camAt(c, 3, 12, -2);
+    let calls = 0;
+    const clock = (): number => 0.2 * calls++; // 0 at the slice's start, then 0.2, 0.4, 0.6 …
+    c.frame(0, Infinity, clock, 0.5);
+    expect(calls, 'the start and three polls').toBe(4);
+    expect(c.walk.running).toBe(true);
+    const ref = reference(768);
+    expect(c.walk.qHead).toBe(ref.qHead);
+    expect(c.walk.qSize).toBe(ref.qSize);
+    expect(c.walk.stamp).toEqual(ref.stamp);
+    // No clock: maxPops (R3's 2,000) per frame.
+    const d = createCaveCuller();
+    d.setRadius(16);
+    camAt(d, 3, 12, -2);
+    d.frame(0, 2000, null, 0);
+    const ref2 = reference(2000);
+    expect(d.walk.qHead).toBe(ref2.qHead);
+    expect(d.walk.qSize).toBe(ref2.qSize);
+    expect(d.walk.running).toBe(true);
+  });
+
+  test('drawn(cx, sy, cz) and drawnAt(torusSlot(cx, cz)·24 + sy) agree at every section of a walked grid', () => {
+    const s0 = [62, 11, -1] as const;
+    let seed = 777;
+    const rnd = (): number => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
+    const c = createCaveCuller();
+    c.setRadius(6);
+    reveal(c, s0[0] - 7, s0[0] + 7, s0[2] - 7, s0[2] + 7, () => {
+      let bits = 0;
+      for (let b = 0; b < 15; b++) if (rnd() < 0.45) bits |= 1 << b;
+      return bits;
+    });
+    camAt(c, s0[0], s0[1], s0[2]);
+    const check = (): number => {
+      let hidden = 0;
+      for (let cz = s0[2] - 7; cz <= s0[2] + 7; cz++) {
+        for (let cx = s0[0] - 7; cx <= s0[0] + 7; cx++) {
+          for (let sy = 0; sy < SECTIONS; sy++) {
+            const at = torusSlot(cx, cz) * SECTIONS + sy;
+            expect(c.drawn(cx, sy, cz)).toBe(c.drawnAt(at));
+            expect(c.drawnAt(at)).toBe(c.drawAll || c.walk.stamp[at]! >= c.shown);
+            if (!c.drawnAt(at)) hidden++;
+          }
+        }
+      }
+      return hidden;
+    };
+    settle(c, 0);
+    expect(check(), 'the walk culls something').toBeGreaterThan(0);
+    camAt(c, s0[0] + 1, s0[1], s0[2]);
+    c.frame(16, 50, null, 0);
+    expect(c.walk.running).toBe(true);
+    check();
+  });
+});
+
+/** The disc offsets dx² + dz² ≤ (r + 0.5)², nearest first (ties by dz, then dx). */
+function discOffsetsOf(r: number): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) if (dx * dx + dz * dz <= (r + 0.5) * (r + 0.5)) out.push([dx, dz]);
+  return out.sort((a, b) => a[0] * a[0] + a[1] * a[1] - (b[0] * b[0] + b[1] * b[1]));
+}

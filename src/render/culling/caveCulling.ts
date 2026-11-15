@@ -16,6 +16,18 @@
  * walk's id. The queue is a ring over `queue` holding a section at most once while it waits; `entry` holds its entered
  * faces (bits 0-5) and its waiting flag (bit 6), valid only where `entryWalk` equals the walk's id, so nothing is
  * cleared per walk and nothing is allocated after `newCaveWalk`.
+ *
+ * The culler (`createCaveCuller`, §8.2) drives the walk from the renderer's events and frames. A section is drawn when
+ * `drawAll` is set or its stamp is at least `shown`, the last completed walk's id, so a half-done walk never hides what
+ * the previous one showed and a revealed or swapped column (stamped with the current walk's id) draws until a walk that
+ * saw it completes. Triggers: (1) the camera's section differs from the last walk's S0: a walk after the one in
+ * progress; `drawAll` when the camera leaves the last completed walk's box; (2) a swap adding a bit: `drawAll` and a
+ * walk (a swap only removing bits owes a walk, never `drawAll`); (3) reveals: a walk when none runs, at most every
+ * 250 ms while they arrive and once a frame passes with none (drained). No walk, and `drawAll`, while the eye is outside
+ * y −64 … 319, the X-ray is on, the hold is on (warmUp and held reveals, ruling P45), culling is disabled or no camera
+ * is known; leaving any of these owes a walk. `drawAll` clears when a walk completes whose box holds the camera's
+ * section and that started after the last trigger that set it. A column within RD (`dx² + dz² ≤ (rd + 0.5)²` from S0,
+ * the MESH disc of `src/engine/rings.ts`) or held in its slot is in range.
  */
 import { connectivityBit } from '../../mesh/connectivity';
 
@@ -208,4 +220,224 @@ export function stepWalk(
   if (w.qSize > 0) return false;
   w.running = false;
   return true;
+}
+
+/** The eye's y range in blocks: sections 0-23 span −64 … 319. */
+const Y_MIN = -64;
+const Y_END = Y_MIN + SECTIONS * 16;
+/** The range before `setRadius`: `RD_MAX` (`src/engine/renderDistance.ts:10`, which render cannot import). */
+const RD_DEFAULT = 16;
+/** Reveals start a walk at most this often while they arrive (§8.2's trigger 3). */
+const REVEAL_WALK_MS = 250;
+/** The slice polls its clock every this many pops (§8.2's budget). */
+const POLL_POPS = 256;
+
+export interface CaveCuller {
+  readonly walk: CaveWalk;
+  /** Everything draws: the last completed walk does not cover the eye, a path opened, or culling is off. */
+  drawAll: boolean;
+  /** The id of the last completed walk. */
+  shown: number;
+  /** The bench's switch (`setCulling`); false draws everything and walks nothing. */
+  enabled: boolean;
+  /** The camera's world position (floating origin plus `camera.position`). */
+  setCamera(x: number, y: number, z: number): void;
+  setRadius(rd: number): void;
+  setXray(on: boolean): void;
+  /** Ruling P45: while held (warmUp, held reveals) everything draws and no walk starts. */
+  setHold(on: boolean): void;
+  onReveal(key: number, cx: number, cz: number, conn: Uint16Array): void;
+  onSwap(key: number, cx: number, cz: number, conn: Uint16Array): void;
+  onRetire(key: number, cx: number, cz: number): void;
+  /**
+   * Starts a walk if one is owed and none runs, then steps it: polling `clock` every 256 pops and stopping once
+   * `budgetMs` has passed, or, with `clock` null, for `maxPops` pops. A completion starts the next owed walk.
+   */
+  frame(nowMs: number, maxPops: number, clock: (() => number) | null, budgetMs: number): void;
+  /** Section `torusSlot(cx, cz)·24 + sy` is drawn. */
+  drawnAt(section: number): boolean;
+  drawn(cx: number, sy: number, cz: number): boolean;
+}
+
+export function createCaveCuller(): CaveCuller {
+  const walk = newCaveWalk();
+  const stamp = walk.stamp;
+  const slotKey = walk.slotKey;
+  /** The column each held slot belongs to (a slot's key alone does not name it). */
+  const ownerX = new Int32Array(SLOTS);
+  const ownerZ = new Int32Array(SLOTS);
+  let rangeLim = (RD_DEFAULT + 0.5) * (RD_DEFAULT + 0.5);
+  let rd = RD_DEFAULT;
+  /** The camera's section, once `setCamera` has run. */
+  let camKnown = false;
+  let camX = 0;
+  let camY = 0;
+  let camZ = 0;
+  let eyeOut = false;
+  let xray = false;
+  let held = false;
+  let on = true;
+  let blocked = true;
+  /** A walk is owed (a camera section change, a swap, a radius change, a block lifted). */
+  let owed = false;
+  let revealPending = false;
+  let revealSinceFrame = false;
+  let lastRevealWalkMs = Number.NEGATIVE_INFINITY;
+  /** The first walk id whose completion may clear `drawAll`. */
+  let clearFrom = 1;
+  /** The last completed walk's S0. */
+  let shownValid = false;
+  let shownX = 0;
+  let shownY = 0;
+  let shownZ = 0;
+
+  /** The slot holds column (cx, cz): it is revealed. */
+  const slotHolds = (cx: number, cz: number): boolean => {
+    const slot = torusSlot(cx, cz);
+    const k = slotKey[slot]!;
+    return k === k && ownerX[slot] === cx && ownerZ[slot] === cz;
+  };
+  const inRange = (cx: number, cz: number): boolean => {
+    const dx = cx - walk.s0x;
+    const dz = cz - walk.s0z;
+    return dx * dx + dz * dz <= rangeLim || slotHolds(cx, cz);
+  };
+  const camInBox = (x: number, y: number, z: number): boolean =>
+    camX - x <= 1 && x - camX <= 1 && camY - y <= 1 && y - camY <= 1 && camZ - z <= 1 && z - camZ <= 1;
+
+  function markDrawAll(): void {
+    c.drawAll = true;
+    clearFrom = walk.walkId + 1;
+  }
+
+  /** Re-derives the block; entering it drops the walk in progress, leaving it owes a walk and keeps `drawAll`. */
+  function refreshBlock(): void {
+    const b = !on || xray || held || !camKnown || eyeOut;
+    if (b === blocked) return;
+    blocked = b;
+    if (b) {
+      c.drawAll = true;
+      walk.running = false;
+    } else {
+      markDrawAll();
+      owed = true;
+    }
+  }
+
+  /** Copies a revealed or swapped column, stamping its sections with the current walk's id; true on a gained bit. */
+  function take(key: number, cx: number, cz: number, conn: Uint16Array): boolean {
+    const gained = setColumnConn(walk, key, cx, cz, conn);
+    const slot = torusSlot(cx, cz);
+    ownerX[slot] = cx;
+    ownerZ[slot] = cz;
+    stamp.fill(walk.walkId, slot * SECTIONS, slot * SECTIONS + SECTIONS);
+    return gained;
+  }
+
+  function tryStart(nowMs: number): boolean {
+    const revealDue = revealPending && (nowMs - lastRevealWalkMs >= REVEAL_WALK_MS || !revealSinceFrame);
+    if (!owed && !revealDue) return false;
+    if (revealPending) lastRevealWalkMs = nowMs;
+    owed = false;
+    revealPending = false;
+    startWalk(walk, camX, camY, camZ, inRange);
+    return true;
+  }
+
+  function complete(): void {
+    c.shown = walk.walkId;
+    shownValid = true;
+    shownX = walk.s0x;
+    shownY = walk.s0y;
+    shownZ = walk.s0z;
+    if (!camInBox(shownX, shownY, shownZ)) {
+      markDrawAll();
+      owed = true;
+    } else if (walk.walkId >= clearFrom) {
+      c.drawAll = false;
+    }
+  }
+
+  const c: CaveCuller = {
+    walk,
+    drawAll: true,
+    shown: 0,
+    get enabled(): boolean {
+      return on;
+    },
+    set enabled(v: boolean) {
+      on = v;
+      refreshBlock();
+    },
+    setCamera(x, y, z) {
+      const sx = Math.floor(x / 16);
+      const sy = Math.floor((y - Y_MIN) / 16);
+      const sz = Math.floor(z / 16);
+      const changed = !camKnown || sx !== camX || sy !== camY || sz !== camZ;
+      camKnown = true;
+      camX = sx;
+      camY = sy;
+      camZ = sz;
+      eyeOut = !(y >= Y_MIN && y < Y_END);
+      refreshBlock();
+      if (!changed || blocked) return;
+      if (!shownValid || !camInBox(shownX, shownY, shownZ)) markDrawAll();
+      if (walk.walkId === 0 || sx !== walk.s0x || sy !== walk.s0y || sz !== walk.s0z) owed = true;
+    },
+    setRadius(r) {
+      if (r === rd) return;
+      rd = r;
+      rangeLim = (r + 0.5) * (r + 0.5);
+      owed = true;
+    },
+    setXray(v) {
+      xray = v;
+      refreshBlock();
+    },
+    setHold(v) {
+      held = v;
+      refreshBlock();
+    },
+    onReveal(key, cx, cz, conn) {
+      // A newly revealed column read open before, so it only closes paths; a re-reveal that gains a bit opens one.
+      if (take(key, cx, cz, conn)) {
+        markDrawAll();
+        owed = true;
+      }
+      revealPending = true;
+      revealSinceFrame = true;
+    },
+    onSwap(key, cx, cz, conn) {
+      if (take(key, cx, cz, conn)) markDrawAll();
+      owed = true;
+    },
+    onRetire(key, cx, cz) {
+      clearColumn(walk, key, cx, cz);
+    },
+    frame(nowMs, maxPops, clock, budgetMs) {
+      if (!blocked && (walk.running || tryStart(nowMs))) {
+        const t0 = clock === null ? 0 : clock();
+        let pops = 0;
+        let done = false;
+        while (pops < maxPops) {
+          const n = clock === null ? maxPops - pops : Math.min(POLL_POPS, maxPops - pops);
+          done = stepWalk(walk, n, inRange, slotHolds);
+          pops += n;
+          if (done || (clock !== null && clock() - t0 >= budgetMs)) break;
+        }
+        if (done) {
+          complete();
+          tryStart(nowMs);
+        }
+      }
+      revealSinceFrame = false;
+    },
+    drawnAt(section) {
+      return c.drawAll || stamp[section]! >= c.shown;
+    },
+    drawn(cx, sy, cz) {
+      return c.drawnAt(torusSlot(cx, cz) * SECTIONS + sy);
+    },
+  };
+  return c;
 }
