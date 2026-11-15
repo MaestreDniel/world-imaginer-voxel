@@ -38,8 +38,11 @@ body { background: #0f1629; color: var(--text); font: 13px/1.4 system-ui, sans-s
 .map-mode-reason { margin-left: .5rem; font-size: 12px; opacity: .75; }
 .map-watch-live { display: inline-flex; gap: .3rem; align-items: center; }
 .map-overlay-slot [hidden] { display: none; }
-/* The world HUD (SP4a spec §6.9) and the help overlay (§7.4). */
-.world-hud { position: absolute; top: .5rem; left: .5rem; z-index: 2; padding: .35rem .6rem; border-radius: 4px; background: rgb(0 0 0 / .45); color: #f0f0f0; font: 12px/1.45 ui-monospace, monospace; font-variant-numeric: tabular-nums; pointer-events: none; white-space: pre; }
+/* The world's top container (SP6b spec §9.5, D8): the HUD then the X-ray's strip, as flex items that cannot overlap;
+   the strip sits right of the HUD when there is room and below it when not, and centres alone while the HUD is hidden. */
+.world-top { position: absolute; top: .5rem; left: .5rem; right: .5rem; display: flex; flex-wrap: wrap; align-items: flex-start; gap: .5rem; pointer-events: none; z-index: 2; }
+/* The world HUD (SP4a spec §6.9), a static item of the top container, and the help overlay (§7.4). */
+.world-hud { padding: .35rem .6rem; border-radius: 4px; background: rgb(0 0 0 / .45); color: #f0f0f0; font: 12px/1.45 ui-monospace, monospace; font-variant-numeric: tabular-nums; pointer-events: none; white-space: pre; }
 .world-help { position: absolute; inset: 0; z-index: 3; display: grid; gap: 1rem; align-content: start; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); padding: 1.5rem; overflow: auto; background: rgb(15 22 41 / .92); }
 .world-hud[hidden], .world-help[hidden] { display: none; }
 /* The world's notices (SP4a spec §8.5): the slow frames, the lost graphics context (the edge notice went in SP4b);
@@ -62,8 +65,9 @@ body { background: #0f1629; color: var(--text); font: 13px/1.4 system-ui, sans-s
 .world-select-label { position: absolute; left: 50%; bottom: 84px; z-index: 2; transform: translateX(-50%); padding: .1rem .5rem; border-radius: 4px; background: rgb(0 0 0 / .45); color: #f4f7ff; white-space: nowrap; pointer-events: none; }
 .world-host:has(> .world-select-label:not([hidden])) > .world-notices { bottom: 7.25rem; }
 .world-crosshair[hidden], .world-slot-name[hidden], .world-select-label[hidden] { display: none; }
-/* The X-ray's strip (SP6a spec §7.2): its line and legend at the top centre while the X-ray is on (styling deferred). */
-.world-xray-strip { position: absolute; left: 50%; top: .5rem; z-index: 2; transform: translateX(-50%); padding: .2rem .6rem; border-radius: 4px; background: rgb(0 0 0 / .45); color: #f4f7ff; font: 12px/1.45 ui-monospace, monospace; text-align: center; pointer-events: none; }
+/* The X-ray's strip (SP6a spec §7.2): its line and legend at the top while the X-ray is on, a static item of the top
+   container after the HUD (SP6b spec §9.5; styling deferred). */
+.world-xray-strip { z-index: 2; margin-inline: auto; max-width: 40rem; padding: .2rem .6rem; border-radius: 4px; background: rgb(0 0 0 / .45); color: #f4f7ff; font: 12px/1.45 ui-monospace, monospace; text-align: center; pointer-events: none; }
 .world-xray-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: .15rem .6rem; }
 .world-xray-swatch { display: inline-block; width: .7rem; height: .7rem; margin-right: .25rem; border-radius: 2px; vertical-align: middle; }
 .world-xray-strip[hidden], .world-xray-legend[hidden] { display: none; }

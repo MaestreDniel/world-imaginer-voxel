@@ -173,10 +173,12 @@ describe('mountWorldHud (SP4a spec §6.9, D30)', () => {
     mount(() => DATA);
     expect(rows(0)).toContain('Fly · x 12.3 y 80.0 z -40.5 · column 0, -3');
     expect(rows(0)).toContain('speed 12.0 blocks/s · 08:00 ×10');
+    // The HUD mounts as its container's first item (SP6b spec §9.5), so the second one is child 0.
     mount(() => ({ ...DATA, mode: 'walk' }));
-    expect(rows(1)).toContain('Walk · x 12.3 y 80.0 z -40.5 · column 0, -3');
-    expect(rows(1)).toContain('speed walking · 08:00 ×10');
-    expect(rows(1).join('\n')).not.toContain('blocks/s');
+    expect(rows(0)).toContain('Walk · x 12.3 y 80.0 z -40.5 · column 0, -3');
+    expect(rows(0)).toContain('speed walking · 08:00 ×10');
+    expect(rows(0).join('\n')).not.toContain('blocks/s');
+    expect(rows(1)).toContain('Fly · x 12.3 y 80.0 z -40.5 · column 0, -3');
   });
 
   test('no edits: no edit line; 12 edits p95 31.4: `edit p95 31 ms (12)` (SP5a spec §4.6, master §4.12)', () => {

@@ -156,10 +156,11 @@ function hudLines(d: HudData, hints: string): string[] {
  * line each, refreshed every 250 ms from `read`; SP4c adds "stale n / needed" while the world regenerates (§4.5); SP5a
  * starts the position line with the mode and adds "edit p95 n ms (k)" once there is an edit (SP5a spec §4.6); SP6a
  * adds the X-ray's line "X-ray · y a … b · by cave type" after it while the X-ray is on (SP6a spec §7.2), "· by cave
- * biome" in SP6b's biome mode (SP6b spec §7.3). The page
+ * biome" in SP6b's biome mode (SP6b spec §7.3). It mounts as the first item of the world's top container (SP6b spec
+ * §9.5, D8), before the X-ray's strip, which the page makes first (its X-ray feeds the HUD's line). The page
  * toggles it on F3 (`toggle`); while hidden it does not read. SP10 grows F3 into the full overlay.
  */
-export function mountWorldHud(host: HTMLElement, read: () => HudData): { toggle(): void; dispose(): void } {
+export function mountWorldHud(container: HTMLElement, read: () => HudData): { toggle(): void; dispose(): void } {
   const box = document.createElement('div');
   box.className = 'world-hud';
   const hints = keyHints();
@@ -175,7 +176,7 @@ export function mountWorldHud(host: HTMLElement, read: () => HudData): { toggle(
     while (rows.length > lines.length) rows.pop()!.remove();
     lines.forEach((text, i) => { rows[i]!.textContent = text; });
   };
-  host.append(box);
+  container.prepend(box);
   update();
   const id = setInterval(() => { if (!box.hidden) update(); }, REFRESH_MS);
   return {

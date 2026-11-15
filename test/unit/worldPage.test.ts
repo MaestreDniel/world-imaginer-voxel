@@ -6568,9 +6568,11 @@ describe('the X-ray in the page: X, PageDown, PageUp and Home, the strip, the HU
     p.xray.action('xray');
     expect(p.calls).toEqual(['setXray true', 'setXray false']);
     expect([p.xray.on, p.box.hidden, p.xray.hud()]).toEqual([false, true, null]);
-    // The page wires the strip beside the build HUD, the HUD's line from `hud()`, and the four keys to `action`.
+    // The page wires the strip into the top container the HUD mounts into first (SP6b spec §9.5, D8), the HUD's line
+    // from `hud()`, and the four keys to `action`.
     const s = SRC();
-    expect(s).toMatch(/const xrayStrip = createXrayStrip\(host\);/);
+    expect(s).toMatch(/const worldTop = mountWorldTop\(host\);\n\s+teardown\.push\(\(\) => worldTop\.remove\(\)\);\n\s+const xrayStrip = createXrayStrip\(worldTop\);/);
+    expect(s).toMatch(/\? mountWorldHud\(worldTop, \(\) => \{/);
     expect(s).toMatch(/teardown\.push\(\(\) => xrayStrip\.dispose\(\)\);/);
     expect(s).toMatch(/xray: pageXray\.hud\(\),/);
     expect(s).toMatch(/case 'xray': case 'xrayDown': case 'xrayUp': case 'xrayAll': case 'xrayColor': pageXray\.action\(a\); break;/);

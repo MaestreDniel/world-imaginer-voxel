@@ -2195,6 +2195,16 @@ export function pageKeyName(a: Action): string {
 export const XRAY_NOTICE_MS = 6_000;
 
 /**
+ * The world's top container `.world-top` in `host` (SP6b spec §9.5, D8): the F3 HUD then the X-ray's strip, flex items
+ * that cannot overlap, so the strip no longer covers the HUD's counts. One per host; the page mounts both into it.
+ */
+export function mountWorldTop(host: HTMLElement): HTMLDivElement {
+  const top = el('div', 'world-top');
+  host.append(top);
+  return top;
+}
+
+/**
  * The X-ray's radius in blocks at render distance `rd` (SP6a spec §5.3): the fog end (rd − 1)·16 (the materials'
  * `fogRange`, which the page may not import), which the renderer's X-ray follows; the Caves tab's radius readout.
  */
@@ -4709,7 +4719,9 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         const benchLimiter = createFpsLimiter(settings.fpsCap);
         // L14's X-ray (SP6a spec §5.3, §7.1): the page's, over the renderer and its strip, with no notice (the bench shows
         // none); X and PageDown reach it through the bench's hooks.
-        const benchStrip = createXrayStrip(host);
+        const benchTop = mountWorldTop(host);
+        teardown.push(() => benchTop.remove());
+        const benchStrip = createXrayStrip(benchTop);
         teardown.push(() => benchStrip.dispose());
         const benchPageXray = createPageXray({
           renderer: world,
@@ -5236,8 +5248,11 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // The X-ray (SP6a spec §5.3, §7.2): its strip beside the build HUD and its state, which X, PageDown, PageUp and Home
     // (and SP6b's C, its colours) change through `onAction`, and the map's Caves tab through its checkbox and sliders (§7.3); the HUD shows its line
     // while it is on. Every change, and every render distance (the radius), is pushed into the Caves tab once the map's
-    // tool is mounted (the mount reads the state itself).
-    const xrayStrip = createXrayStrip(host);
+    // tool is mounted (the mount reads the state itself). The strip and the HUD share the top container (SP6b spec §9.5,
+    // D8): the HUD, mounted below, takes its first place, so the strip follows it and never covers its counts.
+    const worldTop = mountWorldTop(host);
+    teardown.push(() => worldTop.remove());
+    const xrayStrip = createXrayStrip(worldTop);
     teardown.push(() => xrayStrip.dispose());
     const pushXray = (): void => mapRef?.setXray(pageXray.on, pageXray.band, xrayRadiusOf(liveRd));
     const pageXray = createPageXray({
@@ -5251,7 +5266,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // The HUD reads every count from its owner (SP4b spec §7.3), on its own timer outside the frame (§3.10).
     const gpu: GpuEstimate = { sectionsBytes: 0, skyBytes: 0, textureBytes: 0, lightmapBytes: 0, drawingBufferBytes: 0 };
     const huds = hud
-      ? mountWorldHud(host, () => {
+      ? mountWorldHud(worldTop, () => {
         const c = coordinator.counts(counts);
         const up = sections.counts(uploads);
         const info = world.info();
