@@ -7,10 +7,10 @@ import { metricTest } from '../harness/metric';
 
 /**
  * G1's static cells (SP4a spec §9.1, §9.5, D24), every tier, milliseconds: read from the Chrome flight on the Iris Xe
- * re-measured on SP6a's code with caves, `docs/superpowers/specs/assets/sp6a/flight-iris-chrome.json` (`npm run
+ * re-measured on SP6b's code with cave culling, `docs/superpowers/specs/assets/sp6b/flight-iris-chrome.json` (`npm run
  * measure:chrome -- --route flight`, the `?flight=sp4a` route; SP4b spec §8.4; SP4c spec §8.4; SP5a spec §6.2; SP5b spec
- * §6.2; SP5c spec §10.4, D30; SP6a spec §10.6, D29: every G1 file re-measured into `assets/sp6a/`, the SP5c files staying
- * in `assets/sp5c/`). Its shape
+ * §6.2; SP5c spec §10.4, D30; SP6a spec §10.6, D29; SP6b spec §12.6, D31: every G1 file re-measured into `assets/sp6b/`,
+ * the SP6a files staying in `assets/sp6a/`). Its shape
  * is checked first: the route's JSON with the renderer naming the Iris Xe (as reported), the section renderer
  * RegionBatch ('batch'), RD 12, the default profile, a cold driver shader cache (`shaderCache`, rulings R11) and the
  * window fullscreen at 1920 × 1080 with a 1920 × 1080 @ 1 viewport (`screenFailures`, final review GOV-4). The three
@@ -22,8 +22,8 @@ import { metricTest } from '../harness/metric';
  * recorded, when present, in `.out/G1.others.json`, never gated (§9.5: the Firefox cells are checked at the exit).
  *
  * G1's streaming cells (SP4b spec §8.2, §8.4, D23), every tier, a second call (`G1.streaming`): read from the committed
- * Iris Xe Chrome bench files `assets/sp6a/bench-iris-chrome.json` (the default pool) and `bench-iris-chrome-w4.json`
- * (4 workers), `npm run measure:chrome -- --route bench`, re-measured on SP6a's code (SP6a spec §10.6, D29). Each file's
+ * Iris Xe Chrome bench files `assets/sp6b/bench-iris-chrome.json` (the default pool) and `bench-iris-chrome-w4.json`
+ * (4 workers), `npm run measure:chrome -- --route bench`, re-measured on SP6b's code (SP6b spec §12.6, D31). Each file's
  * shape is checked first: route `bench=medium`, the renderer naming the Iris Xe, RegionBatch, RD 12, the default
  * profile, a cold driver shader cache (rulings R11), the window fullscreen at 1920 × 1080 with a 1920 × 1080 @ 1
  * viewport (final review GOV-4), 4 workers in the w4 file, the `gpuMB` breakdown fields,
@@ -44,7 +44,7 @@ import { metricTest } from '../harness/metric';
  * `partialColumnFrames` and `mixedColumnFrames` 0; the RTX cell is checked at SP4b's exit (§8.4).
  *
  * G1's live cells (SP4c spec §8.2, §8.4, D22), every tier, a third call (`G1.live`): read from the same
- * `assets/sp6a/bench-iris-chrome.json`'s `live` block (the bench's Apply, undo and teleport legs L7-L9). The file's
+ * `assets/sp6b/bench-iris-chrome.json`'s `live` block (the bench's Apply, undo and teleport legs L7-L9). The file's
  * shape is checked as the streaming call's, plus the `live` block's: frames measured, the `gpuMB` breakdown, at least
  * one L7-L9 structural frame and every one's `stutterMs` ≤ 33 ms, `live.partialColumnFrames` and
  * `live.mixedColumnFrames` 0. The three
@@ -57,7 +57,7 @@ import { metricTest } from '../harness/metric';
  * p95 and over33 are exit checks (§8.4), not rows.
  *
  * G2's edit part (SP5a spec §6.2, D26), every tier, a fourth call (`G2.edit`): read from the same
- * `assets/sp6a/bench-iris-chrome.json`'s `edit` block (the bench's edit leg L10: 100 scripted edits through the page's
+ * `assets/sp6b/bench-iris-chrome.json`'s `edit` block (the bench's edit leg L10: 100 scripted edits through the page's
  * edit path). The file's shape is checked as the streaming call's, plus the `edit` block's: `timedOut` empty (the
  * hover's RD 12 disc filled) and `editVisibleP95` measured. The gated part:
  * - `editVisibleP95`: `edit.editVisibleP95`, the post → the frame the edited column's new mesh is shown, max 50.
@@ -66,7 +66,7 @@ import { metricTest } from '../harness/metric';
  * bench files' `edit` blocks are recorded, when present, in `.out/G2.edit.others.json`, never gated.
  *
  * G2's flush parts (SP5b spec §6.2, D28), every tier, a fifth call (`G2.flush`): read from the same
- * `assets/sp6a/bench-iris-chrome.json`'s `persist` block (the bench's save leg L11: four 30 s parts at one place,
+ * `assets/sp6b/bench-iris-chrome.json`'s `persist` block (the bench's save leg L11: four 30 s parts at one place,
  * autosave off, on, off, on, L11a-L11d). The file's shape is checked as the streaming call's, plus the `persist`
  * block's: `timedOut` empty, at least 20 flushes in the "on" parts, every figure a gated part reads measured, both
  * "on" parts' `editVisibleP95` measured (rulings P42), and at least 20 edits overlapping a flush
@@ -85,7 +85,7 @@ import { metricTest } from '../harness/metric';
  * Firefox bench files' `persist` blocks are recorded, when present, in `.out/G2.flush.others.json`, never gated.
  *
  * G1's enter part (SP5b spec §6.2, D28), every tier, a sixth call (`G1.enter`): read from the committed Iris Xe Chrome
- * enter file `assets/sp6a/enter-iris-chrome.json` (`npm run measure:chrome -- --route enter --gpu iris`). Its shape is
+ * enter file `assets/sp6b/enter-iris-chrome.json` (`npm run measure:chrome -- --route enter --gpu iris`). Its shape is
  * checked first: route `bench=enter`, the renderer naming the Iris Xe (rulings P42), a cold driver shader cache, six
  * pairs with the first (the cold cache) discarded, five kept, and (`enterFileFailures`, final review GOV-4) six
  * `pairRatios` each its pair's (b) / (a), `enterRatio` their median over pairs 1-5 recomputed, `gpu` 'iris' and the window
@@ -95,7 +95,7 @@ import { metricTest } from '../harness/metric';
  * and Firefox enter files are recorded, when present, in `.out/G1.enter.others.json`, never gated.
  *
  * G2's paste parts (SP5c spec §10.4, D28), every tier, a seventh call (`G2.paste`): read from the same
- * `assets/sp6a/bench-iris-chrome.json`'s `paste` block (the bench's paste leg L12: L12a the hover with the tool off,
+ * `assets/sp6b/bench-iris-chrome.json`'s `paste` block (the bench's paste leg L12: L12a the hover with the tool off,
  * L12b the house's 28 pastes, undos, redos, a move and a cut, L12c the two maximum blocks' 12 pastes and undos, L12d the
  * ghost swept). The file's shape is checked as the streaming call's, plus the `paste` block's (`pasteFailures`): L12 ran
  * whole (`timedOut` empty, `stoppedBy` null), L12b's 28 and L12c's 12 operations present, each 'ok' and shown, every
@@ -111,14 +111,20 @@ import { metricTest } from '../harness/metric';
  * The w4 and RTX bench files' `paste` blocks are recorded, when present, in `.out/G2.paste.others.json`, never gated.
  *
  * G1's cave parts (SP6a spec §10.6, D29), every tier, an eighth call (`G1.caves`): read from the same
- * `assets/sp6a/bench-iris-chrome.json`'s `caves` block (the bench's cave leg L13: the finder's nearest entrance, a flight
+ * `assets/sp6b/bench-iris-chrome.json`'s `caves` block (the bench's cave leg L13: the finder's nearest entrance, a flight
  * to it, then 60 s walking a route through cave air at 4.3 blocks per second while the world streams). The file's shape
  * is checked as the streaming call's, plus the `caves` block's: L13 ran whole (`timedOut` empty, `stoppedBy` null), the
  * finder answered with a hit, a route was walked and every gated figure measured. The gated parts:
  * - `caveP95`: the walk's snapped frame p95 (`caves.p95`), max 16.7;
  * - `caveOver33`: its frames over 33 ms (`caves.over33`), max 0;
  * - `caveMainP95`: its main-thread p95 (`caves.mainP95`), max 6.
- * The rest of the block is recorded (`routeBlocks`, `routeKinds`, `growthEvents`, p50/p99/max). The w4, RTX and Firefox
+ * With cave culling (SP6b spec §8.5, §12.6, D31) the walk runs with culling on, and two more parts are gated:
+ * - `cullMainMeanMs`: the walk's and the filter's main-thread ms per frame, their mean over the walk
+ *   (`caves.cullMainMeanMs`; master :1683's "cave BFS ≤ 1.0 ms amortised"), max 1.0;
+ * - `cullMainMaxMs`: the largest per-frame walk plus filter time (`caves.cullMainMaxMs`), max 1.5 (§8.5's proposal).
+ * The rest of the block is recorded (`routeBlocks`, `routeKinds`, `growthEvents`, p50/p99/max, the culled sections and
+ * triangles drawn, `gpuMs` p50/p95, walks per second, and the culling-off segment's figures, `cullOff`: the route's
+ * first 20 s again with every section drawn). The w4, RTX and Firefox
  * bench files' `caves` blocks are recorded, when present, in `.out/G1.caves.others.json`, never gated.
  *
  * G1's X-ray parts (SP6a spec §10.6, D10, D29), every tier, a ninth call (`G1.xray`): read from the same file's `xray`
@@ -137,12 +143,22 @@ import { metricTest } from '../harness/metric';
  * - `xrayToggleMaxMs`: the longest of the three frames from each toggle (`rd12.toggleMaxMs`), max 33.
  * Recorded: the renderer's X-ray objects (`xrayDrawCallsMax`, rulings P46), `gpuMs` on and off, `xrayVertexBytes`, the
  * radius, growth events, `xrayMapOpenMaxMs` (the map open's longest frame, recorded only: rulings R27),
- * `xrayApplyRefillMs` (about 8 s, accepted by the user, recorded only in SP6a: rulings R26) and the whole RD 16 segment.
+ * `xrayApplyRefillMs` (about 8 s, accepted by the user, recorded only in SP6a: rulings R26; re-measured and recorded in
+ * SP6b, its 6 s target handed to SP12, SP6b spec Point 3, D35) and the whole RD 16 segment.
+ * The biome-mode segment (SP6b spec §7.2, §12.6: C at the hold's end, a 10 s hold, the 360° sweep, C again; `xray.biome`,
+ * left out of `rd12`'s frame figures so they stay by cave type) gates three more parts:
+ * - `xrayBiomeP95`: its snapped frame p95 (`biome.p95`), max 16.7;
+ * - `xrayBiomeOver33`: its frames over 33 ms (`biome.over33`), max 0;
+ * - `xrayColorToggleMaxMs`: the longest of the three frames from each C (`biome.toggleMaxMs`), max 33.
+ * Recorded beside them: the biome segment's figures (`biome*`: `xrayVertexBytes` in biome mode, `gpuMs` with the X-ray
+ * on) and `xrayCulledSections`, the most sections culled on a frame with the X-ray on (0: culling stands down while the
+ * X-ray is on; on RegionBatch the filter is skipped then, so 0 is structural there: Task 49's review).
  * The w4, RTX and Firefox bench files' `xray` blocks are recorded, when present, in `.out/G1.xray.others.json`, never
  * gated.
  */
 const ASSETS = fileURLToPath(new URL('../../docs/superpowers/specs/assets/sp4a/', import.meta.url));
 const ASSETS_SP6A = fileURLToPath(new URL('../../docs/superpowers/specs/assets/sp6a/', import.meta.url));
+const ASSETS_SP6B = fileURLToPath(new URL('../../docs/superpowers/specs/assets/sp6b/', import.meta.url));
 const OUT_DIR = fileURLToPath(new URL('./.out/', import.meta.url));
 const GATED = 'flight-iris-chrome.json';
 const OTHERS = ['flight-iris-chrome-w4.json', 'flight-rtx-chrome.json', 'flight-iris-firefox.json', 'flight-rtx-firefox.json'] as const;
@@ -168,8 +184,8 @@ interface Flight extends ScreenOf {
 const read = <T = Flight>(dir: string, file: string): T => JSON.parse(readFileSync(join(dir, file), 'utf8')) as T;
 
 metricTest('G1', ['mediumStaticP95', 'mediumStaticDrawCalls', 'mediumStaticMainP95'], () => {
-  expect(existsSync(join(ASSETS_SP6A, GATED)), `${GATED} missing: run npm run measure:chrome -- --route flight --gpu iris`).toBe(true);
-  const f = read(ASSETS_SP6A, GATED);
+  expect(existsSync(join(ASSETS_SP6B, GATED)), `${GATED} missing: run npm run measure:chrome -- --route flight --gpu iris`).toBe(true);
+  const f = read(ASSETS_SP6B, GATED);
   expect(f.route, 'the ?flight=sp4a JSON').toBe('flight=sp4a');
   expect(f.renderer ?? '', 'the renderer names the Iris Xe').toMatch(/Iris/i);
   expect(f.sectionRenderer, 'measured on RegionBatch').toBe('batch');
@@ -205,6 +221,21 @@ metricTest('G1', ['mediumStaticP95', 'mediumStaticDrawCalls', 'mediumStaticMainP
 const BENCH = 'bench-iris-chrome.json';
 const BENCH_W4 = 'bench-iris-chrome-w4.json';
 const BENCH_OTHERS = ['bench-rtx-chrome.json', 'bench-iris-firefox.json', 'bench-rtx-firefox.json'] as const;
+
+/**
+ * Where a recorded file beside the gated ones is read: `assets/sp6b/` when it was measured there (the w4 file, Task 52's
+ * Firefox bench), else `assets/sp6a/` (the RTX Chrome files and SP6a's Firefox bench, not re-measured in SP6b, so their
+ * records stay in `.out/*.others.json`); null when neither holds it. The w4 file never falls back: it is gated from sp6b.
+ */
+function othersDir(file: string): string | null {
+  if (existsSync(join(ASSETS_SP6B, file))) return ASSETS_SP6B;
+  if (file !== BENCH_W4 && existsSync(join(ASSETS_SP6A, file))) return ASSETS_SP6A;
+  return null;
+}
+/** The `dir` field of an others record: which assets directory `othersDir` read it from. */
+function dirLabel(dir: string): 'assets/sp6b' | 'assets/sp6a' {
+  return dir === ASSETS_SP6B ? 'assets/sp6b' : 'assets/sp6a';
+}
 /** SP4a's rule (spec §8.4): a snapped frame time above 33 ms counts; here, a structural frame's `stutterMs`. */
 const OVER_MS = 33;
 
@@ -298,17 +329,29 @@ interface Paste extends PasteOf {
   readonly diffWaitMaxMs: number | null;
 }
 
-/** L13's block of a bench JSON (`bench.ts`' CaveFigures). */
-interface Caves {
-  readonly routeBlocks: number;
-  readonly routeKinds: Readonly<Record<string, number>>;
+/** L13's walk figures, with culling on or (`cullOff`) off (`bench.ts`' CaveWalkFigures; the cull fields since SP6b). */
+interface CaveWalk {
   readonly p50: number | null;
   readonly p95: number | null;
   readonly p99: number | null;
   readonly max: number | null;
   readonly over33: number;
   readonly mainP95: number | null;
+  readonly cullMainMeanMs: number | null;
+  readonly cullMainMaxMs: number | null;
+  readonly culledSections: { readonly p50: number; readonly max: number } | null;
+  readonly triangles: { readonly p50: number; readonly max: number } | null;
+  readonly gpuMs: { readonly p50: number; readonly p95: number } | null;
+  readonly walksPerS: number | null;
+}
+
+/** L13's block of a bench JSON (`bench.ts`' CaveFigures). */
+interface Caves extends CaveWalk {
+  readonly routeBlocks: number;
+  readonly routeKinds: Readonly<Record<string, number>>;
   readonly growthEvents: number;
+  /** The culling-off segment (SP6b spec §12.6); absent from SP6a's files. */
+  readonly cullOff: CaveWalk;
   readonly find: { readonly hit: unknown } | null;
   readonly timedOut: readonly string[];
   readonly stoppedBy: string | null;
@@ -339,10 +382,14 @@ interface XraySegment {
 /** L14's block of a bench JSON (`bench.ts`' XrayFigures). */
 interface Xray {
   readonly rd12: XraySegment;
+  /** The biome-mode segment (SP6b spec §12.6); absent from SP6a's files. */
+  readonly biome: XraySegment;
   readonly rd16: XraySegment;
   readonly xrayApplyRefillMs: number | null;
   /** The map open's longest frame, left out of the segments' frame figures (rulings R27); absent before R27's bench. */
   readonly xrayMapOpenMaxMs?: number | null;
+  /** The most sections culled on a frame with the X-ray on (SP6b spec §12.6: 0). */
+  readonly xrayCulledSections: number | null;
   readonly edit: unknown;
   readonly timedOut: readonly string[];
 }
@@ -408,8 +455,8 @@ function checkReveal(file: string, b: Bench): void {
 
 /** The shape of a gated Iris Xe Chrome bench file (spec §8.4). */
 function checkBench(file: string, workers: number | null): Bench {
-  expect(existsSync(join(ASSETS_SP6A, file)), `${file} missing: run npm run measure:chrome -- --route bench --gpu iris${workers === 4 ? ' --workers 4' : ''}`).toBe(true);
-  const b = read<Bench>(ASSETS_SP6A, file);
+  expect(existsSync(join(ASSETS_SP6B, file)), `${file} missing: run npm run measure:chrome -- --route bench --gpu iris${workers === 4 ? ' --workers 4' : ''}`).toBe(true);
+  const b = read<Bench>(ASSETS_SP6B, file);
   expect(b.route, `${file}: the ?bench=medium JSON`).toBe('bench=medium');
   expect(b.renderer ?? '', `${file}: the renderer names the Iris Xe`).toMatch(/Iris/i);
   expect(b.sectionRenderer, `${file}: measured on RegionBatch`).toBe('batch');
@@ -444,11 +491,12 @@ metricTest('G1', ['mediumStreamP95', 'mediumStreamOver33', 'mediumStreamDrawCall
 
   const others: Record<string, unknown> = {};
   for (const file of BENCH_OTHERS) {
-    if (!existsSync(join(ASSETS_SP6A, file))) continue;
-    const o = read<Bench>(ASSETS_SP6A, file);
+    const dir = othersDir(file);
+    if (dir === null) continue;
+    const o = read<Bench>(dir, file);
     checkReveal(file, o);
     others[file] = {
-      renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs,
+      dir: dirLabel(dir), renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs,
       p95: o.stream.frames.p95, over33: o.stream.frames.over33, drawCallsMax: o.stream.drawCalls.max,
       heapPlusSabMB: o.stream.heapMB === null || o.stream.sabMB === null ? null : o.stream.heapMB + o.stream.sabMB,
     };
@@ -494,12 +542,13 @@ metricTest('G1', ['mediumLiveP95', 'mediumLiveOver33', 'mediumLiveGpuMB'], () =>
   // The w4 file's live legs are recorded, not gated (§8.4); the RTX and Firefox files' live blocks are exit checks.
   const others: Record<string, unknown> = {};
   for (const file of [BENCH_W4, ...BENCH_OTHERS]) {
-    if (!existsSync(join(ASSETS_SP6A, file))) continue;
-    const o = read<Bench>(ASSETS_SP6A, file);
+    const dir = othersDir(file);
+    if (dir === null) continue;
+    const o = read<Bench>(dir, file);
     checkLiveReveal(file, o);
     const l = o.live!;
     others[file] = {
-      renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs,
+      dir: dirLabel(dir), renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs,
       p95: l.frames.p95, over33: l.frames.over33, drawCallsMax: l.drawCalls.max, gpuMB: l.gpuMB,
       structuralStutterMaxMs: Math.max(0, ...(o.structuralFrames ?? []).filter((e) => LIVE_LEGS.has(e.leg)).map((e) => e.stutterMs)),
       applyFirstSwapMs: l.applyFirstSwapMs, applyNearMs: l.applyNearMs, undoNearMs: l.undoNearMs, teleportFirstRevealMs: l.teleportFirstRevealMs,
@@ -541,11 +590,12 @@ metricTest('G2', ['editVisibleP95'], () => {
   // The RTX, w4 and Firefox files' edit blocks are recorded, never gated (SP5a spec §6.2).
   const others: Record<string, unknown> = {};
   for (const file of [BENCH_W4, ...BENCH_OTHERS]) {
-    if (!existsSync(join(ASSETS_SP6A, file))) continue;
-    const o = read<Bench>(ASSETS_SP6A, file);
+    const dir = othersDir(file);
+    if (dir === null) continue;
+    const o = read<Bench>(dir, file);
     if (o.edit === undefined) continue;
     others[file] = {
-      renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs,
+      dir: dirLabel(dir), renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs,
       editVisibleP95: o.edit.editVisibleP95, editAllVisibleP95: o.edit.editAllVisibleP95, editDropped: o.edit.editDropped,
       mainP95Ms: o.edit.mainP95Ms, editVisibleStreamingP95: o.edit.editVisibleStreamingP95,
       over33: o.edit.frames.frames.over33, frameMaxMs: o.edit.frames.frames.max, timedOut: o.edit.timedOut,
@@ -602,10 +652,11 @@ metricTest('G2', ['over33Added', 'p95AddedMs', 'editVisibleAddedMs', 'flushEditV
   // The w4, RTX and Firefox files' persist blocks are recorded, never gated (SP5b spec §6.2).
   const others: Record<string, unknown> = {};
   for (const file of [BENCH_W4, ...BENCH_OTHERS]) {
-    if (!existsSync(join(ASSETS_SP6A, file))) continue;
-    const o = read<Bench>(ASSETS_SP6A, file);
+    const dir = othersDir(file);
+    if (dir === null) continue;
+    const o = read<Bench>(dir, file);
     if (o.persist === undefined) continue;
-    others[file] = { renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs, ...o.persist };
+    others[file] = { dir: dirLabel(dir), renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs, ...o.persist };
   }
   mkdirSync(OUT_DIR, { recursive: true });
   writeFileSync(join(OUT_DIR, 'G2.flush.others.json'), `${JSON.stringify({ id: 'G2', tier: process.env.METRICS_TIER ?? null, others }, null, 2)}\n`);
@@ -671,8 +722,8 @@ interface Enter extends ScreenOf {
 }
 
 metricTest('G1', ['enterRatio'], () => {
-  expect(existsSync(join(ASSETS_SP6A, ENTER)), `${ENTER} missing: run npm run measure:chrome -- --route enter --gpu iris`).toBe(true);
-  const e = read<Enter>(ASSETS_SP6A, ENTER);
+  expect(existsSync(join(ASSETS_SP6B, ENTER)), `${ENTER} missing: run npm run measure:chrome -- --route enter --gpu iris`).toBe(true);
+  const e = read<Enter>(ASSETS_SP6B, ENTER);
   expect(e.route, `${ENTER}: the ?bench=enter JSON`).toBe('bench=enter');
   expect(e.renderer ?? '', `${ENTER}: the renderer names the Iris Xe (rulings P42)`).toMatch(/Iris/i);
   expect(e.shaderCache, `${ENTER}: measured on a cold driver shader cache (rulings R11)`).toBe('cold');
@@ -683,10 +734,11 @@ metricTest('G1', ['enterRatio'], () => {
 
   const others: Record<string, unknown> = {};
   for (const file of ENTER_OTHERS) {
-    if (!existsSync(join(ASSETS_SP6A, file))) continue;
-    const o = read<Enter>(ASSETS_SP6A, file);
+    const dir = othersDir(file);
+    if (dir === null) continue;
+    const o = read<Enter>(dir, file);
     others[file] = {
-      renderer: o.renderer ?? null, kept: o.kept, pairRatios: o.pairRatios, enterRatio: o.enterRatio,
+      dir: dirLabel(dir), renderer: o.renderer ?? null, kept: o.kept, pairRatios: o.pairRatios, enterRatio: o.enterRatio,
       medianUnsavedMs: o.medianUnsavedMs, medianSavedMs: o.medianSavedMs, idbOpenMs: o.idbOpenMs, loadMs: o.loadMs,
       decodeMs: o.decodeMs, newWorldRevealMs: o.newWorldRevealMs,
     };
@@ -720,12 +772,13 @@ metricTest('G2', ['pasteOver33', 'sweepOver33', 'pasteP95AddedMs', 'housePasteVi
   // The w4 and RTX files' paste blocks are recorded, never gated (SP5c spec §10.4).
   const others: Record<string, unknown> = {};
   for (const file of [BENCH_W4, ...BENCH_OTHERS]) {
-    if (!existsSync(join(ASSETS_SP6A, file))) continue;
-    const o = read<Bench>(ASSETS_SP6A, file);
+    const dir = othersDir(file);
+    if (dir === null) continue;
+    const o = read<Bench>(dir, file);
     if (o.paste === undefined) continue;
     const failures = pasteFailures(o.paste);
     others[file] = {
-      renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs,
+      dir: dirLabel(dir), renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs,
       failures, ...(failures.length === 0 ? pasteGateOf(o.paste) : {}),
       L12a: o.paste.L12a, L12b: o.paste.L12b, L12c: o.paste.L12c, L12d: o.paste.L12d,
       clipboardReadMs: o.paste.clipboardReadMs, clipboardWriteMs: o.paste.clipboardWriteMs, diffWaitMaxMs: o.paste.diffWaitMaxMs,
@@ -781,9 +834,31 @@ metricTest('G2', ['pasteOver33', 'sweepOver33', 'pasteP95AddedMs', 'housePasteVi
 /** A figure recorded beside the parts: the number, or -1 with no sample. */
 const orNone = (v: number | null): number => v ?? -1;
 
-metricTest('G1', ['caveP95', 'caveOver33', 'caveMainP95'], () => {
+/**
+ * L13's walk figures, prefixed (`cull`: the culling-on walk's cull figures, `cullOff`: the culling-off segment's). The
+ * `cull` walk's main-thread mean and max are left out: they are the gated `cullMainMeanMs` and `cullMainMaxMs` already.
+ */
+function caveWalkRecord(prefix: string, w: CaveWalk): Record<string, number> {
+  const main = prefix === 'cull' ? {} : {
+    [`${prefix}MainMeanMs`]: orNone(w.cullMainMeanMs),
+    [`${prefix}MainMaxMs`]: orNone(w.cullMainMaxMs),
+  };
+  return {
+    ...main,
+    [`${prefix}CulledSectionsP50`]: w.culledSections?.p50 ?? -1,
+    [`${prefix}CulledSectionsMax`]: w.culledSections?.max ?? -1,
+    [`${prefix}TrianglesP50`]: w.triangles?.p50 ?? -1,
+    [`${prefix}TrianglesMax`]: w.triangles?.max ?? -1,
+    [`${prefix}GpuMsP50`]: w.gpuMs?.p50 ?? -1,
+    [`${prefix}GpuMsP95`]: w.gpuMs?.p95 ?? -1,
+    [`${prefix}WalksPerS`]: orNone(w.walksPerS),
+  };
+}
+
+metricTest('G1', ['caveP95', 'caveOver33', 'caveMainP95', 'cullMainMeanMs', 'cullMainMaxMs'], () => {
   // The streaming call's shape checks (route, Iris Xe, RegionBatch, RD 12, default profile, cold cache), then the caves
-  // block's: L13 ran whole and every gated figure was measured (SP6a spec §10.6).
+  // block's: L13 ran whole and every gated figure was measured (SP6a spec §10.6; SP6b spec §12.6: the cull figures and
+  // the culling-off segment).
   const b = checkBench(BENCH, null);
   expect(b.caves, `${BENCH}: the caves block (SP6a's L13) is present`).toBeDefined();
   const c = b.caves!;
@@ -791,15 +866,17 @@ metricTest('G1', ['caveP95', 'caveOver33', 'caveMainP95'], () => {
   expect(c.stoppedBy, `${BENCH}: L13 was not stopped`).toBeNull();
   expect(c.find?.hit ?? null, `${BENCH}: L13's finder found an entrance`).not.toBeNull();
   expect(c.routeBlocks, `${BENCH}: L13 walked a route`).toBeGreaterThan(0);
-  for (const k of ['p95', 'mainP95'] as const) expect(c[k], `${BENCH}: caves.${k} measured`).not.toBeNull();
+  for (const k of ['p95', 'mainP95', 'cullMainMeanMs', 'cullMainMaxMs'] as const) expect(c[k], `${BENCH}: caves.${k} measured`).not.toBeNull();
+  expect(c.cullOff?.p95 ?? null, `${BENCH}: L13's culling-off segment measured`).not.toBeNull();
 
   // The w4, RTX and Firefox files' caves blocks are recorded, never gated (SP6a spec §10.6).
   const others: Record<string, unknown> = {};
   for (const file of [BENCH_W4, ...BENCH_OTHERS]) {
-    if (!existsSync(join(ASSETS_SP6A, file))) continue;
-    const o = read<Bench>(ASSETS_SP6A, file);
+    const dir = othersDir(file);
+    if (dir === null) continue;
+    const o = read<Bench>(dir, file);
     if (o.caves === undefined) continue;
-    others[file] = { renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs, ...o.caves };
+    others[file] = { dir: dirLabel(dir), renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs, ...o.caves };
   }
   mkdirSync(OUT_DIR, { recursive: true });
   writeFileSync(join(OUT_DIR, 'G1.caves.others.json'), `${JSON.stringify({ id: 'G1', tier: process.env.METRICS_TIER ?? null, others }, null, 2)}\n`);
@@ -810,6 +887,8 @@ metricTest('G1', ['caveP95', 'caveOver33', 'caveMainP95'], () => {
     caveP95: c.p95!,
     caveOver33: c.over33,
     caveMainP95: c.mainP95!,
+    cullMainMeanMs: c.cullMainMeanMs!,
+    cullMainMaxMs: c.cullMainMaxMs!,
     displayIntervalMs: b.displayIntervalMs,
     caveP50: orNone(c.p50),
     caveP99: orNone(c.p99),
@@ -817,6 +896,16 @@ metricTest('G1', ['caveP95', 'caveOver33', 'caveMainP95'], () => {
     routeBlocks: c.routeBlocks,
     growthEvents: c.growthEvents,
     ...kinds,
+    // Recorded (SP6b spec §12.6): the walk's culled sections, triangles, GPU ms and walks per second, and the culling-off
+    // segment's frame figures beside its own (the same figures with every section drawn).
+    ...caveWalkRecord('cull', c),
+    cullOffP50: orNone(c.cullOff.p50),
+    cullOffP95: orNone(c.cullOff.p95),
+    cullOffP99: orNone(c.cullOff.p99),
+    cullOffMaxMs: orNone(c.cullOff.max),
+    cullOffOver33: c.cullOff.over33,
+    cullOffMainP95: orNone(c.cullOff.mainP95),
+    ...caveWalkRecord('cullOff', c.cullOff),
   };
 }, 600_000, { outName: 'G1.caves' });
 
@@ -844,7 +933,7 @@ function xraySegmentRecord(prefix: string, x: XraySegment): Record<string, numbe
   };
 }
 
-metricTest('G1', ['xrayP95', 'xrayOver33', 'xrayMainP95', 'xrayGpuMB', 'xrayDrawCalls', 'xrayToggleMaxMs'], () => {
+metricTest('G1', ['xrayP95', 'xrayOver33', 'xrayMainP95', 'xrayGpuMB', 'xrayDrawCalls', 'xrayToggleMaxMs', 'xrayBiomeP95', 'xrayBiomeOver33', 'xrayColorToggleMaxMs'], () => {
   // The streaming call's shape checks (route, Iris Xe, RegionBatch, RD 12, default profile, cold cache), then the xray
   // block's: L14 ran whole, its gated segment at RD 12 and every gated figure measured (SP6a spec §10.6).
   const b = checkBench(BENCH, null);
@@ -858,14 +947,20 @@ metricTest('G1', ['xrayP95', 'xrayOver33', 'xrayMainP95', 'xrayGpuMB', 'xrayDraw
   }
   // Measured by R27's bench: the map's open left out of the frame figures and its longest frame recorded.
   expect(x.xrayMapOpenMaxMs ?? null, `${BENCH}: xray.xrayMapOpenMaxMs recorded (rulings R27)`).not.toBeNull();
+  // The biome-mode segment (SP6b spec §12.6), at RD 12, its gated figures measured.
+  const m = x.biome;
+  expect(m, `${BENCH}: the xray block's biome segment (SP6b) is present`).toBeDefined();
+  expect(m.rd, `${BENCH}: xray.biome measured at RD 12`).toBe(12);
+  for (const k of ['p95', 'toggleMaxMs'] as const) expect(m[k], `${BENCH}: xray.biome.${k} measured`).not.toBeNull();
 
   // The w4, RTX and Firefox files' xray blocks are recorded, never gated (SP6a spec §10.6).
   const others: Record<string, unknown> = {};
   for (const file of [BENCH_W4, ...BENCH_OTHERS]) {
-    if (!existsSync(join(ASSETS_SP6A, file))) continue;
-    const o = read<Bench>(ASSETS_SP6A, file);
+    const dir = othersDir(file);
+    if (dir === null) continue;
+    const o = read<Bench>(dir, file);
     if (o.xray === undefined) continue;
-    others[file] = { renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs, ...o.xray };
+    others[file] = { dir: dirLabel(dir), renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs, ...o.xray };
   }
   mkdirSync(OUT_DIR, { recursive: true });
   writeFileSync(join(OUT_DIR, 'G1.xray.others.json'), `${JSON.stringify({ id: 'G1', tier: process.env.METRICS_TIER ?? null, others }, null, 2)}\n`);
@@ -877,12 +972,18 @@ metricTest('G1', ['xrayP95', 'xrayOver33', 'xrayMainP95', 'xrayGpuMB', 'xrayDraw
     xrayGpuMB: s.gpuMB!,
     xrayDrawCalls: s.drawCallsMax!,
     xrayToggleMaxMs: s.toggleMaxMs!,
+    xrayBiomeP95: m.p95!,
+    xrayBiomeOver33: m.over33,
+    xrayColorToggleMaxMs: m.toggleMaxMs!,
     displayIntervalMs: b.displayIntervalMs,
     // Recorded, not gated: the map open's longest frame (rulings R27) and the X-ray's refill after the Apply (about 8 s,
     // accepted by the user; rulings R26).
     xrayMapOpenMaxMs: orNone(x.xrayMapOpenMaxMs ?? null),
     xrayApplyRefillMs: orNone(x.xrayApplyRefillMs),
+    // Recorded (SP6b spec §12.6): 0 expected, culling stands down while the X-ray is on.
+    xrayCulledSections: orNone(x.xrayCulledSections),
     ...xraySegmentRecord('rd12', s),
+    ...xraySegmentRecord('biome', m),
     ...xraySegmentRecord('rd16', x.rd16),
   };
 }, 600_000, { outName: 'G1.xray' });

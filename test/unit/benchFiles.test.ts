@@ -2,8 +2,11 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { enterFileFailures, pasteFailures, pasteGateOf, persistFailures, screenFailures, type EnterFileOf, type PasteOf, type PersistOf } from '../harness/benchFiles';
 
+/** The RTX cells, measured last in SP6a (SP6b measures no RTX cell, spec §12.6). */
 const ASSETS_SP6A = new URL('../../docs/superpowers/specs/assets/sp6a/', import.meta.url);
-const read = <T>(file: string): T => JSON.parse(readFileSync(new URL(file, ASSETS_SP6A), 'utf8')) as T;
+/** The gated Iris Xe Chrome cells, re-measured into `assets/sp6b/` (SP6b spec §12.6, D31). */
+const ASSETS_SP6B = new URL('../../docs/superpowers/specs/assets/sp6b/', import.meta.url);
+const read = <T>(file: string, dir: URL = ASSETS_SP6B): T => JSON.parse(readFileSync(new URL(file, dir), 'utf8')) as T;
 
 const FULL = { window: { width: 1920, height: 1080, windowState: 'fullscreen' }, viewport: { innerWidth: 1920, innerHeight: 1080, devicePixelRatio: 1 } };
 
@@ -29,7 +32,7 @@ describe('the committed browser files\' derived figures (SP5b spec §6.2; final 
 
   test('enterFileFailures: the gated Iris file passes; the RTX file is not the Iris\'s (SP5c\'s stayed fullscreen)', () => {
     expect(enterFileFailures(read<EnterFileOf>('enter-iris-chrome.json'))).toEqual([]);
-    expect(enterFileFailures(read<EnterFileOf>('enter-rtx-chrome.json'))).toEqual(['gpu rtx, not iris']);
+    expect(enterFileFailures(read<EnterFileOf>('enter-rtx-chrome.json', ASSETS_SP6A))).toEqual(['gpu rtx, not iris']);
   });
 
   test('enterFileFailures: six pairs and ratios, each (b) / (a), and `enterRatio` the median of pairRatios[1..5]', () => {
@@ -55,8 +58,8 @@ describe('the committed browser files\' derived figures (SP5b spec §6.2; final 
   });
 
   test('persistFailures: the committed bench files\' added parts are their parts\' differences', () => {
-    for (const file of ['bench-iris-chrome.json', 'bench-iris-chrome-w4.json', 'bench-rtx-chrome.json']) {
-      expect(persistFailures(read<{ persist: PersistOf }>(file).persist), file).toEqual([]);
+    for (const [file, dir] of [['bench-iris-chrome.json', ASSETS_SP6B], ['bench-iris-chrome-w4.json', ASSETS_SP6B], ['bench-rtx-chrome.json', ASSETS_SP6A]] as const) {
+      expect(persistFailures(read<{ persist: PersistOf }>(file, dir).persist), file).toEqual([]);
     }
   });
 

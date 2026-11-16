@@ -1,5 +1,5 @@
 {
-  "sha256": "18a9d244d49447338e8649663f136db39c08e06946a8e683e1068e2216a7ae30",
+  "sha256": "2e07dc6323a1c76dea55be4e989f6836302a50d58694909b46ca0a23b0e6f2ac",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -607,6 +607,14 @@
           "activeFrom": "SP6a",
           "max": 16.7
         },
+        "cullMainMaxMs": {
+          "activeFrom": "SP6b",
+          "max": 1.5
+        },
+        "cullMainMeanMs": {
+          "activeFrom": "SP6b",
+          "max": 1
+        },
         "enterRatio": {
           "activeFrom": "SP5b",
           "max": 1.1
@@ -658,6 +666,18 @@
         "mediumStreamP95": {
           "activeFrom": "SP4b",
           "max": 16.7
+        },
+        "xrayBiomeOver33": {
+          "activeFrom": "SP6b",
+          "max": 0
+        },
+        "xrayBiomeP95": {
+          "activeFrom": "SP6b",
+          "max": 16.7
+        },
+        "xrayColorToggleMaxMs": {
+          "activeFrom": "SP6b",
+          "max": 33
         },
         "xrayDrawCalls": {
           "activeFrom": "SP6a",
