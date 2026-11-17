@@ -1731,6 +1731,21 @@ Run on 2026-11-17 at e0e7a52 (Task 58's last commit; no `src/**` change since) a
   - the title of the §16 check inside "§10's SP12 line";
   - Tasks 55 and 56's smoke polish (the `cornerOf` helper, the fixed notice wait, the hotbar colour in the shots).
 
+### The production check (Task 60)
+
+On production (https://world-imaginer-voxel.vercel.app/), in Chrome by the controller and in Firefox by the user (§18's production row and D29's row): `assets/sp6b/production-check.json`.
+
+- **The merge.** `main` fast-forwarded from ae33227 to 30203fe after the user's go-ahead (2026-11-17; ruling U16), once the branch's run 44089213148 was green at 30203fe. Main CI run 44092185406 green, cold (the `regions-*` caches missed on `main`), 23 jobs, **wall 5 min 38 s** against the exit's 6 min 0 s; the longest job metrics-fast (terrain-caves) 5:09. Production served `index-BkdAkf-i.js`, byte-equal to a local build of `main` (`index.html` and all 51 assets by sha256).
+- **Step 0, an SP6a world** (before the merge, production still serving SP6a's `index-D86N0JbD.js`): the controller's headful Chrome saved "SP6a world" (default, seed 42, `GENERATOR_VERSION` 8, schema 4) with oak planks placed at (185, −58, −10) on SP6a's lowest floor near the `bottomCavern` pose and the deepslate under them dug at (185, −59, −10).
+- **Chrome** (the controller's headful Chrome 155 on the Iris Xe, ANGLE Mesa ADL GT2, RegionBatch; maximized on eDP-1 at 240 Hz, its own profile kept from Step 0; the GPU conditions and the CPU check (no EC cap) right before the run): steps 0-9 passed.
+  - **D29:** Load world listed the SP6a world with the "older generator" badge; it opened with today's terrain, its two edits kept (the planks read 25, the dug voxel air). The rock floor closed SP6a's bottom around the planks: 425 voxels of SP6a's air in the 9 × 9 columns around them are rock now, none the other way, and no air sits on bedrock. Its 41 × 41-column probe (292,320 voxels) hashes the same as an unsaved seed-42 default world of this build. The record moved to `GENERATOR_VERSION` 9 with its diffs.
+  - **Each biome by its link** (RD 12, every eye in cave air with no sky in view; the skin within 12 blocks of the pose): lush moss_block 647 and clay 320; dripstone dripstone_block 2,155; the abyss abyss rock 15,366 and ash 152; the biome border abyss rock 3,679. Night vision lifts each from the light floor (lush 12.5 → 86.0 mean luminance, the abyss 4.0 → 40.9).
+  - **The X-ray by cave biome (C)** at the dripstone pose: the strip "… · by cave biome" with the five-row legend and the notice; dripstone 86.8 %, abyss 4.9 %, plain 8.2 % of the canvas. **The map's caveBiome layer** at y −32: lush 26.7 %, dripstone 1.1 %, abyss 12.0 %. **`cave_heavy`:** New world lists it; its spawn link reveals at RD 12 with 1.24 × the default's cave air in the same 33 × 33 columns.
+  - **A cave with culling:** the evidence is the dripstone walk, 10 flight steps over 14.1 blocks that cross two section boundaries: no sky through the rock, and at most 0.02 % of the picture changing in the 0.7 s after a step (a step itself changes 28 %). The flight from the biome-border slot met rock after 2.5 blocks inside one section, so it is kept only as a no-hole check (the task review's minor).
+  - **The bottom cavern:** floors y −42 … −20 in its 25 × 25 columns (spread 20 blocks against C7's 6), deepslate and dripstone floors, no air on bedrock; SP6a's floors there reached −58.
+  - `?selftest=1` "✓ all 65 goldens match (11.8 s)" and "IndexedDB contract: 10/10 passed"; 0 page and 0 console errors.
+- **Firefox** (the user, by hand, Firefox 158, RegionMesh with its region culling, 2026-11-17; ruling U17): the review links, the X-ray with X then C, the map's layer and a walk through a cave with culling, all OK; `?selftest=1` 65/65, each value equal to `test/goldens.json` (`GENERATOR_VERSION` 9) and to Task 52's `assets/sp6b/selftest-firefox.json`, and "IndexedDB contract: 10/10 passed". No frame timings (by hand).
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)

@@ -1,0 +1,2760 @@
+{
+  "task": "SP6b Task 60: the production check on main 30203fe (Step 0's SP6a world, Step 1's main CI, Step 2 in Chrome by the agent and in Firefox by the user, by hand) and the user's §12.8 check (Step 3).",
+  "date": "2026-11-17T13:39:40.084Z",
+  "url": "https://world-imaginer-voxel.vercel.app/",
+  "gitHead": "30203fe2064eae81476d8ca6a83d296f0a6ddf92",
+  "servedBundle": "index-BkdAkf-i.js",
+  "localBundle": "index-BkdAkf-i.js",
+  "sameBuild": true,
+  "bundleCompare": {
+    "servedBundle": "index-BkdAkf-i.js",
+    "servedCss": "index-CvFmo4uU.css",
+    "localBundle": "index-BkdAkf-i.js",
+    "indexSha256": "8b1d09d43ad85113711f797ea0e71ec9411fdde6023d7b6863fdd2025f60a396",
+    "localIndexHtmlEqual": true,
+    "distDir": "/home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/task60/step2/dist-main",
+    "distBuiltAt": "2026-11-17T13:23:29.926Z",
+    "assetsCompared": 51,
+    "assetsEqual": 51,
+    "assetsDiffering": []
+  },
+  "ci": {
+    "branchRun": 44089213148,
+    "branchRunHead": "30203fe",
+    "branchConclusion": "success",
+    "mainRun": 44092185406,
+    "mainConclusion": "success",
+    "mainCreated": "2026-11-17T13:23:06Z",
+    "mainLastJobEnd": "2026-11-17T13:28:44Z",
+    "mainWall": "5:38",
+    "against": "6:00",
+    "cold": "regions-* caches not found on main (cold)",
+    "jobs": 23,
+    "longestJob": "metrics-fast (terrain-caves) 5:09",
+    "deploy": "production served index-BkdAkf-i.js by 13:27Z, byte-identical to a local build of main (51/51)"
+  },
+  "step0": {
+    "by": "the agent's own headful Chrome over CDP, before the merge, production serving SP6a (index-D86N0JbD.js)",
+    "date": "2026-11-17T13:22:19.115Z",
+    "profile": "/tmp/wi10-pyki",
+    "preChecks": {
+      "prime": "on-demand",
+      "eDP1": [
+        "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+        "   1920x1080    240.00*+ 240.00    60.00  ",
+        "   1680x1050    240.00  "
+      ],
+      "eDP1Current": "   1920x1080    240.00*+ 240.00    60.00  ",
+      "connectedOutputs": [
+        "eDP-1"
+      ],
+      "session": "2",
+      "sessionFrom": "loginctl list-sessions: the seat0 x11 session",
+      "sessions": "2 1000 maestre seat0 tty2 active no -",
+      "sessionProps": "Seat=seat0\nType=x11\nActive=yes\nLockedHint=no",
+      "acOnline": "1",
+      "gitBranch": "sp6b/cave-biomes",
+      "gitHead": "30203fe2064eae81476d8ca6a83d296f0a6ddf92",
+      "originMain": "ae3322750e6f32e4bd064bb224a0470f9320b562",
+      "loadavg": [
+        0.72,
+        0.98,
+        2.58
+      ],
+      "uptime": "14:22:19 up 14:32,  1 user,  load average: 0,72, 0,98, 2,58",
+      "gitStatus": "?? .superpowers/"
+    },
+    "allStepsPass": true,
+    "world": {
+      "id": "97b2abb0-8fec-476d-b432-7b788aaae36e",
+      "name": "SP6a world",
+      "preset": "default",
+      "seed": "42",
+      "storedRecord": {
+        "generatorVersion": 8,
+        "schemaVersion": 4,
+        "genKey": "77e28df7dc018147",
+        "paramsHash": "d41013cac991ff82"
+      }
+    },
+    "edits": {
+      "placedPlanksAt": [
+        185,
+        -58,
+        -10
+      ],
+      "dugAt": [
+        185,
+        -59,
+        -10
+      ],
+      "dugWas": 17,
+      "why": "SP6a's lowest cave floor in the bottomCavern pose's cavern (SP6a's flat bottom at y −58, deepslate under it), where SP6b's rock floor F1 leaves rock"
+    },
+    "sp6aFloorStats": {
+      "columnsWithFloor": 354,
+      "min": -58,
+      "p10": -56,
+      "p50": -46,
+      "p90": -22,
+      "max": -20
+    },
+    "poseSaved": {
+      "x": 0,
+      "y": 97,
+      "z": 0,
+      "yaw": 315.14999999999986,
+      "pitch": -80.35000000000001
+    },
+    "stepSummary": [
+      {
+        "step": 0,
+        "name": "pre-checks (read-only: PRIME on-demand, eDP-1 at 240 Hz and the only output connected, the session unlocked, load < 1, AC online); production still serves SP6a",
+        "pass": true,
+        "checks": "7/7 checks"
+      },
+      {
+        "step": 1,
+        "name": "Step 0: New world \"SP6a world\" (default, seed 42) in SP6a's production; an edit in the bottomCavern pose's wide cavern, at SP6a's flat bottom (under SP6b's rock floor)",
+        "pass": true,
+        "checks": "16/16 checks"
+      },
+      {
+        "step": 9,
+        "name": "page and console errors",
+        "pass": true,
+        "checks": "2/2 checks"
+      }
+    ],
+    "pageErrors": 0,
+    "consoleErrors": 0
+  },
+  "chrome": {
+    "by": "the agent's own headful Chrome over CDP (Task 60 Step 2, the Chrome half)",
+    "browser": "Chrome/155.0.8059.39 (pid 393145), Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+    "renderer": "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6); multiDraw true; the world pages on RegionBatch",
+    "profile": "/tmp/wi10-pyki, this task's own mktemp -d profile from Step 0 (holding Step 0's SP6a world), MESA_SHADER_CACHE_DISABLE=true in this Chrome's env only; stopped by CDP Browser.close (exited after Browser.close (code 0, signal null)); removed after the check",
+    "window": {
+      "left": 0,
+      "top": 32,
+      "width": 1756,
+      "height": 956,
+      "windowState": "maximized"
+    },
+    "viewport": {
+      "innerWidth": 1756,
+      "innerHeight": 869,
+      "devicePixelRatio": 1.09375,
+      "hasFocus": false
+    },
+    "windowOnEdp1": true,
+    "preChecks": {
+      "prime": "on-demand",
+      "eDP1": [
+        "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+        "   1920x1080    240.00*+ 240.00    60.00  ",
+        "   1680x1050    240.00  "
+      ],
+      "eDP1Current": "   1920x1080    240.00*+ 240.00    60.00  ",
+      "connectedOutputs": [
+        "eDP-1"
+      ],
+      "session": "2",
+      "sessionFrom": "loginctl list-sessions: the seat0 x11 session",
+      "sessions": "2 1000 maestre seat0 tty2 active no -",
+      "sessionProps": "Seat=seat0\nType=x11\nActive=yes\nLockedHint=no",
+      "acOnline": "1",
+      "gitBranch": "main",
+      "gitHead": "30203fe2064eae81476d8ca6a83d296f0a6ddf92",
+      "originMain": "30203fe2064eae81476d8ca6a83d296f0a6ddf92",
+      "loadavg": [
+        0.08,
+        0.48,
+        1.56
+      ],
+      "uptime": "14:39:40 up 14:49,  1 user,  load average: 0,08, 0,48, 1,56",
+      "gitStatus": "?? .superpowers/"
+    },
+    "cpuCheck": [
+      "2026-11-17T14:29:24+01:00 load 0.94 2.09 2.65; pkg 45 C; AC 1",
+      "  6 threads t=2s: busiest-6 mean 4,10 GHz; all: min 0,40 med 3,32 max 4,10 GHz; pkg 89 C",
+      "  6 threads t=4s: busiest-6 mean 4,10 GHz; all: min 0,40 med 3,28 max 4,10 GHz; pkg 90 C",
+      "  6 threads t=6s: busiest-6 mean 4,10 GHz; all: min 0,40 med 3,31 max 4,10 GHz; pkg 90 C",
+      "  6 threads t=8s: busiest-6 mean 4,10 GHz; all: min 0,40 med 3,31 max 4,10 GHz; pkg 90 C",
+      "  20 threads t=2s: busiest-20 mean 3,49 GHz; all: min 3,00 med 3,80 max 3,90 GHz; pkg 90 C",
+      "  20 threads t=4s: busiest-20 mean 3,47 GHz; all: min 2,95 med 3,70 max 3,90 GHz; pkg 90 C",
+      "  20 threads t=6s: busiest-20 mean 3,45 GHz; all: min 2,90 med 3,80 max 3,90 GHz; pkg 89 C",
+      "  20 threads t=8s: busiest-20 mean 2,33 GHz; all: min 2,20 med 2,40 max 2,50 GHz; pkg 63 C",
+      "2026-11-17T14:29:40+01:00 done; pkg 64 C"
+    ],
+    "loadBefore": {
+      "uptime": "14:39:40 up 14:49,  1 user,  load average: 0,08, 0,48, 1,56",
+      "loadavg": [
+        0.08,
+        0.48,
+        1.56
+      ]
+    },
+    "loadAfter": {
+      "uptime": "14:42:24 up 14:52,  1 user,  load average: 2,83, 1,71, 1,86",
+      "loadavg": [
+        2.83,
+        1.71,
+        1.86
+      ]
+    },
+    "allStepsPass": true,
+    "stepSummary": [
+      {
+        "step": 0,
+        "name": "pre-checks (read-only: PRIME on-demand, eDP-1 at 240 Hz and the only output connected, the session unlocked, load < 1, AC online) and the bundle compare against a local build of main",
+        "pass": true,
+        "checks": "8/8 checks",
+        "wallMs": 7036
+      },
+      {
+        "step": 1,
+        "name": "Step 0's SP6a world (D29): the \"older generator\" badge; it opens with the rock floor and the cave biomes (today's terrain), its edits kept (planks at (185, -58, -10), air at (185, -59, -10))",
+        "pass": true,
+        "checks": "18/18 checks",
+        "wallMs": 25973
+      },
+      {
+        "step": 2,
+        "name": "each cave biome by its review link (RD 12, seed 42): lush, dripstone, the abyss, the biome border; at the light floor and with night vision",
+        "pass": true,
+        "checks": "8/8 checks",
+        "wallMs": 32503
+      },
+      {
+        "step": 3,
+        "name": "the X-ray by cave biome (C) at the dripstone pose pitched 20° up (the review shot's view): X, C, the strip's line and legend, the notice, the colours; C and X back",
+        "pass": true,
+        "checks": "5/5 checks",
+        "wallMs": 14634
+      },
+      {
+        "step": 4,
+        "name": "the map's caveBiome layer (the world's map over the dripstone pose, full screen): Map layer \"caveBiome\", its y at −32 (SP6B_MAP's), the three biome colours drawn",
+        "pass": true,
+        "checks": "7/7 checks",
+        "wallMs": 8270
+      },
+      {
+        "step": 5,
+        "name": "cave_heavy: New world's preset select lists it; its spawn link generates; more cave air than the default at the same columns",
+        "pass": true,
+        "checks": "4/4 checks",
+        "wallMs": 12096
+      },
+      {
+        "step": 6,
+        "name": "a cave with culling (RegionBatch, culling on underground): the culling evidence is the dripstone walk, 10 flight steps over 14.1 blocks along yaw 135 that cross the section boundaries x −1520 and z 1584; after each step the picture right away and 0.7 s later (no pop-in), and no sky through the rock (no hole). The short flight from the biome-border slot (2 steps over 2.5 blocks, then rock ahead) crosses no section boundary and is kept only as a no-hole check at a doorway",
+        "pass": true,
+        "checks": "6/6 checks",
+        "wallMs": 41176
+      },
+      {
+        "step": 7,
+        "name": "the bottom cavern (its review link): the rock floor of mounds and gullies, no flat bedrock floor; against SP6a's floor in the same columns (Step 0's scan)",
+        "pass": true,
+        "checks": "2/2 checks",
+        "wallMs": 6939
+      },
+      {
+        "step": 8,
+        "name": "?selftest=1 on production (the profile's wi10 untouched: the selftest uses its own wi10-selftest)",
+        "pass": true,
+        "checks": "4/4 checks",
+        "wallMs": 13848
+      },
+      {
+        "step": 9,
+        "name": "page and console errors",
+        "pass": true,
+        "checks": "2/2 checks",
+        "wallMs": 0
+      }
+    ],
+    "steps": [
+      {
+        "step": 0,
+        "name": "pre-checks (read-only: PRIME on-demand, eDP-1 at 240 Hz and the only output connected, the session unlocked, load < 1, AC online) and the bundle compare against a local build of main",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "PRIME is on-demand (prime-select query: on-demand)"
+          },
+          {
+            "pass": true,
+            "what": "eDP-1 is connected and runs at 240 Hz (1920x1080    240.00*+ 240.00    60.00)",
+            "detail": [
+              "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+              "   1920x1080    240.00*+ 240.00    60.00  ",
+              "   1680x1050    240.00  "
+            ]
+          },
+          {
+            "pass": true,
+            "what": "eDP-1 is the only connected output (eDP-1; HDMI disconnected)",
+            "detail": [
+              "eDP-1"
+            ]
+          },
+          {
+            "pass": true,
+            "what": "the session is active and unlocked (Seat=seat0, Type=x11, Active=yes, LockedHint=no)"
+          },
+          {
+            "pass": true,
+            "what": "the 1-minute load 0.08 is below 1"
+          },
+          {
+            "pass": true,
+            "what": "AC online (/sys/class/power_supply/ADP1/online = 1)"
+          },
+          {
+            "pass": true,
+            "what": "the repo is main at 30203fe2064eae81476d8ca6a83d296f0a6ddf92 (= origin/main 30203fe2064eae81476d8ca6a83d296f0a6ddf92), the tree clean but for the untracked .superpowers/ (\"?? .superpowers/\")"
+          },
+          {
+            "pass": true,
+            "what": "production serves the local build of main: served index-BkdAkf-i.js, local index-BkdAkf-i.js, index.html equal true, 51/51 files byte-identical",
+            "detail": {
+              "servedBundle": "index-BkdAkf-i.js",
+              "servedCss": "index-CvFmo4uU.css",
+              "localBundle": "index-BkdAkf-i.js",
+              "indexSha256": "8b1d09d43ad85113711f797ea0e71ec9411fdde6023d7b6863fdd2025f60a396",
+              "localIndexHtmlEqual": true,
+              "distDir": "test/metrics/.out/task60/step2/dist-main",
+              "distBuiltAt": "2026-11-17T13:23:29.926Z",
+              "assetsCompared": 51,
+              "assetsEqual": 51,
+              "assetsDiffering": []
+            }
+          }
+        ],
+        "pass": true,
+        "pre": {
+          "prime": "on-demand",
+          "eDP1": [
+            "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+            "   1920x1080    240.00*+ 240.00    60.00  ",
+            "   1680x1050    240.00  "
+          ],
+          "eDP1Current": "   1920x1080    240.00*+ 240.00    60.00  ",
+          "connectedOutputs": [
+            "eDP-1"
+          ],
+          "session": "2",
+          "sessionFrom": "loginctl list-sessions: the seat0 x11 session",
+          "sessions": "2 1000 maestre seat0 tty2 active no -",
+          "sessionProps": "Seat=seat0\nType=x11\nActive=yes\nLockedHint=no",
+          "acOnline": "1",
+          "gitBranch": "main",
+          "gitHead": "30203fe2064eae81476d8ca6a83d296f0a6ddf92",
+          "originMain": "30203fe2064eae81476d8ca6a83d296f0a6ddf92",
+          "loadavg": [
+            0.08,
+            0.48,
+            1.56
+          ],
+          "uptime": "14:39:40 up 14:49,  1 user,  load average: 0,08, 0,48, 1,56",
+          "gitStatus": "?? .superpowers/"
+        },
+        "wallMs": 7036,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 1,
+        "name": "Step 0's SP6a world (D29): the \"older generator\" badge; it opens with the rock floor and the cave biomes (today's terrain), its edits kept (planks at (185, -58, -10), air at (185, -59, -10))",
+        "notes": [
+          "the cave floor rose by -1 … 37 (median 25) blocks over the 40 columns with a floor in both",
+          "the X-ray by cave biome in the SP6a world, looking down: {\"plain\":0.4313,\"lush\":0,\"dripstone\":0.5687,\"abyss\":0} of the canvas' samples",
+          "in the unsaved world the edit's voxels read A 17, B 17 (today's generated blocks)",
+          "after the open the row reads {\"id\":\"97b2abb0-8fec-476d-b432-7b788aaae36e\",\"name\":\"SP6a world\",\"title\":\"SP6a world · default · seed 42\",\"info\":[\"Modified 2026-11-17 14:40\"],\"badges\":[]}: the open wrote today's genKey, so the badge is gone, as designed (SP5b D8)"
+        ],
+        "checks": [
+          {
+            "pass": true,
+            "what": "before opening: worlds[97b2abb0-8fec-476d-b432-7b788aaae36e] is Step 0's record (generatorVersion 8, schemaVersion 4, genKey 77e28df7dc018147)",
+            "detail": {
+              "id": "97b2abb0-8fec-476d-b432-7b788aaae36e",
+              "name": "SP6a world",
+              "seedText": "42",
+              "seed": [
+                42,
+                0
+              ],
+              "profile": "default",
+              "schemaVersion": 4,
+              "paramsHash": "d41013cac991ff82",
+              "generatorVersion": 8,
+              "genKey": "77e28df7dc018147",
+              "created": 1794921742551,
+              "backupOf": null,
+              "stateTableLength": 58,
+              "densityDefsKeys": 2,
+              "densityDefsNames": [
+                "defs",
+                "root"
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "before opening: its edits are stored (diffs 1, historySteps 2)"
+          },
+          {
+            "pass": true,
+            "what": "Load world lists \"SP6a world\" (SP6a world · default · seed 42)",
+            "detail": [
+              {
+                "id": "97b2abb0-8fec-476d-b432-7b788aaae36e",
+                "name": "SP6a world",
+                "title": "SP6a world · default · seed 42",
+                "info": [
+                  "Modified 2026-11-17 14:22",
+                  "opens with today's terrain; your blocks stay at their coordinates"
+                ],
+                "badges": [
+                  "older generator"
+                ]
+              }
+            ]
+          },
+          {
+            "pass": true,
+            "what": "its row carries the \"older generator\" badge (D29): badges [\"older generator\"], lines [\"Modified 2026-11-17 14:22\",\"opens with today's terrain; your blocks stay at their coordinates\"]",
+            "detail": {
+              "id": "97b2abb0-8fec-476d-b432-7b788aaae36e",
+              "name": "SP6a world",
+              "title": "SP6a world · default · seed 42",
+              "info": [
+                "Modified 2026-11-17 14:22",
+                "opens with today's terrain; your blocks stay at their coordinates"
+              ],
+              "badges": [
+                "older generator"
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "Play opens /?world=97b2abb0-8fec-476d-b432-7b788aaae36e"
+          },
+          {
+            "pass": true,
+            "what": "the SP6a world reveals after Play (4371 ms)"
+          },
+          {
+            "pass": true,
+            "what": "the notice at open: \"This world was made with an earlier generator version; it opens with today's terrain and your blocks stay at their coordinates. Dismiss\""
+          },
+          {
+            "pass": true,
+            "what": "the hook names the SP6a world"
+          },
+          {
+            "pass": true,
+            "what": "the placed oak_planks is kept at (185, -58, -10): blockAt 25"
+          },
+          {
+            "pass": true,
+            "what": "the dug voxel (185, -59, -10) stays air: blockAt 0"
+          },
+          {
+            "pass": true,
+            "what": "the rock floor closes SP6a's bottom around the edit: in the 9 × 9 columns around A (y −64 … −20) 425 voxels SP6a had as air are rock today (0 the other way, 7 rock changed kind), and all 5 of A's 8 neighbours that were air are rock: the planks sit inside today's floor",
+            "detail": {
+              "box": {
+                "x0": 181,
+                "x1": 190,
+                "z0": -14,
+                "z1": -5,
+                "y0": -64,
+                "y1": -20
+              },
+              "airToSolid": 425,
+              "solidToAir": 0,
+              "otherChanged": 7,
+              "same": 3211,
+              "neighboursOfA": {
+                "wasAir": 5,
+                "nowSolid": 5
+              },
+              "floorRise": {
+                "columns": 40,
+                "min": -1,
+                "p50": 25,
+                "max": 37
+              }
+            }
+          },
+          {
+            "pass": true,
+            "what": "no air right above bedrock in the 9 × 9 columns (0; SP6a's scan of the 25 × 25 box: 0)"
+          },
+          {
+            "pass": true,
+            "what": "the probe volume (41 × 41 columns around A, its column left out, y −64 … 109) read: 292320 voxels, cave air 30340, skin {\"moss\":0,\"clay\":0,\"dripstone\":5959,\"abyssRock\":0}, hash a5629a48",
+            "detail": {
+              "box": {
+                "x0": 165,
+                "x1": 206,
+                "z0": -30,
+                "z1": 11,
+                "y0": -64,
+                "y1": 109
+              },
+              "skippedColumns": [
+                [
+                  185,
+                  -10
+                ]
+              ],
+              "columns": 1680,
+              "voxels": 292320,
+              "caveAir": 30340,
+              "skin": {
+                "moss": 0,
+                "clay": 0,
+                "dripstone": 5959,
+                "abyssRock": 0
+              },
+              "unloaded": 0,
+              "hash": "a5629a48"
+            }
+          },
+          {
+            "pass": true,
+            "what": "X turns the X-ray on in the SP6a world (\"X-ray · y −64 … 319 · by cave type\")",
+            "detail": {
+              "hidden": false,
+              "text": "X-ray · y −64 … 319 · by cave type"
+            }
+          },
+          {
+            "pass": true,
+            "what": "C: \"X-ray · y −64 … 319 · by cave biome\" with the biome legend",
+            "detail": {
+              "hidden": false,
+              "text": "X-ray · y −64 … 319 · by cave biome"
+            }
+          },
+          {
+            "pass": true,
+            "what": "after opening: the record carries today's generator (generatorVersion 8 → 9, genKey 77e28df7dc018147 → 33ab1ff51b12145d; stored params schemaVersion 4, migrated on read), its edits kept (diffs 1)",
+            "detail": {
+              "id": "97b2abb0-8fec-476d-b432-7b788aaae36e",
+              "name": "SP6a world",
+              "seedText": "42",
+              "seed": [
+                42,
+                0
+              ],
+              "profile": "default",
+              "schemaVersion": 4,
+              "paramsHash": "d1587f5906142e4c",
+              "generatorVersion": 9,
+              "genKey": "33ab1ff51b12145d",
+              "created": 1794921742551,
+              "backupOf": null,
+              "stateTableLength": 65,
+              "densityDefsKeys": 2,
+              "densityDefsNames": [
+                "defs",
+                "root"
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "the comparison world is unsaved"
+          },
+          {
+            "pass": true,
+            "what": "the SP6a world generates today's terrain: the probe volume (292320 voxels) hashes a5629a48 in the saved world and a5629a48 in an unsaved seed-42 default world of this build; cave air 30340 = 30340; skin {\"moss\":0,\"clay\":0,\"dripstone\":5959,\"abyssRock\":0}",
+            "detail": {
+              "saved": "a5629a48",
+              "fresh": "a5629a48"
+            }
+          }
+        ],
+        "pass": true,
+        "recordBefore": {
+          "id": "97b2abb0-8fec-476d-b432-7b788aaae36e",
+          "name": "SP6a world",
+          "seedText": "42",
+          "seed": [
+            42,
+            0
+          ],
+          "profile": "default",
+          "schemaVersion": 4,
+          "paramsHash": "d41013cac991ff82",
+          "generatorVersion": 8,
+          "genKey": "77e28df7dc018147",
+          "created": 1794921742551,
+          "backupOf": null,
+          "stateTableLength": 58,
+          "densityDefsKeys": 2,
+          "densityDefsNames": [
+            "defs",
+            "root"
+          ]
+        },
+        "loadListBefore": [
+          {
+            "id": "97b2abb0-8fec-476d-b432-7b788aaae36e",
+            "name": "SP6a world",
+            "title": "SP6a world · default · seed 42",
+            "info": [
+              "Modified 2026-11-17 14:22",
+              "opens with today's terrain; your blocks stay at their coordinates"
+            ],
+            "badges": [
+              "older generator"
+            ]
+          }
+        ],
+        "shotLoadList": "test/metrics/.out/task60/step2/shots/1-load-world-older-generator.png",
+        "playToRevealMs": 4371,
+        "noticesAtOpen": "This world was made with an earlier generator version; it opens with today's terrain and your blocks stay at their coordinates. Dismiss",
+        "shotOpened": "test/metrics/.out/task60/step2/shots/1-sp6a-world-opened.png",
+        "poseAtOpen": {
+          "x": 0,
+          "y": 97,
+          "z": 0,
+          "yaw": 315.14999999999986,
+          "pitch": -80.35000000000001
+        },
+        "editsRead": {
+          "A": 25,
+          "B": 0
+        },
+        "floorCompare": {
+          "box": {
+            "x0": 181,
+            "x1": 190,
+            "z0": -14,
+            "z1": -5,
+            "y0": -64,
+            "y1": -20
+          },
+          "airToSolid": 425,
+          "solidToAir": 0,
+          "otherChanged": 7,
+          "same": 3211,
+          "neighboursOfA": {
+            "wasAir": 5,
+            "nowSolid": 5
+          },
+          "floorRise": {
+            "columns": 40,
+            "min": -1,
+            "p50": 25,
+            "max": 37
+          }
+        },
+        "probeSaved": {
+          "box": {
+            "x0": 165,
+            "x1": 206,
+            "z0": -30,
+            "z1": 11,
+            "y0": -64,
+            "y1": 109
+          },
+          "skippedColumns": [
+            [
+              185,
+              -10
+            ]
+          ],
+          "columns": 1680,
+          "voxels": 292320,
+          "caveAir": 30340,
+          "skin": {
+            "moss": 0,
+            "clay": 0,
+            "dripstone": 5959,
+            "abyssRock": 0
+          },
+          "unloaded": 0,
+          "hash": "a5629a48"
+        },
+        "lookDown": true,
+        "xrayBiomeShares": {
+          "samples": 177689,
+          "sky": 0.0013,
+          "byBiome": {
+            "plain": 0.4313,
+            "lush": 0,
+            "dripstone": 0.5687,
+            "abyss": 0
+          },
+          "faint": 0
+        },
+        "shotXrayBiome": "test/metrics/.out/task60/step2/shots/1-sp6a-world-xray-by-biome.png",
+        "flush": {
+          "ok": true,
+          "flushSeq": 17
+        },
+        "recordAfter": {
+          "id": "97b2abb0-8fec-476d-b432-7b788aaae36e",
+          "name": "SP6a world",
+          "seedText": "42",
+          "seed": [
+            42,
+            0
+          ],
+          "profile": "default",
+          "schemaVersion": 4,
+          "paramsHash": "d1587f5906142e4c",
+          "generatorVersion": 9,
+          "genKey": "33ab1ff51b12145d",
+          "created": 1794921742551,
+          "backupOf": null,
+          "stateTableLength": 65,
+          "densityDefsKeys": 2,
+          "densityDefsNames": [
+            "defs",
+            "root"
+          ]
+        },
+        "idbAfterOpen": {
+          "counts": {
+            "diffs": 1,
+            "history": 1,
+            "historySteps": 2,
+            "meta": 0,
+            "state": 1,
+            "worlds": 1
+          },
+          "historySteps": {
+            "perWorld": {
+              "97b2abb0-8fec-476d-b432-7b788aaae36e": 2
+            },
+            "steps": [
+              {
+                "key": [
+                  "97b2abb0-8fec-476d-b432-7b788aaae36e",
+                  0
+                ],
+                "edits": [
+                  {
+                    "x": 185,
+                    "y": -59,
+                    "z": -10,
+                    "before": 4294967295,
+                    "after": 0
+                  }
+                ]
+              },
+              {
+                "key": [
+                  "97b2abb0-8fec-476d-b432-7b788aaae36e",
+                  1
+                ],
+                "edits": [
+                  {
+                    "x": 185,
+                    "y": -58,
+                    "z": -10,
+                    "before": 4294967295,
+                    "after": 6400
+                  }
+                ]
+              }
+            ]
+          },
+          "diffs": {
+            "perWorld": {
+              "97b2abb0-8fec-476d-b432-7b788aaae36e": 1
+            },
+            "keys": [
+              [
+                "97b2abb0-8fec-476d-b432-7b788aaae36e",
+                2148237311
+              ]
+            ]
+          }
+        },
+        "probeUnsaved": {
+          "box": {
+            "x0": 165,
+            "x1": 206,
+            "z0": -30,
+            "z1": 11,
+            "y0": -64,
+            "y1": 109
+          },
+          "skippedColumns": [
+            [
+              185,
+              -10
+            ]
+          ],
+          "columns": 1680,
+          "voxels": 292320,
+          "caveAir": 30340,
+          "skin": {
+            "moss": 0,
+            "clay": 0,
+            "dripstone": 5959,
+            "abyssRock": 0
+          },
+          "unloaded": 0,
+          "hash": "a5629a48"
+        },
+        "editColumnUnsaved": {
+          "A": 17,
+          "B": 17
+        },
+        "shotUnsaved": "test/metrics/.out/task60/step2/shots/1-unsaved-seed-42.png",
+        "loadListAfter": [
+          {
+            "id": "97b2abb0-8fec-476d-b432-7b788aaae36e",
+            "name": "SP6a world",
+            "title": "SP6a world · default · seed 42",
+            "info": [
+              "Modified 2026-11-17 14:40"
+            ],
+            "badges": []
+          }
+        ],
+        "wallMs": 25973,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 2,
+        "name": "each cave biome by its review link (RD 12, seed 42): lush, dripstone, the abyss, the biome border; at the light floor and with night vision",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "lush: the stream settled at RD 12 (rd, filled = [12,12], after 4 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "lush: the eye in cave air at (-1679, 49.5, 1744); within 12 blocks of (-1679, 49, 1744) {\"moss\":647,\"clay\":320} (moss_block and clay; the pose rule counted 647 moss_block and 320 clay over the T-stage grid), 0 deepslate, 12705 stone; night vision lifts the view's mean luminance 12.47 → 85.99; no sky in view (0)",
+            "detail": {
+              "pose": {
+                "x": -1679,
+                "y": 49.5,
+                "z": 1744,
+                "yaw": 270,
+                "pitch": 0
+              },
+              "eyeState": 0,
+              "unloaded": 0,
+              "skin": {
+                "moss": 647,
+                "clay": 320
+              },
+              "deepslate": 0,
+              "stone": 12705,
+              "air": 1939,
+              "lightFloor": {
+                "samples": 177777,
+                "pureBlack": 0,
+                "darkest": {
+                  "x": 957,
+                  "y": 69,
+                  "rgb": [
+                    2,
+                    5,
+                    1
+                  ],
+                  "lum": 4.07
+                },
+                "maxChannel": {
+                  "min": 5,
+                  "p01": 7,
+                  "p10": 9,
+                  "p50": 13
+                },
+                "luminance": {
+                  "min": 4.07,
+                  "p01": 5.72,
+                  "p50": 11.72,
+                  "mean": 12.47
+                },
+                "saturatedShare": 0
+              },
+              "nightVision": {
+                "samples": 177777,
+                "pureBlack": 0,
+                "darkest": {
+                  "x": 957,
+                  "y": 771,
+                  "rgb": [
+                    27,
+                    31,
+                    42
+                  ],
+                  "lum": 30.94
+                },
+                "maxChannel": {
+                  "min": 34,
+                  "p01": 43,
+                  "p10": 73,
+                  "p50": 89
+                },
+                "luminance": {
+                  "min": 30.94,
+                  "p01": 37.88,
+                  "p50": 82.44,
+                  "mean": 85.99
+                },
+                "saturatedShare": 0.6854
+              },
+              "skyShareNv": 0
+            }
+          },
+          {
+            "pass": true,
+            "what": "dripstone: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "dripstone: the eye in cave air at (-1525, 0.5, 1583); within 12 blocks of (-1525, 0, 1583) {\"dripstone\":2155} (dripstone_block; the pose rule counted 2,155 dripstone_block over the T-stage grid), 5948 deepslate, 1753 stone; night vision lifts the view's mean luminance 15.13 → 96.13; no sky in view (0)",
+            "detail": {
+              "pose": {
+                "x": -1525,
+                "y": 0.5,
+                "z": 1583,
+                "yaw": 135,
+                "pitch": 0
+              },
+              "eyeState": 0,
+              "unloaded": 0,
+              "skin": {
+                "dripstone": 2155
+              },
+              "deepslate": 5948,
+              "stone": 1753,
+              "air": 5769,
+              "lightFloor": {
+                "samples": 177777,
+                "pureBlack": 0,
+                "darkest": {
+                  "x": 114,
+                  "y": 447,
+                  "rgb": [
+                    3,
+                    3,
+                    3
+                  ],
+                  "lum": 3
+                },
+                "maxChannel": {
+                  "min": 3,
+                  "p01": 5,
+                  "p10": 8,
+                  "p50": 20
+                },
+                "luminance": {
+                  "min": 3,
+                  "p01": 4.07,
+                  "p50": 14.91,
+                  "mean": 15.13
+                },
+                "saturatedShare": 0
+              },
+              "nightVision": {
+                "samples": 177777,
+                "pureBlack": 0,
+                "darkest": {
+                  "x": 1020,
+                  "y": 459,
+                  "rgb": [
+                    24,
+                    28,
+                    39
+                  ],
+                  "lum": 27.94
+                },
+                "maxChannel": {
+                  "min": 39,
+                  "p01": 52,
+                  "p10": 65,
+                  "p50": 115
+                },
+                "luminance": {
+                  "min": 27.94,
+                  "p01": 48.35,
+                  "p50": 95.73,
+                  "mean": 96.13
+                },
+                "saturatedShare": 0.817
+              },
+              "skyShareNv": 0
+            }
+          },
+          {
+            "pass": true,
+            "what": "abyss: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "abyss: the eye in cave air at (-1316, -33.5, 1519); within 12 blocks of (-1316, -34, 1519) {\"abyssRock\":15366,\"ash\":152} (abyss rock; the pose rule counted 15,366 abyss rock over the T-stage grid), 0 deepslate, 0 stone; night vision lifts the view's mean luminance 3.95 → 40.89; no sky in view (0)",
+            "detail": {
+              "pose": {
+                "x": -1316,
+                "y": -33.5,
+                "z": 1519,
+                "yaw": 270,
+                "pitch": 0
+              },
+              "eyeState": 0,
+              "unloaded": 0,
+              "skin": {
+                "abyssRock": 15366,
+                "ash": 152
+              },
+              "deepslate": 0,
+              "stone": 0,
+              "air": 259,
+              "lightFloor": {
+                "samples": 177546,
+                "pureBlack": 0,
+                "darkest": {
+                  "x": 729,
+                  "y": 300,
+                  "rgb": [
+                    1,
+                    0,
+                    1
+                  ],
+                  "lum": 0.28
+                },
+                "maxChannel": {
+                  "min": 1,
+                  "p01": 1,
+                  "p10": 1,
+                  "p50": 3
+                },
+                "luminance": {
+                  "min": 0.28,
+                  "p01": 1,
+                  "p50": 2.07,
+                  "mean": 3.95
+                },
+                "saturatedShare": 0
+              },
+              "nightVision": {
+                "samples": 177546,
+                "pureBlack": 0,
+                "darkest": {
+                  "x": 732,
+                  "y": 303,
+                  "rgb": [
+                    13,
+                    12,
+                    17
+                  ],
+                  "lum": 12.57
+                },
+                "maxChannel": {
+                  "min": 17,
+                  "p01": 22,
+                  "p10": 26,
+                  "p50": 38
+                },
+                "luminance": {
+                  "min": 12.57,
+                  "p01": 15.93,
+                  "p50": 31.21,
+                  "mean": 40.89
+                },
+                "saturatedShare": 0
+              },
+              "skyShareNv": 0
+            }
+          },
+          {
+            "pass": true,
+            "what": "biomeBorder: the stream settled at RD 12 (rd, filled = [12,12], after 1 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "biomeBorder: the eye in cave air at (-1542, -50.5, 1349); within 12 blocks of (-1542, -52, 1349) {\"abyssRock\":3679,\"stone\":0} (abyss rock (plain cave into the abyss); the pose rule counted — over the T-stage grid), 6419 deepslate, 0 stone; night vision lifts the view's mean luminance 6.91 → 63.2; no sky in view (0)",
+            "detail": {
+              "pose": {
+                "x": -1542,
+                "y": -50.5,
+                "z": 1349,
+                "yaw": 180,
+                "pitch": 0
+              },
+              "eyeState": 0,
+              "unloaded": 0,
+              "skin": {
+                "abyssRock": 3679,
+                "stone": 0
+              },
+              "deepslate": 6419,
+              "stone": 0,
+              "air": 3663,
+              "lightFloor": {
+                "samples": 177777,
+                "pureBlack": 0,
+                "darkest": {
+                  "x": 444,
+                  "y": 237,
+                  "rgb": [
+                    1,
+                    1,
+                    1
+                  ],
+                  "lum": 1
+                },
+                "maxChannel": {
+                  "min": 1,
+                  "p01": 2,
+                  "p10": 4,
+                  "p50": 8
+                },
+                "luminance": {
+                  "min": 1,
+                  "p01": 2,
+                  "p50": 7.07,
+                  "mean": 6.91
+                },
+                "saturatedShare": 0
+              },
+              "nightVision": {
+                "samples": 177777,
+                "pureBlack": 0,
+                "darkest": {
+                  "x": 450,
+                  "y": 345,
+                  "rgb": [
+                    24,
+                    21,
+                    22
+                  ],
+                  "lum": 21.71
+                },
+                "maxChannel": {
+                  "min": 24,
+                  "p01": 32,
+                  "p10": 51,
+                  "p50": 71
+                },
+                "luminance": {
+                  "min": 21.71,
+                  "p01": 24.99,
+                  "p50": 66.36,
+                  "mean": 63.2
+                },
+                "saturatedShare": 0
+              },
+              "skyShareNv": 0
+            }
+          }
+        ],
+        "pass": true,
+        "links": {
+          "lush": "https://world-imaginer-voxel.vercel.app/?at=-1679,1744&y=49.5&yaw=270.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+          "dripstone": "https://world-imaginer-voxel.vercel.app/?at=-1525,1583&y=0.5&yaw=135.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+          "abyss": "https://world-imaginer-voxel.vercel.app/?at=-1316,1519&y=-33.5&yaw=270.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+          "biomeBorder": "https://world-imaginer-voxel.vercel.app/?at=-1542,1349&y=-50.5&yaw=180.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+          "bottomCavern": "https://world-imaginer-voxel.vercel.app/?at=186,-22&y=-38.5&yaw=45.0&pitch=-15.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+          "caveHeavySpawn": "https://world-imaginer-voxel.vercel.app/?at=0,0&y=101.5&yaw=0.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19"
+        },
+        "shot_lush_lightFloor": "test/metrics/.out/task60/step2/shots/2-lush-light-floor.png",
+        "shot_lush_nightVision": "test/metrics/.out/task60/step2/shots/2-lush-night-vision.png",
+        "lush": {
+          "pose": {
+            "x": -1679,
+            "y": 49.5,
+            "z": 1744,
+            "yaw": 270,
+            "pitch": 0
+          },
+          "eyeState": 0,
+          "unloaded": 0,
+          "skin": {
+            "moss": 647,
+            "clay": 320
+          },
+          "deepslate": 0,
+          "stone": 12705,
+          "air": 1939,
+          "lightFloor": {
+            "samples": 177777,
+            "pureBlack": 0,
+            "darkest": {
+              "x": 957,
+              "y": 69,
+              "rgb": [
+                2,
+                5,
+                1
+              ],
+              "lum": 4.07
+            },
+            "maxChannel": {
+              "min": 5,
+              "p01": 7,
+              "p10": 9,
+              "p50": 13
+            },
+            "luminance": {
+              "min": 4.07,
+              "p01": 5.72,
+              "p50": 11.72,
+              "mean": 12.47
+            },
+            "saturatedShare": 0
+          },
+          "nightVision": {
+            "samples": 177777,
+            "pureBlack": 0,
+            "darkest": {
+              "x": 957,
+              "y": 771,
+              "rgb": [
+                27,
+                31,
+                42
+              ],
+              "lum": 30.94
+            },
+            "maxChannel": {
+              "min": 34,
+              "p01": 43,
+              "p10": 73,
+              "p50": 89
+            },
+            "luminance": {
+              "min": 30.94,
+              "p01": 37.88,
+              "p50": 82.44,
+              "mean": 85.99
+            },
+            "saturatedShare": 0.6854
+          },
+          "skyShareNv": 0
+        },
+        "shot_dripstone_lightFloor": "test/metrics/.out/task60/step2/shots/2-dripstone-light-floor.png",
+        "shot_dripstone_nightVision": "test/metrics/.out/task60/step2/shots/2-dripstone-night-vision.png",
+        "dripstone": {
+          "pose": {
+            "x": -1525,
+            "y": 0.5,
+            "z": 1583,
+            "yaw": 135,
+            "pitch": 0
+          },
+          "eyeState": 0,
+          "unloaded": 0,
+          "skin": {
+            "dripstone": 2155
+          },
+          "deepslate": 5948,
+          "stone": 1753,
+          "air": 5769,
+          "lightFloor": {
+            "samples": 177777,
+            "pureBlack": 0,
+            "darkest": {
+              "x": 114,
+              "y": 447,
+              "rgb": [
+                3,
+                3,
+                3
+              ],
+              "lum": 3
+            },
+            "maxChannel": {
+              "min": 3,
+              "p01": 5,
+              "p10": 8,
+              "p50": 20
+            },
+            "luminance": {
+              "min": 3,
+              "p01": 4.07,
+              "p50": 14.91,
+              "mean": 15.13
+            },
+            "saturatedShare": 0
+          },
+          "nightVision": {
+            "samples": 177777,
+            "pureBlack": 0,
+            "darkest": {
+              "x": 1020,
+              "y": 459,
+              "rgb": [
+                24,
+                28,
+                39
+              ],
+              "lum": 27.94
+            },
+            "maxChannel": {
+              "min": 39,
+              "p01": 52,
+              "p10": 65,
+              "p50": 115
+            },
+            "luminance": {
+              "min": 27.94,
+              "p01": 48.35,
+              "p50": 95.73,
+              "mean": 96.13
+            },
+            "saturatedShare": 0.817
+          },
+          "skyShareNv": 0
+        },
+        "shot_abyss_lightFloor": "test/metrics/.out/task60/step2/shots/2-abyss-light-floor.png",
+        "shot_abyss_nightVision": "test/metrics/.out/task60/step2/shots/2-abyss-night-vision.png",
+        "abyss": {
+          "pose": {
+            "x": -1316,
+            "y": -33.5,
+            "z": 1519,
+            "yaw": 270,
+            "pitch": 0
+          },
+          "eyeState": 0,
+          "unloaded": 0,
+          "skin": {
+            "abyssRock": 15366,
+            "ash": 152
+          },
+          "deepslate": 0,
+          "stone": 0,
+          "air": 259,
+          "lightFloor": {
+            "samples": 177546,
+            "pureBlack": 0,
+            "darkest": {
+              "x": 729,
+              "y": 300,
+              "rgb": [
+                1,
+                0,
+                1
+              ],
+              "lum": 0.28
+            },
+            "maxChannel": {
+              "min": 1,
+              "p01": 1,
+              "p10": 1,
+              "p50": 3
+            },
+            "luminance": {
+              "min": 0.28,
+              "p01": 1,
+              "p50": 2.07,
+              "mean": 3.95
+            },
+            "saturatedShare": 0
+          },
+          "nightVision": {
+            "samples": 177546,
+            "pureBlack": 0,
+            "darkest": {
+              "x": 732,
+              "y": 303,
+              "rgb": [
+                13,
+                12,
+                17
+              ],
+              "lum": 12.57
+            },
+            "maxChannel": {
+              "min": 17,
+              "p01": 22,
+              "p10": 26,
+              "p50": 38
+            },
+            "luminance": {
+              "min": 12.57,
+              "p01": 15.93,
+              "p50": 31.21,
+              "mean": 40.89
+            },
+            "saturatedShare": 0
+          },
+          "skyShareNv": 0
+        },
+        "shot_biomeBorder_lightFloor": "test/metrics/.out/task60/step2/shots/2-biomeBorder-light-floor.png",
+        "shot_biomeBorder_nightVision": "test/metrics/.out/task60/step2/shots/2-biomeBorder-night-vision.png",
+        "biomeBorder": {
+          "pose": {
+            "x": -1542,
+            "y": -50.5,
+            "z": 1349,
+            "yaw": 180,
+            "pitch": 0
+          },
+          "eyeState": 0,
+          "unloaded": 0,
+          "skin": {
+            "abyssRock": 3679,
+            "stone": 0
+          },
+          "deepslate": 6419,
+          "stone": 0,
+          "air": 3663,
+          "lightFloor": {
+            "samples": 177777,
+            "pureBlack": 0,
+            "darkest": {
+              "x": 444,
+              "y": 237,
+              "rgb": [
+                1,
+                1,
+                1
+              ],
+              "lum": 1
+            },
+            "maxChannel": {
+              "min": 1,
+              "p01": 2,
+              "p10": 4,
+              "p50": 8
+            },
+            "luminance": {
+              "min": 1,
+              "p01": 2,
+              "p50": 7.07,
+              "mean": 6.91
+            },
+            "saturatedShare": 0
+          },
+          "nightVision": {
+            "samples": 177777,
+            "pureBlack": 0,
+            "darkest": {
+              "x": 450,
+              "y": 345,
+              "rgb": [
+                24,
+                21,
+                22
+              ],
+              "lum": 21.71
+            },
+            "maxChannel": {
+              "min": 24,
+              "p01": 32,
+              "p10": 51,
+              "p50": 71
+            },
+            "luminance": {
+              "min": 21.71,
+              "p01": 24.99,
+              "p50": 66.36,
+              "mean": 63.2
+            },
+            "saturatedShare": 0
+          },
+          "skyShareNv": 0
+        },
+        "wallMs": 32503,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 3,
+        "name": "the X-ray by cave biome (C) at the dripstone pose pitched 20° up (the review shot's view): X, C, the strip's line and legend, the notice, the colours; C and X back",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "the dripstone pose: the stream settled at RD 12 (rd, filled = [12,12], after 1 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "X: \"X-ray · y −64 … 319 · by cave type\" with the ten kinds' legend",
+            "detail": {
+              "kinds": [
+                "Cheese",
+                "Spaghetti 3D",
+                "Spaghetti 2D",
+                "Noodle",
+                "Entrance",
+                "Worm",
+                "Ravine",
+                "Underground worm",
+                "Other density air",
+                "Surface"
+              ],
+              "biomes": null
+            }
+          },
+          {
+            "pass": true,
+            "what": "C: \"X-ray · y −64 … 319 · by cave biome\" with the biome legend [\"Plain cave\",\"Lush\",\"Dripstone\",\"Abyss\",\"Surface\"]",
+            "detail": {
+              "strip": {
+                "hidden": false,
+                "text": "X-ray · y −64 … 319 · by cave biome"
+              },
+              "legends": {
+                "kinds": null,
+                "biomes": [
+                  "Plain cave",
+                  "Lush",
+                  "Dripstone",
+                  "Abyss",
+                  "Surface"
+                ]
+              }
+            }
+          },
+          {
+            "pass": true,
+            "what": "C's notice \"X-ray by cave biome\" (This world is not saved: it was opened from a link. Use New world on the start screen to keep one. DismissX-ray by cave biome Dismiss)"
+          },
+          {
+            "pass": true,
+            "what": "by cave biome the walls read dripstone's orange on 86.8 % of the canvas' samples, the abyss's violet 4.9 %, plain cave 8.2 %, lush 0.0 % (the review shot's dripstone all round, the abyss below, plain above); C changed 73.0 % of the samples (by cave type the kinds' colours, which the nearest-biome classifier reads as {\"plain\":0.0152,\"lush\":0.069,\"dripstone\":0.8948,\"abyss\":0.0211}: not a biome reading)",
+            "detail": {
+              "byType": {
+                "samples": 170388,
+                "sky": 0.0042,
+                "byBiome": {
+                  "plain": 0.0152,
+                  "lush": 0.069,
+                  "dripstone": 0.8948,
+                  "abyss": 0.0211
+                },
+                "faint": 0
+              },
+              "byBiome": {
+                "samples": 170388,
+                "sky": 0.0018,
+                "byBiome": {
+                  "plain": 0.0823,
+                  "lush": 0,
+                  "dripstone": 0.8683,
+                  "abyss": 0.0494
+                },
+                "faint": 0
+              }
+            }
+          }
+        ],
+        "pass": true,
+        "link": "https://world-imaginer-voxel.vercel.app/?at=-1525,1583&y=0.5&yaw=135.0&pitch=20.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "sharesByType": {
+          "samples": 170388,
+          "sky": 0.0042,
+          "byBiome": {
+            "plain": 0.0152,
+            "lush": 0.069,
+            "dripstone": 0.8948,
+            "abyss": 0.0211
+          },
+          "faint": 0
+        },
+        "shotByType": "test/metrics/.out/task60/step2/shots/3-xray-by-cave-type.png",
+        "hud": "240 fps · p50 4.2 ms · p95 4.2 ms\ncolumns T 825/825 · D 705/705 · L 593/593 · meshed 489/489 · revealed 489 · sections 9218\nin flight / queued T 0/0 · D 0/0 · L 0/0 · MESH 0/0\nX-ray · y −64 … 319 · by cave type\ngenCap 5 · dropped 0 · failed 0\ndraw calls 7 · triangles 284.5 k\nFly · x -1525.0 y 0.5 z 1583.0 · column -96, 98\nspeed 12.0 blocks/s · 08:08 ×1\nRD 12 (fog 12.0) · workers 6/6 · batch\nregions 14 · GPU 110.0 MB\nGPU ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)\nH / F1 help · F3 hide",
+        "sharesByBiome": {
+          "samples": 170388,
+          "sky": 0.0018,
+          "byBiome": {
+            "plain": 0.0823,
+            "lush": 0,
+            "dripstone": 0.8683,
+            "abyss": 0.0494
+          },
+          "faint": 0
+        },
+        "diffTypeToBiome": 0.7296,
+        "shotByBiome": "test/metrics/.out/task60/step2/shots/3-xray-by-cave-biome.png",
+        "wallMs": 14634,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 4,
+        "name": "the map's caveBiome layer (the world's map over the dripstone pose, full screen): Map layer \"caveBiome\", its y at −32 (SP6B_MAP's), the three biome colours drawn",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "M opens the map"
+          },
+          {
+            "pass": true,
+            "what": "the Map layer select offers caveBiome and takes it ([\"biome\",\"relief\",\"rivers\",\"lakes\",\"C\",\"E\",\"PV\",\"W\",\"T\",\"H\",\"R\",\"offset\",\"sigma\",\"jag\",\"islandMask\",\"caveBiome\"])"
+          },
+          {
+            "pass": true,
+            "what": "the layer's y field shows"
+          },
+          {
+            "pass": true,
+            "what": "the caveBiome layer at y -32 draws lush 26.70 %, dripstone 1.12 %, the abyss 11.95 % and plain cave 56.80 % of the map canvas' samples (each colour within 6 per channel)",
+            "detail": {
+              "samples": 327328,
+              "plain": 0.568,
+              "lush": 0.267,
+              "dripstone": 0.0112,
+              "abyss": 0.1195
+            }
+          },
+          {
+            "pass": true,
+            "what": "M closes the map"
+          },
+          {
+            "pass": true,
+            "what": "C again: back to by cave type"
+          },
+          {
+            "pass": true,
+            "what": "X again: the X-ray off"
+          }
+        ],
+        "pass": true,
+        "layersOffered": [
+          "biome",
+          "relief",
+          "rivers",
+          "lakes",
+          "C",
+          "E",
+          "PV",
+          "W",
+          "T",
+          "H",
+          "R",
+          "offset",
+          "sigma",
+          "jag",
+          "islandMask",
+          "caveBiome"
+        ],
+        "layerBefore": "biome",
+        "mapShares": {
+          "samples": 327328,
+          "plain": 0.568,
+          "lush": 0.267,
+          "dripstone": 0.0112,
+          "abyss": 0.1195
+        },
+        "yField": "-32",
+        "shotMap": "test/metrics/.out/task60/step2/shots/4-map-cave-biome-layer.png",
+        "wallMs": 8270,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 5,
+        "name": "cave_heavy: New world's preset select lists it; its spawn link generates; more cave air than the default at the same columns",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "New world's preset select lists cave_heavy (default, large_biomes, archipelago, amplified, floating_islands, cave_heavy)"
+          },
+          {
+            "pass": true,
+            "what": "cave_heavy: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "cave_heavy reveals and draws"
+          },
+          {
+            "pass": true,
+            "what": "cave_heavy holds more cave air than the default in the 33 × 33 columns around (0, 0): 15179 against 12211 (×1.24)",
+            "detail": {
+              "heavy": 15179,
+              "def": 12211
+            }
+          }
+        ],
+        "pass": true,
+        "presets": [
+          "default",
+          "large_biomes",
+          "archipelago",
+          "amplified",
+          "floating_islands",
+          "cave_heavy"
+        ],
+        "shotNew": "test/metrics/.out/task60/step2/shots/5-new-world-presets.png",
+        "poseHeavy": {
+          "x": 0,
+          "y": 101.5,
+          "z": 0,
+          "yaw": 0,
+          "pitch": 0
+        },
+        "shotHeavy": "test/metrics/.out/task60/step2/shots/5-cave-heavy-spawn.png",
+        "probeHeavy": {
+          "box": {
+            "x0": -16,
+            "x1": 17,
+            "z0": -16,
+            "z1": 17,
+            "y0": -64,
+            "y1": 125
+          },
+          "skippedColumns": [],
+          "columns": 1089,
+          "voxels": 206910,
+          "caveAir": 15179,
+          "skin": {
+            "moss": 0,
+            "clay": 0,
+            "dripstone": 3153,
+            "abyssRock": 0
+          },
+          "unloaded": 0,
+          "hash": "f35d255a"
+        },
+        "probeDefault": {
+          "box": {
+            "x0": -16,
+            "x1": 17,
+            "z0": -16,
+            "z1": 17,
+            "y0": -64,
+            "y1": 125
+          },
+          "skippedColumns": [],
+          "columns": 1089,
+          "voxels": 206910,
+          "caveAir": 12211,
+          "skin": {
+            "moss": 0,
+            "clay": 0,
+            "dripstone": 3002,
+            "abyssRock": 0
+          },
+          "unloaded": 0,
+          "hash": "6374f7f9"
+        },
+        "wallMs": 12096,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 6,
+        "name": "a cave with culling (RegionBatch, culling on underground): the culling evidence is the dripstone walk, 10 flight steps over 14.1 blocks along yaw 135 that cross the section boundaries x −1520 and z 1584; after each step the picture right away and 0.7 s later (no pop-in), and no sky through the rock (no hole). The short flight from the biome-border slot (2 steps over 2.5 blocks, then rock ahead) crosses no section boundary and is kept only as a no-hole check at a doorway",
+        "notes": [
+          "The task review's minor 1: the biome-border walk moved 2.5 blocks (z 1349 → 1351.5) inside one section (z 1344-1359), so it crossed no doorway between culled cells; its pass rule (at least 2 steps) was the agent's own, set at a rehearsal, not a spec gate. The dripstone walk (14.1 blocks, across x −1520 and z 1584) is the culling evidence. Neither walk read culledSections(); culling is on by default on RegionBatch (the bench alone turns it off).",
+          "The task review's minor 2: from the biome-border link, straight ahead at yaw 180 meets rock after 2.5 blocks; a person walking into the abyss turns or flies to find the opening."
+        ],
+        "checks": [
+          {
+            "pass": true,
+            "what": "biomeBorder: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "biomeBorder: flying"
+          },
+          {
+            "pass": true,
+            "what": "biomeBorder: 2 steps along yaw 180 (2.5 blocks): no hole (the sky's share of the canvas at most 0) and nothing popping in (at most 0.00 % of the samples change in the 0.7 s after a step settles; a step itself changes 22.4 % on average)",
+            "detail": {
+              "id": "biomeBorder",
+              "yaw": 180,
+              "rows": [
+                {
+                  "k": 0,
+                  "pose": {
+                    "x": -1542,
+                    "y": -50.5,
+                    "z": 1349,
+                    "yaw": 180.14999999999998,
+                    "pitch": -0.15
+                  },
+                  "sky": 0
+                },
+                {
+                  "k": 1,
+                  "pose": {
+                    "x": -1542,
+                    "y": -50.5,
+                    "z": 1350.2
+                  },
+                  "moved": 1.2,
+                  "popIn": 0,
+                  "stepChange": 0.1428,
+                  "sky1": 0,
+                  "sky2": 0
+                },
+                {
+                  "k": 2,
+                  "pose": {
+                    "x": -1542,
+                    "y": -50.5,
+                    "z": 1351.5
+                  },
+                  "moved": 1.3,
+                  "popIn": 0,
+                  "stepChange": 0.3056,
+                  "sky1": 0,
+                  "sky2": 0
+                },
+                {
+                  "k": 3,
+                  "stop": "rock ahead [0,17,17]"
+                }
+              ],
+              "steps": 2,
+              "distance": 2.5,
+              "maxPopIn": 0,
+              "maxSky": 0,
+              "meanStepChange": 0.22419999999999998
+            }
+          },
+          {
+            "pass": true,
+            "what": "dripstone: the stream settled at RD 12 (rd, filled = [12,12], after 1 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "dripstone: flying"
+          },
+          {
+            "pass": true,
+            "what": "dripstone: 10 steps along yaw 135 (14.1 blocks): no hole (the sky's share of the canvas at most 0) and nothing popping in (at most 0.02 % of the samples change in the 0.7 s after a step settles; a step itself changes 28.4 % on average)",
+            "detail": {
+              "id": "dripstone",
+              "yaw": 135,
+              "rows": [
+                {
+                  "k": 0,
+                  "pose": {
+                    "x": -1525,
+                    "y": 0.5,
+                    "z": 1583,
+                    "yaw": 135.14999999999998,
+                    "pitch": -0.15
+                  },
+                  "sky": 0
+                },
+                {
+                  "k": 1,
+                  "pose": {
+                    "x": -1523.7,
+                    "y": 0.5,
+                    "z": 1584.3
+                  },
+                  "moved": 1.9,
+                  "popIn": 0.0002,
+                  "stepChange": 0.3643,
+                  "sky1": 0,
+                  "sky2": 0
+                },
+                {
+                  "k": 2,
+                  "pose": {
+                    "x": -1522.7,
+                    "y": 0.5,
+                    "z": 1585.3
+                  },
+                  "moved": 1.3,
+                  "popIn": 0.0002,
+                  "stepChange": 0.2618,
+                  "sky1": 0,
+                  "sky2": 0
+                },
+                {
+                  "k": 3,
+                  "pose": {
+                    "x": -1521.8,
+                    "y": 0.5,
+                    "z": 1586.3
+                  },
+                  "moved": 1.3,
+                  "popIn": 0.0001,
+                  "stepChange": 0.2917,
+                  "sky1": 0,
+                  "sky2": 0
+                },
+                {
+                  "k": 4,
+                  "pose": {
+                    "x": -1520.8,
+                    "y": 0.5,
+                    "z": 1587.2
+                  },
+                  "moved": 1.3,
+                  "popIn": 0.0001,
+                  "stepChange": 0.2635,
+                  "sky1": 0,
+                  "sky2": 0
+                },
+                {
+                  "k": 5,
+                  "pose": {
+                    "x": -1519.9,
+                    "y": 0.5,
+                    "z": 1588.2
+                  },
+                  "moved": 1.3,
+                  "popIn": 0.0001,
+                  "stepChange": 0.2731,
+                  "sky1": 0,
+                  "sky2": 0
+                },
+                {
+                  "k": 6,
+                  "pose": {
+                    "x": -1518.9,
+                    "y": 0.5,
+                    "z": 1589.1
+                  },
+                  "moved": 1.3,
+                  "popIn": 0.0002,
+                  "stepChange": 0.24,
+                  "sky1": 0,
+                  "sky2": 0
+                },
+                {
+                  "k": 7,
+                  "pose": {
+                    "x": -1517.9,
+                    "y": 0.5,
+                    "z": 1590.1
+                  },
+                  "moved": 1.3,
+                  "popIn": 0.0002,
+                  "stepChange": 0.3146,
+                  "sky1": 0,
+                  "sky2": 0
+                },
+                {
+                  "k": 8,
+                  "pose": {
+                    "x": -1517,
+                    "y": 0.5,
+                    "z": 1591.1
+                  },
+                  "moved": 1.4,
+                  "popIn": 0.0002,
+                  "stepChange": 0.292,
+                  "sky1": 0,
+                  "sky2": 0
+                },
+                {
+                  "k": 9,
+                  "pose": {
+                    "x": -1516,
+                    "y": 0.5,
+                    "z": 1592
+                  },
+                  "moved": 1.3,
+                  "popIn": 0.0001,
+                  "stepChange": 0.2798,
+                  "sky1": 0,
+                  "sky2": 0
+                },
+                {
+                  "k": 10,
+                  "pose": {
+                    "x": -1515.1,
+                    "y": 0.5,
+                    "z": 1593
+                  },
+                  "moved": 1.3,
+                  "popIn": 0.0002,
+                  "stepChange": 0.2605,
+                  "sky1": 0,
+                  "sky2": 0
+                }
+              ],
+              "steps": 10,
+              "distance": 14.1,
+              "maxPopIn": 0.0002,
+              "maxSky": 0,
+              "meanStepChange": 0.2841
+            }
+          }
+        ],
+        "pass": true,
+        "shot_biomeBorder_1": "test/metrics/.out/task60/step2/shots/6-biomeBorder-step-1.png",
+        "shot_dripstone_1": "test/metrics/.out/task60/step2/shots/6-dripstone-step-1.png",
+        "shot_dripstone_3": "test/metrics/.out/task60/step2/shots/6-dripstone-step-3.png",
+        "shot_dripstone_6": "test/metrics/.out/task60/step2/shots/6-dripstone-step-6.png",
+        "shot_dripstone_9": "test/metrics/.out/task60/step2/shots/6-dripstone-step-9.png",
+        "walks": [
+          {
+            "id": "biomeBorder",
+            "yaw": 180,
+            "rows": [
+              {
+                "k": 0,
+                "pose": {
+                  "x": -1542,
+                  "y": -50.5,
+                  "z": 1349,
+                  "yaw": 180.14999999999998,
+                  "pitch": -0.15
+                },
+                "sky": 0
+              },
+              {
+                "k": 1,
+                "pose": {
+                  "x": -1542,
+                  "y": -50.5,
+                  "z": 1350.2
+                },
+                "moved": 1.2,
+                "popIn": 0,
+                "stepChange": 0.1428,
+                "sky1": 0,
+                "sky2": 0
+              },
+              {
+                "k": 2,
+                "pose": {
+                  "x": -1542,
+                  "y": -50.5,
+                  "z": 1351.5
+                },
+                "moved": 1.3,
+                "popIn": 0,
+                "stepChange": 0.3056,
+                "sky1": 0,
+                "sky2": 0
+              },
+              {
+                "k": 3,
+                "stop": "rock ahead [0,17,17]"
+              }
+            ],
+            "steps": 2,
+            "distance": 2.5,
+            "maxPopIn": 0,
+            "maxSky": 0,
+            "meanStepChange": 0.22419999999999998
+          },
+          {
+            "id": "dripstone",
+            "yaw": 135,
+            "rows": [
+              {
+                "k": 0,
+                "pose": {
+                  "x": -1525,
+                  "y": 0.5,
+                  "z": 1583,
+                  "yaw": 135.14999999999998,
+                  "pitch": -0.15
+                },
+                "sky": 0
+              },
+              {
+                "k": 1,
+                "pose": {
+                  "x": -1523.7,
+                  "y": 0.5,
+                  "z": 1584.3
+                },
+                "moved": 1.9,
+                "popIn": 0.0002,
+                "stepChange": 0.3643,
+                "sky1": 0,
+                "sky2": 0
+              },
+              {
+                "k": 2,
+                "pose": {
+                  "x": -1522.7,
+                  "y": 0.5,
+                  "z": 1585.3
+                },
+                "moved": 1.3,
+                "popIn": 0.0002,
+                "stepChange": 0.2618,
+                "sky1": 0,
+                "sky2": 0
+              },
+              {
+                "k": 3,
+                "pose": {
+                  "x": -1521.8,
+                  "y": 0.5,
+                  "z": 1586.3
+                },
+                "moved": 1.3,
+                "popIn": 0.0001,
+                "stepChange": 0.2917,
+                "sky1": 0,
+                "sky2": 0
+              },
+              {
+                "k": 4,
+                "pose": {
+                  "x": -1520.8,
+                  "y": 0.5,
+                  "z": 1587.2
+                },
+                "moved": 1.3,
+                "popIn": 0.0001,
+                "stepChange": 0.2635,
+                "sky1": 0,
+                "sky2": 0
+              },
+              {
+                "k": 5,
+                "pose": {
+                  "x": -1519.9,
+                  "y": 0.5,
+                  "z": 1588.2
+                },
+                "moved": 1.3,
+                "popIn": 0.0001,
+                "stepChange": 0.2731,
+                "sky1": 0,
+                "sky2": 0
+              },
+              {
+                "k": 6,
+                "pose": {
+                  "x": -1518.9,
+                  "y": 0.5,
+                  "z": 1589.1
+                },
+                "moved": 1.3,
+                "popIn": 0.0002,
+                "stepChange": 0.24,
+                "sky1": 0,
+                "sky2": 0
+              },
+              {
+                "k": 7,
+                "pose": {
+                  "x": -1517.9,
+                  "y": 0.5,
+                  "z": 1590.1
+                },
+                "moved": 1.3,
+                "popIn": 0.0002,
+                "stepChange": 0.3146,
+                "sky1": 0,
+                "sky2": 0
+              },
+              {
+                "k": 8,
+                "pose": {
+                  "x": -1517,
+                  "y": 0.5,
+                  "z": 1591.1
+                },
+                "moved": 1.4,
+                "popIn": 0.0002,
+                "stepChange": 0.292,
+                "sky1": 0,
+                "sky2": 0
+              },
+              {
+                "k": 9,
+                "pose": {
+                  "x": -1516,
+                  "y": 0.5,
+                  "z": 1592
+                },
+                "moved": 1.3,
+                "popIn": 0.0001,
+                "stepChange": 0.2798,
+                "sky1": 0,
+                "sky2": 0
+              },
+              {
+                "k": 10,
+                "pose": {
+                  "x": -1515.1,
+                  "y": 0.5,
+                  "z": 1593
+                },
+                "moved": 1.3,
+                "popIn": 0.0002,
+                "stepChange": 0.2605,
+                "sky1": 0,
+                "sky2": 0
+              }
+            ],
+            "steps": 10,
+            "distance": 14.1,
+            "maxPopIn": 0.0002,
+            "maxSky": 0,
+            "meanStepChange": 0.2841
+          }
+        ],
+        "wallMs": 41176,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 7,
+        "name": "the bottom cavern (its review link): the rock floor of mounds and gullies, no flat bedrock floor; against SP6a's floor in the same columns (Step 0's scan)",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "bottomCavern: the stream settled at RD 12 (rd, filled = [12,12], after 1 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "in the 25 × 25 columns around (185, -22) the cave floors (327 columns) lie at y -42 … -20 (p10 -41, median -30, p90 -21: a spread of 20 blocks, C7.bottomFloorSpread's bound 6); no air right above bedrock (0); floor blocks {\"17\":197,\"59\":130}; SP6a's floors there: {\"columnsWithFloor\":354,\"min\":-58,\"p10\":-56,\"p50\":-46,\"p90\":-22,\"max\":-20} (spread 34), risen by 0 … 36 (median 4)",
+            "detail": {
+              "f": {
+                "columns": 625,
+                "columnsWithFloor": 327,
+                "min": -42,
+                "p10": -41,
+                "p50": -30,
+                "p90": -21,
+                "max": -20,
+                "spreadP90P10": 20,
+                "floorBlocks": {
+                  "17": 197,
+                  "59": 130
+                },
+                "bedrockExposed": 0
+              },
+              "sp6a": {
+                "sp6aStats": {
+                  "columnsWithFloor": 354,
+                  "min": -58,
+                  "p10": -56,
+                  "p50": -46,
+                  "p90": -22,
+                  "max": -20
+                },
+                "sp6aSpreadP90P10": 34,
+                "rise": {
+                  "columns": 327,
+                  "min": 0,
+                  "p50": 4,
+                  "max": 36
+                }
+              }
+            }
+          }
+        ],
+        "pass": true,
+        "floorStats": {
+          "columns": 625,
+          "columnsWithFloor": 327,
+          "min": -42,
+          "p10": -41,
+          "p50": -30,
+          "p90": -21,
+          "max": -20,
+          "spreadP90P10": 20,
+          "floorBlocks": {
+            "17": 197,
+            "59": 130
+          },
+          "bedrockExposed": 0
+        },
+        "againstSp6a": {
+          "sp6aStats": {
+            "columnsWithFloor": 354,
+            "min": -58,
+            "p10": -56,
+            "p50": -46,
+            "p90": -22,
+            "max": -20
+          },
+          "sp6aSpreadP90P10": 34,
+          "rise": {
+            "columns": 327,
+            "min": 0,
+            "p50": 4,
+            "max": 36
+          }
+        },
+        "shotNv": "test/metrics/.out/task60/step2/shots/7-bottom-cavern-night-vision.png",
+        "shotLightFloor": "test/metrics/.out/task60/step2/shots/7-bottom-cavern-light-floor.png",
+        "wallMs": 6939,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 8,
+        "name": "?selftest=1 on production (the profile's wi10 untouched: the selftest uses its own wi10-selftest)",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "✓ all 65 goldens match (11.8 s) (test/goldens.json holds 65; 65 ✓ rows, 65 of them the repo's keys)",
+            "detail": "✓ all 65 goldens match (11.8 s)"
+          },
+          {
+            "pass": true,
+            "what": "IndexedDB contract: 10/10 passed",
+            "detail": {
+              "kv": "IndexedDB contract: 10/10 passed",
+              "kvFailures": []
+            }
+          },
+          {
+            "pass": true,
+            "what": "the selftest database wi10-selftest is deleted after the run",
+            "detail": [
+              "wi10@2"
+            ]
+          },
+          {
+            "pass": true,
+            "what": "the profile's wi10 is the same before and after the selftest (counts {\"diffs\":1,\"history\":1,\"historySteps\":2,\"meta\":0,\"state\":1,\"worlds\":1})",
+            "detail": {
+              "before": {
+                "diffs": 1,
+                "history": 1,
+                "historySteps": 2,
+                "meta": 0,
+                "state": 1,
+                "worlds": 1
+              },
+              "after": {
+                "diffs": 1,
+                "history": 1,
+                "historySteps": 2,
+                "meta": 0,
+                "state": 1,
+                "worlds": 1
+              }
+            }
+          }
+        ],
+        "pass": true,
+        "summaryMs": 11842,
+        "summary": "✓ all 65 goldens match (11.8 s)",
+        "keyCount": 65,
+        "repoGoldenCount": 65,
+        "equalCount": 65,
+        "matchesRepoGoldens": 65,
+        "byGroup": {
+          "sp1": 27,
+          "sp2a": 20,
+          "sp3a": 3,
+          "sp3b": 2,
+          "sp3c": 2,
+          "sp3e": 5,
+          "sp6a": 3,
+          "sp6b": 3
+        },
+        "mismatches": [],
+        "kv": "IndexedDB contract: 10/10 passed",
+        "kvFailures": [],
+        "kvMs": 157,
+        "databasesAfter": [
+          "wi10@2"
+        ],
+        "wallMs": 13848,
+        "shot": "test/metrics/.out/task60/step2/shots/8-selftest.png",
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 9,
+        "name": "page and console errors",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "no page error (0)",
+            "detail": []
+          },
+          {
+            "pass": true,
+            "what": "no console error (0; 4 benign logs ignored and listed)",
+            "detail": []
+          }
+        ],
+        "pass": true,
+        "pageErrors": 0,
+        "consoleErrors": 0,
+        "ignored": 4,
+        "wallMs": 0,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      }
+    ],
+    "selftest": "65/65",
+    "selftestSummary": "✓ all 65 goldens match (11.8 s)",
+    "kvContract": "IndexedDB contract: 10/10 passed",
+    "pageErrors": 0,
+    "consoleErrors": 0,
+    "ignoredLogs": [
+      {
+        "step": "0-pre-checks (read-only: PRIME on-demand, eDP-1 at 240 Hz and the only output connected, the session unlocked, load < 1, AC online) and the bundle compare against a local build of main",
+        "source": "log.network",
+        "text": "Failed to load resource: the server responded with a status of 404 ()",
+        "url": "https://world-imaginer-voxel.vercel.app/favicon.ico",
+        "why": "index.html declares no icon, so Chrome asks for /favicon.ico and the host answers 404 (the same ignore as test/tools/cdp.ts ignoredLog and SP5b/SP5c's checks)"
+      },
+      {
+        "step": "1-Step 0's SP6a world (D29): the \"older generator\" badge; it opens with the rock floor and the cave biomes (today's terrain), its edits kept (planks at (185, -58, -10), air at (185, -59, -10))",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=0,0&y=97&yaw=315.1&pitch=-80.4&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "5-cave_heavy: New world's preset select lists it; its spawn link generates; more cave air than the default at the same columns",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=0,0&y=101.5&yaw=0.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "6-a cave with culling (RegionBatch, culling on underground): short flights along the cave from the biome-border slot (a doorway into the abyss) and along the dripstone cave; after each step the picture right away and 0.7 s later (no pop-in), and no sky through the rock (no hole)",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=0,0&y=101.5&yaw=0.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      }
+    ],
+    "dialogs": 10,
+    "settings": {
+      "before": "{\"rd\":12}",
+      "atEndBeforeRestore": "{\"rd\":12,\"fpsCap\":0,\"fov\":70,\"sensitivity\":1,\"brightness\":0.3,\"mapMode\":\"full\",\"watchLive\":true,\"holdRepeat\":false,\"nightVision\":false}",
+      "end": "{\"rd\":12}"
+    },
+    "script": "test/metrics/.out/task60/prodcheck.mjs (Node v24.21.0, no npm dependency; PC_MODE=step0 for Step 0), assemble.mjs for this file; shots in test/metrics/.out/task60/step0/shots and step2/shots"
+  },
+  "firefox": {
+    "by": "the user, by hand, in their own Firefox, on production",
+    "browser": "Firefox 158 (RegionMesh, the Firefox path, with RegionMesh's region culling)",
+    "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:158.0) Gecko/20100101 Firefox/158.0",
+    "date": "2026-11-17, after the Chrome check above",
+    "url": "https://world-imaginer-voxel.vercel.app/",
+    "build": "main at 30203fe, the build the Chrome check above found served (index-BkdAkf-i.js); main was not pushed again before the user's run",
+    "steps": "the Chrome check's steps by hand: the review links handed over after the Chrome check (lush, dripstone, the abyss, the biome border, the bottom cavern, cave_heavy's spawn), the X-ray (X, then C for the X-ray by cave biome), the map's caveBiome layer and a walk through a cave with culling: the user reported them OK. Step 0's SP6a world was not part of it: it lived in the agent's Chrome profile (IndexedDB is per browser and profile)",
+    "links": "the user: \"me gusta lo que veo, puedo reconocer los biomas solo por los colores que representan sus bloques, así que con las texturas y decoraciones estará aun mejor\"",
+    "interaction": "X then C, the map layer and the culling walk: OK (the user)",
+    "selftest": "65/65: every expected equals actual, and each equals test/goldens.json's entry (generatorVersion 9, 65 keys), checked key by key from the user's pasted result; the results are key for key those of assets/sp6b/selftest-firefox.json (Task 52's run)",
+    "selftestResults": {
+      "sp1.detMath.detSin": {
+        "expected": "c0068832078fcc5f",
+        "actual": "c0068832078fcc5f"
+      },
+      "sp1.detMath.detCos": {
+        "expected": "feb91af46e2d5fa8",
+        "actual": "feb91af46e2d5fa8"
+      },
+      "sp1.detMath.detExp": {
+        "expected": "c53d7ddf72bd3cec",
+        "actual": "c53d7ddf72bd3cec"
+      },
+      "sp1.detMath.detExp2": {
+        "expected": "169843df6c4b480a",
+        "actual": "169843df6c4b480a"
+      },
+      "sp1.detMath.detErf": {
+        "expected": "2e75e35244a19c1a",
+        "actual": "2e75e35244a19c1a"
+      },
+      "sp1.detMath.detSmoothstep": {
+        "expected": "e8ecc239194f0001",
+        "actual": "e8ecc239194f0001"
+      },
+      "sp1.noise.climate.warp.shift.noise.x": {
+        "expected": "ab58facf37a59f64",
+        "actual": "ab58facf37a59f64"
+      },
+      "sp1.noise.climate.warp.shift.noise.z": {
+        "expected": "ce2a355bb0a4b957",
+        "actual": "ce2a355bb0a4b957"
+      },
+      "sp1.noise.climate.warp.C.noise.x": {
+        "expected": "73777f2e5850f398",
+        "actual": "73777f2e5850f398"
+      },
+      "sp1.noise.climate.warp.C.noise.z": {
+        "expected": "2eeae0c123b03ad4",
+        "actual": "2eeae0c123b03ad4"
+      },
+      "sp1.noise.climate.warp.R.noise.x": {
+        "expected": "3b557c06de0599df",
+        "actual": "3b557c06de0599df"
+      },
+      "sp1.noise.climate.warp.R.noise.z": {
+        "expected": "cd46ececce41f6e0",
+        "actual": "cd46ececce41f6e0"
+      },
+      "sp1.noise.climate.C": {
+        "expected": "680c01ba6642f1a7",
+        "actual": "680c01ba6642f1a7"
+      },
+      "sp1.noise.climate.E": {
+        "expected": "58586d7808dfe2d1",
+        "actual": "58586d7808dfe2d1"
+      },
+      "sp1.noise.climate.W": {
+        "expected": "a0f5467da1603401",
+        "actual": "a0f5467da1603401"
+      },
+      "sp1.noise.climate.T": {
+        "expected": "98a56062d2803095",
+        "actual": "98a56062d2803095"
+      },
+      "sp1.noise.climate.H": {
+        "expected": "bbeef615830d715b",
+        "actual": "bbeef615830d715b"
+      },
+      "sp1.noise.climate.R": {
+        "expected": "7f29f6fd6882fcf0",
+        "actual": "7f29f6fd6882fcf0"
+      },
+      "sp1.noise.test.density3d": {
+        "expected": "127615bde2c54f3e",
+        "actual": "127615bde2c54f3e"
+      },
+      "sp1.noise.test.adv2d16": {
+        "expected": "12594d7f09c393c9",
+        "actual": "12594d7f09c393c9"
+      },
+      "sp1.noise.test.adv3d8": {
+        "expected": "439e4ef6ce852dd6",
+        "actual": "439e4ef6ce852dd6"
+      },
+      "sp1.noise.test.adv3d32": {
+        "expected": "a456079e4b571a2c",
+        "actual": "a456079e4b571a2c"
+      },
+      "sp1.spline.OFFSET": {
+        "expected": "9d5ae62fbb06366d",
+        "actual": "9d5ae62fbb06366d"
+      },
+      "sp1.spline.SIGMA": {
+        "expected": "7163452d6496dba1",
+        "actual": "7163452d6496dba1"
+      },
+      "sp1.spline.JAG": {
+        "expected": "445a1955b3113d35",
+        "actual": "445a1955b3113d35"
+      },
+      "sp1.spline.TANGENT_FIXTURE": {
+        "expected": "48c1ad609fc51ac9",
+        "actual": "48c1ad609fc51ac9"
+      },
+      "sp1.params": {
+        "expected": "6b819ad553ff5c16",
+        "actual": "6b819ad553ff5c16"
+      },
+      "sp2a.column.point.default": {
+        "expected": "f6eea0b28a0d0b5d",
+        "actual": "f6eea0b28a0d0b5d"
+      },
+      "sp2a.column.point.large_biomes": {
+        "expected": "e817c6995df09a87",
+        "actual": "e817c6995df09a87"
+      },
+      "sp2a.column.sample": {
+        "expected": "2d0575772b66c48b",
+        "actual": "2d0575772b66c48b"
+      },
+      "sp2a.tile.biome.256": {
+        "expected": "6d4706bd9dbe40c5",
+        "actual": "6d4706bd9dbe40c5"
+      },
+      "sp2a.tile.biome.64": {
+        "expected": "a83c59568366276e",
+        "actual": "a83c59568366276e"
+      },
+      "sp2a.tile.biome.16": {
+        "expected": "e31830aa8db805be",
+        "actual": "e31830aa8db805be"
+      },
+      "sp2a.tile.biome.4": {
+        "expected": "85c6cc65316619ce",
+        "actual": "85c6cc65316619ce"
+      },
+      "sp2a.tile.relief.256": {
+        "expected": "5379c0cff8523945",
+        "actual": "5379c0cff8523945"
+      },
+      "sp2a.tile.relief.64": {
+        "expected": "524e0a9ee3fd9925",
+        "actual": "524e0a9ee3fd9925"
+      },
+      "sp2a.tile.relief.16": {
+        "expected": "80b633886df6d2fa",
+        "actual": "80b633886df6d2fa"
+      },
+      "sp2a.tile.relief.4": {
+        "expected": "d9fecde4976f44bb",
+        "actual": "d9fecde4976f44bb"
+      },
+      "sp2a.tile.rivers.256": {
+        "expected": "d075bd749fbcc025",
+        "actual": "d075bd749fbcc025"
+      },
+      "sp2a.tile.rivers.64": {
+        "expected": "9dc9184c9d07926c",
+        "actual": "9dc9184c9d07926c"
+      },
+      "sp2a.tile.rivers.16": {
+        "expected": "7b1a03e31269d80b",
+        "actual": "7b1a03e31269d80b"
+      },
+      "sp2a.tile.rivers.4": {
+        "expected": "de3776fe6877fcd5",
+        "actual": "de3776fe6877fcd5"
+      },
+      "sp2a.tile.C.256": {
+        "expected": "df02f1596684e5cd",
+        "actual": "df02f1596684e5cd"
+      },
+      "sp2a.tile.C.64": {
+        "expected": "d0d22bdc15560fc4",
+        "actual": "d0d22bdc15560fc4"
+      },
+      "sp2a.tile.C.16": {
+        "expected": "3cbad99308c9a597",
+        "actual": "3cbad99308c9a597"
+      },
+      "sp2a.tile.C.4": {
+        "expected": "154b3bda8afb6efd",
+        "actual": "154b3bda8afb6efd"
+      },
+      "sp2a.spawn": {
+        "expected": "ebf9cfffc8f8b0c7",
+        "actual": "ebf9cfffc8f8b0c7"
+      },
+      "sp3a.registry": {
+        "expected": "5e1febd88b449b63",
+        "actual": "5e1febd88b449b63"
+      },
+      "sp3a.region.T.default": {
+        "expected": "b67e413da23b5a67",
+        "actual": "b67e413da23b5a67"
+      },
+      "sp3a.region.T.large_biomes": {
+        "expected": "ad3fd9a702137c3e",
+        "actual": "ad3fd9a702137c3e"
+      },
+      "sp3b.density.ops": {
+        "expected": "adad71e21efc60cb",
+        "actual": "adad71e21efc60cb"
+      },
+      "sp3b.density.default": {
+        "expected": "37d2c98c279fc5a8",
+        "actual": "37d2c98c279fc5a8"
+      },
+      "sp3c.registry": {
+        "expected": "2ade4ab7c488e7c2",
+        "actual": "2ade4ab7c488e7c2"
+      },
+      "sp3c.surface.ops": {
+        "expected": "382457eb3ff175e1",
+        "actual": "382457eb3ff175e1"
+      },
+      "sp3e.region.T.amplified": {
+        "expected": "ece006113ac26c53",
+        "actual": "ece006113ac26c53"
+      },
+      "sp3e.region.T.archipelago": {
+        "expected": "23be13f59c578317",
+        "actual": "23be13f59c578317"
+      },
+      "sp3e.region.T.floating_islands": {
+        "expected": "c6b215c6e90300ed",
+        "actual": "c6b215c6e90300ed"
+      },
+      "sp3e.column.point.archipelago": {
+        "expected": "576dcc24bc474a96",
+        "actual": "576dcc24bc474a96"
+      },
+      "sp3e.column.point.floating_islands": {
+        "expected": "38ad6e018c200781",
+        "actual": "38ad6e018c200781"
+      },
+      "sp6a.density.ops": {
+        "expected": "631964217f1d4c07",
+        "actual": "631964217f1d4c07"
+      },
+      "sp6a.carver.paths": {
+        "expected": "f01d27e99576808f",
+        "actual": "f01d27e99576808f"
+      },
+      "sp6a.region.T.caves": {
+        "expected": "8afd5153cb96bd4e",
+        "actual": "8afd5153cb96bd4e"
+      },
+      "sp6b.registry": {
+        "expected": "338b3c5eb9dd4a78",
+        "actual": "338b3c5eb9dd4a78"
+      },
+      "sp6b.caveBiome.points": {
+        "expected": "5f9ace3e5561dd90",
+        "actual": "5f9ace3e5561dd90"
+      },
+      "sp6b.region.T.biomes": {
+        "expected": "6f3dd0476471c770",
+        "actual": "6f3dd0476471c770"
+      }
+    },
+    "kvContract": "IndexedDB contract: 10/10 passed",
+    "frameTimings": "none: by hand",
+    "errors": "not recorded: by hand"
+  },
+  "usersCheck": {
+    "by": "the user, in their own Firefox, from the review links (§12.8; ruling U17)",
+    "date": "2026-11-17",
+    "check": "go down into caves and recognise lush (moss floors and ceilings, clay patches), dripstone (dripstone floors and ceilings) and the abyss (dark layered rock all round, ash floors) by their blocks, with night vision (L) where too dark; wide caves no longer end on a flat bedrock floor (the bottomCavern link)",
+    "verdict": "OK",
+    "quote": "me gusta lo que veo, puedo reconocer los biomas solo por los colores que representan sus bloques, así que con las texturas y decoraciones estará aun mejor",
+    "findings": [],
+    "retune": "none: GENERATOR_VERSION stays 9"
+  }
+}
