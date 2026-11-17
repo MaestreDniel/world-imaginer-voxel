@@ -3143,6 +3143,13 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(line, 'SP12 has no "Received from SP6b" line').toBeDefined();
     expect(line).toContain('the `deriveSeed` memo (taken by SP6b: Task 25\'s lever 25f, the SP6b spec §9.2, so nothing moved);');
     expect(line).not.toContain('if SP6b did not take it');
+    // The SP6b spec §16's SP12 bullet, which the line copies, words it the same (Task 57's whole-branch review).
+    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-12-sp6b-cave-biomes-design.md`, 'utf8');
+    const s16 = spec.slice(spec.indexOf('## 16. Notes handed to later SPs'), spec.indexOf('## 17. Cut line'));
+    const bullet = s16.split('\n').find((l) => l.startsWith('- **SP12:** '));
+    expect(bullet, 'the SP6b spec §16 has no SP12 bullet').toBeDefined();
+    expect(bullet).toContain('the `deriveSeed` memo (taken by SP6b: Task 25\'s lever 25f, §9.2, so nothing moved);');
+    expect(bullet).not.toContain('if SP6b did not take it');
   });
 
   // Pre-exit form: the exit (Task 59 Step 0) appends "(delivered in SP6b, so nothing moved)" to each item taken and
