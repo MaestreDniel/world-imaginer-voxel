@@ -19,10 +19,11 @@ export const SP_DEPS: Readonly<Record<SubProjectId, readonly SubProjectId[]>> = 
   SP5c: ['SP5b'],
   SP6a: ['SP3c', 'SP5c'],
   SP6b: ['SP6a'],
-  SP7: ['SP6b', 'SP5a'],
+  SP7a: ['SP6b', 'SP5a'],
+  SP7b: ['SP7a', 'SP5c'],
   SP8a: ['SP4a'],
-  SP8b: ['SP7', 'SP8a'],
-  SP8c: ['SP7', 'SP5a'],
+  SP8b: ['SP7a', 'SP8a'],
+  SP8c: ['SP7a', 'SP5a'],
   SP9: ['SP8b', 'SP8a'],
   SP10: ['SP9'],
   SP11: ['SP10'],
@@ -35,7 +36,7 @@ export const SP_ORDER = Object.keys(SP_DEPS) as SubProjectId[];
  * Append-only list of sub-projects whose first commit has landed.
  * Each SP appends its id in its first commit. Part of the locked governance state.
  */
-export const STARTED_SPS: readonly SubProjectId[] = ['SP0', 'SP1', 'SP2a', 'SP2b', 'SP3a', 'SP3b', 'SP3c', 'SP3d', 'SP3e', 'SP4a', 'SP4b', 'SP4c', 'SP5a', 'SP5b', 'SP5c', 'SP6a', 'SP6b'];
+export const STARTED_SPS: readonly SubProjectId[] = ['SP0', 'SP1', 'SP2a', 'SP2b', 'SP3a', 'SP3b', 'SP3c', 'SP3d', 'SP3e', 'SP4a', 'SP4b', 'SP4c', 'SP5a', 'SP5b', 'SP5c', 'SP6a', 'SP6b', 'SP7a'];
 
 export function spIndex(sp: SubProjectId): number {
   return SP_ORDER.indexOf(sp);

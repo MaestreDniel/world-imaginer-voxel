@@ -21,7 +21,7 @@
  * solid word: `LAVA_LAYER`, water's smooth light, and AO, tint, flags and frame 0, at the voxel's full height. Its
  * block light 15 makes it bright through the lightmap. The face tables, the corner light, the merge loop and the
  * corner positions are `mesh/faces.ts`'s, shared with `mesh/greedy.ts`. Flowing levels, falling water and flowing lava
- * are SP7's.
+ * are SP7a's.
  */
 import { FLUID_LAVA, FLUID_WATER, fluidType, hasFluid } from '../world/blocks/fluid';
 import { ALL_FACES, PASS_OPAQUE } from '../world/blocks/kinds';

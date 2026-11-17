@@ -6,13 +6,13 @@
  * count` and count × `{u32 packedPos, u16 dueOffset}` by packedPos. A value is `state << 8 | fluid` (`diffStore.ts`).
  * The encoding is canonical: one column has exactly one byte string, whatever its input order (the flush writes the same
  * bytes straight from the DiffStore's maps, `encodeColumnSections`). The header's genKey is the world's when the column
- * was written and is informative (D8: entries apply under any generator). The trailer is written with count 0 until SP7;
- * any count decodes, and SP5b's callers drop the decoded ticks (D21).
+ * was written and is informative (D8: entries apply under any generator). The trailer is written with count 0 until
+ * SP7b; any count decodes, and SP5b's callers drop the decoded ticks (D21).
  */
 import type { Hash64 } from '../core/hash';
 import type { ColumnDiff } from '../world/store/api';
 
-/** A pending runtime fluid tick (SP7's): the voxel's packed position and its due offset. */
+/** A pending runtime fluid tick (SP7b's): the voxel's packed position and its due offset. */
 export interface FluidTick {
   readonly packedPos: number;
   readonly dueOffset: number;

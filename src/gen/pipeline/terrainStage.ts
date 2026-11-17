@@ -19,7 +19,7 @@
  * - Water v0: `top` is the y of the highest solid voxel per position (−64 when there is none above bedrock); air with
  *   `top − 12 < y ≤ surfaceWaterLevel` (nearest quart corner, as SP3a) becomes a water source, recorded in a
  *   column-wide water scratch. Air under an overhang near the water line fills; deeper enclosed air stays dry
- *   (aquifers, SP7). A position whose own level is −∞ stays dry beside a neighbour's water (the v0 "water wall").
+ *   (aquifers, SP7a). A position whose own level is −∞ stays dry beside a neighbour's water (the v0 "water wall").
  *   With `islands.enabled` (SP3e spec §3.5) the fill's base skips island runs (bottom voxel ≥ ISLAND_RUN_MIN_BOTTOM,
  *   181), so the sea under a floating island fills as if the island were not there; `top` is unchanged.
  * - The per-block surface biome (`readBiome`), computed once into a 256-entry buffer for the surface pass and aux A.

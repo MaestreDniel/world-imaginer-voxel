@@ -16,7 +16,7 @@
  * - Then the final heightmaps of aux A (`finalHeightmaps.ts`, §3.2), over the final blocks and fluid: the proto's
  *   sections, and the rebuilt scratch for the overlaid ones (`nb.final` is null below Decorated). `tintTH` stays 0
  *   (SP8a writes it) and no proto is freed.
- * Settle (SP7) and freeze_top_layer (SP8b) are its later steps. Never commits: the caller does (`fillColumnD`,
+ * Settle (SP7a) and freeze_top_layer (SP8b) are its later steps. Never commits: the caller does (`fillColumnD`,
  * `workers/worldJobs.ts`). Follows the gen determinism rules.
  */
 import type { ColumnDiff as ColumnDiffT, ColumnView as ColumnViewT, ColumnWriter as ColumnWriterT, NeighborhoodReader as NeighborhoodReaderT } from '../../world/store/api';

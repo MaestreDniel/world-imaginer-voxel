@@ -175,7 +175,9 @@ export const THRESHOLDS: ThresholdTable = {
   // underground poses, every tier.
   R3: { wronglyCulled: { max: 0, activeFrom: 'SP6b' }, popIn: { max: 0, activeFrom: 'SP6b' }, culledUnderground: { min: 0.5, activeFrom: 'SP6b' } },
   R4: { medianQuads: { max: 2000, activeFrom: 'SP8b' }, p95Quads: { max: 4000, activeFrom: 'SP8b' } },
-  R5: { waterQuadsPerFace: { max: 0.1, activeFrom: 'SP7' } },
+  // SP7a spec §13.3 (the plan's Spec correction 1): ungated under 'SP7b' (not started) until the commit that reaches ≤ 0.1
+  // moves it to 'SP7a'.
+  R5: { waterQuadsPerFace: { max: 0.1, activeFrom: 'SP7b' } },
   // SP4b spec §8.1-§8.2 (D24): the atomic reveal while streaming, from the scripted flight in Node over both section
   // renderers (`stream.metric.ts`), every tier. SP4c spec §8.1-§8.2 (D21): the Apply part, from the scripted edits, undo
   // and teleport in Node over both renderers (`apply.metric.ts`, `.out/R7.apply.json`), every tier.

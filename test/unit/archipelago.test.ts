@@ -184,7 +184,7 @@ describe('SP3e archipelago shore (spec §1.3, seed 42)', () => {
 /**
  * Lakes below the sea beside it (SP3e spec §1.3, Review Focus): a lake's level Lw is the ring's lowest offset0 − 1 (master
  * §3.5), so on archipelago's low land a lake near the shore can sit far below the sea 8 blocks away. Water v0 has no
- * flow, so the sea column stands as a wall of water above the lake (or its dry basin) until SP7's settle; the spec
+ * flow, so the sea column stands as a wall of water above the lake (or its dry basin) until SP7a's settle; the spec
  * states it and these counts pin it. Per enabled lake cell with Lw < 62: the largest 63 − Lw over the basin columns
  * (lakeMask 1, its Lw) on an 8-block grid around the cell centre that have a sea neighbour 8 blocks away (lakeMask 0,
  * surfaceWaterLevel 63). A lake column holds water up to Lw or is dry, so 63 − Lw is the step from the sea to it.

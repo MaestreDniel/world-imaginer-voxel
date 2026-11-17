@@ -405,7 +405,7 @@ Over the caves passes' 32 × 32-chunk regions (`test/metrics/caves.metric.ts`; s
 ### 13.3 R1 and R5
 
 - **R1:** `hiddenEmitted`, `visibleMissing` (water and opaque) with flowing water and lava on R1's sites plus a spring window (a spill, a fall, lava steps); the brute force with §6.2's side strips and lava's drops (K5); `xrayFluid` 0 (§10.1).
-- **R5:** §6.5; `activeFrom` 'SP7' → 'SP7a' (`test/thresholds.ts:178`) in the first commit (the accept report prints LOOSEN because 'SP7' leaves `SP_DEPS`; a Threshold-log line says so, SP6a's precedent); gated from the commit that reaches ≤ 0.1.
+- **R5:** §6.5; `activeFrom` 'SP7' → 'SP7b' (`test/thresholds.ts:178`) in the first commit, so it stays ungated exactly as under 'SP7' (the accept report prints LOOSEN because 'SP7' leaves `SP_DEPS`; a Threshold-log line says so, SP6a's precedent); 'SP7b' → 'SP7a' (a TIGHTEN) in the commit that reaches ≤ 0.1, so it is gated from that commit. ('SP7a' in the first commit would gate it there, since that commit starts SP7a and a part is gated once its `activeFrom` has started, `test/harness/metric.ts:43`, while quick reads 0.2148 and full 0.2236 today: the plan's Spec correction 1.)
 
 ### 13.4 DT1, DT2 and the settle reference
 
@@ -473,8 +473,8 @@ Expected cold wall 5:40-6:10. **Budget: ≤ 6 min 0 s** on the last two cold run
 - `src/core/ids.ts:10-13`, `:16-19`: `'SP7'` → `'SP7a' | 'SP7b'` (26 sub-projects; the header comment gains "SP7 was split on 2026-11-17 into SP7a (water in the generated world) and SP7b (fluids that move when you edit)"); `CURRENT_SP` 'SP7a' (`:28`).
 - `test/harness/sp.ts:22` → `SP7a: ['SP6b', 'SP5a']`, `SP7b: ['SP7a', 'SP5c']`; `:24-25` → `SP8b: ['SP7a', 'SP8a']`, `SP8c: ['SP7a', 'SP5a']` (SP8b's lava lakes feed SP7a's settle; SP8c's ambience reads generated water; neither needs the sim); `:38` `STARTED_SPS` appends 'SP7a'.
 - `test/arch/sp.test.ts` (the current SP, "25 sub-projects" → 26, the `SP_ORDER` literal, the SP8c parallel paths, "SP7 needs SP6b").
-- `test/thresholds.ts:178` R5 → 'SP7a' (§13.3).
-- The master's §2.5 union, §10 headers and the critical path (§16 items 1-3), with every `spEntry('SP7', …)` and `spEntry('SP6b', 'SP7')` pin of `test/arch/masterSpec.test.ts` (:1300, :1927, :1939, :1981, :1988-1990, :2016, :2022-2023, :2541, :3115, :3141, :3145, :3170, :3174, :3178, :3229, :3253, :3256) naming the new ids, and the pins that read SP7 in other entries' text: :1316-1318 (SP8a "in parallel with SP5a-SP7"), :1324 (the SP8c header "(M; SP7, SP5a;"), :1337 ("schedules fluid ticks … (SP7)", → SP7b), :2042 (the quart-lattice caching "SP7-SP9", §16 item 6) and :2049 (the bench route's "SP7 the flood", → SP7b).
+- `test/thresholds.ts:178` R5 → 'SP7b' (§13.3: ungated until the commit that reaches ≤ 0.1 moves it to 'SP7a').
+- The master's §2.5 union, §10 headers and the critical path (§16 items 1-3), with every `spEntry('SP7', …)` and `spEntry('SP6b', 'SP7')` pin of `test/arch/masterSpec.test.ts` (:1300, :1927, :1939, :1981, :1988-1990, :2016, :2022-2023, :2541, :3115, :3141, :3145, :3170, :3174, :3178, :3229, :3253, :3256) naming the new ids, and the pins that read SP7 in other entries' text: :1316-1318 (SP8a "in parallel with SP5a-SP7"), :1324 (the SP8c header "(M; SP7, SP5a;"), :1337 ("schedules fluid ticks … (SP7)", → SP7b), :2042 (the quart-lattice caching "SP7-SP9", §16 item 6), :2049 (the bench route's "SP7 the flood", → SP7b) and :3278 (the Default receivers' "SP7 extra lava reactions → SP12", §16 item 3, → SP7b). The pins of text that later items reword move into the SP7a describe with those items' commits: :2188 (§3.8's "carvers shrink to nothing under water … each carved voxel asks `aquifer.fluidAt` (SP7; until then it is air)", §16 item 5), :2673 (§3.9's "lava may appear there (SP7)", §16 item 7), :2615 (rule 4's "SP7, with aquifers", §16 item 8) and :2042 above (§16 item 6) (the plan's Spec correction 2).
 - Comments naming SP7 (`terrainStage.ts:22`, `decorateStage.ts:19`, `surfaceEstimate.ts:6`, `src/mesh/fluid.ts:24`, `src/persist/diffCodec.ts:9`, `:15`, `test/metrics/render.metric.ts:50`, `test/unit/archipelago.test.ts:187`) → SP7a or SP7b; `CLAUDE.md` and `README.md` status lines.
 
 ### 15.2 Locks
@@ -666,3 +666,5 @@ Ids are recon-obligations' (§1a-§1f O1-O95 and K1-K13; §4 Q1-Q18); "→ X" me
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
+
+- 2026-11-17 — SP7a Task 1: startedSps gains 'SP7a' (spec §15.1); R5.waterQuadsPerFace activeFrom 'SP7' → 'SP7b' ('SP7' left SP_DEPS, so the report prints LOOSEN; both are unstarted, so R5 stays ungated exactly as before; Task 34 moves it to 'SP7a' in the commit that reaches ≤ 0.1; Spec correction 1).

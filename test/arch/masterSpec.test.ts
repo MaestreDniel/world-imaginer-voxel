@@ -193,6 +193,18 @@
  * and the Exit and Cut line are §15 item 1's and §17's, the Cut line saying nothing moved; item 4's four receivers each
  * gain "(delivered in SP6b, so nothing moved)", and SP10's "Received from SP6b" line (with the SP6b spec §16's SP10
  * bullet it copies) words the cut-line items as delivered. The SP6a describe's pins of those lines moved here.
+ * SP7a (its spec §15.1, §16): §16's amendments land in the commit that makes each true, pinned in the new 'master spec
+ * amendments (SP7a §16)' describe, each test title naming its "§16 item n"; a pin of an earlier describe that reads text
+ * SP7a rewords moves there with the commit that rewords it. The first commit (Task 1) lands items 1-3 and 13: the split
+ * paragraph after SP6's; the SP7a entry (XL; its contents and Deliverable, SP7's "Received from SP6a" and "Received from
+ * SP6b" lines kept verbatim until the exit, a "Received from SP8b (moved by SP7a)" line for the springs, its Exit and
+ * Cut line in pre-exit form) and the SP7b entry (SP7's "Received from SP5c" line, the MVP line) in place of SP7's; SP8a's,
+ * SP8b's (its springs moved to SP7a), SP8c's and SP12's SP7a or SP7b; the critical path, parallelism, visible value, the
+ * Default receivers, risk 15 and §2.5's `SubProjectId`; §4.12's fluid ticks, the bench route's flood and R5's row (R5
+ * itself stays ungated, `activeFrom` 'SP7b', until the commit that reaches ≤ 0.1). The earlier describes' pins of SP7's
+ * entry take the new ids in place (`spEntry('SP7a', 'SP7b')` for SP6a's and SP6b's hand-overs, `spEntry('SP7b', 'SP8a')`
+ * for SP5c's, `spEntry('SP6b', 'SP7a')` for SP6b's entry); SP7's header pin and the critical path's moved here. Text SP7a
+ * rewords later (§3.7's caching line, §3.8's carvers, §3.9's abyss, rule 4) keeps its pins until the task rewording it.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -216,7 +228,7 @@ import {
   SLICE_BIOME3D_P50_MAX_MS, SLICE_CAVES_P50_MAX_MS, TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS,
 } from '../bench/gates';
 import { THRESHOLDS } from '../thresholds';
-import { SP_DEPS } from '../harness/sp';
+import { SP_DEPS, STARTED_SPS } from '../harness/sp';
 import { DET_FILES } from './rules/banned';
 import { BATCH_GROWTH, OPTIMIZE_AT, SHRINK_HEADROOM, SHRINK_IDLE_PUMPS, SHRINK_MIN_SLACK } from '../../src/render/regionBatch';
 import { GROWTH } from '../../src/render/regionGrid';
@@ -740,8 +752,7 @@ describe('master spec amendments (SP3e §12, §13, exit)', () => {
     expect(f, 'island-edge springs moved to SP8b').not.toMatch(/springs/);
   });
 
-  test('§10\'s SP8b and SP11 carry SP3e\'s notes (SP6a\'s moved to the SP6a describe)', () => {
-    expect(spEntry('SP8b', 'SP8c')).toContain('springs, lava lakes and island-edge springs feeding settle (island-edge springs on SP3e\'s islands term, `islandMask` and island runs; SP3e spec §12)');
+  test('§10\'s SP11 carries SP3e\'s note (SP6a\'s moved to the SP6a describe, SP8b\'s with its springs to the SP7a describe)', () => {
     expect(spEntry('SP11', 'SP12')).toContain(`LOD clipmap with fill mask and island terms (the islands tap is non-positive outside the corners y ${band.lo}-${lastCorner} and where islandMask < ${gate.lo}; SP3e spec §12)`);
   });
 
@@ -1297,9 +1308,11 @@ describe('master spec amendments (SP5a §9)', () => {
   });
 
   test('SP7 hands swimming and the buckets to SP5a; SP10 and SP8b receive from SP5a', () => {
-    const sp7 = spEntry('SP7', 'SP8a');
-    expect(sp7).not.toContain('swimming');
-    expect(sp7).not.toContain('the empty bucket');
+    // SP7's entry is SP7a's and SP7b's since the SP7a split (SP7a spec §15.1).
+    for (const sp7 of [spEntry('SP7a', 'SP7b'), spEntry('SP7b', 'SP8a')]) {
+      expect(sp7).not.toContain('swimming');
+      expect(sp7).not.toContain('the empty bucket');
+    }
     expect(spEntry('SP10', 'SP11').split('\n').some((l) => l.startsWith('- Received from SP5a (its spec §10; amended by SP5a): sneaking')), 'SP10 has no "Received from SP5a" line').toBe(true);
     expect(spEntry('SP8b', 'SP8c').split('\n').some((l) => l.startsWith('- Received from SP5a (its spec §10, D20, D23):')), 'SP8b has no "Received from SP5a" line').toBe(true);
   });
@@ -1313,15 +1326,15 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(text.slice(at, text.indexOf('### 3.8 ', at))).toContain('in walk mode (SP5a)');
   });
 
-  test('the SP8a header runs in parallel with SP5a-SP7 and needs SP5a for boxes', () => {
+  test('the SP8a header runs in parallel with SP5a-SP7b and needs SP5a for boxes', () => {
     const sp8a = spEntry('SP8a', 'SP8b');
-    expect(sp8a).toContain('in parallel with SP5a-SP7');
+    expect(sp8a).toContain('in parallel with SP5a-SP7b');
     expect(sp8a).toContain('SP5a for collision/raycast/orientation against boxes');
   });
 
   test('the split\'s other §10 lines, §2.3 and §4.12\'s deferred parts (SP5a spec §9; risk 1\'s Kill line moved to the SP5b block)', () => {
     // The SP6 and SP7 headers moved to the SP6a describe (the split).
-    expect(spEntry('SP8c', 'SP9').startsWith('**SP8c — Audio** (M; SP7, SP5a;'), 'the SP8c header').toBe(true);
+    expect(spEntry('SP8c', 'SP9').startsWith('**SP8c — Audio** (M; SP7a, SP5a;'), 'the SP8c header').toBe(true);
     expect(spEntry('SP8a', 'SP8b')).toContain('the replacement of SP5a\'s provisional boxes, glass frame and log-end layer');
     expect(spEntry('SP4a', 'SP4b')).toContain('(the full start and worlds menu is SP5b\'s)');
     const parallel = text.split('\n').find((l) => l.startsWith('In parallel: '));
@@ -1334,7 +1347,7 @@ describe('master spec amendments (SP5a §9)', () => {
     expect(reclamation).not.toMatch(/\bSP5's/);
     const at412 = text.indexOf('### 4.12 ');
     const s412 = text.slice(at412, text.indexOf('### 4.13 ', at412));
-    expect(s412).toContain('schedules fluid ticks for the 6 neighbours (SP7)');
+    expect(s412).toContain('schedules fluid ticks for the 6 neighbours (SP7b)');
     expect(s412).toContain('RMB on a door, trapdoor or fence gate toggles `open` (both door halves) instead of placing (SP8a)');
     expect(s412).toContain('(two entries for doors and double plants, applied atomically; SP8a)');
   });
@@ -1924,7 +1937,7 @@ describe('master spec amendments (SP5c §13)', () => {
     const received = (id: SubProjectId, next: SubProjectId): string | undefined =>
       spEntry(id, next).split('\n').find((l) => l.startsWith('- Received from SP5c (its spec §14; amended by SP5c):'));
     const handed: Array<[id: SubProjectId, next: SubProjectId, phrases: string[]]> = [
-      ['SP7', 'SP8a', ['8k-updates-per-tick']],
+      ['SP7b', 'SP8a', ['8k-updates-per-tick']],
       ['SP8a', 'SP8b', ['rotateState']],
       ['SP8c', 'SP9', ['one break-or-place event']],
       ['SP10', 'SP11', ['SP5c\'s nine actions', 'Configurable Ctrl+Z / Ctrl+Y for blocks', 'The replaced-block overlay, SP5c\'s cut line, was delivered in SP5c, so nothing moved here (the SP5c spec §15).']],
@@ -1936,7 +1949,8 @@ describe('master spec amendments (SP5c §13)', () => {
       for (const phrase of phrases) expect(line, `${id}'s "Received from SP5c" line`).toContain(phrase);
     }
     expect(spEntry('SP6a', 'SP6b')).not.toContain('Received from SP5c');
-    expect(spEntry('SP6b', 'SP7')).not.toContain('Received from SP5c');
+    expect(spEntry('SP6b', 'SP7a')).not.toContain('Received from SP5c');
+    expect(spEntry('SP7a', 'SP7b')).not.toContain('Received from SP5c');
     expect(received('SP10', 'SP11')).not.toContain('if SP5c\'s cut line is taken');
   });
 
@@ -1978,16 +1992,16 @@ describe('master spec amendments (SP6a §13)', () => {
     // The exit (SP6a spec §15, Task 53): all three shipped (the finder's Find buttons, the rarity bands, the underground worm).
     expect(cut!.endsWith('Each is cut whole. It was not taken: the Find buttons, the spaghetti-2D rarity bands and the underground-only carver shipped in SP6a, so nothing moved.'), 'the Cut line as taken').toBe(true);
     // Item 2: the SP6b entry.
-    const sp6b = spEntry('SP6b', 'SP7');
+    const sp6b = spEntry('SP6b', 'SP7a');
     // The SP6b header's, contents line's, "Received from SP6a" items' and Exit and Cut line's pins moved to 'master spec
     // amendments (SP6b §15)' (SP6b §15 item 1 rewords them).
     expect(sp6b).toContain('**Deliverable:** cave biomes recognised by their blocks.');
     const sp6bReceived = sp6b.split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
     expect(sp6bReceived, 'SP6b has no "Received from SP6a" line').toBeDefined();
-    // Item 3: SP7's header (moved from the SP5a describe) and the "Received from SP6a" lines of SP7-SP12 (§14).
-    expect(spEntry('SP7', 'SP8a').startsWith('**SP7 — Water and fluids** (L; SP6b, SP5a)'), 'the SP7 header').toBe(true);
+    // Item 3: the "Received from SP6a" lines of SP7-SP12 (§14); SP7's line is SP7a's since the SP7a split. SP7's header
+    // pin moved to 'master spec amendments (SP7a §16)' (SP7a §16 item 1 splits it).
     const handed: Array<[id: SubProjectId, entry: string, phrase: string]> = [
-      ['SP7', spEntry('SP7', 'SP8a'), '`wetCover`'],
+      ['SP7a', spEntry('SP7a', 'SP7b'), '`wetCover`'],
       ['SP8a', spEntry('SP8a', 'SP8b'), 'the floor\'s value is re-judged with textures'],
       ['SP8b', spEntry('SP8b', 'SP8c'), 'ores in stone, never in tagged air'],
       ['SP8c', spEntry('SP8c', 'SP9'), 'may read the tag'],
@@ -2012,15 +2026,14 @@ describe('master spec amendments (SP6a §13)', () => {
     for (const [id, line] of [['SP10', receivedOf(spEntry('SP10', 'SP11'))], ['SP12', receivedOf(sp12Entry())]] as const) {
       expect(line, `${id}'s line still reads "if cut"`).not.toMatch(/if (they were )?cut/);
     }
-    // Item 3: SP7's line carries §14's text to its last item before the abyss lava (left to SP6b).
-    const sp7Received = spEntry('SP7', 'SP8a').split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
-    expect(sp7Received, 'SP7\'s "Received from SP6a" line ends with the bench\'s flood scenario').toMatch(/`dryPitsBelowSea` \(SP3c\); the bench's flood scenario after L13\.$/);
+    // Item 3: SP7's line (SP7a's since the SP7a split) carries §14's text to its last item before the abyss lava (left to SP6b).
+    const sp7Received = spEntry('SP7a', 'SP7b').split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
+    expect(sp7Received, 'SP7a\'s "Received from SP6a" line ends with the bench\'s flood scenario').toMatch(/`dryPitsBelowSea` \(SP3c\); the bench's flood scenario after L13\.$/);
     // Item 3: SP12's line carries ruling R19's hand-off (the SP6a spec §14's SP12 bullet, §10.4), after the summit caps it goes with.
     const sp12Received = sp12Entry().split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
     expect(sp12Received, 'SP12\'s "Received from SP6a" line carries R19\'s large-island grass').toContain('`islandBranchOnGround` before and after caves; with them, the grass kept under floating_islands\' islands that lies at sky 0 under islands wider than about 30 blocks (ruling R19, the SP6a spec §10.4: S1\'s large-island window, recorded, not pooled); the y mod 16 residue');
-    // Item 4 (the critical path moved from the SP5a describe) and item 5.
-    const critical = text.split('\n').find((l) => l.startsWith('Critical path: '));
-    expect(critical).toContain('SP5c → SP6a → SP6b → SP7');
+    // Item 4 (the critical path, moved from the SP5a describe) moved on to 'master spec amendments (SP7a §16)' (SP7a §16
+    // item 3 rewrites the line); item 5.
     const visible = text.split('\n').find((l) => l.startsWith('Visible value in every SP: '));
     expect(visible).toContain('caves and the X-ray in SP6a, cave biomes in SP6b');
     const receivers = text.split('\n').find((l) => l.startsWith('**Cut lines.**'));
@@ -2046,7 +2059,7 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(line('**Greedy meshing.**')).toContain('R2 is re-baselined at SP6a (caves) and SP8b');
     // §5.4's cave-biome sentence moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 18 rewords it).
     // Moved from the SP4b describe (§5.8's bench route).
-    expect(line('**Bench route `?bench=<preset>`')).toContain('SP6a adds the cave scenario, SP7 the flood)');
+    expect(line('**Bench route `?bench=<preset>`')).toContain('SP6a adds the cave scenario, SP7b the flood)');
     expect(line('| S1 |')).toContain('gated from SP6a (amended by SP4a)');
     expect(line('| R2 |')).toContain('re-baselined at SP6a and SP8b');
     expect(spEntry('SP3a', 'SP3b')).toContain('(the block list grows in SP6b, SP8a, SP8b and SP9)');
@@ -2538,7 +2551,7 @@ describe('master spec amendments (SP6a §13)', () => {
 
 describe('master spec amendments (SP6b §15)', () => {
   test('§10\'s SP6b header names the size and the spec (SP6b spec §15 item 1)', () => {
-    const sp6b = spEntry('SP6b', 'SP7');
+    const sp6b = spEntry('SP6b', 'SP7a');
     expect(sp6b.startsWith('**SP6b — Cave biomes** (XL; SP6a). Spec: `2026-11-12-sp6b-cave-biomes-design.md`.'), 'the SP6b header').toBe(true);
   });
 
@@ -3112,7 +3125,7 @@ describe('master spec amendments (SP6b §15)', () => {
     const SP6B = '- Received from SP6b (its spec §16; amended by SP6b):';
     // Each phrase is §16's text, so it is checked in §16's bullet too.
     const handed: Array<[id: SubProjectId, entry: string, phrases: readonly string[]]> = [
-      ['SP7', spEntry('SP7', 'SP8a'), ['lava may appear in the abyss and light it a little', '"y la propia lava que también emite luz"', 'widened by 0.1 depth disables aquifers there', 'clay under cave water in lush and gravel under cave water elsewhere', '`caves.floor.y` by a lava mask', 'and re-checks `C7.bedrockExposed`', 'the cave channel\'s nibble marks flooded caves\' biome too', 'SP7\'s spec reconciles the two.']],
+      ['SP7a', spEntry('SP7a', 'SP7b'), ['lava may appear in the abyss and light it a little', '"y la propia lava que también emite luz"', 'widened by 0.1 depth disables aquifers there', 'clay under cave water in lush and gravel under cave water elsewhere', '`caves.floor.y` by a lava mask', 'and re-checks `C7.bedrockExposed`', 'the cave channel\'s nibble marks flooded caves\' biome too', 'SP7\'s spec reconciles the two.']],
       ['SP8a', spEntry('SP8a', 'SP8b'), ['painters for the seven flat-colour blocks', 'the abyss\'s dark albedos re-judged with textures under the light floor', 'the X-ray\'s biome palette stays flat']],
       ['SP8b', spEntry('SP8b', 'SP8c'), ['the abyss\'s faintly glowing crystals or gems, exclusive to the abyss, and its light gothic touch', 'the abyss mineral (O2) placed by the nibble or `caveBiomeQ`', 'reads the scan\'s per-run `floorBiome` and `ceilBiome` and the nibble', '`secondaryDepthRange` if its rules need a noisy depth', 'emitters lift caves above the light floor']],
       ['SP8c', spEntry('SP8c', 'SP9'), ['the abyss silent', '"Oscuro y silencioso"', 'AU3\'s abyss label from the nibble at the eye', 'the `SOUND` group `abyss` now assigned to five blocks (footsteps)']],
@@ -3129,8 +3142,10 @@ describe('master spec amendments (SP6b §15)', () => {
       // It follows the entry's "Received from SP6a" line, which keeps none of SP6b's hand-overs (MST:1979's pin).
       expect(lines[at - 1]!.startsWith(SP6A), `${id}'s "Received from SP6b" line follows its "Received from SP6a" line`).toBe(true);
       expect(lines[at - 1], `${id}'s "Received from SP6a" line`).not.toContain('Received from SP6b');
-      const bullet = s16.split('\n').find((l) => l.startsWith(`- **${id}:** `));
-      expect(bullet, `the SP6b spec §16 has no ${id} bullet`).toBeDefined();
+      // The SP6b spec §16 handed SP7's items to SP7, whose entry is SP7a's since the SP7a split (SP7a spec §16 item 1).
+      const bulletId = id === 'SP7a' ? 'SP7' : id;
+      const bullet = s16.split('\n').find((l) => l.startsWith(`- **${bulletId}:** `));
+      expect(bullet, `the SP6b spec §16 has no ${bulletId} bullet`).toBeDefined();
       for (const phrase of phrases) {
         expect(lines[at], `${id}'s "Received from SP6b" line`).toContain(phrase);
         expect(bullet, `the SP6b spec §16's ${id} bullet`).toContain(phrase);
@@ -3138,11 +3153,11 @@ describe('master spec amendments (SP6b §15)', () => {
     }
     // The three abyss hand-overs, each in its receiver's line (the user's words, SP6b's entry).
     const of = (entry: string): string => entry.split('\n').find((l) => l.startsWith(SP6B)) ?? '';
-    expect(of(spEntry('SP7', 'SP8a'))).toContain('lava may appear in the abyss');
+    expect(of(spEntry('SP7a', 'SP7b'))).toContain('lava may appear in the abyss');
     expect(of(spEntry('SP8b', 'SP8c'))).toContain('crystals or gems');
     expect(of(spEntry('SP8c', 'SP9'))).toContain('silent');
     // SP6b's own entry receives nothing from itself.
-    expect(spEntry('SP6b', 'SP7')).not.toContain(SP6B);
+    expect(spEntry('SP6b', 'SP7a')).not.toContain(SP6B);
   });
 
   test('§10\'s SP12 line: the deriveSeed memo as delivered (SP6b spec §15 item 2, §19 R28)', () => {
@@ -3167,15 +3182,15 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(item1, 'the SP6b spec §15 has no item 1').toBeDefined();
     const contents = /contents as built \("([^"]+)"\)/.exec(item1!)?.[1];
     expect(contents, '§15 item 1 quotes no contents').toBeDefined();
-    const lines = spEntry('SP6b', 'SP7').split('\n');
+    const lines = spEntry('SP6b', 'SP7a').split('\n');
     expect(lines[1], 'the contents line is item 1\'s quoted text').toBe(`- ${contents!.charAt(0).toUpperCase()}${contents!.slice(1)}.`);
     expect(lines[1]).toBe('- A cave-biome picker per block from per-position climate, depth and border noises (lush, dripstone, **abyss**) with cave floor and ceiling rules (rule 4); the abyss\'s rock and palette; seven new blocks; the rock floor above the bedrock; the X-ray coloured by cave biome (C); the map cave-biome layer, the Cave biome slice field and the Caves tab\'s biome finder; the `cave_heavy` preset; cave culling (§4.15) with R3.');
     expect(lines[2]).toBe('- **Deliverable:** cave biomes recognised by their blocks.');
-    expect(spEntry('SP6b', 'SP7'), 'the pre-exit contents').not.toContain('3D quart cave-biome picker (lush');
+    expect(spEntry('SP6b', 'SP7a'), 'the pre-exit contents').not.toContain('3D quart cave-biome picker (lush');
   });
 
   test('§10\'s SP6b entry at the exit: each "Received from SP6a" item as delivered or handed on in place (SP6b spec §15 item 1)', () => {
-    const line = spEntry('SP6b', 'SP7').split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):')) ?? '';
+    const line = spEntry('SP6b', 'SP7a').split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):')) ?? '';
     expect(line, 'SP6b has no "Received from SP6a" line').not.toBe('');
     // [the item as SP6a handed it, its outcome right after it]; §15 item 1 names the picker's, the aux-B read's,
     // secondaryDepthRange's, C6's, the refill's, the deriveSeed memo's and the T gate's.
@@ -3226,7 +3241,7 @@ describe('master spec amendments (SP6b §15)', () => {
   });
 
   test('§10\'s SP6b entry at the exit: the user check\'s flat bedrock floor as delivered (SP6b spec §15 item 1, ruling R33)', () => {
-    const lines = spEntry('SP6b', 'SP7').split('\n');
+    const lines = spEntry('SP6b', 'SP7a').split('\n');
     const at = lines.findIndex((l) => l.startsWith('- Received from SP6a\'s user check (the SP6a spec §14, ruling R33; amended by SP6a):'));
     expect(at, 'SP6b has no "Received from SP6a\'s user check" line').toBeGreaterThan(-1);
     expect(lines[at - 1]!.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'), 'it follows SP6b\'s "Received from SP6a" line').toBe(true);
@@ -3250,10 +3265,10 @@ describe('master spec amendments (SP6b §15)', () => {
     const item1 = spec.split('\n').find((l) => l.startsWith('1. **§10 SP6b entry**')) ?? '';
     const exit = /\*\*Exit:\*\* "([^"]+)"/.exec(item1)?.[1];
     expect(exit, '§15 item 1 quotes no Exit').toBeDefined();
-    const lines = spEntry('SP6b', 'SP7').split('\n');
+    const lines = spEntry('SP6b', 'SP7a').split('\n');
     expect(lines.filter((l) => l.startsWith('- **Exit')).length, 'one Exit line').toBe(1);
     expect(lines.find((l) => l.startsWith('- **Exit')), 'the Exit line is item 1\'s quoted text').toBe(`- **Exit:** ${exit}.`);
-    expect(spEntry('SP6b', 'SP7'), 'the pre-exit line').not.toContain('set by the SP6b spec');
+    expect(spEntry('SP6b', 'SP7a'), 'the pre-exit line').not.toContain('set by the SP6b spec');
     const cut = lines.find((l) => l.startsWith('- **Cut line:** '));
     expect(cut, 'the SP6b entry has no `- **Cut line:**` line').toBeDefined();
     expect(lines.indexOf(cut!), 'the Cut line closes the entry, after Exit').toBe(lines.findIndex((l) => l.startsWith('- **Exit:** ')) + 1);
@@ -3274,8 +3289,8 @@ describe('master spec amendments (SP6b §15)', () => {
     const delivered = entries.split('; ').map((e) => `${e} (delivered in SP6b, so nothing moved)`).join('; ');
     const receivers = text.split('\n').find((l) => l.startsWith('**Cut lines.**'));
     expect(receivers, 'no `**Cut lines.**` paragraph in §10').toBeDefined();
-    // After SP6a's entries (the SP6a describe's pin), before SP7's; none of the four was cut (§17, the Cut line's pin).
-    expect(receivers).toContain(`SP6a cave finder → SP10 (delivered in SP6a, so nothing moved); ${delivered}; SP7 extra lava reactions → SP12;`);
+    // After SP6a's entries (the SP6a describe's pin), before SP7b's; none of the four was cut (§17, the Cut line's pin).
+    expect(receivers).toContain(`SP6a cave finder → SP10 (delivered in SP6a, so nothing moved); ${delivered}; SP7b extra lava reactions → SP12;`);
     expect(receivers!.split('SP6b ').length - 1, 'SP6b\'s entries in the receivers').toBe(4);
     // §15 item 4 quotes the four entries; §17 lists the four items with the same receivers, in order.
     const item4 = spec.split('\n').find((l) => l.startsWith('4. **§10 Default receivers**'));
@@ -3332,5 +3347,96 @@ describe('master spec amendments (SP6b §15)', () => {
     const missing = items.filter((i) => !pinned.has(i));
     expect(missing, 'the SP6b spec §15 items with no test naming them in this describe').toEqual([]);
     expect([...pinned].filter((i) => !items.includes(i)), 'tests naming a §15 item the spec does not have').toEqual([]);
+  });
+});
+
+describe('master spec amendments (SP7a §16)', () => {
+  test('§10\'s SP7 split into SP7a and SP7b (SP7a spec §16 item 1)', () => {
+    // The split paragraph, after SP6's (SP6a §13 item 1's pattern: the §10 split paragraphs before SP4a).
+    const split = 'SP7 was split on 2026-11-17 into SP7a and SP7b (the user: "Estoy de acuerdo con la forma 1"): SP7a (water in the generated world) and SP7b (fluids that move when you edit), proposed in brainstorming because SP7 grew past L, so SP7a delivers the waterfalls in the first merge and the runtime sim, the riskiest part, comes on its own; each is testable on its own (the SP7a spec\'s "What was agreed", item 5).';
+    expect(split).toContain('SP7 was split on 2026-11-17 into SP7a and SP7b (the user: "Estoy de acuerdo con la forma 1")');
+    const sp6Split = text.split('\n').find((l) => l.startsWith('SP6 was split on '));
+    expect(sp6Split, 'no SP6 split paragraph').toBeDefined();
+    expect(text).toContain(`${sp6Split!}\n\n${split}\n\n**SP4a — `);
+    expect(text, 'SP7\'s entry is replaced by SP7a\'s and SP7b\'s').not.toContain('**SP7 — ');
+    // The SP7a entry (moved from the SP6a describe: SP7's header pin).
+    const sp7a = spEntry('SP7a', 'SP7b').split('\n');
+    expect(sp7a[0], 'the SP7a header').toBe('**SP7a — Water in the generated world** (XL; SP6b, SP5a). Spec: `2026-11-17-sp7a-water-design.md`.');
+    expect(sp7a[1], 'the SP7a contents').toBe('- Aquifers (water, lava, barriers, the abyss\'s water off and lava on, fast path); seas, rivers and lakes at their `surfaceWaterLevel`; water springs in mountain faces, island-edge springs and lava springs in the abyss, placed by T; the exact 3 × 3 settle with the distance cap, `FLUID_MODE` and the unsettled flag; the flowing water and lava mesher; water tiers Fast and Fancy; underwater fog and tint; rule 4\'s under-water branches; the X-ray and slice showing flooded caves.');
+    expect(sp7a[2]).toBe('- **Deliverable:** waterfalls from springs on mountains and island edges; translucent oceans, rivers and elevated lakes; flooded caves under the sea, dry caves below sea level under land; deep lava and the abyss\'s lava falls.');
+    expect(sp7a[2]).toContain('waterfalls from springs on mountains and island edges');
+    // SP7's "Received from SP6a" and "Received from SP6b" lines stay with SP7a verbatim until the exit (Task 56 Step 0
+    // words them as delivered); the "Received from SP5c" line moved to SP7b.
+    expect(sp7a[3], 'SP7a\'s "Received from SP6a" line').toBe('- Received from SP6a (its spec §14; amended by SP6a): aquifers (§3.9) replace the wet roof for oceans and rivers: SP7 decides whether caves may open under water then, and `caves.limits.waterDepth` with it; `aquifer.fluidAt` per carved voxel (the SP6a spec §2.4); A1-A4 use SP6a\'s 3D components and the tag; the cave channel marks water-filled caves as hollow, so the X-ray shows flooded caves; the map\'s cave slice "plus aquifer fluid" (§5.6): the `caves` slice field shows aquifer fluid in carved voxels; the `wetCover` scan and `C7.waterWall` re-read with aquifers; the level-field −∞ rule only if aquifers need `col` level fields (the SP6a spec D19); `surfaceEst3` caching with its first consumer (§3.7); `dryPitsBelowSea` (SP3c); the bench\'s flood scenario after L13.');
+    expect(sp7a[4], 'SP7a\'s "Received from SP6b" line').toBe('- Received from SP6b (its spec §16; amended by SP6b): lava may appear in the abyss and light it a little (the user: "y la propia lava que también emite luz"; no water there, guess, confirmed); the abyss box (the SP6b spec §1.3) widened by 0.1 depth disables aquifers there (§3.9\'s **Abyss.**); rule 4\'s under-water branches, clay under cave water in lush and gravel under cave water elsewhere (the SP6b spec D21); under SP6b\'s rock floor §3.9\'s "Everything below y −54 is lava" rarely fires, so SP7 places the abyss\'s lava from aquifer cells or lowers the floor locally (`caves.floor.y` by a lava mask), and re-checks `C7.bedrockExposed`; the cave channel\'s nibble marks flooded caves\' biome too; SP7\'s exit "P1: T still ≤ 10 ms" predates ruling R14\'s 13 ms p50 gate (the SP6a spec\'s Threshold log), which SP6b keeps (the SP6b spec D27): SP7\'s spec reconciles the two.');
+    expect(sp7a[5], 'SP7a\'s "Received from SP8b (moved by SP7a)" line').toBe('- Received from SP8b (moved by SP7a): springs and island-edge springs feeding settle (island-edge springs on SP3e\'s islands term, `islandMask` and island runs; SP3e spec §12), placed by T and reaching settle as proto sources (the SP7a spec §3, D21); lava lakes stay SP8b\'s.');
+    expect(sp7a[6], 'the pre-exit Exit').toBe('- **Exit:** as the SP7a spec §19 (A1-A5; A2 after settle; B2 voxel; B5 with its third part; R5; DT1 with settle; P1 with the gates in force and the aquifer row; the Chrome legs with the water segment; CI ≤ 6 min on cold runs; the user\'s check).');
+    expect(sp7a[7], 'the pre-exit Cut line, §18\'s items in order').toBe('- **Cut line:** vertex waves (→ SP11); then, in this order, the X-ray\'s fluid tint (and its legend rows, `R1.xrayFluid`) (→ SP10); the slice field\'s aquifer fluid and hover lines (→ SP10); the walk\'s fluid-height rule (→ SP7b); the bench\'s water segment (Fancy\'s 1.2 ms measured) (→ SP11). Each is cut whole.');
+    expect(sp7a.slice(8).join('\n').trim(), 'nothing after the Cut line').toBe('');
+    // The SP7b entry.
+    const sp7b = spEntry('SP7b', 'SP8a').split('\n');
+    expect(sp7b[0], 'the SP7b header').toBe('**SP7b — Fluids that move when you edit** (size set by the SP7b spec; SP7a, SP5c)');
+    expect(sp7b[1], 'the SP7b contents').toBe('- The runtime fluid sim (edit-triggered, 20 TPS, rules from `fluidRules.ts`, reactions obsidian, cobblestone and stone, caps, sim distance, diffs and the trailer\'s ticks); SP5c\'s paste, cut and move ticks and the 8k cap; the ghost drawing fluids; the bench\'s flood scenario; the current\'s push.');
+    expect(sp7b[2]).toBe('- **Deliverable:** break a lake rim and watch it drain.');
+    expect(sp7b[3], 'SP7b\'s "Received from SP5c" line, moved from SP7\'s').toMatch(/^- Received from SP5c \(its spec §14; amended by SP5c\): .*8k-updates-per-tick/);
+    expect(sp7b[4]).toBe('- **Exit:** F1, F2, F3; DT1 with the sim\'s diffs; P1 tick p95 ≤ 4 ms.');
+    expect(sp7b[5]).toBe('- **Cut line:** lava reactions beyond obsidian and cobblestone (→ SP12).');
+    expect(sp7b[6]).toBe('- **MVP line:** after SP7b the app is a complete explorer and editor with caves, entrances and real water.');
+    expect(sp7b.slice(7).join('\n').trim(), 'nothing after the MVP line').toBe('');
+  });
+
+  test('§10\'s SP8a, SP8b, SP8c and SP12 read SP7a or SP7b (SP7a spec §16 item 2)', () => {
+    expect(spEntry('SP8a', 'SP8b').split('\n')[0]).toContain('the texture parts can run in parallel with SP5a-SP7b)');
+    const sp8b = spEntry('SP8b', 'SP8c').split('\n');
+    expect(sp8b[0]).toBe('**SP8b — Decorate content: features, ores, vegetation, cave decoration** (L; SP7a, SP8a)');
+    // Springs and island-edge springs moved to SP7a (its "Received from SP8b" line, item 1's pin), with SP3e's note on
+    // island-edge springs (moved from the SP3e describe); lava lakes stay.
+    expect(sp8b[1]).toContain('freeze_top_layer; lava lakes feeding settle (D step 1); tuning mode');
+    expect(sp8b[1]).not.toContain('springs');
+    expect(spEntry('SP7a', 'SP7b')).toContain('springs and island-edge springs feeding settle (island-edge springs on SP3e\'s islands term, `islandMask` and island runs; SP3e spec §12)');
+    expect(spEntry('SP8c', 'SP9').split('\n')[0]).toBe('**SP8c — Audio** (M; SP7a, SP5a; can run in parallel with SP8a/SP8b)');
+    const volcano = sp12Entry().split('\n').find((l) => l.startsWith('- The volcanic cone'));
+    expect(volcano).toContain('lava in the crater uses SP7a\'s generated lava.');
+  });
+
+  test('the critical path, parallelism, visible value, Default receivers, risk 15 and §2.5 (SP7a spec §16 item 3)', () => {
+    const line = (head: string): string => {
+      const l = text.split('\n').find((x) => x.startsWith(head));
+      expect(l, `no line starting ${head}`).toBeDefined();
+      return l!;
+    };
+    // Moved from the SP6a describe (MST:2023's pin).
+    expect(line('Critical path: ')).toContain('SP5c → SP6a → SP6b → SP7a → SP8b → SP9');
+    const parallel = line('In parallel: ');
+    expect(parallel).toContain('SP8a\'s texture parts after SP4a (alongside SP4b-SP7b;');
+    expect(parallel).toContain('SP7b after SP7a (alongside SP8a/SP8b); SP8c after SP7a (alongside SP8a/SP8b);');
+    expect(line('Visible value in every SP: ')).toContain('cave biomes in SP6b, water in SP7a, fluids that flow when edited in SP7b.');
+    const receivers = line('**Cut lines.**');
+    expect(receivers).toContain('SP5c replaced-block overlay → SP10 (delivered in SP5c, so nothing moved); SP7a vertex waves → SP11;');
+    expect(receivers).toContain('SP7b extra lava reactions → SP12;');
+    expect(line('15. **Scope creep.**')).toContain('After SP7b the app is a complete explorer and editor with water.');
+    // A bare SP7 is gone from §10's headers, paths and receivers and from §8's risk 15.
+    for (const l of [line('Critical path: '), parallel, line('Visible value in every SP: '), receivers, line('15. **Scope creep.**')]) {
+      expect(l, `a bare SP7 in ${l.slice(0, 40)}`).not.toMatch(/\bSP7\b/);
+    }
+    // §2.5's union (MST:245's pin) with the two ids in SUB_PROJECTS' order.
+    const union = [...line('type SubProjectId =').matchAll(/'(SP[^']*)'/g)].map((m) => m[1]);
+    expect(union).toEqual([...SUB_PROJECTS]);
+    expect(union.slice(union.indexOf('SP6b'), union.indexOf('SP8a') + 1)).toEqual(['SP6b', 'SP7a', 'SP7b', 'SP8a']);
+  });
+
+  test('§4.11 and §4.12 name SP7b; the bench route\'s flood is SP7b\'s and R5\'s row is gated from SP7a (SP7a spec §16 item 13)', () => {
+    const at = text.indexOf('### 4.11 ');
+    const s411to412 = text.slice(at, text.indexOf('### 4.13 ', at));
+    expect(s411to412).toContain('schedules fluid ticks for the 6 neighbours (SP7b)');
+    expect(s411to412, 'a bare SP7 in §4.11 or §4.12').not.toMatch(/\bSP7\b/);
+    const bench = text.split('\n').find((l) => l.startsWith('**Bench route `?bench=<preset>`'));
+    expect(bench).toContain('SP6a adds the cave scenario, SP7b the flood)');
+    const r5 = text.split('\n').find((l) => l.startsWith('| R5 |'));
+    expect(r5).toBe('| R5 | water surface quads per face | ≤ 0.1 (recorded from SP4a; gated from SP7a) |');
+    // R5 stays ungated until the commit that reaches ≤ 0.1 moves it to 'SP7a' (SP7a spec §13.3; the plan's Spec
+    // correction 1): 'SP7b' has not started.
+    expect(THRESHOLDS.R5?.waterQuadsPerFace).toEqual({ max: 0.1, activeFrom: 'SP7b' });
+    expect(STARTED_SPS).not.toContain('SP7b');
   });
 });

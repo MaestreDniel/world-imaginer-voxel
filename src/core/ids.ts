@@ -5,27 +5,28 @@
  * on 2026-10-20 into SP4a (the world in 3D, loaded once) and SP4b (streaming and life, later split); SP4b was split on
  * 2026-10-23 into SP4b (streaming) and SP4c (the map in the world and live editing); SP5 was split on 2026-10-27 into
  * SP5a (build and walk), SP5b (saved worlds) and SP5c (the selection tool)). SP6 was split on 2026-11-02 into SP6a (the
- * shape of the caves) and SP6b (cave biomes).
+ * shape of the caves) and SP6b (cave biomes). SP7 was split on 2026-11-17 into SP7a (water in the generated world) and
+ * SP7b (fluids that move when you edit).
  */
 export type SubProjectId =
   | 'SP0' | 'SP1' | 'SP2a' | 'SP2b' | 'SP3a' | 'SP3b' | 'SP3c' | 'SP3d' | 'SP3e' | 'SP4a' | 'SP4b'
-  | 'SP4c' | 'SP5a' | 'SP5b' | 'SP5c' | 'SP6a' | 'SP6b' | 'SP7' | 'SP8a' | 'SP8b' | 'SP8c' | 'SP9' | 'SP10' | 'SP11'
-  | 'SP12';
+  | 'SP4c' | 'SP5a' | 'SP5b' | 'SP5c' | 'SP6a' | 'SP6b' | 'SP7a' | 'SP7b' | 'SP8a' | 'SP8b' | 'SP8c' | 'SP9' | 'SP10'
+  | 'SP11' | 'SP12';
 
 /** Every sub-project in master §10 order. */
 export const SUB_PROJECTS: readonly SubProjectId[] = [
   'SP0', 'SP1', 'SP2a', 'SP2b', 'SP3a', 'SP3b', 'SP3c', 'SP3d', 'SP3e', 'SP4a', 'SP4b', 'SP4c',
-  'SP5a', 'SP5b', 'SP5c', 'SP6a', 'SP6b', 'SP7', 'SP8a', 'SP8b', 'SP8c', 'SP9', 'SP10', 'SP11', 'SP12',
+  'SP5a', 'SP5b', 'SP5c', 'SP6a', 'SP6b', 'SP7a', 'SP7b', 'SP8a', 'SP8b', 'SP8c', 'SP9', 'SP10', 'SP11', 'SP12',
 ];
 
 /**
  * The sub-project this build belongs to; hides profiles whose readyFrom comes later (SP2a spec §4.4).
  * It is the last SP of the longest prefix of SUB_PROJECTS whose members have all started (SP3a spec §9),
  * so an SP running alongside an earlier unstarted one (SP4a before SP3c, SP3d or SP3e) does not advance it.
- * SP6a (the shape of the caves) started on 2026-11-02 (SP6a spec §12). SP6b (cave biomes) started on 2026-11-12 and is
- * the current SP (SP6b spec §14.1).
+ * SP6a (the shape of the caves) started on 2026-11-02 (SP6a spec §12). SP6b (cave biomes) started on 2026-11-12 (SP6b
+ * spec §14.1). SP7a (water in the generated world) started on 2026-11-17 and is the current SP (SP7a spec §15.1).
  */
-export const CURRENT_SP: SubProjectId = 'SP6b';
+export const CURRENT_SP: SubProjectId = 'SP7a';
 
 /** Every metric id of master spec §6.4 (E1-E7 expanded; C7-C9 are SP6a's, its spec §10.1, §13 item 18). */
 export type MetricId =

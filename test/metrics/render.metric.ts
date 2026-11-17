@@ -47,8 +47,9 @@ import { nearestRank } from '../harness/zMetrics';
  *   unless the measurement misses them, which goes to the user.
  * - R4 (recorded, activeFrom SP8b): quads per interior column (opaque and water, the Medium meshing), `medianQuads` and
  *   `p95Quads` by nearest rank.
- * - R5 (recorded, activeFrom SP7, D26): `waterQuadsPerFace`, water quads per water unit face (the mesh's keys without
- *   duplicates, ruling P32), pooled, on the Medium meshing; 0 when no region holds water.
+ * - R5 (recorded, activeFrom SP7b, D26; gated from SP7a by the commit that reaches ≤ 0.1, the SP7a spec §13.3):
+ *   `waterQuadsPerFace`, water quads per water unit face (the mesh's keys without duplicates, ruling P32), pooled, on
+ *   the Medium meshing; 0 when no region holds water.
  * The four tests share one measurement (the first to run takes it).
  */
 type Tier = 'fast' | 'quick' | 'full';

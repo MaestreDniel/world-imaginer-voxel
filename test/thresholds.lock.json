@@ -1,5 +1,5 @@
 {
-  "sha256": "2e07dc6323a1c76dea55be4e989f6836302a50d58694909b46ca0a23b0e6f2ac",
+  "sha256": "9097087c645f51442fe0d7a7ca50190fe1626b7a0a79f286d3bf2fa69d4ed171",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -18,7 +18,8 @@
       "SP5b",
       "SP5c",
       "SP6a",
-      "SP6b"
+      "SP6b",
+      "SP7a"
     ],
     "thresholds": {
       "B1": {
@@ -912,7 +913,7 @@
       },
       "R5": {
         "waterQuadsPerFace": {
-          "activeFrom": "SP7",
+          "activeFrom": "SP7b",
           "max": 0.1
         }
       },
