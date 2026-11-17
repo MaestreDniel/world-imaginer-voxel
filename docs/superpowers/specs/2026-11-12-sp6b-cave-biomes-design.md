@@ -1347,6 +1347,74 @@ The gate reads, each with its own code's `g1.metric.ts` (`npx vitest run --proje
 
 No gate was loosened, and no bound beyond the brief's was added: the gates are switched on this set as Task 50 specifies (the Threshold log's Task 50 line).
 
+### The Firefox run (Task 52)
+
+The user ran it by hand in their own Firefox 158 (`Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:158.0) Gecko/20100101 Firefox/158.0`), so the shader cache was not controlled. The run took place on 2026-11-17, about 00:05-00:24, on the controller's `vite preview --port 4173 --strictPort` of b0293b6's build (`index-BkdAkf-i.js`). b0293b6's `src/` is 13da5ec's (`git diff 13da5ec b0293b6 -- src` is empty), the code of the Chrome cells' sixth set. Conditions:
+- kernel 7.0.0-43-generic, PRIME on-demand;
+- eDP-1 at 240 Hz, HDMI-1-0 disconnected (ruling U12);
+- on AC after an EC reset (U12). The controller's 16 s CPU check ran right before: 6 threads at 4.1 GHz; 20 threads at 3.5 GHz, then 2.2-2.4 GHz with no collapse. So the cap was gone, as before the sixth set (U11);
+- nothing else heavy ran.
+
+Committed in `assets/sp6b/`:
+- `selftest-firefox.json`, the user's pasted reading;
+- `bench-iris-firefox.json`, byte-identical (`cmp`) to the user's download `bench-firefox(9).json` (saved 00:24).
+
+Firefox's figures are recorded, not gated (§12.6). `g1.metric.ts` now reads this bench file from `assets/sp6b/` (`othersDir`): `dir` reads `assets/sp6b` in its `.out/G1.*.others.json` and `G2.*.others.json` records, and its 9 calls pass with the file in place. Firefox exposes no timer query (`timerQuery` false), so every `gpuMs` in the file is null: the stream, live and edit blocks, L13 with culling on and off, and L14's three segments. No GPU time is recorded for Firefox. The rest of the setup is as in SP6a's Firefox files: the window at 1760 × 990 and a device pixel ratio of 1.09, `displayIntervalMs` 4.14, the masked renderer string `Intel(R) HD Graphics, or similar`, `sectionRenderer` `mesh` (RegionMesh), `multiDraw` false, 6 workers. Times in ms.
+
+- **`?selftest=1`** (§12.8): 65/65. Every key's expected equals its actual and its entry in `test/goldens.json` (`generatorVersion` 9; sp1 27, sp2a 20, sp3a 3, sp3b 2, sp3c 2, sp3e 5, sp6a 3, sp6b 3). The page's second section read `IndexedDB contract: 10/10 passed`. The file holds only the goldens, so the contract's result is the user's reading.
+- **`?bench=medium`** (recorded): every leg L0-L14 ran, `timedOut` is empty in the live, cave and X-ray blocks, and `stoppedBy` is null. The reveal took 4,247. L0's two long frames are the first reveal's, 146.1 and 173.9 ms with main ≤ 0.3 ms (ungated; SP6a's Firefox file 75.0 and 129.3).
+
+**L13 with RegionMesh's region culling** (D23, §8.4; ruling P58's culled sections). Frame p50, p95 and p99 8.28, max 12.42, `caveOver33` 0, `caveMainP95` 0.96. `cullMainMeanMs` 0.013 and `cullMainMaxMs` 0.70 (Chrome's gates 1.0 and 1.5; the culling-off segment, where the walk does not run, 0.006 and 0.16). 0.37 walks per second (Chrome run 2: 0.40). The finder hit Chrome's entrance (20408, 198, −4795) in 16.5 ms, the route walked 258 blocks, 3 growth events, `gpuMs` null. **Culled sections: p50 0, max 0** on Firefox, against p50 71 and max 176 in Chrome run 2 (the gated file) on the same route, seed, profile and RD. Read from the code (nothing run):
+- **What the figure counts on each backend.** On RegionBatch (Chrome) it counts the entries the filter dropped from three's per-frame draw lists after three's per-instance frustum culling. Each entry is one section (`regionBatch.ts:51-55`; pinned in `regionBatch.test.ts:761`). On RegionMesh (Firefox) it counts the rows of the shown spans in the terrain and water arenas of culled regions (`culledRows`, `regionMesh.ts:400-410`), counted only while some region is culled (`:739`). A region is culled only on a re-apply frame where no section of any of its live columns (at most 64 columns × 24 sections) is drawn: `culled = !k.drawAll && !regionDrawn(g, k)` (`:394`, `regionDrawn` `:366-375`). A section is drawn when it carries the last completed walk's stamp or `drawAll` is set (`caveCulling.ts:435-436`). `renderer.test.ts:833-861` pins the count on both backends with only section (0, 4, 0) drawn. RegionMesh counts 3, the terrain rows of the region none of whose sections is drawn; the region holding the drawn section keeps its arenas drawn and counts nothing. RegionBatch counts 4: those 3 rows plus that region's one row the walk did not reach. So a culled region holding shown spans would show in the figure.
+- **The culling ran.** The walk completed 0.37 walks a second (0 in the culling-off segment). The walk slice and the re-apply took 0.013 ms per frame on average, against 0.006 ms with culling off. So the region verdicts were taken. On no recorded frame of the culling-on segment was a region with a shown terrain or water span wholly undrawn: each kept at least one drawn section. (A culled region whose arenas hold no shown span counts 0, and such an arena draws nothing either way.)
+- **Chrome's 71 and 176 do not contradict it.** They are single sections that lie in regions which may still hold drawn sections, and RegionBatch takes no region verdict. The bench records no per-region figure, so how close any region came to being wholly undrawn on this route is not measured.
+- **Triangles.** p50 2,471,295 and max 2,620,319 with culling on; 2,604,605 and 2,682,419 off. With no region culled, the difference is not culling's: the off segment walks the route's first 20 s again while the world streams (`bench.ts`, L13). The figure is not comparable with Chrome's (p50 303,527). RegionMesh draws each region arena whole, its range up to the high-water mark (`applyDrawRange`, `regionMesh.ts:362-365`), after three culls the region's bounds. RegionBatch draws per section after three's per-section frustum culling.
+
+**L14 with the biome segment** (recorded; `gpuMs` on and off null in each segment):
+- **The X-ray at RD 12:** p95 8.28, `over33` 1, main p95 1.82. Its one frame over 33 ms is the toggle's longest frame, 45.54 (`toggleMaxMs`): frame 70,629, main 0.54 ms after a 40.24 ms main-thread frame (`prevMainMs`). So the X press's own work presented the next frame late, as in SP6a's Firefox file (45.58 after 42.88). GPU MB 194.4, draw calls max 30 (13 of them the X-ray's), `xrayVertexBytes` 36,191,232.
+- **The biome segment:** p95 8.28, `over33` 0, max 8.28, main p95 0.96, the C toggle's longest frame 8.28 (Chrome's `xrayColorToggleMaxMs` cell), the X-ray's draw calls max 12, `xrayVertexBytes` 33,951,744.
+- **RD 16** (recorded on every browser): p95 8.28, `over33` 1, main p95 1.14. Its one frame over 33 ms is again its toggle's longest frame, 49.68: frame 81,705, main 1.14 ms after a 39.92 ms main frame, with RD 16's arena growths in frames 81,700-81,703 (`structuralFrames`). GPU MB 297.7, `xrayVertexBytes` 57,988,224, 78 growth events.
+- **Outside the segments:** `xrayMapOpenMaxMs` 165.6 (frame 79,030, main 0.84 after 0.64, the map's opening). One more frame over 33 ms: 33.12 at frame 81,472, main 4.24 after a 34.68 ms main frame. So the leg as a whole reads `over33` 4. `xrayCulledSections` 0: the culler walks nothing and sets `drawAll` while the X-ray is on (`caveCulling.ts`' header).
+- **Against SP6a's Firefox file:** RD 12 p95 12.72, `over33` 1, max 45.58; RD 16 p95 16.96, `over33` 1, max 59.36; GPU MB 217.8 and 331.3; `xrayVertexBytes` 41,468,544 and 64,219,392.
+- **Against Chrome run 2:** RD 12 p95 4.165, `over33` 0, toggle 8.33, GPU MB 124.7, `xrayVertexBytes` 19,664,856; the biome segment 4.165, 0, 4.165.
+- **Read against Chrome's gates,** which do not apply to Firefox: the biome segment's cells would hold. The RD 12 segment's `over33` 1 and toggle 45.5 would not (gates 0 and ≤ 33), as in SP6a's Firefox file (1 and 45.6).
+
+**The refills** (recorded; SP6a's Firefox file, then Chrome run 2):
+- L5's refill: 5,116 (5,398; 3,166).
+- The teleport's refill: 8,100, first reveal 504 (8,084; 6,012).
+- The Apply's full refill 6,380 and the undo's 6,030 (7,000 and 6,417; 4,216 and 4,704).
+- `xrayApplyRefillMs`: 9,400 after L14's `caves.cheese.offset` 0.5 → 0.2 (8,250; 6,742). The 6 s target is SP12's (Point 3).
+
+Firefox's X-ray refill is 1.39 times Chrome's on the same code and machine state. It is 1.14 times SP6a's Firefox file, which was measured on another day and build (the R29 (b) re-run at 3f15fe9) with its EC state and displays not recorded. With one run on each side, that difference is not attributed.
+
+**Persist, paste and edit, side by side** (each column one run). The SP6a Firefox column is the user's R29 (b) re-run, 2026-11-10, at 3f15fe9's build, which replaced Task 51's file (the SP6a spec's Exit evidence). The SP6b Chrome column is run 2 of the sixth set, the gated file. The Chrome gates are shown for reference and do not apply to Firefox.
+
+| cell (Chrome gate) | SP6a's Firefox file | SP6b Firefox (this run) | SP6b Chrome run 2 |
+|---|---|---|---|
+| reveal | 4,737 | 4,247 | 3,560 |
+| stream p95 / over33 / max / main p95 | 8.48 / 1 / 33.92 / 2.36 | 8.28 / 0 / 20.70 / 2.30 | 4.165 / 0 / 12.50 / 3.19 |
+| stream GPU MB / geometry MB / draw calls max | 194.8 / 181.5 / 22 | 169.1 / 155.8 / 22 | 130.1 / 114.3 / 16 |
+| live p95 / over33 / max / main max | 12.72 / 0 / 29.68 / 26.8 | 8.28 / 0 / 24.84 / 20.3 | 4.165 / 0 / 16.66 / 16.2 |
+| `editVisibleP50` / `editVisibleP95` (≤ 50) / max | 23.12 / 48.92 / 64.62 | 16.26 / 34.30 / 46.86 | 13.54 / 28.40 / 34.91 |
+| `editAllVisibleP95` / `replyP95Ms` / `editVisibleStreamingP95` | 70.62 / 4.22 / 30.84 | 55.76 / 3.16 / 26.40 | 45.64 / 2.60 / 18.89 |
+| `issueToStagedP95Ms` / `stagedToShownP95Ms` | 18.18 / 35.28 | 15.92 / 21.56 | 9.77 / 17.93 |
+| persist L11a-d p95 (over33) | 12.72 each (0) | 8.28 each (0) | 4.165 each (0) |
+| persist L11a / b / c / d `editVisibleP95` | 32.70 / 38.66 / 35.34 / 34.20 | 22.38 / 29.60 / 30.74 / 29.16 | 19.86 / 25.36 / 22.40 / 18.48 |
+| `flushSyncP95Ms` / `flushCommitP95Ms` / `flushMainP95Ms` | 0.82 / 168.6 / 0.98 | 1.02 / 153.1 / 0.60 | 0.165 / 8.41 / 0.375 |
+| `replyDuringFlushP95Ms` (≤ 5; samples) | 7.42 (31) | 8.26 (33) | 3.75 (31) |
+| `editVisibleAddedMs` / `p95AddedMs` / `over33Added` | 2.41 / 0 / 0 | 2.82 / 0 / 0 | 0.79 / 0 / 0 |
+| paste L12a-d p95 (over33) / L12c max | 12.72 each (0) / 21.2 | 8.28 each (0) / 24.84 | 4.165 each (0) / 12.50 |
+| `ghostSliceMaxMs` L12b / c / d (≤ 4) | 3.38 / 1.48 / 1.56 | 2.48 / 1.42 / 1.62 | 2.04 / 1.27 / 1.53 |
+| ghost build ms L12b / c / d | 7.64 / 11.54 / 14.12 | 5.78 / 12.02 / 15.04 | 4.33 / 6.40 / 10.79 |
+| paste `flushMainMaxMs` / `flushSyncMaxMs` / clipboard read / write | 12.98 / 4.32 / 4.32 / 7.70 | 10.32 / 2.82 / 3.22 / 7.68 | 7.69 / 1.69 / 5.15 / 7.91 |
+| caves p95 / over33 / max / main p95 | 8.48 / 0 / 21.2 / 0.98 | 8.28 / 0 / 12.42 / 0.96 | 4.165 / 0 / 8.33 / 2.22 |
+
+Against SP6a's Firefox file, this run reads one display interval less at p95 on the live, persist and paste legs and on the X-ray's RD 12 segment (8.28 against 12.72), and two less on RD 16 (8.28 against 16.96). The stream and the cave route stay at 8.28-8.48, and `editVisibleP95` drops from 48.9 to 34.3. Against Chrome run 2, Firefox stays about one display interval behind at p95 (8.28 against 4.165) on every frame leg, as SP6a's re-run read (R29 (b): "Firefox stays about one display interval behind Chrome as it was before SP6a"). Two figures stand out:
+- `replyDuringFlushP95Ms` reads 8.26, against 7.42 in SP6a's Firefox file and 3.75 in Chrome run 2.
+- `flushCommitP95Ms` reads 153 against Chrome's 8.4. This is the IndexedDB commit's time in Firefox, as in SP6a's file (169).
+
+Both are recorded only.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
