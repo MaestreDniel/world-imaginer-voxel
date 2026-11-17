@@ -1555,6 +1555,8 @@ Each row of §19 with the commit on `sp6b/cave-biomes` that placed it, or the re
 
 ### CI at the exit (Task 58)
 
+**Met at the third measurement: after the user's rulings U14 and U15, the last two cold runs before the exit commit read 5:32 and 4:47 against §13's 6 min 0 s ("After U15's column slices" below).** The first two measurements stopped for the user; their records follow in order.
+
 **Missed: the last two cold runs before the exit commit read 8:29 and 8:40 against §13's 6 min 0 s, and Stage 2's items (none taken: Task 6 was skipped) cannot reach it, so the work stopped for the user (STOP) before building them.** Task 59 Step 0's commit e5505ae (master §10 at the exit and its pins; ruling P61) was pushed first. Its push range from b0293b6 holds 35d02cd's `test/harness/caveMetrics.ts`, so its run was cold. Every run is on `sp6b/cave-biomes`. Each attempt's wall runs from its start (creation for #1) to its last job's end. Runner minutes are the sum of the job times.
 
 - **e5505ae, run 44041739227 #1: cold run 1.** Every `regions-*` key (hash `27dd0a00…`) logged "Cache not found". 07:50:02 → 07:58:31Z, wall **8:29**, green. Long pole `unit (rest)` 8:13.
@@ -1605,7 +1607,7 @@ Each row of §19 with the commit on `sp6b/cave-biomes` that placed it, or the re
 
 - **edc2ace, run 44054778989 #1: cold run 1.** 09:21:08 → 09:27:22Z, wall **6:14**. Long pole `metrics-quick (terrain-large)` 5:55 (vitest 334.5 s); every other job ≤ 4:29.
 - **#2** (warm re-run): 09:29:12 → 09:34:28Z, wall 5:16. Long pole `metrics-fast (rest)` 4:57.
-- **#3: cold run 2.** 09:35:30 → 09:41:54Z, wall **6:24**. Long pole `metrics-quick (surface-large)` 6:06 (vitest 347.2 s); next `metrics-fast (terrain-caves)` 5:08; every other job ≤ 4:40.
+- **#3: cold run 2.** 09:35:30 → 09:41:54Z, wall **6:24**. Long pole `metrics-quick (surface-large)` 6:06 (vitest 347.2 s); next `metrics-fast (terrain-caves)` 5:08; every other job ≤ 4:40. The attempt also holds an abandoned `unit (heavy-b)` record (started 09:35:54, never completed, `conclusion` null): the runner re-dispatched it, and the real `unit (heavy-b)` started at 09:35:56, about 12 s after the other test jobs, and ended at 09:39:00, so the wall is unaffected.
 - **#4** (warm re-run): 09:43:11 → 09:49:29Z, wall 6:18. Long pole `metrics-quick (terrain-large)` 5:56.
 
 | job | 44054778989 #1 (cold 1) | #2 (warm) | #3 (cold 2) | #4 (warm) |
@@ -1637,6 +1639,46 @@ Each row of §19 with the commit on `sp6b/cave-biomes` that placed it, or the re
 
 - **What the levers did.** The poles U14 aimed at fell from 7:17-8:17 to at most 4:57: the four unit shards ran 2:26-4:48 (`unit (liveness)` vitest 132-193 s; on #3 `livenessCaveBiomes.test.ts` 115.8 s, `livenessBands` 85.0 s, `liveness` 76.0 s, `livenessSp6b` 62.2 s), `metrics-fast (rest)` 3:57-4:57, `metrics-quick (rest)` 2:58-3:55 and `(region)` 2:14-3:10. Runner minutes fell from 59.8-68.0 to 60.5-65.3.
 - **What is left.** The walls above 6:00 come from the two large-profile shards, which none of U14's levers touched (they are Stage 2 item 1's, the column slices with a merge job, not taken): `metrics-quick (terrain-large)` 4:22-5:56 and `(surface-large)` 3:30-6:06 on one code, their spread the runners' (§13's ±45 %), as at the exit's first runs (5:52-5:54 and 4:05-6:28). Next is `metrics-fast (terrain-caves)` 2:57-5:08: the fold runs terrain (292.3 s on #3) and caves (211.4 s) side by side, more than twice the 127 s terrain took in its own job at the exit. The question is the user's (R23 rules out sample reductions).
+
+**After U15's column slices (the user's ruling U15; §13 "Item 1 for the large profile"): met, 5:32 and 4:47 cold.** Commit 118e0e0 (the column slices, the `metrics-merge` job, two folds) was pushed on 53f4434 (push range edc2ace..118e0e0). It changes `test/harness/**` (the new `columnSlices.ts`; `sumScattered` in `terrainScatter.ts`), so the region-cache key changed (hash `47004119…`) and #1 was cold without deleting any cache; before #3 this repository's own seven `regions-*` caches of that hash were deleted by key (`metrics-fast-{terrain-caves,rest}`, `metrics-quick-{caves,caves-presets-edit-clipboard,caves-biomes-persist,render,region}`). Every `regions-*` key logged "Cache not found" on #1 and #3, and the seven restored on #2 and #4 (`metrics-fast (persist)` and `metrics-quick (rest)` save none). 20 test jobs ran in parallel on every attempt and `metrics-merge` after metrics-quick; all four attempts green, 23 job records each, none abandoned.
+
+- **118e0e0, run 44069090096 #1: cold run 1.** 10:54:15 → 10:59:47Z, wall **5:32**. Long pole `metrics-fast (rest)` 5:13 (vitest 289.2 s), next `unit (rest)` 5:04; `metrics-merge` ran 10:58:48 → 10:59:00.
+- **#2** (warm re-run): 11:01:17 → 11:06:27Z, wall 5:10. Long pole `metrics-fast (terrain-caves)` 4:47.
+- **#3: cold run 2.** 11:07:24 → 11:12:11Z, wall **4:47**. Long pole `metrics-quick (terrain-surface-default)` 4:13 (vitest 236.2 s), then `metrics-merge` 11:11:53 → 11:12:04.
+- **#4** (warm re-run): 11:13:25 → 11:18:22Z, wall 4:57. Long pole `unit (heavy-b)` 4:33.
+
+| job | 44069090096 #1 (cold 1) | #2 (warm) | #3 (cold 2) | #4 (warm) |
+|---|---|---|---|---|
+| wall | **5:32** | 5:10 | **4:47** | 4:57 |
+| runner minutes | 68.1 | 62.3 | 62.5 | 59.3 |
+| `changes` | 0:09 | 0:09 | 0:09 | 0:09 |
+| `check` | 3:14 | 3:49 | 3:52 | 3:54 |
+| `unit (heavy-a)` | 3:38 | 3:45 | 2:18 | 2:57 |
+| `unit (heavy-b)` | 3:29 | 3:04 | 3:36 | 4:33 |
+| `unit (liveness)` | 4:19 | 4:18 | 3:24 | 3:26 |
+| `unit (rest)` | 5:04 | 3:28 | 3:01 | 3:48 |
+| `metrics-fast (terrain-caves)` | 2:50 | 4:47 | 3:49 | 3:42 |
+| `metrics-fast (surface)` | 3:59 | 2:55 | 2:06 | 2:42 |
+| `metrics-fast (persist)` | 2:39 | 1:42 | 2:05 | 2:27 |
+| `metrics-fast (rest)` | 5:13 | 4:20 | 3:35 | 3:26 |
+| `metrics-quick (terrain-surface-default)` | 4:18 | 4:17 | 4:13 | 2:36 |
+| `metrics-quick (terrain-large-slice-0)` | 3:15 | 2:32 | 2:55 | 3:06 |
+| `metrics-quick (terrain-large-slice-1)` | 2:27 | 3:25 | 3:14 | 2:11 |
+| `metrics-quick (surface-large-slice-0)` | 3:25 | 2:25 | 3:14 | 3:19 |
+| `metrics-quick (surface-large-slice-1)` | 1:58 | 2:11 | 2:21 | 2:10 |
+| `metrics-quick (render)` | 2:49 | 1:55 | 2:10 | 1:49 |
+| `metrics-quick (caves)` | 3:09 | 1:44 | 2:55 | 1:11 |
+| `metrics-quick (caves-presets-edit-clipboard)` | 2:44 | 2:10 | 2:40 | 2:12 |
+| `metrics-quick (caves-biomes-persist)` | 3:01 | 3:24 | 3:02 | 3:21 |
+| `metrics-quick (region)` | 3:04 | 2:51 | 3:48 | 2:50 |
+| `metrics-quick (rest)` | 3:06 | 2:44 | 3:50 | 3:07 |
+| `metrics-merge` | 0:12 | 0:17 | 0:11 | 0:20 |
+| `ci-ok` | 0:04 | 0:04 | 0:05 | 0:02 |
+
+- **What the slices did.** The four slices ran 1:58-3:25 (vitest 91.5-184.5 s on #1, 107.3-175.7 s on #3), against 4:22-5:56 and 3:30-6:06 for `terrain-large` and `surface-large` after U14. `metrics-merge` took 0:11-0:20: it downloaded the 4 slice artifacts and its vitest ran 1.1-1.3 s, with 10 tests passed and 1 skipped, as in the whole run (T3's `value` is gated on full only). It starts after the slowest metrics-quick shard, `terrain-surface-default` (2:36-4:18), so on #3 it closed the wall's path. The two folds ran 2:10-2:44 (`caves-presets-edit-clipboard`) and 3:01-3:24 (`caves-biomes-persist`). The long poles are now `metrics-fast (rest)` (3:26-5:13), `unit (rest)` (3:01-5:04) and `metrics-fast (terrain-caves)` (2:50-4:47).
+- **The merge reads the union exactly.** On 118e0e0's code, locally on the quick tier with `METRICS_PROFILES=large_biomes`: the whole run of `terrain.metric.ts` and `surface.metric.ts` (as the `terrain-large` and `surface-large` jobs ran them) and the slices `0/2` and `1/2` with the merge `merge/2` wrote the same 11 records (`.out/T1`, `T2`, `T3`, `T5`, `T4`, `B3.windows`, `S1`, `S2`, `S3`, `B4.voxel`, `B2.voxel`): all 978 keys agree, every gated part among them; only the timing keys (`seconds`) differ. Unit tests pin the slices' sums on real columns (`terrainScatter.test.ts`, `surfaceScatter.test.ts`) and the record format (`columnSlices.test.ts`).
+- **Runner minutes:** 59.3-68.1, against U14's 60.5-65.3.
+- **The rule (Task 58 Step 2):** both cold runs are at or under 6:00, so it is met. No sample was reduced (R23), no gate loosened and no test removed.
 
 ## Threshold log
 
