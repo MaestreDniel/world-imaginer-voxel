@@ -1422,6 +1422,89 @@ Both are recorded only.
 - **§15 item 17 (§7's main-thread row):** `cullMainMeanMs` 0.027 and `cullMainMaxMs` 0.58 ms on L13 in the gated Chrome file (G1's bounds 1.0 and 1.5); in Firefox, with RegionMesh's arenas, 0.013 and 0.70 ms.
 - **§15 item 2:** SP7-SP12 each gain a "Received from SP6b (its spec §16; amended by SP6b)" line with §16's text, its cross-references named as the SP6b spec's.
 
+### The obligations audit (Task 54; §19)
+
+Each row of §19 with the commit on `sp6b/cave-biomes` that placed it, or the receiving SP's line in the master (line numbers at Task 54's commit; "Received" is that SP's "Received from SP6b (its spec §16; amended by SP6b)" line). A row whose last step is a later task names it: scheduled, not missing. **Missing: none**, so this audit hands Task 57 no blocking finding.
+- **§15:** all 21 items are pinned in 'master spec amendments (SP6b §15)'; its last test checks that each item has a test naming it (ruling P52). Item 4 lands here in its pre-exit form: the Default receivers (master :1806) gain "SP6b Find-a-cave-biome buttons → SP10; SP6b map cave-biome layer → SP10; SP6b Cave biome slice field → SP10; SP6b RegionMesh region culling → SP11" after SP6a's entries. Items 1 (the contents, the Received items as delivered, Exit, Cut line) and 4 are worded as delivered by Task 59 Step 0, which Task 58 Step 0 performs (ruling P61).
+- **Worded as delivered here:** SP12's Received line (:2026) read "the `deriveSeed` memo if SP6b did not take it". Lever 25f took it (R28 below), so the line now reads "the `deriveSeed` memo (taken by SP6b: Task 25's lever 25f, the SP6b spec §9.2, so nothing moved)", pinned. SP10's "the items of the SP6b spec §17 if cut" (:2008) stays for Task 59 Step 0, with the receivers' exit wording. Nothing was cut: Tasks 43-48 built all four items.
+
+| id | lands |
+|---|---|
+| E1 | 18b5690 (Task 1: the header `(XL; SP6a)` with the spec's name, §15 item 1); the contents line as built: Task 59 Step 0 (scheduled) |
+| E2, R1, M2 | 73f3886 (Task 10: `caveRegistry.ts`, `cavePicker.ts`); b35b44c (Task 17: T picks per block, the `caves.biomes.*` leaves; master §3.10 as built, §15 item 11) |
+| E3, R3, M4 | e618bd3 (Task 12: `caveBiome`, master §3.11's Conditions); 96d845a (Task 22: rule 4 at `root.rules[2]`; §15 item 12) |
+| E4, R5, M7, M9, M30 (stone part) | bf5e886 (Task 7: ids 58-64, `SOUND` grass, stone and abyss; §15 items 7, 13); 96d845a (rule 4 places them) |
+| E5, R6, A9 | c814caf (Task 32: the mesher's biome bits); dfa9f6b (Task 33: the colour uniform); 8038250 (Task 34: C); e584dd5 (Task 35: the terrain passes draw nothing); §15 item 16 |
+| E6, R7, M15 | b5f0099, 2d7b271 (Tasks 44-45: the `caveBiome` layer at a y; master §5.6, §15 item 18); cut line 2 not taken |
+| E7, R8, R23, R29, A5, A6, M8, K3 | 18b5690 (Task 1: `cave_heavy` ready, in New world and the map); e74097b (Task 27: its C1, C2, C9); 30541bc (Task 30: the cheese offset 0.30; master §3.15, §15 item 14) |
+| E8, R11, A7, M11, K8 | a772a87, 2e4efaa (Tasks 37-38: the walk, its triggers and slices); aa46e69 (Task 42: RegionBatch's draw filter); 4f5c4cb (Task 43: RegionMesh's arenas, master §4.15); 04c95bd (Task 53: the measured cost); §15 item 17 |
+| E9, R20 | the user's check: Task 60 (scheduled) |
+| E10 | §17: none of the four items cut; the Exit and Cut line wording and item 4 as delivered: Task 59 Step 0 (scheduled) |
+| R2, M10 (aux B) | b35b44c (Task 17: `caveBiomeQ` written by T; master §2.3, §15 item 8) |
+| R4 | → SP8b: master :1976 (Received: "`secondaryDepthRange` if its rules need a noisy depth"); e618bd3 (master §3.11: "deferred to SP8b (amended by SP6b)") |
+| R9, M18, M24, K5 | 206c1f4 (Task 23: B3 per window, recorded); 08b1985, 30541bc (Task 30: at its bounds, gated on every tier) |
+| R10, M20 | e74097b (Task 27: `C1.caveHeavyMin` / `Max` recorded, activeFrom 'SP12'); → SP12: master :2026 (Received: "`cave_heavy`'s finalisation with C1's 10-22 % gate") |
+| R12, M17 | 1ebbfde (Task 39: `harness/refs.ts`; master §6.1, §15 item 19) |
+| R13 | a772a87, aa46e69 (the culler copies a column's `connectivity15` from the staging on a reveal or a swap) |
+| R14, M10 (meta) | 4f5c4cb (Task 43: bits 17-31 stay 0; master §2.3, §15 item 8) |
+| R15 | 2e4efaa (Task 38: `setXray`, the culler draws everything while the X-ray is on) |
+| R16 | 08b1985, 30541bc (Task 30: C1-C9, L2, S1, DT1, DT2 re-asserted on fast, quick and full); 3adefb3, 829159e (Task 18: DT2's `caveBiomeProbe` and its surface parts); the exit's full tier: Task 59 Step 1 (scheduled) |
+| R17, M25 | 1beb6c9 (Task 24: `caveBiome.column`, D25's checkpoint); a99f7fe (Task 25: the baselines after the levers); 04c95bd (Task 53: §7's "Measured in SP6b", §15 item 21); the exit bench: Task 59 Step 1 (scheduled) |
+| R18 | b35b44c (`GENERATOR_VERSION` 9); 1e1d8da (Task 31: the generator push's golden record) |
+| R19 | bf5e886 (`test/unit/clipboardCodec.test.ts`: the seven states round-trip by key; `rotateState` and `mirrorState` map each to itself) |
+| R21, K9 | bf5e886 (`EMIT` 0); ae83c1d (Task 28: `L2.abyssLit` recorded) |
+| R22 | 04c95bd (Task 53: SP7 :1955, SP8b :1976, SP8c :1986; §15 item 2) |
+| R24, M23 | b35b44c, 9c0b2bb, 96d845a (the U2 count 187, 191, 193 with the leaves); 668c745 (Task 29: U2-U4 on every tier; master §6.4's U2 row as built, §15 item 20) |
+| R25, A2, A13 | 596796b, 7b00c74, 27d50c9, f76fb55 (Tasks 2-5: the CI work item, measured); 79617ef (ruling R5); the exit's runs: Task 58 (scheduled) |
+| R26 | → SP12: master :2026 (Received: "`C6.latticeBias`'s 1.1, read as ≤ 1.09 on SP6b's measure"); 08b1985 (SP12's line, §15 items 5, 20); ec2640f (ruling U1's measure) |
+| R27, A3 | 13da5ec, b0293b6 (Tasks 49-50: L14's `xrayApplyRefillMs`, 6,742 ms in Chrome); 98e3000 (Task 52: 9,400 ms in Firefox); → SP12: master :2026 (Received: "the X-ray refill's 6 s target") |
+| R28 | 5cac76d (Task 25's lever 25f: the `deriveSeed` memo per kind, taken because `slice.caves128` read 370.6 ms); master :2026 worded as delivered in Task 54's commit |
+| R30, A18, M27, K4 | `TERRAIN_P50_MAX_MS` 13 unchanged (`test/bench/gates.ts:15`, D27); 04c95bd (§7's T gate pinned); SP7's exit → SP7: master :1955 (Received: "SP7's spec reconciles the two") |
+| U1, U2, A4, M6 | 9c0b2bb, b72f83c (Tasks 19-20: `floorY`, g_b, S_b, σ_b; master §3.6 and §3.8, §15 item 15); d148157, a763c66 (levers 25d, 25c) |
+| U3 | b72f83c (`C7.bottomPlane` gated); bce0f31 (Task 21: the bottom parts recorded, `bedrockExposed` gated); 30541bc (`bottomFloorSpread`, `bottomFlatRatio` at the user's bounds) |
+| M1, K1 | 73f3886 (§1.2's depth axis); b35b44c (master §3.2, §15 item 9); 1beb6c9 (D25's checkpoint: the abyss band measured); d148157, a763c66, a99f7fe (Task 25's levers) |
+| M3 | → SP7: master :1955 (Received: "widened by 0.1 depth disables aquifers there"); b35b44c (master §3.9's box, §15 item 10) |
+| M5, K2 | → SP7: master :1955 (Received: "clay under cave water in lush and gravel under cave water elsewhere"); 96d845a, 16c7975 (Task 22: clay by the `cavePatch` noise) |
+| M12 | 4f5c4cb (§7's main-thread row worded); b0293b6 (Task 50: `cullMainMeanMs` ≤ 1.0 and `cullMainMaxMs` ≤ 1.5 gated); 04c95bd (measured) |
+| M13 | b35b44c (master §5.4: parameter leaves, not table rows; §15 item 18) |
+| M14 | 572a90b (Task 46: the Cave biome field; master §5.5, §15 item 18); the probe → SP10: master :2008 (Received: "the probe's cave biome and the picker's inputs") |
+| M16 | → SP10: master :2008 (Received: the F3 line "cave biome at the eye", a "freeze culling" toggle); 13da5ec (L13's bench-only culling switch) |
+| M19 | 1ebbfde, 14fd678 (Tasks 39-40: R3's row, cross-checked against `THRESHOLDS`; §15 item 20) |
+| M21 | 08b1985 (master §6.4's S2 note, §15 item 20); S2 and T4 gated on every tier, held at Task 30's re-assertion |
+| M22 | → SP8b: master :1976 (Received: "the abyss mineral (O2) placed by the nibble or `caveBiomeQ`"); → SP8c: master :1986 (Received: "AU3's abyss label from the nibble at the eye") |
+| M26 | 73f3886, a772a87, 1ebbfde (`SP6B_MODULES`' rows), bf5e886 (the metrics entry and "Banned APIs"); §15 item 6 |
+| M28 | 08b1985 (Task 30: SP12's line, §15 item 5) |
+| M29 | 04c95bd (Task 53: not needed, §8 risk 3 pinned unchanged; §15 item 3) |
+| M30 (rest) | → SP8b: master :1976 (the crystals or gems, the gothic touch, cave decoration, the mineral); → SP8c: master :1986 (the silence) |
+| A1 | this audit |
+| A8 | Task 56 (scheduled: the review links and screenshots) |
+| A10 | bf5e886 (`stateIds.lock.json` gains ids 58-64 through `test:accept-state-ids`); 1e1d8da (the generator push: `sp3c.surface.ops` in the allowed golden diff) |
+| A11 | 1cc244a (Task 36: one top container; the strip and the F3 counts disjoint) |
+| A12 | → SP10: master :2008 (Received: "`replyDuringFlushP95Ms`'s flake") |
+| A14 | 1beb6c9 (C5's thinnest 4 at the checkpoint); a763c66 (lever 25c: still 4); 30541bc (re-asserted) |
+| A15 | → SP11: master :2018 (Received: "RegionMesh's buffer policy") |
+| A16 | `docs/backlog.md:29`, unchanged on the branch |
+| A17 | 18b5690 (Task 1: `METRICS_TIMEOUT_SCALE` in `test/harness/metric.ts`) |
+| A19, K7 | c52c230 (Task 16: schema version 5 migrates GV8's built-in trees); b97abe6 (RF2's saved GV8 world); a world saved in SP6a opened in production: Task 60 (scheduled) |
+| K6 | the pins moved with each commit that reworded their text (the describe's header comment names each); the completeness test (Task 54) |
+| SP1 :397, :509 | 18b5690, c52c230, 9c0b2bb, 30541bc (`test/unit/profiles.test.ts` follows the overlay) |
+| SP2b :348, :490 | = M13 |
+| SP3a :311, :326 | done in SP6a |
+| SP3b :222 | = R2 |
+| SP3b :216-217, :415; SP3c :450 | → SP7: master :1952 (its deliverable's "dry caves below sea level") and :1954 (`dryPitsBelowSea`, `C7.waterWall`) |
+| SP3c :21, :164, :307, :448, :467, :469; SP3d :22, :25, :600 | = R3-R5 |
+| SP3c :117 | bf5e886 (the seven types carvable) |
+| SP3c :449 | = R16 |
+| SP3d :60, :772; SP3c :447, :490 | → SP12: master :2025 ("the y mod 16 residue"), unchanged |
+| SP3e :32, :537, :550 | = A6 (18b5690); islands done in SP6a |
+| SP4a :31, :60, :735, :737, :777 | = E8, R14; D's first feature → SP8b: master :1975; S1, L2 done |
+| SP4b :38, :630-632, :668 | = R13; L13 done in SP6a |
+| SP5a :77, :372 | done |
+| SP5b :57, :314 | = A6 |
+| SP5c :6, :509 | = R19 |
+| brief: CI time (R23) | = R25 |
+| brief: controller notes | the rows named there: R30 (D27), R26, E7 (K3), R28, A12, A15, A14, A11, A16 |
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)

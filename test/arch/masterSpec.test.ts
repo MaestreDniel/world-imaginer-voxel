@@ -152,7 +152,7 @@
  * describe that reads text SP6b rewords moves there with the commit that rewords it. The first commit (Task 1) lands
  * item 1's header, `**SP6b — Cave biomes** (XL; SP6a). Spec: …` (the size the user chose, "XL completa"), and moves the
  * SP6a describe's header pin. §1 names each SP6b module in its entry, which exists (`SP6B_MODULES`, its first rows
- * added with the picker); the exit adds the completeness test over §15's items. The seven blocks (Task 7) land item 7
+ * added with the picker); Task 54 adds the completeness test over §15's items. The seven blocks (Task 7) land item 7
  * (§2.2's terrain palette names them, ids 58-64, with their sounds), item 13 (§3.12's abyss line names the abyss
  * palette; the SP6a describe's pin of that line moved here) and item 6's two lines for `sp6bGoldens.ts` (§1's metrics
  * entry and "Banned APIs", which must equal `DET_FILES`; the SP6a describe's pins of that list's end moved here).
@@ -182,7 +182,12 @@
  * so §8 risk 3's text is pinned unchanged and the Exit evidence records it) and item 2 (the "Received from SP6b" lines
  * of SP7-SP12, after each "Received from SP6a" line, each phrase checked against the spec's §16 bullet: SP7's carries
  * the abyss's lava, SP8b's the crystals or gems and the gothic touch, SP8c's the silence; the "Received from SP6a"
- * lines still hold none of them, the SP6a describe's pin).
+ * lines still hold none of them, the SP6a describe's pin). The master pins II (Task 54) land item 4 in its pre-exit form
+ * (the Default receivers' four SP6b entries after SP6a's, each a cut-line item of the spec's §17 with its receiver,
+ * checked against item 4's quoted text and §17's arrows; the exit appends "(delivered in SP6b, so nothing moved)" to
+ * each item taken and re-pins the line), word SP12's `deriveSeed` memo as delivered (lever 25f took it; §19's R28), and
+ * add the describe's last test, which checks from the titles of the tests registered in it that every item of the SP6b
+ * spec's §15 as it stands has a test that names it (ruling P52).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -3131,5 +3136,65 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(of(spEntry('SP8c', 'SP9'))).toContain('silent');
     // SP6b's own entry receives nothing from itself.
     expect(spEntry('SP6b', 'SP7')).not.toContain(SP6B);
+  });
+
+  test('§10\'s SP12 line: the deriveSeed memo as delivered (SP6b spec §15 item 2, §19 R28)', () => {
+    const line = sp12Entry().split('\n').find((l) => l.startsWith('- Received from SP6b (its spec §16; amended by SP6b):'));
+    expect(line, 'SP12 has no "Received from SP6b" line').toBeDefined();
+    expect(line).toContain('the `deriveSeed` memo (taken by SP6b: Task 25\'s lever 25f, the SP6b spec §9.2, so nothing moved);');
+    expect(line).not.toContain('if SP6b did not take it');
+  });
+
+  // Pre-exit form: the exit (Task 59 Step 0) appends "(delivered in SP6b, so nothing moved)" to each item taken and
+  // re-pins this line.
+  test('the Default receivers name SP6b\'s cut-line items (SP6b spec §15 item 4)', () => {
+    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-12-sp6b-cave-biomes-design.md`, 'utf8');
+    const entries = 'SP6b Find-a-cave-biome buttons → SP10; SP6b map cave-biome layer → SP10; SP6b Cave biome slice field → SP10; SP6b RegionMesh region culling → SP11';
+    const receivers = text.split('\n').find((l) => l.startsWith('**Cut lines.**'));
+    expect(receivers, 'no `**Cut lines.**` paragraph in §10').toBeDefined();
+    // After SP6a's entries (the SP6a describe's pin), before SP7's.
+    expect(receivers).toContain(`SP6a cave finder → SP10 (delivered in SP6a, so nothing moved); ${entries}; SP7 extra lava reactions → SP12;`);
+    expect(receivers!.split('SP6b ').length - 1, 'SP6b\'s entries in the receivers').toBe(4);
+    // §15 item 4 quotes the four entries; §17 lists the four items with the same receivers, in order.
+    const item4 = spec.split('\n').find((l) => l.startsWith('4. **§10 Default receivers**'));
+    expect(item4, 'the SP6b spec §15 has no item 4').toBeDefined();
+    expect(item4).toContain(`"${entries}"`);
+    const s17 = spec.slice(spec.indexOf('\n## 17. Cut line\n'), spec.indexOf('\n## 18. Exit criteria\n'));
+    const cut = [...s17.matchAll(/^\d+\. \*\*[^*]+\*\*[^→\n]*→ (SP\d+[a-z]?)/gm)].map((m) => m[1]);
+    expect(cut, '§17\'s cut-line items and their receivers').toEqual([...entries.matchAll(/→ (SP\d+)/g)].map((m) => m[1]));
+  });
+
+  /**
+   * Ruling P52: every item of the SP6b spec's §15 has a test in this describe that names it in its title ("§15 item 4",
+   * "§15 item 20, ruling U1"); the item numbers come from the describe's registered tests and from the spec's §15 as it
+   * stands, so an item added to §15 without its pin turns this red.
+   */
+  test('every item of the SP6b spec §15 is pinned by a test of this describe that names it (ruling P52)', ({ task }) => {
+    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-12-sp6b-cave-biomes-design.md`, 'utf8');
+    // The headings at a line start: §15's intro quotes both in its text.
+    const start = spec.indexOf('\n## 15. Master-spec amendments made with this spec\n');
+    const end = spec.indexOf('\n## 16. Notes handed to later SPs\n');
+    expect(start, 'the SP6b spec has no §15 heading').toBeGreaterThan(-1);
+    expect(end, 'the SP6b spec has no §16 heading after §15').toBeGreaterThan(start);
+    const s15 = spec.slice(start, end);
+    const items = [...s15.matchAll(/^(\d+)\. \*\*/gm)].map((m) => Number(m[1]));
+    expect(items.length, 'the SP6b spec §15 lists items 1-21').toBe(21);
+    expect(items, '§15\'s items are numbered 1 … n').toEqual(items.map((_, i) => i + 1));
+    const pinned = new Set<number>();
+    const titles = (task.suite?.tasks ?? []).map((t) => t.name);
+    expect(titles.length, 'the describe\'s tests').toBeGreaterThan(1);
+    for (const title of titles) {
+      for (const m of title.matchAll(/§15 items? ([^§)]*)/g)) {
+        for (const token of m[1]!.split(/[,;]\s*|\s+and\s+/)) {
+          const range = /^(\d+)(?:-(\d+))?$/.exec(token.trim());
+          if (range === null) break;
+          const from = Number(range[1]), to = Number(range[2] ?? range[1]);
+          for (let i = from; i <= to; i++) pinned.add(i);
+        }
+      }
+    }
+    const missing = items.filter((i) => !pinned.has(i));
+    expect(missing, 'the SP6b spec §15 items with no test naming them in this describe').toEqual([]);
+    expect([...pinned].filter((i) => !items.includes(i)), 'tests naming a §15 item the spec does not have').toEqual([]);
   });
 });
