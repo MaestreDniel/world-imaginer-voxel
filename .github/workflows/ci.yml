@@ -70,10 +70,10 @@ jobs:
       - if: ${{ !cancelled() }}
         run: node .github/scripts/slowest.mjs --title "Slowest test files (check)" "$RUNNER_TEMP/vitest.json"
 
-  # The unit project split by .github/scripts/unitShards.mjs (SP4b spec §1.2): named heavy files in `heavy` plus the
-  # catch-all `rest`, so a new unit file always runs; its `check` fails the job unless the shards cover the project's
-  # files exactly once. On both paths; no build (vitest transpiles; the typecheck stays in `check`) and no cache (only
-  # the metrics jobs cache).
+  # The unit project split by .github/scripts/unitShards.mjs (SP4b spec §1.2): named heavy files in `heavy-a`, `heavy-b`
+  # and `liveness` (SP6b Task 58) plus the catch-all `rest`, so a new unit file always runs; its `check` fails the job
+  # unless the shards cover the project's files exactly once. On both paths; no build (vitest transpiles; the typecheck
+  # stays in `check`) and no cache (only the metrics jobs cache).
   unit:
     needs: changes
     name: unit (${{ matrix.shard }})
@@ -98,9 +98,10 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
 
-  # metrics-fast split by .github/scripts/fastShards.mjs (SP4b spec §9's lever, taken after SP4c's merge run): `terrain`
-  # and `surface` each in a shard of its own plus the catch-all `rest`, so a new metric file always runs; its `check`
-  # fails the job unless the shards cover the project's files exactly once.
+  # metrics-fast split by .github/scripts/fastShards.mjs (SP4b spec §9's lever, taken after SP4c's merge run): the
+  # slowest files in shards of their own (`terrain-caves`, `surface`, `persist` since SP6b Task 58) plus the catch-all
+  # `rest`, so a new metric file always runs; its `check` fails the job unless the shards cover the project's files
+  # exactly once.
   metrics-fast:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
@@ -122,10 +123,10 @@ jobs:
       # covers everything a dump's srcKey hashes; no restore-keys, so a code change starts cold instead of restoring
       # dumps that can never hit. Each metrics job (every metrics-fast shard, every metrics-quick shard) has its own key
       # suffix, so each restores and saves only the dumps of its own tier and files.
-      # The terrain and surface shards never save a dump (T4's regions run with `cache: false`, the scatters column by
-      # column), so they skip the cache step (SP6b spec §13).
+      # The surface shard never saves a dump (the scatters run column by column), so it skips the cache step (SP6b spec
+      # §13); `terrain-caves` keeps it for the caves' dumps (T4's regions run with `cache: false`; SP6b Task 58).
       - uses: actions/cache@v6
-        if: ${{ !startsWith(matrix.shard, 'terrain') && !startsWith(matrix.shard, 'surface') }}
+        if: ${{ matrix.shard != 'surface' }}
         with:
           path: test/.cache/regions
           key: regions-${{ runner.os }}-metrics-fast-${{ matrix.shard }}-${{ hashFiles('src/**', 'test/harness/**', 'package-lock.json') }}

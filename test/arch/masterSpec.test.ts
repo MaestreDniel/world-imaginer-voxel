@@ -220,6 +220,9 @@ import { SP_DEPS } from '../harness/sp';
 import { DET_FILES } from './rules/banned';
 import { BATCH_GROWTH, OPTIMIZE_AT, SHRINK_HEADROOM, SHRINK_IDLE_PUMPS, SHRINK_MIN_SLACK } from '../../src/render/regionBatch';
 import { GROWTH } from '../../src/render/regionGrid';
+import { SHARDS as FAST_SHARDS } from '../../.github/scripts/fastShards.mjs';
+import { SHARDS as METRIC_SHARDS } from '../../.github/scripts/metricShards.mjs';
+import { SHARDS as UNIT_SHARDS } from '../../.github/scripts/unitShards.mjs';
 
 // Resolved from this file, not the cwd (SP3b spec §7), so the test also runs from another directory.
 const MASTER = fileURLToPath(new URL('../../docs/superpowers/specs/2026-09-26-architecture-design.md', import.meta.url));
@@ -850,7 +853,8 @@ describe('master spec amendments (SP4b §13)', () => {
   });
 
   test('§1\'s ci.yml line names the unit shards', () => {
-    expect(layoutEntry(/^\s+\.github\/workflows\/ci\.yml /)).toContain('the two unit shards (`.github/scripts/unitShards.mjs`)');
+    // Their count ("the two unit shards") moved to 'master spec amendments (SP6b §15)': SP6b Task 58 made them four.
+    expect(layoutEntry(/^\s+\.github\/workflows\/ci\.yml /)).toContain(' unit shards (`.github/scripts/unitShards.mjs`)');
     expect(existsSync(`${ROOT_DIR}.github/scripts/unitShards.mjs`)).toBe(true);
   });
 
@@ -1244,8 +1248,10 @@ describe('master spec amendments (SP4c §12)', () => {
 
   test('§1\'s ci.yml line names the metrics-fast shards beside the unit shards (SP4c spec §9\'s CI note)', () => {
     const entry = layoutEntry(/^\s+\.github\/workflows\/ci\.yml /);
-    expect(entry).toContain('the two unit shards (`.github/scripts/unitShards.mjs`), the metrics-fast shards (`.github/scripts/fastShards.mjs`) and the metrics-quick shards (cached)');
-    expect(entry).toContain('(amended 2026-10-20: parallel CI jobs; SP4b: the unit shards; SP4c: the metrics-fast shards)');
+    // The unit shards' count moved to 'master spec amendments (SP6b §15)' (SP6b Task 58: four), and the parenthesis's end
+    // with it (SP6b's clause).
+    expect(entry).toContain(' unit shards (`.github/scripts/unitShards.mjs`), the metrics-fast shards (`.github/scripts/fastShards.mjs`) and the metrics-quick shards (cached)');
+    expect(entry).toContain('(amended 2026-10-20: parallel CI jobs; SP4b: the unit shards; SP4c: the metrics-fast shards;');
     expect(existsSync(`${ROOT_DIR}.github/scripts/fastShards.mjs`)).toBe(true);
   });
 });
@@ -2948,6 +2954,16 @@ describe('master spec amendments (SP6b §15)', () => {
     // Gated at D25's culling checkpoint (Task 40), which measured it on quick.
     expect(def).toContain('`culledUnderground`, 1 − drawn non-empty sections / non-empty sections in range pooled over the underground poses, gated from D25\'s culling checkpoint on every tier (SP6b, its spec §12.4-§12.5; amended by SP6b)');
     expect(def).not.toContain('recorded until D25');
+  });
+
+  test('§1\'s ci.yml line names the four unit shards and the 20 parallel test jobs, as the shard tables hold them (SP6b spec §15 item 6, Task 58)', () => {
+    const entry = layoutEntry(/^\s+\.github\/workflows\/ci\.yml /);
+    // Moved from the SP4b and SP4c describes, which pinned "the two unit shards".
+    expect(entry).toContain('the four unit shards (`.github/scripts/unitShards.mjs`), the metrics-fast shards (`.github/scripts/fastShards.mjs`) and the metrics-quick shards (cached)');
+    expect(entry).toContain('(amended 2026-10-20: parallel CI jobs; SP4b: the unit shards; SP4c: the metrics-fast shards; SP6b: four unit shards, 20 parallel test jobs)');
+    expect(Object.keys(UNIT_SHARDS)).toHaveLength(4);
+    // `check`, the unit shards, the metrics-fast shards and the metrics-quick shards (`changes` runs before, `ci-ok` after).
+    expect(1 + Object.keys(UNIT_SHARDS).length + Object.keys(FAST_SHARDS).length + Object.keys(METRIC_SHARDS).length).toBe(20);
   });
 
   test('§1\'s test entry names R3\'s files (SP6b spec §15 item 6)', () => {
