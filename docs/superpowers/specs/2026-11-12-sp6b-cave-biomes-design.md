@@ -598,7 +598,7 @@ The shard tables name a shard by (file, env) (`metricShards.mjs:18-44`, `shardLi
 
 **A miss inside the work item** (this spec's decision; the builder check's question 4): if the two cold runs after L1-L6 read above 5 min 30 s, Stage 2's items below join the work item in order, each pushed and measured, before any generator change, until two consecutive cold runs read ≤ 5 min 30 s or the list is exhausted; then the measured wall is recorded and the generator work starts (the exit bound still applies). Alternative: record the miss at once and leave Stage 2 to the exit.
 
-**Exit criterion: CI wall ≤ 6 min 0 s** (against SP6a's 9 min, ruling R23), measured on the last two cold runs before the exit commit (the exit commit is docs-only, and CI's docs-only path skips the metrics jobs, `.github/workflows/ci.yml:170-186`, so its own run says nothing). If missed, Stage 2's items in order (those not already taken), each measured: (1) `terrain-large` and `surface-large` split into 2 column slices each with a `metrics-merge` job (slice k takes draws k, k + 2, … of the unchanged list; partial accumulators as artifacts); the caves default group merged by seed the same way; (2) `unit (rest)` into a third shard (liveness, densityFast, carve, densityDefaults, floatingIslands); (3) `persist.metric.ts` into a fast shard of its own; folding `metrics-fast (caves)` and `metrics-quick (clipboard)` into neighbours keeps the job count ≤ 20 (19 with `caves-biomes`). No sample reductions (R23). The docs-only path grows by the unit additions only; the Chrome legs, the bench and the smoke are not in CI. The Exit evidence records every measured run's job table.
+**Exit criterion: CI wall ≤ 6 min 0 s** (against SP6a's 9 min, ruling R23), measured on the last two cold runs before the exit commit (the exit commit is docs-only, and CI's docs-only path skips the metrics jobs, `.github/workflows/ci.yml:170-186`, so its own run says nothing). If missed, Stage 2's items in order (those not already taken), each measured: (1) `terrain-large` and `surface-large` split into 2 column slices each with a `metrics-merge` job (slice k takes draws k, k + 2, … of the unchanged list; partial accumulators as artifacts); the caves default group merged by seed the same way; (2) `unit (rest)` into a third shard (liveness, densityFast, carve, densityDefaults, floatingIslands); (3) `persist.metric.ts` into a fast shard of its own, folding `metrics-fast (caves)` and `metrics-quick (clipboard)` into neighbours and two further small shards (each named with its measured time), so the job count with `caves-biomes` stays ≤ 20 (counted without the merge job, which runs after `metrics-quick`: 19 test jobs with `caves-biomes`, 22 after item 1, 23 after item 2, 22 after item 3's first two folds; a Stage 2 that stops after item 1 or 2 folds enough small shards in that item's commit). No sample reductions (R23). The docs-only path grows by the unit additions only; the Chrome legs, the bench and the smoke are not in CI. The Exit evidence records every measured run's job table.
 
 ## 14. Governance
 
@@ -1536,6 +1536,54 @@ Each row of §19 with the commit on `sp6b/cave-biomes` that placed it, or the re
 **Reviewed** for straight borders, flat cuts, the floor's relief and the abyss's darkness: no straight or grid-like border in the map layer or the X-ray; no flat cut in the cave shots; the bottom cavern ends on mounds and gullies, not on a plane; the abyss at the light floor is dark. Each biome shot shows its skin (ruling U13): the first run's poses, Task 27's first floor voxel in the grid's index order, lay at their zones' edges (within 12 blocks, a count through the hook in a 25 × 17 × 25 box: lush 106 moss_block and no clay, dripstone 104 dripstone_block, the abyss 2,955 abyss rock, each among 4,534-9,851 deepslate), and U13's poses hold, of the 15,625 voxels within 12 blocks (the rule's own count over the T-stage grid), lush 647 moss_block and 320 clay, dripstone 2,155 dripstone_block, the abyss 15,366 abyss rock. No shot has a near-plane patch: every biome pose's corner has its four voxels open (the rule's 3 × 3), and the one pale area, in `review-lush.png`, is clay.
 
 **The browser smoke** (`npm run build`, then `node test/tools/uiSmoke.ts --skip-build --profile-dir <mktemp -d /tmp/wi10-XXXX> --shots <mktemp -d /tmp/wi10-shots-XXXX>`, its own `vite preview` on a free port and headless Chrome through SwiftShader; 8 min 5 s): 635/635 checks pass, every step of `SMOKE_STEPS` ran (42), 0 page errors; `?selftest=1` `✓ all 65 goldens match (11.8 s)` and `IndexedDB contract: 10/10 passed`. Re-run after U13's poses (8 min 8 s): 635/635, all 42 steps, 0 page errors, the same selftest and IndexedDB lines; Task 55's checks at the new lush pose: the pixel (1200, 820) reads rgb 37, 100, 60 by cave biome (lush) and 97, 54, 28 by cave type; "Nearest lush cave" from (−1679, 220, 1744) finds (−1696, 116, 1738), 105 blocks; the map's caveBiome layer on `CAVE_MAP` (centre (−1678, 1750)) not lush at y 160 and lush at y 48.
+
+### CI at the exit (Task 58)
+
+**Missed: the last two cold runs before the exit commit read 8:29 and 8:40 against §13's 6 min 0 s, and Stage 2's items (none taken: Task 6 was skipped) cannot reach it, so the work stopped for the user (STOP) before building them.** Task 59 Step 0's commit e5505ae (master §10 at the exit and its pins; ruling P61) was pushed first. Its push range from b0293b6 holds 35d02cd's `test/harness/caveMetrics.ts`, so its run was cold. Every run is on `sp6b/cave-biomes`. Each attempt's wall runs from its start (creation for #1) to its last job's end. Runner minutes are the sum of the job times.
+
+- **e5505ae, run 44041739227 #1: cold run 1.** Every `regions-*` key (hash `27dd0a00…`) logged "Cache not found". 07:50:02 → 07:58:31Z, wall **8:29**, green. Long pole `unit (rest)` 8:13.
+- **#2** (warm re-run: the seven saved `regions-*` caches restored; `edit`, `clipboard` and `persist` save none): 07:59:16 → 08:06:52Z, wall 7:36, green. Long pole `unit (heavy)` 7:17.
+- **#3: cold run 2.** Made cold by deleting the run's seven `regions-*` caches (`metrics-fast-{caves,rest}`, `metrics-quick-{caves,caves-presets,caves-biomes,render,rest}`, hash `27dd0a00…`), then `gh run rerun`; every key missed again. 08:07:29 → 08:16:09Z, wall **8:40**, green. Long pole `unit (rest)` 8:17.
+- **#4** (warm re-run): 08:16:48 → 08:24:53Z, wall 8:05, green. Long pole `unit (heavy)` 7:34.
+- The two cold runs before them, both green with every caves key missed: b0293b6 (run 43912350765) 7:59, and d0252f8 (run 43758828191) 6:39.
+
+| job | 44041739227 #1 (cold 1) | #2 (warm) | #3 (cold 2) | #4 (warm) |
+|---|---|---|---|---|
+| wall | **8:29** | 7:36 | **8:40** | 8:05 |
+| runner minutes | 63.7 | 59.8 | 68.0 | 64.7 |
+| `changes` | 0:07 | 0:07 | 0:10 | 0:17 |
+| `check` | 3:58 | 3:51 | 2:26 | 3:55 |
+| `unit (rest)` | 8:13 | 6:28 | 8:17 | 7:28 |
+| `unit (heavy)` | 4:21 | 7:17 | 7:27 | 7:34 |
+| `metrics-fast (rest)` | 5:04 | 3:35 | 6:15 | 6:05 |
+| `metrics-fast (terrain)` | 3:07 | 3:03 | 2:16 | 2:18 |
+| `metrics-fast (surface)` | 3:57 | 2:54 | 4:09 | 2:48 |
+| `metrics-fast (caves)` | 2:02 | 1:32 | 1:42 | 1:27 |
+| `metrics-quick (terrain-default)` | 2:11 | 2:01 | 1:47 | 2:54 |
+| `metrics-quick (terrain-large)` | 5:54 | 3:15 | 5:52 | 4:30 |
+| `metrics-quick (surface-default)` | 1:30 | 1:26 | 1:18 | 2:01 |
+| `metrics-quick (surface-large)` | 4:05 | 4:35 | 6:28 | 4:31 |
+| `metrics-quick (caves)` | 1:50 | 2:04 | 2:23 | 1:09 |
+| `metrics-quick (caves-presets)` | 1:41 | 1:10 | 1:29 | 1:20 |
+| `metrics-quick (caves-biomes)` | 1:51 | 1:28 | 1:47 | 1:41 |
+| `metrics-quick (render)` | 2:14 | 1:53 | 2:06 | 2:32 |
+| `metrics-quick (edit)` | 1:52 | 1:46 | 1:48 | 2:16 |
+| `metrics-quick (clipboard)` | 1:43 | 2:08 | 1:20 | 1:24 |
+| `metrics-quick (persist)` | 2:53 | 3:13 | 2:46 | 2:46 |
+| `metrics-quick (rest)` | 5:08 | 5:59 | 6:08 | 5:45 |
+| `ci-ok` | 0:03 | 0:03 | 0:03 | 0:03 |
+
+- **The long poles** (cold run 2's vitest file times, from the job logs):
+  - `unit (rest)`: vitest 481.7 s, of which `liveness.test.ts` alone is 461.2 s. Its tests run one after another in one file: the cave-biome leaves' test 205.0 s, the band leaves' 56.0 s, the slot columns' 42.3 s, the caverns' and tunnels' leaves 40.0 s and 37.4 s, `capTop` 26.8 s, the carver leaves 25.4 s.
+  - `unit (heavy)`: vitest 433.6 s over 21 files: `surfaceFuzz.test.ts` 203.6 s, `cavesMetric.test.ts` 197.2 s, `sliceJob.test.ts` 120.6 s, `floatingRules.test.ts` 102.7 s. It ran 4:21 on cold run 1 and 7:17-7:34 on the other three attempts, and 5:38-5:41 at Task 31 and d0252f8.
+  - `metrics-fast (rest)`: `persist.metric.ts` 232.6 s, `clipboard.metric.ts` 145.1 s, `params.metric.ts` (U2) 120.2 s.
+  - `metrics-quick (rest)`: `region.metric.ts` 287.3 s, `noise.metric.ts` 253.8 s, `params.metric.ts` 134.7 s.
+  - `metrics-quick (surface-large)` and `(terrain-large)`: 5:52-6:28 on the cold runs.
+- **Why Stage 2 cannot reach 6:00.** The wall is about 0:20 plus the longest job, so 6:00 needs every job at or under about 5:40. Vitest runs a file inside one job, so no shard split can make `liveness.test.ts` (7:41 of vitest time on cold run 2) shorter. The three items do not touch that file:
+  - Item 1 slices `terrain-large`, `surface-large` and the caves default group.
+  - Item 2 moves `liveness.test.ts` into a third unit shard, which still holds the whole file.
+  - Item 3 gives `persist.metric.ts` a fast shard of its own.
+  No item touches `unit (heavy)` (7:17-7:34 on three of four attempts) or `metrics-quick (rest)` (5:45-6:08) either. After all three items the wall would still be at least about 8:00, and §13's rule would end in the same STOP. This record holds every measured run's job table as §13 asks. The question is the user's (R23 rules out sample reductions).
 
 ## Threshold log
 
