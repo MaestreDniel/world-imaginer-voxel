@@ -143,7 +143,15 @@
  *   restores it; with Lowest y focused at 0, PageDown moves only the slider; at 1600 × 900 (the panel stacked under
  *   the map) "Cave slice" shows the drawer in the window below the side panel and scrolls the slice into view under
  *   the stacked tree and form, and "Cave parameters" still works with the drawer open (`cavesChecks`, `PANES_APART`,
- *   `SLICE_IN_VIEW`; the SP6a user's check, finding 2 and R32 c);
+ *   `SLICE_IN_VIEW`; the SP6a user's check, finding 2 and R32 c); then SP6b's (SP6b spec §12.8, `caveBiomeChecks`): at
+ *   the lush review pose (`LUSH_POSE`) X, then C: the strip ends "· by cave biome" with the biome legend, C's notice and
+ *   the HUD's line follow, and `XRAY_BIOME_PIXEL` reads the lush colour, which it did not by cave type; the F3 HUD and
+ *   the strip apart full screen in both modes; moss_block copied with Ctrl+C and pasted with Ctrl+V (C with Ctrl is
+ *   copy only); over the lush pose, side by side at 1920 × 1080 and 1280 × 720, the Caves tab's Colour by in step with
+ *   C and turning the strip, the HUD and the strip apart in both modes (`HUD_STRIP_VIEWS`, Review Focus 5), "Cave
+ *   slice" by cave biome opening the horizontal `biome3d` slice, "Nearest lush cave" moving the camera to its hit;
+ *   `?map`'s caveBiome layer on `CAVE_MAP`, its y field drawing the lush colour at the canvas centre; `cave_heavy` in
+ *   the map's profile select and New world's preset select, and its world generating;
  * - console: no exception, console error or failed load, except the known favicon.ico 404 and Chrome's notice that it
  *   blocked a world page's `beforeunload` prompt when a step left it (`leaveGuardLog`); every step ran.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
@@ -894,11 +902,12 @@ export function rowTitleOk(text: string): boolean {
 /**
  * The key codes the saved-world steps and `stream` press (`DEFAULT_KEYMAP`'s, mirrored: a unit test compares them);
  * `select` presses the selection tool's Q and N plain and C and V with Ctrl (SP5c spec §10.8); the X-ray's X, PageDown
- * and Home and night vision's L, all plain (SP6a spec §7.1, §10.9).
+ * and Home and night vision's L, all plain (SP6a spec §7.1, §10.9); the X-ray's colours, C plain (SP6b spec §9.4: the
+ * code of Ctrl+C's copy, told apart by Ctrl).
  */
 export const SMOKE_KEYS = {
   toggleWalk: 'KeyF', timeSpeed: 'KeyT', savePlace: 'KeyB', settings: 'KeyG', help: 'KeyH', selectTool: 'KeyQ', copy: 'KeyC', paste: 'KeyV', move: 'KeyN',
-  xray: 'KeyX', xrayDown: 'PageDown', xrayAll: 'Home', nightVision: 'KeyL',
+  xray: 'KeyX', xrayDown: 'PageDown', xrayAll: 'Home', nightVision: 'KeyL', xrayColor: 'KeyC',
 } as const;
 
 // ---------------------------------------------------------------- the select step (SP5c spec §10.8)
@@ -1320,8 +1329,12 @@ export function entranceShotPose(): CaveExamplePose {
 
 /** The X-ray's clear colour #0b0e14 (`XRAY_CLEAR` in `src/render/renderer.ts`, spec §5.3; a unit test keeps them equal). */
 export const XRAY_CLEAR_RGB = [0x0b, 0x0e, 0x14] as const;
-/** The `caves` step's sky pixel (CSS px at DPR 1): the top right, clear of the HUD (top left) and the strip (top centre). */
-export const XRAY_SKY_PIXEL = { x: 1250, y: 40 } as const;
+/**
+ * The `caves` step's sky pixel (CSS px at DPR 1): the top right, in the 0.5rem gutter right of the top container
+ * `.world-top` (SP6b spec §9.5), so clear of the HUD and the strip whatever their widths (at x 1250 the strip, centred
+ * in the room the HUD leaves since SP6b D8, covered it).
+ */
+export const XRAY_SKY_PIXEL = { x: 1396, y: 40 } as const;
 /** How far a channel may read from the clear colour (SwiftShader's rounding). */
 export const XRAY_CLEAR_TOL = 2;
 
@@ -1333,9 +1346,12 @@ export function clearColour(rgb: readonly number[]): boolean {
 /** A y as the X-ray strip writes it: a negative one with the minus sign U+2212 (`stripText`). */
 const stripY = (y: number): string => (y < 0 ? `−${-y}` : String(y));
 
-/** The strip's line for the band `yMin` … `yMax` (`stripText` of `src/ui/world/xrayStrip.ts`; a unit test pins it). */
-export function xrayStripText(yMin: number, yMax: number): string {
-  return `X-ray · y ${stripY(yMin)} … ${stripY(yMax)} · by cave type`;
+/**
+ * The strip's line for the band `yMin` … `yMax` by cave type, or by cave biome with `mode` 1 (`stripText` of
+ * `src/ui/world/xrayStrip.ts`; a unit test pins it).
+ */
+export function xrayStripText(yMin: number, yMax: number, mode: 0 | 1 = 0): string {
+  return `X-ray · y ${stripY(yMin)} … ${stripY(yMax)} · ${mode === 1 ? 'by cave biome' : 'by cave type'}`;
 }
 
 /** The strip's line at every depth (−64 … 319). */
@@ -1369,6 +1385,104 @@ export const CAVE_LINE = {
   a: [-160, -52],
   b: [352, -52],
 } as const satisfies SmokeLine;
+
+// ---------------------------------------------------------------- the caves step's SP6b checks (SP6b spec §12.8)
+
+/**
+ * SP6b's lush review pose (SP6b spec §12.8, D14): the `caves-biomes` run's `lush` in `.out/caveBiomes.examples.json`
+ * (Task 27: the first floor voxel of a lush cave in seed 42's default biome region, the yaw along the floor), mirrored as
+ * a literal, with its link's corner `at` by `CAVE_AT`'s rule (`uiSmoke.test.ts` computes it with `solidAt`). Task 56
+ * pins the literal against the committed copy.
+ */
+export const LUSH_POSE = { x: -1777.5, y: -28.5, z: 1650.5, yaw: 45, pitch: 0, at: [-1777, 1650] } as const satisfies CaveExamplePose;
+
+/**
+ * The cave biomes' colours by id, plain, lush, dripstone, abyss (`CAVE_BIOME_COLORS` of `src/core/constants.ts`, the
+ * X-ray's and the map layer's, mirrored as RGB: a unit test compares them).
+ */
+export const CAVE_BIOME_RGB = [[0x6f, 0x86, 0xa6], [0x4d, 0xff, 0x7a], [0xff, 0xb3, 0x47], [0xb0, 0x5c, 0xff]] as const;
+/** The lush cave biome's id (`CAVE_BIOME.lush`). */
+export const LUSH = 1;
+
+/** The X-ray strip's biome legend, in order (`XRAY_BIOME_LABELS`' labelled entries: a unit test compares them). */
+export const XRAY_BIOME_LEGEND = ['Plain cave', 'Lush', 'Dripstone', 'Abyss', 'Surface'] as const;
+/** The kinds' legend's size: the nine cave kinds and the surface film (`XRAY_LABELS`' labelled entries). */
+export const XRAY_KIND_LEGEND_SIZE = 10;
+/** C's notices (`xrayColorNotice`): by cave type (mode 0), by cave biome (1). */
+export const XRAY_COLOR_NOTICES = ['X-ray by cave type', 'X-ray by cave biome'] as const;
+
+/**
+ * The pixel the C check reads at the lush pose (CSS px at DPR 1, 1400 × 900): up and right of the centre, where the
+ * lush cave's walls fill the view (when chosen, every third pixel of the 133 px square around it read lush by cave
+ * biome and none of them by cave type), clear of the HUD, the strip, the pointer prompt and the notices.
+ */
+export const XRAY_BIOME_PIXEL = { x: 1200, y: 140 } as const;
+/** The least excess over the clear colour (summed over the channels) a pixel needs to name a cave biome. */
+export const XRAY_BIOME_MIN = 12;
+
+/**
+ * The cave biome an X-ray pixel reads (by id), or null when it is too faint (`XRAY_BIOME_MIN`). The walls blend
+ * additively over the clear colour (each at alpha 0.14, times the face shade and the fog's fade: `xray.glsl.ts`), so a
+ * pixel is the clear colour plus a sum of scaled wall colours: the biome whose colour points the nearest way to the
+ * pixel's excess over the clear colour (the largest cosine) is the one its walls mostly have.
+ */
+export function xrayBiomeOf(rgb: readonly number[]): number | null {
+  const ex = XRAY_CLEAR_RGB.map((c, i) => Math.max(0, (rgb[i] ?? 0) - c));
+  if (ex[0]! + ex[1]! + ex[2]! < XRAY_BIOME_MIN) return null;
+  const cos = (c: readonly number[]): number => (ex[0]! * c[0]! + ex[1]! * c[1]! + ex[2]! * c[2]!) / (Math.hypot(...ex) * Math.hypot(...c));
+  let best = 0;
+  for (let i = 1; i < CAVE_BIOME_RGB.length; i++) if (cos(CAVE_BIOME_RGB[i]!) > cos(CAVE_BIOME_RGB[best]!)) best = i;
+  return best;
+}
+
+/**
+ * The HUD and strip check's windows (SP6b Review Focus 5, §9.5): 1400 × 900 full screen (`VIEWPORT`), and side by side
+ * with the map at 1920 × 1080 (`OVERLAY_VIEWPORT`) and at 1280 × 720 (the world in a 640 px half), F3 and the X-ray on,
+ * in both colour modes.
+ */
+export const HUD_STRIP_VIEWS = [
+  { width: 1400, height: 900, split: false },
+  { width: 1920, height: 1080, split: true },
+  { width: 1280, height: 720, split: true },
+] as const;
+
+/** Whether two rects (CSS px) are both shown (positive sizes) and do not overlap (touching edges do not). */
+export function rectsApart(
+  a: { readonly x: number; readonly y: number; readonly width: number; readonly height: number } | null,
+  b: { readonly x: number; readonly y: number; readonly width: number; readonly height: number } | null,
+): boolean {
+  if (a === null || b === null || a.width <= 0 || a.height <= 0 || b.width <= 0 || b.height <= 0) return false;
+  return a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
+}
+
+/** "Nearest lush cave" (SP6b spec §9.3): its button, and the y the step presses it from, high over the lush pose's column. */
+export const FIND_LUSH = { id: 'map-caves-find-biome-1', text: 'Nearest lush cave', fromY: 150 } as const;
+
+/** A biome Find's hit as its result line reads it (`findBiomeText`: "Lush cave at x, y, z · d blocks away"), else null. */
+export function parseLushHit(text: string): { readonly x: number; readonly y: number; readonly z: number; readonly d: number } | null {
+  const m = /^Lush cave at (-?\d+), (-?\d+), (-?\d+) · (\d+) blocks away$/.exec(text);
+  return m === null ? null : { x: Number(m[1]), y: Number(m[2]), z: Number(m[3]), d: Number(m[4]) };
+}
+
+/**
+ * The map check (SP6b spec §9.1): `?map` at seed 42 on the caveBiome layer, centred on (−1742, 1702) at 2 blocks/px, a
+ * lush column 63 blocks from the lush pose: its y control typed to `above` (over the ground there: the greyed relief)
+ * and then to `y` (lush), read at the canvas centre. A unit test checks with the generator that the column and the
+ * blocks within 16 of it are lush at `y` and above the ground at `above`.
+ */
+export const CAVE_MAP = { view: { x: -1742, z: 1702, bpp: 2, layer: 'caveBiome' }, y: -28, above: 100 } as const;
+/** The caveBiome layer's y number field (`src/ui/map/toolbar.ts`). */
+export const CAVE_Y_FIELD = 'input[aria-label="Cave biome y value"]';
+/** How far a channel of the map's lush pixel may read from `CAVE_BIOME_RGB`'s. */
+export const MAP_RGB_TOL = 2;
+
+/** moss_block (`test/stateIds.lock.json`, SP6b D36; a unit test keeps it the registry's): the new state copied and pasted by key. */
+export const SMOKE_MOSS = 58;
+
+/** The `cave_heavy` world's page (SP6b spec §6.2): seed 42 on the profile by its hash, RD 4 on batch with the test hook. */
+export function caveHeavyQuery(): string {
+  return `?rd=${WORLD_RD}&renderer=batch&wiTest=1#${mapHash({ ...START, profile: 'cave_heavy' })}`;
+}
 
 /** The camera's pose as the hook reads it (`__wiTest.pose()`). */
 export interface PoseRead { readonly x: number; readonly y: number; readonly z: number; readonly yaw: number; readonly pitch: number }
@@ -5442,6 +5556,244 @@ async function cavesChecks(t: Smoke): Promise<void> {
   await setViewport(p, VIEWPORT.width, VIEWPORT.height);
 }
 
+/** The X-ray strip's two legends' labels in order, each null while hidden (null without the strip). */
+const STRIP_LEGENDS = `(() => {
+  const s = document.getElementById('world-xray-strip');
+  if (s === null) return null;
+  const [kinds, biomes] = s.querySelectorAll('.world-xray-legend');
+  const labels = (l) => (l === undefined || l.hidden ? null : [...l.querySelectorAll('.world-xray-key')].map((k) => k.textContent));
+  return { kinds: labels(kinds), biomes: labels(biomes) };
+})()`;
+/**
+ * The page expression "the strip is shown at every depth in colour mode `mode` (SP6b spec §7.3): its line ends '· by
+ * cave type' (0) or '· by cave biome' (1), and only that mode's legend shows: the ten kinds', or the five biomes' in
+ * order (`XRAY_BIOME_LEGEND`)".
+ */
+const stripInMode = (mode: 0 | 1): string => `(() => {
+  const l = ${STRIP_LEGENDS};
+  return ${stripIs(true, xrayStripText(-64, 319, mode))} && l !== null && (${mode === 1}
+    ? l.kinds === null && JSON.stringify(l.biomes) === ${JSON.stringify(JSON.stringify(XRAY_BIOME_LEGEND))}
+    : l.biomes === null && l.kinds !== null && l.kinds.length === ${XRAY_KIND_LEGEND_SIZE});
+})()`;
+/** The strip as it reads, with its legends, for a failed check's detail. */
+const stripDetail = (p: Page) => async (): Promise<unknown> => ({ strip: await p.eval(STRIP_READ), legends: await p.eval(STRIP_LEGENDS) });
+/** The F3 HUD's and the X-ray strip's rects (CSS px), each null when missing or hidden. */
+const HUD_STRIP_RECTS = `(() => {
+  const r = (e) => { if (e === null || e.hidden) return null; const b = e.getBoundingClientRect(); return { x: b.left, y: b.top, width: b.width, height: b.height }; };
+  return { hud: r(document.querySelector('.world-hud')), strip: r(document.getElementById('world-xray-strip')) };
+})()`;
+/** The Caves tab's Colour by radios as checked (null before the tab mounts). */
+const COLOUR_BY = `(() => {
+  const type = document.getElementById('map-caves-color-type');
+  const biome = document.getElementById('map-caves-color-biome');
+  return type === null || biome === null ? null : { type: type.checked, biome: biome.checked };
+})()`;
+/** The page expression "the Caves tab's Colour by shows mode `mode`" (Cave type 0, Cave biome 1). */
+const colourByIs = (mode: 0 | 1): string => `(() => { const c = ${COLOUR_BY}; return c !== null && c.type === ${mode === 0} && c.biome === ${mode === 1}; })()`;
+const modeName = (mode: 0 | 1): string => (mode === 1 ? 'by cave biome' : 'by cave type');
+
+/** F3 shows the HUD when it is hidden (a world page starts with it shown): checked shown. */
+async function hudOn(t: Smoke, what: string): Promise<void> {
+  const p = t.page;
+  if (await p.eval<boolean>(`document.querySelector('.world-hud')?.hidden === true`)) await worldKey(p, 'F3', 'F3', 114);
+  await holds(t, `document.querySelector('.world-hud')?.hidden === false`, `${what}: the F3 HUD is shown`, 5000, () => p.eval(HUD_TEXT));
+}
+
+/** The HUD's and the strip's rects, both shown and apart (`rectsApart`), at the window `view` in colour mode `mode`. */
+async function hudStripApart(t: Smoke, view: (typeof HUD_STRIP_VIEWS)[number], mode: 0 | 1): Promise<void> {
+  const p = t.page;
+  await frames(p, 2, `caves: two frames at ${view.width} × ${view.height}`);
+  const r = await p.eval<{ hud: Box | null; strip: Box | null }>(HUD_STRIP_RECTS);
+  t.check(rectsApart(r.hud, r.strip),
+    `caves: at ${view.width} × ${view.height} ${view.split ? 'side by side' : 'full screen'}, F3 and the X-ray on ${modeName(mode)}, the HUD and the strip are both shown and apart`, r);
+}
+
+/**
+ * SP6b's C at the lush pose (SP6b spec §7.3, §12.8; `LUSH_POSE`, 1400 × 900): X shows the strip by cave type with the
+ * kinds' legend; C turns it to "· by cave biome" with the biome legend, the notice "X-ray by cave biome" and the HUD's
+ * line in step, and `XRAY_BIOME_PIXEL` reads the lush colour (`xrayBiomeOf`), which by cave type it did not; the HUD and
+ * the strip apart full screen in both modes (C back to by cave type: its notice). Then the new state (moss_block) copied
+ * and pasted by key (`mossCopyPaste`).
+ */
+async function lushXrayChecks(t: Smoke): Promise<void> {
+  const p = t.page;
+  const full = HUD_STRIP_VIEWS[0];
+  if (!(await openCavePage(t, cavePageQuery(LUSH_POSE), 'caves: the lush pose'))) return;
+  // Every column within the RD revealed, so no wall the pixel adds up streams in between the two reads.
+  await holds(t, `__wiTest.rd() >= ${WORLD_RD} && __wiTest.filled() === __wiTest.rd()`, `caves: the stream settled at RD ${WORLD_RD} at the lush pose`,
+    STREAM_SETTLED_MS, () => p.eval('[__wiTest.rd(), __wiTest.filled()]'));
+  await hudOn(t, 'caves: the lush pose');
+  await worldKey(p, 'x', SMOKE_KEYS.xray, 88);
+  await holds(t, stripInMode(0), `caves: X at the lush pose shows the strip "${xrayStripText(-64, 319, 0)}" with the kinds' legend`, 5000, stripDetail(p));
+  await frames(p, 3, 'caves: three frames with the X-ray on by cave type');
+  const typed = pixelAt(await p.capture(), XRAY_BIOME_PIXEL.x, XRAY_BIOME_PIXEL.y);
+  await hudStripApart(t, full, 0);
+
+  await worldKey(p, 'c', SMOKE_KEYS.xrayColor, 67);
+  await holds(t, stripInMode(1), `caves: C turns the strip to "${xrayStripText(-64, 319, 1)}" with the biome legend (${XRAY_BIOME_LEGEND.join(', ')})`, 5000, stripDetail(p));
+  await holds(t, `(${WORLD_NOTICES}).includes(${JSON.stringify(XRAY_COLOR_NOTICES[1])})`, `caves: C shows "${XRAY_COLOR_NOTICES[1]}"`, 5000, () => p.eval(WORLD_NOTICES));
+  await holds(t, `(${HUD_TEXT}).split('\\n').includes(${JSON.stringify(xrayStripText(-64, 319, 1))})`, 'caves: the F3 HUD\'s X-ray line follows C', 5000, () => p.eval(HUD_TEXT));
+  await frames(p, 3, 'caves: three frames with the X-ray on by cave biome');
+  const biomed = pixelAt(await p.capture(), XRAY_BIOME_PIXEL.x, XRAY_BIOME_PIXEL.y);
+  const { x: px, y: py } = XRAY_BIOME_PIXEL;
+  t.check(xrayBiomeOf(biomed) === LUSH, `caves: by cave biome the pixel (${px}, ${py}) at the lush pose reads the lush colour (rgb ${biomed.join(', ')})`, { biomed, typed });
+  t.check(xrayBiomeOf(typed) !== LUSH, `caves: by cave type it read the kinds' colours, not the lush one (rgb ${typed.join(', ')})`, { biomed, typed });
+  await hudStripApart(t, full, 1);
+  await worldKey(p, 'c', SMOKE_KEYS.xrayColor, 67);
+  await holds(t, stripInMode(0), 'caves: C again turns the strip back by cave type with the kinds\' legend', 5000, stripDetail(p));
+  await holds(t, `(${WORLD_NOTICES}).includes(${JSON.stringify(XRAY_COLOR_NOTICES[0])})`, `caves: C again shows "${XRAY_COLOR_NOTICES[0]}"`, 5000, () => p.eval(WORLD_NOTICES));
+  await mossCopyPaste(t);
+}
+
+/**
+ * The new state copied and pasted by key (SP6b spec §12.8, D36, R19): moss_block through the hook 2 above the ground
+ * beside the camera, Q, the one-voxel selection through the hook, Ctrl+C (the stored clipboard is that voxel; the
+ * X-ray's colours untouched: C with Ctrl is copy only), Ctrl+V pinned on the ground of another column and the page's
+ * confirm: that voxel reads moss_block; Q off.
+ */
+async function mossCopyPaste(t: Smoke): Promise<void> {
+  const p = t.page;
+  const sites = selectSites(await hookPose(p));
+  const one = (f: Footprint): Footprint => ({ x: f.x, z: f.z, w: 1, d: 1 });
+  const g0 = await groundOver(t, 'caves: the moss block', one(sites.house));
+  if (g0 === null) return;
+  const src: Voxel = { x: sites.house.x, y: g0 + 2, z: sites.house.z };
+  const r = await hookEdit(p, src, SMOKE_MOSS);
+  t.check(r === 'ok' && await hookBlock(p, src) === SMOKE_MOSS, `caves: moss_block (${SMOKE_MOSS}) through the hook at (${xyz(src)})`, r);
+  // Headless Chrome hands Ctrl+C, Ctrl+V and Ctrl+X (their raw key-downs) to a page only while its target is in front: the
+  // page is `two tabs`' target, brought to front when it opened, and again here so the check does not lean on that.
+  await p.cdp.send('Page.bringToFront');
+  if (!(await toolTo(t, 'caves: the moss copy', 'select'))) return;
+  await p.eval(`(__wiTest.select(${xyz(src)}, ${xyz(src)}), true)`);
+  const strip0 = await p.eval(STRIP_READ);
+  await p.blur();
+  await p.key('c', SMOKE_KEYS.copy, 67, 2);
+  if (!(await clipboardHolds(t, `caves: Ctrl+C stores the moss block (1 × 1 × 1, hash ${cellsHash([SMOKE_MOSS << 8])})`, { w: 1, h: 1, d: 1, hash: cellsHash([SMOKE_MOSS << 8]) }, 10_000))) return;
+  const strip1 = await p.eval(STRIP_READ);
+  t.check(sameJson(strip1, strip0), 'caves: Ctrl+C leaves the X-ray\'s colours as they were (C with Ctrl is copy only)', { before: strip0, after: strip1 });
+  const gp = await groundOver(t, 'caves: the moss paste', one(sites.paste));
+  if (gp === null) return;
+  const at: Voxel = { x: sites.paste.x, y: gp, z: sites.paste.z };
+  if (!(await placeAndConfirm(t, 'caves: the moss paste', 'paste', at, 0))) return;
+  const read = await hookBlock(p, at);
+  t.check(read === SMOKE_MOSS, `caves: Ctrl+V pastes moss_block at (${xyz(at)})`, read);
+  await toolTo(t, 'caves: after the moss paste', 'off');
+}
+
+/**
+ * SP6b's map checks in the world (SP6b spec §9.3, §9.5, §12.8), over the lush pose at `FIND_LUSH.fromY`: X, C (by cave
+ * biome), then M side by side at 1920 × 1080: the Caves tab's Colour by shows Cave biome (C before M); at 1920 × 1080
+ * and 1280 × 720 each radio turns the strip's mode (its line and legend), and the HUD and the strip stay apart in both
+ * modes; "Cave slice" in the biome mode opens the Density tab's horizontal `biome3d` field and draws its 128² slice;
+ * "Nearest lush cave" moves the camera to the hit its line names (the eye at the hit voxel's centre), d blocks from where
+ * it was.
+ */
+async function caveBiomeMapChecks(t: Smoke): Promise<void> {
+  const p = t.page;
+  const [, wide, narrow] = HUD_STRIP_VIEWS;
+  const from: CaveExamplePose = { ...LUSH_POSE, y: FIND_LUSH.fromY };
+  if (!(await openCavePage(t, cavePageQuery(from), `caves: over the lush pose (y ${FIND_LUSH.fromY})`))) return;
+  await hudOn(t, 'caves: over the lush pose');
+  await worldKey(p, 'x', SMOKE_KEYS.xray, 88);
+  await worldKey(p, 'c', SMOKE_KEYS.xrayColor, 67);
+  await holds(t, stripInMode(1), 'caves: X and C over the lush pose: the strip by cave biome', 5000, stripDetail(p));
+  await setViewport(p, wide.width, wide.height);
+  await pressM(p);
+  await p.until(OVERLAY_SHOWN, 'caves: the overlay after M', 15_000);
+  if (!(await p.eval<boolean>(WORLD_SPLIT))) {
+    await p.click('#map-mode-split');
+    await p.until(WORLD_SPLIT, 'caves: side by side', 5000);
+  }
+  await p.click('#map-tab-caves');
+  await holds(t, colourByIs(1), 'caves: C before M: the Caves tab\'s Colour by shows Cave biome', 5000, () => p.eval(COLOUR_BY));
+
+  for (const view of [wide, narrow]) {
+    await setViewport(p, view.width, view.height);
+    t.check(await p.eval<boolean>(WORLD_SPLIT), `caves: at ${view.width} × ${view.height} the map stays side by side`);
+    for (const mode of [0, 1] as const) {
+      await p.click(mode === 1 ? '#map-caves-color-biome' : '#map-caves-color-type');
+      await holds(t, `${stripInMode(mode)} && ${colourByIs(mode)}`,
+        `caves: at ${view.width} × ${view.height} the Colour by radio ${mode === 1 ? 'Cave biome' : 'Cave type'} turns the strip ${modeName(mode)}`, 5000,
+        async () => ({ ...(await stripDetail(p)() as object), radios: await p.eval(COLOUR_BY) }));
+      await hudStripApart(t, view, mode);
+    }
+  }
+  await setViewport(p, wide.width, wide.height);
+
+  // Cave slice by cave biome: the horizontal biome3d field (SP6b spec §9.2, §9.3).
+  await p.click('#map-tab-caves');
+  await holds(t, colourByIs(1), 'caves: the Caves tab by cave biome before "Cave slice"', 5000, () => p.eval(COLOUR_BY));
+  await p.click('#map-caves-slice');
+  await holds(t, `${DENSITY_SHOWN} && document.querySelector(${JSON.stringify(SV_FIELD)}).value === 'biome3d' && document.querySelector(${JSON.stringify(SV_PLANE)}).value === 'horizontal'`,
+    'caves: by cave biome "Cave slice" opens the Density tab with the horizontal biome3d field ("Cave biome")', 5000, () => p.slice());
+  await holds(t, Page.fresh(128), 'caves: the biome slice draws its 128² slice', 60_000, () => p.slice());
+
+  // Nearest lush cave: the camera moves to the hit (`cavePlace`: the eye at the hit voxel's centre).
+  await p.click('#map-tab-caves');
+  const start = await hookPose(p);
+  t.check(await p.eval<string>(`document.getElementById(${JSON.stringify(FIND_LUSH.id)})?.textContent ?? ''`) === FIND_LUSH.text, `caves: the Find row has "${FIND_LUSH.text}"`);
+  await p.click(`#${FIND_LUSH.id}`);
+  const RESULT = `document.getElementById('map-caves-find-result')?.textContent ?? ''`;
+  await p.until(`/^(Lush cave at |No lush cave|Lush cave search)/.test(${RESULT})`, 'caves: the lush cave search\'s result', 60_000).catch(() => 0);
+  const line = await p.eval<string>(RESULT);
+  const hit = parseLushHit(line);
+  const d = hit === null ? Number.NaN : Math.round(Math.hypot(hit.x + 0.5 - start.x, hit.y + 0.5 - start.y, hit.z + 0.5 - start.z));
+  t.check(hit !== null && hit.d === d && d > 0, `caves: "${FIND_LUSH.text}" finds one from (${start.x}, ${start.y}, ${start.z}): "${line}"`, { line, start });
+  if (hit !== null) {
+    const at = `(() => { const q = __wiTest.pose(); return Math.abs(q.x - ${hit.x + 0.5}) <= ${POSE_TOL} && Math.abs(q.y - ${hit.y + 0.5}) <= ${POSE_TOL} && Math.abs(q.z - ${hit.z + 0.5}) <= ${POSE_TOL}; })()`;
+    await holds(t, at, `caves: "${FIND_LUSH.text}" moves the camera to the hit's centre (${hit.x + 0.5}, ${hit.y + 0.5}, ${hit.z + 0.5}), ${d} blocks`, 10_000, () => hookPose(p));
+  }
+  await pressM(p);
+  await p.until(OVERLAY_CLOSED, 'caves: M closes the map', 10_000);
+  await setViewport(p, VIEWPORT.width, VIEWPORT.height);
+}
+
+/**
+ * The caveBiome layer and `cave_heavy` (SP6b spec §6.2, §9.1, §12.8): `?map` on `CAVE_MAP`'s view, whose profile select
+ * lists `cave_heavy`; its y field typed to the y over the ground (the canvas centre not lush), then to the lush y (the
+ * centre the lush colour within `MAP_RGB_TOL`, the hash's view at that y); New world's preset select lists `cave_heavy`;
+ * the `cave_heavy` world opened by its hash generates (revealed, three frames).
+ */
+async function caveMapAndHeavyChecks(t: Smoke): Promise<void> {
+  const p = t.page;
+  await p.goto(`${p.base}?map#${mapHash({ ...START, view: CAVE_MAP.view })}`, MAP_READY);
+  const profiles = await p.eval<string[]>(`[...document.querySelectorAll('select[title="Profile"] option')].map((o) => o.value)`);
+  t.check(profiles.includes('cave_heavy'), `caves: the map's profile select lists cave_heavy (${profiles.join(', ')})`, profiles);
+  const mc = await p.center('.map-canvas');
+  const centre = `(() => { const w = __wiSmoke.mapPixels(${mc.x}, ${mc.y}, 0); return [w.rgba[0], w.rgba[1], w.rgba[2]]; })()`;
+  const lush = CAVE_BIOME_RGB[LUSH];
+  const lushAt = `(() => { const c = ${centre}; return __wiSmoke.settled() && ${JSON.stringify(lush)}.every((v, i) => Math.abs(c[i] - v) <= ${MAP_RGB_TOL}); })()`;
+  const typeY = async (y: number): Promise<void> => {
+    await p.typeInto(CAVE_Y_FIELD, String(y));
+    await p.enter();
+    await p.until(`__wiSmoke.state()?.view?.caveY === ${y}`, `caves: the map's view at y ${y} (the hash)`, 10_000);
+  };
+  await typeY(CAVE_MAP.above);
+  await p.until('__wiSmoke.settled()', `caves: the caveBiome layer at y ${CAVE_MAP.above}`, 30_000);
+  await sleep(1000);
+  const over = await p.eval<number[]>(centre);
+  t.check(!lush.every((v, i) => Math.abs(over[i]! - v) <= MAP_RGB_TOL), `caves: at y ${CAVE_MAP.above}, over the ground, the caveBiome layer's centre is not lush (rgb ${over.join(', ')})`, over);
+  await typeY(CAVE_MAP.y);
+  await holds(t, lushAt, `caves: the caveBiome layer's y field at ${CAVE_MAP.y} draws the lush colour #4dff7a at the canvas centre (${CAVE_MAP.view.x}, ${CAVE_MAP.view.z})`, 30_000, () => p.eval(centre));
+
+  await p.goto(p.base, `document.getElementById('start-new') !== null`);
+  await p.click('#start-new');
+  await p.until(`document.getElementById('new-world')?.hidden === false`, 'caves: New world', 5000);
+  const presets = await p.eval<string[]>(`[...document.querySelectorAll('#new-preset option')].map((o) => o.value)`);
+  t.check(presets.includes('cave_heavy'), `caves: New world's preset select lists cave_heavy (${presets.join(', ')})`, presets);
+
+  await p.goto(`${p.base}${caveHeavyQuery()}`, `window.__wiWorld !== undefined`);
+  if (!(await worldRevealed(t, 'caves: the cave_heavy world'))) return;
+  await p.until('window.__wiWorld.frames >= 3', 'three frames after the cave_heavy reveal', 30_000);
+}
+
+/** SP6b's parts of the `caves` step (SP6b spec §12.8), after SP6a's: the lush pose, the world's map, then `?map` and cave_heavy. */
+async function caveBiomeChecks(t: Smoke): Promise<void> {
+  await lushXrayChecks(t);
+  await caveBiomeMapChecks(t);
+  await caveMapAndHeavyChecks(t);
+}
+
 /**
  * With --shots, the viewport saved as `name`: on a world page once the stream settled at the shot's RD
  * (`STREAM_SETTLED`, a failed check when it does not within `STREAM_SETTLED_MS`), then after `settleMs` (the
@@ -5562,13 +5914,20 @@ async function caveShots(t: Smoke): Promise<void> {
 
 async function runCaves(t: Smoke): Promise<void> {
   const p = t.page;
-  t.step(`caves: ${cavesStepQuery()} (the entrance pose, pitched up): X (the strip, the clear colour at a sky pixel), PageDown, Home; L and the Settings checkbox across a reload; the Caves tab, Cave slice, a cave parameter live; PageDown on a focused band slider`);
+  t.step(`caves: ${cavesStepQuery()} (the entrance pose, pitched up): X (the strip, the clear colour at a sky pixel), PageDown, Home; L and the Settings checkbox across a reload; the Caves tab, Cave slice, a cave parameter live; PageDown on a focused band slider; SP6b: C at the lush pose (the strip, its legend, a lush pixel), the HUD and the strip apart, moss_block copied and pasted, Colour by, the biome slice, Nearest lush cave, the caveBiome layer's y, cave_heavy`);
   const errors0 = t.errors.length;
   await setViewport(p, VIEWPORT.width, VIEWPORT.height);
   try {
     await cavesChecks(t);
   } catch (e) {
     t.check(false, `caves: the step stopped: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    await setViewport(p, VIEWPORT.width, VIEWPORT.height);
+  }
+  try {
+    await caveBiomeChecks(t);
+  } catch (e) {
+    t.check(false, `caves: SP6b's checks stopped: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
     await setViewport(p, VIEWPORT.width, VIEWPORT.height);
   }

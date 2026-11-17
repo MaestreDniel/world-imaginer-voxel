@@ -93,7 +93,18 @@ import { BACKUP_NOTICE_MS, MODIFY_ON_NOTICE } from '../../src/ui/world/modifyMod
 import { MODE_OFF_TIP } from '../../src/ui/common/modeTip';
 import { PLACE_COLOURS, PLACE_SAVED_NOTICE } from '../../src/ui/world/places';
 import { turnClipboard } from '../../src/ui/world/clipboard';
-import { clipboardHash } from '../../src/ui/world/worldPage';
+import { clipboardHash, xrayColorNotice } from '../../src/ui/world/worldPage';
+import { CAVE_BIOME, CAVE_BIOME_COLORS } from '../../src/core/constants';
+import { XRAY_BIOME_LABELS, XRAY_LABELS } from '../../src/render/xrayPalette';
+import { findBiomeButtonText, findBiomeText } from '../../src/ui/map/cavesTab';
+import { cavePickerOf } from '../../src/gen/biomes/cavePicker';
+import { newPointRecord, samplePoint } from '../../src/gen/column/columnPoint';
+import { caveBiomeIdAt } from '../../src/gen/map/layers';
+import { CAVE_Y_MAX, CAVE_Y_MIN } from '../../src/ui/map/mapState';
+import {
+  CAVE_BIOME_RGB, CAVE_MAP, CAVE_Y_FIELD, caveHeavyQuery, FIND_LUSH, HUD_STRIP_VIEWS, LUSH, LUSH_POSE, MAP_RGB_TOL, parseLushHit, rectsApart, SMOKE_MOSS,
+  XRAY_BIOME_LEGEND, XRAY_BIOME_MIN, XRAY_BIOME_PIXEL, XRAY_COLOR_NOTICES, XRAY_KIND_LEGEND_SIZE, xrayBiomeOf,
+} from '../tools/uiSmoke';
 
 const EDITED: MapState = {
   v: 1, seed: '42', profile: 'default',
@@ -1348,13 +1359,13 @@ describe('UI smoke test: the saved-world steps (SP5b spec §6.5)', () => {
     expect(rowTitleOk('New world 1 · amplified · seed smoke-77')).toBe(false);
   });
 
-  test('the keys the steps press are the key map\'s: F walks, T the time speed, B a place, G the Settings, H the help; Q, Ctrl+C, Ctrl+V and N the selection tool\'s (SP5c spec §10.8); X, PageDown, Home and L the X-ray\'s and night vision\'s (SP6a spec §7.1)', () => {
+  test('the keys the steps press are the key map\'s: F walks, T the time speed, B a place, G the Settings, H the help; Q, Ctrl+C, Ctrl+V and N the selection tool\'s (SP5c spec §10.8); X, PageDown, Home and L the X-ray\'s and night vision\'s (SP6a spec §7.1); C the X-ray\'s colours (SP6b spec §9.4)', () => {
     const codeOf = (action: string) => DEFAULT_KEYMAP.find((k) => k.action === action)!.bindings.flatMap((b) => (b.kind === 'code' ? [b.code] : []))[0];
     expect(SMOKE_KEYS).toEqual(Object.fromEntries(Object.keys(SMOKE_KEYS).map((a) => [a, codeOf(a)])));
-    expect(Object.keys(SMOKE_KEYS)).toHaveLength(13);
+    expect(Object.keys(SMOKE_KEYS)).toHaveLength(14);
     expect(SMOKE_KEYS).toEqual({
       toggleWalk: 'KeyF', timeSpeed: 'KeyT', savePlace: 'KeyB', settings: 'KeyG', help: 'KeyH', selectTool: 'KeyQ', copy: 'KeyC', paste: 'KeyV', move: 'KeyN',
-      xray: 'KeyX', xrayDown: 'PageDown', xrayAll: 'Home', nightVision: 'KeyL',
+      xray: 'KeyX', xrayDown: 'PageDown', xrayAll: 'Home', nightVision: 'KeyL', xrayColor: 'KeyC',
     });
     // Ctrl+C and Ctrl+V are the map's Ctrl bindings, Q and N its plain ones: the step presses them with those modifiers.
     const ctrlOf = (action: string) => DEFAULT_KEYMAP.find((k) => k.action === action)!.bindings.some((b) => b.kind === 'code' && b.ctrl === true);
@@ -1841,6 +1852,10 @@ describe('UI smoke test: the caves step, SP6a\'s review links and its review scr
     expect(VIEWPORT.height / 2 - XRAY_SKY_PIXEL.y).toBeGreaterThan(400);
     expect(XRAY_SKY_PIXEL.x).toBeGreaterThan(VIEWPORT.width / 2 + 200);
     expect(XRAY_SKY_PIXEL.x).toBeLessThan(VIEWPORT.width);
+    // Since SP6b D8 the HUD and the strip are flex items of `.world-top`, 0.5rem (8 px) in from the window's right edge:
+    // the pixel lies in that gutter, clear of both whatever their widths (at x 1250 the strip covered it).
+    expect(readFileSync(new URL('../../src/ui/styles.css', import.meta.url), 'utf8')).toContain('.world-top { position: absolute; top: .5rem; left: .5rem; right: .5rem;');
+    expect(XRAY_SKY_PIXEL.x).toBeGreaterThanOrEqual(VIEWPORT.width - 8);
   });
 
   test('the review shots at a real render distance (Task 48e, the user\'s check): SHOT_RD ≥ 12 (the bench\'s medium RD), every 3D shot page and the night surface at it, the rest of the smoke at WORLD_RD 4', () => {
@@ -1900,7 +1915,7 @@ describe('UI smoke test: the caves step, SP6a\'s review links and its review scr
     expect(clearColour([168, 204, 255])).toBe(false);
   });
 
-  test('the strip\'s line is stripText\'s by cave type (the smoke never presses C); a first PageDown from every depth gives 32 blocks around the eye, as bandStep does', () => {
+  test('the strip\'s line is stripText\'s by cave type (SP6a\'s checks press no C; SP6b\'s, below, turn it by cave biome); a first PageDown from every depth gives 32 blocks around the eye, as bandStep does', () => {
     for (const [a, b] of [[-64, 319], [68, 99], [-12, 19], [0, 0], [-1, 5]] as const) {
       expect(xrayStripText(a, b)).toBe(stripText(bandSet(a, b), 0));
       expect(parseStripBand(xrayStripText(a, b))).toEqual({ yMin: a, yMax: b });
@@ -1970,6 +1985,178 @@ describe('UI smoke test: the caves step, SP6a\'s review links and its review scr
       expect(png.subarray(1, 4).toString('latin1'), name).toBe('PNG');
       expect([png.readUInt32BE(16), png.readUInt32BE(20)], name).toEqual([VIEWPORT.width, VIEWPORT.height]);
     }
+  });
+});
+
+describe('UI smoke test: the caves step\'s SP6b checks: C, the HUD and the strip, the map layer, cave_heavy (SP6b spec §12.8)', () => {
+  const src = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+  /** The body of the tool's function `name` (to its closing brace at the line start). */
+  const body = (name: string): string => {
+    const start = src.indexOf(`async function ${name}(`);
+    expect(start, name).toBeGreaterThan(-1);
+    return src.slice(start, src.indexOf('\n}\n', start));
+  };
+
+  test('SMOKE_KEYS.xrayColor is KeyC without Ctrl: the key map\'s C, the code of Ctrl+C\'s copy, told apart by Ctrl', () => {
+    expect(SMOKE_KEYS.xrayColor).toBe('KeyC');
+    expect(DEFAULT_KEYMAP.find((k) => k.action === 'xrayColor')!.bindings).toEqual([{ kind: 'code', code: 'KeyC', ctrl: false }]);
+    expect(DEFAULT_KEYMAP.find((k) => k.action === 'copy')!.bindings).toEqual([{ kind: 'code', code: 'KeyC', ctrl: true }]);
+    expect(SMOKE_KEYS.copy).toBe(SMOKE_KEYS.xrayColor);
+  });
+
+  test('the step\'s literals are the key map\'s: C pressed plain through SMOKE_KEYS.xrayColor (key code 67), Ctrl+C through SMOKE_KEYS.copy with Ctrl, X plain', () => {
+    expect('C'.charCodeAt(0)).toBe(67);
+    for (const f of ['lushXrayChecks', 'caveBiomeMapChecks']) {
+      expect(body(f), f).toContain("worldKey(p, 'c', SMOKE_KEYS.xrayColor, 67)");
+      expect(body(f), f).toContain("worldKey(p, 'x', SMOKE_KEYS.xray, 88)");
+      expect(body(f), f).not.toMatch(/SMOKE_KEYS\.xrayColor, \d+, [1-9]/);
+    }
+    expect(body('mossCopyPaste')).toContain("p.key('c', SMOKE_KEYS.copy, 67, 2)");
+  });
+
+  test('the HUD and strip check\'s three windows: 1400 × 900 full screen, 1920 × 1080 and 1280 × 720 side by side (Review Focus 5)', () => {
+    expect(HUD_STRIP_VIEWS).toEqual([
+      { width: 1400, height: 900, split: false },
+      { width: 1920, height: 1080, split: true },
+      { width: 1280, height: 720, split: true },
+    ]);
+    expect([HUD_STRIP_VIEWS[0].width, HUD_STRIP_VIEWS[0].height]).toEqual([VIEWPORT.width, VIEWPORT.height]);
+    expect([HUD_STRIP_VIEWS[1].width, HUD_STRIP_VIEWS[1].height]).toEqual([OVERLAY_VIEWPORT.width, OVERLAY_VIEWPORT.height]);
+    // Side by side the world takes the window's right half: 640 px at 1280 (Review Focus 5's host).
+    expect(HUD_STRIP_VIEWS[2].width / 2).toBe(640);
+    // Each window is checked in both colour modes, by C full screen and by the Colour by radios side by side.
+    expect(body('lushXrayChecks').match(/await hudStripApart\(t, full, [01]\);/g)).toEqual(['await hudStripApart(t, full, 0);', 'await hudStripApart(t, full, 1);']);
+    expect(body('caveBiomeMapChecks')).toContain('for (const view of [wide, narrow]) {');
+    expect(body('caveBiomeMapChecks')).toContain('for (const mode of [0, 1] as const) {');
+  });
+
+  test('rectsApart: both rects shown and not overlapping; touching edges are apart, a hidden (null) or empty rect never is', () => {
+    const r = (x: number, y: number, width: number, height: number) => ({ x, y, width, height });
+    expect(rectsApart(r(0, 0, 100, 50), r(110, 0, 100, 50))).toBe(true);
+    expect(rectsApart(r(0, 0, 100, 50), r(100, 0, 100, 50))).toBe(true);
+    expect(rectsApart(r(0, 0, 100, 50), r(0, 50, 100, 50))).toBe(true);
+    expect(rectsApart(r(0, 0, 100, 50), r(99, 49, 10, 10))).toBe(false);
+    expect(rectsApart(r(0, 0, 100, 50), r(20, 10, 10, 10))).toBe(false);
+    expect(rectsApart(null, r(0, 0, 10, 10))).toBe(false);
+    expect(rectsApart(r(0, 0, 0, 10), r(50, 50, 10, 10))).toBe(false);
+  });
+
+  test('the lush pose: the eye at its voxel\'s centre on a floor (air, solid below); `at` its corner by CAVE_AT\'s rule; its page at RD 4 on batch with the hook', () => {
+    const dc = createDensityContext(ctxFor('42'));
+    const [vx, vy, vz] = [Math.floor(LUSH_POSE.x), Math.floor(LUSH_POSE.y), Math.floor(LUSH_POSE.z)];
+    expect([LUSH_POSE.x, LUSH_POSE.y, LUSH_POSE.z]).toEqual([vx + 0.5, vy + 0.5, vz + 0.5]);
+    expect([LUSH_POSE.yaw, LUSH_POSE.pitch]).toEqual([45, 0]);
+    expect([solidAt(dc, vx, vy, vz), solidAt(dc, vx, vy - 1, vz)]).toEqual([false, true]);
+    const [fx, , fz] = lookVector(LUSH_POSE.yaw, 0);
+    const corners: Array<[number, number]> = [[vx, vz], [vx + 1, vz], [vx, vz + 1], [vx + 1, vz + 1]];
+    const solids = corners.map(([ax, az]) => ([[-1, -1], [0, -1], [-1, 0], [0, 0]] as const)
+      .filter(([dx, dz]) => solidAt(dc, ax + dx, vy, az + dz))
+      .map(([dx, dz]) => [dx + 0.5, dz + 0.5] as const));
+    const clear = solids.findIndex((s) => s.length === 0);
+    const behind = solids.findIndex((s) => s.every(([ox, oz]) => ox * fx + oz * fz < -1e-9));
+    expect(LUSH_POSE.at).toEqual(corners[clear >= 0 ? clear : behind]);
+    const q = parseWorldQuery(new URL(`/${cavePageQuery(LUSH_POSE)}`, 'http://127.0.0.1').searchParams);
+    expect([q.at, q.y, q.yaw, q.pitch, q.rd, q.renderer]).toEqual([{ x: LUSH_POSE.at[0], z: LUSH_POSE.at[1] }, LUSH_POSE.y, 45, 0, WORLD_RD, 'batch']);
+  });
+
+  test('C\'s texts are the page\'s: the strip\'s line in each mode (stripText), the biome legend (XRAY_BIOME_LABELS), the kinds\' legend\'s size, the notices', () => {
+    expect(xrayStripText(-64, 319, 1)).toBe(stripText(XRAY_ALL, 1));
+    expect(xrayStripText(-64, 319, 0)).toBe(stripText(XRAY_ALL, 0));
+    expect(xrayStripText(-12, 19, 1)).toBe(stripText(bandSet(-12, 19), 1));
+    expect(XRAY_BIOME_LEGEND).toEqual(XRAY_BIOME_LABELS.filter((l) => l !== ''));
+    expect(XRAY_KIND_LEGEND_SIZE).toBe(XRAY_LABELS.filter((l) => l !== '').length);
+    expect(XRAY_COLOR_NOTICES).toEqual([xrayColorNotice(0), xrayColorNotice(1)]);
+  });
+
+  test('the biome colours are CAVE_BIOME_COLORS; LUSH is CAVE_BIOME.lush', () => {
+    const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    expect(CAVE_BIOME_RGB.map((c) => [...c])).toEqual(CAVE_BIOME_COLORS.map(rgb));
+    expect(LUSH).toBe(CAVE_BIOME.lush);
+  });
+
+  test('xrayBiomeOf names the biome whose colour, shaded and blended additively over the clear colour, a pixel holds; null when faint', () => {
+    // The material's blend: the clear colour plus Σ alpha·fade·sRGB(linear colour × face shade), per wall.
+    const lin = (c: number) => { const v = c / 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+    const srgb = (v: number) => 255 * (v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055);
+    const blend = (walls: ReadonlyArray<readonly [number, number, number]>) => XRAY_CLEAR_RGB.map((c, i) =>
+      Math.round(c + walls.reduce((sum, [biome, shade, k]) => sum + k * srgb(lin(CAVE_BIOME_RGB[biome]![i]!) * shade), 0)));
+    expect(xrayBiomeOf([...XRAY_CLEAR_RGB])).toBeNull();
+    for (let b = 0; b < 4; b++) {
+      for (const shade of [1, 0.8, 0.6, 0.5]) {
+        expect(xrayBiomeOf(blend([[b, shade, 0.14]])), `${b} × ${shade}`).toBe(b);
+        expect(xrayBiomeOf(blend([[b, shade, 0.14], [b, 1, 0.07]])), `${b} × ${shade}, twice`).toBe(b);
+      }
+    }
+    // Lush walls with a fainter plain one behind still read lush; the plain ones in the lead read plain.
+    expect(xrayBiomeOf(blend([[LUSH, 0.8, 0.14], [LUSH, 0.6, 0.14], [0, 0.6, 0.07]]))).toBe(LUSH);
+    expect(xrayBiomeOf(blend([[0, 0.8, 0.14], [0, 0.6, 0.14], [LUSH, 0.6, 0.05]]))).toBe(0);
+    // The pixel as the smoke read it at the lush pose: by cave biome (16, 31, 28), by cave type (29, 27, 21).
+    expect(xrayBiomeOf([16, 31, 28])).toBe(LUSH);
+    expect(xrayBiomeOf([29, 27, 21])).not.toBe(LUSH);
+    // Below XRAY_BIOME_MIN over the clear colour, no biome.
+    expect(xrayBiomeOf([XRAY_CLEAR_RGB[0] + 2, XRAY_CLEAR_RGB[1] + 6, XRAY_CLEAR_RGB[2] + 3])).toBeNull();
+    expect(2 + 6 + 3).toBeLessThan(XRAY_BIOME_MIN);
+    // The pixel lies inside the 1400 × 900 window, right of the HUD's column and below the strip's row.
+    expect(XRAY_BIOME_PIXEL.x).toBeLessThan(VIEWPORT.width);
+    expect(XRAY_BIOME_PIXEL.y).toBeLessThan(VIEWPORT.height);
+  });
+
+  test('"Nearest lush cave": the button\'s id and text are the Caves tab\'s; parseLushHit reads findBiomeText\'s hit line, nothing else', () => {
+    expect(FIND_LUSH.text).toBe(findBiomeButtonText(CAVE_BIOME.lush));
+    expect(readFileSync(new URL('../../src/ui/map/cavesTab.ts', import.meta.url), 'utf8')).toContain('button(`map-caves-find-biome-${biome}`, findBiomeButtonText(biome))');
+    expect(FIND_LUSH.id).toBe(`map-caves-find-biome-${CAVE_BIOME.lush}`);
+    const from = { x: LUSH_POSE.at[0], y: FIND_LUSH.fromY, z: LUSH_POSE.at[1] };
+    const line = findBiomeText(CAVE_BIOME.lush, { hit: { x: -1749, y: 80, z: 1628, yaw: 90 }, reason: 'found' }, from);
+    expect(parseLushHit(line)).toEqual({ x: -1749, y: 80, z: 1628, d: Math.round(Math.hypot(-1748.5 - from.x, 80.5 - from.y, 1628.5 - from.z)) });
+    expect(parseLushHit(findBiomeText(CAVE_BIOME.lush, { hit: null, reason: 'budget' }, from))).toBeNull();
+    expect(parseLushHit(findBiomeText(CAVE_BIOME.dripstone, { hit: { x: 1, y: 2, z: 3, yaw: 0 }, reason: 'found' }, from))).toBeNull();
+    // Pressed from high over the lush pose's column, inside the camera's y range and above the ground there.
+    expect(FIND_LUSH.fromY).toBeLessThanOrEqual(400);
+    expect(FIND_LUSH.fromY).toBeGreaterThan(columnPoint(ctxFor('42'), LUSH_POSE.at[0], LUSH_POSE.at[1]).surfaceEst);
+  });
+
+  test('the map check\'s view: seed 42\'s caveBiome layer; its column and every block within 16 of it lush at y, above the ground at `above` (the generator\'s caveBiomeIdAt)', () => {
+    const ctx = ctxFor('42');
+    const picker = cavePickerOf(ctx);
+    const P = newPointRecord();
+    const ids = (y: number): Set<number> => {
+      const out = new Set<number>();
+      for (let dx = -16; dx <= 16; dx += 4) for (let dz = -16; dz <= 16; dz += 4) out.add(caveBiomeIdAt(picker, samplePoint(ctx, CAVE_MAP.view.x + dx, CAVE_MAP.view.z + dz, false, P), y));
+      return out;
+    };
+    expect([...ids(CAVE_MAP.y)]).toEqual([CAVE_BIOME.lush]);
+    expect([...ids(CAVE_MAP.above)]).toEqual([255]);
+    // Both on the field's step (4) inside its range; the view decodes as a map state on the caveBiome layer.
+    for (const y of [CAVE_MAP.y, CAVE_MAP.above]) {
+      expect(Math.abs(y % 4), String(y)).toBe(0);
+      expect(y >= CAVE_Y_MIN && y <= CAVE_Y_MAX, String(y)).toBe(true);
+    }
+    const st = decodeMapState(mapHash({ ...START, view: CAVE_MAP.view }));
+    expect(st.error).toBeNull();
+    expect(st.state.view).toEqual({ ...CAVE_MAP.view });
+    expect(Math.hypot(CAVE_MAP.view.x - LUSH_POSE.x, CAVE_MAP.view.z - LUSH_POSE.z)).toBeLessThan(64);
+    expect(MAP_RGB_TOL).toBeLessThanOrEqual(2);
+    expect(readFileSync(new URL('../../src/ui/map/toolbar.ts', import.meta.url), 'utf8')).toContain("[yField, 'number', 'Cave biome y value']");
+    expect(CAVE_Y_FIELD).toBe('input[aria-label="Cave biome y value"]');
+  });
+
+  test('moss_block is the registry\'s state 58 (SP6b D36), a property-less cube; its clipboard values are the state shifted by 8 (no fluid)', () => {
+    expect(SMOKE_MOSS).toBe(REGISTRY.parseStateKey('moss_block'));
+    expect(REGISTRY.stateKey(SMOKE_MOSS)).toBe('moss_block');
+    expect(REGISTRY.rotateState(SMOKE_MOSS, 1)).toBe(SMOKE_MOSS);
+    expect(cellsHash([SMOKE_MOSS << 8])).toBe(clipboardHash(new Uint32Array([SMOKE_MOSS << 8])));
+  });
+
+  test('cave_heavy: a ready profile in both selects (the map\'s and New world\'s list profileOptions); its page opens seed 42 on it at RD 4 on batch with the hook', () => {
+    expect(profileOptions()).toContain('cave_heavy');
+    expect(READY_PROFILES).toContain('cave_heavy');
+    const url = new URL(`/${caveHeavyQuery()}`, 'http://127.0.0.1');
+    const q = parseWorldQuery(url.searchParams);
+    expect([q.rd, q.renderer, q.at]).toEqual([WORLD_RD, 'batch', null]);
+    expect(url.searchParams.get('wiTest')).toBe('1');
+    const st = decodeMapState(url.hash.slice(1));
+    expect(st.error).toBeNull();
+    expect([st.state.seed, st.state.profile]).toEqual(['42', 'cave_heavy']);
   });
 });
 
