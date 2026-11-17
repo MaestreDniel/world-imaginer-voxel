@@ -187,7 +187,12 @@
  * checked against item 4's quoted text and §17's arrows; the exit appends "(delivered in SP6b, so nothing moved)" to
  * each item taken and re-pins the line), word SP12's `deriveSeed` memo as delivered (lever 25f took it; §19's R28), and
  * add the describe's last test, which checks from the titles of the tests registered in it that every item of the SP6b
- * spec's §15 as it stands has a test that names it (ruling P52).
+ * spec's §15 as it stands has a test that names it (ruling P52). The exit (Task 59 Step 0, made by Task 58 Step 0 before
+ * the exit's CI runs, ruling P61): none of §17's four items was cut, so item 1's contents line reads as built (§15 item 1's
+ * quoted text), each "Received from SP6a" item and the user check's flat floor read as delivered or handed on in place,
+ * and the Exit and Cut line are §15 item 1's and §17's, the Cut line saying nothing moved; item 4's four receivers each
+ * gain "(delivered in SP6b, so nothing moved)", and SP10's "Received from SP6b" line (with the SP6b spec §16's SP10
+ * bullet it copies) words the cut-line items as delivered. The SP6a describe's pins of those lines moved here.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1968,13 +1973,11 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(cut!.endsWith('Each is cut whole. It was not taken: the Find buttons, the spaghetti-2D rarity bands and the underground-only carver shipped in SP6a, so nothing moved.'), 'the Cut line as taken').toBe(true);
     // Item 2: the SP6b entry.
     const sp6b = spEntry('SP6b', 'SP7');
-    // The SP6b header's pin moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 1 rewords it).
-    expect(sp6b).toContain('- 3D quart cave-biome picker (lush, dripstone, **abyss**) with cave floor and ceiling surface rules; the abyss surface-palette blocks (decided in the SP6b spec); the X-ray coloured by cave biome; the map cave-biome layer; the `cave_heavy` preset; cave culling (§4.15) with R3.');
+    // The SP6b header's, contents line's, "Received from SP6a" items' and Exit and Cut line's pins moved to 'master spec
+    // amendments (SP6b §15)' (SP6b §15 item 1 rewords them).
     expect(sp6b).toContain('**Deliverable:** cave biomes recognised by their blocks.');
     const sp6bReceived = sp6b.split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
     expect(sp6bReceived, 'SP6b has no "Received from SP6a" line').toBeDefined();
-    expect(sp6bReceived).toContain('`readyFrom` \'SP6b\'');
-    expect(sp6b).toContain('**Exit** and **Cut line:** set by the SP6b spec');
     // Item 3: SP7's header (moved from the SP5a describe) and the "Received from SP6a" lines of SP7-SP12 (§14).
     expect(spEntry('SP7', 'SP8a').startsWith('**SP7 — Water and fluids** (L; SP6b, SP5a)'), 'the SP7 header').toBe(true);
     const handed: Array<[id: SubProjectId, entry: string, phrase: string]> = [
@@ -1995,13 +1998,11 @@ describe('master spec amendments (SP6a §13)', () => {
       expect(line, `${id}'s "Received from SP6a" line holds an abyss hand-over`).not.toMatch(/lava may appear|crystals or gems|gothic|silent|Oscuro y silencioso/);
     }
     // Item 3 at the exit (Task 53): the cut-line items reached SP10's and SP12's lines as delivered; SP6b's line gains
-    // the SP6a spec §14's exit hand-overs (U2-U4, the CI work item, C6, the refill, the slice margin, cave_heavy).
+    // the SP6a spec §14's exit hand-overs (U2-U4, the CI work item, C6, the refill, the slice margin, cave_heavy), whose
+    // pins moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 1 words them as delivered).
     const receivedOf = (entry: string): string => entry.split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):')) ?? '';
     expect(receivedOf(spEntry('SP10', 'SP11'))).toContain('the Caves tab\'s Find buttons, SP6a\'s first cut-line item, were delivered in SP6a, so nothing moved here (the SP6a spec §15).');
     expect(receivedOf(sp12Entry())).toContain('the underground-only carver and the spaghetti-2D rarity bands, SP6a\'s other cut-line items, were delivered in SP6a, so nothing moved here (the SP6a spec §15);');
-    for (const phrase of ['U2-U4 over its new leaves', 'the CI work item before or at its start', '`C6.latticeBias` at 1.25 for SP6a', '`xrayApplyRefillMs` about 8.3-8.4 s', '`slice.caves128`\'s margin', '`cave_heavy`\'s `cheese.offset` 0.20']) {
-      expect(sp6bReceived, `SP6b's "Received from SP6a" line names ${phrase}`).toContain(phrase);
-    }
     for (const [id, line] of [['SP10', receivedOf(spEntry('SP10', 'SP11'))], ['SP12', receivedOf(sp12Entry())]] as const) {
       expect(line, `${id}'s line still reads "if cut"`).not.toMatch(/if (they were )?cut/);
     }
@@ -2049,18 +2050,8 @@ describe('master spec amendments (SP6a §13)', () => {
     for (const l of bare) expect(kept.some((k) => l.startsWith(k)), `a bare SP6 outside the split paragraphs: ${l.slice(0, 120)}`).toBe(true);
     for (const k of kept) expect(bare.some((l) => l.startsWith(k)), `no line starts with ${k}`).toBe(true);
   });
-  test('SP6b\'s "Received from SP6a\'s user check": the flat bedrock floor in wide caves (ruling R33, SP6a spec §14)', () => {
-    const lines = spEntry('SP6b', 'SP7').split('\n');
-    const at = lines.findIndex((l) => l.startsWith('- Received from SP6a\'s user check (the SP6a spec §14, ruling R33; amended by SP6a):'));
-    expect(at, 'SP6b has no "Received from SP6a\'s user check" line').toBeGreaterThan(-1);
-    expect(lines[at - 1]!.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'), 'it follows SP6b\'s "Received from SP6a" line').toBe(true);
-    const line = lines[at]!;
-    expect(line).toContain('"a menudo se nota demasiado el límite de altura del mundo por debajo y se expone un suelo plano de bedrock en las cuevas amplias"');
-    expect(line).toContain('`C7.flatWallShare` has about a quarter of its flat faces on the bedrock floor y −63');
-    for (const shape of ['a bottom cap closing the cave families above the floor, as the band caps do', 'a noisy bedrock layer', 'a deep fluid floor (lava stays SP7\'s and SP8\'s)']) {
-      expect(line, `the candidate shape: ${shape}`).toContain(shape);
-    }
-  });
+  // SP6b's "Received from SP6a's user check" pin moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 1 words it as
+  // delivered).
   test('§2.5\'s Expr ops gain noiseScaled{id, s} (SP6a spec §13 item 10, §1.5)', () => {
     const lines = text.split('\n');
     const from = lines.findIndex((l) => l.startsWith('type Expr ='));
@@ -3152,23 +3143,145 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(bullet).not.toContain('if SP6b did not take it');
   });
 
-  // Pre-exit form: the exit (Task 59 Step 0) appends "(delivered in SP6b, so nothing moved)" to each item taken and
-  // re-pins this line.
-  test('the Default receivers name SP6b\'s cut-line items (SP6b spec §15 item 4)', () => {
+  // The exit (Task 59 Step 0, made by Task 58 Step 0, ruling P61): none of §17's four items was cut, so item 1's lines
+  // and item 4's receivers read as delivered.
+  test('§10\'s SP6b entry at the exit: the contents line as built (SP6b spec §15 item 1)', () => {
+    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-12-sp6b-cave-biomes-design.md`, 'utf8');
+    const item1 = spec.split('\n').find((l) => l.startsWith('1. **§10 SP6b entry**'));
+    expect(item1, 'the SP6b spec §15 has no item 1').toBeDefined();
+    const contents = /contents as built \("([^"]+)"\)/.exec(item1!)?.[1];
+    expect(contents, '§15 item 1 quotes no contents').toBeDefined();
+    const lines = spEntry('SP6b', 'SP7').split('\n');
+    expect(lines[1], 'the contents line is item 1\'s quoted text').toBe(`- ${contents!.charAt(0).toUpperCase()}${contents!.slice(1)}.`);
+    expect(lines[1]).toBe('- A cave-biome picker per block from per-position climate, depth and border noises (lush, dripstone, **abyss**) with cave floor and ceiling rules (rule 4); the abyss\'s rock and palette; seven new blocks; the rock floor above the bedrock; the X-ray coloured by cave biome (C); the map cave-biome layer, the Cave biome slice field and the Caves tab\'s biome finder; the `cave_heavy` preset; cave culling (§4.15) with R3.');
+    expect(lines[2]).toBe('- **Deliverable:** cave biomes recognised by their blocks.');
+    expect(spEntry('SP6b', 'SP7'), 'the pre-exit contents').not.toContain('3D quart cave-biome picker (lush');
+  });
+
+  test('§10\'s SP6b entry at the exit: each "Received from SP6a" item as delivered or handed on in place (SP6b spec §15 item 1)', () => {
+    const line = spEntry('SP6b', 'SP7').split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):')) ?? '';
+    expect(line, 'SP6b has no "Received from SP6a" line').not.toBe('');
+    // [the item as SP6a handed it, its outcome right after it]; §15 item 1 names the picker's, the aux-B read's,
+    // secondaryDepthRange's, C6's, the refill's, the deriveSeed memo's and the T gate's.
+    const items: Array<[item: string, outcome: string]> = [
+      ['the 3D quart cave-biome picker and its registry (§3.10; the depth axis, §3.2)', ' (delivered per block, the SP6b spec D16: per-position climate and depth perturbed by border noises, jittered per voxel; the registry\'s boxes as `caves.biomes.*` leaves);'],
+      ['`caveBiomeQ` in aux B (§2.3)', ' (delivered: written by T beside the `cave` byte\'s nibble);'],
+      ['the `caveBiome` condition and rule 4 before rule 2 (§3.11)', ' (delivered: rule 4 at `root.rules[2]`),'],
+      ['with `secondaryDepthRange` if its rules need it', ' (not needed: → SP8b, the SP6b spec D18);'],
+      ['the `SOUND` group `abyss`, §2.2)', ' (delivered: the seven blocks, ids 58-64, the SP6b spec D36; the abyss\'s rock all through by the `strata` rule kind, D19);'],
+      ['the X-ray coloured by cave biome (the `xray` pack variant\'s 4 reserved bits, read from aux B by the mesh job)', ' (delivered: the bits read from the `cave` byte\'s nibble, D17, in place of aux B; C switches the colours, D7);'],
+      ['the map cave-biome layer and the slice view\'s biome3d field', ' (delivered: the layer at a chosen y, §5.6; the "Cave biome" field, §5.5);'],
+      ['`cave_heavy`\'s overlay on the SP6a spec §4\'s leaves, `readyFrom` \'SP6b\'', ' (delivered: §3.15);'],
+      [' B3', ' (delivered: per 8 × 8 km window, with its border parts and the abyss rock\'s boundary, §6.4);'],
+      ['C1\'s cave_heavy 10-22 % recorded', ' (delivered: recorded, gated in SP12);'],
+      ['skipping the X-ray pass while the X-ray is on', ' (delivered: §4.15; the meta bits 17-31 stay 0, the walk reading `connectivity15` from the staging; R3\'s `wronglyCulled` and `popIn` 0, `culledUnderground` ≥ 50 %);'],
+      ['C1-C9, L2, S1, DT1 and DT2 re-asserted (DT2\'s surface parts with the cave rules)', ' (delivered, with C7\'s bottom parts and DT2\'s `caveBiomeProbe`);'],
+      ['P1 re-measured with about 300 cave quarts (§7)', ' (delivered: §7\'s T row as measured);'],
+      ['`GENERATOR_VERSION` bumped again', ` (delivered: ${GENERATOR_VERSION});`],
+      ['turn with `rotateState` (the SP5c spec §14)', ' (delivered: the seven property-less states round-trip by key and turn to themselves);'],
+      ['so each zone is recognised by its blocks', ' (built: rule 4\'s skins and the abyss\'s rock; the user\'s check judges it);'],
+      ['no other light until SP7\'s lava and SP8b\'s crystals', ' (delivered: no SP6b block emits, `EMIT` 0; L2\'s `abyssLit` recorded);'],
+      ['the `undergroundWorms.chance` × 1.5 in `cave_heavy`', ' (delivered, with the worms\' and the ravines\');'],
+      ['U2-U4 over its new leaves (§6.4: a part once active stays gated)', ' (delivered: U2 over 193 leaves, §6.4);'],
+      ['the CI work item before or at its start', ' (SP6a\'s runs take 6 min 37 s to 9 min 1 s'],
+      ['its sample reductions not taken)', ' (delivered first: Stage 1\'s levers, the SP6b spec §13, two cold runs at 5:10 and 5:17 against its 5 min 30 s; the exit\'s runs in its Exit evidence);'],
+      ['`C6.latticeBias` at 1.25 for SP6a (measured 1.124-1.185), §6.4\'s 1.1 still the target, with the structural levers (cell height 4, per-voxel noise for the thin families)', ' (handed on: the 1.1, read as ≤ 1.09 on SP6b\'s measure, with the structural levers → SP12);'],
+      ['`xrayApplyRefillMs` about 8.3-8.4 s on the Iris Xe, recorded, not gated, its 6 s target with the levers left (a frame cap while regenerating, a cached non-cave density), raised at SP6b\'s brainstorming', ' (handed on by the SP6b spec\'s Point 3: re-measured in L14, the 6 s target with its levers → SP12);'],
+      ['`slice.caves128`\'s margin (p50 about 280 ms against 300) and its output-keeping lever, a memo of `deriveSeed` per kind for the source rolls that fail', ' (taken by SP6b: Task 25\'s lever 25f, the SP6b spec §9.2);'],
+      ['`cave_heavy`\'s `cheese.offset` 0.20 now 0.30 under the default 0.5, for its overlay', ' (delivered: 0.30, the user\'s choice at the tuning, §3.15);'],
+      ['T ≤ 13 ms p50 as the SP6a spec\'s Threshold log set it, unless SP6b decides otherwise', ' (kept: 13 / 20 ms, the SP6b spec D27).'],
+    ];
+    let from = 0;
+    for (const [item, outcome] of items) {
+      const at = line.indexOf(item + outcome, from);
+      expect(at, `the item "${item}" followed by "${outcome}", in order`).toBeGreaterThan(-1);
+      from = at + item.length + outcome.length;
+    }
+    // The abyss hand-overs are written in their receivers' lines (§15 item 2's pins), which this line says.
+    expect(line.endsWith('the abyss silent (SP8c: little sound, not unsettling music) (each written in SP7\'s, SP8b\'s and SP8c\'s "Received from SP6b" lines).'), 'the abyss hand-overs as written').toBe(true);
+    // The pins of the line's last SP6a items, moved from the SP6a describe, on their delivered wording.
+    for (const phrase of ['U2-U4 over its new leaves', 'the CI work item before or at its start', '`C6.latticeBias` at 1.25 for SP6a', '`xrayApplyRefillMs` about 8.3-8.4 s', '`slice.caves128`\'s margin', '`cave_heavy`\'s `cheese.offset` 0.20']) {
+      expect(line, `SP6b's "Received from SP6a" line names ${phrase}`).toContain(phrase);
+    }
+    // The values the outcomes quote, cross-checked against the code and the master's own rows.
+    expect(text).toContain('| cave_heavy | cheese offset 0.5 → 0.30');
+    expect(TERRAIN_P50_MAX_MS).toBe(13);
+    expect(TERRAIN_P99_MAX_MS).toBe(20);
+  });
+
+  test('§10\'s SP6b entry at the exit: the user check\'s flat bedrock floor as delivered (SP6b spec §15 item 1, ruling R33)', () => {
+    const lines = spEntry('SP6b', 'SP7').split('\n');
+    const at = lines.findIndex((l) => l.startsWith('- Received from SP6a\'s user check (the SP6a spec §14, ruling R33; amended by SP6a):'));
+    expect(at, 'SP6b has no "Received from SP6a\'s user check" line').toBeGreaterThan(-1);
+    expect(lines[at - 1]!.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'), 'it follows SP6b\'s "Received from SP6a" line').toBe(true);
+    const line = lines[at]!;
+    // Moved from the SP6a describe: the finding as handed over.
+    expect(line).toContain('"a menudo se nota demasiado el límite de altura del mundo por debajo y se expone un suelo plano de bedrock en las cuevas amplias"');
+    expect(line).toContain('`C7.flatWallShare` has about a quarter of its flat faces on the bedrock floor y −63');
+    for (const shape of ['a bottom cap closing the cave families above the floor, as the band caps do', 'a noisy bedrock layer', 'a deep fluid floor (lava stays SP7\'s and SP8\'s)']) {
+      expect(line, `the candidate shape: ${shape}`).toContain(shape);
+    }
+    // The exit: delivered by the rock floor (D6, §5), its defaults cross-checked against DEFAULTS.caves.
+    expect(line.endsWith(' Delivered by the rock floor (the SP6b spec D6, its §5; Point 2\'s F1; §3.6 and §3.8): floorY = −60 + 7·|Nf| closes every cave family and carver above the bedrock, so `C7.bedrockExposed` is gated at 0 and `C7.bottomPlane` at ≤ 1 %, and the new floor is no plane either (`C7.bottomFloorSpread` ≥ 6 blocks, `C7.bottomFlatRatio` ≤ 2.05).'), 'the finding as delivered').toBe(true);
+    expect(DEFAULTS.caves.floor.y).toBe(-60);
+    expect(DEFAULTS.caves.floor.amp).toBe(7);
+    const c7 = THRESHOLDS.C7;
+    expect([c7?.bedrockExposed?.max, c7?.bottomPlane?.max, c7?.bottomFloorSpread?.min, c7?.bottomFlatRatio?.max]).toEqual([0, 0.01, 6, 2.05]);
+  });
+
+  test('§10\'s SP6b entry at the exit: Exit as the spec §18, the Cut line as taken (SP6b spec §15 item 1)', () => {
+    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-12-sp6b-cave-biomes-design.md`, 'utf8');
+    const item1 = spec.split('\n').find((l) => l.startsWith('1. **§10 SP6b entry**')) ?? '';
+    const exit = /\*\*Exit:\*\* "([^"]+)"/.exec(item1)?.[1];
+    expect(exit, '§15 item 1 quotes no Exit').toBeDefined();
+    const lines = spEntry('SP6b', 'SP7').split('\n');
+    expect(lines.filter((l) => l.startsWith('- **Exit')).length, 'one Exit line').toBe(1);
+    expect(lines.find((l) => l.startsWith('- **Exit')), 'the Exit line is item 1\'s quoted text').toBe(`- **Exit:** ${exit}.`);
+    expect(spEntry('SP6b', 'SP7'), 'the pre-exit line').not.toContain('set by the SP6b spec');
+    const cut = lines.find((l) => l.startsWith('- **Cut line:** '));
+    expect(cut, 'the SP6b entry has no `- **Cut line:**` line').toBeDefined();
+    expect(lines.indexOf(cut!), 'the Cut line closes the entry, after Exit').toBe(lines.findIndex((l) => l.startsWith('- **Exit:** ')) + 1);
+    expect(cut).toBe('- **Cut line:** in this order, the Caves tab\'s "Find a cave biome" buttons, with its "Show cave biomes on the map" and "Cave biome parameters" buttons (D14\'s review links replace them for the user\'s check) (→ SP10); the map\'s cave-biome layer (the slice field and the X-ray by biome still show biomes) (→ SP10); the Cave biome slice field and the Voxels mode\'s biome colours (→ SP10); RegionMesh\'s region culling (Firefox then draws unculled; RegionBatch\'s culling and R3 stay) (→ SP11). Each is cut whole. It was not taken: the biome finder with its two buttons, the map\'s cave-biome layer, the Cave biome slice field with the Voxels mode\'s colours and RegionMesh\'s region culling shipped in SP6b, so nothing moved.');
+    // §17's wording: its four items with the same receivers, in order.
+    const s17 = spec.slice(spec.indexOf('\n## 17. Cut line\n'), spec.indexOf('\n## 18. Exit criteria\n'));
+    const receivers = [...s17.matchAll(/^\d+\. \*\*[^*]+\*\*[^→\n]*→ (SP\d+[a-z]?)/gm)].map((m) => m[1]);
+    expect([...cut!.matchAll(/\(→ (SP\d+)\)/g)].map((m) => m[1]), 'the Cut line\'s receivers are §17\'s').toEqual(receivers);
+    for (const phrase of ['"Find a cave biome" buttons', '"Show cave biomes on the map"', '"Cave biome parameters"', 'D14\'s review links replace them for the user\'s check', 'The slice field and the X-ray by biome still show biomes', 'the Voxels mode\'s biome colours', 'Firefox then draws unculled', 'RegionBatch\'s culling and R3 stay', 'Each is cut whole.']) {
+      expect(s17, `§17 words ${phrase}`).toContain(phrase);
+      expect(cut!.toLowerCase(), `the Cut line words ${phrase}`).toContain(phrase.toLowerCase());
+    }
+  });
+
+  test('the Default receivers name SP6b\'s cut-line items as delivered (SP6b spec §15 item 4)', () => {
     const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-12-sp6b-cave-biomes-design.md`, 'utf8');
     const entries = 'SP6b Find-a-cave-biome buttons → SP10; SP6b map cave-biome layer → SP10; SP6b Cave biome slice field → SP10; SP6b RegionMesh region culling → SP11';
+    const delivered = entries.split('; ').map((e) => `${e} (delivered in SP6b, so nothing moved)`).join('; ');
     const receivers = text.split('\n').find((l) => l.startsWith('**Cut lines.**'));
     expect(receivers, 'no `**Cut lines.**` paragraph in §10').toBeDefined();
-    // After SP6a's entries (the SP6a describe's pin), before SP7's.
-    expect(receivers).toContain(`SP6a cave finder → SP10 (delivered in SP6a, so nothing moved); ${entries}; SP7 extra lava reactions → SP12;`);
+    // After SP6a's entries (the SP6a describe's pin), before SP7's; none of the four was cut (§17, the Cut line's pin).
+    expect(receivers).toContain(`SP6a cave finder → SP10 (delivered in SP6a, so nothing moved); ${delivered}; SP7 extra lava reactions → SP12;`);
     expect(receivers!.split('SP6b ').length - 1, 'SP6b\'s entries in the receivers').toBe(4);
     // §15 item 4 quotes the four entries; §17 lists the four items with the same receivers, in order.
     const item4 = spec.split('\n').find((l) => l.startsWith('4. **§10 Default receivers**'));
     expect(item4, 'the SP6b spec §15 has no item 4').toBeDefined();
     expect(item4).toContain(`"${entries}"`);
+    expect(item4).toContain('worded at the exit by whether each was taken');
     const s17 = spec.slice(spec.indexOf('\n## 17. Cut line\n'), spec.indexOf('\n## 18. Exit criteria\n'));
     const cut = [...s17.matchAll(/^\d+\. \*\*[^*]+\*\*[^→\n]*→ (SP\d+[a-z]?)/gm)].map((m) => m[1]);
     expect(cut, '§17\'s cut-line items and their receivers').toEqual([...entries.matchAll(/→ (SP\d+)/g)].map((m) => m[1]));
+  });
+
+  test('§10\'s SP10 line: SP6b\'s cut-line items as delivered, as the SP6b spec §16 words it (SP6b spec §15 items 2 and 4, ruling P61)', () => {
+    const line = spEntry('SP10', 'SP11').split('\n').find((l) => l.startsWith('- Received from SP6b (its spec §16; amended by SP6b):')) ?? '';
+    expect(line, 'SP10 has no "Received from SP6b" line').not.toBe('');
+    expect(line).toContain('the map\'s cave tile layer (SP6a) gains the biome; SP6b\'s four cut-line items (the SP6b spec §17) were delivered in SP6b, so nothing moved here; `replyDuringFlushP95Ms`\'s flake');
+    expect(line, 'SP10\'s line still reads "if cut"').not.toMatch(/if cut/);
+    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-12-sp6b-cave-biomes-design.md`, 'utf8');
+    const s16 = spec.slice(spec.indexOf('## 16. Notes handed to later SPs'), spec.indexOf('## 17. Cut line'));
+    const bullet = s16.split('\n').find((l) => l.startsWith('- **SP10:** ')) ?? '';
+    expect(bullet, 'the SP6b spec §16 has no SP10 bullet').not.toBe('');
+    expect(bullet).toContain('the map\'s cave tile layer (SP6a) gains the biome; SP6b\'s four cut-line items (§17) were delivered in SP6b, so nothing moved here; `replyDuringFlushP95Ms`\'s flake (D32).');
+    expect(bullet).not.toMatch(/if cut/);
   });
 
   /**
