@@ -1593,6 +1593,43 @@ Each row of §19 with the commit on `sp6b/cave-biomes` that placed it, or the re
   - Item 3 gives `persist.metric.ts` a fast shard of its own.
   No item touches `unit (heavy)` (7:17-7:34 on three of four attempts) or `metrics-quick (rest)` (5:45-6:08) either. After all three items the wall would still be at least about 8:00, and §13's rule would end in the same STOP. This record holds every measured run's job table as §13 asks. The question is the user's (R23 rules out sample reductions).
 
+**After U14's levers (the user's ruling U14; §13 "The exit's levers as taken"): missed again, 6:14 and 6:24 cold, so the work stopped for the user a second time (STOP).** Commit edc2ace (the levers) was pushed on e4900b1. It changes no cache input (`src/**`, `test/harness/**`, the lockfile), so before each cold attempt this repository's own `regions-*` caches of hash `27dd0a00…` were deleted (7 before #1: the old layout's; 7 before #3: the new layout's `metrics-fast-{terrain-caves,rest}`, `metrics-quick-{caves,caves-presets,caves-biomes,render,region}`), and every `regions-*` key logged "Cache not found" on #1 and #3. 20 test jobs ran in parallel on every attempt; all four attempts green.
+
+- **edc2ace, run 44054778989 #1: cold run 1.** 09:21:08 → 09:27:22Z, wall **6:14**. Long pole `metrics-quick (terrain-large)` 5:55 (vitest 334.5 s); every other job ≤ 4:29.
+- **#2** (warm re-run): 09:29:12 → 09:34:28Z, wall 5:16. Long pole `metrics-fast (rest)` 4:57.
+- **#3: cold run 2.** 09:35:30 → 09:41:54Z, wall **6:24**. Long pole `metrics-quick (surface-large)` 6:06 (vitest 347.2 s); next `metrics-fast (terrain-caves)` 5:08; every other job ≤ 4:40.
+- **#4** (warm re-run): 09:43:11 → 09:49:29Z, wall 6:18. Long pole `metrics-quick (terrain-large)` 5:56.
+
+| job | 44054778989 #1 (cold 1) | #2 (warm) | #3 (cold 2) | #4 (warm) |
+|---|---|---|---|---|
+| wall | **6:14** | 5:16 | **6:24** | 6:18 |
+| runner minutes | 60.5 | 60.9 | 65.3 | 62.4 |
+| `changes` | 0:10 | 0:08 | 0:07 | 0:07 |
+| `check` | 3:06 | 3:52 | 3:08 | 2:15 |
+| `unit (heavy-a)` | 3:38 | 3:43 | 3:32 | 3:51 |
+| `unit (heavy-b)` | 4:05 | 4:34 | 3:04 | 3:36 |
+| `unit (liveness)` | 2:26 | 3:28 | 3:29 | 2:27 |
+| `unit (rest)` | 3:20 | 2:41 | 3:14 | 4:48 |
+| `metrics-fast (terrain-caves)` | 2:57 | 3:17 | 5:08 | 3:43 |
+| `metrics-fast (surface)` | 2:57 | 3:57 | 4:00 | 2:20 |
+| `metrics-fast (persist)` | 2:04 | 1:33 | 2:16 | 1:40 |
+| `metrics-fast (rest)` | 3:57 | 4:57 | 4:40 | 4:52 |
+| `metrics-quick (terrain-surface-default)` | 3:06 | 3:17 | 2:55 | 4:20 |
+| `metrics-quick (terrain-large)` | 5:55 | 4:28 | 4:22 | 5:56 |
+| `metrics-quick (surface-large)` | 4:29 | 3:30 | 6:06 | 4:06 |
+| `metrics-quick (render)` | 2:45 | 1:56 | 2:08 | 2:35 |
+| `metrics-quick (edit-clipboard)` | 1:26 | 1:54 | 1:51 | 1:39 |
+| `metrics-quick (persist)` | 2:24 | 2:57 | 2:47 | 2:59 |
+| `metrics-quick (caves)` | 2:18 | 1:55 | 2:38 | 1:36 |
+| `metrics-quick (caves-presets)` | 1:53 | 1:15 | 1:51 | 1:16 |
+| `metrics-quick (caves-biomes)` | 2:17 | 1:06 | 1:53 | 1:32 |
+| `metrics-quick (region)` | 2:14 | 2:30 | 3:10 | 2:50 |
+| `metrics-quick (rest)` | 2:58 | 3:55 | 3:00 | 3:50 |
+| `ci-ok` | 0:03 | 0:03 | 0:02 | 0:05 |
+
+- **What the levers did.** The poles U14 aimed at fell from 7:17-8:17 to at most 4:57: the four unit shards ran 2:26-4:48 (`unit (liveness)` vitest 132-193 s; on #3 `livenessCaveBiomes.test.ts` 115.8 s, `livenessBands` 85.0 s, `liveness` 76.0 s, `livenessSp6b` 62.2 s), `metrics-fast (rest)` 3:57-4:57, `metrics-quick (rest)` 2:58-3:55 and `(region)` 2:14-3:10. Runner minutes fell from 59.8-68.0 to 60.5-65.3.
+- **What is left.** The walls above 6:00 come from the two large-profile shards, which none of U14's levers touched (they are Stage 2 item 1's, the column slices with a merge job, not taken): `metrics-quick (terrain-large)` 4:22-5:56 and `(surface-large)` 3:30-6:06 on one code, their spread the runners' (§13's ±45 %), as at the exit's first runs (5:52-5:54 and 4:05-6:28). Next is `metrics-fast (terrain-caves)` 2:57-5:08: the fold runs terrain (292.3 s on #3) and caves (211.4 s) side by side, more than twice the 127 s terrain took in its own job at the exit. The question is the user's (R23 rules out sample reductions).
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
