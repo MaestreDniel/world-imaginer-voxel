@@ -4,47 +4,47 @@
   "seed": "42",
   "poses": {
     "lush": {
-      "x": -1777.5,
-      "y": -28.5,
-      "z": 1650.5,
-      "yaw": 45,
+      "x": -1678.5,
+      "y": 49.5,
+      "z": 1744.5,
+      "yaw": 270,
       "pitch": 0,
       "voxel": [
-        -1778,
-        -29,
-        1650
+        -1679,
+        49,
+        1744
       ],
-      "component": 262334,
+      "component": 98260,
       "profile": "default",
       "region": "seed '42' default biome region (-112, 80)"
     },
     "dripstone": {
-      "x": -1579.5,
-      "y": -48.5,
-      "z": 1293.5,
-      "yaw": 180,
+      "x": -1524.5,
+      "y": 0.5,
+      "z": 1583.5,
+      "yaw": 135,
       "pitch": 0,
       "voxel": [
-        -1580,
-        -49,
-        1293
+        -1525,
+        0,
+        1583
       ],
-      "component": 211971,
+      "component": 996352,
       "profile": "default",
       "region": "seed '42' default biome region (-112, 80)"
     },
     "abyss": {
-      "x": -1541.5,
-      "y": -51.5,
-      "z": 1350.5,
-      "yaw": 0,
+      "x": -1315.5,
+      "y": -33.5,
+      "z": 1519.5,
+      "yaw": 270,
       "pitch": 0,
       "voxel": [
-        -1542,
-        -52,
-        1350
+        -1316,
+        -34,
+        1519
       ],
-      "component": 211971,
+      "component": 996352,
       "profile": "default",
       "region": "seed '42' default biome region (-112, 80)"
     },

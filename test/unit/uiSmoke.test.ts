@@ -2048,7 +2048,7 @@ describe('UI smoke test: the caves step\'s SP6b checks: C, the HUD and the strip
     const dc = createDensityContext(ctxFor('42'));
     const [vx, vy, vz] = [Math.floor(LUSH_POSE.x), Math.floor(LUSH_POSE.y), Math.floor(LUSH_POSE.z)];
     expect([LUSH_POSE.x, LUSH_POSE.y, LUSH_POSE.z]).toEqual([vx + 0.5, vy + 0.5, vz + 0.5]);
-    expect([LUSH_POSE.yaw, LUSH_POSE.pitch]).toEqual([45, 0]);
+    expect([LUSH_POSE.yaw, LUSH_POSE.pitch]).toEqual([270, 0]);
     expect([solidAt(dc, vx, vy, vz), solidAt(dc, vx, vy - 1, vz)]).toEqual([false, true]);
     const [fx, , fz] = lookVector(LUSH_POSE.yaw, 0);
     const corners: Array<[number, number]> = [[vx, vz], [vx + 1, vz], [vx, vz + 1], [vx + 1, vz + 1]];
@@ -2059,7 +2059,7 @@ describe('UI smoke test: the caves step\'s SP6b checks: C, the HUD and the strip
     const behind = solids.findIndex((s) => s.every(([ox, oz]) => ox * fx + oz * fz < -1e-9));
     expect(LUSH_POSE.at).toEqual(corners[clear >= 0 ? clear : behind]);
     const q = parseWorldQuery(new URL(`/${cavePageQuery(LUSH_POSE)}`, 'http://127.0.0.1').searchParams);
-    expect([q.at, q.y, q.yaw, q.pitch, q.rd, q.renderer]).toEqual([{ x: LUSH_POSE.at[0], z: LUSH_POSE.at[1] }, LUSH_POSE.y, 45, 0, WORLD_RD, 'batch']);
+    expect([q.at, q.y, q.yaw, q.pitch, q.rd, q.renderer]).toEqual([{ x: LUSH_POSE.at[0], z: LUSH_POSE.at[1] }, LUSH_POSE.y, 270, 0, WORLD_RD, 'batch']);
   });
 
   test('C\'s texts are the page\'s: the strip\'s line in each mode (stripText), the biome legend (XRAY_BIOME_LABELS), the kinds\' legend\'s size, the notices', () => {
@@ -2093,9 +2093,9 @@ describe('UI smoke test: the caves step\'s SP6b checks: C, the HUD and the strip
     // Lush walls with a fainter plain one behind still read lush; the plain ones in the lead read plain.
     expect(xrayBiomeOf(blend([[LUSH, 0.8, 0.14], [LUSH, 0.6, 0.14], [0, 0.6, 0.07]]))).toBe(LUSH);
     expect(xrayBiomeOf(blend([[0, 0.8, 0.14], [0, 0.6, 0.14], [LUSH, 0.6, 0.05]]))).toBe(0);
-    // The pixel as the smoke read it at the lush pose: by cave biome (16, 31, 28), by cave type (29, 27, 21).
-    expect(xrayBiomeOf([16, 31, 28])).toBe(LUSH);
-    expect(xrayBiomeOf([29, 27, 21])).not.toBe(LUSH);
+    // The pixel as the smoke read it at the lush pose (ruling U13's): by cave biome (37, 100, 60), by cave type (97, 54, 28).
+    expect(xrayBiomeOf([37, 100, 60])).toBe(LUSH);
+    expect(xrayBiomeOf([97, 54, 28])).not.toBe(LUSH);
     // Below XRAY_BIOME_MIN over the clear colour, no biome.
     expect(xrayBiomeOf([XRAY_CLEAR_RGB[0] + 2, XRAY_CLEAR_RGB[1] + 6, XRAY_CLEAR_RGB[2] + 3])).toBeNull();
     expect(2 + 6 + 3).toBeLessThan(XRAY_BIOME_MIN);

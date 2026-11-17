@@ -1393,16 +1393,17 @@ export const CAVE_LINE = {
 
 /**
  * SP6b's review poses (spec §12.8, D14), in D14's order: a cave of each biome in seed 42's default biome region (the
- * first floor voxel of a cave of that biome, the yaw along the floor), a biome border (plain cave looking into the
- * abyss), the widest cavern at the bottom (the rock floor's relief) and `cave_heavy`'s spawn. The `caves-biomes` run's
+ * floor voxel inside its zone with the most of the biome's skin within 12 blocks, room for the eye and floor and ceiling
+ * in view, ruling U13; the yaw along the floor), a biome border (plain cave looking into the abyss), the widest cavern
+ * at the bottom (the rock floor's relief) and `cave_heavy`'s spawn. The `caves-biomes` run's
  * `.out/caveBiomes.examples.json` merged with the `caves` run's `bottomCavern`, committed as
  * `docs/superpowers/specs/assets/sp6b/caveBiomes.examples.json` (a unit test keeps every pose equal to it); each pose
  * opens on its own profile's world (`profileHash`). SP6a's `CAVE_POSES` stay as they are beside them.
  */
 export const SP6B_POSES = {
-  lush: { x: -1777.5, y: -28.5, z: 1650.5, yaw: 45, pitch: 0, profile: 'default' },
-  dripstone: { x: -1579.5, y: -48.5, z: 1293.5, yaw: 180, pitch: 0, profile: 'default' },
-  abyss: { x: -1541.5, y: -51.5, z: 1350.5, yaw: 0, pitch: 0, profile: 'default' },
+  lush: { x: -1678.5, y: 49.5, z: 1744.5, yaw: 270, pitch: 0, profile: 'default' },
+  dripstone: { x: -1524.5, y: 0.5, z: 1583.5, yaw: 135, pitch: 0, profile: 'default' },
+  abyss: { x: -1315.5, y: -33.5, z: 1519.5, yaw: 270, pitch: 0, profile: 'default' },
   biomeBorder: { x: -1541.5, y: -51.5, z: 1349.5, yaw: 180, pitch: 0, profile: 'default' },
   bottomCavern: { x: 185.5, y: -38.5, z: -21.5, yaw: 45, pitch: -15, profile: 'default' },
   caveHeavySpawn: { x: 0.5, y: 101.5, z: 0.5, yaw: 0, pitch: 0, profile: 'cave_heavy' },
@@ -1419,9 +1420,9 @@ export const SP6B_POSE_IDS = Object.keys(SP6B_POSES) as readonly Sp6bPoseId[];
  * clear colour (Tasks 24-25's shots); its clear corner does not.
  */
 export const SP6B_AT = {
-  lush: [-1777, 1650],
-  dripstone: [-1580, 1294],
-  abyss: [-1542, 1350],
+  lush: [-1679, 1744],
+  dripstone: [-1525, 1583],
+  abyss: [-1316, 1519],
   biomeBorder: [-1542, 1349],
   bottomCavern: [186, -22],
   caveHeavySpawn: [0, 0],
@@ -1429,10 +1430,11 @@ export const SP6B_AT = {
 
 /**
  * The poses no corner of whose eye's row `CAVE_AT`'s rule accepts (every corner has rock beside the eye, not behind it):
- * their voxel is the floor of a one-wide slot under an open cave, so their link raises the eye one block, into the
- * cave, and takes the corner in that row (`uiSmoke.test.ts` checks both with `solidAt`).
+ * the biome border's voxel is the floor of a one-wide slot under an open cave, so its link raises the eye one block,
+ * into the cave, and takes the corner in that row (`uiSmoke.test.ts` checks both with `solidAt`). The biome poses have
+ * the 3 × 3 voxels around them clear by their rule (ruling U13), so none is raised.
  */
-export const SP6B_RAISED: readonly Sp6bPoseId[] = ['abyss', 'biomeBorder'];
+export const SP6B_RAISED: readonly Sp6bPoseId[] = ['biomeBorder'];
 
 /** An SP6b review pose as its link opens it: its corner (`SP6B_AT`), the eye one block up if raised, its profile. */
 export function sp6bPose(id: Sp6bPoseId): CaveExamplePose & { readonly profile: 'default' | 'cave_heavy' } {
@@ -1458,8 +1460,8 @@ export function sp6bShotQuery(id: Sp6bPoseId, pitch: number = SP6B_POSES[id].pit
 }
 
 /**
- * The X-ray shot's pitch at the dripstone pose (degrees, up): at 0 the lower half of the view is the empty space under
- * the cave's walls; 20° up fills it with the walls around, plain, dripstone and the abyss's to the north-east.
+ * The X-ray shot's pitch at the dripstone pose (degrees, up): 20° up fills the view with the walls around the cave,
+ * dripstone's, plain's and the abyss's below at the left.
  */
 export const SP6B_XRAY_PITCH = 20;
 
@@ -1495,11 +1497,12 @@ export const SP6B_MAP = { view: { x: -1536, z: 1536, bpp: 4, layer: 'caveBiome' 
 
 /**
  * SP6b's lush review pose (SP6b spec §12.8, D14): the `caves-biomes` run's `lush` in `.out/caveBiomes.examples.json`
- * (Task 27: the first floor voxel of a lush cave in seed 42's default biome region, the yaw along the floor), mirrored as
- * a literal, with its link's corner `at` by `CAVE_AT`'s rule (`uiSmoke.test.ts` computes it with `solidAt`). Task 56
- * pins the literal against the committed copy.
+ * (Task 27's rule as ruling U13 re-picked it: the floor voxel of a lush cave in seed 42's default biome region with the
+ * most moss_block and clay within 12 blocks, the yaw along the floor), mirrored as a literal, with its link's corner
+ * `at` by `CAVE_AT`'s rule (`uiSmoke.test.ts` computes it with `solidAt`). Task 56 pins the literal against the
+ * committed copy.
  */
-export const LUSH_POSE = { x: -1777.5, y: -28.5, z: 1650.5, yaw: 45, pitch: 0, at: [-1777, 1650] } as const satisfies CaveExamplePose;
+export const LUSH_POSE = { x: -1678.5, y: 49.5, z: 1744.5, yaw: 270, pitch: 0, at: [-1679, 1744] } as const satisfies CaveExamplePose;
 
 /**
  * The cave biomes' colours by id, plain, lush, dripstone, abyss (`CAVE_BIOME_COLORS` of `src/core/constants.ts`, the
@@ -1517,11 +1520,12 @@ export const XRAY_KIND_LEGEND_SIZE = 10;
 export const XRAY_COLOR_NOTICES = ['X-ray by cave type', 'X-ray by cave biome'] as const;
 
 /**
- * The pixel the C check reads at the lush pose (CSS px at DPR 1, 1400 × 900): up and right of the centre, where the
- * lush cave's walls fill the view (when chosen, every third pixel of the 133 px square around it read lush by cave
- * biome and none of them by cave type), clear of the HUD, the strip, the pointer prompt and the notices.
+ * The pixel the C check reads at the lush pose (CSS px at DPR 1, 1400 × 900): down and right of the centre, on the lush
+ * cave's floor face in front of the eye (re-chosen for ruling U13's pose: every third pixel of the 133 px square around
+ * it read lush by cave biome and none of them by cave type, the colour constant within 40 px, rgb 37, 100, 60 by cave
+ * biome and 97, 54, 28 by cave type), clear of the HUD, the strip, the pointer prompt, the notices and the hotbar.
  */
-export const XRAY_BIOME_PIXEL = { x: 1200, y: 140 } as const;
+export const XRAY_BIOME_PIXEL = { x: 1200, y: 820 } as const;
 /** The least excess over the clear colour (summed over the channels) a pixel needs to name a cave biome. */
 export const XRAY_BIOME_MIN = 12;
 
@@ -1560,8 +1564,11 @@ export function rectsApart(
   return a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
 }
 
-/** "Nearest lush cave" (SP6b spec §9.3): its button, and the y the step presses it from, high over the lush pose's column. */
-export const FIND_LUSH = { id: 'map-caves-find-biome-1', text: 'Nearest lush cave', fromY: 150 } as const;
+/**
+ * "Nearest lush cave" (SP6b spec §9.3): its button, and the y the step presses it from, high over the lush pose's column
+ * (its ground estimate 143; the rock within 3 blocks of it reaches y 181).
+ */
+export const FIND_LUSH = { id: 'map-caves-find-biome-1', text: 'Nearest lush cave', fromY: 220 } as const;
 
 /** A biome Find's hit as its result line reads it (`findBiomeText`: "Lush cave at x, y, z · d blocks away"), else null. */
 export function parseLushHit(text: string): { readonly x: number; readonly y: number; readonly z: number; readonly d: number } | null {
@@ -1570,12 +1577,12 @@ export function parseLushHit(text: string): { readonly x: number; readonly y: nu
 }
 
 /**
- * The map check (SP6b spec §9.1): `?map` at seed 42 on the caveBiome layer, centred on (−1742, 1702) at 2 blocks/px, a
- * lush column 63 blocks from the lush pose: its y control typed to `above` (over the ground there: the greyed relief)
+ * The map check (SP6b spec §9.1): `?map` at seed 42 on the caveBiome layer, centred on (−1678, 1750) at 2 blocks/px, a
+ * lush column 6 blocks from the lush pose: its y control typed to `above` (over the ground there: the greyed relief)
  * and then to `y` (lush), read at the canvas centre. A unit test checks with the generator that the column and the
  * blocks within 16 of it are lush at `y` and above the ground at `above`.
  */
-export const CAVE_MAP = { view: { x: -1742, z: 1702, bpp: 2, layer: 'caveBiome' }, y: -28, above: 100 } as const;
+export const CAVE_MAP = { view: { x: -1678, z: 1750, bpp: 2, layer: 'caveBiome' }, y: 48, above: 160 } as const;
 /** The caveBiome layer's y number field (`src/ui/map/toolbar.ts`). */
 export const CAVE_Y_FIELD = 'input[aria-label="Cave biome y value"]';
 /** How far a channel of the map's lush pixel may read from `CAVE_BIOME_RGB`'s. */

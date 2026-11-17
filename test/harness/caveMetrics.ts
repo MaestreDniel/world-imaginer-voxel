@@ -100,7 +100,8 @@
  *   abyss rock, bedrock, other). A region's counts are sums, so a job's parts are those of its regions' summed counts.
  *   In the `caves-biomes` job (Task 27) each biome | plain pair needs `BORDER_PAIR_MIN` (2,000) border faces, else an
  *   insufficient sample (`borderSampleProblems`); the biome region's T window (`biomeTileMasks`) and its review poses
- *   (`caveBiomeExamples`: per biome a voxel standing on a floor face of a cave, and one at a biome | plain border).
+ *   (`caveBiomeExamples`: per biome a voxel standing on a floor face of a cave with the most of its skin within 12
+ *   blocks, ruling U13, and one at a biome | plain border).
  *   The border counts also hold the region's cave air per biome (`air`; Task 28: `cave_heavy`'s shares, §12.1).
  * - `B3.abyssRockStraight` (SP6b spec §12.2, ruling P30; Task 28, recorded; `abyssRockCounts`): the abyss rock's
  *   boundary on walls, rock against rock, which the air-to-air parts above do not see. An exposed wall voxel is a solid
@@ -2832,6 +2833,11 @@ export const PILLAR_VIEW = 20;
  * up to `LOOK_STEPS`; ties to the smaller yaw.
  */
 function longestRunYaw(g: CaveGrid, x: number, y: number, z: number): number {
+  return longestRun(g, x, y, z).yaw;
+}
+
+/** `longestRunYaw`'s yaw and its run's length in voxels. */
+function longestRun(g: CaveGrid, x: number, y: number, z: number): { yaw: number; run: number } {
   const { w, d, cells } = g;
   const plane = w * d;
   let best = -1;
@@ -2852,7 +2858,7 @@ function longestRunYaw(g: CaveGrid, x: number, y: number, z: number): number {
       yaw = 45 * k;
     }
   }
-  return yaw;
+  return { yaw, run: best };
 }
 
 /**
@@ -3198,14 +3204,79 @@ export const BIOME_BORDER_VIEW = 16;
 /** The grid-local axis steps of the yaws 0°, 90°, 180°, 270° (0° facing −z, 90° +x; `player/fly.ts`). */
 const AXIS_YAWS: ReadonlyArray<readonly [yaw: number, dx: number, dz: number]> = [[0, 0, -1], [90, 1, 0], [180, 0, 1], [270, -1, 0]];
 
+/** How far from a biome pose's voxel its skin is counted: the voxels within this Chebyshev distance (ruling U13). */
+export const BIOME_SKIN_REACH = 12;
+/** A biome pose's headroom: its voxel and the voxels above it up to this many in all are not solid (ruling U13). */
+export const BIOME_EYE_HEADROOM = 3;
+/** A biome pose's ceiling in view: a solid voxel at most this far above its voxel (ruling U13). */
+export const BIOME_CEILING_MAX = 12;
+/** A biome pose's view along the floor: its longest straight run of non-solid voxels at least this long (ruling U13). */
+export const BIOME_VIEW_MIN = 8;
+/** Per cave biome id (plain, lush, dripstone, abyss): the block classes of its skin (rule 4's, SP6b spec §3.4; ruling U13). */
+export const BIOME_SKIN: ReadonlyArray<readonly number[]> = [[], [CLS_MOSS, CLS_CLAY], [CLS_DRIPSTONE], [CLS_ABYSS]];
+
 /**
- * The biome poses of one region (SP6b spec §12.8, Task 27). A voxel stands on a floor face when it is cave air (tagged,
- * neither solid nor fluid, §12.1's), the voxel below is solid and the voxel above is not, and it lies in a component of
- * at least `cavern` voxels (C4's 10,000 by default: a cave, not a pocket). Scanning the grid's voxels in index order (y
- * from the lowest, then z, then x):
- * - `lush`, `dripstone`, `abyss`: the first standing voxel of that biome (the cell's bits 6-7); the eye at its centre,
- *   the yaw along the longest straight run of non-solid voxels from it (`caveExamples`' rule; ties to the smaller yaw),
- *   pitch 0, so the view runs along the floor with floor and ceiling in it;
+ * Per candidate (its world y in `ys` and its plane position in `ps`, in index order: y never decreases), the voxels of
+ * the classes in `skin` within `BIOME_SKIN_REACH` (Chebyshev) of it, the box clipped to the grid. Each layer's class
+ * mask becomes a summed-area table once, kept in a ring of 2·reach + 1 layers, so a box is 4 reads per layer.
+ */
+function skinWithinReach(g: CaveGrid, ys: readonly number[], ps: readonly number[], skin: readonly number[]): Int32Array {
+  const { w, d, cls } = g;
+  const plane = w * d;
+  const r = BIOME_SKIN_REACH;
+  const W = w + 1;
+  const isSkin = new Uint8Array(256);
+  for (const k of skin) isSkin[k] = 1;
+  const ring = Array.from({ length: 2 * r + 1 }, () => new Int32Array(W * (d + 1)));
+  const ringY = new Array<number>(2 * r + 1).fill(Number.NaN);
+  const table = (y: number): Int32Array => {
+    const slot = (y - GRID_Y0) % ring.length;
+    const t = ring[slot]!;
+    if (ringY[slot] === y) return t;
+    ringY[slot] = y;
+    const at = (y - GRID_Y0) * plane;
+    for (let z = 0; z < d; z++) {
+      let row = 0;
+      for (let x = 0; x < w; x++) {
+        row += isSkin[cls[at + z * w + x]!]!;
+        t[(z + 1) * W + x + 1] = t[z * W + x + 1]! + row;
+      }
+    }
+    return t;
+  };
+  const out = new Int32Array(ys.length);
+  for (let i = 0; i < ys.length; i++) {
+    const y = ys[i]!;
+    const p = ps[i]!;
+    const x = p % w;
+    const z = Math.floor(p / w);
+    const xa = Math.max(0, x - r);
+    const xb = Math.min(w, x + r + 1);
+    const za = Math.max(0, z - r);
+    const zb = Math.min(d, z + r + 1);
+    let n = 0;
+    for (let yy = Math.max(GRID_Y0, y - r); yy <= Math.min(GRID_Y0 + GRID_H - 1, y + r); yy++) {
+      const t = table(yy);
+      n += t[zb * W + xb]! - t[za * W + xb]! - t[zb * W + xa]! + t[za * W + xa]!;
+    }
+    out[i] = n;
+  }
+  return out;
+}
+
+/**
+ * The biome poses of one region (SP6b spec §12.8, Task 27; ruling U13). A voxel stands on a floor face when it is cave
+ * air (tagged, neither solid nor fluid, §12.1's), the voxel below is solid and the voxel above is not, and it lies in a
+ * component of at least `cavern` voxels (C4's 10,000 by default: a cave, not a pocket). Scanning the grid's voxels in
+ * index order (y from the lowest, then z, then x):
+ * - `lush`, `dripstone`, `abyss` (ruling U13: inside the zone, not at its edge): of the biome's standing voxels (the
+ *   cell's bits 6-7) with room for the eye and a clear view — the voxel and those above it up to `BIOME_EYE_HEADROOM`
+ *   not solid, a solid voxel at most `BIOME_CEILING_MAX` above it (the ceiling in view), the 3 × 3 voxels around it in
+ *   its row and the row above not solid (every corner of the voxel clear, so the link's eye opens in the cave, never on
+ *   a wall), and its longest straight run of non-solid voxels at least `BIOME_VIEW_MIN` long — the one with the most
+ *   voxels of the biome's skin (`BIOME_SKIN`: lush moss_block and clay, dripstone dripstone_block, the abyss its rock)
+ *   within `BIOME_SKIN_REACH`, ties to the first; the eye at its centre, the yaw along that run (`caveExamples`'
+ *   rule; ties to the smaller yaw), pitch 0, so the view runs along the floor with floor and ceiling in it;
  * - `biomeBorder`: the first standing voxel of plain cave air from which, along one of the axis yaws (0°, 90°, 180°,
  *   270°, in that order), the run of cave-air voxels reaches a biome's cave air within `BIOME_BORDER_VIEW` voxels; the
  *   eye at its centre, that yaw, pitch 0: the view crosses the border face between the last plain voxel and the biome's.
@@ -3216,8 +3287,8 @@ export function caveBiomeExamples(g: CaveGrid, c: CaveComponents, cavern = FLOOR
   const plane = w * d;
   const out: Record<BiomeExampleId, CavePose | null> = { lush: null, dripstone: null, abyss: null, biomeBorder: null };
   const names: readonly BiomeExampleId[] = ['biomeBorder', 'lush', 'dripstone', 'abyss'];
-  let missing = 4;
   const biomeOf = (cell: number): number => (cell & BIOME_MASK) >> BIOME_SHIFT;
+  const solid = (x: number, y: number, z: number): boolean => (cells[(y - GRID_Y0) * plane + z * w + x]! & SOLID_BIT) !== 0;
   const pose = (x: number, y: number, z: number, yaw: number, l: number): CavePose => ({
     x: x0 + x + 0.5, y: y + 0.5, z: z0 + z + 0.5, yaw, pitch: 0, voxel: [x0 + x, y, z0 + z], component: c.size.get(l)!,
   });
@@ -3235,12 +3306,28 @@ export function caveBiomeExamples(g: CaveGrid, c: CaveComponents, cavern = FLOOR
     }
     return -1;
   };
+  /** Room for the eye and a clear view at a standing voxel (see the header). */
+  const roomy = (x: number, y: number, z: number): boolean => {
+    if (x < 1 || x > w - 2 || z < 1 || z > d - 2 || y + BIOME_CEILING_MAX > GRID_Y0 + GRID_H - 1) return false;
+    for (let k = 1; k < BIOME_EYE_HEADROOM; k++) if (solid(x, y + k, z)) return false;
+    let ceiling = false;
+    for (let k = BIOME_EYE_HEADROOM; k <= BIOME_CEILING_MAX && !ceiling; k++) ceiling = solid(x, y + k, z);
+    if (!ceiling) return false;
+    for (let yy = y; yy <= y + 1; yy++) {
+      for (let zz = z - 1; zz <= z + 1; zz++) for (let xx = x - 1; xx <= x + 1; xx++) if (solid(xx, yy, zz)) return false;
+    }
+    return longestRun(g, x, y, z).run >= BIOME_VIEW_MIN;
+  };
+  // Per biome (1-3) its roomy standing voxels in index order: world y, plane position, component label.
+  const ys: number[][] = [[], [], [], []];
+  const ps: number[][] = [[], [], [], []];
+  const ls: number[][] = [[], [], [], []];
   const y0 = Math.max(c.yMin, GRID_Y0 + 1);
   const y1 = Math.min(c.yMax, GRID_Y0 + GRID_H - 2);
-  for (let y = y0; y <= y1 && missing > 0; y++) {
+  for (let y = y0; y <= y1; y++) {
     const at = (y - GRID_Y0) * plane;
     const lab = (y - c.yMin) * plane;
-    for (let p = 0; p < plane && missing > 0; p++) {
+    for (let p = 0; p < plane; p++) {
       const cell = cells[at + p]!;
       if (!caveAir(cell) || (cells[at + p - plane]! & SOLID_BIT) === 0 || (cells[at + p + plane]! & SOLID_BIT) !== 0) continue;
       const l = c.label[lab + p]!;
@@ -3253,12 +3340,21 @@ export function caveBiomeExamples(g: CaveGrid, c: CaveComponents, cavern = FLOOR
         const yaw = borderYaw(x, y, z);
         if (yaw < 0) continue;
         out.biomeBorder = pose(x, y, z, yaw, l);
-        missing--;
-      } else if (out[names[b]!] === null) {
-        out[names[b]!] = pose(x, y, z, longestRunYaw(g, x, y, z), l);
-        missing--;
+      } else if (roomy(x, y, z)) {
+        ys[b]!.push(y);
+        ps[b]!.push(p);
+        ls[b]!.push(l);
       }
     }
+  }
+  for (let b = 1; b <= 3; b++) {
+    if (ys[b]!.length === 0) continue;
+    const n = skinWithinReach(g, ys[b]!, ps[b]!, BIOME_SKIN[b]!);
+    let k = 0;
+    for (let i = 1; i < n.length; i++) if (n[i]! > n[k]!) k = i;
+    const x = ps[b]![k]! % w;
+    const z = Math.floor(ps[b]![k]! / w);
+    out[names[b]!] = pose(x, ys[b]![k]!, z, longestRunYaw(g, x, ys[b]![k]!, z), ls[b]![k]!);
   }
   return out;
 }

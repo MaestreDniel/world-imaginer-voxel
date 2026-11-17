@@ -12,7 +12,7 @@ import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, BEDROCK, DEEPSLATE, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { CarverPath } from '../../src/gen/caves/carvers';
 import {
-  BIOME_BORDER_VIEW, BIOME_EXAMPLE_IDS, biomeTileMasks, BORDER_PAIR_MIN, BORDER_SAMPLE_PAIRS, borderSampleProblems, caveBiomeExamples,
+  BIOME_BORDER_VIEW, BIOME_CEILING_MAX, BIOME_EXAMPLE_IDS, BIOME_EYE_HEADROOM, BIOME_SKIN, BIOME_SKIN_REACH, BIOME_VIEW_MIN, biomeTileMasks, BORDER_PAIR_MIN, BORDER_SAMPLE_PAIRS, borderSampleProblems, caveBiomeExamples,
   emptyBorderCounts, type CavePose,
   abyssRockCounts, abyssRockStraight, emptyAbyssRockCounts, poolAbyssRockCounts, STRAIGHT_RUN,
   BIOME_MASK, BIOME_SHIFT, BORDER_PAIR_NAMES, caveBorderCounts, caveBorderParts, cellAt, CLS_CLAY, CLS_DRIPSTONE, CLS_MOSS, FLUID_BIT,
@@ -1462,14 +1462,18 @@ describe("the caves-biomes job: the biome region, the pair minimum, the biome po
   });
 
   describe('caveBiomeExamples on a hand-built grid', () => {
-    // A rock grid at (16, −32) with one room x 2 … 29, z 2 … 29 (grid-local), y −40 … −35: plain at x 2 … 9, lush at
-    // 10 … 15, dripstone at 16 … 21, abyss at 22 … 29; and a tall pocket of lush (too small for a cave) below it.
+    // A rock grid at (16, −32) with one room x 2 … 29, z 2 … 29 (grid-local), y −40 … −35 under a rock ceiling at −34:
+    // plain at x 2 … 9, lush at 10 … 15, dripstone at 16 … 21, abyss at 22 … 29; and a tall pocket of lush (too small for
+    // a cave) below it. The skins (ruling U13): moss_block in the floor's rock (y −41) under x 10 … 15, z 20 … 29, and
+    // dripstone_block in the ceiling (y −34) over x 16 … 21, z 2 … 5; no abyss rock.
     const X0 = 16;
     const Z0 = -32;
     const g = rock(32, 32, 0, X0, Z0);
     const biomeOfX = (x: number): number => (x < 10 ? B.plain : x < 16 ? B.lush : x < 22 ? B.dripstone : B.abyss);
     for (let y = -40; y <= -35; y++) for (let z = 2; z <= 29; z++) for (let x = 2; x <= 29; x++) setCell(g, X0 + x, y, Z0 + z, tagOf(biomeOfX(x)), false);
     carve(g, tagOf(B.lush), X0 + 5, X0 + 6, -50, -46, Z0 + 5, Z0 + 6);
+    for (let z = 20; z <= 29; z++) for (let x = 10; x <= 15; x++) setCell(g, X0 + x, -41, Z0 + z, 0, true, false, CLS_MOSS);
+    for (let z = 2; z <= 5; z++) for (let x = 16; x <= 21; x++) setCell(g, X0 + x, -34, Z0 + z, 0, true, false, CLS_DRIPSTONE);
     const c = caveComponents(g, preCaveTops(g));
     const poses = caveBiomeExamples(g, c, 1000);
     const cellOfVoxel = (v: readonly [number, number, number]): number => g.cells[cellAt(g, v[0], v[1], v[2])]!;
@@ -1481,24 +1485,54 @@ describe("the caves-biomes job: the biome region, the pair minimum, the biome po
         && (cellOfVoxel([x, y - 1, z]) & SOLID_BIT) !== 0 && (cellOfVoxel([x, y + 1, z]) & SOLID_BIT) === 0;
     };
 
-    test('each biome pose stands in cave air of its biome on a floor face, the first in index order, eye at its centre, yaw along the floor', () => {
+    test('each biome pose stands in cave air of its biome on a floor face with room and a clear view, the most skin within reach (ties to the first in index order), eye at its centre, yaw along the floor', () => {
       expect(Object.keys(poses)).toEqual([...BIOME_EXAMPLE_IDS]);
-      for (const [id, biome, x] of [['lush', B.lush, 10], ['dripstone', B.dripstone, 16], ['abyss', B.abyss, 22]] as const) {
+      expect([BIOME_SKIN_REACH, BIOME_EYE_HEADROOM, BIOME_CEILING_MAX, BIOME_VIEW_MIN]).toEqual([12, 3, 12, 8]);
+      expect(BIOME_SKIN).toEqual([[], [CLS_MOSS, CLS_CLAY], [CLS_DRIPSTONE], [CLS_ABYSS]]);
+      // lush: every voxel whose box (±12) holds all 60 moss voxels ties; the first of them in index order (the lowest y,
+      // then z, then x) is (10, −40, 17), not the zone's first floor voxel (10, −40, 2). dripstone: the box holds the 24
+      // ceiling voxels from z ≤ 14; z = 2 has rock beside the voxel (the room's wall), so the first is (16, −40, 3). The
+      // abyss has no skin: every roomy voxel ties at 0, and the first, by the wall rule too, is (22, −40, 3).
+      for (const [id, biome, x, z] of [['lush', B.lush, 10, 17], ['dripstone', B.dripstone, 16, 3], ['abyss', B.abyss, 22, 3]] as const) {
         const p = poses[id]!;
         expect(p, id).not.toBeNull();
         expect(standsOnFloor(p), id).toBe(true);
         expect(biomeAt(p.voxel), id).toBe(biome);
-        // The first standing voxel of the biome in index order (the lowest y, then z, then x): the room's floor at
-        // (x, −40, 2), not the pocket below (too small).
-        expect(p.voxel, id).toEqual([X0 + x, -40, Z0 + 2]);
-        expect([p.x, p.y, p.z], id).toEqual([X0 + x + 0.5, -39.5, Z0 + 2.5]);
+        expect(p.voxel, id).toEqual([X0 + x, -40, Z0 + z]);
+        expect([p.x, p.y, p.z], id).toEqual([X0 + x + 0.5, -39.5, Z0 + z + 0.5]);
         expect(p.pitch, id).toBe(0);
         expect(p.component, id).toBe(6 * 28 * 28);
       }
-      // From the room's z = 2 edge the longest straight run along the floor is along +z (180°: 27 voxels, against 19 and
-      // 7 along +x).
-      expect(poses.lush!.yaw).toBe(180);
-      expect(poses.abyss!.yaw).toBe(180);
+      // The longest straight run along the floor: from (10, 17) along +x (90°: 19 voxels, against 15 along −z); from
+      // (16, 3) and (22, 3) along +z (180°: 26 voxels).
+      expect([poses.lush!.yaw, poses.dripstone!.yaw, poses.abyss!.yaw]).toEqual([90, 180, 180]);
+    });
+
+    test('a biome pose needs headroom, a ceiling within BIOME_CEILING_MAX and a view of BIOME_VIEW_MIN', () => {
+      // A stalactite two above lush's pick takes its headroom: the next voxel of the tie in index order, (11, −40, 17).
+      const low = rock(32, 32, 0, X0, Z0);
+      for (let y = -40; y <= -35; y++) for (let z = 2; z <= 29; z++) for (let x = 2; x <= 29; x++) setCell(low, X0 + x, y, Z0 + z, tagOf(biomeOfX(x)), false);
+      for (let z = 20; z <= 29; z++) for (let x = 10; x <= 15; x++) setCell(low, X0 + x, -41, Z0 + z, 0, true, false, CLS_MOSS);
+      setCell(low, X0 + 10, -38, Z0 + 17, 0, true);
+      expect(caveBiomeExamples(low, caveComponents(low, preCaveTops(low)), 1000).lush!.voxel).toEqual([X0 + 11, -40, Z0 + 17]);
+      // A room 14 voxels high (y −40 … −27): no ceiling within 12 of the floor, so no biome pose; the border pose stays.
+      const tall = rock(32, 32, 0, X0, Z0);
+      for (let y = -40; y <= -27; y++) for (let z = 2; z <= 29; z++) for (let x = 2; x <= 29; x++) setCell(tall, X0 + x, y, Z0 + z, tagOf(biomeOfX(x)), false);
+      const tp = caveBiomeExamples(tall, caveComponents(tall, preCaveTops(tall)), 1000);
+      expect([tp.lush, tp.dripstone, tp.abyss]).toEqual([null, null, null]);
+      expect(tp.biomeBorder).not.toBeNull();
+      // A lush gallery 3 high in a deeper grid (z 0 … 95), x 10 … x1, z za … zb: 5 wide and 80 long, its roomy voxels
+      // (x 11 … 13, z ≥ 1) see 78 voxels along +z, the first (11, −40, 1); 2 wide, none has the 3 × 3 clear; a 7 × 7
+      // room (x, z 10 … 16) has the 3 × 3 at x, z 11 … 15, but no straight run of 8 from any of them.
+      const gal = (x1: number, za: number, zb: number) => {
+        const r = rock(32, 96, 0, X0, Z0);
+        for (let y = -40; y <= -38; y++) for (let z = za; z <= zb; z++) for (let x = 10; x <= x1; x++) setCell(r, X0 + x, y, Z0 + z, tagOf(B.lush), false);
+        return caveBiomeExamples(r, caveComponents(r, preCaveTops(r)), 100).lush;
+      };
+      expect(gal(14, 0, 79)!.voxel).toEqual([X0 + 11, -40, Z0 + 1]);
+      expect(gal(14, 0, 79)!.yaw).toBe(180);
+      expect(gal(11, 0, 79)).toBeNull();
+      expect(gal(16, 10, 16)).toBeNull();
     });
 
     test('biomeBorder stands in plain cave air on a floor face and its view crosses a border face into a biome', () => {
