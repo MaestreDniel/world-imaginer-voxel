@@ -1,10 +1,29 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { WorkerFailed } from '../../src/engine/workerPool';
+import { allGoldenKeys } from '../../src/metrics/sp2aGoldens';
 import type { KV } from '../../src/persist/kv';
 import { KV_CONTRACT } from '../../src/persist/kvContract';
 import { createMemoryKV } from '../../src/persist/memory';
-import { KV_SELFTEST_DB, mountKvSection, runKvSelftest, runSelftest, type SelftestRow } from '../../src/ui/selftest/selftestPage';
+import {
+  KV_SELFTEST_DB, mountKvSection, mountSelftestPage, runKvSelftest, runSelftest, selftestCopyPayload, type SelftestRow,
+} from '../../src/ui/selftest/selftestPage';
 import { installDom, type FakeElement } from './fixtures/domShim';
+
+/** The page's pool and IndexedDB, driven by `mocks` (`mountSelftestPage` uses the module defaults). */
+const mocks = vi.hoisted(() => ({
+  selftest: (_key: string): Promise<{ actual: string | null; error: string | null }> => new Promise(() => {}),
+  openIdbKV: (_name: string): Promise<unknown> => new Promise(() => {}),
+  deleteIdb: (_name: string): Promise<void> => Promise.resolve(),
+}));
+vi.mock('../../src/engine/workerPool', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/workerPool')>(),
+  createBrowserPool: () => ({ selftest: (key: string) => mocks.selftest(key), terminate: () => {} }),
+}));
+vi.mock('../../src/persist/idb', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/persist/idb')>(),
+  openIdbKV: (name: string) => mocks.openIdbKV(name),
+  deleteIdb: (name: string) => mocks.deleteIdb(name),
+}));
 
 type Answer = { actual: string | null; error: string | null };
 
@@ -82,7 +101,8 @@ describe('the selftest\'s IndexedDB section (SP5b spec §6.4)', () => {
     const { document } = installDom();
     const host = document.createElement('div');
     const open = recordingOpen([], new Set([4]));
-    await mountKvSection(host as unknown as HTMLElement, () => open(), () => Promise.resolve());
+    const outcome = await mountKvSection(host as unknown as HTMLElement, () => open(), () => Promise.resolve());
+    expect(outcome).toEqual({ results: rows });
     expect(host.querySelector('#selftest-kv')!.textContent).toBe(`IndexedDB contract: ${KV_CONTRACT.length - 1}/${KV_CONTRACT.length} passed`);
     expect(host.querySelectorAll('li').map((li: FakeElement) => li.textContent)).toEqual([`✗ ${KV_CONTRACT[4]!.name}  error: ${rows[4]!.error}`]);
   });
@@ -108,5 +128,86 @@ describe('the selftest\'s IndexedDB section (SP5b spec §6.4)', () => {
     expect(removed).toEqual(['wi10-selftest', 'wi10-selftest']);
     expect(host.querySelector('#selftest-kv')!.textContent).toBe(`IndexedDB contract: ${KV_CONTRACT.length}/${KV_CONTRACT.length} passed`);
     expect(host.querySelectorAll('li')).toEqual([]);
+  });
+
+  test('a section that could not run reports its error on the line and in its outcome', async () => {
+    const { document } = installDom();
+    const host = document.createElement('div');
+    const blocked = Object.assign(new Error('blocked by another tab'), { name: 'BlockedError' });
+    const outcome = await mountKvSection(host as unknown as HTMLElement, () => Promise.resolve(createMemoryKV()), () => Promise.reject(blocked));
+    expect(outcome).toEqual({ error: 'BlockedError: blocked by another tab' });
+    expect(host.querySelector('#selftest-kv')!.textContent).toBe('IndexedDB contract: could not run: BlockedError: blocked by another tab');
+  });
+});
+
+describe('copy as JSON carries the goldens and the IndexedDB contract', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  const rows: SelftestRow[] = [
+    { key: 'a', expected: 'h-a', actual: 'h-a', error: null, ok: true },
+    { key: 'b', expected: 'h-b', actual: null, error: 'job failed: boom', ok: false },
+  ];
+  const goldensPart = { userAgent: 'UA/1', results: { a: { expected: 'h-a', actual: 'h-a' }, b: { expected: 'h-b', actual: null, error: 'job failed: boom' } } };
+
+  test('every case passed', () => {
+    const kv = { results: KV_CONTRACT.map((c) => ({ name: c.name, ok: true, error: null })) };
+    const payload = selftestCopyPayload('UA/1', rows, kv);
+    expect(payload).toEqual({
+      ...goldensPart,
+      indexedDb: { summary: `${KV_CONTRACT.length}/${KV_CONTRACT.length} passed`, passed: KV_CONTRACT.length, total: KV_CONTRACT.length, failures: [] },
+    });
+    // The JSON keeps its shape: userAgent, results, then the new indexedDb.
+    expect(Object.keys(payload)).toEqual(['userAgent', 'results', 'indexedDb']);
+  });
+
+  test('failed cases are listed with their names and errors', () => {
+    const kv = { results: [{ name: 'one', ok: true, error: null }, { name: 'two', ok: false, error: 'got x' }, { name: 'three', ok: false, error: 'got y' }] };
+    expect(selftestCopyPayload('UA/1', rows, kv)).toEqual({
+      ...goldensPart,
+      indexedDb: { summary: '1/3 passed', passed: 1, total: 3, failures: [{ name: 'two', error: 'got x' }, { name: 'three', error: 'got y' }] },
+    });
+  });
+
+  test('a contract that could not run carries its error', () => {
+    expect(selftestCopyPayload('UA/1', rows, { error: 'BlockedError: blocked' })).toEqual({ ...goldensPart, indexedDb: { error: 'BlockedError: blocked' } });
+  });
+
+  test('the button stays disabled until the goldens and the IndexedDB section are done, then one click copies both', async () => {
+    const { document } = installDom();
+    const written: string[] = [];
+    vi.stubGlobal('navigator', { userAgent: 'UA/test', clipboard: { writeText: (t: string) => { written.push(t); return Promise.resolve(); } } });
+    const keys = allGoldenKeys();
+    mocks.selftest = (key) => Promise.resolve({ actual: `got-${key}`, error: null });
+    mocks.openIdbKV = () => Promise.resolve(createMemoryKV());
+    // The first delete (before the contract) waits for the test's go.
+    let go!: () => void;
+    const gate = new Promise<void>((resolve) => { go = resolve; });
+    let deletes = 0;
+    mocks.deleteIdb = (name) => {
+      expect(name).toBe(KV_SELFTEST_DB);
+      return deletes++ === 0 ? gate : Promise.resolve();
+    };
+    const root = document.createElement('div');
+    mountSelftestPage(root as unknown as HTMLElement);
+    const page = root.children[0]!;
+    const summary = page.children[1]!;
+    const copy = page.querySelector('button')!;
+    expect(copy.disabled).toBe(true);
+    await vi.waitFor(() => expect(summary.textContent).toMatch(/^✗ /));
+    await vi.waitFor(() => expect(page.querySelector('#selftest-kv')?.textContent).toBe('IndexedDB contract: running…'));
+    // The goldens are done, the IndexedDB section is not: the button is still disabled.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(copy.disabled).toBe(true);
+    go();
+    await vi.waitFor(() => expect(copy.disabled).toBe(false));
+    expect(page.querySelector('#selftest-kv')!.textContent).toBe(`IndexedDB contract: ${KV_CONTRACT.length}/${KV_CONTRACT.length} passed`);
+    copy.click();
+    await vi.waitFor(() => expect(copy.textContent).toBe('copied'));
+    expect(written).toHaveLength(1);
+    const json = JSON.parse(written[0]!) as { userAgent: string; results: Record<string, unknown>; indexedDb: unknown };
+    expect(json.userAgent).toBe('UA/test');
+    expect(Object.keys(json.results)).toEqual(keys);
+    expect(json.results[keys[0]!]).toMatchObject({ actual: `got-${keys[0]}` });
+    expect(json.indexedDb).toEqual({ summary: `${KV_CONTRACT.length}/${KV_CONTRACT.length} passed`, passed: KV_CONTRACT.length, total: KV_CONTRACT.length, failures: [] });
   });
 });
