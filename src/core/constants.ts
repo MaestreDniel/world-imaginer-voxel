@@ -227,3 +227,27 @@ export const SLICE_RULE_NA = 255;
  * cave byte's low 4 bits, so it is never a kind.
  */
 export const CAVE_SLICE_SOLID = 16;
+
+/**
+ * The fluid rules' numbers (SP7a spec §4.1, D22; `world/blocks/fluidRules.ts`): each front's horizontal distance cap
+ * (water 12, lava 14), the nearest-drop search reach (water 4, lava 2; cap + search = 16, the 3 × 3's margin around K),
+ * the level step per block sideways (water 1, lava 2) and the last level reached (water 7; lava 6, so lava's levels are
+ * 0, 2, 4, 6 and it reaches 3 blocks, Minecraft's overworld lava, **MC (memory)**). Here rather than in `gen/fluids/`,
+ * which exports functions and types only (gen exports no numeric data): gen, the harness and SP7b's sim read them.
+ */
+export const FLUID_CAP_WATER = 12;
+export const FLUID_CAP_LAVA = 14;
+export const FLUID_SEARCH_WATER = 4;
+export const FLUID_SEARCH_LAVA = 2;
+export const FLUID_STEP_WATER = 1;
+export const FLUID_STEP_LAVA = 2;
+export const FLUID_LAST_LEVEL_WATER = 7;
+export const FLUID_LAST_LEVEL_LAVA = 6;
+/**
+ * The codes a top corner's voxel takes in `cornerHeight` besides its fluid height in [0, 1] (SP7a spec §6.1): a passable
+ * fluid-free voxel (height 0, weight 1), a solid voxel (not counted) and a voxel holding the same fluid with the same
+ * fluid above (the corner is 1).
+ */
+export const CORNER_DRY = -1;
+export const CORNER_SOLID = -2;
+export const CORNER_FULL = 2;

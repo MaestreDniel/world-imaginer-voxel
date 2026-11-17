@@ -101,8 +101,9 @@ world-imaginer-voxel/          (repository root)
     world/                      L1 (core only)
       blocks/kinds.ts registry.ts defs.ts index.ts fluid.ts light.ts   (SP3a) u16 block-state ids (<= 4096 used): property kinds
                                 and codes, buildRegistry (ids, SoA per-state tables, keys, rotations, mirrors), the definitions, REGISTRY
-                                and its table aliases, fluid and light bytes; states.ts, shapes.ts (shape boxes), tags.ts (SP5a) and fluidRules.ts
-                                (rules shared by settle + sim) arrive with the SPs that need them (amended by SP3a);
+                                and its table aliases, fluid and light bytes; states.ts, shapes.ts (shape boxes), tags.ts (SP5a) and
+                                fluidRules.ts (SP7a; also the fluid surface and corner heights), the rules shared by settle + sim, arrive with
+                                the SPs that need them (amended by SP3a);
                                 provisionalBoxes.ts (SP5a, provisional until SP8a): the torch, wall-torch and ladder boxes
                                 that mesh/boxes.ts and the raycast share, until SP8a's SHAPE_BOXES
       store/pool.ts columnTable.ts section.ts aux.ts epochs.ts store.ts api.ts   (SP3a) SAB store: slab pools over growable buffers

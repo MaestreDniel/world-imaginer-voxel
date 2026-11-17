@@ -205,6 +205,9 @@
  * entry take the new ids in place (`spEntry('SP7a', 'SP7b')` for SP6a's and SP6b's hand-overs, `spEntry('SP7b', 'SP8a')`
  * for SP5c's, `spEntry('SP6b', 'SP7a')` for SP6b's entry); SP7's header pin and the critical path's moved here. Text SP7a
  * rewords later (§3.7's caching line, §3.8's carvers, §3.9's abyss, rule 4) keeps its pins until the task rewording it.
+ * §1 names each SP7a module in its entry, which exists (`SP7A_MODULES`, item 19): the shared fluid rules (Task 2) add
+ * its first row, `world/blocks/fluidRules.ts` "(SP7a; also the fluid surface and corner heights)" on the line that
+ * names it (rulings P6: the bare file name was already in §1).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -3351,6 +3354,21 @@ describe('master spec amendments (SP6b §15)', () => {
 });
 
 describe('master spec amendments (SP7a §16)', () => {
+  /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 17, 19 and 22 append theirs. */
+  const SP7A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
+    [/^\s+blocks\/kinds\.ts /, 'fluidRules.ts (SP7a; also the fluid surface', 'src/world/blocks/fluidRules.ts'],
+  ];
+
+  test('§1 names each SP7a module in its entry, which exists (SP7a spec §16 item 19)', () => {
+    expect(SP7A_MODULES.length, 'SP7A_MODULES has no rows').toBeGreaterThan(0);
+    for (const [head, token, file] of SP7A_MODULES) {
+      const entry = layoutEntry(head);
+      expect(entry, `§1 has no entry matching ${head}`).not.toBe('');
+      expect(entry, `§1's ${head} entry does not name ${token}`).toContain(token);
+      expect(existsSync(`${ROOT_DIR}${file}`), `${file} does not exist`).toBe(true);
+    }
+  });
+
   test('§10\'s SP7 split into SP7a and SP7b (SP7a spec §16 item 1)', () => {
     // The split paragraph, after SP6's (SP6a §13 item 1's pattern: the §10 split paragraphs before SP4a).
     const split = 'SP7 was split on 2026-11-17 into SP7a and SP7b (the user: "Estoy de acuerdo con la forma 1"): SP7a (water in the generated world) and SP7b (fluids that move when you edit), proposed in brainstorming because SP7 grew past L, so SP7a delivers the waterfalls in the first merge and the runtime sim, the riskiest part, comes on its own; each is testable on its own (the SP7a spec\'s "What was agreed", item 5).';
