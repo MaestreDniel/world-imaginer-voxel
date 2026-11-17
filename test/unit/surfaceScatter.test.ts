@@ -2,8 +2,12 @@
  * The surface metric's per-column analysis moved into its region worker (SP3c spec §5.1-§5.2; Task 14): each worker
  * accumulates a `SurfaceAcc` of plain counts and the main thread only merges them. The merge must be an exact sum of
  * every field (so the threaded pass equals one pass over every column in any order), the record must survive
- * `postMessage`'s structured clone, and the worker's handler must give the analyser's own record.
+ * `postMessage`'s structured clone, and the worker's handler must give the analyser's own record. Two column slices'
+ * passes, each through its record, merge to the whole pass (SP6b spec §13 Stage 2 item 1; the user's ruling U15).
  */
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { fillColumnT } from '../../src/metrics/region';
 import { seedFromInput } from '../../src/core/seed';
@@ -12,8 +16,11 @@ import type { ColumnView } from '../../src/world/store/api';
 import { createStore } from '../../src/world/store/store';
 import { paramsWith } from '../harness/gen';
 import { createGenContext } from '../../src/gen/context';
+import { readSlices, sliceOf, writeSlice } from '../harness/columnSlices';
+import { analyseColumnsThreaded } from '../harness/surfaceAnalysis';
 import { createSurfaceColumnAnalyser, mergeSurfaceAcc, newSurfaceAcc, type SurfaceAcc } from '../harness/surfaceScatter';
 import { createTaskHandler, type SurfaceScatterReply } from '../harness/surfaceScatterWorker';
+import { scatterColumns } from '../harness/terrainScatter';
 
 type Field = number | Float64Array;
 const fields = (a: SurfaceAcc): Record<string, Field> => a as unknown as Record<string, Field>;
@@ -206,4 +213,27 @@ describe('the analyser and the worker handler on real columns', () => {
     expect(again.type === 'acc' ? again.acc : null).toEqual(newSurfaceAcc());
     expect(send({ type: 'nope' })).toMatchObject({ type: 'error', message: expect.stringMatching(/unknown message 'nope'/) });
   }, 30_000);
+
+  test('two column slices (SP6b spec §13 Stage 2 item 1; ruling U15): each slice\'s threaded pass through its record, merged, equals the whole threaded pass', async () => {
+    // 32 default columns of seed '42', drawn as the metric draws them (`scatterColumns`).
+    const cols = scatterColumns(['default'], [SEED], { default: 32, large_biomes: 0 }, { default: 1024, large_biomes: 4096 }).default![0]!;
+    const whole = newSurfaceAcc();
+    await analyseColumnsThreaded('surfaceScatterTest', SEED, params, cols, whole);
+    expect(whole.columns).toBe(32);
+    const dir = mkdtempSync(join(tmpdir(), 'surfaceSlices-'));
+    try {
+      const meta = { tier: 'test', columns: cols.length };
+      for (const k of [0, 1]) {
+        const part = newSurfaceAcc();
+        await analyseColumnsThreaded('surfaceScatterTest', SEED, params, sliceOf(cols, { k, n: 2 }), part);
+        expect(part.columns).toBe(16);
+        writeSlice('surfaceScatterTest', { k, n: 2 }, meta, part, dir);
+      }
+      const merged = (readSlices('surfaceScatterTest', 2, meta, dir) as SurfaceAcc[]).reduce((acc, p) => mergeSurfaceAcc(acc, p), newSurfaceAcc());
+      expect(merged.ymod).toBeInstanceOf(Float64Array);
+      expect(merged).toEqual(whole);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
 });

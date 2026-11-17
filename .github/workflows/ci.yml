@@ -13,8 +13,8 @@ concurrency:
 
 # Jobs: `changes` decides the docs-only fast path, the unit shards and the metrics-fast and metrics-quick shards;
 # `check` (build, arch, integration), the `unit` shards, the `metrics-fast` shards and the `metrics-quick` shards run in
-# parallel after it; `ci-ok` is the one status to require. Every vitest job writes a JSON report and lists its slowest
-# files in the job summary.
+# parallel after it; `metrics-merge` sums metrics-quick's column slices after it; `ci-ok` is the one status to require.
+# Every vitest job writes a JSON report and lists its slowest files in the job summary.
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -139,9 +139,10 @@ jobs:
           SHARD: ${{ matrix.shard }}
 
   # metrics-quick split by .github/scripts/metricShards.mjs: named heavy files in their own shards (a shard is named by
-  # (file, env): T1-T5 and S1-S3 by profile, the caves by group, SP6b spec §13) plus a catch-all shard that excludes
-  # them, so a new metric file always runs; its `check` fails the job unless the shards cover the project's files
-  # exactly once (a file in several shards only when their envs partition it).
+  # (file, env): T1-T5 and S1-S3 by profile, the caves by group, SP6b spec §13; the large profile's terrain and surface
+  # in column slices, SP6b Task 58) plus a catch-all shard that excludes them, so a new metric file always runs; its
+  # `check` fails the job unless the shards cover the project's files exactly once (a file in several shards only when
+  # their envs partition it) and the slices are sound.
   metrics-quick:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
@@ -169,26 +170,63 @@ jobs:
       - run: node .github/scripts/metricShards.mjs run "$SHARD" "$RUNNER_TEMP/vitest.json"
         env:
           SHARD: ${{ matrix.shard }}
+      # A column slice (a shard named `…-slice-k`, which `check` holds to `METRICS_SLICE=k/n`; SP6b spec §13 Stage 2
+      # item 1, the user's ruling U15) hands its record (test/harness/columnSlices.ts) to `metrics-merge`; `overwrite`
+      # replaces an earlier attempt's on a re-run.
+      - if: ${{ contains(matrix.shard, '-slice-') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: slice-${{ matrix.shard }}
+          path: test/.cache/slices/
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
       - if: ${{ !cancelled() }}
         run: node .github/scripts/slowest.mjs --tests --title "Slowest test files (metrics-quick $SHARD)" "$RUNNER_TEMP/vitest.json"
         env:
           SHARD: ${{ matrix.shard }}
 
+  # The column slices' merge (SP6b spec §13 Stage 2 item 1; the user's ruling U15): every slice's record from the
+  # metrics-quick shards, summed by the sliced metric files (`metricShards.mjs merge`, METRICS_SLICE=merge/n), which run
+  # every test and gate of the whole run on the sums and generate nothing. After metrics-quick, so not counted among the
+  # parallel test jobs; no region cache.
+  metrics-merge:
+    needs: [changes, metrics-quick]
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: slice-*
+          path: test/.cache/slices/
+          merge-multiple: true
+      - run: node .github/scripts/metricShards.mjs merge "$RUNNER_TEMP/vitest.json"
+      - if: ${{ !cancelled() }}
+        run: node .github/scripts/slowest.mjs --tests --title "Slowest test files (metrics-merge)" "$RUNNER_TEMP/vitest.json"
+
   # The status to require: every job green, except that the docs-only path skips the metrics jobs. A matrix job's result
   # is its shards' aggregate: success only when every shard succeeded.
   ci-ok:
-    needs: [changes, check, unit, metrics-fast, metrics-quick]
+    needs: [changes, check, unit, metrics-fast, metrics-quick, metrics-merge]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - run: |
-          echo "docs_only=$DOCS_ONLY changes=$CHANGES check=$CHECK unit=$UNIT metrics-fast=$FAST metrics-quick=$QUICK"
+          echo "docs_only=$DOCS_ONLY changes=$CHANGES check=$CHECK unit=$UNIT metrics-fast=$FAST metrics-quick=$QUICK metrics-merge=$MERGE"
           [ "$CHANGES" = success ] || { echo "::error::changes: $CHANGES"; exit 1; }
           [ "$CHECK" = success ] || { echo "::error::check: $CHECK"; exit 1; }
           [ "$UNIT" = success ] || { echo "::error::unit: $UNIT"; exit 1; }
           if [ "$DOCS_ONLY" = true ]; then want=skipped; else want=success; fi
           [ "$FAST" = "$want" ] || { echo "::error::metrics-fast: $FAST (want $want)"; exit 1; }
           [ "$QUICK" = "$want" ] || { echo "::error::metrics-quick: $QUICK (want $want)"; exit 1; }
+          [ "$MERGE" = "$want" ] || { echo "::error::metrics-merge: $MERGE (want $want)"; exit 1; }
         env:
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           CHANGES: ${{ needs.changes.result }}
@@ -196,3 +234,4 @@ jobs:
           UNIT: ${{ needs.unit.result }}
           FAST: ${{ needs.metrics-fast.result }}
           QUICK: ${{ needs.metrics-quick.result }}
+          MERGE: ${{ needs.metrics-merge.result }}

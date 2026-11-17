@@ -218,12 +218,24 @@ export function mergeScattered(into: Scattered, part: Scattered): void {
 }
 
 /**
+ * A new `Scattered` holding the parts' sum (`mergeScattered`) with its T5 list sorted: the record of the union of the
+ * parts' columns, whichever way the columns were dealt out (to region workers, or to column slices: SP6b spec §13
+ * Stage 2 item 1, `columnSlices.ts`).
+ */
+export function sumScattered(parts: readonly Scattered[]): Scattered {
+  const s = newScattered();
+  for (const part of parts) mergeScattered(s, part);
+  s.t5.sort((x, y) => x - y);
+  return s;
+}
+
+/**
  * T1-T5's analysis of scattered (possibly repeated) columns on `opts.workers` region workers (default 4; SP6b spec
  * §13 L5, ruling P5): the columns are dealt out in turn (column i to worker i mod n), and each worker generates its
  * share up to the T stage, analyses each column in place (`analyseColumn` with `surfaceEst3` and `preCaveTop` on a
- * DensityContext of its own, built once) and frees it, then answers one `Scattered` for its share. This thread merges
- * the parts (`mergeScattered`) and sorts the T5 list, so the result equals the serial `analyseColumn` loop's for any
- * worker count (`seconds` aside: 0, the caller's to set). `workerDir` as `forEachColumnThreaded`'s.
+ * DensityContext of its own, built once) and frees it, then answers one `Scattered` for its share. This thread sums
+ * the parts (`sumScattered`: merged, the T5 list sorted), so the result equals the serial `analyseColumn` loop's for
+ * any worker count (`seconds` aside: 0, the caller's to set). `workerDir` as `forEachColumnThreaded`'s.
  */
 export async function scatterColumnsThreaded(
   workerDir: string,
@@ -245,10 +257,7 @@ export async function scatterColumnsThreaded(
       if (r.type !== 'scattered') throw new Error(`region worker ${t}, scatter: ${r.type === 'error' ? r.message : r.type}`);
       return r.scattered;
     }));
-    const s = newScattered();
-    for (const part of parts) mergeScattered(s, part);
-    s.t5.sort((x, y) => x - y);
-    return s;
+    return sumScattered(parts);
   } finally {
     await Promise.all(workers.map((w) => w.terminate()));
   }

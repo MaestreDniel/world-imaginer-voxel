@@ -3,11 +3,13 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
 import { resolveProfile } from '../../src/core/params/profiles';
-import { metricTest } from '../harness/metric';
+import type { Params } from '../../src/core/params/schema';
+import { columnSlice, readSlices, sliceOf, writeSlice } from '../harness/columnSlices';
+import { metricTest, type MetricEnv } from '../harness/metric';
 import { genRegion } from '../harness/region';
 import {
-  b3Values, mergeScattered, metricsProfiles, newGrid, newScattered, putColumn, scatterColumns, scatterColumnsThreaded, t1Values,
-  t2Values, t3Values, t4Sites, t5Values, waterWalls, type B3Values, type Scattered, type ScatterProfile,
+  b3Values, mergeScattered, metricsProfiles, newGrid, newScattered, putColumn, scatterColumns, scatterColumnsThreaded, sumScattered,
+  t1Values, t2Values, t3Values, t4Sites, t5Values, waterWalls, type B3Values, type Scattered, type ScatterProfile, type T4Site,
 } from '../harness/terrainScatter';
 
 /**
@@ -29,6 +31,14 @@ import {
  *   the order above (T4's rejections included) and only the run's profiles kept (ruling P1), so each profile's columns
  *   and regions are the unsplit run's; every gated part is the worse profile or a sum with max 0, so the worst over
  *   the jobs is the unsplit value (`siteDraws` counts the run's profiles' draws).
+ * - In column slices (SP6b spec §13 Stage 2 item 1, the user's ruling U15; `METRICS_SLICE`, read once,
+ *   `test/harness/columnSlices.ts`): CI runs the large_biomes profile as two slice runs and one merge run. Slice k of n
+ *   draws every column and T4 site as above, keeps draws k, k + n, … of each (profile, seed) column list and of each
+ *   profile's T4 sites, scatters its columns and generates its regions as above, writes each seed's `Scattered` and each
+ *   region's counts (`T4Region`) to its record, and gates nothing (every test below is skipped there). The merge run
+ *   generates nothing: it reads the n records, sums each seed's parts (`sumScattered`: integer counts, the T5 list
+ *   sorted) and folds the regions in site order, so every test below reads what the whole run reads (its `seconds`
+ *   keys are the slices' summed times).
  *
  * Definitions (§8.2): solid = any block but air (stone; bedrock at y −64); a position is land when no water voxel lies
  * above its highest stone (`WORLD_SURFACE_WG === OCEAN_FLOOR_WG`), and its true top is `WORLD_SURFACE_WG − 1`; under
@@ -105,6 +115,41 @@ const T4_REGIONS = pick(4, 4, 16);
 const WORKER_DIR = `terrainRegionWorker-${TIER}`;
 const SCATTER_WORKER_DIR = `terrainScatterWorker-${TIER}`;
 
+/** The run's column slice (`METRICS_SLICE`; header): null, the whole run. */
+const SLICE = columnSlice(process.env.METRICS_SLICE);
+/** The whole run's tests (and the merge run's): skipped in a slice run, which gates and records nothing of its own. */
+const wholeRunTest = SLICE?.kind === 'slice' ? test.skip : test;
+const GATED: MetricEnv = { register: wholeRunTest };
+/** The slice records' name, and the run's constants the merge run checks each record against. */
+const SLICE_NAME = `terrain-${TIER}-${PROFILES.join('+')}`;
+const SLICE_META = { tier: TIER, profiles: PROFILES, seeds: SEEDS, columns: COLUMNS, range: RANGE, t4Regions: T4_REGIONS };
+
+/**
+ * One T4 region's counts (header): its floor's sd under water, its wet, bedrock and deep floors, its lowest floor, its
+ * water walls.
+ */
+interface T4Region { sd: number; wet: number; bedrock: number; deep: number; minFloor: number; walls: number; water: number }
+
+/** A slice run's record (header): per profile, its `Scattered` per seed and its T4 regions by site index; timings. */
+interface TerrainSlice {
+  scattered: Record<Profile, Scattered[]>;
+  t4: Record<Profile, Array<{ site: number; region: T4Region }>>;
+  seconds: Record<Profile, number>;
+  t4Seconds: number;
+}
+
+let slicesMemo: TerrainSlice[] | null = null;
+
+/** The merge run's slice records, read once. */
+function slices(): TerrainSlice[] {
+  if (SLICE?.kind !== 'merge') throw new Error('terrain slices: not a merge run');
+  slicesMemo ??= readSlices(SLICE_NAME, SLICE.n, SLICE_META) as TerrainSlice[];
+  return slicesMemo;
+}
+
+/** Seconds summed over the slices, rounded as a run's own (a timing key). */
+const slicesSeconds = (f: (s: TerrainSlice) => number): number => Math.round(slices().reduce((a, s) => a + f(s), 0) * 1000) / 1000;
+
 let scatteredMemo: Promise<Record<Profile, Scattered>> | null = null;
 
 /** The one pass over the scattered columns (T1, T2, T3, T5), memoised. */
@@ -114,6 +159,7 @@ function scattered(): Promise<Record<Profile, Scattered>> {
 }
 
 async function scatter(): Promise<Record<Profile, Scattered>> {
+  if (SLICE?.kind === 'merge') return mergedScatter();
   const columns = scatterColumns(PROFILES, SEEDS, COLUMNS, RANGE);
   const out = {} as Record<Profile, Scattered>;
   for (const profile of PROFILES) {
@@ -124,6 +170,22 @@ async function scatter(): Promise<Record<Profile, Scattered>> {
       mergeScattered(s, await scatterColumnsThreaded(SCATTER_WORKER_DIR, seed, params, columns[profile]![k]!));
     }
     s.seconds = Math.round(performance.now() - t0) / 1000;
+    out[profile] = s;
+  }
+  return out;
+}
+
+/** The merge run's pass: per profile, each seed's slice parts summed (`sumScattered`), then the seeds in order. */
+function mergedScatter(): Record<Profile, Scattered> {
+  const out = {} as Record<Profile, Scattered>;
+  for (const profile of PROFILES) {
+    const s = newScattered();
+    for (const [k, seed] of SEEDS.entries()) {
+      const part = sumScattered(slices().map((r) => r.scattered[profile][k]!));
+      if (part.columns !== COLUMNS[profile]) throw new Error(`terrain slices: ${profile}, seed ${seed}: ${part.columns} columns, not ${COLUMNS[profile]}`);
+      mergeScattered(s, part);
+    }
+    s.seconds = slicesSeconds((r) => r.seconds[profile]);
     out[profile] = s;
   }
   return out;
@@ -159,7 +221,7 @@ metricTest('T1', ['band', 'span', 'above120', 'above200'], async () => {
   perProfile(rec, 'above200', byProfile((p) => per[p].above200!), 'min');
   extras(rec, per, ['band', 'span', 'above120', 'above200']);
   return rec;
-});
+}, 600_000, GATED);
 
 metricTest('T2', ['overhangs', 'overhangsPeaks'], async () => {
   const per = await partValues(t2Values);
@@ -168,7 +230,7 @@ metricTest('T2', ['overhangs', 'overhangsPeaks'], async () => {
   perProfile(rec, 'overhangsPeaks', byProfile((p) => per[p].overhangsPeaks!), 'min');
   extras(rec, per, ['overhangs', 'overhangsPeaks']);
   return rec;
-});
+}, 600_000, GATED);
 
 metricTest('T3', ['value'], async () => {
   const per = await partValues(t3Values);
@@ -176,7 +238,7 @@ metricTest('T3', ['value'], async () => {
   extras(rec, per, ['value']);
   perProfile(rec, 'value', byProfile((p) => per[p].value!), 'max');
   return rec;
-});
+}, 600_000, GATED);
 
 metricTest('T5', ['median', 'p90', 'p99'], async () => {
   const per = await partValues(t5Values);
@@ -186,7 +248,7 @@ metricTest('T5', ['median', 'p90', 'p99'], async () => {
   perProfile(rec, 'p99', byProfile((p) => per[p].p99!), 'max');
   extras(rec, per, ['median', 'p90', 'p99']);
   return rec;
-});
+}, 600_000, GATED);
 
 const OUT_DIR = fileURLToPath(new URL('./.out/', import.meta.url));
 
@@ -194,7 +256,7 @@ const OUT_DIR = fileURLToPath(new URL('./.out/', import.meta.url));
 const json = (v: unknown): string => `${JSON.stringify(v, (_, x: unknown) => (typeof x === 'number' && !Number.isFinite(x) ? String(x) : x), 2)}\n`;
 
 // B3's per-window record (header), every profile's.
-test('B3: cave-biome shares per window (recorded)', async () => {
+wholeRunTest('B3: cave-biome shares per window (recorded)', async () => {
   const sc = await scattered();
   const profiles = Object.fromEntries(PROFILES.map((p) => [p, b3Values(sc[p], p)])) as Partial<Record<Profile, B3Values>>;
   mkdirSync(OUT_DIR, { recursive: true });
@@ -217,12 +279,68 @@ if (PROFILES.includes('default')) {
       lushMin: b.lushMin, dripstoneMin: b.dripstoneMin, abyssMin: b.abyssMin, windowAir: b.windowAir,
       insufficientWindows: b.insufficientWindows, air: b.air,
     };
-  }, 600_000, { outName: 'B3.shares' });
+  }, 600_000, { ...GATED, outName: 'B3.shares' });
+}
+
+/** Generates one T4 region (`genRegion`, 4 threads, no cache) and counts it (header). */
+async function t4Region(params: Params, { seed, cx0, cz0 }: T4Site): Promise<T4Region> {
+  const res = await genRegion({
+    seed, params, cx0, cz0, w: 16, h: 16, upTo: 'T', order: 'spiral', threads: 4, cache: false, workerDir: WORKER_DIR,
+  });
+  const g = newGrid(256, 256);
+  for (let cz = cz0; cz < cz0 + 16; cz++) {
+    for (let cx = cx0; cx < cx0 + 16; cx++) putColumn(g, res.view.store.proto(cx, cz)!.aux()!, 16 * (cx - cx0), 16 * (cz - cz0));
+  }
+  const [walls, water] = waterWalls(g);
+  let n0 = 0;
+  let s1 = 0;
+  let s2 = 0;
+  let bedrock = 0;
+  let deep = 0;
+  let minFloor = Infinity;
+  for (let k = 0; k < g.n * g.m; k++) {
+    if (g.land[k] === 1) continue;
+    const f = g.top[k]!;
+    n0++;
+    s1 += f;
+    s2 += f * f;
+    if (f === -64) bedrock++;
+    if (f <= -50) deep++;
+    if (f < minFloor) minFloor = f;
+  }
+  const sd = n0 < 2 ? 0 : Math.sqrt(Math.max(0, (s2 - (s1 * s1) / n0) / (n0 - 1)));
+  return { sd, wet: n0, bedrock, deep, minFloor, walls, water };
+}
+
+/** Per profile, T4's regions in site order: generated here (the whole run) or the slices' records (the merge run). */
+async function t4Regions(drawn: ReturnType<typeof t4Sites>): Promise<Record<Profile, T4Region[]>> {
+  const out = {} as Record<Profile, T4Region[]>;
+  for (const profile of PROFILES) {
+    const sites = drawn[profile]!.sites;
+    if (SLICE?.kind === 'merge') {
+      const regions: Array<T4Region | undefined> = Array.from({ length: sites.length }, () => undefined);
+      for (const r of slices()) {
+        for (const { site, region } of r.t4[profile]) {
+          if (regions[site] !== undefined) throw new Error(`terrain slices: ${profile}'s T4 site ${site} in two slices`);
+          regions[site] = region;
+        }
+      }
+      const missing = regions.findIndex((r) => r === undefined);
+      if (missing >= 0) throw new Error(`terrain slices: no slice holds ${profile}'s T4 site ${missing}`);
+      out[profile] = regions as T4Region[];
+    } else {
+      const params = resolveProfile(profile);
+      out[profile] = [];
+      for (const site of sites) out[profile].push(await t4Region(params, site));
+    }
+  }
+  return out;
 }
 
 metricTest('T4', ['floorSd', 'exposedBedrock', 'deepFloor'], async () => {
   const t0 = performance.now();
   const drawn = t4Sites(PROFILES, SEEDS, T4_REGIONS, RANGE);
+  const measured = await t4Regions(drawn);
   const rec: Record<string, number> = {};
   const sd = byProfile(() => 0);
   const bedrock = byProfile(() => 0);
@@ -231,39 +349,20 @@ metricTest('T4', ['floorSd', 'exposedBedrock', 'deepFloor'], async () => {
   let water = 0;
   let draws = 0;
   for (const profile of PROFILES) {
-    const params = resolveProfile(profile);
     let sdSum = 0;
     let regions = 0;
     let wet = 0;
     let minFloor = Infinity;
     draws += drawn[profile]!.draws;
-    for (const { seed, cx0, cz0 } of drawn[profile]!.sites) {
-      const res = await genRegion({
-        seed, params, cx0, cz0, w: 16, h: 16, upTo: 'T', order: 'spiral', threads: 4, cache: false, workerDir: WORKER_DIR,
-      });
-      const g = newGrid(256, 256);
-      for (let cz = cz0; cz < cz0 + 16; cz++) {
-        for (let cx = cx0; cx < cx0 + 16; cx++) putColumn(g, res.view.store.proto(cx, cz)!.aux()!, 16 * (cx - cx0), 16 * (cz - cz0));
-      }
-      const [wl, wt] = waterWalls(g);
-      walls += wl;
-      water += wt;
-      let n0 = 0;
-      let s1 = 0;
-      let s2 = 0;
-      for (let k = 0; k < g.n * g.m; k++) {
-        if (g.land[k] === 1) continue;
-        const f = g.top[k]!;
-        n0++;
-        s1 += f;
-        s2 += f * f;
-        if (f === -64) bedrock[profile]++;
-        if (f <= -50) deep[profile]++;
-        if (f < minFloor) minFloor = f;
-      }
-      wet += n0;
+    for (const r of measured[profile]) {
+      walls += r.walls;
+      water += r.water;
+      bedrock[profile] += r.bedrock;
+      deep[profile] += r.deep;
+      if (r.minFloor < minFloor) minFloor = r.minFloor;
+      wet += r.wet;
       regions++;
-      sdSum += n0 < 2 ? 0 : Math.sqrt(Math.max(0, (s2 - (s1 * s1) / n0) / (n0 - 1)));
+      sdSum += r.sd;
     }
     sd[profile] = sdSum / regions;
     rec[`wetPositions.${profile}`] = wet;
@@ -278,6 +377,37 @@ metricTest('T4', ['floorSd', 'exposedBedrock', 'deepFloor'], async () => {
   rec.waterWallVoxels = walls;
   rec.waterVoxels = water;
   rec.waterWallShare = water === 0 ? 0 : walls / water;
-  rec.seconds = Math.round(performance.now() - t0) / 1000;
+  rec.seconds = SLICE?.kind === 'merge' ? slicesSeconds((r) => r.t4Seconds) : Math.round(performance.now() - t0) / 1000;
   return rec;
-});
+}, 600_000, GATED);
+
+// A slice run (header): its share of T1-T5's and B3's columns and of T4's regions, recorded for the merge run.
+if (SLICE?.kind === 'slice') {
+  const slice = SLICE;
+  test(`column slice ${slice.k}/${slice.n}: T1-T5's and B3's columns and T4's regions, draws ${slice.k}, ${slice.k} + ${slice.n}, …, recorded for the merge run`, async () => {
+    const columns = scatterColumns(PROFILES, SEEDS, COLUMNS, RANGE);
+    const drawn = t4Sites(PROFILES, SEEDS, T4_REGIONS, RANGE);
+    const rec = { scattered: {}, t4: {}, seconds: {}, t4Seconds: 0 } as TerrainSlice;
+    for (const profile of PROFILES) {
+      const t0 = performance.now();
+      const params = resolveProfile(profile);
+      rec.scattered[profile] = [];
+      for (const [k, seed] of SEEDS.entries()) {
+        const cols = sliceOf(columns[profile]![k]!, slice);
+        const part = await scatterColumnsThreaded(SCATTER_WORKER_DIR, seed, params, cols);
+        expect(part.columns, `${profile}, seed ${seed}`).toBe(cols.length);
+        rec.scattered[profile].push(part);
+      }
+      rec.seconds[profile] = Math.round(performance.now() - t0) / 1000;
+    }
+    const t1 = performance.now();
+    for (const profile of PROFILES) {
+      const params = resolveProfile(profile);
+      const sites = drawn[profile]!.sites;
+      rec.t4[profile] = [];
+      for (const site of sliceOf(sites.map((_, i) => i), slice)) rec.t4[profile].push({ site, region: await t4Region(params, sites[site]!) });
+    }
+    rec.t4Seconds = Math.round(performance.now() - t1) / 1000;
+    writeSlice(SLICE_NAME, slice, SLICE_META, rec);
+  }, 600_000);
+}

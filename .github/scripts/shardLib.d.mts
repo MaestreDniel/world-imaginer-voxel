@@ -5,11 +5,14 @@
  */
 export type Shard = string[] | { files: string[]; env: Record<string, string> } | null;
 export type Shards = Record<string, Shard>;
+/** The merge of a table's column slices (SP6b spec §13 Stage 2 item 1): its files and the env its run sets. */
+export type Merge = { files: string[]; env: Record<string, string> };
 
 export interface ShardTool {
   matrix(): string[];
   check(): void;
   run(name: string, report: string): never;
+  merge(report: string): never;
 }
 
 export function shardArgs(shards: Shards, name: string): string[];
@@ -24,6 +27,10 @@ export function coverageProblems(o: {
   listed: Record<string, string[]>;
 }): string[];
 
-export function shardTool(o: { project: string; dir: string; suffix: string; shards: Shards }): ShardTool;
+export const SLICE_VAR: 'METRICS_SLICE';
+
+export function sliceProblems(shards: Shards, merge: Merge | undefined): string[];
+
+export function shardTool(o: { project: string; dir: string; suffix: string; shards: Shards; merge?: Merge }): ShardTool;
 
 export function cli(url: string, tool: ShardTool, script: string): void;

@@ -1,4 +1,4 @@
-import { expect } from 'vitest';
+import { expect, test } from 'vitest';
 import { ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
 import type { JsonValue } from '../../src/core/params/json';
@@ -8,10 +8,11 @@ import { SCHEMA, type Params } from '../../src/core/params/schema';
 import { Xoshiro128 } from '../../src/core/rng';
 import { GRASS_BLOCK, REGISTRY } from '../../src/world/blocks/index';
 import { CARVERS_OFF } from '../harness/carverParams';
-import { metricTest } from '../harness/metric';
+import { columnSlice, readSlices, sliceOf, writeSlice } from '../harness/columnSlices';
+import { metricTest, type MetricEnv } from '../harness/metric';
 import { cavesMuted } from '../harness/sp5cTrees';
 import { analyseColumnsThreaded, MIN_SURFACE_POPULATION, s1Values, s2Values, s3Values, surfaceCommonValues } from '../harness/surfaceAnalysis';
-import { newSurfaceAcc, SURFACE_STATES, type SurfaceAcc } from '../harness/surfaceScatter';
+import { mergeSurfaceAcc, newSurfaceAcc, SURFACE_STATES, type SurfaceAcc } from '../harness/surfaceScatter';
 import {
   forEachColumnThreaded, metricsProfiles, scatterColumns, type PopulationMode, type ScatterProfile,
 } from '../harness/terrainScatter';
@@ -37,6 +38,15 @@ import { branchHoldsAtTop, columnStates, positionColumn, solidRuns } from '../ha
  * default profile. Every profile's columns are drawn and only the run's kept (ruling P1), so each profile's columns
  * are the unsplit run's; every gated part is the worse profile or a sum with max 0, so the worst over the jobs is the
  * unsplit value.
+ *
+ * In column slices (SP6b spec §13 Stage 2 item 1, the user's ruling U15; `METRICS_SLICE`, read once,
+ * `test/harness/columnSlices.ts`): CI runs the large_biomes profile as two slice runs and one merge run, as T1-T5
+ * (terrain.metric.ts' header). Slice k of n draws every column as above, keeps draws k, k + n, … of each (profile, seed)
+ * list, analyses them as above into one accumulator per profile, writes it to its record and gates nothing (every test
+ * below is skipped there). The merge run generates no scattered column: it adds the n records up (`mergeSurfaceAcc`, the
+ * same exact sum as the workers'), so every test below reads what the whole run reads (`seconds` is the slices' summed
+ * time). `islandBranchOnGround` (the default profile's alone) is not sliced: a merge run with the default profile runs
+ * it whole.
  *
  * Readouts (§5.2): each column's ColumnSample is rebuilt in the worker (`buildColumnSample`, as the stage builds it)
  * and its voxels re-scanned with the stage's SurfaceContext settings (`scanColumn` over the stored solidity, the stored
@@ -103,6 +113,14 @@ const COLUMNS: Readonly<Record<Profile, number>> = pick(
 );
 const SCATTER_WORKER_DIR = `surfaceScatterWorker-${TIER}`;
 
+/** The run's column slice (`METRICS_SLICE`; header): null, the whole run. */
+const SLICE = columnSlice(process.env.METRICS_SLICE);
+/** The whole run's tests (and the merge run's): skipped in a slice run, which gates and records nothing of its own. */
+const GATED: MetricEnv = { register: SLICE?.kind === 'slice' ? test.skip : test };
+/** The slice records' name, and the run's constants the merge run checks each record against. */
+const SLICE_NAME = `surface-${TIER}-${PROFILES.join('+')}`;
+const SLICE_META = { tier: TIER, profiles: PROFILES, seeds: SEEDS, columns: COLUMNS, range: RANGE };
+
 const STATES = SURFACE_STATES;
 const NAMES: readonly string[] = Array.from({ length: STATES }, (_, s) => REGISTRY.stateKey(s));
 
@@ -122,7 +140,12 @@ function scattered(): Promise<Record<Profile, Acc>> {
 }
 
 async function scatter(): Promise<Record<Profile, Acc>> {
-  const columns = scatterColumns(PROFILES, SEEDS, COLUMNS, RANGE);
+  if (SLICE?.kind === 'merge') return mergedScatter(SLICE.n);
+  return analyse(scatterColumns(PROFILES, SEEDS, COLUMNS, RANGE));
+}
+
+/** Per profile, one accumulator over the given columns per seed (each seed's list in `columns[profile]`). */
+async function analyse(columns: Partial<Record<Profile, ReadonlyArray<ReadonlyArray<readonly [number, number]>>>>): Promise<Record<Profile, Acc>> {
   const out = {} as Record<Profile, Acc>;
   for (const profile of PROFILES) {
     const t0 = performance.now();
@@ -130,6 +153,20 @@ async function scatter(): Promise<Record<Profile, Acc>> {
     const params = resolveProfile(profile);
     for (const [k, seed] of SEEDS.entries()) await analyseColumnsThreaded(SCATTER_WORKER_DIR, seed, params, columns[profile]![k]!, a);
     a.seconds = Math.round(performance.now() - t0) / 1000;
+    out[profile] = a;
+  }
+  return out;
+}
+
+/** The merge run's pass: per profile, the slices' accumulators added up (their `seconds` summed). */
+function mergedScatter(n: number): Record<Profile, Acc> {
+  const parts = readSlices(SLICE_NAME, n, SLICE_META) as Array<Record<Profile, Acc>>;
+  const out = {} as Record<Profile, Acc>;
+  for (const profile of PROFILES) {
+    const a = parts.reduce((acc, r) => mergeSurfaceAcc(acc, r[profile]), newSurfaceAcc());
+    const want = SEEDS.length * COLUMNS[profile];
+    if (a.columns !== want) throw new Error(`surface slices: ${profile}: ${a.columns} columns, not ${want}`);
+    a.seconds = Math.round(a.seconds * 1000) / 1000;
     out[profile] = a;
   }
   return out;
@@ -185,15 +222,15 @@ async function sMetric(body: Body, steps: readonly Step[]): Promise<Record<strin
 
 metricTest('S1', ['buried', 'grassNoSky', 'ymod16'], () => sMetric(s1Values, [
   ['part', 'buried', 'sum'], ['part', 'grassNoSky', 'sum'], ['n', 'buried'], ['n', 'grassNoSky'], ['part', 'ymod16', 'min'], ['n', 'ymod16'],
-]));
+]), 600_000, GATED);
 
 metricTest('S2', ['deepslateBelow0', 'deepslateAbove8', 'bedrockFloor'], () => sMetric(s2Values, [
   ['part', 'deepslateBelow0', 'min'], ['part', 'deepslateAbove8', 'max'], ['part', 'bedrockFloor', 'min'], ['n', 'deepslateBelow0'], ['n', 'deepslateAbove8'],
-]));
+]), 600_000, GATED);
 
 metricTest('S3', ['snowAboveLine', 'snowNoSky'], () => sMetric(s3Values, [
   ['part', 'snowAboveLine', 'min'], ['part', 'snowNoSky', 'sum'], ['n', 'snowAboveLine'], ['n', 'snowNoSky'],
-]));
+]), 600_000, GATED);
 
 metricTest('B4', ['snowInDesert', 'coastBandBeachVoxel', 'landTopsBelowSea'], async () => {
   const sc = await scattered();
@@ -229,7 +266,7 @@ metricTest('B4', ['snowInDesert', 'coastBandBeachVoxel', 'landTopsBelowSea'], as
   }
   common(rec, sc);
   return rec;
-}, 600_000, { outName: 'B4.voxel' });
+}, 600_000, { ...GATED, outName: 'B4.voxel' });
 
 metricTest('B2', ['riverChannelWater'], async () => {
   const sc = await scattered();
@@ -253,7 +290,7 @@ metricTest('B2', ['riverChannelWater'], async () => {
   }
   common(rec, sc);
   return rec;
-}, 600_000, { outName: 'B2.voxel' });
+}, 600_000, { ...GATED, outName: 'B2.voxel' });
 
 /** islandBranchOnGround's chunk columns per seed (header). */
 const ISLAND_BRANCH_COLUMNS = pick(64, 256, 1024);
@@ -338,5 +375,17 @@ if (PROFILES.includes('default')) {
     rec.columns = after.fired.size;
     rec.seconds = Math.round(performance.now() - t0) / 1000;
     return rec;
-  }, 1_800_000, { outName: 'S.islandBranchOnGround' });
+  }, 1_800_000, { ...GATED, outName: 'S.islandBranchOnGround' });
+}
+
+// A slice run (header): its share of S1-S3's, B4's and B2's columns, recorded for the merge run.
+if (SLICE?.kind === 'slice') {
+  const slice = SLICE;
+  test(`column slice ${slice.k}/${slice.n}: S1-S3's, B4's and B2's columns, draws ${slice.k}, ${slice.k} + ${slice.n}, …, recorded for the merge run`, async () => {
+    const all = scatterColumns(PROFILES, SEEDS, COLUMNS, RANGE);
+    const mine = Object.fromEntries(PROFILES.map((p) => [p, all[p]!.map((cols) => sliceOf(cols, slice))]));
+    const rec = await analyse(mine);
+    for (const p of PROFILES) expect(rec[p].columns, p).toBe(mine[p]!.reduce((a, cols) => a + cols.length, 0));
+    writeSlice(SLICE_NAME, slice, SLICE_META, rec);
+  }, 600_000);
 }

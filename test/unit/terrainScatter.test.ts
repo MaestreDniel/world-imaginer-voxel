@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest';
 import { CAVE_BIOME, CAVE_KIND } from '../../src/core/constants';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
@@ -14,11 +17,12 @@ import { AIR } from '../../src/world/blocks/index';
 import type { ColumnView } from '../../src/world/store/api';
 import { createStore } from '../../src/world/store/store';
 import { CARVERS_OFF } from '../harness/carverParams';
+import { readSlices, sliceOf, writeSlice } from '../harness/columnSlices';
 import { ctxFor } from '../harness/gen';
 import { cavesMuted } from '../harness/sp5cTrees';
 import {
   analyseColumn, B3_WINDOW_AIR_MIN, b3Values, caveDepthOf, metricsProfiles, newScatterScratch, newScattered, preCaveSolidity, preCaveTop, presetRecord, SCATTER_PROFILES,
-  scatterColumns, scatterColumnsThreaded, solidity, t1Values, t2Values, t3Values, t4Sites, t5Values, transitions, type ScatterColumn,
+  scatterColumns, scatterColumnsThreaded, solidity, sumScattered, t1Values, t2Values, t3Values, t4Sites, t5Values, transitions, type ScatterColumn,
   type Scattered,
 } from '../harness/terrainScatter';
 
@@ -590,5 +594,23 @@ describe("T1's analysis in the region workers (SP6b spec §13 L5; ruling P5): sl
     const threaded = await scatterColumnsThreaded('terrainScatterTest', SEED, params, cols, { workers });
     expect(threaded.t5).toEqual([...threaded.t5].sort((a, b) => a - b));
     expect(comparable(threaded)).toEqual(comparable(serial));
+  }, 300_000);
+
+  test('two column slices (SP6b spec §13 Stage 2 item 1; ruling U15): each slice\'s scatter through its record, summed (sumScattered), equals the serial loop\'s', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'terrainSlices-'));
+    try {
+      const meta = { tier: 'test', columns: cols.length };
+      for (const k of [0, 1]) {
+        const part = await scatterColumnsThreaded('terrainScatterTest', SEED, params, sliceOf(cols, { k, n: 2 }));
+        expect(part.columns).toBe(256);
+        writeSlice('terrainScatterTest', { k, n: 2 }, meta, part, dir);
+      }
+      const merged = sumScattered(readSlices('terrainScatterTest', 2, meta, dir) as Scattered[]);
+      expect(merged.t5).toEqual([...merged.t5].sort((a, b) => a - b));
+      expect(merged.borderPairs).toBeInstanceOf(Float64Array);
+      expect(comparable(merged)).toEqual(comparable(serial));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 300_000);
 });
