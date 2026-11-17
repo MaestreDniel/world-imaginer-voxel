@@ -53,6 +53,11 @@ export async function runKvSelftest(open: () => Promise<KV>, remove: () => Promi
 /** The IndexedDB section's outcome: every case's result, or the error that kept the contract from running. */
 export type KvSelftestOutcome = { readonly results: readonly KvContractResult[] } | { readonly error: string };
 
+/** "Name: message" for an `Error`, else `String(e)`: the `{error}` of a section that could not run. */
+function errorText(e: unknown): string {
+  return e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+}
+
 /** "n/m passed" over a contract run's results. */
 function kvSummary(results: readonly KvContractResult[]): string {
   return `${results.filter((r) => r.ok).length}/${results.length} passed`;
@@ -83,7 +88,7 @@ export async function mountKvSection(
     }
     return { results };
   } catch (e) {
-    const error = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    const error = errorText(e);
     line.textContent = `IndexedDB contract: could not run: ${error}`;
     return { error };
   }
@@ -154,6 +159,10 @@ export function mountSelftestPage(root: HTMLElement): void {
   }).then((outcome) => {
     // Enabled only now, so one click always carries the goldens and the IndexedDB contract.
     kv = outcome;
+    copy.disabled = false;
+  }).catch((e: unknown) => {
+    // A throw outside `mountKvSection`'s own try (e.g. `pool.terminate()`): the goldens stay copyable, with the error.
+    kv = { error: errorText(e) };
     copy.disabled = false;
   });
 }

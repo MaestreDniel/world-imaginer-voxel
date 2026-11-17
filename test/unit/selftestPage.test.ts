@@ -9,15 +9,22 @@ import {
 } from '../../src/ui/selftest/selftestPage';
 import { installDom, type FakeElement } from './fixtures/domShim';
 
-/** The page's pool and IndexedDB, driven by `mocks` (`mountSelftestPage` uses the module defaults). */
-const mocks = vi.hoisted(() => ({
-  selftest: (_key: string): Promise<{ actual: string | null; error: string | null }> => new Promise(() => {}),
-  openIdbKV: (_name: string): Promise<unknown> => new Promise(() => {}),
-  deleteIdb: (_name: string): Promise<void> => Promise.resolve(),
-}));
+/**
+ * The page's pool and IndexedDB, driven by `mocks` (`mountSelftestPage` uses the module defaults); a test that
+ * reassigns one gets `mockDefaults` back after it.
+ */
+const { mocks, mockDefaults } = vi.hoisted(() => {
+  const mockDefaults = {
+    selftest: (_key: string): Promise<{ actual: string | null; error: string | null }> => new Promise(() => {}),
+    terminate: (): void => {},
+    openIdbKV: (_name: string): Promise<unknown> => new Promise(() => {}),
+    deleteIdb: (_name: string): Promise<void> => Promise.resolve(),
+  };
+  return { mocks: { ...mockDefaults }, mockDefaults };
+});
 vi.mock('../../src/engine/workerPool', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/workerPool')>(),
-  createBrowserPool: () => ({ selftest: (key: string) => mocks.selftest(key), terminate: () => {} }),
+  createBrowserPool: () => ({ selftest: (key: string) => mocks.selftest(key), terminate: () => mocks.terminate() }),
 }));
 vi.mock('../../src/persist/idb', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/persist/idb')>(),
@@ -141,7 +148,10 @@ describe('the selftest\'s IndexedDB section (SP5b spec §6.4)', () => {
 });
 
 describe('copy as JSON carries the goldens and the IndexedDB contract', () => {
-  afterEach(() => { vi.unstubAllGlobals(); });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Object.assign(mocks, mockDefaults);
+  });
 
   const rows: SelftestRow[] = [
     { key: 'a', expected: 'h-a', actual: 'h-a', error: null, ok: true },
@@ -209,5 +219,23 @@ describe('copy as JSON carries the goldens and the IndexedDB contract', () => {
     expect(Object.keys(json.results)).toEqual(keys);
     expect(json.results[keys[0]!]).toMatchObject({ actual: `got-${keys[0]}` });
     expect(json.indexedDb).toEqual({ summary: `${KV_CONTRACT.length}/${KV_CONTRACT.length} passed`, passed: KV_CONTRACT.length, total: KV_CONTRACT.length, failures: [] });
+  });
+
+  test('a throw outside the IndexedDB section still enables the button, and the copy carries the goldens and the error', async () => {
+    const { document } = installDom();
+    const written: string[] = [];
+    vi.stubGlobal('navigator', { userAgent: 'UA/test', clipboard: { writeText: (t: string) => { written.push(t); return Promise.resolve(); } } });
+    const keys = allGoldenKeys();
+    mocks.selftest = (key) => Promise.resolve({ actual: `got-${key}`, error: null });
+    mocks.terminate = () => { throw new TypeError('terminate failed'); };
+    const root = document.createElement('div');
+    mountSelftestPage(root as unknown as HTMLElement);
+    const copy = root.children[0]!.querySelector('button')!;
+    await vi.waitFor(() => expect(copy.disabled).toBe(false));
+    copy.click();
+    await vi.waitFor(() => expect(copy.textContent).toBe('copied'));
+    const json = JSON.parse(written[0]!) as { results: Record<string, unknown>; indexedDb: unknown };
+    expect(Object.keys(json.results)).toEqual(keys);
+    expect(json.indexedDb).toEqual({ error: 'TypeError: terminate failed' });
   });
 });
