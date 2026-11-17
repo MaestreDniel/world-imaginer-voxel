@@ -105,6 +105,9 @@ import {
   CAVE_BIOME_RGB, CAVE_MAP, CAVE_Y_FIELD, caveHeavyQuery, FIND_LUSH, HUD_STRIP_VIEWS, LUSH, LUSH_POSE, MAP_RGB_TOL, parseLushHit, rectsApart, SMOKE_MOSS,
   XRAY_BIOME_LEGEND, XRAY_BIOME_MIN, XRAY_BIOME_PIXEL, XRAY_COLOR_NOTICES, XRAY_KIND_LEGEND_SIZE, xrayBiomeOf,
 } from '../tools/uiSmoke';
+import { profileHash, SP6B_AT, SP6B_MAP, SP6B_POSE_IDS, SP6B_POSES, SP6B_RAISED, SP6B_SHOTS, SP6B_XRAY_PITCH, sp6bLink, sp6bPose, sp6bShotQuery } from '../tools/uiSmoke';
+import { createGenContext } from '../../src/gen/context';
+import { seedFromInput } from '../../src/core/seed';
 
 const EDITED: MapState = {
   v: 1, seed: '42', profile: 'default',
@@ -2157,6 +2160,182 @@ describe('UI smoke test: the caves step\'s SP6b checks: C, the HUD and the strip
     const st = decodeMapState(url.hash.slice(1));
     expect(st.error).toBeNull();
     expect([st.state.seed, st.state.profile]).toEqual(['42', 'cave_heavy']);
+  });
+});
+
+describe('UI smoke test: SP6b\'s review links and screenshots (SP6b spec §12.8, D14)', () => {
+  type ExamplePose = { x: number; y: number; z: number; yaw: number; pitch: number; voxel: [number, number, number]; component: number; profile: string; region?: string; fallback?: boolean };
+  /** The committed merge of the `caves-biomes` run's `.out/caveBiomes.examples.json` and the `caves` run's `bottomCavern`. */
+  const readExamples = () => JSON.parse(readFileSync(new URL('../../docs/superpowers/specs/assets/sp6b/caveBiomes.examples.json', import.meta.url), 'utf8')) as {
+    id: string; tier: string; seed: string; poses: Record<string, ExamplePose | null>;
+  };
+  const src = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+  /** The density context of seed 42 on `profile` (the pose's world). */
+  const densityOf = (profile: 'default' | 'cave_heavy') => createDensityContext(createGenContext(seedFromInput('42'), resolveProfile(profile)));
+
+  test('the committed caveBiomes.examples.json: the quick tier at seed 42, D14\'s poses in order, each found, cave_heavy\'s spawn no fallback', () => {
+    const examples = readExamples();
+    expect([examples.id, examples.tier, examples.seed]).toEqual(['caveBiomes.examples', 'quick', '42']);
+    expect(SP6B_POSE_IDS).toEqual(['lush', 'dripstone', 'abyss', 'biomeBorder', 'bottomCavern', 'caveHeavySpawn']);
+    expect(Object.keys(examples.poses)).toEqual([...SP6B_POSE_IDS]);
+    for (const id of SP6B_POSE_IDS) expect(examples.poses[id], id).not.toBeNull();
+    expect(SP6B_POSE_IDS.map((id) => examples.poses[id]!.profile)).toEqual(['default', 'default', 'default', 'default', 'default', 'cave_heavy']);
+    expect(examples.poses.caveHeavySpawn!.fallback).toBe(false);
+  });
+
+  test('SP6B_POSES mirror the committed poses (x, y, z, yaw, pitch, profile), the eye at the voxel\'s centre; Task 55\'s LUSH_POSE is the committed lush pose at its corner', () => {
+    expect(Object.keys(SP6B_POSES)).toEqual([...SP6B_POSE_IDS]);
+    const examples = readExamples();
+    for (const id of SP6B_POSE_IDS) {
+      const e = examples.poses[id]!;
+      expect(SP6B_POSES[id], id).toEqual({ x: e.x, y: e.y, z: e.z, yaw: e.yaw, pitch: e.pitch, profile: e.profile });
+      expect([e.x, e.y, e.z], id).toEqual([e.voxel[0] + 0.5, e.voxel[1] + 0.5, e.voxel[2] + 0.5]);
+    }
+    const { profile, ...lush } = sp6bPose('lush');
+    expect(profile).toBe('default');
+    expect(LUSH_POSE).toEqual(lush);
+  });
+
+  test('each SP6b pose\'s `at` is CAVE_AT\'s corner on its own profile\'s generator (solidAt); bottomCavern\'s is not the low corner, whose x = 184 rock put the eye on a wall (Tasks 24-25\'s near-plane patch)', () => {
+    expect(Object.keys(SP6B_AT)).toEqual([...SP6B_POSE_IDS]);
+    const examples = readExamples();
+    const dcs = { default: densityOf('default'), cave_heavy: densityOf('cave_heavy') } as const;
+    for (const id of SP6B_POSE_IDS) {
+      const pose = SP6B_POSES[id];
+      const dc = dcs[pose.profile];
+      const [vx, vy, vz] = examples.poses[id]!.voxel;
+      expect(solidAt(dc, vx, vy, vz), `${id}: its voxel is open`).toBe(false);
+      const [fx, , fz] = lookVector(pose.yaw, 0);
+      const corners: Array<[number, number]> = [[vx, vz], [vx + 1, vz], [vx, vz + 1], [vx + 1, vz + 1]];
+      /** CAVE_AT's rule in the row y: the first clear corner, else the first whose rock lies behind the view; -1: none. */
+      const cornerAt = (y: number): number => {
+        const solids = corners.map(([ax, az]) => ([[-1, -1], [0, -1], [-1, 0], [0, 0]] as const)
+          .filter(([dx, dz]) => solidAt(dc, ax + dx, y, az + dz))
+          .map(([dx, dz]) => [dx + 0.5, dz + 0.5] as const));
+        const clear = solids.findIndex((s) => s.length === 0);
+        return clear >= 0 ? clear : solids.findIndex((s) => s.every(([ox, oz]) => ox * fx + oz * fz < -1e-9));
+      };
+      // No corner of the eye's row: the eye one block up, its voxel open and the rule applied in that row (SP6B_RAISED).
+      const k0 = cornerAt(vy);
+      const raised = k0 < 0;
+      expect(SP6B_RAISED.includes(id), `${id}: raised`).toBe(raised);
+      if (raised) expect(solidAt(dc, vx, vy + 1, vz), `${id}: the voxel above is open`).toBe(false);
+      const k = raised ? cornerAt(vy + 1) : k0;
+      expect(k, `${id}: a corner of its voxel`).toBeGreaterThanOrEqual(0);
+      expect(SP6B_AT[id], id).toEqual(corners[k]);
+      expect(sp6bPose(id), id).toEqual({ ...pose, y: pose.y + (raised ? 1 : 0), at: SP6B_AT[id] });
+    }
+    // The low corner (185, −22) has the x = 184 deepslate column in the eye's row: an eye there clips the near plane into
+    // the wall and shows the clear colour (Task 24's and 25's bottomCavern shots); the link opens at a clear corner.
+    expect(solidAt(dcs.default, 184, -39, -22)).toBe(true);
+    expect(SP6B_AT.bottomCavern).not.toEqual([185, -22]);
+  });
+
+  test('a review link opens seed 42 on the pose\'s profile (its own hash) in flight at RD 12: `at` its corner, y exact, yaw and pitch as hereUrl writes them', () => {
+    for (const id of SP6B_POSE_IDS) {
+      const pose = sp6bPose(id);
+      const link = sp6bLink(id);
+      expect(link.startsWith('/?at='), id).toBe(true);
+      const url = new URL(link, 'http://127.0.0.1');
+      expect(url.hash, id).toBe(profileHash(pose.profile));
+      const st = decodeMapState(url.hash.slice(1));
+      expect(st.error, id).toBeNull();
+      expect(st.state, id).toEqual({ ...DEFAULT_MAP_STATE, profile: pose.profile });
+      const q = parseWorldQuery(url.searchParams);
+      expect(q.at, id).toEqual({ x: SP6B_AT[id][0], z: SP6B_AT[id][1] });
+      expect([q.y, q.yaw, q.pitch], id).toEqual([pose.y, pose.yaw, pose.pitch]);
+      expect([q.rd, q.renderer, q.world, q.shot], id).toEqual([SHOT_RD, null, null, false]);
+      const here = new URL(hereUrl(pose, null, profileHash(pose.profile)), 'http://127.0.0.1').searchParams;
+      expect([url.searchParams.get('yaw'), url.searchParams.get('pitch')], id).toEqual([here.get('yaw'), here.get('pitch')]);
+      // The shot's page: the same place at SHOT_RD on batch with the test hook, on the pose's profile.
+      const shot = new URL(`/${sp6bShotQuery(id)}`, 'http://127.0.0.1');
+      const sq = parseWorldQuery(shot.searchParams);
+      expect([sq.at, sq.y, sq.yaw, sq.pitch, sq.rd, sq.renderer, shot.searchParams.get('wiTest'), shot.hash], id)
+        .toEqual([q.at, q.y, q.yaw, q.pitch, SHOT_RD, 'batch', '1', url.hash]);
+    }
+    // The X-ray shot: the dripstone pose's place pitched SP6B_XRAY_PITCH up.
+    const xq = parseWorldQuery(new URL(`/${sp6bShotQuery('dripstone', SP6B_XRAY_PITCH)}`, 'http://127.0.0.1').searchParams);
+    const dq = parseWorldQuery(new URL(`/${sp6bShotQuery('dripstone')}`, 'http://127.0.0.1').searchParams);
+    expect({ ...xq, pitch: 0 }).toEqual({ ...dq, pitch: 0 });
+    expect([dq.pitch, xq.pitch]).toEqual([SP6B_POSES.dripstone.pitch, SP6B_XRAY_PITCH]);
+    // The default profile's hash is SP6a's SEED_42_HASH; cave_heavy's differs only in its profile.
+    expect(profileHash('default')).toBe(SEED_42_HASH);
+    expect(profileHash('cave_heavy')).not.toBe(SEED_42_HASH);
+  });
+
+  test('--shots writes SP6b\'s review screenshots but the bottom before the floor (a 441b67d build, the same pose); all eleven committed in assets/sp6b at 1400 × 900', () => {
+    expect(Object.values(SP6B_SHOTS)).toEqual([
+      'review-lush.png', 'review-dripstone.png', 'review-abyss.png', 'review-abyss-night-vision.png', 'review-biome-border.png',
+      'review-bottom-before.png', 'review-bottom-after.png', 'review-xray-biome.png', 'review-slice-biome3d.png', 'review-map-cave-biome.png',
+      'review-hud-strip.png',
+    ]);
+    for (const name of Object.values(SP6B_SHOTS)) {
+      const png = readFileSync(new URL(`../../docs/superpowers/specs/assets/sp6b/${name}`, import.meta.url));
+      expect(png.subarray(1, 4).toString('latin1'), name).toBe('PNG');
+      expect([png.readUInt32BE(16), png.readUInt32BE(20)], name).toEqual([VIEWPORT.width, VIEWPORT.height]);
+    }
+    const start = src.indexOf('async function caveBiomeShots(');
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf('\n}\n', start));
+    for (const [k, name] of Object.entries(SP6B_SHOTS)) expect(new RegExp(`SP6B_SHOTS\\.${k}[,)\\]]`).test(body), name).toBe(k !== 'bottomBefore');
+    // Every world page at its pose's shot query (SHOT_RD), none at WORLD_RD; the abyss at the light floor, then with night vision.
+    expect(body).not.toContain('cavePageQuery(');
+    expect(body).not.toContain('caveShotQuery(');
+    expect(body.match(/openCavePage\(t, sp6bShotQuery\(/g)?.length).toBe(3);
+    expect(body).toContain("['lush', SP6B_SHOTS.lush], ['dripstone', SP6B_SHOTS.dripstone], ['biomeBorder', SP6B_SHOTS.biomeBorder], ['bottomCavern', SP6B_SHOTS.bottomAfter],");
+    const abyss = body.indexOf('caveShot(t, SP6B_SHOTS.abyss)');
+    const on = body.indexOf('await nightVisionTo(t, true);');
+    expect(body.indexOf('await nightVisionTo(t, false);')).toBeGreaterThan(-1);
+    expect(body.indexOf('await nightVisionTo(t, false);')).toBeLessThan(abyss);
+    expect(abyss).toBeLessThan(on);
+    expect(on).toBeLessThan(body.indexOf('caveShot(t, SP6B_SHOTS.abyssNightVision'));
+    // The X-ray by cave biome (X, then C) from the dripstone pose pitched up; then F3's counts beside the strip, kept in the shot.
+    const xray = body.indexOf("openCavePage(t, sp6bShotQuery('dripstone', SP6B_XRAY_PITCH)");
+    expect(xray).toBeGreaterThan(-1);
+    expect(body.indexOf("worldKey(p, 'c', SMOKE_KEYS.xrayColor, 67)", xray)).toBeLessThan(body.indexOf('caveShot(t, SP6B_SHOTS.xrayBiome)'));
+    expect(body.indexOf('await hudOn(t, ')).toBeGreaterThan(body.indexOf('caveShot(t, SP6B_SHOTS.xrayBiome)'));
+    expect(body.indexOf('t.save(SP6B_SHOTS.hudStrip, ')).toBeGreaterThan(body.indexOf('await hudOn(t, '));
+    // runCaves takes them after SP6a's, with --shots only.
+    const run = src.slice(src.indexOf('async function runCaves('), src.indexOf('\n}\n', src.indexOf('async function runCaves(')));
+    expect(run.indexOf('await caveBiomeShots(t);')).toBeGreaterThan(run.indexOf('await caveShots(t);'));
+    expect(run.indexOf('await caveBiomeShots(t);')).toBeGreaterThan(run.indexOf('if (t.shots === null) return;'));
+  });
+
+  test('the map shot\'s view: seed 42\'s caveBiome layer over the biome region (BIOME_REGION\'s 32 × 32 chunks) at a y on the field\'s step that holds all three biomes', () => {
+    const ctx = ctxFor('42');
+    const picker = cavePickerOf(ctx);
+    const P = newPointRecord();
+    const seen = new Set<number>();
+    for (let dx = -512; dx <= 512; dx += 32) for (let dz = -512; dz <= 512; dz += 32) seen.add(caveBiomeIdAt(picker, samplePoint(ctx, SP6B_MAP.view.x + dx, SP6B_MAP.view.z + dz, false, P), SP6B_MAP.y));
+    for (const b of [CAVE_BIOME.lush, CAVE_BIOME.dripstone, CAVE_BIOME.abyss]) expect(seen.has(b), String(b)).toBe(true);
+    expect(SP6B_MAP.view.layer).toBe('caveBiome');
+    expect(Math.abs(SP6B_MAP.y % 4)).toBe(0);
+    expect(SP6B_MAP.y >= CAVE_Y_MIN && SP6B_MAP.y <= CAVE_Y_MAX).toBe(true);
+    // The biome region: chunk origin (−112, 80), 32 × 32 chunks (blocks −1792 … −1281, 1280 … 1791).
+    expect(SP6B_MAP.view.x >= -1792 && SP6B_MAP.view.x < -1280 && SP6B_MAP.view.z >= 1280 && SP6B_MAP.view.z < 1792).toBe(true);
+    expect(decodeMapState(mapHash({ ...START, view: SP6B_MAP.view })).error).toBeNull();
+  });
+
+  test('the SP6b spec\'s §12.8 names SP6B_POSES/SP6B_AT (ruling P60) and its Exit evidence lists every review link, each row from the committed poses', () => {
+    const spec = readFileSync(new URL('../../docs/superpowers/specs/2026-11-12-sp6b-cave-biomes-design.md', import.meta.url), 'utf8');
+    expect(spec).toContain('mirrored in `test/tools/uiSmoke.ts` as `SP6B_POSES`/`SP6B_AT` (each with its profile) beside SP6a\'s `CAVE_POSES`/`CAVE_AT`');
+    const head = '### The review links and screenshots (Task 56)';
+    const from = spec.indexOf(head);
+    expect(from).toBeGreaterThan(0);
+    const end = spec.indexOf('\n## ', from);
+    const section = spec.slice(from, end < 0 ? undefined : end);
+    const what = {
+      lush: 'lush', dripstone: 'dripstone', abyss: 'the abyss', biomeBorder: 'a biome border (plain cave into the abyss)',
+      bottomCavern: 'the widest bottom cavern', caveHeavySpawn: '`cave_heavy`\'s spawn',
+    } as const;
+    const examples = readExamples();
+    const rows = SP6B_POSE_IDS.map((id) => {
+      const e = examples.poses[id]!;
+      const voxel = e.voxel.map((v) => String(v).replace('-', '−')).join(', ');
+      return `| ${what[id]} | ${e.profile} | (${voxel}) | ${e.component.toLocaleString('en-US')} | \`${sp6bLink(id)}\` |`;
+    });
+    const header = '| pose | profile | voxel | its component (voxels) | link |\n|---|---|---|---|---|\n';
+    expect(section).toContain(`${header}${rows.join('\n')}\n`);
   });
 });
 

@@ -178,7 +178,9 @@
  * `review-selection.png`, `review-ghost.png` and `review-rotated-paste.png` (select, a scene built in front of the
  * camera after the step's checks); only those five are committed, in `assets/sp5c/`. SP6a's fourteen (`SP6A_SHOTS`,
  * spec §10.10, 1400 × 900) close the `caves` step, each at its review pose (`caveShots`); all are committed, in
- * `assets/sp6a/`.
+ * `assets/sp6a/`. SP6b's ten (`SP6B_SHOTS` but the bottom before the floor, SP6b spec §12.8, 1400 × 900) follow them
+ * (`caveBiomeShots`, at `SP6B_POSES` on each pose's profile); with the eleventh, from a 441b67d build, all are
+ * committed in `assets/sp6b/`.
  * Every command to a page is bounded (`guardedCdp`, SP6a ruling R16): a page-side wait by its own time plus a minute,
  * any other command by 5 minutes, and every command in flight fails at once when the page's renderer crashes
  * (`Inspector.targetCrashed`), so a dead renderer fails its step with a message instead of hanging the smoke.
@@ -1257,11 +1259,12 @@ function degText(v: number): string {
  * The query opening seed 42's default world at `pose` (spec §10.10): `?at=<x>,<z>&y=<y>&yaw=…&pitch=…`, then
  * `extra`, then `SEED_42_HASH`. `at` takes integers (`parseWorldQuery`), so x and z are the pose's corner (`at`,
  * `CAVE_AT` through `reviewPose`), or without one ⌊x⌋, ⌊z⌋ (the eye on the voxel's low corner); y is the eye's, used
- * exactly (`firstView.ts`); yaw and pitch in `hereUrl`'s format. An unsaved world opens in flight.
+ * exactly (`firstView.ts`); yaw and pitch in `hereUrl`'s format. An unsaved world opens in flight. `hash` another
+ * world's (SP6b's `cave_heavy` pose, `profileHash`).
  */
-export function caveQuery(pose: CaveExamplePose, extra = ''): string {
+export function caveQuery(pose: CaveExamplePose, extra = '', hash = SEED_42_HASH): string {
   const [ax, az] = pose.at ?? [Math.floor(pose.x), Math.floor(pose.z)];
-  return `?at=${ax},${az}&y=${pose.y}&yaw=${degText(pose.yaw)}&pitch=${degText(pose.pitch)}${extra}${SEED_42_HASH}`;
+  return `?at=${ax},${az}&y=${pose.y}&yaw=${degText(pose.yaw)}&pitch=${degText(pose.pitch)}${extra}${hash}`;
 }
 
 /** A review link as the Exit evidence writes it: `/` and `caveQuery(pose)` at the shots' RD (`SHOT_RD`, Task 48e). */
@@ -1385,6 +1388,108 @@ export const CAVE_LINE = {
   a: [-160, -52],
   b: [352, -52],
 } as const satisfies SmokeLine;
+
+// ---------------------------------------------------------------- SP6b's review links and screenshots (SP6b spec §12.8, D14)
+
+/**
+ * SP6b's review poses (spec §12.8, D14), in D14's order: a cave of each biome in seed 42's default biome region (the
+ * first floor voxel of a cave of that biome, the yaw along the floor), a biome border (plain cave looking into the
+ * abyss), the widest cavern at the bottom (the rock floor's relief) and `cave_heavy`'s spawn. The `caves-biomes` run's
+ * `.out/caveBiomes.examples.json` merged with the `caves` run's `bottomCavern`, committed as
+ * `docs/superpowers/specs/assets/sp6b/caveBiomes.examples.json` (a unit test keeps every pose equal to it); each pose
+ * opens on its own profile's world (`profileHash`). SP6a's `CAVE_POSES` stay as they are beside them.
+ */
+export const SP6B_POSES = {
+  lush: { x: -1777.5, y: -28.5, z: 1650.5, yaw: 45, pitch: 0, profile: 'default' },
+  dripstone: { x: -1579.5, y: -48.5, z: 1293.5, yaw: 180, pitch: 0, profile: 'default' },
+  abyss: { x: -1541.5, y: -51.5, z: 1350.5, yaw: 0, pitch: 0, profile: 'default' },
+  biomeBorder: { x: -1541.5, y: -51.5, z: 1349.5, yaw: 180, pitch: 0, profile: 'default' },
+  bottomCavern: { x: 185.5, y: -38.5, z: -21.5, yaw: 45, pitch: -15, profile: 'default' },
+  caveHeavySpawn: { x: 0.5, y: 101.5, z: 0.5, yaw: 0, pitch: 0, profile: 'cave_heavy' },
+} as const satisfies Record<string, CaveExamplePose & { readonly profile: 'default' | 'cave_heavy' }>;
+export type Sp6bPoseId = keyof typeof SP6B_POSES;
+/** The SP6b poses in D14's order. */
+export const SP6B_POSE_IDS = Object.keys(SP6B_POSES) as readonly Sp6bPoseId[];
+
+/**
+ * Where an SP6b link puts each pose's eye: `CAVE_AT`'s rule (the first corner of the pose's voxel whose four voxels of
+ * the eye's row are open, else the first whose rock lies behind the view), on the pose's own profile (`uiSmoke.test.ts`
+ * computes each with `solidAt`); for a pose in `SP6B_RAISED`, in the row one block up. bottomCavern's low corner
+ * (185, −22) stands on the face of the x = 184 deepslate column, where the near plane cut into the wall and showed the
+ * clear colour (Tasks 24-25's shots); its clear corner does not.
+ */
+export const SP6B_AT = {
+  lush: [-1777, 1650],
+  dripstone: [-1580, 1294],
+  abyss: [-1542, 1350],
+  biomeBorder: [-1542, 1349],
+  bottomCavern: [186, -22],
+  caveHeavySpawn: [0, 0],
+} as const satisfies Record<Sp6bPoseId, readonly [number, number]>;
+
+/**
+ * The poses no corner of whose eye's row `CAVE_AT`'s rule accepts (every corner has rock beside the eye, not behind it):
+ * their voxel is the floor of a one-wide slot under an open cave, so their link raises the eye one block, into the
+ * cave, and takes the corner in that row (`uiSmoke.test.ts` checks both with `solidAt`).
+ */
+export const SP6B_RAISED: readonly Sp6bPoseId[] = ['abyss', 'biomeBorder'];
+
+/** An SP6b review pose as its link opens it: its corner (`SP6B_AT`), the eye one block up if raised, its profile. */
+export function sp6bPose(id: Sp6bPoseId): CaveExamplePose & { readonly profile: 'default' | 'cave_heavy' } {
+  const pose = SP6B_POSES[id];
+  return { ...pose, y: pose.y + (SP6B_RAISED.includes(id) ? 1 : 0), at: SP6B_AT[id] };
+}
+
+/** The world page's hash of seed 42 on `profile` with no patch (`SEED_42_HASH` for the default profile). */
+export function profileHash(profile: 'default' | 'cave_heavy'): string {
+  return `#${mapHash({ ...START, profile })}`;
+}
+
+/** An SP6b review link as the Exit evidence writes it: its pose on its profile's world, in flight at `SHOT_RD`. */
+export function sp6bLink(id: Sp6bPoseId): string {
+  const pose = sp6bPose(id);
+  return `/${caveQuery(pose, `&rd=${SHOT_RD}`, profileHash(pose.profile))}`;
+}
+
+/** The query of an SP6b review shot's page: the link's place at SHOT_RD on batch with the test hook, at `pitch`. */
+export function sp6bShotQuery(id: Sp6bPoseId, pitch: number = SP6B_POSES[id].pitch): string {
+  const pose = sp6bPose(id);
+  return caveQuery({ ...pose, pitch }, `&rd=${SHOT_RD}&renderer=batch&wiTest=1`, profileHash(pose.profile));
+}
+
+/**
+ * The X-ray shot's pitch at the dripstone pose (degrees, up): at 0 the lower half of the view is the empty space under
+ * the cave's walls; 20° up fills it with the walls around, plain, dripstone and the abyss's to the north-east.
+ */
+export const SP6B_XRAY_PITCH = 20;
+
+/**
+ * SP6b's review screenshots (spec §12.8), 1400 × 900, committed in `assets/sp6b/`: a lush, a dripstone cave and a
+ * biome border with night vision (their walls read almost black at the light floor); the abyss at the light floor, then
+ * with night vision; the widest bottom cavern before the rock floor (taken from a build of 441b67d, SP6a's generator,
+ * at the same pose: not by `--shots`) and after it, with night vision; the X-ray by cave biome; the F3 HUD beside the
+ * strip in their top container (§9.5); the horizontal Cave biome slice (`biome3d`, "Cave slice" by cave biome); the
+ * map's caveBiome layer over the biome region (`SP6B_MAP`).
+ */
+export const SP6B_SHOTS = {
+  lush: 'review-lush.png',
+  dripstone: 'review-dripstone.png',
+  abyss: 'review-abyss.png',
+  abyssNightVision: 'review-abyss-night-vision.png',
+  biomeBorder: 'review-biome-border.png',
+  bottomBefore: 'review-bottom-before.png',
+  bottomAfter: 'review-bottom-after.png',
+  xrayBiome: 'review-xray-biome.png',
+  sliceBiome3d: 'review-slice-biome3d.png',
+  mapCaveBiome: 'review-map-cave-biome.png',
+  hudStrip: 'review-hud-strip.png',
+} as const;
+
+/**
+ * The map shot (SP6b spec §9.1): `?map` at seed 42 on the caveBiome layer over the biome region (`BIOME_REGION`, chunk
+ * origin (−112, 80), 32 × 32 chunks), at a y holding all three biomes (a unit test checks with `caveBiomeIdAt`).
+ */
+export const SP6B_MAP = { view: { x: -1536, z: 1536, bpp: 4, layer: 'caveBiome' }, y: -32 } as const;
 
 // ---------------------------------------------------------------- the caves step's SP6b checks (SP6b spec §12.8)
 
@@ -5912,6 +6017,77 @@ async function caveShots(t: Smoke): Promise<void> {
   await caveShot(t, SP6A_SHOTS.sliceVertical);
 }
 
+/**
+ * SP6b's review screenshots (`SP6B_SHOTS`, spec §12.8) but the bottom before the floor, with --shots only, each world
+ * page at its pose on its profile (`sp6bShotQuery`), the counts hidden and the "not saved" notice dismissed: the abyss at
+ * the light floor, then with night vision; with night vision the lush and dripstone caves, the biome border and the
+ * bottom cavern; the X-ray by cave biome from the dripstone pose (X and C, their notices gone), then F3's counts beside
+ * the strip, then the horizontal Cave biome slice ("Cave slice" by cave biome, the map in full screen, the drawer at its
+ * tallest); night vision off; the map's caveBiome layer on `SP6B_MAP` at its y.
+ */
+async function caveBiomeShots(t: Smoke): Promise<void> {
+  const p = t.page;
+  if (!(await openCavePage(t, sp6bShotQuery('abyss'), 'caves shots: the abyss'))) return;
+  await nightVisionTo(t, false);
+  await caveShot(t, SP6B_SHOTS.abyss);
+  await nightVisionTo(t, true);
+  await caveShot(t, SP6B_SHOTS.abyssNightVision, 1600);
+
+  const caves: ReadonlyArray<readonly [Sp6bPoseId, string]> = [
+    ['lush', SP6B_SHOTS.lush], ['dripstone', SP6B_SHOTS.dripstone], ['biomeBorder', SP6B_SHOTS.biomeBorder], ['bottomCavern', SP6B_SHOTS.bottomAfter],
+  ];
+  for (const [id, name] of caves) {
+    if (!(await openCavePage(t, sp6bShotQuery(id), `caves shots: ${id}`))) continue;
+    await caveShot(t, name);
+  }
+
+  if (!(await openCavePage(t, sp6bShotQuery('dripstone', SP6B_XRAY_PITCH), 'caves shots: the X-ray by cave biome'))) return;
+  await worldKey(p, 'x', SMOKE_KEYS.xray, 88);
+  await worldKey(p, 'c', SMOKE_KEYS.xrayColor, 67);
+  await p.until(stripInMode(1), 'caves shots: the X-ray on by cave biome', 5000);
+  await sleep(6500); // X's and C's notices (6 s) gone
+  await caveShot(t, SP6B_SHOTS.xrayBiome);
+  await hudOn(t, 'caves shots: the counts beside the strip');
+  await frames(p, 3, `caves shots: three frames before ${SP6B_SHOTS.hudStrip}`);
+  t.save(SP6B_SHOTS.hudStrip, (await p.capture()).png);
+
+  // The horizontal Cave biome slice from the dripstone pose (its y, the band at all), the map in full screen.
+  await pressM(p);
+  await p.until(OVERLAY_SHOWN, 'caves shots: the overlay after M', 15_000);
+  if (await p.eval<boolean>(WORLD_SPLIT)) {
+    await p.click('#map-mode-full');
+    await p.until(`!(${WORLD_SPLIT})`, 'caves shots: the map in full screen', 5000);
+  }
+  await p.click('#map-tab-caves');
+  await p.until(colourByIs(1), 'caves shots: the Caves tab by cave biome', 5000);
+  await p.click('#map-caves-slice');
+  await tallDrawer(p);
+  await p.until(Page.fresh(128, `document.querySelector(${JSON.stringify(SV_FIELD)}).value === 'biome3d'`), 'caves shots: the horizontal cave biome slice', 60_000);
+  await caveShot(t, SP6B_SHOTS.sliceBiome3d);
+  await pressM(p);
+  await p.until(OVERLAY_CLOSED, 'caves shots: M closes the map', 10_000);
+  await nightVisionTo(t, false);
+
+  // The caveBiome layer over the biome region at SP6B_MAP's y.
+  await p.goto(`${p.base}?map#${mapHash({ ...START, view: SP6B_MAP.view })}`, MAP_READY);
+  await p.typeInto(CAVE_Y_FIELD, String(SP6B_MAP.y));
+  await p.enter();
+  await p.until(`__wiSmoke.state()?.view?.caveY === ${SP6B_MAP.y}`, `caves shots: the map's view at y ${SP6B_MAP.y}`, 10_000);
+  await p.blur();
+  await p.until('__wiSmoke.settled()', `caves shots: the caveBiome layer at y ${SP6B_MAP.y}`, 30_000);
+  // The preview settles before every tile of the view is drawn at its own resolution: wait for the view to stop changing.
+  let last = (await p.capture()).png;
+  let still = false;
+  for (let i = 0; i < 60 && !still; i++) {
+    await sleep(1000);
+    const now = (await p.capture()).png;
+    still = now.equals(last);
+    last = now;
+  }
+  t.check(still, `caves shots: the caveBiome map stops changing before ${SP6B_SHOTS.mapCaveBiome}`);
+  await caveShot(t, SP6B_SHOTS.mapCaveBiome, 0);
+}
+
 async function runCaves(t: Smoke): Promise<void> {
   const p = t.page;
   t.step(`caves: ${cavesStepQuery()} (the entrance pose, pitched up): X (the strip, the clear colour at a sky pixel), PageDown, Home; L and the Settings checkbox across a reload; the Caves tab, Cave slice, a cave parameter live; PageDown on a focused band slider; SP6b: C at the lush pose (the strip, its legend, a lush pixel), the HUD and the strip apart, moss_block copied and pasted, Colour by, the biome slice, Nearest lush cave, the caveBiome layer's y, cave_heavy`);
@@ -5937,6 +6113,11 @@ async function runCaves(t: Smoke): Promise<void> {
     await caveShots(t);
   } catch (e) {
     t.check(false, `caves: the shots stopped: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  try {
+    await caveBiomeShots(t);
+  } catch (e) {
+    t.check(false, `caves: SP6b's shots stopped: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
     // The stored night vision is left off for whatever runs next.
     if (await t.page.eval<boolean>(`typeof __wiTest === 'object' && ${NIGHT_VISION_STORED}`).catch(() => false)) await nightVisionTo(t, false).catch(() => undefined);
