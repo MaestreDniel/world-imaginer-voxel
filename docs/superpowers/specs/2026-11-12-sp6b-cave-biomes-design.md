@@ -1415,6 +1415,13 @@ Against SP6a's Firefox file, this run reads one display interval less at p95 on 
 
 Both are recorded only.
 
+### The master pins I (Task 53; §15 items 2, 3, 17, 21)
+
+- **§15 item 3 (§8 risk 3): not needed.** D25's generator checkpoint `terrain.real` p50 after Task 25's levers (25e included) is 10.33 ms at turbo (the record at a99f7fe), 0.13 ms under `test/baselines.json`'s 1ac9e7b row (10.46 ms), so the move is not more than 0.5 ms. 25e's own bench read 10.58 ms (+0.12), and the later records 10.74 ms (the generator push, +0.28) and 10.04 ms (D25's culling checkpoint, −0.42). Master §8 risk 3 is unchanged, and its pin asserts that.
+- **§15 item 21 (§7's "Measured in SP6b" line):** from `test/baselines.json` as recorded at D25's culling checkpoint (Task 40's table above), at turbo: `terrain.real` 10.04 / 17.88 ms; `terrain.islands` 14.29 / 24.80 ms at the record's throttled clock, about 11.4 ms p50 at turbo; `caveBiome.column` 0.26 ms; `cull.walk.rd12` 0.357 and `cull.walk.rd16` 0.657 ms. `slice.biome3d128` is Task 46's hand-added row: 301.5 ms at a throttled clock (0.769 ns), about 243-249 ms at turbo, provisional until Task 59's bench re-records it at turbo. The refill is `xrayApplyRefillMs` from the gated Chrome file (6,742 ms) and from the Firefox file (9,400 ms). The T row's "about 300 cave quarts" is restated as recon-gen §1.7 measured it at SP6b's start, on SP6a's caves: quarts holding cave air per column p50 60, p90 177, max 575.
+- **§15 item 17 (§7's main-thread row):** `cullMainMeanMs` 0.027 and `cullMainMaxMs` 0.58 ms on L13 in the gated Chrome file (G1's bounds 1.0 and 1.5); in Firefox, with RegionMesh's arenas, 0.013 and 0.70 ms.
+- **§15 item 2:** SP7-SP12 each gain a "Received from SP6b (its spec §16; amended by SP6b)" line with §16's text, its cross-references named as the SP6b spec's.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)

@@ -173,6 +173,16 @@
  * and words the R3 row as built (item 20's R3 part). RegionMesh's region culling (Task 43) lands item 8's meta line
  * (§2.3: bits 17-31 stay 0; the SP6a describe's "SP6b decides whether the meta holds it" pin moved here) and item 17
  * (§4.15's cave culling as built and §7's main-thread row as worded; the measured cost comes with the master pins).
+ * The master pins I (Task 53) land item 17's measured cost (§7's main-thread row with `cullMainMeanMs` and
+ * `cullMainMaxMs` read from `assets/sp6b/`'s gated Chrome file and the Firefox file, the bounds cross-checked against
+ * THRESHOLDS; §4.15's test keeps the row's wording), item 21 (§7's "Measured in SP6b" line: `terrain.real`,
+ * `terrain.islands`, `caveBiome.column`, `cull.walk.rd12`, `cull.walk.rd16` and `slice.biome3d128`, which `BENCH_ROWS`
+ * measures, each with its measured value and the bench's gates, and the refill read from `assets/sp6b/`; the T row's
+ * cave quarts as measured), item 3 (not needed: D25's `terrain.real` p50 after the levers sits under 1ac9e7b's 10.46 ms,
+ * so §8 risk 3's text is pinned unchanged and the Exit evidence records it) and item 2 (the "Received from SP6b" lines
+ * of SP7-SP12, after each "Received from SP6a" line, each phrase checked against the spec's §16 bullet: SP7's carries
+ * the abyss's lava, SP8b's the crystals or gems and the gothic touch, SP8c's the silence; the "Received from SP6a"
+ * lines still hold none of them, the SP6a describe's pin).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -193,7 +203,7 @@ import { PACK_LAYOUT } from '../../src/mesh/packing';
 import { RULE_KINDS } from '../../src/gen/surface/rules';
 import {
   BENCH_ROWS, ISLANDS_P50_MAX_MS, ISLANDS_P99_MAX_MS, LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P99_MAX_MS,
-  SLICE_CAVES_P50_MAX_MS, TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS,
+  SLICE_BIOME3D_P50_MAX_MS, SLICE_CAVES_P50_MAX_MS, TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS,
 } from '../bench/gates';
 import { THRESHOLDS } from '../thresholds';
 import { SP_DEPS } from '../harness/sp';
@@ -3001,9 +3011,125 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(s415).not.toContain('The result drives `setVisibleAt`.');
     expect(s415).not.toContain('a turn of more than 10°');
     expect(s415).not.toContain('1.5 ms');
-    // §7's main-thread row as worded (its measured cost lands with the master pins, SP6b spec §15 item 17).
+    // §7's main-thread row as worded; its measured cost is the next test's (the master pins, SP6b spec §15 item 17).
     const s7 = text.slice(text.indexOf('**Main thread per frame (Medium):**'), text.indexOf('**GPU per frame'));
     const rows = s7.split('\n').filter((l) => l.startsWith('| cave '));
-    expect(rows).toEqual(['| cave culling: the walk (on change, 0.5 ms slices) and RegionBatch\'s draw filter (SP6b; `cullMainMeanMs`, its spec §8.5) | ≤ 1.0 ms amortised |']);
+    expect(rows.length, 'one cave row in §7\'s main-thread table').toBe(1);
+    expect(rows[0]!.startsWith('| cave culling: the walk (on change, 0.5 ms slices) and RegionBatch\'s draw filter (SP6b; `cullMainMeanMs`, its spec §8.5')).toBe(true);
+    expect(rows[0]!.endsWith(' | ≤ 1.0 ms amortised |')).toBe(true);
+  });
+
+  test('§7\'s main-thread row: the walk\'s measured cost (SP6b spec §15 item 17)', () => {
+    type Caves = { caves: { cullMainMeanMs: number; cullMainMaxMs: number } };
+    const asset = (name: string): Caves => JSON.parse(readFileSync(`${ROOT_DIR}docs/superpowers/specs/assets/sp6b/${name}`, 'utf8')) as Caves;
+    const chrome = asset('bench-iris-chrome.json').caves, firefox = asset('bench-iris-firefox.json').caves;
+    const s7 = text.slice(text.indexOf('**Main thread per frame (Medium):**'), text.indexOf('**GPU per frame'));
+    const row = s7.split('\n').find((l) => l.startsWith('| cave culling:'));
+    expect(row, 'no cave culling row in §7\'s main-thread table').toBeDefined();
+    // G1's bounds on L13 (the spec §8.5, §12.6), as THRESHOLDS holds them.
+    const mean = THRESHOLDS.G1?.['cullMainMeanMs'], max = THRESHOLDS.G1?.['cullMainMaxMs'];
+    expect(mean).toEqual({ max: 1.0, activeFrom: 'SP6b' });
+    expect(max).toEqual({ max: 1.5, activeFrom: 'SP6b' });
+    // The gated Chrome file's mean and max (RegionBatch's filter and the walk), then Firefox's (RegionMesh's arenas).
+    expect(row).toContain(`measured on L13 at ${chrome.cullMainMeanMs.toFixed(3)} ms per frame on average and ${chrome.cullMainMaxMs.toFixed(2)} ms at most in Chrome on the Iris Xe, \`assets/sp6b/bench-iris-chrome.json\`, gated by G1 at ${mean!.max!.toFixed(1)} and ${max!.max!.toFixed(1)} ms;`);
+    expect(row).toContain(`with RegionMesh's arenas in Firefox ${firefox.cullMainMeanMs.toFixed(3)} and ${firefox.cullMainMaxMs.toFixed(2)} ms, \`assets/sp6b/bench-iris-firefox.json\`)`);
+    expect(chrome.cullMainMeanMs).toBeLessThanOrEqual(mean!.max!);
+    expect(chrome.cullMainMaxMs).toBeLessThanOrEqual(max!.max!);
+    expect(row!.endsWith(' | ≤ 1.0 ms amortised |')).toBe(true);
+  });
+
+  test('§7 as measured in SP6b: the rows with their values and gates, the refill, the cave quarts (SP6b spec §15 item 21)', () => {
+    const lines = text.split('\n');
+    const line = lines.find((l) => l.startsWith('- **Measured in SP6b** (amended by SP6b):'));
+    expect(line, 'no `- **Measured in SP6b** (amended by SP6b): …` line in §7').toBeDefined();
+    // It follows SP6a's measured line, inside §7.
+    const at = text.indexOf(line!);
+    expect(at).toBeGreaterThan(text.indexOf('- **Measured in SP6a** (amended by SP6a):'));
+    expect(at).toBeLessThan(text.indexOf('## 8. Risks'));
+    // The bench rows it names are measured by BENCH_ROWS, and each carries a measured value (a number of ms after its name).
+    const rows: readonly string[] = BENCH_ROWS;
+    for (const row of ['terrain.real', 'terrain.islands', 'caveBiome.column', 'cull.walk.rd12', 'cull.walk.rd16', 'slice.biome3d128']) {
+      expect(line, `§7's "Measured in SP6b" line does not name ${row}`).toContain(`\`${row}\``);
+      expect(rows, `BENCH_ROWS does not measure ${row}`).toContain(row);
+      const after = line!.slice(line!.indexOf(`\`${row}\``));
+      expect(after, `${row} has no measured value`).toMatch(/^`[^`]+`[^;]*?\d+(?:\.\d+)? ms/);
+    }
+    // The gates are the bench's constants.
+    expect(line).toContain(`gated at p50 ≤ ${TERRAIN_P50_MAX_MS} ms, p99 ≤ ${TERRAIN_P99_MAX_MS} ms by \`TERRAIN_P50_MAX_MS\` and \`TERRAIN_P99_MAX_MS\``);
+    expect(line).toContain(`gated at p50 ≤ ${ISLANDS_P50_MAX_MS} ms, p99 ≤ ${ISLANDS_P99_MAX_MS} ms by \`ISLANDS_P50_MAX_MS\` and \`ISLANDS_P99_MAX_MS\``);
+    expect(line).toContain(`gated at p50 ≤ ${SLICE_BIOME3D_P50_MAX_MS} ms by \`SLICE_BIOME3D_P50_MAX_MS\``);
+    // `terrain.real` against 1ac9e7b's 10.46 ms (§8 risk 3's condition, the next test).
+    const real = /`terrain\.real` p50 (\d+(?:\.\d+)?) ms/.exec(line!);
+    expect(real, 'the line states terrain.real\'s p50').not.toBeNull();
+    expect(Number(real![1]) - 10.46).toBeLessThanOrEqual(0.5);
+    expect(line).toContain('so §8 risk 3 gains no sentence');
+    // The refill: L14's `xrayApplyRefillMs` read from the committed Chrome (gated) and Firefox files, recorded.
+    type Xray = { xray: { xrayApplyRefillMs: number } };
+    const refill = (name: string): string => Math.round((JSON.parse(readFileSync(`${ROOT_DIR}docs/superpowers/specs/assets/sp6b/${name}`, 'utf8')) as Xray).xray.xrayApplyRefillMs).toLocaleString('en-US');
+    expect(line).toContain(`\`xrayApplyRefillMs\` (L14's cave Apply with the X-ray on at RD 12) ${refill('bench-iris-chrome.json')} ms in Chrome on the Iris Xe (\`assets/sp6b/bench-iris-chrome.json\`) and ${refill('bench-iris-firefox.json')} ms in Firefox (\`assets/sp6b/bench-iris-firefox.json\`), recorded, not gated: its 6 s target is SP12's`);
+    // The T row's "about 300 cave quarts" restated as measured (recon-gen §1.7; the SP6b spec §12.5).
+    const tRow = lines.find((l) => l.startsWith('| T: biomes + surface scan + write |'));
+    expect(tRow, 'no T biomes row in §7').toBeDefined();
+    expect(tRow).toContain('p50 60, p90 177, max 575 quarts holding cave air per column (estimated about 300 before; amended by SP6b)');
+    expect(tRow).not.toContain('about 300 cave quarts');
+  });
+
+  test('§8 risk 3 unchanged: the move was not more than 0.5 ms, so its sentence was not needed (SP6b spec §15 item 3)', () => {
+    const r3 = text.slice(text.indexOf('3. **T cost of the full cave family in JS, plus DAG closures.**'), text.indexOf('4. **Hashed-lattice noise cost.**'));
+    const lines = r3.trimEnd().split('\n');
+    expect(lines.length, 'risk 3 keeps its header and three items').toBe(4);
+    expect(lines[0]).toBe('3. **T cost of the full cave family in JS, plus DAG closures.**');
+    expect(lines[1]).toBe('   - Mitigation: interval early-outs, bench gates per SP, and the codegen kill criterion.');
+    expect(lines[2]).toBe('   - Knobs in reserve: octave pruning via amplitude arrays, and 4×8×4 cells for noodles (thinnest-axis metric C5 guards against blurring).');
+    expect(lines[3]!.startsWith('   - Outcome (SP6a; amended by SP6a):')).toBe(true);
+    expect(r3).not.toContain('SP6b');
+    // The Exit evidence records the item as not needed, with D25's figure after the levers against 1ac9e7b's 10.46 ms.
+    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-12-sp6b-cave-biomes-design.md`, 'utf8');
+    const evidence = spec.slice(spec.indexOf('## Exit evidence'), spec.indexOf('## Threshold log'));
+    const item = evidence.split('\n').find((l) => l.startsWith('- **§15 item 3 (§8 risk 3): not needed.**'));
+    expect(item, 'the Exit evidence does not record §15 item 3 as not needed').toBeDefined();
+    const d25 = /`terrain\.real` p50 after Task 25's levers \(25e included\) is (\d+(?:\.\d+)?) ms at turbo/.exec(item!);
+    expect(d25, 'the item states D25\'s terrain.real p50 after the levers').not.toBeNull();
+    expect(Number(d25![1]) - 10.46).toBeLessThanOrEqual(0.5);
+  });
+
+  test('§10\'s Received from SP6b lines (SP6b spec §15 item 2)', () => {
+    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-12-sp6b-cave-biomes-design.md`, 'utf8');
+    const s16 = spec.slice(spec.indexOf('## 16. Notes handed to later SPs'), spec.indexOf('## 17. Cut line'));
+    const SP6A = '- Received from SP6a (its spec §14; amended by SP6a):';
+    const SP6B = '- Received from SP6b (its spec §16; amended by SP6b):';
+    // Each phrase is §16's text, so it is checked in §16's bullet too.
+    const handed: Array<[id: SubProjectId, entry: string, phrases: readonly string[]]> = [
+      ['SP7', spEntry('SP7', 'SP8a'), ['lava may appear in the abyss and light it a little', '"y la propia lava que también emite luz"', 'widened by 0.1 depth disables aquifers there', 'clay under cave water in lush and gravel under cave water elsewhere', '`caves.floor.y` by a lava mask', 'and re-checks `C7.bedrockExposed`', 'the cave channel\'s nibble marks flooded caves\' biome too', 'SP7\'s spec reconciles the two.']],
+      ['SP8a', spEntry('SP8a', 'SP8b'), ['painters for the seven flat-colour blocks', 'the abyss\'s dark albedos re-judged with textures under the light floor', 'the X-ray\'s biome palette stays flat']],
+      ['SP8b', spEntry('SP8b', 'SP8c'), ['the abyss\'s faintly glowing crystals or gems, exclusive to the abyss, and its light gothic touch', 'the abyss mineral (O2) placed by the nibble or `caveBiomeQ`', 'reads the scan\'s per-run `floorBiome` and `ceilBiome` and the nibble', '`secondaryDepthRange` if its rules need a noisy depth', 'emitters lift caves above the light floor']],
+      ['SP8c', spEntry('SP8c', 'SP9'), ['the abyss silent', '"Oscuro y silencioso"', 'AU3\'s abyss label from the nibble at the eye', 'the `SOUND` group `abyss` now assigned to five blocks (footsteps)']],
+      ['SP9', spEntry('SP9', 'SP10'), ['structures may read `caveBiomeQ` to choose cave pieces', 'a structure\'s boxes shrink the floor\'s terms as they shrink carvers']],
+      ['SP10', spEntry('SP10', 'SP11'), ['the F3 line "cave biome at the eye" with the kind', 'the probe\'s cave biome and the picker\'s inputs', 'a "freeze culling" toggle and the culled count in F3', 'the map\'s cave tile layer (SP6a) gains the biome', '`replyDuringFlushP95Ms`\'s flake']],
+      ['SP11', spEntry('SP11', 'SP12'), ['RegionMesh\'s buffer policy (Firefox geometry 181 MB', 'per-section culling on RegionMesh (index writes or multi-draw), if Firefox needs them', 'the X-ray\'s biome palette is a uniform of the GLSL material (the TSL seam)']],
+      ['SP12', sp12Entry(), ['the X-ray refill\'s 6 s target', '(a frame cap while regenerating with a scaled upload budget; a cached non-cave density)', '`C6.latticeBias`\'s 1.1, read as ≤ 1.09 on SP6b\'s measure', 'the SP6a tree reads 1.10-1.11 on it', '`cave_heavy`\'s finalisation with C1\'s 10-22 % gate', 'the B3 border bounds and `C7.bottomFlatRatio` re-judged with the final tuning', 'the cave biomes in the extreme presets']],
+    ];
+    for (const [id, entry, phrases] of handed) {
+      const lines = entry.split('\n');
+      const at = lines.findIndex((l) => l.startsWith(SP6B));
+      expect(at, `${id} has no "Received from SP6b" line`).toBeGreaterThan(-1);
+      expect(lines.filter((l) => l.startsWith(SP6B)).length, `${id} has one "Received from SP6b" line`).toBe(1);
+      // It follows the entry's "Received from SP6a" line, which keeps none of SP6b's hand-overs (MST:1979's pin).
+      expect(lines[at - 1]!.startsWith(SP6A), `${id}'s "Received from SP6b" line follows its "Received from SP6a" line`).toBe(true);
+      expect(lines[at - 1], `${id}'s "Received from SP6a" line`).not.toContain('Received from SP6b');
+      const bullet = s16.split('\n').find((l) => l.startsWith(`- **${id}:** `));
+      expect(bullet, `the SP6b spec §16 has no ${id} bullet`).toBeDefined();
+      for (const phrase of phrases) {
+        expect(lines[at], `${id}'s "Received from SP6b" line`).toContain(phrase);
+        expect(bullet, `the SP6b spec §16's ${id} bullet`).toContain(phrase);
+      }
+    }
+    // The three abyss hand-overs, each in its receiver's line (the user's words, SP6b's entry).
+    const of = (entry: string): string => entry.split('\n').find((l) => l.startsWith(SP6B)) ?? '';
+    expect(of(spEntry('SP7', 'SP8a'))).toContain('lava may appear in the abyss');
+    expect(of(spEntry('SP8b', 'SP8c'))).toContain('crystals or gems');
+    expect(of(spEntry('SP8c', 'SP9'))).toContain('silent');
+    // SP6b's own entry receives nothing from itself.
+    expect(spEntry('SP6b', 'SP7')).not.toContain(SP6B);
   });
 });
