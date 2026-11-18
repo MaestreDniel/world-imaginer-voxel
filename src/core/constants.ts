@@ -267,3 +267,11 @@ export const AQUIFER_JITTER_Y = 9;
 export const AQUIFER_LAVA_BLOCK_XZ = 64;
 export const AQUIFER_LAVA_BLOCK_Y = 40;
 export const AQUIFER_EMPTY = 0;
+/**
+ * The aquifer's voxel rule (SP7a spec §1.5-§1.6, the plan's Task 6): `AQUIFER_BARRIER` is `voxelRule`'s answer for a
+ * barrier (rock, never a fluid byte); `AQUIFER_EMPTY_LEVEL` the finite level an empty status counts as in the barrier
+ * pressure, Minecraft's `WAY_BELOW_MIN_Y` (`MIN_Y` −2032 << 4, **MC (memory)**): any level far below the world gives
+ * the same pressure, and −∞ would give NaN.
+ */
+export const AQUIFER_BARRIER = -1;
+export const AQUIFER_EMPTY_LEVEL = -32512;

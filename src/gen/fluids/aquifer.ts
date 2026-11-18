@@ -1,6 +1,6 @@
 /**
- * The aquifer's cells and statuses (SP7a spec §1.1-§1.4, D18; master §3.9): the cell grid, the jittered centres and
- * each cell's status, a level and a fluid type. Task 6 adds the voxel rule over a column, Task 7 the point functions.
+ * The aquifer (SP7a spec §1.1-§1.8, D18-D20; master §3.9): the cell grid, the jittered centres and each cell's status,
+ * a level and a fluid type; the voxel rule and the column step T runs. Task 7 adds the point functions.
  * - **Cells.** 16 × 12 × 16 blocks on a grid offset by (5, 1, 5): a voxel's cell is (i, j, k) = (⌊(x − 5)/16⌋,
  *   ⌊(y + 1)/12⌋, ⌊(z − 5)/16⌋), and its 12 candidates are i … i + 1, j − 1 … j + 1, k … k + 1, enumerated i outer, j,
  *   k inner (`cellCandidates`); a tie between equal squared distances goes to the lower index in that order. A cell's
@@ -14,18 +14,31 @@
  *   ⌊centre.y/40⌋·40 + 20 + 3·round(Nspread·10/3), lava when that level ≤ `lavaMaxLevel` and |Nlava| > `lavaThreshold`;
  *   else empty. Nf, Nspread and Nlava are clamped to [−1, 1]; Nf is read at (cx, 0.67·cy, cz), Nspread at (cx,
  *   0.714·cy, cz), Nlava at the corner of the centre's 64 × 40 × 64 block (**MC (memory)**).
+ * - **The voxel rule** (`voxelRule`, §1.4-§1.6). A tagged non-solid voxel reads its two nearest centres among the 12
+ *   candidates (squared distances d1 ≤ d2, statuses s1, s2). Inside the abyss (its own nibble 3) a water status reads
+ *   as empty. When s1 ≠ s2 and d2 − d1 < `barrierBand`, the voxel is a barrier (rock) when similarity·2·(Nb + p) > 0,
+ *   similarity = 1 − (d2 − d1)/`barrierBand`, p = `pressure(y, s1, s2)`, Nb the barrier noise at (x, 0.5·y, z) read only
+ *   while −2 ≤ p ≤ 2 (**MC (memory)**). Otherwise s1's fluid fills at y ≤ its level (Spec correction 7: a level is the
+ *   highest fluid y), water becoming barrier rock in the abyss's margin (`inAbyssMargin`); an empty voxel below
+ *   `lavaLevel` is a lava source.
+ * - **The column step** (`aquiferColumn`, §1.7-§1.8, D19): untagged air takes water at y ≤ ⌊`surfaceWaterLevel`⌋ at the
+ *   nearest quart corner; tagged air the voxel rule, over a per-job status cache of 3 × 35 × 3 cells (Spec correction 14).
+ *   Its fast path skips a voxel more than 4 blocks above every level of its 12 candidates (beyond the pressure's reach,
+ *   so no barrier and no fluid) when none of them is lava and the voxel is not below `lavaLevel`.
  * Follows the gen determinism rules: every value in world coordinates, one fixed operation order.
  */
 import {
-  AQUIFER_CELL_XZ, AQUIFER_CELL_Y, AQUIFER_EMPTY, AQUIFER_JITTER_XZ, AQUIFER_JITTER_Y, AQUIFER_LAVA_BLOCK_XZ,
-  AQUIFER_LAVA_BLOCK_Y, AQUIFER_OFFSET_XZ, AQUIFER_OFFSET_Y, SEA_LEVEL,
+  AQUIFER_BARRIER, AQUIFER_CELL_XZ, AQUIFER_CELL_Y, AQUIFER_EMPTY, AQUIFER_EMPTY_LEVEL, AQUIFER_JITTER_XZ, AQUIFER_JITTER_Y,
+  AQUIFER_LAVA_BLOCK_XZ, AQUIFER_LAVA_BLOCK_Y, AQUIFER_OFFSET_XZ, AQUIFER_OFFSET_Y, CAVE_BIOME, MIN_Y, SEA_LEVEL,
 } from '../../core/constants';
 import { deriveSeed, hash3 } from '../../core/hash';
 import { NormalNoise } from '../../core/noise/normal';
 import type { NormalNoise as NormalNoiseT } from '../../core/noise/normal';
 import type { NoiseDef } from '../../core/noise/types';
-import { FLUID_LAVA, FLUID_WATER } from '../../world/blocks/fluid';
+import { FLUID_LAVA, FLUID_WATER, LAVA_SOURCE, WATER_SOURCE } from '../../world/blocks/fluid';
+import type { CaveColumnPass, CavePickerInputs } from '../biomes/cavePicker';
 import { newPointRecord, samplePoint } from '../column/columnPoint';
+import { readLevel, type ColumnSample } from '../column/columnStage';
 import type { GenContext } from '../context';
 
 const CELL_XZ = AQUIFER_CELL_XZ;
@@ -48,6 +61,14 @@ const SAMPLE = samplePoint;
 const FLOOR = Math.floor;
 const ROUND = Math.round;
 const ABS = Math.abs;
+const BARRIER = AQUIFER_BARRIER;
+const EMPTY_LEVEL = AQUIFER_EMPTY_LEVEL;
+const BIOME = CAVE_BIOME;
+const ABYSS = BIOME.abyss;
+const Y0 = MIN_Y;
+const WATER_SRC = WATER_SOURCE;
+const LAVA_SRC = LAVA_SOURCE;
+const LEVEL = readLevel;
 
 /** The ocean factor's span: t = clamp((63 − offset)/8, 0, 1). */
 const OCEAN_SPAN = 8;
@@ -188,14 +209,17 @@ const CENTRE = new Int32Array(3);
  * when given, receives `cellKindOf` on the same sampled values.
  */
 export function cellStatus(inp: AquiferInputs, i: number, j: number, k: number, kindOut?: Int32Array): number {
+  const p = SAMPLE(inp.ctx, i * CELL_XZ, k * CELL_XZ, false, REC);
+  return statusAtPoint(inp, i, j, k, p.offset, p.surfaceWaterLevel, kindOut);
+}
+
+/** `cellStatus` on its grid column's sampled `offset` and `surfaceWaterLevel` (the column step samples each once). */
+function statusAtPoint(inp: AquiferInputs, i: number, j: number, k: number, offset: number, level: number, kindOut?: Int32Array): number {
   const st = inp.settings;
   cellCentre(inp, i, j, k, CENTRE);
   const cx = CENTRE[0]!;
   const cy = CENTRE[1]!;
   const cz = CENTRE[2]!;
-  const p = SAMPLE(inp.ctx, i * CELL_XZ, k * CELL_XZ, false, REC);
-  const offset = p.offset;
-  const level = p.surfaceWaterLevel;
   let nf = 0;
   let ns = 0;
   let nlava = 0;
@@ -206,4 +230,298 @@ export function cellStatus(inp: AquiferInputs, i: number, j: number, k: number, 
   }
   if (kindOut !== undefined) kindOut[0] = cellKindOf(st, cy, offset, level, nf);
   return statusOf(st, cy, offset, level, nf, ns, nlava);
+}
+
+/** The barrier noise's vertical scale: Nb is read at (x, 0.5·y, z) (**MC (memory)**). */
+const BARRIER_Y = 0.5;
+/** The abyss margin's depth part (§1.6, master :760): depth > `depthMin` − 0.1. */
+const ABYSS_DEPTH_MARGIN = 0.1;
+/** The fast path's reach above a neighbourhood's highest level: the pressure is below −2 from level + 4.5 up. */
+const FAST_REACH = 4;
+
+const typeOfStatus = (s: number): number => s >>> 16;
+/** A status's level, an empty status counting as `AQUIFER_EMPTY_LEVEL` (the pressure's finite −∞). */
+const levelOfStatus = (s: number): number => (s === EMPTY ? EMPTY_LEVEL : (s & 0xffff) - LEVEL_BIAS);
+/** Whether one status is water and the other lava with both holding fluid at y (fluid at y ≤ level). */
+const fluidContact = (y: number, s1: number, s2: number): boolean => {
+  const t1 = typeOfStatus(s1);
+  const t2 = typeOfStatus(s2);
+  return t1 !== 0 && t2 !== 0 && t1 !== t2 && y <= levelOfStatus(s1) && y <= levelOfStatus(s2);
+};
+
+/**
+ * The barrier pressure at height y between statuses s1 and s2 (**MC (memory)**): 2 when one is water and the other lava
+ * and both hold fluid at y; else, with L1, L2 their levels (`AQUIFER_EMPTY_LEVEL` for an empty status), dl = |L1 − L2|
+ * (0 when equal), e = y + 0.5 − (L1 + L2)/2 and o = dl/2 − |e|: for e > 0, o/1.5 when o > 0, else o/2.5; for e ≤ 0,
+ * with q = 3 + o, q/3 when q > 0, else q/10.
+ */
+export function pressure(y: number, s1: number, s2: number): number {
+  if (fluidContact(y, s1, s2)) return 2;
+  const l1 = levelOfStatus(s1);
+  const l2 = levelOfStatus(s2);
+  const dl = ABS(l1 - l2);
+  if (dl === 0) return 0;
+  const e = y + 0.5 - (l1 + l2) / 2;
+  const o = dl / 2 - ABS(e);
+  if (e > 0) return o > 0 ? o / 1.5 : o / 2.5;
+  const q = 3 + o;
+  return q > 0 ? q / 3 : q / 10;
+}
+
+/**
+ * The rule's body (see `voxelRule`), reading the barrier noise from `noise` at (x, 0.5·y, z) when given, else taking
+ * `nb`; either is read only where it decides (s1 ≠ s2, d2 − d1 < `barrierBand`, no fluid contact, −2 ≤ p ≤ 2).
+ */
+function ruleOf(
+  st: AquiferSettings, y: number, d1: number, s1: number, d2: number, s2: number, nb: number, abyss: boolean, margin: boolean,
+  noise: NormalNoiseT | null, x: number, z: number,
+): number {
+  if (abyss) {
+    if (typeOfStatus(s1) === WATER) s1 = EMPTY;
+    if (typeOfStatus(s2) === WATER) s2 = EMPTY;
+  }
+  const band = st.barrierBand;
+  if (s1 !== s2 && d2 - d1 < band) {
+    const similarity = 1 - (d2 - d1) / band;
+    const p = pressure(y, s1, s2);
+    let n = 0;
+    if (p >= -2 && p <= 2 && !fluidContact(y, s1, s2)) n = noise === null ? nb : noise.z3(x, BARRIER_Y * y, z);
+    if (similarity * 2 * (n + p) > 0) return BARRIER;
+  }
+  const t = typeOfStatus(s1);
+  if (t !== 0 && y <= levelOfStatus(s1)) return t === WATER ? (margin ? BARRIER : WATER_SRC) : LAVA_SRC;
+  return y < st.lavaLevel ? LAVA_SRC : 0;
+}
+
+/**
+ * The aquifer's decision at a tagged non-solid voxel at height y (§1.4-§1.6, D20), from its two nearest centres
+ * (squared distances d1 ≤ d2, statuses s1, s2), the barrier noise nb there, whether its own nibble is the abyss and
+ * whether it lies in the abyss's margin: a water status reads as empty where `abyss`; when s1 ≠ s2 and d2 − d1 <
+ * `barrierBand`, `AQUIFER_BARRIER` when similarity·2·(nb + p) > 0 (similarity = 1 − (d2 − d1)/`barrierBand`, p =
+ * `pressure(y, s1, s2)`, nb counted only while −2 ≤ p ≤ 2 and the statuses are not water and lava both fluid at y);
+ * otherwise s1's fluid source at y ≤ its level (Spec correction 7), water becoming `AQUIFER_BARRIER` where `margin`;
+ * else a lava source below `lavaLevel`, 0 above. Returns a fluid byte, 0 or `AQUIFER_BARRIER`.
+ */
+export function voxelRule(
+  st: AquiferSettings, y: number, d1: number, s1: number, d2: number, s2: number, nb: number, abyss: boolean, margin: boolean,
+): number {
+  return ruleOf(st, y, d1, s1, d2, s2, nb, abyss, margin, null, 0, 0);
+}
+
+/**
+ * Whether voxel (x, y, z) of the pass's column lies in the abyss box widened on every side (§1.6), from the pass's
+ * unjittered C′, E′ and Y0 at (x, z): E′ ≤ `eMax` + m, C′ > `cMin` − m and depth = (Y0 − y)/`depthScale` > `depthMin` −
+ * 0.1, m = `abyssMargin`. The caller tests the voxel's own nibble first (the margin is for voxels outside the abyss).
+ */
+export function inAbyssMargin(inp: AquiferInputs, pick: CavePickerInputs, pass: CaveColumnPass, x: number, y: number, z: number): boolean {
+  const b = pick.settings;
+  const a = b.abyss;
+  const m = inp.settings.abyssMargin;
+  const k = (z - 16 * pass.cz + 4) * 24 + (x - 16 * pass.cx + 4);
+  const depth = (pass.y0[k]! - y) / b.depthScale;
+  return pass.e[k]! <= a.eMax + m && pass.c[k]! > a.cMin - m && depth > a.depthMin - ABYSS_DEPTH_MARGIN;
+}
+
+/** The status cache's rows: j −7 … 27 (Spec correction 14), and its neighbourhoods' rows j −6 … 26. */
+const ROWS = 35;
+const J_MIN = -7;
+const HOOD_ROWS = 33;
+const HOOD_J_MIN = -6;
+const CACHE_CELLS = 3 * ROWS * 3;
+const HOODS = 2 * HOOD_ROWS * 2;
+
+/**
+ * The status cache of one T job (§1.8, Spec correction 14): the 3 × 35 × 3 cells i cx − 1 … cx + 1, j −7 … 27,
+ * k cz − 1 … cz + 1 that a column's candidates reach (entry ((i − cx + 1)·35 + j + 7)·3 + k − cz + 1), each status and
+ * centre filled on first use; and each neighbourhood's (the 12 candidates of a base cell i0 cx − 1 … cx, j0 −6 … 26,
+ * k0 cz − 1 … cz; entry ((i0 − cx + 1)·33 + j0 + 6)·2 + k0 − cz + 1) highest level and whether one of its cells is lava;
+ * and the 9 grid columns' (16i, 16k) `offset` and `surfaceWaterLevel` (entry (i − cx + 1)·3 + k − cz + 1, D18's 9
+ * `samplePoint` calls per T column). `aquiferColumn` resets it for its column.
+ */
+export interface AquiferScratch {
+  cx: number;
+  cz: number;
+  readonly filled: Uint8Array;
+  readonly status: Int32Array;
+  readonly centre: Int32Array;
+  readonly hoodFilled: Uint8Array;
+  readonly hoodMax: Int32Array;
+  readonly hoodLava: Uint8Array;
+  readonly pointFilled: Uint8Array;
+  readonly pointOffset: Float64Array;
+  readonly pointLevel: Float64Array;
+}
+
+export function createAquiferScratch(): AquiferScratch {
+  return {
+    cx: 0, cz: 0,
+    filled: new Uint8Array(CACHE_CELLS), status: new Int32Array(CACHE_CELLS), centre: new Int32Array(3 * CACHE_CELLS),
+    hoodFilled: new Uint8Array(HOODS), hoodMax: new Int32Array(HOODS), hoodLava: new Uint8Array(HOODS),
+    pointFilled: new Uint8Array(9), pointOffset: new Float64Array(9), pointLevel: new Float64Array(9),
+  };
+}
+
+const CACHE_CENTRE = new Int32Array(3);
+
+/** The cache entry of cell (i, j, k), its status and centre filled on first use. */
+function cachedCell(inp: AquiferInputs, sc: AquiferScratch, i: number, j: number, k: number): number {
+  const e = ((i - sc.cx + 1) * ROWS + j - J_MIN) * 3 + k - sc.cz + 1;
+  if (sc.filled[e] === 0) {
+    const g = (i - sc.cx + 1) * 3 + k - sc.cz + 1;
+    if (sc.pointFilled[g] === 0) {
+      const p = SAMPLE(inp.ctx, i * CELL_XZ, k * CELL_XZ, false, REC);
+      sc.pointOffset[g] = p.offset;
+      sc.pointLevel[g] = p.surfaceWaterLevel;
+      sc.pointFilled[g] = 1;
+    }
+    sc.status[e] = statusAtPoint(inp, i, j, k, sc.pointOffset[g]!, sc.pointLevel[g]!);
+    cellCentre(inp, i, j, k, CACHE_CENTRE);
+    sc.centre[3 * e] = CACHE_CENTRE[0]!;
+    sc.centre[3 * e + 1] = CACHE_CENTRE[1]!;
+    sc.centre[3 * e + 2] = CACHE_CENTRE[2]!;
+    sc.filled[e] = 1;
+  }
+  return e;
+}
+
+/** The neighbourhood entry of base cell (i0, j0, k0), its highest level and lava flag filled on first use. */
+function cachedHood(inp: AquiferInputs, sc: AquiferScratch, i0: number, j0: number, k0: number): number {
+  const h = ((i0 - sc.cx + 1) * HOOD_ROWS + j0 - HOOD_J_MIN) * 2 + k0 - sc.cz + 1;
+  if (sc.hoodFilled[h] === 0) {
+    let max = EMPTY_LEVEL;
+    let lava = 0;
+    for (let di = 0; di <= 1; di++) {
+      for (let dj = -1; dj <= 1; dj++) {
+        for (let dk = 0; dk <= 1; dk++) {
+          const s = sc.status[cachedCell(inp, sc, i0 + di, j0 + dj, k0 + dk)]!;
+          const l = levelOfStatus(s);
+          if (l > max) max = l;
+          if (typeOfStatus(s) === LAVA) lava = 1;
+        }
+      }
+    }
+    sc.hoodMax[h] = max;
+    sc.hoodLava[h] = lava;
+    sc.hoodFilled[h] = 1;
+  }
+  return h;
+}
+
+/** Each position's ⌊`surfaceWaterLevel`⌋ at its nearest quart corner (−∞ on land), per column index `lz·16 + lx`. */
+const SKY_LEVEL = new Float64Array(256);
+
+/** `aquiferColumn`'s body; `fast` turns on §1.8's fast path. */
+function columnStep(
+  inp: AquiferInputs, s: ColumnSample, pick: CavePickerInputs, pass: CaveColumnPass, solid: Uint8Array, tags: Uint8Array,
+  waterV: Uint8Array, fluid: Uint8Array, topFluid: Int32Array, sc: AquiferScratch, fast: boolean,
+): void {
+  if (solid.length !== 98304 || tags.length !== 98304 || waterV.length !== 98304 || fluid.length !== 98304 || topFluid.length !== 256) {
+    throw new RangeError('aquiferColumn: solid, tags, waterV and fluid need 98,304 entries, topFluid 256');
+  }
+  const st = inp.settings;
+  const enabled = st.enabled;
+  const lavaLevel = st.lavaLevel;
+  const noise = inp.barrier;
+  const x0 = 16 * s.cx;
+  const z0 = 16 * s.cz;
+  sc.cx = s.cx;
+  sc.cz = s.cz;
+  sc.filled.fill(0);
+  sc.hoodFilled.fill(0);
+  sc.pointFilled.fill(0);
+  const centre = sc.centre;
+  const status = sc.status;
+  for (let p = 0; p < 256; p++) {
+    SKY_LEVEL[p] = FLOOR(LEVEL(s, 'surfaceWaterLevel', x0 + (p & 15), z0 + (p >> 4)));
+    topFluid[p] = Y0 - 1;
+  }
+  waterV.fill(0, 0, 256);
+  fluid.fill(0, 0, 256);
+  for (let v = 256; v < 98304; v++) {
+    let f = 0;
+    if (solid[v] === 0) {
+      const p = v & 255;
+      const y = (v >> 8) + Y0;
+      const tag = tags[v]!;
+      if ((tag & 15) === 0) {
+        if (y <= SKY_LEVEL[p]!) f = WATER_SRC;
+      } else if (enabled) {
+        const x = x0 + (p & 15);
+        const z = z0 + (p >> 4);
+        const i0 = FLOOR((x - OFFSET_XZ) / CELL_XZ);
+        const j0 = FLOOR((y + OFFSET_Y) / CELL_Y);
+        const k0 = FLOOR((z - OFFSET_XZ) / CELL_XZ);
+        let skip = false;
+        if (fast && y >= lavaLevel) {
+          const h = cachedHood(inp, sc, i0, j0, k0);
+          skip = sc.hoodLava[h] === 0 && y > sc.hoodMax[h]! + FAST_REACH;
+        }
+        if (!skip) {
+          let d1 = Infinity;
+          let d2 = Infinity;
+          let s1 = EMPTY;
+          let s2 = EMPTY;
+          for (let di = 0; di <= 1; di++) {
+            for (let dj = -1; dj <= 1; dj++) {
+              for (let dk = 0; dk <= 1; dk++) {
+                const e = cachedCell(inp, sc, i0 + di, j0 + dj, k0 + dk);
+                const dx = x - centre[3 * e]!;
+                const dy = y - centre[3 * e + 1]!;
+                const dz = z - centre[3 * e + 2]!;
+                const d = dx * dx + dy * dy + dz * dz;
+                if (d < d1) {
+                  d2 = d1;
+                  s2 = s1;
+                  d1 = d;
+                  s1 = status[e]!;
+                } else if (d < d2) {
+                  d2 = d;
+                  s2 = status[e]!;
+                }
+              }
+            }
+          }
+          const abyss = tag >> 4 === ABYSS;
+          // The margin decides only where s1's water would fill (y at or below its level).
+          const margin = !abyss && typeOfStatus(s1) === WATER && y <= levelOfStatus(s1) && inAbyssMargin(inp, pick, pass, x, y, z);
+          const r = ruleOf(st, y, d1, s1, d2, s2, 0, abyss, margin, noise, x, z);
+          if (r === BARRIER) {
+            solid[v] = 1;
+            tags[v] = 0;
+          } else {
+            f = r;
+          }
+        }
+      }
+    }
+    fluid[v] = f;
+    waterV[v] = f === WATER_SRC ? 1 : 0;
+    if (f !== 0) topFluid[v & 255] = (v >> 8) + Y0;
+  }
+}
+
+/**
+ * The aquifer step of column (s.cx, s.cz) (§1.7-§1.8, D19, D20) over its voxels (98,304 entries each, index
+ * `256·(y + 64) + p`, p = lz·16 + lx; the y −64 entries are bedrock and get no fluid), `pass` the column's cave-biome
+ * pass (filled by the cave-biome step): an untagged non-solid voxel takes `WATER_SOURCE` iff y ≤ ⌊`surfaceWaterLevel`⌋
+ * at its nearest quart corner (`readLevel`); a tagged one (kind ≠ 0 in `tags`' bits 0-3) `voxelRule` over its two
+ * nearest centres, with `abyss` its nibble (bits 4-7) and the margin from `inAbyssMargin`; a barrier sets `solid` to 1
+ * and `tags` to 0. Writes `fluid` (the byte, 0 for none), `waterV` (1 at water, the surface pass's scratch) and
+ * `topFluid[p]` (the highest fluid y, Y0 − 1 when none). With `enabled` false every tagged voxel is dry. The fast path
+ * (§1.8): a tagged voxel more than 4 above its 12 candidates' highest level, with no lava cell among them and not below
+ * `lavaLevel`, is air without a distance. `sc` is reset for the column.
+ */
+export function aquiferColumn(
+  inp: AquiferInputs, s: ColumnSample, pick: CavePickerInputs, pass: CaveColumnPass, solid: Uint8Array, tags: Uint8Array,
+  waterV: Uint8Array, fluid: Uint8Array, topFluid: Int32Array, sc: AquiferScratch,
+): void {
+  columnStep(inp, s, pick, pass, solid, tags, waterV, fluid, topFluid, sc, true);
+}
+
+/** `aquiferColumn` without the fast path: every tagged voxel reads its distances (the test oracle). */
+export function aquiferColumnSlow(
+  inp: AquiferInputs, s: ColumnSample, pick: CavePickerInputs, pass: CaveColumnPass, solid: Uint8Array, tags: Uint8Array,
+  waterV: Uint8Array, fluid: Uint8Array, topFluid: Int32Array, sc: AquiferScratch,
+): void {
+  columnStep(inp, s, pick, pass, solid, tags, waterV, fluid, topFluid, sc, false);
 }
