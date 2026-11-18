@@ -955,7 +955,7 @@ describe('the X-ray toggle and band (SP6a spec §5.3)', () => {
   };
   const setup = () => {
     const materials = createMaterialSystem({ variant: 'mesh', ao: true, smoothLight: true }, createFlatColorArray());
-    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0 });
+    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0, seconds: 0 });
     const sky = createSky(materials);
     const clear = fakeClear(0x123456, 0.5);
     const shown: boolean[] = [];
@@ -971,7 +971,7 @@ describe('the X-ray toggle and band (SP6a spec §5.3)', () => {
     x.setXray(true);
     x.setXray(true);
     x.setXrayBand(-40, -9);
-    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 8, fogBand: 64, nightVision: 0 });
+    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 8, fogBand: 64, nightVision: 0, seconds: 0 });
     x.syncRadius();
     x.setXray(false);
     expect(shown).toEqual([true, true, false]);
@@ -1015,14 +1015,14 @@ describe('the X-ray toggle and band (SP6a spec §5.3)', () => {
   test('the radius follows the fog end (no radius forced): `syncRadius` after a render distance change', () => {
     const { materials, x, values } = setup();
     x.setXray(true);
-    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 16.5, fogBand: 64, nightVision: 0 });
+    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 16.5, fogBand: 64, nightVision: 0, seconds: 0 });
     x.syncRadius();
     expect(values()).toEqual([1, -64, 319, 248]);
   });
 
   test('setColorMode (SP6b spec §7.2, §7.3) reaches xrayColorMode and writes nothing else: the toggle, the band, the radius, the sky dome and the clear colour unchanged, and no remesh (no `stage` call)', () => {
     const materials = createMaterialSystem({ variant: 'batch', ao: true, smoothLight: true }, createFlatColorArray());
-    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0 });
+    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0, seconds: 0 });
     const sky = createSky(materials);
     const clear = fakeClear(0x123456, 0.5);
     const calls = { setXray: 0, stage: 0 };
@@ -1088,6 +1088,12 @@ describe('the X-ray toggle and band (SP6a spec §5.3)', () => {
     const src = readFileSync(new URL('../../src/render/renderer.ts', import.meta.url), 'utf8');
     expect(src).toContain('  setXrayColorMode(mode: 0 | 1): void;');
     expect(src).toContain('    setXrayColorMode(mode) {\n      xray.setColorMode(mode);\n    },');
+  });
+
+  test('WorldRenderer.setWaterTier is the materials\' setWaterTier, nothing more: no remesh or relink (SP7a spec §7, D28; no GL context in Node: the source)', () => {
+    const src = readFileSync(new URL('../../src/render/renderer.ts', import.meta.url), 'utf8');
+    expect(src).toContain('  setWaterTier(tier: 0 | 1): void;');
+    expect(src).toContain('    setWaterTier(tier) {\n      materials.setWaterTier(tier);\n    },');
   });
 
   test('XRAY_ORDER sorts after every water region and before the ghost, with nothing between them', () => {

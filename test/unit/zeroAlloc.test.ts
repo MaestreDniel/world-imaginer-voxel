@@ -227,7 +227,7 @@ interface AtRest {
   readonly counts: CoordinatorCounts;
   /** One frame step, at the next 144 Hz timestamp. */
   tick(): void;
-  readonly state: { readonly t: number; readonly eyeSky: number; readonly nightVision: number };
+  readonly state: { readonly t: number; readonly eyeSky: number; readonly nightVision: number; readonly seconds: number };
   /** Ticks run, rendered frames, lightmap rebuilds. */
   stats(): { ticks: number; rendered: number; lightmapBuilds: number };
   readonly t0: number;
@@ -281,6 +281,10 @@ interface AtRest {
   readonly xray: PageXray;
   /** The night-vision setting the frame step eases toward (SP6a spec §6.2), off until its test. */
   setNightVision(on: boolean): void;
+  /** The water tier on the batch materials (`MaterialSystem.setWaterTier`, SP7a spec §7, D28): Fancy (1) by default. */
+  setWaterTier(tier: 0 | 1): void;
+  /** The water material's `waterTier` and `timeSeconds` uniforms. */
+  waterState(): { tier: number; seconds: number };
   /** The X-ray's uniforms (SP6b's colour mode included), the sky dome's visibility, the clear colour and the strip's element. */
   xrayState(): { on: number; yMin: number; yMax: number; mode: number; sky: boolean; clear: number; strip: ReturnType<ReturnType<typeof installDom>['el']> };
   /**
@@ -359,7 +363,7 @@ async function buildAtRest(): Promise<AtRest> {
   expect(speed60).toBeGreaterThanOrEqual(0);
   const fog = createFogEase(12);
   const frames = createFrameStats();
-  const state = { t: OPENING_T, brightness: 0.5, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand, nightVision: 0 };
+  const state = { t: OPENING_T, brightness: 0.5, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand, nightVision: 0, seconds: 0 };
   let nightVision = false;
   const none: ReadonlySet<Action> = new Set();
   // A 144 Hz display under a cap of 144: the limiter's median runs on every tick and every tick renders. Enough
@@ -618,6 +622,11 @@ async function buildAtRest(): Promise<AtRest> {
     xray: pageXray,
     setRender(fn) { render = fn; },
     setNightVision(on) { nightVision = on; },
+    setWaterTier(tier) { materials.setWaterTier(tier); },
+    waterState: () => ({
+      tier: materials.water.uniforms['waterTier']!.value as number,
+      seconds: materials.water.uniforms['timeSeconds']!.value as number,
+    }),
     xrayState: () => ({
       on: materials.xray.uniforms['xrayOn']!.value as number,
       yMin: materials.xray.uniforms['xrayYMin']!.value as number,
@@ -1121,6 +1130,25 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
       for (let i = 0; i < 100; i++) f.tick();
     }
     expect(f.state.nightVision).toBe(0);
+  }, TIMEOUT_MS);
+
+  test(`${N} frame steps at rest with Fancy water on grow the heap by less than the boxing budget of 256 B per tick, the ripple clock written every frame (SP7a spec §7, D28)`, async () => {
+    const f = await atRest();
+    // Fancy is the default (Medium's); the frames since the fixture's warm-up already wrote the clock.
+    f.setWaterTier(1);
+    expect(f.waterState().tier).toBe(1);
+    const s0 = f.waterState().seconds;
+    expect(s0).toBe(f.state.seconds);
+    const before = f.stats();
+    const g = allocationOver(f.tick, 0, FRAME_STEP_ALLOC_MAX);
+    expectAtRest(g, FRAME_STEP_ALLOC_MAX);
+    expectSp4cAtRest(f);
+    expect(f.stats().rendered - before.rendered).toBe(g.calls);
+    const w = f.waterState();
+    expect(w.tier).toBe(1);
+    // Written every frame (a wrap at 3,600 s may land inside the window, so only that it moved).
+    expect(w.seconds).not.toBe(s0);
+    expect(w.seconds).toBe(f.state.seconds);
   }, TIMEOUT_MS);
 
   test(`${N} frame steps at rest with culling on, walking and filtering, grow the heap by less than the boxing budget of 256 B per tick (SP6b §8.1, §8.3)`, async () => {

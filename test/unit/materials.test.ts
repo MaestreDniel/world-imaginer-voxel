@@ -28,7 +28,7 @@ const all = (m: MaterialSystem): Record<string, ShaderMaterial> => ({
 /** The terrain and water materials: the ones with a batched and a RegionMesh variant. */
 const terrainAndWater = (m: MaterialSystem): ShaderMaterial[] => [m.terrainOpaque, m.terrainCutout, m.water];
 
-const FRAME: FrameState = { t: 1 / 12, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0 };
+const FRAME: FrameState = { t: 1 / 12, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0, seconds: 0 };
 
 /** The index of the `#endif` that closes the conditional block opened at `start` (nested blocks skipped). */
 function blockEnd(src: string, start: number): number {
@@ -667,5 +667,86 @@ describe('the X-ray material and the collapse uniform (SP6a spec §5.2, §5.3)',
     }
     expect(readings.length, 'every attempt saw a GC').toBeGreaterThan(0);
     expect(readings[readings.length - 1]!, `heap growth over 10,000 calls (attempts: ${readings.join(', ')})`).toBeLessThan(256 * 1024);
+  });
+});
+
+describe('the water tiers (SP7a spec §7, D10, D28)', () => {
+  const mainOf = (src: string): string => src.slice(src.indexOf('void main() {'));
+
+  test('the water fragment declares waterTier and timeSeconds once and branches on waterTier: Fast keeps today\'s colour and the alpha uniform (0.72), Fancy the dFdx/dFdy normal, both ripple octaves, Schlick Fresnel (F0 0.02) toward skyColor(reflect(…)) and alpha 0.6 + 0.3·Fresnel', () => {
+    for (const v of VARIANTS) {
+      const src = SYSTEMS[v].water.fragmentShader;
+      for (const decl of ['uniform float waterTier;', 'uniform float timeSeconds;']) {
+        expect(src.split(decl).length - 1, `${v} ${decl}`).toBe(1);
+      }
+      const body = mainOf(src);
+      // Fast: today's colour, the alpha uniform; Fancy overrides both inside the one uniform branch.
+      expect(body).toContain('vec3 color = mix(waterShallow, waterDeep, vDepth / 15.0) * lightmapAt(vBlock, vSky);');
+      expect(body).toContain('float a = alpha;');
+      const branch = body.indexOf('if (waterTier > 0.5) {');
+      expect(branch, `${v}: the waterTier branch`).toBeGreaterThan(body.indexOf('float a = alpha;'));
+      expect(body.split('waterTier').length - 1, `${v}: one branch`).toBe(1);
+      const fancy = body.slice(branch, body.indexOf('\n  }\n', branch));
+      expect(fancy).toContain('vec3 n = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));');
+      expect(fancy).toContain('n = normalize(n + rippleTilt(vWorldPos.xz, timeSeconds));');
+      expect(fancy).toContain('float fresnel = 0.02 + 0.98 * pow(1.0 - clamp(dot(-viewDir, n), 0.0, 1.0), 5.0);');
+      expect(fancy).toContain('skyColor(reflect(viewDir, n))');
+      expect(fancy).toContain('a = 0.6 + 0.3 * fresnel;');
+      expect(body).toContain('gl_FragColor = vec4(applyFog(color, vViewPos, vWorldPos), a);');
+      // Both octaves: λ 4 and 1.7 blocks, scrolling 0.4 and 0.9 blocks/s along (1, 0) and (−0.6, 0.8), value-noise
+      // gradients (no texture).
+      expect(src).toContain('vec2 g = valueNoiseGrad((xz - vec2(1.0, 0.0) * (0.4 * t)) / 4.0)');
+      expect(src).toContain('+ valueNoiseGrad((xz - vec2(-0.6, 0.8) * (0.9 * t)) / 1.7);');
+      expect(src.split('valueNoiseGrad(').length - 1, `${v}: the definition and two octaves`).toBe(3);
+      expect(src).not.toMatch(/sampler2D(?!\s+lightmap)/);
+    }
+  });
+
+  test('one water material per variant (no second program): the tier is a uniform, not a define', () => {
+    for (const v of VARIANTS) {
+      const m = SYSTEMS[v];
+      const materialKeys = Object.entries(m).filter(([, x]) => (x as { isShaderMaterial?: boolean })?.isShaderMaterial === true).map(([k]) => k);
+      expect(materialKeys.filter((k) => /water/i.test(k)), v).toEqual(['water']);
+      const tiered = Object.values(all(m)).filter((mat) => mat.fragmentShader.includes('waterTier'));
+      expect(tiered, v).toEqual([m.water]);
+      expect(Object.keys(m.water.defines).filter((d) => /TIER|FANCY|FAST/.test(d)), v).toEqual([]);
+    }
+  });
+
+  test('defaults: waterTier 1 (Fancy, Medium\'s) and timeSeconds 0, one shared uniform object each in the water material', () => {
+    for (const v of VARIANTS) {
+      const fresh = system(v);
+      expect(fresh.water.uniforms['waterTier']!.value, v).toBe(1);
+      expect(fresh.water.uniforms['timeSeconds']!.value, v).toBe(0);
+      for (const name of ['waterTier', 'timeSeconds']) {
+        for (const mat of [fresh.terrainOpaque, fresh.terrainCutout, fresh.sky, fresh.ghost, fresh.xray]) {
+          expect(mat.uniforms[name], `${v} ${mat.name} ${name}`).toBeUndefined();
+        }
+      }
+    }
+  });
+
+  test('setFrameUniforms writes timeSeconds from FrameState.seconds', () => {
+    const m = system('batch');
+    m.setFrameUniforms({ ...FRAME, seconds: 12.5 });
+    expect(m.water.uniforms['timeSeconds']!.value).toBe(12.5);
+    m.setFrameUniforms({ ...FRAME, seconds: 3599.75 });
+    expect(m.water.uniforms['timeSeconds']!.value).toBe(3599.75);
+  });
+
+  test('setWaterTier(0) then (1) writes the uniform and changes no material\'s version (no recompile)', () => {
+    for (const v of VARIANTS) {
+      const m = system(v);
+      const versions = (): number[] => Object.values(all(m)).map((mat) => mat.version);
+      const before = versions();
+      const sources = Object.values(all(m)).map((mat) => mat.vertexShader + mat.fragmentShader);
+      m.setWaterTier(0);
+      expect(m.water.uniforms['waterTier']!.value, v).toBe(0);
+      expect(versions(), v).toEqual(before);
+      m.setWaterTier(1);
+      expect(m.water.uniforms['waterTier']!.value, v).toBe(1);
+      expect(versions(), v).toEqual(before);
+      expect(Object.values(all(m)).map((mat) => mat.vertexShader + mat.fragmentShader), v).toEqual(sources);
+    }
   });
 });

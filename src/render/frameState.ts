@@ -20,4 +20,10 @@ export interface FrameState {
    * lightmap with the day, dusk and brightness; required, so every frame writes it.
    */
   readonly nightVision: number;
+  /**
+   * The frame's clock in seconds (SP7a spec §7): the rendered deltas summed by the frame step, wrapped every 3,600 s to
+   * keep the shader's precision; Fancy water's ripples scroll with it (`timeSeconds`). Not the time of day (`t`);
+   * required, so every frame writes it.
+   */
+  readonly seconds: number;
 }

@@ -9,7 +9,7 @@ import type { Action } from '../../src/player/keymap';
 import { createFloatingOrigin } from '../../src/render/floatingOrigin';
 import { createFpsLimiter, type FpsCap } from '../../src/render/fpsLimiter';
 import { createFrameClock } from '../../src/ui/world/frameNotice';
-import { createFrameStep, displayInterval, eyeSkyLight, NIGHT_VISION_EASE_S, type FrameStepDeps } from '../../src/ui/world/frameStep';
+import { createFrameStep, displayInterval, eyeSkyLight, NIGHT_VISION_EASE_S, SECONDS_WRAP, type FrameStepDeps } from '../../src/ui/world/frameStep';
 import { createTeleport } from '../../src/ui/world/teleport';
 import { EYE, createWalkState, type WalkState } from '../../src/player/walk';
 import { AIR } from '../../src/world/blocks/index';
@@ -47,14 +47,14 @@ interface Rig {
 }
 
 /** A frame step over fakes: every call it makes is logged in order; the clock, limiter and throttle are real. */
-function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; paused?: () => boolean; fatalInUpdate?: () => boolean; hooks?: boolean; mode?: FlyState['mode']; timing?: boolean } = {}): Rig {
+function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; paused?: () => boolean; fatalInUpdate?: () => boolean; hooks?: boolean; mode?: FlyState['mode']; timing?: boolean; timeSpeed?: number } = {}): Rig {
   const log: string[] = [];
   const counts = createCoordinatorCounts();
   const throttle = createThrottle({ max: o.max ?? 3 });
   const pushes: Rig['pushes'] = [];
   const fly: FlyState = { x: 8, y: o.y ?? 100, z: 8, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT, mode: o.mode ?? 'fly' };
   const walk = createWalkState();
-  const state = { t: 0.1, brightness: 0.5, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand, nightVision: 0 };
+  const state = { t: 0.1, brightness: 0.5, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand, nightVision: 0, seconds: 0 };
   const held: ReadonlySet<Action> = new Set(o.held ?? []);
   const origin = createFloatingOrigin(0, 0, 0);
   // The page's `stopped` flag, set by `update` when it raises a fatal synchronously (the page's failAfterReveal).
@@ -169,7 +169,7 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
       r.ms += 3;
     },
     state,
-    timeSpeed: () => 1,
+    timeSpeed: () => o.timeSpeed ?? 1,
     fogStep: () => 12,
     nightVision: () => r.nightVision,
     onRendered: (dt) => { r.rendered.push(dt); },
@@ -339,6 +339,31 @@ describe('createFrameStep (SP4b spec §7.2)', () => {
     // ×1: 1 s of a 20-minute day.
     expect(r.state.t - t0).toBeCloseTo(1000 / 1_200_000, 12);
     expect(r.state.rd).toBe(12);
+  });
+
+  test('the water clock: state.seconds advances by the rendered delta, on rendered ticks only, and wraps from 3,599.99 to 0 (SP7a spec §7)', () => {
+    const r = rig({ cap: 30 });
+    const seen: number[] = [];
+    for (let i = 1; i <= 20; i++) {
+      r.step.tick(i * HZ60);
+      seen.push(r.state.seconds);
+    }
+    // Every rendered frame adds its delta in seconds; a skipped tick leaves it.
+    expect(r.rendered.length).toBeGreaterThan(5);
+    expect(r.state.seconds).toBeCloseTo(r.rendered.reduce((a, b) => a + b, 0) / 1000, 9);
+    expect(new Set(seen).size).toBe(r.rendered.length);
+    // The clock runs with the time of day fixed too (×0): the ripples do not stop with it.
+    expect(SECONDS_WRAP).toBe(3600);
+    const w = rig({ timeSpeed: 0 });
+    const t0 = w.state.t;
+    w.state.seconds = 3599.99;
+    w.step.tick(10);
+    expect(w.rendered).toEqual([10]);
+    expect(w.state.t).toBe(t0);
+    expect(w.state.seconds).toBeGreaterThanOrEqual(0);
+    expect(w.state.seconds).toBeLessThan(1e-9);
+    w.step.tick(1010);
+    expect(w.state.seconds).toBeCloseTo(1, 9);
   });
 
   test('night vision eases toward the setting by the rendered delta over NIGHT_VISION_EASE_S, on rendered ticks only (SP6a spec §6.2)', () => {

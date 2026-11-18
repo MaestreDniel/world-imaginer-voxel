@@ -37,6 +37,10 @@ export interface SharedUniforms {
   readonly xrayBiomePalette: IUniform<Color[]>;
   /** The X-ray's colour mode (SP6b spec §7.2), 0 or 1: its walls by kind (0) or by cave biome (1); the film by kind. */
   readonly xrayColorMode: IUniform<number>;
+  /** The water tier (SP7a spec §7, D28), 0 Fast or 1 Fancy: one water program, its fragment shader branches on it. */
+  readonly waterTier: IUniform<number>;
+  /** The frame's clock in seconds, wrapped every 3,600 s (`FrameState.seconds`): Fancy's ripples scroll with it. */
+  readonly timeSeconds: IUniform<number>;
 }
 
 /** Shared uniforms over `albedo` and the lightmap texture, at full day until the first `setFrameUniforms`. */
@@ -57,6 +61,8 @@ export function createSharedUniforms(albedo: DataArrayTexture, lightmap: DataTex
     xrayPalette: { value: XRAY_COLORS.map((hex) => new Color().setStyle(hex, SRGBColorSpace)) },
     xrayBiomePalette: { value: XRAY_BIOME_COLORS.map((hex) => new Color().setStyle(hex, SRGBColorSpace)) },
     xrayColorMode: { value: 0 },
+    waterTier: { value: 1 },
+    timeSeconds: { value: 0 },
   };
 }
 
@@ -97,13 +103,15 @@ const WATER_SHALLOW = [64, 128, 230] as const;
 const WATER_DEEP = [16, 40, 96] as const;
 
 /**
- * Water's uniforms: the shared ones, the X-ray toggle (its vertex shader collapses on it, SP6a spec §5.3), its alpha
- * and its two colours in linear (one tint until SP8a).
+ * Water's uniforms: the shared ones, the X-ray toggle (its vertex shader collapses on it, SP6a spec §5.3), the tier and
+ * the clock (SP7a spec §7, D28), Fast's alpha and its two colours in linear (one tint until SP8a).
  */
 export function waterUniforms(u: SharedUniforms): Uniforms {
   return {
     ...litUniforms(u),
     xrayOn: u.xrayOn,
+    waterTier: u.waterTier,
+    timeSeconds: u.timeSeconds,
     alpha: { value: WATER_ALPHA },
     waterShallow: { value: linear(...WATER_SHALLOW) },
     waterDeep: { value: linear(...WATER_DEEP) },

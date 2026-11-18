@@ -7111,7 +7111,7 @@ describe('night vision in the page: L, the notice, the setting and the Settings 
 
     // The page's frame over a real material system (the lightmap), its L and the Settings screen.
     const materials = createMaterialSystem({ variant: 'batch', ao: true, smoothLight: true }, createFlatColorArray());
-    const frame = { t: 0.75, brightness: 0.3, eyeSky: 0, rd: 4, fogBand: 64, nightVision: 0 };
+    const frame = { t: 0.75, brightness: 0.3, eyeSky: 0, rd: 4, fogBand: 64, nightVision: 0, seconds: 0 };
     materials.setFrameUniforms(frame);
     const lightmap = materials.lightmap.texture;
     const before = (lightmap.image.data as Uint8Array).slice();

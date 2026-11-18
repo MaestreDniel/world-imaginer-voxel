@@ -3504,6 +3504,17 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(vertex, 'the solid word\'s flags name the lava drop').toBe('  - opaque/cutout: `layer10 | face3 | ao2 | sky4 | block4 | tint3 | flags4 (emissive, waving, randomRotate, upper; for `LAVA_LAYER` the vertex\'s corner drop, SP7a) | 2 spare`;');
   });
 
+  test('§4.6/§4.10\'s water tier as built (SP7a spec §16 item 12)', () => {
+    // Item 12's Fancy half (Task 35): `water(tier)` is one program with a `waterTier` uniform; Fancy as built (Fresnel and
+    // procedural ripples; the animated texture SP8a/SP11, vertex waves SP11). The underwater fog half is Task 38's.
+    const s46 = text.slice(text.indexOf('### 4.6 '), text.indexOf('### 4.7 '));
+    expect(s46.split('\n')[2], '§4.6\'s material list').toBe('`createMaterialSystem(settings)` returns `terrainOpaque`, `terrainCutout`, `water(tier)` (one program for every tier: a `waterTier` uniform branches, SP7a), `lava`, `sky`, `clouds`, `lod`, `shadowDepth` and `selection`, plus `setFrameUniforms(frame)`. All are `ShaderMaterial({glslVersion: GLSL3})` and include `batching_pars_vertex` and `batching_vertex`.');
+    const s410 = text.slice(text.indexOf('### 4.10 '), text.indexOf('### 4.11 ')).split('\n');
+    expect(s410.find((l) => l.startsWith('| Fancy |')), 'the Fancy row as built').toBe('| Fancy | adds Schlick Fresnel (F0 0.02) toward `skyColor(reflect(view, n))`, 2 scrolling procedural ripple-normal octaves (value-noise gradients at λ 4 and 1.7 blocks, no texture; SP7a), on sloped surfaces the normal from `dFdx`/`dFdy` of the world position, alpha 0.6 + 0.3·Fresnel (SP7a); animated texture (SP8a\'s animation frames, cut to SP11); vertex waves on ungreedy near-camera water (High+; SP11) |');
+    expect(s410, 'the one-program paragraph').toContain('Fast and Fancy are one water program (SP7a, its D28): the `waterTier` uniform (0 Fast, 1 Fancy) branches in the fragment shader and `timeSeconds` (the frame\'s clock, wrapped every 3,600 s) scrolls the ripples, so a toggle writes one uniform and relinks nothing.');
+    expect(text, 'the pre-SP7a Fancy row is gone').not.toContain('2 scrolling ripple-normal octaves, animated texture, vertex waves');
+  });
+
   test('§4.11 and §4.12 name SP7b; the bench route\'s flood is SP7b\'s and R5\'s row is gated from SP7a (SP7a spec §16 item 13)', () => {
     const at = text.indexOf('### 4.11 ');
     const s411to412 = text.slice(at, text.indexOf('### 4.13 ', at));

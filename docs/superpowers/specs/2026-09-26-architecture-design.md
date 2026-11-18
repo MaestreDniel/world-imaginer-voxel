@@ -1104,7 +1104,7 @@ On Ultra, passes 2-4 (after the LOD depth clear) render into a `WebGLRenderTarge
 
 ### 4.6 Materials (`render/materials`, the only GLSL boundary)
 
-`createMaterialSystem(settings)` returns `terrainOpaque`, `terrainCutout`, `water(tier)`, `lava`, `sky`, `clouds`, `lod`, `shadowDepth` and `selection`, plus `setFrameUniforms(frame)`. All are `ShaderMaterial({glslVersion: GLSL3})` and include `batching_pars_vertex` and `batching_vertex`.
+`createMaterialSystem(settings)` returns `terrainOpaque`, `terrainCutout`, `water(tier)` (one program for every tier: a `waterTier` uniform branches, SP7a), `lava`, `sky`, `clouds`, `lod`, `shadowDepth` and `selection`, plus `setFrameUniforms(frame)`. All are `ShaderMaterial({glslVersion: GLSL3})` and include `batching_pars_vertex` and `batching_vertex`.
 
 **terrain.frag:**
 - `layer = base + hash(floor(worldPos)) % variantCount`, where the variant count comes from a layer-info `usampler2D`;
@@ -1181,8 +1181,10 @@ This is a custom depth pass (the `shadowDepth` material decodes the same vertex 
 | tier | technique |
 |---|---|
 | Fast | alpha 0.72, biome water tint, shallow-to-deep colour from the mesher's depth-to-floor |
-| Fancy | adds Schlick Fresnel (F0 0.02) toward `skyColor`, 2 scrolling ripple-normal octaves, animated texture, vertex waves on ungreedy near-camera water (High+) |
+| Fancy | adds Schlick Fresnel (F0 0.02) toward `skyColor(reflect(view, n))`, 2 scrolling procedural ripple-normal octaves (value-noise gradients at λ 4 and 1.7 blocks, no texture; SP7a), on sloped surfaces the normal from `dFdx`/`dFdy` of the world position, alpha 0.6 + 0.3·Fresnel (SP7a); animated texture (SP8a's animation frames, cut to SP11); vertex waves on ungreedy near-camera water (High+; SP11) |
 | Fabulous | adds refraction and Beer-Lambert absorption from the opaque colour/depth copy |
+
+Fast and Fancy are one water program (SP7a, its D28): the `waterTier` uniform (0 Fast, 1 Fancy) branches in the fragment shader and `timeSeconds` (the frame's clock, wrapped every 3,600 s) scrolls the ripples, so a toggle writes one uniform and relinks nothing.
 
 MeshPhysicalMaterial transmission and Reflector are never used.
 
