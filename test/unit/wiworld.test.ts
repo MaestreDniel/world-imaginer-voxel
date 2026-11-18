@@ -23,6 +23,7 @@ import { readWiworld, WIWORLD_VERSION, wiworldHash, writeWiworld } from '../../s
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
 import { REGISTRY } from '../../src/world/blocks';
 import { gv8DensityTrees, gv8SurfaceTrees } from '../harness/gv8Trees';
+import { gv9SurfaceTrees } from '../harness/gv9Trees';
 import { sp6aTrees } from '../harness/sp6aTrees';
 
 const S = (key: string): number => REGISTRY.parseStateKey(key);
@@ -334,6 +335,21 @@ describe('.wiworld refusals and repairs (SP5b spec §2.4, D15, §2.1)', () => {
     if (!p.ok) throw new Error(JSON.stringify(p.issues));
     expect(p.value.density.defs).toBe(resolveProfile(r.dump.world.profile).density.defs);
     expect(p.value.surface.rules).toBe(resolveProfile(r.dump.world.profile).surface.rules);
+  });
+
+  test('a GV9 file (its record schema 5, a default world whose params are a schema-5 document with the GV9 default surface tree) imports as stored and loads through the 5 → 6 migration with the live tree by identity (SP7a D34, spec §15.4)', async () => {
+    const src = sourceDump();
+    const params = JSON.parse(canonicalJSON(resolveProfile('default'))) as Record<string, any>;
+    params['surface'].rules = gv9SurfaceTrees().default;
+    const world: WorldRecord = { ...src.world, profile: 'default', params: params as JsonObject, schemaVersion: 5, generatorVersion: 9 };
+    const r = await importInto(createMemoryKV(), await writeWiworld({ ...src, world }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect([r.dump.world.profile, r.dump.world.schemaVersion, canonicalJSON(r.dump.world.params)]).toEqual(['default', 5, canonicalJSON(params)]);
+    const p = loadParams(r.dump.world);
+    if (!p.ok) throw new Error(JSON.stringify(p.issues));
+    expect(p.value.surface.rules).toBe(resolveProfile(r.dump.world.profile).surface.rules);
+    expect(canonicalJSON(p.value)).toBe(canonicalJSON(resolveProfile('default')));
   });
 
   test('Review Focus 3: a file whose header\'s `stateTable` is today\'s 65 keys permuted and cut to 55 plus one unknown key `nope[x=1]`, with a stored genKey of another generator: imports with every voxel equal by state key, the unknown key\'s 3 voxels air, the record\'s `stateTable` today\'s, its records re-encoded under today\'s ids, and `olderGenerator` true; a file whose `version` is 2 is refused with nothing written', async () => {

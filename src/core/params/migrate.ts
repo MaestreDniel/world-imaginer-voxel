@@ -11,7 +11,7 @@ export interface JsonObject {
 
 export type Migration = (doc: JsonObject) => JsonObject;
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 const isObject = (v: unknown): v is JsonObject => typeof v === 'object' && v !== null && !Array.isArray(v);
 
@@ -137,6 +137,29 @@ function sp6bTrees(doc: JsonObject): JsonObject {
 }
 
 /**
+ * The two built-in surface trees at `GENERATOR_VERSION` 9 (`DEFAULT_SURFACE_RULES` and floating_islands', as at
+ * 78c48e4, SP7a's push base), by the same hash, each mapped to today's tree of the same kind (SP7a D34, spec §15.4).
+ * The trees are in `test/fixtures/gv9-surface-trees.json`, and `test/unit/gv9Trees.test.ts` pins the same two hashes.
+ */
+const GV9_SURFACE_HASHES: ReadonlyMap<string, JsonValue> = new Map<string, JsonValue>([
+  ['1f4054f83dc79614', DEFAULT_SURFACE_RULES as JsonValue],
+  ['740973420dda53df', FLOATING_SURFACE_RULES as JsonValue],
+]);
+
+/**
+ * 5 → 6 (SP7a D34, spec §15.4): a stored `surface.rules` canonically equal to one of GV9's built-in surface trees
+ * becomes today's tree of that kind (the registered frozen tree itself, which SP7a gives rule 4's under-water
+ * branches); any other tree (a user's edit, whose world gets no clay or gravel under cave water) and every other leaf
+ * are kept. Density trees are untouched (D24). The new leaves (`aquifer.*`, `springs.*`) are not written: a missing
+ * leaf takes the profile's value. A document whose tree is absent, not an object, or not GV9's is returned as is; the
+ * input is never mutated. GV8's surface trees reach today's through 4 → 5, which maps them by reference to the live
+ * trees.
+ */
+function sp7aTrees(doc: JsonObject): JsonObject {
+  return mapBuiltInTree(doc, 'surface', 'rules', GV9_SURFACE_HASHES);
+}
+
+/**
  * MIGRATIONS[v - 1] upgrades a version-v document to v + 1; invariant: length === SCHEMA_VERSION - 1.
  * 1 → 2 (SP3d spec §1.11): the identity — version 2 adds the `json` leaves `density.defs` and `surface.rules`, which a
  * version-1 document lacks, and a missing leaf takes the profile's value.
@@ -146,8 +169,10 @@ function sp6bTrees(doc: JsonObject): JsonObject {
  * their documents' SP6a noodle defaults today's (`sp6aNoodles`); an edited tree or value is kept.
  * 4 → 5 (SP6b D29): GV8's built-in density and surface trees become today's, with the rock floor and rule 4
  * (`sp6bTrees`); an edited tree is kept.
+ * 5 → 6 (SP7a D34): GV9's built-in surface trees become today's (`sp7aTrees`), so a world saved before SP7a opens
+ * with rule 4's under-water branches; an edited tree is kept, and density trees are untouched.
  */
-export const MIGRATIONS: readonly Migration[] = [(doc) => doc, builtInTrees, sp6aNoodles, sp6bTrees];
+export const MIGRATIONS: readonly Migration[] = [(doc) => doc, builtInTrees, sp6aNoodles, sp6bTrees, sp7aTrees];
 
 /** Upgrades a document from `from` to migrations.length + 1 (SP1 spec §4.6). */
 export function migrate(doc: JsonObject, from: number, migrations: readonly Migration[] = MIGRATIONS): Result<JsonObject> {

@@ -12,6 +12,7 @@ import { SCHEMA, type Params } from '../../src/core/params/schema';
 import { dirtyStages, genKey, stageHashes } from '../../src/core/stage/hash';
 import { STAGES } from '../../src/core/stage/registry';
 import { gv8DensityTrees, gv8SurfaceTrees, type Gv8DensityKind, type Gv8SurfaceKind } from '../harness/gv8Trees';
+import { gv9SurfaceTrees, type Gv9SurfaceKind } from '../harness/gv9Trees';
 import { randomParams } from '../harness/params';
 import { sp5cTrees, type Sp5cKind } from '../harness/sp5cTrees';
 import { sp6aTrees, type Sp6aKind } from '../harness/sp6aTrees';
@@ -90,8 +91,8 @@ describe('migrations', () => {
     const r = migrate(doc, SCHEMA_VERSION);
     expect(r.ok && r.value).toBe(doc);
   });
-  test('SCHEMA_VERSION 5 (SP6b D29): four migrations, 1 → 2 the identity, 2 → 3 the built-in trees, 3 → 4 SP6a\'s trees and noodles, 4 → 5 GV8\'s trees', () => {
-    expect([SCHEMA_VERSION, MIGRATIONS.length]).toEqual([5, 4]);
+  test('SCHEMA_VERSION 6 (SP7a D34): five migrations, 1 → 2 the identity, 2 → 3 the built-in trees, 3 → 4 SP6a\'s trees and noodles, 4 → 5 GV8\'s trees, 5 → 6 GV9\'s surface trees', () => {
+    expect([SCHEMA_VERSION, MIGRATIONS.length]).toEqual([6, 5]);
   });
   test('1 → 2 (SP3d spec §1.11) is the identity (the trees a v1 document lacks are the profile\'s), and 2 → 3 keeps a document without density.defs', () => {
     const doc = { climate: { scaleMul: 2 }, density: { detailAmpLo: 0.8 } } as JsonObject;
@@ -404,13 +405,95 @@ describe('migrations', () => {
     });
   });
 
+  describe('5 → 6 (SP7a D34, spec §15.4): GV9\'s built-in surface trees become today\'s; density trees untouched', () => {
+    const SURFACE: Record<Gv9SurfaceKind, JsonValue> = { default: DEFAULT_SURFACE_RULES, floating_islands: FLOATING_SURFACE_RULES };
+    const SURFACE_KINDS = Object.keys(SURFACE) as Gv9SurfaceKind[];
+    const v5 = (over: { defs?: unknown; rules?: unknown }): JsonObject =>
+      ({
+        climate: { scaleMul: 2 }, caves: { cheese: { offset: 0.45 } },
+        density: { detailAmpLo: 0.8, ...(over.defs === undefined ? {} : { defs: over.defs }) },
+        surface: { snowline: 150, ...(over.rules === undefined ? {} : { rules: over.rules }) },
+      }) as unknown as JsonObject;
+    const defsOf = (d: JsonObject): JsonValue | undefined => (d['density'] as JsonObject)['defs'];
+    const rulesOf = (d: JsonObject): JsonValue | undefined => (d['surface'] as JsonObject)['rules'];
+    /** Everything but the surface tree (set to null where present). */
+    const rest = (d: JsonObject): string => canonicalJSON({ ...d, surface: { ...(d['surface'] as JsonObject), ...(rulesOf(d) === undefined ? {} : { rules: null }) } });
+    /** GV9's surface tree of `kind` with one literal changed (rule 1's bedrock gradient −59 → −60): an edited tree. */
+    const editedSurface = (kind: Gv9SurfaceKind): JsonValue => {
+      const tree = gv9SurfaceTrees()[kind] as { rules: [{ if: { falseAtAndAbove: number } }] };
+      tree.rules[0].if.falseAtAndAbove = -60;
+      return tree as unknown as JsonValue;
+    };
+    /** A GV9 density tree as a saved world stores it: a fresh copy of the built-in tree of `kind` (unchanged by SP7a, D24). */
+    const gv9Density = (kind: 'default' | 'amplified' | 'floating_islands'): JsonValue =>
+      JSON.parse(canonicalJSON({ default: DEFAULT_DENSITY_TREE, amplified: AMPLIFIED_DENSITY_TREE, floating_islands: FLOATING_DENSITY_TREE }[kind])) as JsonValue;
+
+    test.each(SURFACE_KINDS)('the GV9 %s surface tree migrates to today\'s tree of its kind (the registered tree itself); every other leaf is kept', (kind) => {
+      const doc = v5({ rules: gv9SurfaceTrees()[kind] });
+      const r = MIGRATIONS[4]!(doc);
+      expect(rulesOf(r)).toBe(SURFACE[kind]);
+      expect(rest(r)).toBe(rest(doc));
+      const m = migrate(doc, 5);
+      expect(m.ok && rulesOf(m.value)).toBe(SURFACE[kind]);
+    });
+
+    test.each(SURFACE_KINDS)('the GV9 %s surface tree with one literal changed is kept (the same object)', (kind) => {
+      const doc = v5({ rules: editedSurface(kind) });
+      expect(MIGRATIONS[4]!(doc)).toBe(doc);
+    });
+
+    test.each(['default', 'amplified', 'floating_islands'] as const)('a GV9 %s density tree passes unchanged (D24): the input\'s own object, beside a migrated surface tree', (kind) => {
+      const defs = gv9Density(kind);
+      const alone = v5({ defs });
+      expect(MIGRATIONS[4]!(alone)).toBe(alone);
+      const both = MIGRATIONS[4]!(v5({ defs, rules: gv9SurfaceTrees().default }));
+      expect(defsOf(both)).toBe(defs);
+      expect(rulesOf(both)).toBe(DEFAULT_SURFACE_RULES);
+    });
+
+    test('a document without the leaves is the same object, the missing aquifer and springs leaves written nowhere; a GV8 tree is kept; the input is never mutated', () => {
+      const plain = v5({});
+      expect(MIGRATIONS[4]!(plain)).toBe(plain);
+      const empty = {} as JsonObject;
+      expect(MIGRATIONS[4]!(empty)).toBe(empty);
+      const gv8 = v5({ rules: gv8SurfaceTrees().default });
+      expect(MIGRATIONS[4]!(gv8)).toBe(gv8);
+      const doc = v5({ defs: gv9Density('default'), rules: gv9SurfaceTrees().default });
+      const before = canonicalJSON(doc);
+      const out = MIGRATIONS[4]!(doc);
+      expect(out).not.toBe(doc);
+      expect(canonicalJSON(doc)).toBe(before);
+      expect(Object.keys(out).sort()).toEqual(['caves', 'climate', 'density', 'surface']);
+      expect(Object.keys(out['caves'] as JsonObject)).toEqual(['cheese']);
+      // Non-object values at surface or its tree are left for checkParams to refuse.
+      for (const odd of [{ surface: 3 }, { surface: { rules: 'x' } }, { surface: { rules: null } }, { surface: { rules: [] } }] as JsonObject[]) expect(MIGRATIONS[4]!(odd)).toBe(odd);
+    });
+
+    test('a schema-4 document runs 4 → 5 then 5 → 6: the GV8 default surface tree ends as DEFAULT_SURFACE_RULES (4 → 5 maps it by reference to the live tree, which 5 → 6 keeps)', () => {
+      const doc = v5({ rules: gv8SurfaceTrees().default });
+      const m = migrate(doc, 4);
+      if (!m.ok) throw new Error(JSON.stringify(m.issues));
+      expect(rulesOf(m.value)).toBe(DEFAULT_SURFACE_RULES);
+      const f = migrate(v5({ rules: gv8SurfaceTrees().floating_islands }), 4);
+      expect(f.ok && rulesOf(f.value)).toBe(FLOATING_SURFACE_RULES);
+    });
+
+    test.each(['default', 'amplified', 'floating_islands'] as const)('a schema-5 preset file of profile %s holding its GV9 surface tree imports with the live tree (toBe)', (profile) => {
+      const rules = gv9SurfaceTrees()[profile === 'floating_islands' ? 'floating_islands' : 'default'];
+      const r = importPreset({ format: 'wi10-preset', schemaVersion: 5, name: 'GV9', profile, params: { surface: { rules } } });
+      expect(r.ok, r.ok ? '' : JSON.stringify(r.issues)).toBe(true);
+      if (!r.ok) return;
+      expect(r.value.params.surface.rules).toBe(resolveProfile(profile).surface.rules);
+    });
+  });
+
   test('an injected v1 → v2 rename', () => {
     const toV2 = (d: JsonObject) => renamePath(d, 'climate.zoom', 'climate.scaleMul');
     const r = migrate({ climate: { zoom: 3, C: { octaves: 5 } } }, 1, [toV2]);
     expect(r.ok && r.value).toEqual({ climate: { scaleMul: 3, C: { octaves: 5 } } });
     expect(migrate({ climate: {} }, 1, [toV2])).toEqual({ ok: true, value: { climate: {} } });
     expect(migrate({}, 3, [toV2]).ok).toBe(false);
-    expect(migrate({}, 6).ok).toBe(false);
+    expect(migrate({}, 7).ok).toBe(false);
     expect(migrate({}, 0).ok).toBe(false);
     const boom = migrate({}, 1, [() => { throw new Error('boom'); }]);
     expect(!boom.ok && boom.issues[0]!.code).toBe('MIGRATION_FAILED');
@@ -467,7 +550,7 @@ describe('presets', () => {
     ['reserved name', (d) => { d.name = 'large_biomes'; }, ['RESERVED_NAME @ name']],
     ['unknown profile', (d) => { d.profile = 'nope'; }, ['UNKNOWN_PROFILE @ profile']],
     ['bad schema version', (d) => { d.schemaVersion = 1.5; }, ['BAD_SCHEMA_VERSION @ schemaVersion']],
-    ['newer schema version', (d) => { d.schemaVersion = 6; }, ['NEWER_SCHEMA_VERSION @ schemaVersion']],
+    ['newer schema version', (d) => { d.schemaVersion = 7; }, ['NEWER_SCHEMA_VERSION @ schemaVersion']],
     ['params not an object', (d) => { d.params = []; }, ['NOT_OBJECT @ params']],
     ['typo in params', (d) => { d.params = { climate: { scaleMull: 4 } }; }, ['UNKNOWN_KEY @ params.climate.scaleMull']],
     ['invalid value', (d) => { d.params = { climate: { scaleMul: 99 } }; }, ['OUT_OF_RANGE @ params.climate.scaleMul']],

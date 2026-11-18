@@ -667,6 +667,10 @@ Ids are recon-obligations' (§1a-§1f O1-O95 and K1-K13; §4 Q1-Q18); "→ X" me
 
 §1.6's m, measured on seed '42''s default profile (2026-11-18, a scratch script, not committed). Columns drawn uniformly from cx, cz in −4,000 … 3,999 (a fixed `Xoshiro128` stream) until 4,098 positions were found on the abyss box's unjittered sides, at most 4 per column (91,728 columns drawn, 11,793 of them holding a position inside the box): positions (x, z) of the column's 16 × 16 where, between (x, z) and (x + 1, z) or (x, z + 1), E′ crosses `abyss.eMax` with C′ > `cMin` (4,077 positions) or C′ crosses `cMin` with E′ ≤ `eMax` (21), and the box's depth is reached above the rock floor, (Y0 + 47)/`depthScale` ≥ `depthMin` (SP6b's `BIOME_SCAN_ROOM_Y` −47). The gradient across the side is |∇E′| (or |∇C′|) per block by central differences over the cave-biome column pass. Its 50th percentile 0.00388, **95th 0.00956**, 99th 0.01263, maximum 0.01746 (95th on E′ sides 0.00949, on C′ sides 0.01730). m = 6 × 0.00956 = 0.0573, rounded up to 0.005: **m = 0.06**, a lateral margin of 6.28 blocks at the 95th percentile. The default the tests use (`test/harness/aquiferDefaults.ts`) and Task 13's leaf.
 
+### The generator push's base (Tasks 11-12)
+
+`<push base>` = **78c48e48b4409871fe42cf633c6e59911b0740ff** (2026-11-18): Task 11 Step 6's pushed head, the merge commit of lane M (Tasks 9-11, the flowing water and lava mesher) into `sp7a/water` (npm test green, goldens unchanged). The generator push's golden diff (§15.3) is taken against it. Task 12 (`SCHEMA_VERSION` 6, `MIGRATIONS[4]`; GV9's surface trees exported at this base into `test/fixtures/gv9-surface-trees.json`, hashes `1f4054f83dc79614` default and `740973420dda53df` floating_islands) changes no generated output: `git checkout <push base> -- test/goldens.json`, the goldens re-recorded, `git diff --exit-code <push base> -- test/goldens.json` empty.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
