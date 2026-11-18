@@ -4,8 +4,9 @@
  * `PACK_LAYOUT`, so the mesher and the shaders cannot drift apart.
  *
  * - solid (opaque and cutout): `layer` 0-9, `face` 10-12, `ao` 13-14, `sky` 15-18, `block` 19-22, `tint` 23-25,
- *   `flags` 26-29 (emissive, waving, randomRotate, upper), `frame` 30 (glass's thin frame, discarded inside by the
- *   cutout shader; SP5a spec §1.3, provisional until SP8a), spare 31;
+ *   `flags` 26-29 (emissive, waving, randomRotate, upper; for `LAVA_LAYER` the vertex's corner drop, 0 … 8 ninths of a
+ *   block below the voxel's top, which the terrain vertex shader subtracts; SP7a spec §6.3, D26), `frame` 30 (glass's
+ *   thin frame, discarded inside by the cutout shader; SP5a spec §1.3, provisional until SP8a), spare 31;
  * - fluid: `layer` 0-9, `face` 10-12, `sky` 13-16, `block` 17-20, `depth` 21-24, `tint` 25-27, `cornerDrop` 28-31
  *   (ninths of a block below the voxel's top);
  * - xray (SP6a spec §5.1, D23; the X-ray pass, `mesh/xray.ts`): the position as the solid word's, then `face` 0-2,

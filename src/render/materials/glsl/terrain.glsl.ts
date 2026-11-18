@@ -3,8 +3,11 @@
  * Terrain: albedo(layer) × faceShade × AO × lightmap(block, sky), then the fog, then three's colour-space chunk; no
  * Lambert and no sun term. The defines `TERRAIN_AO`, `SMOOTH_LIGHT`, `CUTOUT` and `GHOST` (SP5c) come from the material.
  * SP6a (spec §5.3): the vertex shader collapses every vertex while the X-ray is on (`xrayOn` 1), under `#ifndef
- * GHOST`, so the ghost (the same source with `GHOST`) is never collapsed.
+ * GHOST`, so the ghost (the same source with `GHOST`) is never collapsed. SP7a (spec §6.3, D26): a `LAVA_LAYER` vertex
+ * holds its corner drop in `flags`, so the vertex shader lowers it by `flags` ninths of a block, as the water shader
+ * does by `cornerDrop`.
  */
+import { LAVA_LAYER } from '../../../mesh/greedy';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../../world/blocks/kinds';
 import type { MaterialVariant } from '../index';
 import {
@@ -45,7 +48,8 @@ export const GHOST_LIGHT_FLOOR = 0.6;
 
 /**
  * The terrain vertex shader: decodes the solid `data` word; layer, face and frame flat, sky, block and AO
- * interpolated. Without `GHOST`, every vertex is collapsed while the X-ray is on (SP6a spec §5.3).
+ * interpolated; a lava vertex (`LAVA_LAYER`) lowered by its `flags` ninths (positions are in 1/8-block units, so a
+ * ninth is 8/9; SP7a spec §6.3). Without `GHOST`, every vertex is collapsed while the X-ray is on (SP6a spec §5.3).
  */
 export function terrainVertex(variant: MaterialVariant): string {
   return `${vertexHead(variant)}${LIGHT_INTERP_GLSL}
@@ -72,7 +76,9 @@ void main() {
 #else
   vAo = 1.0;
 #endif
-${vertexPlace(variant, 'position')}  vViewPos = mvPos4.xyz;
+  vec3 p = position;
+  if (pkS_layer(data) == ${LAVA_LAYER}u) p.y -= float(pkS_flags(data)) * (8.0 / 9.0);
+${vertexPlace(variant, 'p')}  vViewPos = mvPos4.xyz;
   vWorldPos = worldPos4.xyz;
 #ifndef GHOST
   if (xrayOn > 0.5) gl_Position = COLLAPSED;

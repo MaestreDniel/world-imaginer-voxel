@@ -5,6 +5,7 @@ import { AdditiveBlending, Color, DoubleSide, GLSL3, NoColorSpace, SRGBColorSpac
 import { describe, expect, test } from 'vitest';
 import { skyColors, sunDirection } from '../../src/daynight/dayNight';
 import { FOG_GLSL } from '../../src/render/materials/glsl/common.glsl';
+import { LAVA_LAYER } from '../../src/mesh/greedy';
 import { packingGlsl } from '../../src/render/materials/glsl/packing.glsl';
 import { GHOST_LIGHT_FLOOR, TERRAIN_FRAGMENT, terrainVertex } from '../../src/render/materials/glsl/terrain.glsl';
 import { createMaterialSystem, fogRange, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
@@ -316,6 +317,27 @@ describe('materials v1 (SP4a spec §6.4-§6.6)', () => {
         expect(cutout).toContain('if (all(greaterThanEqual(inFace, vec2(0.0625))) && all(lessThanEqual(inFace, vec2(0.9375)))) discard;');
         expect(src.indexOf('vFrame != 0u')).toBe(src.lastIndexOf('vFrame != 0u'));
       }
+    }
+  });
+
+  test('lava (SP7a spec §6.3, D26): the terrain vertex shader lowers a vertex by flags · 8/9 only under the LAVA_LAYER test, as the water shader by cornerDrop', () => {
+    expect(LAVA_LAYER).toBe(66);
+    const lower = `if (pkS_layer(data) == ${LAVA_LAYER}u) p.y -= float(pkS_flags(data)) * (8.0 / 9.0);`;
+    for (const v of VARIANTS) {
+      expect(terrainVertex(v)).toContain(lower);
+      for (const m of [SYSTEMS[v].terrainOpaque, SYSTEMS[v].terrainCutout, SYSTEMS[v].ghost]) {
+        const src = m.vertexShader;
+        // The one subtraction, under the layer test, before the placement reads p.
+        expect(src.split('* (8.0 / 9.0)')).toHaveLength(2);
+        expect(src.split('pkS_flags(data)')).toHaveLength(2);
+        const at = src.indexOf(lower);
+        expect(at).toBeGreaterThan(src.indexOf('vec3 p = position;'));
+        expect(src.indexOf('vec4 local = vec4(p, 1.0);')).toBeGreaterThan(at);
+        expect(src).not.toContain('vec4 local = vec4(position, 1.0);');
+      }
+      // The water shader keeps its own drop, the decode-debug shader none.
+      expect(SYSTEMS[v].water.vertexShader).toContain('vec3 p = vec3(position.x, position.y - cornerDrop * (8.0 / 9.0), position.z);');
+      expect(SYSTEMS[v].decodeDebug.vertexShader).not.toContain('8.0 / 9.0');
     }
   });
 

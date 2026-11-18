@@ -12,6 +12,7 @@ import {
   type SolidFields,
   type XrayFields,
 } from '../../src/mesh/packing';
+import { LAVA_LAYER } from '../../src/mesh/greedy';
 import { packingGlsl } from '../../src/render/materials/glsl/packing.glsl';
 import { testRng } from '../harness/stats';
 
@@ -95,6 +96,18 @@ describe.each(ALL_VARIANTS)('%s', (v) => {
     expect(bitCount).toBe(top + 1);
     expect(covered).toBe(max(top + 1));
   });
+});
+
+test('a LAVA_LAYER vertex\'s flags (its corner drop in ninths, SP7a spec §6.3) round-trip at 0 … 8, beside every other field', () => {
+  for (let drop = 0; drop <= 8; drop++) {
+    for (const face of [0, 4, 5]) {
+      const fields: SolidFields = { layer: LAVA_LAYER, face, ao: 0, sky: 15, block: 15, tint: 0, flags: drop, frame: 0 };
+      const word = packSolid(fields);
+      expect(unpackSolid(word)).toEqual(fields);
+      expect((word >>> PACK_LAYOUT.solid.flags.offset) & 15).toBe(drop);
+      expect(word & 1023).toBe(LAVA_LAYER);
+    }
+  }
 });
 
 test('the X-ray word: face 0-2, kind 3-6, biome 7-10 (reserved for SP6b, written 0), bits 11-31 spare (SP6a spec §5.1)', () => {

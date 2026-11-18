@@ -30,7 +30,7 @@ import { meshSolid, type MeshOptions } from '../../src/mesh/greedy';
 import { unpackFluid, unpackSolid, unpackXray } from '../../src/mesh/packing';
 import { meshXray } from '../../src/mesh/xray';
 import { REVIEW_HOUSE, REVIEW_POOL, REVIEW_SITE } from '../../src/ui/world/bench';
-import { FLUID_WATER, fluidType } from '../../src/world/blocks/fluid';
+import { FLUID_WATER, NO_FLUID, fluidType, packFluid } from '../../src/world/blocks/fluid';
 import { CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
 import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, FULL_FACES, GLASS, PASS, STONE, TORCH } from '../../src/world/blocks/index';
@@ -729,5 +729,106 @@ describe('meshColumnPayload keeps a row per section and pass, the X-ray\'s inclu
         expect(d).toBeLessThanOrEqual(r);
       }
     }
+  });
+});
+
+describe('a waterfall and its spill across section and column borders (SP7a spec §6.2; Review Focus 4; ruling P12)', () => {
+  /**
+   * A hand-built 4 × 3 of Published columns (x −1 … +2, z −1 … +1), light 0xF0, stone at y ≤ 29: a falling column at
+   * (12, 30 … 70, 8) under a source at (12, 71, 8), crossing the section boundaries at y 32, 48 and 64, and its spill
+   * along z 8 at y 30, levels 1 … 7 at x 13 … 19, crossing the +x column border (x 16).
+   */
+  function waterfallStore(): VoxelStore {
+    const FALLING = packFluid(FLUID_WATER, 0, true);
+    const fluidAt = (x: number, y: number, z: number): number => {
+      if (z !== 8) return NO_FLUID;
+      if (x === 12) return y >= 30 && y <= 70 ? FALLING : y === 71 ? WATER_SOURCE : NO_FLUID;
+      return y === 30 && x >= 13 && x <= 19 ? packFluid(FLUID_WATER, x - 12) : NO_FLUID;
+    };
+    const s = createStore({ shared: false, maxBlockBytes: 32 * MiB, maxByteBytes: 32 * MiB });
+    for (let cz = -1; cz <= 1; cz++) {
+      for (let cx = -1; cx <= 2; cx++) {
+        const w = s.claimColumn(cx, cz, 0);
+        for (let sy = 0; sy < SECTIONS; sy++) {
+          const blocks = new Uint16Array(4096);
+          const fluid = new Uint8Array(4096);
+          for (let i = 0; i < 4096; i++) {
+            const [x, y, z] = [16 * cx + (i & 15), MIN_Y + 16 * sy + (i >> 8), 16 * cz + ((i >> 4) & 15)];
+            blocks[i] = y <= 29 ? STONE : AIR;
+            fluid[i] = fluidAt(x, y, z);
+          }
+          w.setFinal(sy, blocks, new Uint8Array(4096).fill(0xF0), fluid);
+        }
+        w.commit(3);
+      }
+    }
+    return s;
+  }
+
+  /** A water quad of a payload in world coordinates: its face, its corners (blocks) and their drops. */
+  interface WaterQuad { face: number; corners: Array<[number, number, number]>; drops: number[] }
+  function waterQuads(p: ColumnMeshPayload): WaterQuad[] {
+    const out: WaterQuad[] = [];
+    for (const row of rowsOf(p).filter((r) => r.pass === MESH_PASS_TRANSLUCENT)) {
+      for (let q = row.vertexStart; q < row.vertexStart + row.vertexCount; q += 4) {
+        const corners: Array<[number, number, number]> = [];
+        const drops: number[] = [];
+        for (let v = q; v < q + 4; v++) {
+          corners.push([16 * p.cx + p.position[4 * v]! / 8, MIN_Y + 16 * row.sy + p.position[4 * v + 1]! / 8, 16 * p.cz + p.position[4 * v + 2]! / 8]);
+          drops.push(unpackFluid(p.data[v]!).cornerDrop);
+        }
+        out.push({ face: unpackFluid(p.data[q]!).face, corners, drops });
+      }
+    }
+    return out;
+  }
+  const span = (q: WaterQuad, a: number): [number, number] => [Math.min(...q.corners.map((c) => c[a])), Math.max(...q.corners.map((c) => c[a]))];
+
+  test('no up face on a falling voxel; the sides of consecutive sections meet; the spill\'s seam vertices agree; either meshing order gives the same bytes', () => {
+    const s = waterfallStore();
+    const scratch = createMeshScratch();
+    const eastFirst = snapshot(meshColumnPayload(s.neighborhood(1, 0), scratch, MEDIUM));
+    const centre = meshColumnPayload(s.neighborhood(0, 0), scratch, MEDIUM);
+    const centreBytes = snapshot(centre);
+    const east = meshColumnPayload(s.neighborhood(1, 0), scratch, MEDIUM);
+    expect(payloadProblem(centre)).toBeNull();
+    expect(payloadProblem(east)).toBeNull();
+    // Meshing the +x column before or after the centre gives byte-identical payloads (and the centre's is unchanged).
+    expect(snapshot(east)).toEqual(eastFirst);
+    expect(snapshot(meshColumnPayload(s.neighborhood(0, 0), scratch, MEDIUM))).toEqual(centreBytes);
+
+    const quads = waterQuads(centre);
+    // No up face for any falling voxel, the top voxel of each lower section included (its water above lies in the
+    // pad): the only up face over (12, 8) is the source's, at y 72.
+    const ups = quads.filter((q) => q.face === FACE_UP && span(q, 0)[0] <= 12 && span(q, 0)[1] >= 13 && span(q, 2)[0] <= 8 && span(q, 2)[1] >= 9);
+    expect(ups.map((q) => span(q, 1))).toEqual([[72, 72]]);
+    // The column's sides, per face (north z 8, east x 13, south z 9, west x 12): consecutive quads meet with no gap
+    // from the floor (y 30; east y 31, its y 30 side faces the spill's level 1 and draws nothing) to the source's top,
+    // and at each section boundary (32, 48, 64) the lower section's top vertices sit at the boundary with drop 0.
+    const planes: Array<[number, number, number, number]> = [[FACE_NORTH, 2, 8, 0], [FACE_EAST, 0, 13, 2], [FACE_SOUTH, 2, 9, 0], [FACE_WEST, 0, 12, 2]];
+    for (const [face, axis, at, along] of planes) {
+      const sides = quads
+        .filter((q) => q.face === face && span(q, axis)[0] === at && span(q, along)[0] === (along === 0 ? 12 : 8) && span(q, along)[1] === (along === 0 ? 13 : 9))
+        .sort((a, b) => span(a, 1)[0] - span(b, 1)[0]);
+      expect(span(sides[0]!, 1)[0], `face ${face}: the bottom`).toBe(face === FACE_EAST ? 31 : 30);
+      for (let k = 1; k < sides.length; k++) expect(span(sides[k]!, 1)[0], `face ${face}: quad ${k} meets the one below`).toBe(span(sides[k - 1]!, 1)[1]);
+      expect(span(sides[sides.length - 1]!, 1)[1], `face ${face}: the source's top`).toBe(72);
+      for (const boundary of [32, 48, 64]) {
+        const below = sides.find((q) => span(q, 1)[1] === boundary);
+        expect(below, `face ${face}: a quad ends at ${boundary}`).toBeDefined();
+        below!.corners.forEach((c, k) => { if (c[1] === boundary) expect(below!.drops[k], `face ${face} at ${boundary}`).toBe(0); });
+        expect(sides.some((q) => span(q, 1)[0] === boundary), `face ${face}: a quad starts at ${boundary}`).toBe(true);
+      }
+    }
+    // The spill's seam (x 16): each seam vertex's (world position, cornerDrop) pair is the same in both payloads.
+    const seam = (p: ColumnMeshPayload): string[] => {
+      const pairs = new Set<string>();
+      for (const q of waterQuads(p)) q.corners.forEach((c, k) => { if (c[0] === 16) pairs.add(`${c.join(',')}:${q.drops[k]}`); });
+      return [...pairs].sort();
+    };
+    const pairs = seam(centre);
+    expect(pairs.length).toBeGreaterThanOrEqual(4);
+    expect(pairs.filter((pair) => pair.startsWith('16,31,'))).toEqual(['16,31,8:7', '16,31,9:7']);
+    expect(seam(east)).toEqual(pairs);
   });
 });
