@@ -3458,8 +3458,21 @@ describe('master spec amendments (SP7a §16)', () => {
     const at = text.indexOf('**Fluid mesh:**');
     expect(at, 'no **Fluid mesh:** block in §4.4').toBeGreaterThan(text.indexOf('### 4.4 '));
     const block = text.slice(at, text.indexOf('**Vertex = 8 B**', at)).split('\n');
-    expect(block[2], 'the sides as built').toBe('- Sides are emitted only against non-fluid neighbours that do not occlude them (predicate above), and between voxels of one fluid where the neighbour\'s surface is lower (a side strip; SP7a): its bottom vertices at the neighbour\'s corner drops on the shared edge, its top vertices at the voxel\'s, all four positions at the voxel\'s top. Water draws the same strip against lava where lava\'s corners on the shared edge are lower (each fluid\'s corners count the other as solid); its up face under lava stays, its down face over lava is not drawn.');
+    expect(block[2], 'the sides as built').toBe('- Sides are emitted only against non-fluid neighbours that do not occlude them (predicate above), and between voxels of one fluid where the neighbour\'s surface is lower (a side strip; SP7a): its bottom vertices at the neighbour\'s corner drops on the shared edge, its top vertices at the voxel\'s, all four positions at the voxel\'s top. Water draws the same strip against lava where lava\'s corners on the shared edge are lower (each fluid\'s corners count the other as solid); its up face under lava stays, and its down face over lava is drawn unless that lava is drawn full (its top on the shared plane at all four corners).');
     expect(text, 'the pre-SP7a sides sentence is gone').not.toContain('- Sides are emitted only against non-fluid neighbours that do not occlude them (predicate above).\n');
+  });
+
+  test('§4.4\'s fluid mesh: lava\'s drops in the solid word\'s `flags` nibble for `LAVA_LAYER` (SP7a spec §16 item 11)', () => {
+    // Item 11's lava half (Task 11): lava keeps the opaque pass and the solid word, its corners, strips and split as
+    // water's, its four drops in `flags`; water's down face over lava (re-pinned in the strip test above) follows
+    // lava's lowered top.
+    const at = text.indexOf('**Fluid mesh:**');
+    expect(at, 'no **Fluid mesh:** block in §4.4').toBeGreaterThan(text.indexOf('### 4.4 '));
+    const block = text.slice(at, text.indexOf('**Vertex = 8 B**', at)).split('\n');
+    expect(block[3], 'lava as built').toBe('- Lava (SP7a) stays in the opaque pass with the solid word (`LAVA_LAYER`): its corners, side strips and split follow the rules above for lava (a source at 8/9), and its sides against water run from its bottom to its corners; lava\'s drops in the solid word\'s `flags` nibble for `LAVA_LAYER`, one per vertex, which the terrain vertex shader subtracts (`flags`·8/9 in 1/8-block units) as the water shader subtracts `cornerDrop`.');
+    expect(block[4]).toBe('- Still surfaces merge greedily (about 0.06 quads per face).');
+    const vertex = text.split('\n').find((l) => l.startsWith('  - opaque/cutout: `layer10'));
+    expect(vertex, 'the solid word\'s flags name the lava drop').toBe('  - opaque/cutout: `layer10 | face3 | ao2 | sky4 | block4 | tint3 | flags4 (emissive, waving, randomRotate, upper; for `LAVA_LAYER` the vertex\'s corner drop, SP7a) | 2 spare`;');
   });
 
   test('§4.11 and §4.12 name SP7b; the bench route\'s flood is SP7b\'s and R5\'s row is gated from SP7a (SP7a spec §16 item 13)', () => {

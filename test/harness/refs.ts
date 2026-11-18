@@ -123,12 +123,14 @@ const faceKey = (lx: number, y: number, lz: number, face: number): number => ((y
  * - `opaque`: the faces of PASS opaque and cutout states (passes 0 and 1) against a neighbour that does not occlude
  *   them (PASS opaque with the facing bit in `fullFaces`), a cutout face also not against the same block unless
  *   `leaves` marks it (SP4a's world has no cutout state); and the faces of any other voxel holding lava against a
- *   neighbour that does not occlude them and does not hold lava (SP5a spec §1.3: lava meshes in pass 0);
+ *   neighbour that does not occlude them (SP5a spec §1.3: lava meshes in pass 0): one not holding lava; one holding
+ *   lava, through a side face as a side strip only (SP7a spec §6.2-§6.3, below);
  * - `water`: the faces of water voxels (fluid type water) against a neighbour that does not occlude them (§5.6): one
- *   holding neither water nor lava; one holding lava, through the up face, and through a side face as water's side
- *   strip (below), never through the down face; one holding water, through a side face as a side strip only (SP7a spec
- *   §6.2): when the neighbour's top corners on the shared edge are lower than this voxel's drawn top there, either
- *   corner strictly lower.
+ *   holding neither water nor lava; one holding lava, through the up face, through a side face as water's side strip
+ *   (below), and through the down face where the lava's drawn top lies below the shared plane at any of its four
+ *   corners (SP7a: lava's top at its corners); one holding water, through a side face as a side strip only (SP7a spec
+ *   §6.2). A side strip shows when the neighbour's top corners on the shared edge are lower than this voxel's drawn top
+ *   there, either corner strictly lower.
  * A drawn top corner is read voxel by voxel by SP7a spec §6.1 for the voxel's fluid type: 1 (drop 0) when the voxel
  * holds the same fluid above it or is falling; else `cornerDrop(cornerHeight(…))` of the 4 voxels around the corner at
  * the voxel's y, in the spec's world order (−x−z, +x−z, +x+z, −x+z), each `CORNER_FULL` when it holds that fluid with
@@ -156,15 +158,21 @@ export function bruteFaces(view: RegionView, cx: number, cz: number, t: MeshTabl
     if (fluidFalling(view.fluid(x, y, z)) || typeAt(x, y + 1, z) === t) return 0;
     return cornerDrop(cornerHeight(code(X - 1, y, Z - 1, t), code(X, y, Z - 1, t), code(X, y, Z, t), code(X - 1, y, Z, t)));
   };
-  /** Whether water voxel (x, y, z)'s side (dx, dz) shows a strip: the neighbour, of type `t`, lower at either shared corner. */
-  const stripShows = (x: number, y: number, z: number, dx: number, dz: number, t: number): boolean => {
+  /**
+   * Whether voxel (x, y, z), holding fluid type `own`, shows a strip through its side (dx, dz): the neighbour, of type
+   * `t`, lower at either shared corner.
+   */
+  const stripShows = (x: number, y: number, z: number, dx: number, dz: number, own: number, t: number): boolean => {
     for (const k of [0, 1]) {
       const X = dx > 0 ? x + 1 : dx < 0 ? x : x + k;
       const Z = dz > 0 ? z + 1 : dz < 0 ? z : z + k;
-      if (topDrop(x + dx, y, z + dz, t, X, Z) > topDrop(x, y, z, FLUID_WATER, X, Z)) return true;
+      if (topDrop(x + dx, y, z + dz, t, X, Z) > topDrop(x, y, z, own, X, Z)) return true;
     }
     return false;
   };
+  /** Whether lava voxel (x, y, z)'s drawn top lies below its voxel's top at any of its four corners. */
+  const lavaTopBelow = (x: number, y: number, z: number): boolean =>
+    [[x, z], [x + 1, z], [x + 1, z + 1], [x, z + 1]].some(([X, Z]) => topDrop(x, y, z, FLUID_LAVA, X!, Z!) > 0);
   const opaque: number[] = [];
   const water: number[] = [];
   for (let y = -64; y < 320; y++) {
@@ -185,11 +193,12 @@ export function bruteFaces(view: RegionView, cx: number, cz: number, t: MeshTabl
           if (pass[ns] === PASS_OPAQUE && ((fullFaces[ns]! >> opp) & 1) !== 0) continue;
           const nt = typeAt(x + dx, y + dy, z + dz);
           if (solid && !(ps === PASS_CUTOUT && ns === s && (leaves === undefined || leaves[s] === 0))) opaque.push(faceKey(lx, y, lz, f));
-          if (lava && nt !== FLUID_LAVA) opaque.push(faceKey(lx, y, lz, f));
+          if (lava && (nt !== FLUID_LAVA || (dy === 0 && stripShows(x, y, z, dx, dz, FLUID_LAVA, FLUID_LAVA)))) opaque.push(faceKey(lx, y, lz, f));
           if (!wet) continue;
           const shows = nt === FLUID_NONE ? true
-            : dy !== 0 ? nt === FLUID_LAVA && dy > 0
-              : stripShows(x, y, z, dx, dz, nt);
+            : dy > 0 ? nt === FLUID_LAVA
+              : dy < 0 ? nt === FLUID_LAVA && lavaTopBelow(x, y - 1, z)
+                : stripShows(x, y, z, dx, dz, FLUID_WATER, nt);
           if (shows) water.push(faceKey(lx, y, lz, f));
         }
       }
