@@ -9,6 +9,7 @@ import { EXPR_CHILD_KEYS, type DensityExpr, type Expr } from '../../src/gen/dens
 import { resolveDensity } from '../../src/gen/density/source';
 import { densityColumnCost, rulesColumnCost, structuralCost, workCost } from '../../src/gen/inspect/cost';
 import { surfaceFastPath } from '../../src/gen/surface/compile';
+import { resolveRules } from '../../src/gen/surface/source';
 import type { Condition, Rule } from '../../src/gen/surface/rules';
 import { randomDensityExpr, SCHEMA_DENSITY_NOISES } from '../harness/densityFuzz';
 import { legacyDefaultDensityExpr, legacyDefaultSurfaceRules } from '../harness/legacyTrees';
@@ -282,6 +283,31 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
     expect(countTreeNodes(sp6a, 'surfaceRules')).toBe(163);
     expect(rulesColumnCost(sp6a)).toBe(SP6A_RULES_DEFAULT);
     expect(163 * 256 * (1 + 4 + SD_MAX_STATIC)).toBe(SP6A_RULES_DEFAULT);
+  });
+
+  test("the default with Task 29's two under-water branches (SP7a §5, D25): 223 nodes, the water-gated leaves at their floor bound 1, 3,733,504, within the maximum", () => {
+    // Inserted at root.rules[2].rules[1] and [2] (rule 4, after its abyss branch): caveBiome{floor} → not(water{0,
+    // runTop}) → stoneDepth{floor, 1 | 0} → clay | gravel, 8 nodes each, none under the caveBiome{here}.
+    const branch = (biomes: string[], offset: number, state: string) => ({
+      kind: 'condition', if: { kind: 'caveBiome', side: 'floor', biomes },
+      then: { kind: 'condition', if: { kind: 'not', if: { kind: 'water', offset: 0, runTop: true } },
+        then: { kind: 'condition', if: { kind: 'stoneDepth', side: 'floor', offset, addSurfaceDepth: false }, then: { kind: 'block', state } } },
+    });
+    const tree = copy(DEFAULT_SURFACE_RULES);
+    (at(tree, 'rules[2]')['rules'] as unknown[]).splice(1, 0, branch(['lush'], 1, 'clay'), branch(['plain', 'dripstone'], 0, 'gravel'));
+    expect(countTreeNodes(tree, 'surfaceRules')).toBe(223);
+    // Every node but rule 4's 9 under caveBiome{here} at 256 × (1 + 51): the water-gated bound 1 is below the largest.
+    const cost = rulesColumnCost(tree);
+    expect(Number.isFinite(cost)).toBe(true);
+    expect(cost).toBe((223 - 9) * 256 * (1 + 4 + SD_MAX_STATIC) + 9 * VOXELS);
+    expect(cost).toBe(3_733_504);
+    expect(cost).toBeLessThanOrEqual(RULES_COLUMN_COST_MAX);
+    expect(RULES_COLUMN_COST_MAX).toBe(138_870_784);
+    // The compiler agrees: the branches form the water-gated class at bound 1, the largest bound unchanged.
+    const resolved = resolveRules(tree, DEFAULTS);
+    const fp = surfaceFastPath(resolved, SD_MAX_STATIC)!;
+    expect([fp.maxSurfaceDepth, fp.floorBound, fp.waterFloorBound, fp.waterFloorBiomes, fp.ceilBound, fp.here]).toEqual([4 + SD_MAX_STATIC, 1, 1, 0b0111, 1, true]);
+    expect(rulesColumnCost(resolved)).toBe(cost);
   });
 
   test('a strata leaf under a Y-only path (or none) keeps the fast path at no depth bound (SP6b §3.3, §3.5)', () => {

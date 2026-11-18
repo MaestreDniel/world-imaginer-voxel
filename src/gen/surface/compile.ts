@@ -15,7 +15,8 @@
  * - floor-bounded: a path `if` is `stoneDepth{side floor}`; its bound is the smallest, over those gates, of offset +
  *   (addSurfaceDepth ? SD_MAX : 0); it is in the sky class when a path `if` is `skyOpen`, else in the run-top-gated
  *   class when a path `if` is a `yAbove{runTop true}` (SP6b §3.5's islands lever: floating_islands' island branch),
- *   else in the other floor class;
+ *   else in the water-gated class when a path `if` is a `water` under an odd number of `not`s (SP7a D25: it holds only
+ *   in a run with water directly above its top; rule 4's under-water branches), else in the other floor class;
  * - ceiling-bounded (SP6b §3.5, Spec correction 6): no floor gate and a path `if` is `stoneDepth{side ceiling}`; its
  *   bound is the same smallest over its ceiling gates, counted from the run's bottom (a leaf with a floor gate is
  *   floor-bounded only: its floor gate already excludes every voxel beyond it, whatever its ceiling gates say);
@@ -28,7 +29,9 @@
  * ceiling-bounded path also holds a `skyOpen` `if`. The biome-gated skip (SP6b §3.5 item 3): when every leaf of the
  * other floor class holds a `caveBiome{side floor}` `if`, `floorBiomes` is the set of cave biomes they name (each leaf's
  * gates intersected), and a run whose floor biome is none or outside it has no such leaf that can hold (its floor
- * bound in that class is −1); `ceilBiomes` the same for the ceiling class with `caveBiome{side ceiling}`. The y range
+ * bound in that class is −1); `waterFloorBiomes` the same for the water-gated class, a set of its own, so a run without
+ * water above keeps the other floor class's skip; `ceilBiomes` the same for the ceiling class with
+ * `caveBiome{side ceiling}`. The y range
  * −63 … 319 is cut only by the Y-only and here-gated leaves' Y-only conditions: at each such `yAbove{runTop false}`'s
  * minY and at each such gradient's ends; a gradient's dither interval [trueAtAndBelow + 1, falseAtAndAbove − 1] is
  * always evaluated; every other interval is a constant band whose result is the tree evaluated at compile time
@@ -40,7 +43,9 @@
  * evaluating when it lies beyond every class's bound: floorDepth > the run's floor bound (the sky-open run's: the
  * largest of the floor classes'; any other run's: the non-sky classes', so in a sky-gated tree every depth of such a
  * run; the run-top-gated class's counts only in a run whose top is ≥ its topFloorMinY, the smallest of its leaves'
- * gates, since no leaf of it holds in a lower run) and ceilDepth > the ceiling bound (each −1 for a run the biome-gated skip excludes), and, in a tree with
+ * gates, since no leaf of it holds in a lower run; the water-gated class's only in a run with `waterAbove`, so a dry
+ * cave run evaluates what it did without the class) and ceilDepth > the ceiling bound (each −1 for a run the
+ * biome-gated skip excludes), and, in a tree with
  * here-gated leaves, the position's classification (`classifyCaveBiomes`, SP6b §3.5 item 4) leaves one result over
  * the cave biomes the picker can return at that y (one biome, or several with one result); else the voxel is evaluated,
  * a `caveBiome{here}` there taking the classification's answer when it is sure (true when every possible biome is in
@@ -127,7 +132,7 @@ export interface SurfaceFastPath {
   readonly skyGated: boolean;
   /** The largest floor bound of the floor-bounded leaves whose path holds a `skyOpen`; −1 when there is none. */
   readonly skyFloorBound: number;
-  /** The largest floor bound of the other floor-bounded leaves but the run-top-gated ones; −1 when there is none. */
+  /** The largest floor bound of the other floor-bounded leaves but the run-top-gated and water-gated ones; −1 when none. */
   readonly floorBound: number;
   /**
    * The largest floor bound of the run-top-gated floor-bounded leaves (no `skyOpen`; a `yAbove{runTop true}` on the
@@ -136,6 +141,12 @@ export interface SurfaceFastPath {
   readonly topFloorBound: number;
   /** The smallest, over the run-top-gated leaves, of the largest `yAbove{runTop true}` minY on each path; −1 when none. */
   readonly topFloorMinY: number;
+  /**
+   * The largest floor bound of the water-gated floor-bounded leaves (SP7a D25: no `skyOpen` and no `yAbove{runTop true}`
+   * on the path, a `water` under an odd number of `not`s on it); −1 when there is none. They hold only in a run with
+   * water directly above its top, so the bound counts only for runs with `waterAbove`.
+   */
+  readonly waterFloorBound: number;
   /** The largest ceiling bound (from the run's bottom) of the ceiling-bounded leaves; −1 when there is none. */
   readonly ceilBound: number;
   /**
@@ -143,6 +154,8 @@ export interface SurfaceFastPath {
    * `caveBiome{floor}` gates name when every one of them holds one; −1 when one does not or the class is empty.
    */
   readonly floorBiomes: number;
+  /** The same for the water-gated class (its own set, SP7a D25). */
+  readonly waterFloorBiomes: number;
   /** The same for the ceiling class and `caveBiome{ceiling}`. */
   readonly ceilBiomes: number;
   /** Some leaf is here-gated (SP6b §3.5 item 4): the band results depend on the cave biome at the voxel. */
@@ -177,6 +190,20 @@ export interface CompiledSurfaceRules {
 /** A Y-only condition: a `verticalGradient`, a `yAbove{runTop false}`, or a `not` of one. */
 function isYOnly(c: Condition): boolean {
   return c.kind === 'verticalGradient' || (c.kind === 'yAbove' && !c.runTop) || (c.kind === 'not' && isYOnly(c.if));
+}
+
+/**
+ * A condition that holds only in a run with water directly above its top (SP7a D25): a `water` under an odd number of
+ * `not`s (`water` holds whenever the run has no water above, `src/gen/surface/conditions.ts` `waterHolds`).
+ */
+function needsWaterAbove(c: Condition): boolean {
+  let negated = false;
+  let x = c;
+  while (x.kind === 'not') {
+    negated = !negated;
+    x = x.if;
+  }
+  return negated && x.kind === 'water';
 }
 
 /** A here-only condition (SP6b §3.5 item 4): a `caveBiome{side here}`, or a `not` of one. */
@@ -255,12 +282,15 @@ function analyse(root: Rule, sdMax: number): BandAnalysis | null {
   let floorBound = -1;
   let topFloorBound = -1;
   let topFloorMinY = Infinity;
+  let waterFloorBound = -1;
   let ceilBound = -1;
   let skyGated = true;
   // The biome-gated skip: the union of the leaves' gate sets, −1 once a leaf of the class lacks a gate.
   let floorBiomes = 0;
+  let waterFloorBiomes = 0;
   let ceilBiomes = 0;
   let floorLeaves = 0;
+  let waterLeaves = 0;
   let ceilLeaves = 0;
   let here = false;
   const bandLeaves: BandLeaf[] = [];
@@ -273,6 +303,8 @@ function analyse(root: Rule, sdMax: number): BandAnalysis | null {
     let ceilGate = -1;
     // The leaf's run-top gate: the largest yAbove{runTop true} minY on its path (−Infinity: none).
     let topGate = -Infinity;
+    // A water gate (SP7a D25): the leaf holds only in a run with water above.
+    let wet = false;
     for (const c of leaf.conditions) {
       if (c.kind === 'stoneDepth') {
         const b = c.offset + (c.addSurfaceDepth ? sdMax : 0);
@@ -286,6 +318,8 @@ function analyse(root: Rule, sdMax: number): BandAnalysis | null {
         floorGate = (floorGate < 0 ? ~0 : floorGate) & caveBits(c.biomes);
       } else if (c.kind === 'caveBiome' && c.side === 'ceiling') {
         ceilGate = (ceilGate < 0 ? ~0 : ceilGate) & caveBits(c.biomes);
+      } else if (needsWaterAbove(c)) {
+        wet = true;
       }
     }
     if (floor !== Infinity) {
@@ -297,6 +331,13 @@ function analyse(root: Rule, sdMax: number): BandAnalysis | null {
         topFloorBound = Math.max(topFloorBound, floor);
         topFloorMinY = Math.min(topFloorMinY, topGate);
         skyGated = false;
+      } else if (wet) {
+        // Water-gated (SP7a D25): its bound and biome set count only for runs with water above, so a dry run keeps the
+        // other floor class's bound and skip.
+        waterFloorBound = Math.max(waterFloorBound, floor);
+        skyGated = false;
+        waterLeaves++;
+        waterFloorBiomes = waterFloorBiomes < 0 || floorGate < 0 ? -1 : waterFloorBiomes | floorGate;
       } else {
         floorBound = Math.max(floorBound, floor);
         skyGated = false;
@@ -357,9 +398,10 @@ function analyse(root: Rule, sdMax: number): BandAnalysis | null {
     y = end + 1;
   }
   const fastPath: SurfaceFastPath = {
-    maxSurfaceDepth: Math.max(skyFloorBound, floorBound, topFloorBound), skyGated, skyFloorBound, floorBound,
-    topFloorBound, topFloorMinY: topFloorBound < 0 ? -1 : topFloorMinY, ceilBound,
-    floorBiomes: floorLeaves === 0 ? -1 : floorBiomes, ceilBiomes: ceilLeaves === 0 ? -1 : ceilBiomes, here, bands,
+    maxSurfaceDepth: Math.max(skyFloorBound, floorBound, topFloorBound, waterFloorBound), skyGated, skyFloorBound, floorBound,
+    topFloorBound, topFloorMinY: topFloorBound < 0 ? -1 : topFloorMinY, waterFloorBound, ceilBound,
+    floorBiomes: floorLeaves === 0 ? -1 : floorBiomes, waterFloorBiomes: waterLeaves === 0 ? -1 : waterFloorBiomes,
+    ceilBiomes: ceilLeaves === 0 ? -1 : ceilBiomes, here, bands,
   };
   return { fastPath, results: Int32Array.from(results), direct };
 }
@@ -660,12 +702,14 @@ export function compileSurfaceRules(
       if (out.length !== COLUMN_VOXELS) throw new RangeError(`fillColumn: out has ${out.length} entries, expected ${COLUMN_VOXELS}`);
       const useFast = fast && fastPath !== null;
       // The floor bounds of the sky-open run (every floor class) and of every other run (the non-sky classes only, the
-      // run-top-gated one where the run's top reaches its gate), and the ceiling bound, each with its biome-gated skip
-      // (SP6b §3.5 items 1-3 and its islands lever).
+      // run-top-gated one where the run's top reaches its gate, the water-gated one where the run has water above), and
+      // the ceiling bound, each with its biome-gated skip (SP6b §3.5 items 1-3 and its islands lever; SP7a D25).
       const skyFloor = fastPath === null ? 0 : fastPath.skyFloorBound;
       const otherFloor = fastPath === null ? 0 : fastPath.floorBound;
       const topFloor = fastPath === null ? -1 : fastPath.topFloorBound;
       const topMinY = fastPath === null ? 0 : fastPath.topFloorMinY;
+      const waterFloor = fastPath === null ? -1 : fastPath.waterFloorBound;
+      const waterSet = fastPath === null ? -1 : fastPath.waterFloorBiomes;
       const ceilAll = fastPath === null ? 0 : fastPath.ceilBound;
       const floorSet = fastPath === null ? -1 : fastPath.floorBiomes;
       const ceilSet = fastPath === null ? -1 : fastPath.ceilBiomes;
@@ -673,7 +717,7 @@ export function compileSurfaceRules(
       // is compiled and the scan has a picker.
       const byMask = useFast && hereBand.length > 0;
       const classify = useFast && hasHere && scan.cavePicker !== null && scan.cavePass !== null;
-      const { runFirst, skyRun, runTop, runBottom, runFloorBiome, runCeilBiome, caveRangeLow, caveRangeMask } = scan;
+      const { runFirst, skyRun, runTop, runBottom, runWaterAbove, runFloorBiome, runCeilBiome, caveRangeLow, caveRangeMask } = scan;
       let evaluated = 0;
       for (let p = 0; p < 256; p++) {
         const ranges = setPosition(scan, p, classify);
@@ -687,7 +731,11 @@ export function compileSurfaceRules(
           const bottom = runBottom[r]!;
           const fb = runFloorBiome[r]!;
           const cb = runCeilBiome[r]!;
-          const biomeFloor = floorSet >= 0 && (fb < 0 || ((floorSet >> fb) & 1) === 0) ? -1 : otherFloor;
+          const dryFloor = floorSet >= 0 && (fb < 0 || ((floorSet >> fb) & 1) === 0) ? -1 : otherFloor;
+          // The water-gated class holds only in a run with water above its top (SP7a D25), under its own skip.
+          const wetSkipped = waterSet >= 0 && (fb < 0 || ((waterSet >> fb) & 1) === 0);
+          const wetFloor = runWaterAbove[r] === 1 && !wetSkipped ? waterFloor : -1;
+          const biomeFloor = Math.max(dryFloor, wetFloor);
           // The run-top-gated class holds only in a run whose top reaches its gate (SP6b §3.5's islands lever).
           const floor = top >= topMinY ? Math.max(biomeFloor, topFloor) : biomeFloor;
           const ceil = ceilSet >= 0 && (cb < 0 || ((ceilSet >> cb) & 1) === 0) ? -1 : ceilAll;

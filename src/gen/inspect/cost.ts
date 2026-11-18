@@ -384,7 +384,10 @@ interface RulePath {
  * bounded by its path's floor `stoneDepth` conditions, or with none of those by its ceiling ones (SP6b §3.5): offset
  * at its maximising end plus SD_MAX's static maximum when `addSurfaceDepth`; else its conditions must all be Y-only or
  * here-only (SP6b §3.5 item 4), as `surfaceFastPath` decides; the largest over the floor and ceiling classes, a
- * `caveBiome{floor | ceiling}`-gated leaf counted at its class's bound), the depth bound clamped to 0 … 383 so the
+ * `caveBiome{floor | ceiling}`-gated leaf counted at its class's bound; a water-gated leaf (SP7a D25: a `water` under an
+ * odd number of `not`s on a floor-bounded path, holding only in a run with water above its top) counted at its floor
+ * bound, since every run of a column may have water above, and never through the biome-gated skip's sets, which are
+ * the compiler's per-run savings and not part of this bound), the depth bound clamped to 0 … 383 so the
  * factor never exceeds a whole column, except the nodes in the `then` of a here-only condition, 98,304 each (SP6b's
  * rulings P20: the picker's classification may take them at any voxel); saturating at 2^31. Tier 2 refuses it above
  * `RULES_COLUMN_COST_MAX`.
@@ -410,7 +413,8 @@ export function tColumnCost(params: Params): number {
 
 /**
  * The node count, the nodes under a here-only condition and the voxels each other node is evaluated at per column (the
- * fast-path rule of `rulesColumnCost`).
+ * fast-path rule of `rulesColumnCost`). Every floor-bounded leaf counts at its floor bound, whatever its class: the sky,
+ * run-top-gated, water-gated (SP7a D25) and other floor classes differ only in which runs their bounds count for.
  */
 function rulesCost(source: unknown): { readonly nodes: number; readonly hereNodes: number; readonly perNode: number } {
   let nodes = 0;

@@ -110,6 +110,63 @@ function withCaveGates(next: () => number, tree: Rule): Rule {
 }
 
 /**
+ * `tree` (a sequence) with 1-2 water-gated branches (SP7a D25) at random places: a `not(water{offset −3 … 3, runTop})`
+ * gate over a floor `stoneDepth` (offset 0 … 3, addSurfaceDepth one time in 4), with one time in 2 a `caveBiome{floor}`
+ * gate, one time in 4 an unnegated `water` gate, one time in 4 a ceiling `stoneDepth`, one time in 8 a `skyOpen` (the
+ * sky class keeps that leaf) and one time in 8 a second `not` pair around the water gate, the gates in random order;
+ * the leaf rule 4's clay two deep over gravel, or one block.
+ */
+function withWaterGates(next: () => number, tree: Rule): Rule {
+  if (tree.kind !== 'sequence') return tree;
+  const IF = (c: Condition, then: Rule): Rule => ({ kind: 'condition', if: c, then });
+  const B = (state: string): Rule => ({ kind: 'block', state });
+  const branches = [...tree.rules];
+  for (let n = 1 + (next() % 2); n > 0; n--) {
+    let water: Condition = { kind: 'not', if: { kind: 'water', offset: (next() % 7) - 3, runTop: next() % 2 === 0 } };
+    if (next() % 8 === 0) water = { kind: 'not', if: { kind: 'not', if: water } };
+    const gates: Condition[] = [water];
+    const insert = (c: Condition) => gates.splice(next() % (gates.length + 1), 0, c);
+    if (next() % 2 === 0) {
+      const pool = [...CAVE_BIOME_NAMES];
+      const biomes: CaveBiomeName[] = [];
+      for (let k = 1 + (next() % 3); k > 0; k--) biomes.push(pool.splice(next() % pool.length, 1)[0]!);
+      insert({ kind: 'caveBiome', side: 'floor', biomes });
+    }
+    if (next() % 4 === 0) insert({ kind: 'water', offset: (next() % 17) - 12, runTop: next() % 2 === 0 });
+    if (next() % 4 === 0) insert({ kind: 'stoneDepth', side: 'ceiling', offset: next() % 6, addSurfaceDepth: false });
+    if (next() % 8 === 0) insert({ kind: 'skyOpen' });
+    insert({ kind: 'stoneDepth', side: 'floor', offset: next() % 4, addSurfaceDepth: next() % 4 === 0 });
+    let branch: Rule = next() % 2 === 0
+      ? { kind: 'sequence', rules: [IF({ kind: 'stoneDepth', side: 'floor', offset: 1, addSurfaceDepth: false }, B('clay')), B('gravel')] }
+      : B(next() % 2 === 0 ? 'gravel' : 'sand');
+    for (let g = gates.length - 1; g >= 0; g--) branch = IF(gates[g]!, branch);
+    branches.splice(next() % (branches.length + 1), 0, branch);
+  }
+  return { kind: 'sequence', rules: branches };
+}
+
+/**
+ * `col` with its water scratch also filled in random tagged air (SP7a: the aquifer's water in caves): each air segment
+ * of tagged voxels (cave kind ≠ 0), bottom-up, flooded from its bottom one time in 4 up to 1 … 8 voxels (the run below
+ * it then has water above, its waterTop at random heights), speckled one time in 4, else left dry.
+ */
+function withCaveWater<T extends { readonly solid: Uint8Array; readonly water: Uint8Array; readonly tags: Uint8Array }>(col: T, seed: number): T {
+  const next = testRng(seed);
+  const water = col.water.slice();
+  for (let p = 0; p < 256; p++) {
+    let mode = -1, height = 0, n = 0;
+    for (let y = -63; y <= 319; y++) {
+      const i = at(p, y);
+      if (col.solid[i] !== 0 || (col.tags[i]! & 15) === 0) { mode = -1; continue; }
+      if (mode < 0) { mode = next() % 4; height = 1 + (next() % 8); n = 0; }
+      if ((mode === 0 && n < height) || (mode === 1 && next() % 2 === 0)) water[i] = 1;
+      n++;
+    }
+  }
+  return { ...col, water };
+}
+
+/**
  * Random `caves.biomes` settings over §6.1's ranges, with overlapping boxes: hMin, cMin −0.2 … 0.9; eMax −0.9 … 0.2,
  * the abyss's cMin −0.6 … 0.4; lush and dripstone depthMin 0 … 1 and depthMax up to 2 (one time in 8 below depthMin,
  * the lint's case), the abyss's depthMin 0 … 1.5; D 32 … 256; edgeJitter 0 … 4; the warps from `warp`.
@@ -523,6 +580,60 @@ describe('surfaceFuzz: random rule trees and hand-built columns (SP3c spec §3.4
     expect(tally.ceilSkip).toBeGreaterThan(30);
     expect(tally.voxels).toBeGreaterThan(200_000_000);
     expect(tally.fastEvaluated).toBeLessThan(tally.voxels / 2);
+  }, 360_000);
+
+  test('the fast path equals full evaluation with water-gated floor leaves (SP7a D25): not(water) gates over cave runs with random water above', () => {
+    // 'fastPath' trees with cave gates, each with 1-2 water-gated branches (withWaterGates), over 24 hand-built columns
+    // whose tags hold every biome and whose cave runs carry random water above (the water scratch filled in random
+    // tagged air, withCaveWater).
+    const set = surfaceFuzzSettings([17, 5]);
+    const cols = Array.from({ length: 24 }, (_, k) => withCaveWater(withCaveBiomes(randomSurfaceColumn(testRng(1701 + k)), 1701 + k), 1801 + k));
+    const scans = cols.map((col) => scanColumn(newSurfaceScan(), set, col.sample, col.solid, col.water, col.biomes, col.tags, col.cave));
+    let wetRuns = 0, dryRuns = 0;
+    for (const scan of scans) {
+      for (let p = 0; p < 256; p++) {
+        for (let q = scan.runFirst[p]!; q < scan.runFirst[p + 1]!; q++) {
+          if (q === scan.skyRun[p] || scan.runFloorBiome[q]! < 0) continue;
+          if (scan.runWaterAbove[q] === 1) wetRuns++; else dryRuns++;
+        }
+      }
+    }
+    // Cave runs (a floor biome, no sky) both with water above and without.
+    expect(wetRuns).toBeGreaterThan(1000);
+    expect(dryRuns).toBeGreaterThan(1000);
+    const next = testRng(1700);
+    const fast = new Uint16Array(98304), full = new Uint16Array(98304);
+    const tally = { trees: 0, waterClass: 0, waterSkip: 0, beside: 0, voxels: 0, fastEvaluated: 0 };
+    for (let i = 0; tally.trees < 200; i++) {
+      expect(i, 'too few accepted trees').toBeLessThan(2000);
+      const base = withWaterGates(next, withCaveGates(next, randomSurfaceRules(next, { style: 'fastPath', ceilingGates: true, noises: SCHEMA_SURFACE_NOISES })));
+      const r = applyPatch(SCHEMA, DEFAULTS, { surface: { rules: base } });
+      if (!r.ok || validateParamTrees(r.value).length > 0) continue;
+      const rules = resolveRules(r.value.surface.rules, r.value);
+      tally.trees++;
+      const c = compileSurfaceRules([17, 5], rules, NOISES, set);
+      const fp = c.fastPath;
+      if (fp !== null && fp.waterFloorBound >= 0) {
+        tally.waterClass++;
+        if (fp.waterFloorBiomes >= 0) tally.waterSkip++;
+        if (fp.floorBound >= 0) tally.beside++;
+      }
+      for (const [k, scan] of scans.entries()) {
+        fast.fill(0);
+        full.fill(0);
+        tally.fastEvaluated += c.fillColumn(scan, fast, true);
+        tally.voxels += c.fillColumn(scan, full, false);
+        if (!Buffer.from(fast.buffer).equals(Buffer.from(full.buffer))) expect([i, k, Array.from(fast)]).toEqual([i, k, Array.from(full)]);
+      }
+    }
+    // Most trees keep the water-gated class (189 of 200; a tree whose other branches have no fast path has none); many
+    // with its biome-gated skip (89), many beside the other floor class (98); the fast fills evaluate about half the
+    // voxels (0.53: every wet cave run evaluates its water-gated bound, an addSurfaceDepth one included).
+    expect(tally.waterClass).toBeGreaterThan(150);
+    expect(tally.waterSkip).toBeGreaterThan(50);
+    expect(tally.beside).toBeGreaterThan(50);
+    expect(tally.voxels).toBeGreaterThan(150_000_000);
+    expect(tally.fastEvaluated).toBeLessThan(0.6 * tally.voxels);
   }, 360_000);
 
   test('columns: reproducible; overhangs, caves, water above / over a gap / in two segments, empty positions, every regime', () => {

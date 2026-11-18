@@ -19,6 +19,7 @@ import {
 import { testRng } from '../harness/stats';
 import { legacyDefaultSurfaceRules } from '../harness/legacyTrees';
 import { DEFAULTS } from '../../src/core/params/defaults';
+import { resolveRules } from '../../src/gen/surface/source';
 import { canonicalJSON } from '../../src/core/params/canonical';
 
 const SEED: Seed64 = [42, 0];
@@ -117,7 +118,8 @@ function fill(c: CompiledSurfaceRules, scan: SurfaceScan, fast: boolean): { out:
 /**
  * The voxels §3.4 and SP6b §3.5 (D20 1-3) let take their band: solid, in a constant band, floorDepth beyond the run's
  * floor bound (the sky-open run's: the largest of the floor classes'; any other run's: the non-sky classes', the
- * run-top-gated one only where the run's top reaches its gate) and
+ * run-top-gated one only where the run's top reaches its gate, the water-gated one, SP7a D25, only in a run with water
+ * directly above its top) and
  * ceilDepth beyond the ceiling class's bound, a class's bound −1 for a run whose floor (ceiling) biome its biome-gated
  * skip leaves out. (A tree with here-gated leaves, item 4, takes more: this counts only the bands whose state is one.)
  */
@@ -129,7 +131,10 @@ function fastVoxels(fp: SurfaceFastPath, scan: SurfaceScan): { fast: number; noS
   for (let p = 0; p < 256; p++) {
     for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
       const sky = r === scan.skyRun[p];
-      const biome = skipped(fp.floorBiomes, scan.runFloorBiome[r]!) ? -1 : fp.floorBound;
+      const dry = skipped(fp.floorBiomes, scan.runFloorBiome[r]!) ? -1 : fp.floorBound;
+      // The water-gated class (SP7a D25) in a run with water above, with its own biome-gated skip.
+      const wet = scan.runWaterAbove[r] !== 1 || skipped(fp.waterFloorBiomes, scan.runFloorBiome[r]!) ? -1 : fp.waterFloorBound;
+      const biome = Math.max(dry, wet);
       // The run-top-gated class (SP6b §3.5's islands lever) where the run's top reaches its gate.
       const other = scan.runTop[r]! >= fp.topFloorMinY ? Math.max(biome, fp.topFloorBound) : biome;
       const ceilBound = skipped(fp.ceilBiomes, scan.runCeilBiome[r]!) ? -1 : fp.ceilBound;
@@ -239,8 +244,10 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
       floorBound: -1,
       topFloorBound: -1,
       topFloorMinY: -1,
+      waterFloorBound: -1,
       ceilBound: -1,
       floorBiomes: -1,
+      waterFloorBiomes: -1,
       ceilBiomes: -1,
       here: false,
       bands: [dither(-63, -60), band(-59, 0, BEDROCK), dither(1, 7), band(8, 319, STONE)],
@@ -278,7 +285,7 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     expect(fp(SEQ(IF(floor(3, false), B('air')), IF(floor(-2, true), B('air'))), 11).maxSurfaceDepth).toBe(9);
     expect(fp(IF(floor(-3, false), B('air')), 11).maxSurfaceDepth).toBe(-1);
     expect(fp(SEQ(), 11)).toEqual({
-      maxSurfaceDepth: -1, skyGated: true, skyFloorBound: -1, floorBound: -1, topFloorBound: -1, topFloorMinY: -1, ceilBound: -1, floorBiomes: -1, ceilBiomes: -1, here: false,
+      maxSurfaceDepth: -1, skyGated: true, skyFloorBound: -1, floorBound: -1, topFloorBound: -1, topFloorMinY: -1, waterFloorBound: -1, ceilBound: -1, floorBiomes: -1, waterFloorBiomes: -1, ceilBiomes: -1, here: false,
       bands: [band(-63, 319, STONE)],
     });
     expect(fp(IF(grad(0, 8), B('air')), 11).skyGated).toBe(true);
@@ -402,8 +409,10 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
       floorBound: -1,
       topFloorBound: -1,
       topFloorMinY: -1,
+      waterFloorBound: -1,
       ceilBound: -1,
       floorBiomes: -1,
+      waterFloorBiomes: -1,
       ceilBiomes: -1,
       here: false,
       bands: [
@@ -428,8 +437,10 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
       floorBound: -1,
       topFloorBound: -1,
       topFloorMinY: -1,
+      waterFloorBound: -1,
       ceilBound: -1,
       floorBiomes: -1,
+      waterFloorBiomes: -1,
       ceilBiomes: -1,
       here: false,
       bands: [band(-63, 0, BEDROCK), dither(1, 7), band(8, 39, STONE), { yMin: 40, yMax: 59, dither: false, state: -1 }, band(60, 319, STONE)],
@@ -665,7 +676,7 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     const t1 = tree(ST('surface.noises.patch', 0)), t2 = tree(ST('surface.noises.fuzzB', 0));
     // The strata leaf is Y-only: the band it decides (8 … 319) has no constant state and is evaluated.
     expect(surfaceFastPath(t1, 11)).toEqual({
-      maxSurfaceDepth: 0, skyGated: true, skyFloorBound: 0, floorBound: -1, topFloorBound: -1, topFloorMinY: -1, ceilBound: -1, floorBiomes: -1, ceilBiomes: -1, here: false,
+      maxSurfaceDepth: 0, skyGated: true, skyFloorBound: 0, floorBound: -1, topFloorBound: -1, topFloorMinY: -1, waterFloorBound: -1, ceilBound: -1, floorBiomes: -1, waterFloorBiomes: -1, ceilBiomes: -1, here: false,
       bands: [band(-63, -41, BEDROCK), band(-40, 0, BEDROCK), dither(1, 7), { yMin: 8, yMax: 319, dither: false, state: -1 }],
     });
     const col = handColumn((p) => 300 + (p % 7));
@@ -957,5 +968,114 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
     expect(mixedInside!).toBeLessThanOrEqual(36 * 7);
     expect(mixedAbyss!).toBeGreaterThan(mixedInside!);
     expect(evaluated!).toBeLessThanOrEqual(floorClass! + 3 * runEnds! + mixedAbyss!);
+  });
+});
+
+describe("rule 4's under-water branches on the fast path: the water-gated class (SP7a spec §5, D25)", () => {
+  const set = surfaceFuzzSettings(SEED);
+  const WATER = (offset: number, runTop: boolean): Condition => ({ kind: 'water', offset, runTop });
+  /** Holds only when water lies directly above the run's top and reaches above it (§5's `not(water{offset 0, runTop true})`). */
+  const UNDER = NOT(WATER(0, true));
+  /** Task 29's two branches (§5, D12): under cave water lush floors clay two deep, plain and dripstone floors gravel one deep. */
+  const UNDER_WATER: readonly Rule[] = [
+    IF(CB('floor', 'lush'), IF(UNDER, IF(floor(1, false), B('clay')))),
+    IF(CB('floor', 'plain', 'dripstone'), IF(UNDER, IF(floor(0, false), B('gravel')))),
+  ];
+  /** `tree` (rule 4's sequence at root.rules[2]) with the two branches inserted at root.rules[2].rules[1] and [2]. */
+  function withUnderWater(tree: Rule): Rule {
+    const root = tree as Extract<Rule, { kind: 'sequence' }>;
+    const rule4 = root.rules[2] as Extract<Rule, { kind: 'sequence' }>;
+    return SEQ(root.rules[0]!, root.rules[1]!, SEQ(rule4.rules[0]!, ...UNDER_WATER, ...rule4.rules.slice(1)), ...root.rules.slice(3));
+  }
+  /** The default tree as it is today (no under-water branch), resolved at the defaults. */
+  const TODAY = resolveRules(DEFAULTS.surface.rules, DEFAULTS);
+  const BRANCHED = withUnderWater(TODAY);
+  const classes = (f: SurfaceFastPath) => [
+    f.skyFloorBound, f.floorBound, f.topFloorBound, f.waterFloorBound, f.ceilBound, f.floorBiomes, f.waterFloorBiomes, f.ceilBiomes, f.here,
+    f.maxSurfaceDepth, f.skyGated,
+  ];
+
+  test("today's default tree has no water-gated leaf: the same classes as before; with the two branches, a water-gated class (bound 1: plain, lush, dripstone)", () => {
+    // The sky-open run's sand, gravel and clay under not(water{…}) stay in the sky class; rule 4 as SP6b left it.
+    const today = surfaceFastPath(TODAY, set.sdMax)!;
+    expect(classes(today)).toEqual([15, 1, -1, -1, 1, 0b1110, -1, 0b0110, true, 15, false]);
+    expect(canonicalJSON(TODAY)).toBe(canonicalJSON(legacyDefaultSurfaceRules(DEFAULTS.surface)));
+    // The branches' leaves hold not(water) on a floor-bounded path without skyOpen or yAbove{runTop}: their own class,
+    // bound max(1, 0), biome set lush | plain | dripstone; the other floor class keeps its bound and its set. Their
+    // depth gates cut no band.
+    const branched = surfaceFastPath(BRANCHED, set.sdMax)!;
+    expect(classes(branched)).toEqual([15, 1, -1, 1, 1, 0b1110, 0b0111, 0b0110, true, 15, false]);
+    expect(branched.bands).toEqual(today.bands);
+  });
+
+  test('a water gate is water-gated only under a not, on a floor-bounded path of the other floor class', () => {
+    const fp = (tree: Rule) => surfaceFastPath(tree, 11)!;
+    const A = B('gravel');
+    const bounds = (f: SurfaceFastPath) => [f.skyFloorBound, f.floorBound, f.topFloorBound, f.waterFloorBound, f.waterFloorBiomes, f.maxSurfaceDepth];
+    // Under a not (an odd number of them): water-gated, whatever the offset and runTop.
+    expect(bounds(fp(IFS([NOT(WATER(0, true)), floor(2, false)], A)))).toEqual([-1, -1, -1, 2, -1, 2]);
+    expect(bounds(fp(IFS([floor(1, true), NOT(WATER(-5, false))], A)))).toEqual([-1, -1, -1, 12, -1, 12]);
+    expect(bounds(fp(IFS([NOT(NOT(NOT(WATER(3, true)))), floor(1, false)], A)))).toEqual([-1, -1, -1, 1, -1, 1]);
+    // A water gate not under a not (or under two) holds in a dry run too: the other floor class.
+    expect(bounds(fp(IFS([WATER(0, true), floor(1, false)], A)))).toEqual([-1, 1, -1, -1, -1, 1]);
+    expect(bounds(fp(IFS([NOT(NOT(WATER(0, true))), floor(1, false)], A)))).toEqual([-1, 1, -1, -1, -1, 1]);
+    // The sky and run-top-gated classes keep their leaves.
+    expect(bounds(fp(IFS([SKY, NOT(WATER(0, false)), floor(2, false)], A)))).toEqual([2, -1, -1, -1, -1, 2]);
+    expect(bounds(fp(IFS([yAbove(100, true), NOT(WATER(0, false)), floor(2, false)], A)))).toEqual([-1, -1, 2, -1, -1, 2]);
+    // Its own biome-gated skip: each leaf's caveBiome{floor} gates intersected, the union over its leaves, −1 once a leaf
+    // has none; the other floor class's set is apart.
+    const gated = fp(SEQ(IFS([CB('floor', 'lush', 'abyss'), UNDER, CB('floor', 'lush'), floor(1, false)], A),
+      IFS([CB('floor', 'plain'), UNDER, floor(0, false)], A), IFS([CB('floor', 'dripstone'), floor(3, false)], A)));
+    expect([gated.floorBound, gated.floorBiomes, gated.waterFloorBound, gated.waterFloorBiomes]).toEqual([3, 0b0100, 1, 0b0011]);
+    const ungated = fp(SEQ(IFS([CB('floor', 'lush'), UNDER, floor(1, false)], A), IFS([UNDER, floor(0, false)], A)));
+    expect([ungated.floorBound, ungated.floorBiomes, ungated.waterFloorBound, ungated.waterFloorBiomes]).toEqual([-1, -1, 1, -1]);
+    // Without a depth gate a not(water) leaf is in no class.
+    expect(surfaceFastPath(SEQ(IF(UNDER, A), IF(grad(0, 8), B('bedrock'))), 11)).toBeNull();
+  });
+
+  test('with the two branches a plain cave run without water above evaluates 0 voxels and one with water above 2; the output equals the reference', () => {
+    // Ground −63 … 100 with a cave at y 20 … 24 at every position, tagged plain (positions p % 4 = 0, 1) or lush (2, 3);
+    // water from the cave's floor up to y 22 at odd positions, so the run below (top 19) has water above it.
+    const col = handColumn(() => 100);
+    const tags = new Uint8Array(98304);
+    for (let p = 0; p < 256; p++) {
+      const lush = (p & 2) !== 0;
+      for (let y = 20; y <= 24; y++) {
+        col.solid[at(p, y)] = 0;
+        tags[at(p, y)] = 1 | ((lush ? 1 : 0) << 4);
+        if ((p & 1) === 1 && y <= 22) col.water[at(p, y)] = 1;
+      }
+    }
+    const scan = scanOf({ ...col, tags }, set);
+    for (let p = 0; p < 256; p++) {
+      const r = scan.runFirst[p]! + 1;
+      expect([scan.runTop[r], scan.runWaterAbove[r], scan.runWaterTop[r], scan.runFloorBiome[r]]).toEqual(
+        [19, p & 1, (p & 1) === 1 ? 22 : scan.runWaterTop[r], (p & 2) !== 0 ? 1 : 0]);
+    }
+    const c = compileSurfaceRules(SEED, BRANCHED, NOISES, set);
+    const slow = fill(c, scan, false), fast = fill(c, scan, true);
+    expect(Buffer.from(fast.out).equals(Buffer.from(slow.out))).toBe(true);
+    // Per position: the sky-open run's top 16 (y 85 … 100) and the dither intervals (y −63 … −60, 1 … 7), 27 voxels;
+    // over a lush cave the sky-open run's bottom 2 (rule 4's ceiling class) and the cave run's top 2 (its floor class,
+    // dry or wet); over a plain cave the cave run's top 2 only with water above (the water-gated class's bound 1, the
+    // clay branch's stoneDepth offset 1), none without.
+    expect(fast.evaluated).toBe(256 * 27 + 64 * 2 + 128 * (2 + 2));
+    // Today's tree evaluates the same voxels but the wet plain runs' 2: a dry plain run is skipped as before.
+    expect(fill(compileSurfaceRules(SEED, TODAY, NOISES, set), scan, true).evaluated).toBe(fast.evaluated - 64 * 2);
+    const ref = createSurfaceReference(SEED, BRANCHED, NOISES);
+    const key = (s: number) => REGISTRY.stateKey(s);
+    for (let p = 0; p < 256; p++) {
+      for (let y = 10; y <= 30; y++) {
+        if (col.solid[at(p, y)] === 0) continue;
+        expect(slow.out[at(p, y)]).toBe(ref.state(scan, set, p, y));
+      }
+      const floor3 = [19, 18, 17].map((y) => key(slow.out[at(p, y)]!));
+      switch (p & 3) {
+        case 0: expect(floor3).toEqual(['stone', 'stone', 'stone']); break;
+        case 1: expect(floor3).toEqual(['gravel', 'stone', 'stone']); break;
+        case 2: expect(['moss_block', 'clay']).toContain(floor3[0]); expect(floor3[2]).toBe('stone'); break;
+        default: expect(floor3).toEqual(['clay', 'clay', 'stone']); break;
+      }
+    }
   });
 });
