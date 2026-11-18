@@ -456,6 +456,46 @@ describe('DT2 with the aquifer\'s barriers (SP7a spec §13.4, D20; Task 13)', ()
   }, 120_000);
 });
 
+describe('DT2 aquiferProbe (SP7a spec §13.4, D19; Task 14)', () => {
+  /** (−2000, −2000): a column under the sea at seed '42' (terrainStage.test.ts' SEA); (40, 900): one holding barriers. */
+  const SEA = [-2000, -2000] as const;
+  const BARRIERS = [40, 900] as const;
+
+  it('reads 0 on 2 columns, one under the sea and one with a barrier: fluidAt equals the stored fluid at every checked non-solid voxel, tagged and untagged', () => {
+    const ctx = ctxOf();
+    const setup = dt2Setup(ctx, LABEL);
+    for (const [cx, cz] of [SEA, BARRIERS]) {
+      const acc = newDt2Acc(LABEL);
+      const seen: Dt2Voxel[] = [];
+      dt2Column(ctx, cx, cz, new Xoshiro128(11), acc, { extra: { count: 512, yLo: -63, yHi: 120 }, voxel: (v) => seen.push(v) });
+      expect(acc.problems).toEqual([]);
+      expect([...failures(acc), acc.tagProbe, acc.aquiferProbe]).toEqual([0, 0, 0, 0, 0, 0]);
+      // The population is every checked voxel T left non-solid; some hold water, and the probe reads both rules.
+      expect(acc.aquiferVoxels).toBe(seen.filter((v) => v.block === AIR).length);
+      expect(acc.aquiferWet, `column (${cx}, ${cz}) has checked fluid voxels`).toBeGreaterThan(0);
+      expect(acc.aquiferTagged).toBeLessThan(acc.aquiferVoxels);
+      if (cx === BARRIERS[0]) {
+        expect(acc.aquiferTagged, 'tagged non-solid voxels checked').toBeGreaterThan(0);
+        expect(seen.some((v) => setup.barrierAt(v.x, v.y, v.z)), 'some checked voxel is a barrier').toBe(true);
+      }
+    }
+  }, 120_000);
+
+  it('an injected mismatch is counted in its own part: a wrong fluidAt → aquiferProbe at every checked non-solid voxel', () => {
+    const ctx = ctxOf();
+    const setup = dt2Setup(ctx, LABEL);
+    const fluidAt = setup.fluidAt;
+    setup.fluidAt = (x, y, z) => fluidAt(x, y, z) ^ 1;
+    const acc = newDt2Acc(LABEL);
+    dt2Column(ctx, ...SEA, new Xoshiro128(11), acc, { extra: { count: 64, yLo: -63, yHi: 120 } });
+    setup.fluidAt = fluidAt;
+    expect(acc.aquiferVoxels).toBeGreaterThan(0);
+    expect([...failures(acc), acc.tagProbe, acc.aquiferProbe]).toEqual([0, 0, 0, 0, 0, acc.aquiferVoxels]);
+    expect(acc.problems).toHaveLength(acc.aquiferVoxels);
+    expect(acc.problems[0]).toMatch(new RegExp(`^profile default, seed '42', column \\(${SEA[0]}, ${SEA[1]}\\): \\(-?\\d+, -?\\d+, -?\\d+\\) stored fluid \\d+ ≠ fluidAt \\d+$`));
+  }, 120_000);
+});
+
 describe('DT2 tagProbe reads the cave kind (SP6b spec §2.1, Spec correction 4; Task 8)', () => {
   it('a column with every nibble set gives the same kind-level outputs as with them cleared: DT2\'s tagProbe comparison count', () => {
     const ctx = ctxOf();

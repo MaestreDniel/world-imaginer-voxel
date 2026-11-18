@@ -1,5 +1,5 @@
 {
-  "sha256": "9097087c645f51442fe0d7a7ca50190fe1626b7a0a79f286d3bf2fa69d4ed171",
+  "sha256": "92a782809bd02c0c2f59fa4dfaa4ff083152b9c911b3bb56b44606a435c452bd",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -416,6 +416,10 @@
         }
       },
       "DT2": {
+        "aquiferProbe": {
+          "activeFrom": "SP7a",
+          "max": 0
+        },
         "caveBiomeProbe": {
           "activeFrom": "SP6b",
           "max": 0

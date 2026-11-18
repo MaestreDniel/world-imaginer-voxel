@@ -251,7 +251,11 @@ metricTest('DT1', ['mismatches', 'carverCache', 'isolated'], async () => {
  *   voxels (kind ≠ 0) whose stored cave biome (bits 4-7 of the `cave` byte) differs from `caveBiomeAt` (a DensityContext
  *   built apart), plus the quarts holding a tagged voxel whose stored `caveBiomeQ` differs from 1 + the biome most of
  *   their tagged voxels get from `caveBiomeAt` (ties to the lower id); every tagged voxel of the column, no draw.
- * The per-column checks of the first four parts, the default tree's `tagProbe` and `caveBiomeProbe` are `dt2Column`
+ * - `aquiferProbe` (SP7a spec §13.4, D19; Task 14): on every DT2 column of each profile's tree, the checked voxels (the
+ *   16 and the straddle stratum's) that T left non-solid, tagged and untagged, whose stored proto fluid byte differs from
+ *   `fluidAt` (a DensityContext built apart, `aquiferOf(ctx)`): both of T's fluid rules are point functions; spring
+ *   voxels excluded (none before Task 19). No draw; `aquiferVoxels`, `aquiferTagged` and `aquiferWet` are its population.
+ * The per-column checks of the first four parts, the default tree's `tagProbe`, `caveBiomeProbe` and `aquiferProbe` are `dt2Column`
  * (`test/harness/dt2.ts`, SP3e spec §5.1, D18): this file keeps the profiles, the shared `DT2` stream, `DT2_RANGE` and
  * the edited parts and calls it per column.
  */
@@ -449,7 +453,7 @@ function mutedTagProbe(at: string, seed: string, params: Params, columns: readon
   }
 }
 
-metricTest('DT2', ['probeBulk', 'compiledReference', 'surfaceProbeBulk', 'surfaceReference', 'editedDensityReference', 'editedSurfaceReference', 'tagProbe', 'caveBiomeProbe'], () => {
+metricTest('DT2', ['probeBulk', 'compiledReference', 'surfaceProbeBulk', 'surfaceReference', 'editedDensityReference', 'editedSurfaceReference', 'tagProbe', 'caveBiomeProbe', 'aquiferProbe'], () => {
   const t0 = performance.now();
   const r = new Xoshiro128(fnv1a32('DT2'));
   const scan = newSurfaceScan();
@@ -493,6 +497,7 @@ metricTest('DT2', ['probeBulk', 'compiledReference', 'surfaceProbeBulk', 'surfac
     editedTagTrees: edited.tagTrees, editedTagVoxels: edited.tagVoxels, editedTagNonZero: edited.tagNonZero,
     mutedEarlyAirVoxels: edited.mutedEarlyAirVoxels,
     caveBiomeProbe: acc.caveBiomeProbe, caveBiomeVoxels: acc.caveBiomeVoxels, caveBiomeQuarts: acc.caveBiomeQuarts,
+    aquiferProbe: acc.aquiferProbe, aquiferVoxels: acc.aquiferVoxels, aquiferTagged: acc.aquiferTagged, aquiferWet: acc.aquiferWet,
     seconds: Math.round(performance.now() - t0) / 1000,
   };
 });

@@ -7,7 +7,7 @@ import { cornerValueIndex } from '../../src/gen/density/compile';
 import { caveTagAt } from '../../src/gen/caves/tags';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import { probe } from '../../src/gen/density/probe';
-import { aquiferOf, barrierAt } from '../../src/gen/fluids/aquifer';
+import { aquiferOf, barrierAt, fluidAt } from '../../src/gen/fluids/aquifer';
 import { terrainSolidAt } from '../../src/gen/fluids/solidAt';
 import { createDensityReference, findTap, interpolatedNodes, type DensityReference } from '../../src/gen/density/reference';
 import { terrainDensityDebug, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
@@ -41,6 +41,10 @@ import { createStore, type VoxelStore } from '../../src/world/store/store';
  * SP7a (spec §13.4, D20; Task 13): `probeBulk` compares the stored solidity with `terrainSolidAt` (the density probe's
  * solidity and no carve, or a tagged voxel the aquifer makes a barrier), and `tagProbe` expects 0 where `barrierAt` holds
  * (barriers clear the tag); `caveBiomeProbe` reads the stored tagged voxels, which hold no barrier.
+ * SP7a (spec §13.4, D19; Task 14): every checked voxel T left non-solid (block AIR), tagged or untagged, also runs
+ * `aquiferProbe`: the stored proto fluid byte against `fluidAt` on the setup's DensityContext (both of T's fluid rules,
+ * the untagged one and the aquifer's, are point functions). Spring voxels are excluded once T places springs (Task 19);
+ * until then there are none. No draw: DT2's streams are unchanged.
  */
 
 export const DT2_VOXELS_PER_COLUMN = 16;
@@ -108,6 +112,14 @@ export interface Dt2Acc {
   /** The straddle stratum's voxels. */
   straddleVoxels: number;
   /**
+   * SP7a (Task 14): checked non-solid voxels whose stored fluid byte ≠ `fluidAt`; the non-solid voxels checked, those
+   * of them tagged (cave byte's kind ≠ 0) and those holding fluid (stored byte ≠ 0).
+   */
+  aquiferProbe: number;
+  aquiferVoxels: number;
+  aquiferTagged: number;
+  aquiferWet: number;
+  /**
    * SP6b (Task 18): tagged voxels whose stored cave biome ≠ `caveBiomeAt`, plus quarts holding a tagged voxel whose
    * stored `caveBiomeQ` ≠ 1 + the majority of `caveBiomeAt`; the tagged voxels and those quarts checked.
    */
@@ -120,7 +132,8 @@ export function newDt2Acc(label = ''): Dt2Acc {
   return {
     label, problems: [], probeBulk: 0, compiledReference: 0, surfaceProbeBulk: 0, surfaceReference: 0, voxels: 0,
     maskedVoxels: 0, corners: 0, columns: 0, surfaceVoxels: 0, surfaceExtraVoxels: 0, surfaceExtraSkipped: 0,
-    tagProbe: 0, tagVoxels: 0, tagNonZero: 0, straddleVoxels: 0, caveBiomeProbe: 0, caveBiomeVoxels: 0, caveBiomeQuarts: 0,
+    tagProbe: 0, tagVoxels: 0, tagNonZero: 0, straddleVoxels: 0, aquiferProbe: 0, aquiferVoxels: 0, aquiferTagged: 0, aquiferWet: 0,
+    caveBiomeProbe: 0, caveBiomeVoxels: 0, caveBiomeQuarts: 0,
   };
 }
 
@@ -129,8 +142,8 @@ export function newDt2Acc(label = ''): Dt2Acc {
  * DensityContext compiled apart from the stage's and its reference interpreter, the `interpolated` nodes' corner
  * slots, the stage's compiled rule tree (`surfaceContextOf(ctx).compiled`) and a SurfaceContext built apart (the
  * probe and the reference evaluator), `tagAt` (`caveTagAt` on `dc`), `biomeAt` (`caveBiomeAt` on `dc`), `solidAt`
- * (`terrainSolidAt` on `dc`) and `barrierAt` (`barrierAt` on `dc`) with `aquiferOf(ctx)`, and the straddle stratum's
- * `StraddleSetup`. The fields are writable so a test can inject a wrong reference.
+ * (`terrainSolidAt` on `dc`), `barrierAt` (`barrierAt` on `dc`) and `fluidAt` (`fluidAt` on `dc`) with `aquiferOf(ctx)`,
+ * and the straddle stratum's `StraddleSetup`. The fields are writable so a test can inject a wrong reference.
  */
 export interface Dt2Setup {
   dc: DensityContext;
@@ -148,6 +161,8 @@ export interface Dt2Setup {
   solidAt: (x: number, y: number, z: number) => boolean;
   /** SP7a: whether a tagged world voxel is a barrier (`barrierAt(aquiferOf(ctx), dc, …)`); `tagProbe` then expects 0. */
   barrierAt: (x: number, y: number, z: number) => boolean;
+  /** SP7a: the proto fluid byte T writes at a non-solid world voxel (`fluidAt(aquiferOf(ctx), dc, …)`), compared by `aquiferProbe`. */
+  fluidAt: (x: number, y: number, z: number) => number;
   straddle: StraddleSetup;
 }
 
@@ -243,6 +258,7 @@ export function dt2Setup(ctx: GenContext, label: string): Dt2Setup {
     dc, ref, interp, compiled, sc, maxSurfaceDepth: compiled.fastPath.maxSurfaceDepth,
     tagAt: (x, y, z) => caveTagAt(dc, x, y, z), biomeAt: (x, y, z) => caveBiomeAt(dc, x, y, z),
     solidAt: (x, y, z) => terrainSolidAt(aq, dc, x, y, z), barrierAt: (x, y, z) => barrierAt(aq, dc, x, y, z),
+    fluidAt: (x, y, z) => fluidAt(aq, dc, x, y, z),
     straddle: straddleSetup(dc),
   };
   SETUPS.set(ctx, setup);
@@ -351,6 +367,19 @@ export function dt2Column(ctx: GenContext, cx: number, cz: number, r: Xoshiro128
     if (tag !== want) {
       acc.tagProbe++;
       acc.problems.push(`${at}: (${x}, ${y}, ${z}) stored tag ${tag} ≠ caveTagAt ${tagAt}${want !== tagAt ? ' (a barrier: 0)' : ''}`);
+    }
+    // SP7a D19: at a voxel T left non-solid, the stored fluid is the point rules' (sky-open water untagged, the aquifer
+    // tagged). Spring voxels are excluded from Task 19 (none before).
+    if (block === AIR) {
+      const fluid = view.fluid(lx, y, lz);
+      const wantFluid = setup.fluidAt(x, y, z);
+      acc.aquiferVoxels++;
+      if (tag !== 0) acc.aquiferTagged++;
+      if (fluid !== 0) acc.aquiferWet++;
+      if (fluid !== wantFluid) {
+        acc.aquiferProbe++;
+        acc.problems.push(`${at}: (${x}, ${y}, ${z}) stored fluid ${fluid} ≠ fluidAt ${wantFluid}`);
+      }
     }
     if (onVoxel !== undefined) {
       const k = runAt(SCAN, i & 255, y);

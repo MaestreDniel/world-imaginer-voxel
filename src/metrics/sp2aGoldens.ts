@@ -2,7 +2,7 @@
  * SP2a golden digests (SP2a spec §7.4), shared by test/unit/goldens.sp2a.test.ts, the ?selftest=1 worker
  * and test/tools/goldensJsc.ts, and the chain of every golden of the build (`allGoldenKeys`/`computeAnyGolden`:
  * SP1, SP2a, then SP3a, SP3a spec §6.4, then SP3b, SP3b spec §9, then SP3c, SP3c spec §7, then SP3e, SP3e spec §6, then
- * SP6a, SP6a spec §12.3, then SP6b, SP6b spec §14.3). The column-point
+ * SP6a, SP6a spec §12.3, then SP6b, SP6b spec §14.3, then SP7a, SP7a spec §15.3). The column-point
  * digest lives in `pointDigest.ts` (SP3e spec §6: `sp3eGoldens.ts` hashes it too). Follows the core determinism rules (arch-tested).
  * Every value is hex64.
  */
@@ -24,6 +24,7 @@ import { computeSp3cGolden, sp3cGoldenKeys } from './sp3cGoldens';
 import { computeSp3eGolden, sp3eGoldenKeys } from './sp3eGoldens';
 import { computeSp6aGolden, sp6aGoldenKeys } from './sp6aGoldens';
 import { computeSp6bGolden, sp6bGoldenKeys } from './sp6bGoldens';
+import { computeSp7aGolden, sp7aGoldenKeys } from './sp7aGoldens';
 
 const FNV32 = fnv1a32;
 const FNV_BYTES = fnv1a64Bytes;
@@ -60,6 +61,8 @@ const SP6A = computeSp6aGolden;
 const SP6A_KEYS = sp6aGoldenKeys;
 const SP6B = computeSp6bGolden;
 const SP6B_KEYS = sp6bGoldenKeys;
+const SP7A = computeSp7aGolden;
+const SP7A_KEYS = sp7aGoldenKeys;
 
 const POINT_PROFILES: readonly ProfileId[] = ['default', 'large_biomes'];
 const TILE_LAYERS: readonly LayerId[] = ['biome', 'relief', 'rivers', 'C'];
@@ -122,9 +125,9 @@ export function computeSp2aGolden(key: string): string {
   throw new Error(`unknown golden ${key}`);
 }
 
-/** Every golden key of the build (SP1, SP2a, SP3a, SP3b, SP3c, SP3e, SP6a, then SP6b). */
+/** Every golden key of the build (SP1, SP2a, SP3a, SP3b, SP3c, SP3e, SP6a, SP6b, then SP7a). */
 export function allGoldenKeys(): string[] {
-  return [...SP1_KEYS(), ...sp2aGoldenKeys(), ...SP3A_KEYS(), ...SP3B_KEYS(), ...SP3C_KEYS(), ...SP3E_KEYS(), ...SP6A_KEYS(), ...SP6B_KEYS()];
+  return [...SP1_KEYS(), ...sp2aGoldenKeys(), ...SP3A_KEYS(), ...SP3B_KEYS(), ...SP3C_KEYS(), ...SP3E_KEYS(), ...SP6A_KEYS(), ...SP6B_KEYS(), ...SP7A_KEYS()];
 }
 
 export function computeAnyGolden(key: string): string {
@@ -134,5 +137,6 @@ export function computeAnyGolden(key: string): string {
   if (key.startsWith('sp3e.')) return SP3E(key);
   if (key.startsWith('sp6a.')) return SP6A(key);
   if (key.startsWith('sp6b.')) return SP6B(key);
+  if (key.startsWith('sp7a.')) return SP7A(key);
   return key.startsWith('sp2a.') ? computeSp2aGolden(key) : SP1(key);
 }

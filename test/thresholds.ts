@@ -92,6 +92,8 @@ export const THRESHOLDS: ThresholdTable = {
     tagProbe: { max: 0, activeFrom: 'SP6a' },
     // SP6b spec §2.3, §12.5 (D26; Task 18): the stored cave biome and caveBiomeQ against `caveBiomeAt`.
     caveBiomeProbe: { max: 0, activeFrom: 'SP6b' },
+    // SP7a spec §13.4 (D19; Task 14): the stored proto fluid against `fluidAt` at the checked non-solid voxels.
+    aquiferProbe: { max: 0, activeFrom: 'SP7a' },
   },
   // SP6a spec §10.1 (D26): the caves' tuning parts (`caves.metric.ts`), gated from Task 38 at §10.1's bounds but as
   // ruling R21 sets them (the user's, 2026-11-08; the SP6a spec's Threshold log): C6.latticeBias max 1.25 (the

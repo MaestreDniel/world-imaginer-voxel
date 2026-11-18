@@ -1,5 +1,5 @@
 /**
- * SP6b golden digests (SP6b spec §14.3, D28), chained last into `allGoldenKeys`/`computeAnyGolden` (`sp2aGoldens.ts`),
+ * SP6b golden digests (SP6b spec §14.3, D28), chained into `allGoldenKeys`/`computeAnyGolden` (`sp2aGoldens.ts`) before SP7a's,
  * so the unit tests, `?selftest=1` and `test/tools/goldensJsc.ts` all check them. The blocks (Task 7) add
  * `sp6b.registry`; the generator push appends `sp6b.caveBiome.points` (Task 17) and `sp6b.region.T.biomes` (Task 31).
  * - `sp6b.registry`: SP3a §6.4's registry byte stream over SP6b's seven types, states 58 … 64 (SP6b spec §4, D36), a

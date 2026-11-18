@@ -218,6 +218,10 @@
  * describe's pin of the abyss's water and lava sentence moved here), and item 16's U2 count, 208 (the schema's count
  * moved from the SP6b describe, which keeps its 193 as its record); the SP6b describe's code checks of rule 4's "As
  * built" paragraph moved here as a code-only test of the terrain stage 6 and `GENERATOR_VERSION` 10 (rulings P25).
+ * DT2's `aquiferProbe` and the `sp7a.aquifer.points` golden (Task 14) land item 16's DT2 part (§6.4's DT2 row: `probeBulk`
+ * with barriers, `aquiferProbe`; the SP6b describe's pin of the row's end moved here) and item 19's `sp7aGoldens.ts`
+ * (§1's metrics entry, an `SP7A_MODULES` row, and "Banned APIs", which must equal `DET_FILES`; the SP6b describe's pins
+ * of that list's end moved here).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2591,14 +2595,14 @@ describe('master spec amendments (SP6b §15)', () => {
   test('§1\'s metrics entry and "Banned APIs" name sp6bGoldens.ts (the sp6b.* goldens), which exists (SP6b spec §15 item 6)', () => {
     const entry = layoutEntry(/^\s+metrics\/\*\.ts\s/);
     expect(entry).toContain('SP6a: sp6aGoldens.ts, the sp6a.* goldens;');
-    expect(entry).toContain('SP6b: sp6bGoldens.ts, the sp6b.* goldens)');
+    expect(entry).toContain('SP6b: sp6bGoldens.ts, the sp6b.* goldens;');
     expect(existsSync(`${ROOT_DIR}src/metrics/sp6bGoldens.ts`), 'src/metrics/sp6bGoldens.ts does not exist').toBe(true);
     expect(DET_FILES.has('metrics/sp6bGoldens.ts')).toBe(true);
     const line = text.split('\n').find((l) => l.includes('(`DET_FILES` in `test/arch/rules/banned.ts`:'));
     expect(line).toContain('`metrics/sp6bGoldens.ts`');
-    // Moved from the SP6a describe: the list's end and its "amended by".
-    expect(line).toContain('and the SP6a goldens, `metrics/sp6aGoldens.ts`, and the SP6b goldens, `metrics/sp6bGoldens.ts`):');
-    expect(line).toContain('(amended by SP1, SP2a, SP2b, SP3a, SP3c, SP3e, SP6a and SP6b)');
+    expect(line).toContain('and the SP6a goldens, `metrics/sp6aGoldens.ts`, and the SP6b goldens, `metrics/sp6bGoldens.ts`,');
+    // The list's end and its "amended by" moved to 'master spec amendments (SP7a §16)' (SP7a §16 item 19 appends
+    // sp7aGoldens.ts).
   });
 
   test('§2.2\'s terrain palette gains SP6b\'s seven types (SP6b spec §15 item 7)', () => {
@@ -2812,8 +2816,9 @@ describe('master spec amendments (SP6b §15)', () => {
   test('§6.4\'s DT2 row gains caveBiomeProbe (SP6b spec §15 item 20)', () => {
     const dt2 = text.split('\n').find((l) => l.startsWith('| DT2 |'));
     expect(dt2, 'no DT2 row in §6.4').toBeDefined();
-    expect(dt2).toContain('SP6b: `caveBiomeProbe` counts tagged voxels whose stored cave biome (bits 4-7 of the `cave` byte) ≠ `caveBiomeAt`, and quarts holding a tagged voxel whose `caveBiomeQ` ≠ 1 + the biome most of their tagged voxels get from `caveBiomeAt`; the surface parts (`surfaceProbeBulk`, `surfaceReference`, `editedSurfaceReference`) are re-asserted with `caveBiome` and `strata` (amended by SP6b) |');
+    expect(dt2).toContain('SP6b: `caveBiomeProbe` counts tagged voxels whose stored cave biome (bits 4-7 of the `cave` byte) ≠ `caveBiomeAt`, and quarts holding a tagged voxel whose `caveBiomeQ` ≠ 1 + the biome most of their tagged voxels get from `caveBiomeAt`; the surface parts (`surfaceProbeBulk`, `surfaceReference`, `editedSurfaceReference`) are re-asserted with `caveBiome` and `strata` (amended by SP6b).');
     expect(THRESHOLDS.DT2?.caveBiomeProbe).toEqual({ max: 0, activeFrom: 'SP6b' });
+    // The row's end moved to 'master spec amendments (SP7a §16)' (SP7a §16 item 16 appends DT2's SP7a parts).
   });
 
   test('§6.4\'s C6 row reads each y residue over its lattice-neutral local mean, the 1.1 as ≤ 1.09 on it (SP6b spec §15 item 20, ruling U1)', () => {
@@ -3368,6 +3373,7 @@ describe('master spec amendments (SP7a §16)', () => {
   /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 17, 19 and 22 append theirs. */
   const SP7A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+blocks\/kinds\.ts /, 'fluidRules.ts (SP7a; also the fluid surface', 'src/world/blocks/fluidRules.ts'],
+    [/^\s+metrics\/\*\.ts\s/, 'SP7a: sp7aGoldens.ts', 'src/metrics/sp7aGoldens.ts'],
   ];
 
   test('§1 names each SP7a module in its entry, which exists (SP7a spec §16 item 19)', () => {
@@ -3604,5 +3610,24 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(STAGES.find((st) => st.id === 'terrain')!.version).toBe(6);
     expect(STAGES.find((st) => st.id === 'terrain')!.params).toEqual(['density', 'surface', 'caves', 'aquifer']);
     expect(GENERATOR_VERSION).toBe(10);
+  });
+
+  test('§1\'s metrics entry and "Banned APIs" name sp7aGoldens.ts (the sp7a.* goldens), which exists (SP7a spec §16 item 19)', () => {
+    const entry = layoutEntry(/^\s+metrics\/\*\.ts\s/);
+    expect(entry).toContain('SP6b: sp6bGoldens.ts, the sp6b.* goldens; SP7a: sp7aGoldens.ts, the sp7a.* goldens)');
+    expect(existsSync(`${ROOT_DIR}src/metrics/sp7aGoldens.ts`), 'src/metrics/sp7aGoldens.ts does not exist').toBe(true);
+    expect(DET_FILES.has('metrics/sp7aGoldens.ts')).toBe(true);
+    const line = text.split('\n').find((l) => l.includes('(`DET_FILES` in `test/arch/rules/banned.ts`:'));
+    expect(line).toContain('`metrics/sp7aGoldens.ts`');
+    // Moved from the SP6b describe: the list's end and its "amended by".
+    expect(line).toContain('and the SP6b goldens, `metrics/sp6bGoldens.ts`, and the SP7a goldens, `metrics/sp7aGoldens.ts`):');
+    expect(line).toContain('(amended by SP1, SP2a, SP2b, SP3a, SP3c, SP3e, SP6a, SP6b and SP7a)');
+  });
+
+  test('§6.4\'s DT2 row: probeBulk with barriers and aquiferProbe (SP7a spec §16 item 16)', () => {
+    const dt2 = text.split('\n').find((l) => l.startsWith('| DT2 |'));
+    expect(dt2, 'no DT2 row in §6.4').toBeDefined();
+    expect(dt2).toContain('(amended by SP6b). SP7a: `probeBulk` compares the stored solidity with `terrainSolidAt` (the density probe\'s solidity, or a tagged voxel the aquifer makes a barrier) and `tagProbe` reads 0 where `barrierAt` holds (barriers clear the tag); `aquiferProbe` counts the checked voxels T left non-solid, tagged and untagged, whose stored proto fluid byte ≠ `fluidAt` (both of T\'s fluid rules are point functions; spring voxels excluded) (amended by SP7a) |');
+    expect(THRESHOLDS.DT2?.aquiferProbe).toEqual({ max: 0, activeFrom: 'SP7a' });
   });
 });

@@ -1,5 +1,5 @@
 /**
- * The SP3e goldens (SP3e spec §6, D14): five keys chained into `allGoldenKeys` before SP6a's, the frozen preset windows (the
+ * The SP3e goldens (SP3e spec §6, D14): five keys chained into `allGoldenKeys` before SP6a's, SP6b's and SP7a's, the frozen preset windows (the
  * search re-run on the approved values still finds them), what the windows show (the floating window holds an island
  * run over water, archipelago's holds sea and land, amplified's review line climbs above y 250), and the observer
  * that records the keys through `expectGolden`.
@@ -44,16 +44,16 @@ function windowViews(p: Sp3ePreset, store: VoxelStore): ColumnView[] {
   return out;
 }
 
-test('5 unique SP3e keys, in the spec\'s order, chained into allGoldenKeys before SP6a\'s and SP6b\'s: 65 goldens', () => {
+test('5 unique SP3e keys, in the spec\'s order, chained into allGoldenKeys before SP6a\'s, SP6b\'s and SP7a\'s: 66 goldens', () => {
   const keys = sp3eGoldenKeys();
   expect(keys).toEqual([
     'sp3e.region.T.amplified', 'sp3e.region.T.archipelago', 'sp3e.region.T.floating_islands',
     'sp3e.column.point.archipelago', 'sp3e.column.point.floating_islands',
   ]);
-  expect(allGoldenKeys().slice(-11, -6)).toEqual(keys);
-  expect(allGoldenKeys().slice(-13, -11)).toEqual(['sp3c.registry', 'sp3c.surface.ops']);
-  expect(allGoldenKeys()).toHaveLength(65);
-  expect(new Set(allGoldenKeys()).size).toBe(65);
+  expect(allGoldenKeys().slice(-12, -7)).toEqual(keys);
+  expect(allGoldenKeys().slice(-14, -12)).toEqual(['sp3c.registry', 'sp3c.surface.ops']);
+  expect(allGoldenKeys()).toHaveLength(66);
+  expect(new Set(allGoldenKeys()).size).toBe(66);
 });
 
 test('unknown SP3e keys throw, directly and through computeAnyGolden', () => {
