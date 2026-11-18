@@ -84,6 +84,18 @@ const biomeNum = (def: number, label: string, doc: string, min: number, max: num
 const caveBiomeNoise = (label: string, doc: string, def: { readonly wavelength: number; readonly octaves: number }) =>
   noise(def, { ...TERRAIN, label, doc, wavelength: CAVE_WAVELENGTH, dims: 2, remapNone: true });
 
+/** An aquifer threshold (SP7a spec §1.3, §1.9): a floodedness value, −1 … 1. */
+const aquiferFrac = (def: number, label: string, doc: string) =>
+  num(def, { ...TERRAIN, label, doc, min: -1, max: 1, step: 0.01 });
+/** The aquifer noises' wavelength range (rulings R11 (c): the lava noise's λ 2 and the barrier's λ 8 lie below the cave noises' 16). */
+const AQUIFER_WAVELENGTH = { min: 1, max: 4096 } as const;
+/**
+ * An aquifer noise (SP7a spec §1.9): 3D, one octave, double, remap 'none', clampSigma 3 (as SP6a's cave noises), read by
+ * `aquiferOf` through `noiseFor` (seed name = its path) and clamped to [−1, 1] by its readers.
+ */
+const aquiferNoise = (label: string, doc: string, wavelength: number) =>
+  noise({ wavelength, octaves: 1, double: true, clampSigma: 3 }, { ...TERRAIN, label, doc, wavelength: AQUIFER_WAVELENGTH, dims: 3, remapNone: true });
+
 /** A surface noise (SP3c spec §3.5): 2D, sampled at unscaled world block coordinates; remap 'none' (validateRules refuses another). */
 const surfaceNoise = (label: string, doc: string, def: { readonly wavelength: number; readonly octaves: number }, wavelength: { readonly min: number; readonly max: number }) =>
   noise(def, { ...TERRAIN, label, doc, wavelength, dims: 2, remapNone: true });
@@ -369,6 +381,31 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       }),
     }),
   }),
+  // SP7a spec §1.9 (Task 13): the aquifer's leaves, appended after `caves`, so randomParams and randomPatch draw every
+  // earlier leaf as before. Read by `aquiferOf(ctx)` (`gen/fluids/aquifer.ts`) in T's aquifer step and the point
+  // functions; the defaults are §1.9's (abyssMargin as the plan's Task 6 measured it), the noises Minecraft's
+  // wavelengths and octaves (**MC (memory)**); the ranges are the plan's.
+  aquifer: group('Aquifer', 'Water and lava in cave air (SP7a spec §1): cells of 16 × 12 × 16 blocks, each with a level and a fluid; a cave voxel takes its nearest cell\'s fluid at or below that level, with rock barriers where two cells differ. The terrain\'s own air fills to its sea, river or lake level.', {
+    enabled: bool(true, { ...TERRAIN, label: 'Enabled', doc: 'Fills cave air from the aquifer cells (off: every cave voxel stays dry; seas, rivers and lakes fill as before).' }),
+    surfaceBand: int(12, { ...TERRAIN, label: 'Surface band', doc: 'A cell whose centre lies at most this many blocks below the surface (offset) at its grid column takes that column\'s water level: 63 under the sea or a river, a lake\'s level, none on land.', unit: 'blocks', min: 0, max: 32 }),
+    thresholds: group('Thresholds', 'Floodedness thresholds, blended from inland to under the ocean by t = clamp((63 − offset)/8, 0, 1): a deeper cell is fully flooded (level 63) where the floodedness noise is above the full threshold, partially flooded (a level near its 40-block band\'s middle) above the partial one, else empty.', {
+      fullInland: aquiferFrac(0.8, 'Full, inland', 'Fully flooded inland where the floodedness noise is above this.'),
+      fullOcean: aquiferFrac(-0.3, 'Full, under the ocean', 'Fully flooded under the ocean where the floodedness noise is above this.'),
+      partialInland: aquiferFrac(0.4, 'Partial, inland', 'Partially flooded inland where the floodedness noise is above this.'),
+      partialOcean: aquiferFrac(-0.8, 'Partial, under the ocean', 'Partially flooded under the ocean where the floodedness noise is above this.'),
+    }),
+    lavaMaxLevel: int(-10, { ...TERRAIN, label: 'Lava below', doc: 'A partially flooded cell whose level is at most this y holds lava where the lava noise passes the lava threshold.', unit: 'y', min: -64, max: 63 }),
+    lavaThreshold: num(0.3, { ...TERRAIN, label: 'Lava threshold', doc: 'A deep partial cell holds lava where |lava noise| is above this (the noise is read once per 64 × 40 × 64 blocks).', min: 0, max: 1, step: 0.01 }),
+    lavaLevel: int(-54, { ...TERRAIN, label: 'Lava floor', doc: 'Cave air below this y that no cell fills is lava (the deepest gullies of the rock floor).', unit: 'y', min: -64, max: -40 }),
+    barrierBand: num(25, { ...TERRAIN, label: 'Barrier band', doc: 'Where a voxel\'s two nearest cells differ and their squared distances differ by less than this, the pressure and the barrier noise may put rock between them: higher → more barriers.', min: 1, max: 64, step: 1 }),
+    abyssMargin: num(0.06, { ...TERRAIN, label: 'Abyss margin', doc: 'Water is off in the abyss; within this margin around the abyss box (in C′ and E′ units, with 0.1 of depth) water becomes rock, so it never touches abyss air.', min: 0, max: 0.2, step: 0.005 }),
+    noises: group('Noises', 'The aquifer\'s noises, 3D, at unscaled world block coordinates (the floodedness read at 0.67·y, the spread at 0.714·y, the barrier at 0.5·y), each clamped to [−1, 1].', {
+      floodedness: aquiferNoise('Floodedness noise', 'Nf at a cell\'s centre: against the thresholds, whether the cell is fully flooded, partially flooded or empty.', 128),
+      spread: aquiferNoise('Spread noise', 'Nspread at a cell\'s centre: moves a partial level by up to 9 blocks around its band\'s middle.', 32),
+      lava: aquiferNoise('Lava noise', 'Nlava at the corner of a cell\'s 64 × 40 × 64 block: whether a deep partial cell holds lava.', 2),
+      barrier: aquiferNoise('Barrier noise', 'Nb at the voxel: added to the pressure where two cells meet; positive → rock.', 8),
+    }),
+  }),
 });
 
 export const SCHEMA = buildSchema(ROOT);
@@ -383,3 +420,4 @@ export interface DensityParams extends Value<typeof ROOT.children.density> {}
 export interface SurfaceParams extends Value<typeof ROOT.children.surface> {}
 export interface IslandParams extends Value<typeof ROOT.children.islands> {}
 export interface CaveParams extends Value<typeof ROOT.children.caves> {}
+export interface AquiferParams extends Value<typeof ROOT.children.aquifer> {}

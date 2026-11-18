@@ -37,7 +37,7 @@ describe('panel tree', () => {
     expect(root.path).toBe('');
     expect(root.label).toBe('Parameters');
     expect(root.controls).toEqual([]);
-    expect(root.sections.map((s) => s.path)).toEqual(['climate', 'shape', 'rivers', 'lakes', 'biomes', 'density', 'surface', 'islands', 'caves']);
+    expect(root.sections.map((s) => s.path)).toEqual(['climate', 'shape', 'rivers', 'lakes', 'biomes', 'density', 'surface', 'islands', 'caves', 'aquifer']);
     const groups = SCHEMA.nodes.filter((n) => n.node.tag === 'group').map((n) => n.path);
     expect(sectionsOf(root).map((s) => s.path).sort()).toEqual([...groups].sort());
     expect(controlsOf(root).map((c) => c.path).sort()).toEqual(SCHEMA.leaves.map((l) => l.path).sort());
@@ -54,8 +54,8 @@ describe('panel tree', () => {
     }
   });
 
-  test('SP3e spec §2.1: the Islands section, last before SP6a\'s Caves, holds the schema\'s first bool leaf as a checkbox control', () => {
-    const islands = panelTree().sections.at(-2)!;
+  test('SP3e spec §2.1: the Islands section, before SP6a\'s Caves and SP7a\'s Aquifer, holds the schema\'s first bool leaf as a checkbox control', () => {
+    const islands = panelTree().sections.at(-3)!;
     expect([islands.path, islands.label]).toEqual(['islands', 'Islands']);
     expect(islands.controls.map((c) => [c.path, c.kind])).toEqual([
       ['islands.enabled', 'bool'], ['islands.noise', 'noise'], ['islands.lo', 'number'], ['islands.hi', 'number'],
@@ -64,8 +64,8 @@ describe('panel tree', () => {
     expect(boolShown(DEFAULTS, 'islands.enabled')).toBe(false);
   });
 
-  test('SP6a spec §4 (D9): the Caves section, last, with its sub-sections in the spec\'s order and sizes first', () => {
-    const caves = panelTree().sections.at(-1)!;
+  test('SP6a spec §4 (D9): the Caves section, before SP7a\'s Aquifer, with its sub-sections in the spec\'s order and sizes first', () => {
+    const caves = panelTree().sections.at(-2)!;
     expect([caves.path, caves.label, caves.controls]).toEqual(['caves', 'Caves', []]);
     // Tasks 6 and 7's sub-groups, the carvers' (Task 27) before Limits.
     expect(caves.sections.map((s) => [s.path, s.label])).toEqual([
@@ -138,6 +138,8 @@ describe('panel tree', () => {
   test('scale: log when min > 0 and max / min ≥ 20, and for every noise wavelength; linear otherwise', () => {
     const log = controlsOf(panelTree()).filter((c) => c.scale === 'log').map((c) => c.path);
     expect(log.sort()).toEqual([
+      // The aquifer's barrier band, 1 … 64, and its four noises (SP7a Task 13).
+      'aquifer.barrierBand', 'aquifer.noises.barrier', 'aquifer.noises.floodedness', 'aquifer.noises.lava', 'aquifer.noises.spread',
       // The cave-biome noises (SP6b Task 17).
       'caves.biomes.noises.border', 'caves.biomes.noises.depth',
       // The floor's softness, 1 … 32 blocks (SP6b Task 19).
@@ -527,8 +529,9 @@ describe('panel controls (Task 17): kinds, slider positions, typed values, issue
     // band ends minY and maxY (Task 8; the band span 1 … 32 is log), + capTop and waterDepth (Task 9), + 32 of the 36
     // carver leaves (Task 27; the worms' radius and height factors are log), + the noodles' threshold (the user's check),
     // + SP6b's 13 cave-biome number and int leaves (Task 17: the 9 box bounds and the four border leaves), + the floor's
-    // y and amp (Task 19; its span 1 … 32 is log).
-    expect(linear.length).toBe(119);
+    // y and amp (Task 19; its span 1 … 32 is log), + SP7a's 9 aquifer number and int leaves (Task 13: surfaceBand, the
+    // four thresholds, lavaMaxLevel, lavaThreshold, lavaLevel, abyssMargin; the barrier band 1 … 64 is log).
+    expect(linear.length).toBe(128);
     for (const c of linear) {
       const n = sliderPositions(c);
       expect(n).toBe(Math.round((c.max! - c.min!) / c.step!));

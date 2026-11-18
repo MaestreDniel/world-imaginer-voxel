@@ -23,7 +23,7 @@ import type { Params } from '../../src/core/params/schema';
 import { createDensityContext } from '../../src/gen/density/context';
 import { attachStore, type StoreHandles } from '../../src/world/store/store';
 import {
-  abyssRockCounts, biomeTileMasks, CAP_AIR_Y, caveBiomeExamples, caveBorderCounts, caveBottomCounts, caveC7C9Counts, caveComponents, caveExamples, caveGridOf, caveRegionCounts, countsTransfer, flatWallDetail,
+  abyssRockCounts, barrierProbe, biomeTileMasks, CAP_AIR_Y, caveBiomeExamples, caveBorderCounts, caveBottomCounts, caveC7C9Counts, caveComponents, caveExamples, caveGridOf, caveRegionCounts, countsTransfer, flatWallDetail,
   landMask, localThickness, preCaveTops, ravinePathsOf, regionCounts, riverMaskOf, sp6bCaveExamples, wetMask,
   type AbyssRockCounts, type BiomeExampleId, type CarverRegionCounts, type CaveBorderCounts, type CaveBottomCounts, type CaveC7C9Counts, type CavePose, type CaveRegionCounts, type ExampleId,
   type Sp6bExampleId,
@@ -74,7 +74,8 @@ export interface CaveRegionResult {
    */
   readonly ms: { shared: number; c16: number; c79: number; bottom: number; borders: number; abyssRock: number; examples: number };
   /**
-   * C7's construction counts: `regionCounts(view, referenceCarve(…), capY)`, capY on floating_islands only; null in the
+   * C7's construction counts: `regionCounts(view, referenceCarve(…), capY, barrierProbe(…))` (SP7a: the aquifer's
+   * barriers excluded), capY on floating_islands only; null in the
    * biomes group (its job registers no C7 call).
    */
   readonly carver: CarverRegionCounts | null;
@@ -147,7 +148,7 @@ export function measureCaveRegion(view: RegionView, site: Site, params: Params, 
   const measured = measureGrid(view, site, params, stride);
   const carver = site.group === 'biomes'
     ? null
-    : regionCounts(view, referenceCarve(view, site.seed, params), site.profile === 'floating_islands' ? CAP_AIR_Y : null);
+    : regionCounts(view, referenceCarve(view, site.seed, params), site.profile === 'floating_islands' ? CAP_AIR_Y : null, barrierProbe(site.seed, params));
   return { ...measured, carver };
 }
 

@@ -161,7 +161,9 @@ test('attach, configure, then T, D, L and MESH_COLUMN through two workers on the
  */
 function decoratedWithTorch(flag: boolean): { store: VoxelStore; y: number } {
   const store = createStore({ shared: true, maxBlockBytes: 64 * MiB, maxByteBytes: 64 * MiB });
-  const ctx = ctxFor('42');
+  // The aquifer off (SP7a Task 13): its lava in the 3 × 3 would open L's emitter scan without a flag (lava always emits),
+  // and the torch with it; the test pins the flag's gate on a region with no emitter but the torch.
+  const ctx = ctxFor('42', { aquifer: { enabled: false } });
   for (const [cx, cz] of square(2)) expect(fillColumnT(store, ctx, cx, cz, NEVER)).toBe(true);
   let y = 0;
   for (const [cx, cz] of square(1)) {

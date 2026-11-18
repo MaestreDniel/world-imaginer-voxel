@@ -161,7 +161,8 @@ describe('the caves group (SP6a spec §4)', () => {
     for (const l of SCHEMA.leaves.filter((x) => x.path.startsWith('caves.'))) {
       expect([l.path, l.meta.scope, l.meta.stage]).toEqual([l.path, 'terrain', 'terrain']);
     }
-    expect(Object.keys(DEFAULTS).at(-1)).toBe('caves');
+    // SP7a appends its aquifer group after caves (Task 13).
+    expect(Object.keys(DEFAULTS).slice(-2)).toEqual(['caves', 'aquifer']);
   });
 
   test('caves.noodles.threshold: "Frequency threshold", −1 … 2 step 0.01, its doc; the group doc names the threshold (the user\'s check, R31)', () => {

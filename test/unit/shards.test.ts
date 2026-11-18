@@ -31,7 +31,8 @@ const HEAVY_A = unitFiles('surfaceFuzz', 'floatingRules', 'fieldSlice', 'relight
   'caveTags', 'splineFixtures', 'meshXray');
 const HEAVY_B = unitFiles('cavesMetric', 'sliceJob', 'workerPool', 'treeMutator', 'terrainHeap', 'terrainStage', 'carverPaths',
   'surfaceProbe', 'columnStage', 'modifyMode');
-const LIVENESS = unitFiles('liveness', 'livenessBands', 'livenessSp6b', 'livenessCaveBiomes', 'densityFast', 'carve',
+// SP7a Task 13: livenessSp7a (the aquifer leaves) joins the liveness files.
+const LIVENESS = unitFiles('liveness', 'livenessBands', 'livenessSp6b', 'livenessCaveBiomes', 'livenessSp7a', 'densityFast', 'carve',
   'densityDefaults', 'floatingIslands');
 
 describe('shardArgs (SP4b spec §1.1)', () => {
@@ -43,9 +44,9 @@ describe('shardArgs (SP4b spec §1.1)', () => {
     // The 21 heavy files of SP6b Task 31 are heavy-a's and heavy-b's.
     expect([...HEAVY_A, ...HEAVY_B]).toHaveLength(21);
     const named = [...HEAVY_A, ...HEAVY_B, ...LIVENESS];
-    expect(new Set(named).size).toBe(29);
+    expect(new Set(named).size).toBe(30);
     const rest = shardArgs(SHARDS, 'rest');
-    expect(rest).toHaveLength(2 * 29);
+    expect(rest).toHaveLength(2 * 30);
     expect(rest).toEqual(named.flatMap((f) => ['--exclude', f]));
     for (const f of named) expect(existsSync(`${ROOT}${f}`), `${f} does not exist`).toBe(true);
   });

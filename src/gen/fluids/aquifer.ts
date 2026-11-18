@@ -25,6 +25,9 @@
  *   nearest quart corner; tagged air the voxel rule, over a per-job status cache of 3 × 35 × 3 cells (Spec correction 14).
  *   Its fast path skips a voxel more than 4 blocks above every level of its 12 candidates (beyond the pressure's reach,
  *   so no barrier and no fluid) when none of them is lava and the voxel is not below `lavaLevel`.
+ * - **The inputs** (`aquiferOf(ctx)`, Task 13): `ctx.params.aquifer` (the schema's `aquifer` group, §1.9) and its four
+ *   noises, the schema instances `aquifer.noises.<name>` (`noiseFor`), memoised per GenContext; `aquiferInputs` builds the
+ *   same from explicit settings and noise definitions (the tests' oracle; rulings P4).
  * - **The point functions** (`fluidAt`, `barrierAt`; D19, D20): the column step's decision at one voxel, from the
  *   density probe's solidity, `caveTagAt` and `caveBiomeAt` in place of T's arrays and the column sample through the
  *   DensityContext's cache; neither rule reads the column's `top`, so they equal T at every voxel (DT2). They keep one
@@ -46,7 +49,7 @@ import {
 import { caveTagAt } from '../caves/tags';
 import { newPointRecord, samplePoint } from '../column/columnPoint';
 import { readLevel, type ColumnSample } from '../column/columnStage';
-import type { GenContext } from '../context';
+import { noiseFor, type GenContext } from '../context';
 import type { DensityContext } from '../density/context';
 import { solidAt } from '../density/probe';
 
@@ -84,6 +87,7 @@ const BIOME_AT = caveBiomeAt;
 const PICKER_OF = cavePickerOf;
 const FILL_PASS = fillCaveColumnPass;
 const NEW_PASS = newCaveColumnPass;
+const NOISE_FOR = noiseFor;
 
 /** The ocean factor's span: t = clamp((63 − offset)/8, 0, 1). */
 const OCEAN_SPAN = 8;
@@ -96,7 +100,7 @@ const SPREAD_Y = 0.714;
 /** The packed status's level bias: level + 32768 fills the low 16 bits. */
 const LEVEL_BIAS = 32768;
 
-/** The aquifer's leaves but the noises (§1.9); Task 13 reads them from `ctx.params.aquifer`. */
+/** The aquifer's leaves but the noises (§1.9), as `ctx.params.aquifer` holds them (`aquiferOf`). */
 export interface AquiferSettings {
   enabled: boolean;
   surfaceBand: number;
@@ -120,8 +124,9 @@ export interface AquiferInputs {
 }
 
 /**
- * The aquifer's inputs for a context (no memo; Task 13's `aquiferOf(ctx)` memoises it). The noises are seeded by their
- * schema paths `aquifer.noises.<name>`, which Task 13's schema instances use, so the switch changes no value (rulings P4).
+ * The aquifer's inputs for a context from explicit settings and noise definitions (no memo; `aquiferOf(ctx)` reads the
+ * context's params). The noises are seeded by their schema paths `aquifer.noises.<name>`, as the schema instances
+ * `aquiferOf` uses, so both give the same values on the same definitions (rulings P4).
  */
 export function aquiferInputs(
   ctx: GenContext, settings: AquiferSettings, noises: { floodedness: NoiseDef; spread: NoiseDef; lava: NoiseDef; barrier: NoiseDef },
@@ -135,6 +140,30 @@ export function aquiferInputs(
     lava: new Normal(ctx.seed, 'aquifer.noises.lava', noises.lava),
     barrier: new Normal(ctx.seed, 'aquifer.noises.barrier', noises.barrier),
   };
+}
+
+const INPUTS = new WeakMap<GenContext, AquiferInputs>();
+
+/**
+ * The aquifer's inputs of a GenContext (§1.9; Task 13), memoised in a WeakMap (as `cavePickerOf`): `settings` is
+ * `ctx.params.aquifer` (its `noises` unread there), the cell seed `deriveSeed(ctx.seed, 'aquifer.cell')`, and the four
+ * noises the schema instances `aquifer.noises.floodedness`, `.spread`, `.lava`, `.barrier` (`noiseFor`).
+ */
+export function aquiferOf(ctx: GenContext): AquiferInputs {
+  let inp = INPUTS.get(ctx);
+  if (inp === undefined) {
+    inp = {
+      ctx,
+      settings: ctx.params.aquifer,
+      cellSeed: DERIVE(ctx.seed, 'aquifer.cell'),
+      floodedness: NOISE_FOR(ctx, 'aquifer.noises.floodedness'),
+      spread: NOISE_FOR(ctx, 'aquifer.noises.spread'),
+      lava: NOISE_FOR(ctx, 'aquifer.noises.lava'),
+      barrier: NOISE_FOR(ctx, 'aquifer.noises.barrier'),
+    };
+    INPUTS.set(ctx, inp);
+  }
+  return inp;
 }
 
 /** The cell (i, j, k) holding voxel (x, y, z): i = ⌊(x − 5)/16⌋, j = ⌊(y + 1)/12⌋, k = ⌊(z − 5)/16⌋. */

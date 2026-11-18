@@ -29,6 +29,8 @@ const DIR = 'test/unit';
  * 225 s and floatingRules 99 s; `heavy-b`: cavesMetric 200 s and sliceJob 130 s), the others balanced by their times;
  * `liveness`: the four liveness files (the cave-biome leaves' 186-205 s the longest) with the spec's Stage 2 item 2 list
  * (densityFast 39 s, carve 21 s, densityDefaults 19 s, floatingIslands 18 s); `rest` the other 285 files (about 595 s).
+ * SP7a Task 13 (its spec §13.7, §14; the plan's Spec correction 5): `livenessSp7a` (the aquifer leaves' verdicts and
+ * witnesses) joins `liveness` with the other liveness files.
  */
 const named = (...names) => names.map((n) => `${DIR}/${n}.test.ts`);
 export const SHARDS = {
@@ -36,8 +38,8 @@ export const SHARDS = {
     'caveTags', 'splineFixtures', 'meshXray'),
   'heavy-b': named('cavesMetric', 'sliceJob', 'workerPool', 'treeMutator', 'terrainHeap', 'terrainStage', 'carverPaths',
     'surfaceProbe', 'columnStage', 'modifyMode'),
-  liveness: named('liveness', 'livenessBands', 'livenessSp6b', 'livenessCaveBiomes', 'densityFast', 'carve', 'densityDefaults',
-    'floatingIslands'),
+  liveness: named('liveness', 'livenessBands', 'livenessSp6b', 'livenessCaveBiomes', 'livenessSp7a', 'densityFast', 'carve',
+    'densityDefaults', 'floatingIslands'),
   rest: null,
 };
 

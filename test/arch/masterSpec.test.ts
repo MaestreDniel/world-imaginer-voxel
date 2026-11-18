@@ -212,6 +212,12 @@
  * generated-fluid mask (int 13) and layer (ints 208-231), aux B's `seedSections`, and §2.5's `interface ColumnWriter`
  * with `replaceFluid`, `setGeneratedFluid` and `clearGeneratedFluid`; the SP6a describe's record-line pin moved here.
  * Item 4's bit-6 sentence (§2.2) lands with the settle in D (Task 16).
+ * T's aquifer step (Task 13) lands item 6 (§3.7's caching line, moved here from the SP6a describe), item 5's aquifer
+ * clause of §3.8's CARVABLE sentence (moved from the SP6a describe; Task 15 re-pins it for "under lakes"), item 7's §3.9
+ * as built but the Borders paragraph (Task 16's), with its parameters cross-checked against `DEFAULTS.aquifer` (the SP6b
+ * describe's pin of the abyss's water and lava sentence moved here), and item 16's U2 count, 208 (the schema's count
+ * moved from the SP6b describe, which keeps its 193 as its record); the SP6b describe's code checks of rule 4's "As
+ * built" paragraph moved here as a code-only test of the terrain stage 6 and `GENERATOR_VERSION` 10 (rulings P25).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -1096,8 +1102,8 @@ describe('master spec amendments (SP4c §12)', () => {
     const s37 = text.slice(at, text.indexOf('### 3.8 ', at));
     const caching = s37.split('\n').find((l) => l.startsWith('- Caching on the quart lattice comes with its first consumer'));
     expect(caching, 'no `- Caching on the quart lattice …` line in §3.7').toBeDefined();
-    // The consumers' SPs moved to the SP6a describe.
-    expect(caching).toContain('; spawn and teleport query one point each and need none, SP4c)');
+    // The consumers' SPs moved to the SP6a describe, then to 'master spec amendments (SP7a §16)' with the SP4c clause
+    // (SP7a §16 item 6 rewords the line).
     expect(caching).not.toContain('SP4c-SP9');
     expect(s37).toContain('- **Teleport** (SP4c): in flight, the camera at max(surface, surfaceWaterLevel) + 24, at most 400, the yaw and pitch kept, where surface is max(⌊surfaceEst⌋, `surfaceEst3`) whenever the density tree has a `terrain` tap (the default tree included), else ⌊surfaceEst⌋, from one worker query before the terrain exists (the 3D estimate, so the arrival is never inside a jagged peak; the spawn keeps its own rule); in walk mode (SP5a) the feet at that surface + 1, the look direction kept, snapped to `MOTION_BLOCKING` once the column is published; while unloaded, the player hovers.');
     expect(s37).not.toContain('surfaceEst + 2');
@@ -2060,8 +2066,8 @@ describe('master spec amendments (SP6a §13)', () => {
     // Item 11's early-out line (Task 9) and item 7's D19 sentence as ruling R8 words it (the wet roof reads `wetMask`).
     expect(line('- **Interval rules.**')).toContain('(SP6a: the cave taps\' intervals come from their noises\' ±clampSigma, so underground cells need their corners)');
     expect(line('- **`col`**')).toContain('SP6a\'s wet roof reads `wetMask` (1 where `surfaceWaterLevel` is finite), so no level-field rule is needed (amended by SP6a)');
-    // Moved from the SP4c describe (§3.7's caching line).
-    expect(line('- Caching on the quart lattice comes with its first consumer')).toContain('(aquifers, structures: SP7-SP9; spawn and teleport query one point each and need none, SP4c)');
+    // §3.7's caching line (moved here from the SP4c describe) moved to 'master spec amendments (SP7a §16)' (SP7a §16
+    // item 6 rewords it).
     // §3.11's Conditions line and the Default rules' order sentence moved to 'master spec amendments (SP6b §15)' (SP6b §15
     // item 12 rewords them).
     // §3.12's abyss line moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 13 rewords it).
@@ -2207,7 +2213,7 @@ describe('master spec amendments (SP6a §13)', () => {
     // §2.2-§2.3's paths as built: the room and the underground worm's shrink below y 40.
     expect(block).toContain('- a room (SP6a): with chance 0.25 a worm starts with an ellipsoid of horizontal radius (1 + 6·u)·hMul and vertical radius that times yScale ∈ [0.1, 0.9] (Minecraft\'s room);');
     expect(block).toContain('shrinking to nothing over the 16 blocks below y 40 (`caves.undergroundWorms.maxY`), so none reaches above y 40 (SP6a)');
-    expect(block).toContain('Only `CARVABLE` blocks; carvers shrink to nothing under water and below `caves.limits.capTop` (from y 172 in floating_islands) (SP6a); structure piece boxes (SP9) shrink them the same way; each carved voxel asks `aquifer.fluidAt` (SP7; until then it is air); carving runs before the surface pass, which skins the carved column (SP6a).');
+    // The CARVABLE sentence moved to 'master spec amendments (SP7a §16)' (SP7a §16 item 5 rewords its aquifer clause).
     expect(block).toContain('carving runs before the surface pass, which skins the carved column (SP6a)');
     // The values as built are the schema's defaults (the carver leaves, Task 27): a retune amends the master.
     const w = DEFAULTS.caves.worms, u = DEFAULTS.caves.undergroundWorms, r = DEFAULTS.caves.ravines, sh = w.shape;
@@ -2641,9 +2647,9 @@ describe('master spec amendments (SP6b §15)', () => {
     const to = lines.findIndex((l, i) => i > from && l.startsWith('### 3.12 '));
     expect(from, 'no **As built by SP6b** paragraph').toBeGreaterThan(lines.findIndex((l) => l.startsWith('### 3.11 ')));
     const asBuilt = lines.slice(from, to).join('\n');
+    // SP6b's record: the code checks moved to 'master spec amendments (SP7a §16)' (the terrain stage 6 and
+    // GENERATOR_VERSION 10, SP7a §15.3; rulings P25); SP7a §16 item 8 adds its own "As built" paragraph (Task 29).
     expect(asBuilt).toContain('The `terrain` stage is version 5; `GENERATOR_VERSION` 9.');
-    expect(STAGES.find((st) => st.id === 'terrain')!.version).toBe(5);
-    expect(GENERATOR_VERSION).toBe(9);
     expect(asBuilt).toContain('`surface.noises.cavePatch` (λ 12) and `surface.noises.strataOffset` (λ 128), 2 octaves each');
     expect([DEFAULTS.surface.noises.cavePatch.wavelength, DEFAULTS.surface.noises.strataOffset.wavelength]).toEqual([12, 128]);
     expect([DEFAULTS.surface.noises.cavePatch.octaves, DEFAULTS.surface.noises.strataOffset.octaves]).toEqual([2, 2]);
@@ -2692,11 +2698,10 @@ describe('master spec amendments (SP6b §15)', () => {
     const a = DEFAULTS.caves.biomes.abyss;
     const abyss = text.split('\n').find((l) => l.startsWith('**Abyss.**'));
     expect(abyss, 'no **Abyss.** paragraph in §3.9').toBeDefined();
-    expect(abyss).toContain('the Abyss holds no water and stays dark; lava may appear there (SP7)');
     expect(abyss).not.toContain('the Abyss stays dry and dark');
-    // The box as built, with the defaults of DEFAULTS.caves.biomes.abyss, widened by 0.1 depth for the aquifers.
+    // The box as built, with the defaults of DEFAULTS.caves.biomes.abyss. Its water and lava sentence ("lava may appear
+    // there (SP7)") and the 0.1 depth margin moved to 'master spec amendments (SP7a §16)' (SP7a §16 item 7 rewords them).
     expect(abyss).toContain(`E′ ≤ \`caves.biomes.abyss.eMax\` ${box(a.eMax)}, C′ > \`caves.biomes.abyss.cMin\` ${box(a.cMin)} and depth ≥ \`caves.biomes.abyss.depthMin\` ${box(a.depthMin)}`);
-    expect(abyss).toContain(`Aquifers are disabled where E′ ≤ ${box(a.eMax)}, C′ > ${box(a.cMin)} and depth > ${box(a.depthMin - 0.1)}`);
   });
 
   test('§3.10\'s registry and per-block evaluation (SP6b spec §15 item 11)', () => {
@@ -2797,11 +2802,11 @@ describe('master spec amendments (SP6b §15)', () => {
     // noises decide on the cave columns).
     const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
     expect(u2, 'no U2 row in §6.4').toBeDefined();
-    const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
     // 187 with the 15 caves.biomes.* leaves (Task 17), 191 with the rock floor's four (Task 19), 193 with rule 4's two
-    // noises (Task 22).
-    expect(n).toBe(193);
-    expect(u2).toContain(`; SP6b: the caves.biomes.* leaves are decided on the class columns, the cave columns first, else on a bounded biome witness (stream columns whose tagged air holds a cave biome the leaf reads, where a step changes the T column), the floor leaves (\`caves.noises.floor\`, \`caves.floor.*\`) on the default base's cave class columns, at the bottom, \`surface.noises.cavePatch\` and \`strataOffset\` on the cave class columns, else on a bounded biome witness (stream columns whose tagged air holds a cave biome rule 4 reads the noise in, where a step changes the T column); U2 covers ${n} leaves (amended by SP6b) |`);
+    // noises (Task 22): SP6b's count, kept as its record; the schema's count moved to 'master spec amendments (SP7a §16)'
+    // (SP7a §16 item 16 appends the aquifer leaves).
+    const n = 193;
+    expect(u2).toContain(`; SP6b: the caves.biomes.* leaves are decided on the class columns, the cave columns first, else on a bounded biome witness (stream columns whose tagged air holds a cave biome the leaf reads, where a step changes the T column), the floor leaves (\`caves.noises.floor\`, \`caves.floor.*\`) on the default base's cave class columns, at the bottom, \`surface.noises.cavePatch\` and \`strataOffset\` on the cave class columns, else on a bounded biome witness (stream columns whose tagged air holds a cave biome rule 4 reads the noise in, where a step changes the T column); U2 covers ${n} leaves (amended by SP6b);`);
   });
 
   test('§6.4\'s DT2 row gains caveBiomeProbe (SP6b spec §15 item 20)', () => {
@@ -3217,7 +3222,7 @@ describe('master spec amendments (SP6b §15)', () => {
       ['skipping the X-ray pass while the X-ray is on', ' (delivered: §4.15; the meta bits 17-31 stay 0, the walk reading `connectivity15` from the staging; R3\'s `wronglyCulled` and `popIn` 0, `culledUnderground` ≥ 50 %);'],
       ['C1-C9, L2, S1, DT1 and DT2 re-asserted (DT2\'s surface parts with the cave rules)', ' (delivered, with C7\'s bottom parts and DT2\'s `caveBiomeProbe`);'],
       ['P1 re-measured with about 300 cave quarts (§7)', ' (delivered: §7\'s T row as measured);'],
-      ['`GENERATOR_VERSION` bumped again', ` (delivered: ${GENERATOR_VERSION});`],
+      ['`GENERATOR_VERSION` bumped again', ' (delivered: 9);'],
       ['turn with `rotateState` (the SP5c spec §14)', ' (delivered: the seven property-less states round-trip by key and turn to themselves);'],
       ['so each zone is recognised by its blocks', ' (built: rule 4\'s skins and the abyss\'s rock; the user\'s check judges it);'],
       ['no other light until SP7\'s lava and SP8b\'s crystals', ' (delivered: no SP6b block emits, `EMIT` 0; L2\'s `abyssLit` recorded);'],
@@ -3517,5 +3522,87 @@ describe('master spec amendments (SP7a §16)', () => {
     // correction 1): 'SP7b' has not started.
     expect(THRESHOLDS.R5?.waterQuadsPerFace).toEqual({ max: 0.1, activeFrom: 'SP7b' });
     expect(STARTED_SPS).not.toContain('SP7b');
+  });
+
+  test('§3.7\'s caching line (SP7a spec §16 item 6)', () => {
+    // Moved from the SP6a describe (which had it from the SP4c describe) and the SP4c describe's clause, on the new text.
+    const line = text.split('\n').find((l) => l.startsWith('- Caching on the quart lattice comes with its first consumer'));
+    expect(line, 'no caching line in §3.7').toBeDefined();
+    expect(line).toContain('(structures, SP9: the aquifer reads the 2D `offset` at its cells\' grid columns, SP7a)');
+    expect(line).not.toContain('SP7-SP9');
+    // Moved from the SP4c describe, on the new text.
+    expect(line).toContain('; spawn and teleport query one point each and need none (SP4c) (amended by SP3b, which caches nothing, SP4c and SP7a).');
+  });
+
+  test('§3.8\'s aquifer sentence (SP7a spec §16 item 5)', () => {
+    // Moved from the SP6a describe (its §3.8 carving rules), on the new text; "under water" becomes "under lakes" with
+    // the lake roof (Task 15).
+    const lines = text.split('\n');
+    const from = lines.findIndex((l) => l.startsWith('### 3.8 '));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('### 3.9 '));
+    const block = lines.slice(from, to).join('\n');
+    expect(block).toContain('Only `CARVABLE` blocks; carvers shrink to nothing under water and below `caves.limits.capTop` (from y 172 in floating_islands) (SP6a); structure piece boxes (SP9) shrink them the same way; every tagged (cave) non-solid voxel asks the aquifer in T; untagged air takes the position\'s `surfaceWaterLevel` (SP7a); carving runs before the surface pass, which skins the carved column (SP6a).');
+    expect(block).toContain('every tagged (cave) non-solid voxel asks the aquifer in T; untagged air takes the position\'s `surfaceWaterLevel` (SP7a)');
+    expect(text).not.toContain('each carved voxel asks `aquifer.fluidAt`');
+  });
+
+  test('§3.9 as built (SP7a spec §16 item 7)', () => {
+    const lines = text.split('\n');
+    const from = lines.findIndex((l) => l.startsWith('### 3.9 '));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('### 3.10 '));
+    expect(from, 'no §3.9').toBeGreaterThanOrEqual(0);
+    const block = lines.slice(from, to).join('\n');
+    const q = DEFAULTS.aquifer;
+    const t = q.thresholds;
+    const m = (v: number): string => (v < 0 ? `−${-v}` : `${v}`);
+    // The cells (the plan's Spec correction 3) and the grid-column near-surface rule (D18).
+    expect(block).toContain('**Cells.** 16×12×16 cells offset (5,1,5), each with a centre jittered by (0-9, 0-8, 0-9) via `hash3(deriveSeed(seed, \'aquifer.cell\'), i, j, k)`');
+    expect(block).toContain(`- Near the surface: if the centre lies at most \`aquifer.surfaceBand\` ${q.surfaceBand} blocks below the 2D \`offset\` at the cell's un-jittered grid column (16i, 16k), or above it, the level is ⌊\`surfaceWaterLevel\`⌋ there`);
+    // The ocean factor and the thresholds as DEFAULTS.aquifer holds them.
+    expect(block).toContain('interpolated between inland and under-ocean by the ocean factor t = clamp((63 − offset)/8, 0, 1)');
+    expect(block).toContain(`  - fully flooded if Nf > ${m(t.fullInland)} inland (> ${m(t.fullOcean)} under ocean): global level 63;`);
+    expect(block).toContain(`  - partially flooded if Nf > ${m(t.partialInland)} (> ${m(t.partialOcean)}): \`floor(y/40)·40 + 20 + 3·round(Nspread·10/3)\`;`);
+    // Lava with aquifer.lavaLevel.
+    expect(block).toContain(`- **Lava:** a partially flooded cell whose level ≤ \`aquifer.lavaMaxLevel\` ${m(q.lavaMaxLevel)} and \`|Nlava| >\` \`aquifer.lavaThreshold\` ${q.lavaThreshold} becomes lava, with Nlava sampled once per 64×40×64 block. Any tagged non-solid voxel below \`aquifer.lavaLevel\` ${m(q.lavaLevel)} that no cell fills is lava`);
+    expect(block).not.toContain('Everything below y −54 is lava.');
+    // The untagged-air rule (D19) and the cave voxels' (D17).
+    expect(block).toContain('Untagged air (the sky, overhangs, the gap under a floating island) takes water iff y ≤ ⌊`surfaceWaterLevel`⌋ at the position.');
+    expect(block).toContain('every tagged (cave) non-solid voxel asks the aquifer in T, after the cave-biome step and before the surface pass');
+    // Barriers as rock with cleared tags.
+    expect(block).toContain(`**Barriers.** When the two nearest centres have different statuses and \`d2 − d1 <\` \`aquifer.barrierBand\` ${q.barrierBand}, MC's pressure formula plus the barrier noise (\`aquifer.noises.barrier\`) decides; a positive result places a barrier: the voxel becomes solid, its tag and nibble cleared`);
+    // The abyss (moved from the SP6b describe: "lava may appear there (SP7)" and the 0.1 depth margin).
+    const abyss = lines.find((l) => l.startsWith('**Abyss.**'));
+    expect(abyss, 'no **Abyss.** paragraph in §3.9').toBeDefined();
+    expect(abyss).toContain('aquifer water is disabled in the abyss and becomes barrier rock in a margin around it on every side (the depth margin 0.1 and a lateral margin); lava is not affected.');
+    expect(abyss).toContain(`E′ ≤ eMax + \`aquifer.abyssMargin\` ${q.abyssMargin}, C′ > cMin − ${q.abyssMargin} and depth > depthMin − 0.1`);
+    expect(abyss).not.toContain('lava may appear there (SP7)');
+    expect(abyss).not.toContain('Aquifers are disabled where');
+    // The fast path.
+    expect(block).toContain('A tagged voxel more than 4 blocks above that level (beyond the pressure\'s reach), with no lava cell among them and not below `aquifer.lavaLevel`, is air without a distance computation (amended by SP7a).');
+    // The Borders paragraph stays the master's until the settle in D (Task 16).
+    expect(block).toContain('**Borders.** Fluid voxels with an air neighbour are flagged `unsettled` for settle (3.14).');
+    // The parameters equal DEFAULTS.aquifer.
+    const n = q.noises;
+    expect([n.floodedness, n.spread, n.lava, n.barrier].map((d) => [d.octaves, d.yScale])).toEqual([[1, 1], [1, 1], [1, 1], [1, 1]]);
+    expect(lines).toContain(`**Parameters** (the \`aquifer\` group, Terrain scope; SP7a): \`aquifer.enabled\` ${q.enabled}; \`surfaceBand\` ${q.surfaceBand}; \`thresholds.{fullInland ${m(t.fullInland)}, fullOcean ${m(t.fullOcean)}, partialInland ${m(t.partialInland)}, partialOcean ${m(t.partialOcean)}}\`; \`lavaMaxLevel\` ${m(q.lavaMaxLevel)}; \`lavaThreshold\` ${q.lavaThreshold}; \`lavaLevel\` ${m(q.lavaLevel)}; \`barrierBand\` ${q.barrierBand}; \`abyssMargin\` ${q.abyssMargin}; \`noises.{floodedness λ ${n.floodedness.wavelength}, spread λ ${n.spread.wavelength}, lava λ ${n.lava.wavelength}, barrier λ ${n.barrier.wavelength}}\`, 3D, one octave each.`);
+    expect(SCHEMA.leaves.filter((l) => l.path.startsWith('aquifer.')).length).toBe(15);
+  });
+
+  test('§6.4\'s U2 row (SP7a spec §16 item 16)', () => {
+    // The schema's count, moved from the SP6b describe: 193 and the 15 aquifer leaves (Task 13); the springs add 7
+    // (Tasks 19-21).
+    const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
+    expect(u2, 'no U2 row in §6.4').toBeDefined();
+    const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
+    expect(n).toBe(208);
+    expect(u2).toContain(`; SP7a: the aquifer.* leaves are decided on the class columns, the cave columns first, else on a bounded aquifer witness (stream columns whose tagged air holds what the leaf acts on: cave air at or below y 63, under land or sea, below the lava levels for the lava leaves, the abyss for \`aquifer.abyssMargin\`, where a step changes the T column); U2 covers ${n} leaves (amended by SP7a) |`);
+  });
+
+  test('the terrain stage 6 and GENERATOR_VERSION 10 (SP7a §15.3)', () => {
+    // A code-only test (rulings P25): the checks of the SP6b describe's rule 4 "As built" paragraph moved here; Task 29
+    // (§16 item 8) adds the "As built by SP7a" paragraph and pins its text beside it.
+    expect(STAGES.find((st) => st.id === 'terrain')!.version).toBe(6);
+    expect(STAGES.find((st) => st.id === 'terrain')!.params).toEqual(['density', 'surface', 'caves', 'aquifer']);
+    expect(GENERATOR_VERSION).toBe(10);
   });
 });

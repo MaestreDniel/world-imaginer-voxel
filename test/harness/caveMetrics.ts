@@ -129,6 +129,8 @@ import { carveTest, densityTopOf, floorYAt, wetAt } from '../../src/gen/caves/ca
 import { carverParamsOf, carverPath, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
 import { buildColumnSample, nearestCornerIndex, newColumnSample } from '../../src/gen/column/columnStage';
 import { createGenContext, noiseFor } from '../../src/gen/context';
+import { createDensityContext } from '../../src/gen/density/context';
+import { aquiferOf, barrierAt } from '../../src/gen/fluids/aquifer';
 import { hasFluid } from '../../src/world/blocks/fluid';
 import { AIR, BEDROCK, REGISTRY } from '../../src/world/blocks/index';
 import { components3d, type Components3d } from './flood';
@@ -3371,6 +3373,8 @@ export function columnOf(view: Pick<RegionView, 'store'>, cx: number, cz: number
 /** One region's counts for `carverReference` and the island cap (`regionCounts`). */
 export interface CarverRegionCounts {
   readonly mismatches: number;
+  /** SP7a (D20): voxels the reference carves that T's aquifer turned to rock (`barrier`), not counted as mismatches. */
+  readonly barriers: number;
   readonly carved: number;
   readonly capAir: number;
   readonly islandVoxels: number;
@@ -3378,14 +3382,31 @@ export interface CarverRegionCounts {
 }
 
 /**
+ * Whether a world voxel of (seed, params) is an aquifer barrier (SP7a D20: rock in T, its tag cleared): `barrierAt` on
+ * `aquiferOf` of the context and a DensityContext of its own. `regionCounts` asks it only where the reference carves a
+ * voxel T stored as rock with no tag.
+ */
+export function barrierProbe(seed: string, params: Params): (x: number, y: number, z: number) => boolean {
+  const ctx = createGenContext(seedFromInput(seed), params);
+  const dc = createDensityContext(ctx);
+  const aq = aquiferOf(ctx);
+  return (x, y, z) => barrierAt(aq, dc, x, y, z);
+}
+
+/**
  * The voxels of the region whose store carver kind (the tag's kind, `caveKindOf`, when 6-8, else 0; bits 4-7 hold the
  * cave biome, SP6b spec §2.1) differs from `ref`'s, the carver-tagged voxels, and with `capY` the tagged voxels at
- * y ≥ capY and the non-air voxels at y ≥ 181.
+ * y ≥ capY and the non-air voxels at y ≥ 181. With `barrier` (SP7a D20), a voxel the reference carves that T stored as
+ * rock with no tag is a barrier, not a mismatch, where `barrier` holds (`barriers`).
  */
-export function regionCounts(view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 'store'>, ref: Uint8Array, capY: number | null): CarverRegionCounts {
+export function regionCounts(
+  view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 'store'>, ref: Uint8Array, capY: number | null,
+  barrier: ((x: number, y: number, z: number) => boolean) | null = null,
+): CarverRegionCounts {
   const W = 16 * view.w;
   const D = 16 * view.h;
   let mismatches = 0;
+  let barriers = 0;
   let carved = 0;
   let capAir = 0;
   let islandVoxels = 0;
@@ -3408,13 +3429,16 @@ export function regionCounts(view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 
               const kind = tag >= 6 && tag <= 8 ? tag : 0;
               if (kind !== 0) carved++;
               const want = ref[row + lx]!;
+              const block = typeof blocks === 'number' ? blocks : blocks[i]!;
               if (kind !== want) {
-                mismatches++;
-                if (examples.length < 10) examples.push(`(${16 * cx + lx}, ${y}, ${16 * cz + lz}) stored ${tag}, reference ${want}`);
+                if (barrier !== null && tag === 0 && block !== AIR && barrier(16 * cx + lx, y, 16 * cz + lz)) barriers++;
+                else {
+                  mismatches++;
+                  if (examples.length < 10) examples.push(`(${16 * cx + lx}, ${y}, ${16 * cz + lz}) stored ${tag}, reference ${want}`);
+                }
               }
               if (capY !== null) {
                 if (y >= capY && tag !== 0) capAir++;
-                const block = typeof blocks === 'number' ? blocks : blocks[i]!;
                 if (y >= 181 && block !== AIR) islandVoxels++;
               }
             }
@@ -3423,7 +3447,7 @@ export function regionCounts(view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 
       }
     }
   }
-  return { mismatches, carved, capAir, islandVoxels, examples };
+  return { mismatches, barriers, carved, capAir, islandVoxels, examples };
 }
 
 /** The y from which the floating_islands region holds no cave air (§10.1's `islandCapAir`). */

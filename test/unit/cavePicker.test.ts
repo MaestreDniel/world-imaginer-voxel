@@ -430,7 +430,7 @@ describe('caveBiomeAt, the point probe (§2.3, Task 18)', () => {
   test('equals T\'s stored nibble at every tagged voxel of Task 17\'s columns, visited in a shuffled order across them', () => {
     // terrainStage.test.ts' cave-biome columns of seed 42: (0, 0), COAST, (40, 900), ABYSS and LUSH.
     const c = ctxFor('42');
-    // Each column's tagged voxels cut into runs of 1 … 32 (about 50,000 voxels, 3,000 runs), the runs shuffled
+    // Each column's tagged voxels cut into runs of 1 … 32 (about 39,000 voxels, 2,400 runs), the runs shuffled
     // (Fisher-Yates with the test stream): consecutive runs mostly lie in different columns, so the memo switches.
     const next = testRng(1818);
     const runs: Array<Array<[number, number, number, number]>> = [];
@@ -447,7 +447,8 @@ describe('caveBiomeAt, the point probe (§2.3, Task 18)', () => {
       [runs[i], runs[k]] = [runs[k]!, runs[i]!];
     }
     const voxels = runs.flat();
-    expect(voxels.length).toBeGreaterThan(40000);
+    // 39,137 since SP7a's barriers (Task 13), which clear the tag of the voxels they turn to rock (D20).
+    expect(voxels.length).toBeGreaterThan(38000);
     let switches = 0;
     for (let i = 1; i < voxels.length; i++) if (voxels[i]![0] >> 4 !== voxels[i - 1]![0] >> 4 || voxels[i]![2] >> 4 !== voxels[i - 1]![2] >> 4) switches++;
     expect(switches).toBeGreaterThan(1000);

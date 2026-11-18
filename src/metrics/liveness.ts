@@ -48,6 +48,14 @@
  * biome runs and in the abyss's rock: meant for the cave class (`LEAF_CLASS`), each is tried on the class columns, then,
  * dead there, decided on a bounded biome witness search (`caveRuleWitness`): stream columns whose tagged air holds a
  * cave biome rule 4 reads the noise in, the first whose T column a step changes.
+ * SP7a (its spec §1.9, §13.7, Task 13; the plan's Spec correction 5): the aquifer's 15 leaves (`aquifer.*`, each noise
+ * one leaf) act only in cave air: meant for the cave class (`intendedClass`), each is tried on the class columns, then,
+ * dead there, decided on a bounded aquifer witness search (`aquiferWitness`): stream columns whose T column's tagged air
+ * holds what the leaf acts on (`aquiferWants`: tagged air at or below y 63, under land or sea, for the status leaves,
+ * the thresholds, `surfaceBand`, `barrierBand`, `enabled` and the spread and barrier noises; at or below the highest
+ * `lavaMaxLevel` of the base and the steps for the lava leaves; below the highest `lavaLevel` for the lava floor; and,
+ * for `abyssMargin`, a position in the margin's lateral band between the base's m and its steps' (on the picker's
+ * pass) and a tagged voxel there whose barrier a step moves), the first whose T column a step changes.
  */
 import { CAVE_BIOME, SEA_LEVEL, SPAGHETTI_BANDS } from '../core/constants';
 import { fnv1a32, hash4, hashF64, hex64 } from '../core/hash';
@@ -69,6 +77,7 @@ import { cellEligible, lakeCell, lakeSpace, nearestCell, newLake, sampleLakes, t
 import { newRiver, sampleRivers } from '../gen/column/rivers';
 import { newShape, sampleShape } from '../gen/column/shape';
 import { createDensityContext, type DensityContext } from '../gen/density/context';
+import { aquiferOf, barrierAt, inAbyssMargin } from '../gen/fluids/aquifer';
 import { biomeId, type SurfaceBiome } from '../gen/biomes/registry';
 import { createSurfaceContext, surfaceContextOf, type SurfaceContext } from '../gen/surface/context';
 import { surfaceProbeColumn } from '../gen/surface/probe';
@@ -133,6 +142,9 @@ const PICKER_OF = cavePickerOf;
 const FILL_PASS = fillCaveColumnPass;
 const BIOME_OF_PASS = caveBiomeOfPass;
 const NEW_PASS = newCaveColumnPass;
+const AQUIFER_OF = aquiferOf;
+const IN_MARGIN = inAbyssMargin;
+const BARRIER_AT = barrierAt;
 
 /** SP3c's surface class slots (SP3c spec §3.5), in the order a third-pass column is offered to them. */
 export const SURFACE_CLASSES = ['cliffY', 'cliffSteep', 'snowline', 'patch', 'badlands'] as const;
@@ -325,6 +337,20 @@ const isBiomeLeaf = (path: string): boolean => BIOME_LEAF.test(path);
 /** SP6b spec §5.2, §12.7 (Task 19): the rock floor's leaves, left out of the slots' acceptance, decided on the class columns. */
 const isFloorLeaf = (path: string): boolean => path === 'caves.noises.floor' || path.startsWith('caves.floor.');
 
+/**
+ * SP7a spec §1.9, §13.7 (Task 13): the aquifer's leaves, decided on the class columns, else on their bounded aquifer
+ * witness (`aquiferWitness`): up to `AQUIFER_DRAWS` draws of `samplePoints('sp7a.liveness.aquifer', …)`, up to
+ * `AQUIFER_EXAMINED` columns examined (T generated) and `AQUIFER_CHECKS` hashed; the witness is the first examined column
+ * whose tagged air holds what the leaf acts on (`aquiferWants`) and whose T column a step changes.
+ */
+const AQUIFER_STREAM = 'sp7a.liveness.aquifer';
+const AQUIFER_DRAWS = 32768;
+const AQUIFER_EXAMINED = 256;
+const AQUIFER_CHECKS = 64;
+const isAquiferLeaf = (path: string): boolean => path.startsWith('aquifer.');
+/** The aquifer leaves read by deep partial cells only (§1.4): lava where the level is at most `lavaMaxLevel`. */
+const AQUIFER_LAVA: ReadonlySet<string> = new Set(['aquifer.lavaMaxLevel', 'aquifer.lavaThreshold', 'aquifer.noises.lava']);
+
 /** The cave class column's scan slots (SP6a spec §4): the caverns' families, then the tunnels'. */
 export type CaveSlot = 'caverns' | 'tunnels';
 export const CAVE_SLOTS: readonly CaveSlot[] = ['caverns', 'tunnels'];
@@ -336,7 +362,7 @@ export function intendedClass(path: string): LivenessClass {
   const c = LEAF_CLASS.get(path);
   if (c !== undefined) return c;
   if (isIslandLeaf(path)) return 'island';
-  if (isCaveLeaf(path)) return 'cave';
+  if (isCaveLeaf(path) || isAquiferLeaf(path)) return 'cave';
   if (path.startsWith('lakes.')) return 'basin';
   if (path.startsWith('rivers.')) return 'channel';
   return 'land';
@@ -1375,6 +1401,124 @@ export function biomeWitness(base: GenContext, path: string, skip: readonly Live
   return biomeWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
 }
 
+// ---------------------------------------------------------------- the aquifer leaves' witness (SP7a Task 13)
+
+/**
+ * What an aquifer leaf's witness column must hold in its base T column's tagged air (SP7a spec §1.2-§1.6), given the
+ * base and the steps' contexts: a tagged voxel at y ≤ the highest `lavaMaxLevel` (the lava leaves), at y < the highest
+ * `lavaLevel` (the lava floor), any tagged voxel (`abyssMargin`, whose columns `marginBand` and `marginMoves` select),
+ * else at y ≤ 63 (cave air below the sea level, under land or sea).
+ */
+function aquiferWants(path: string, ctxs: readonly GenContext[]): (t: TaggedColumn) => boolean {
+  const lowest = (t: TaggedColumn): number => (t.at.length === 0 ? Infinity : (t.at[0]! >> 8) - 64);
+  if (AQUIFER_LAVA.has(path)) {
+    const yMax = Math.max(...ctxs.map((c) => c.params.aquifer.lavaMaxLevel));
+    return (t) => lowest(t) <= yMax;
+  }
+  if (path === 'aquifer.lavaLevel') {
+    const yMax = Math.max(...ctxs.map((c) => c.params.aquifer.lavaLevel));
+    return (t) => lowest(t) < yMax;
+  }
+  if (path === 'aquifer.abyssMargin') return (t) => t.at.length > 0;
+  return (t) => lowest(t) <= SEA;
+}
+
+/**
+ * Whether a position of the column of `pass` (its unjittered C′ and E′) lies in the abyss margin's lateral band between
+ * m = `lo` and m = `hi` (§1.6): E′ ≤ eMax + hi and C′ > cMin − hi, but not E′ ≤ eMax + lo and C′ > cMin − lo.
+ */
+function marginBand(pick: CavePickerInputs, pass: CaveColumnPass, lo: number, hi: number): boolean {
+  const a = pick.settings.abyss;
+  for (let lz = 0; lz < 16; lz++) {
+    for (let lx = 0; lx < 16; lx++) {
+      const k = (lz + 4) * 24 + lx + 4;
+      const e = pass.e[k]!, c = pass.c[k]!;
+      if (e <= a.eMax + hi && c > a.cMin - hi && !(e <= a.eMax + lo && c > a.cMin - lo)) return true;
+    }
+  }
+  return false;
+}
+
+/** A DensityContext per GenContext for the margin's point functions (shared by the steps of one U2 run). */
+const MARGIN_DC = new WeakMap<GenContext, DensityContext>();
+const marginDc = (ctx: GenContext): DensityContext => {
+  let dc = MARGIN_DC.get(ctx);
+  if (dc === undefined) { dc = CREATE_DENSITY(ctx); MARGIN_DC.set(ctx, dc); }
+  return dc;
+};
+
+/**
+ * Whether a step of `aquifer.abyssMargin` moves a barrier of `base`'s T column (cx, cz) (§1.6): a tagged voxel outside
+ * the abyss (its stored nibble) lying in the margin at the widest of the base's and the steps' m but not at the
+ * narrowest (on `pass`, the column's cave-biome pass), where `barrierAt` differs between the base and a step (a water
+ * status fills it at one m and not at the other).
+ */
+function marginMoves(base: GenContext, variants: readonly GenContext[], pick: CavePickerInputs, pass: CaveColumnPass, t: TaggedColumn, cx: number, cz: number): boolean {
+  const all = [base, ...variants];
+  const ms = all.map((c) => c.params.aquifer.abyssMargin);
+  const wide = AQUIFER_OF(all[ms.indexOf(Math.max(...ms))]!);
+  const narrow = AQUIFER_OF(all[ms.indexOf(Math.min(...ms))]!);
+  const inp = AQUIFER_OF(base);
+  const dc = marginDc(base);
+  for (let k = 0; k < t.at.length; k++) {
+    if (t.biome[k] === CB.abyss) continue;
+    const j = t.at[k]!;
+    const x = 16 * cx + (j & 15), y = (j >> 8) - 64, z = 16 * cz + ((j >> 4) & 15);
+    if (!IN_MARGIN(wide, pick, pass, x, y, z) || IN_MARGIN(narrow, pick, pass, x, y, z)) continue;
+    const b = BARRIER_AT(inp, dc, x, y, z);
+    if (variants.some((v) => BARRIER_AT(AQUIFER_OF(v), marginDc(v), x, y, z) !== b)) return true;
+  }
+  return false;
+}
+
+/** The figures of an aquifer leaf's witness search: the deciding column, the draws taken, the columns examined and hashed. */
+export interface AquiferWitnessScan { readonly via: string | null; readonly draws: number; readonly examined: number; readonly checks: number }
+
+function aquiferWitnessOf(base: GenContext, info: LeafInfo, variants: readonly GenContext[], skip: readonly LivenessColumn[], baseHash: BaseHash): AquiferWitnessScan {
+  const stage = stageOf(info);
+  const wants = aquiferWants(info.path, [base, ...variants]);
+  const margin = info.path === 'aquifer.abyssMargin';
+  const ms = [base, ...variants].map((c) => c.params.aquifer.abyssMargin);
+  const mLo = Math.min(...ms), mHi = Math.max(...ms);
+  const inp = PICKER_OF(base);
+  const pts = POINTS(AQUIFER_STREAM, AQUIFER_DRAWS);
+  const seen = new Set<number>(skip.map((c) => (c.cx + 32768) * 65536 + (c.cz + 32768)));
+  let examined = 0, checks = 0, n = 0;
+  for (; n < AQUIFER_DRAWS && examined < AQUIFER_EXAMINED && checks < AQUIFER_CHECKS; n++) {
+    const cx = Math.floor(pts.x[n]! / 16);
+    const cz = Math.floor(pts.z[n]! / 16);
+    const key = (cx + 32768) * 65536 + (cz + 32768);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // The margin's steps move it only in a lateral band around the abyss box: a column with no position in the band
+    // between the base's and the steps' m is not examined (no T generated); an examined one is hashed only when a step
+    // moves one of its barriers (`marginMoves`).
+    if (margin) {
+      FILL_PASS(inp, BUILD(base, cx, cz, BIOME_SAMPLE), BASE_PASS);
+      if (!marginBand(inp, BASE_PASS, mLo, mHi)) continue;
+    }
+    examined++;
+    const t = taggedColumn(base, cx, cz);
+    if (!wants(t)) continue;
+    if (margin && !marginMoves(base, variants, inp, BASE_PASS, t, cx, cz)) continue;
+    checks++;
+    const h = baseHash(stage, cx, cz);
+    if (variants.some((v) => stageOutputHash(v, stage, cx, cz) !== h)) return { via: `aquifer witness column (${cx}, ${cz})`, draws: n + 1, examined, checks };
+  }
+  return { via: null, draws: n, examined, checks };
+}
+
+/**
+ * An aquifer leaf's bounded witness search (SP7a Task 13) over the columns not in `skip`: the deciding column
+ * (`aquifer witness column (cx, cz)`) or null, with the draws taken and the columns examined and hashed (see
+ * `AQUIFER_STREAM`, `aquiferWants`).
+ */
+export function aquiferWitness(base: GenContext, path: string, skip: readonly LivenessColumn[] = []): AquiferWitnessScan {
+  const info = leafInfo(path);
+  if (!isAquiferLeaf(path)) throw new Error(`${path} is not an aquifer leaf`);
+  return aquiferWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
+}
+
 // ---------------------------------------------------------------- the depth-band leaves' witnesses (SP6a Task 8)
 
 /** A depth-band leaf's family, end and stream, or null for any other path. */
@@ -1755,7 +1899,8 @@ function decide(base: GenContext, info: LeafInfo, columns: readonly LivenessColu
         : isCarverLeaf(info.path) ? carverWitnessOf(base, info, variants, columns, baseHash).via
           : isBiomeLeaf(info.path) ? biomeWitnessOf(base, info, variants, columns, baseHash).via
             : isCaveRuleNoise(info.path) ? caveRuleWitnessOf(base, info, variants, columns, baseHash).via
-              : info.path === CAP_TOP_PATH ? capTopWitness(base).via : null;
+              : isAquiferLeaf(info.path) ? aquiferWitnessOf(base, info, variants, columns, baseHash).via
+                : info.path === CAP_TOP_PATH ? capTopWitness(base).via : null;
   return w !== null ? { path: info.path, live: true, via: w, cls: null } : { path: info.path, live: false, via: null, cls: intended };
 }
 
@@ -1771,8 +1916,9 @@ function bandVia(base: GenContext, info: LeafInfo, variants: readonly GenContext
  * One leaf's U2 verdict over `columns` (the class columns of `base`): its stage output hash on the class columns (the
  * intended class first; a `terrain` leaf only on the land, coast, surface, island and cave ones), then, except for a
  * `terrain` leaf, the witness search; a spaghetti scale leaf, a depth-band leaf, a carver leaf, a cave-biome leaf, a
- * rule-4 noise and `caves.limits.capTop` (`terrain` leaves) have their own (ruling P5; Task 8's `bandWitness`; Task
- * 27's `carverWitness`; SP6b Task 17's `biomeWitness`; SP6b Task 22's `caveRuleWitness`; Task 9's `capTopWitness`).
+ * rule-4 noise, an aquifer leaf and `caves.limits.capTop` (`terrain` leaves) have their own (ruling P5; Task 8's
+ * `bandWitness`; Task 27's `carverWitness`; SP6b Task 17's `biomeWitness`; SP6b Task 22's `caveRuleWitness`; SP7a Task
+ * 13's `aquiferWitness`; Task 9's `capTopWitness`).
  */
 export function leafLiveness(base: GenContext, path: string, columns: readonly LivenessColumn[]): LivenessResult {
   return decide(base, leafInfo(path), columns, baseHasher(base));
@@ -1823,8 +1969,9 @@ export function islandColumn(base: GenContext, leaves: readonly LeafInfo[] = isl
  * cave column (<slot>)". The spaghetti scale leaves dead on the class columns are decided on their bounded witness
  * search (ruling P5), the depth-band leaves on their band witness, then (three maxY leaves) on the amplified base (P3),
  * the carver leaves on their carver witness (`carverWitness`, Task 27, ruling P18), the cave-biome leaves on their biome
- * witness (`biomeWitness`, SP6b Task 17), rule 4's noises on theirs (`caveRuleWitness`, SP6b Task 22) and
- * `caves.limits.capTop` on its floating_islands witness (`capTopWitness`, Task 9).
+ * witness (`biomeWitness`, SP6b Task 17), rule 4's noises on theirs (`caveRuleWitness`, SP6b Task 22), the aquifer
+ * leaves on theirs (`aquiferWitness`, SP7a Task 13) and `caves.limits.capTop` on its floating_islands witness
+ * (`capTopWitness`, Task 9).
  */
 export function u2(seedText = '42'): { readonly value: number; readonly results: readonly LivenessResult[] } {
   const base = CREATE(SEED(seedText), RESOLVE('default'));

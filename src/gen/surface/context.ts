@@ -44,7 +44,7 @@ const PREFIX = 'surface.noises.';
 
 /**
  * One rebuilt column of the probe (§3.6): its solidity and water (98,304 entries each, index `256·(y + 64) + p`, the
- * T stage's density fill and water v0), the fill's per-cell record (768 entries, `fillDensityColumn`'s `cells`), its
+ * T stage's density fill and aquifer step, barriers included, SP7a §1.7), the fill's per-cell record (768 entries, `fillDensityColumn`'s `cells`), its
  * cave bytes (98,304 entries, the carve's and the tag's kinds with the cave biome in bits 4-7, SP6b spec §2.3) and its
  * cave picker's pass, its 256-entry surface biome buffer and its scan; `cx`, `cz` name it while `valid` is true.
  */

@@ -1,6 +1,6 @@
 /**
  * The pins and helpers U2's liveness tests share (`liveness.test.ts`, `livenessBands.test.ts`, `livenessSp6b.test.ts`,
- * `livenessCaveBiomes.test.ts`; split by leaf group in SP6b Task 58, ruling U14, so CI's unit shards run them in
+ * `livenessCaveBiomes.test.ts`, `livenessSp7a.test.ts`; split by leaf group in SP6b Task 58, ruling U14, so CI's unit shards run them in
  * parallel). Each test file imports its own copy: the class-column scan (`columns()`) runs once per file.
  */
 import { DEFAULTS } from '../../../src/core/params/defaults';
@@ -35,9 +35,17 @@ export const TUNNELS_VIA = 'cave column (-1986, -30779)';
  * (Task 9: the island cap's capTop, then the wet roof's waterDepth; Task 27: the 36 carver leaves), and the user's check's
  * `caves.noodles.threshold` (R31): 172; SP6b Task 17's 15 `caves.biomes.*` leaves (Spec correction 5): 187; SP6b Task
  * 19's rock floor (`caves.noises.floor`, `caves.floor.y`, `.amp`, `.span`): 191; SP6b Task 22's rule-4 noises
- * (`surface.noises.cavePatch`, `strataOffset`): 193.
+ * (`surface.noises.cavePatch`, `strataOffset`): 193; SP7a Task 13's 15 `aquifer.*` leaves (the plan's Spec correction
+ * 5): 208.
  */
-export const U2_LEAVES = 193;
+export const U2_LEAVES = 208;
+/** The aquifer's leaves (SP7a spec §1.9, Task 13), in schema order; each noise counts as one leaf. */
+export const AQUIFER_LEAVES = [
+  'aquifer.enabled', 'aquifer.surfaceBand',
+  'aquifer.thresholds.fullInland', 'aquifer.thresholds.fullOcean', 'aquifer.thresholds.partialInland', 'aquifer.thresholds.partialOcean',
+  'aquifer.lavaMaxLevel', 'aquifer.lavaThreshold', 'aquifer.lavaLevel', 'aquifer.barrierBand', 'aquifer.abyssMargin',
+  'aquifer.noises.floodedness', 'aquifer.noises.spread', 'aquifer.noises.lava', 'aquifer.noises.barrier',
+] as const;
 /** The cave-biome leaves (SP6b Task 17), decided on the class columns or on their bounded biome witness. */
 export const BIOME_LEAVES = [
   'caves.biomes.lush.hMin', 'caves.biomes.lush.depthMin', 'caves.biomes.lush.depthMax',

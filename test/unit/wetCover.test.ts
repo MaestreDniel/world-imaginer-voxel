@@ -1,8 +1,8 @@
 /**
  * SP6a Task 9 (spec §1.4, D7, D19): the `wetCover` scan. The wet roof's steep part S_w = 128·h_w is added at voxel level
  * with wet′ = clamp(4·wetMask, 0, 1) read at the position (the bilinear `col` readout), so wet′ must be 1, bit for bit,
- * at every position water v0 fills: every position whose water v0 `waterTop` (read at its nearest quart corner,
- * `columnWaterV0`) is ≥ y −64. `wetMask` is the finite 0/1 `col` field that is 1 where `surfaceWaterLevel` is finite, so
+ * at every position the terrain's own water fills: since SP7a (its spec D19, Task 13; water v0 retired) every position
+ * whose untagged air takes water, ⌊`surfaceWaterLevel`⌋ at its nearest quart corner (`readLevel`) ≥ y −64. `wetMask` is the finite 0/1 `col` field that is 1 where `surfaceWaterLevel` is finite, so
  * the scan holds by construction (the readout at a voxel's quart offsets t ∈ {0, ¼, ½, ¾} is exact and the nearest
  * corner's weight is ≥ ¼); the test checks it over 100,352 positions of the quick tier's seeds 42 and 1 on default and
  * archipelago: in each (seed, profile), the first 98 shore columns (chunk columns whose 25 quart corners hold both a wet
@@ -14,12 +14,11 @@ import { resolveProfile, type ProfileId } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { COL_FIELD_BOUNDS } from '../../src/core/constants';
 import { columnPoint, newPointRecord, sampleCoarse, wetMaskOf } from '../../src/gen/column/columnPoint';
-import { latticeIndex, SAMPLE_FIELDS } from '../../src/gen/column/columnStage';
+import { latticeIndex, readLevel, SAMPLE_FIELDS } from '../../src/gen/column/columnStage';
 import { createGenContext } from '../../src/gen/context';
 import { createDensityContext } from '../../src/gen/density/context';
 import type { DensityExpr } from '../../src/gen/density/expr';
 import { resolveDensity, validateDensitySource } from '../../src/gen/density/source';
-import { columnWaterV0 } from '../../src/gen/pipeline/terrainStage';
 import { samplePoints } from '../../src/metrics/noiseStats';
 
 type Rec = Record<string, unknown>;
@@ -56,12 +55,9 @@ describe('wetCover (SP6a spec §1.4)', () => {
     expect(wet).toBeLessThan(462);
   });
 
-  test('every position water v0 fills has wet′ = 1 at the position (100,352 positions, seeds 42 and 1, default and archipelago)', () => {
+  test('every position sky-open water fills (D19\'s untagged rule) has wet′ = 1 at the position (100,352 positions, seeds 42 and 1, default and archipelago)', () => {
     const wetTree = { root: at(DEFAULT_DENSITY_TREE, WET_PATH), defs: {} };
     expect(validateDensitySource(wetTree)).toEqual([]);
-    const solid = new Uint8Array(98304);
-    const top = new Int32Array(256);
-    const waterTop = new Int32Array(256);
     let positions = 0;
     let wet = 0;
     const misses: string[] = [];
@@ -89,13 +85,13 @@ describe('wetCover (SP6a spec §1.4)', () => {
           for (let k = 0; k < 49; k++) {
             if (!Object.is(s.f.wetMask[k], Number.isFinite(s.f.surfaceWaterLevel[k]!) ? 1 : 0)) throw new Error(`(${cx}, ${cz}) lattice ${k}: wetMask ${s.f.wetMask[k]}`);
           }
-          columnWaterV0(s, solid, top, waterTop, null, false);
           for (let p = 0; p < 256; p++) {
             positions++;
-            if (!(waterTop[p]! >= -64)) continue;
+            const lx = p & 15, lz = p >> 4;
+            // D19: untagged air takes water iff y ≤ ⌊surfaceWaterLevel⌋ at the nearest quart corner (−∞ on land).
+            if (!(Math.floor(readLevel(s, 'surfaceWaterLevel', 16 * cx + lx, 16 * cz + lz)) >= -64)) continue;
             wet++;
             here++;
-            const lx = p & 15, lz = p >> 4;
             // y is irrelevant to a `col`-only subtree; 0 is any voxel of the column.
             const v = dc.compiled.voxelFn(lx, 0, lz);
             if (!Object.is(v, 1) && misses.length < 32) misses.push(`${seed}/${profile} (${16 * cx + lx}, ${16 * cz + lz}): wet′ ${v}`);

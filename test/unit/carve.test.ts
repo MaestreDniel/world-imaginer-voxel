@@ -32,8 +32,10 @@ import { carveColumn, carvedAt, carvedKind, carveShrink, carveTest, densityTopCo
 import { carverCacheOf, createCarverCache, type CarverCache } from '../../src/gen/caves/carverCache';
 import { carverParamsOf, carverPath, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
 import { probe } from '../../src/gen/density/probe';
+import { aquiferOf, barrierAt } from '../../src/gen/fluids/aquifer';
 import { terrainStage } from '../../src/gen/pipeline/terrainStage';
 import { createStore } from '../../src/world/store/store';
+import { AIR } from '../../src/world/blocks/index';
 import { newColumnSample, type ColumnSample } from '../../src/gen/column/columnStage';
 import { createGenContext, noiseFor } from '../../src/gen/context';
 import { fillDensityColumn } from '../../src/gen/density/bounds';
@@ -683,7 +685,9 @@ describe('carverCacheOf and carvedAt (SP6a spec §2.5, §3.4; Task 27)', () => {
             if (!(probe(d, x, y, z) > 0)) continue;
             const stored = caveKindOf(view.cave(lx, y, lz));
             const got = carvedAt(d, x, y, z);
-            if (got !== stored) bad.push(`(${x}, ${y}, ${z}): carvedAt ${got} ≠ stored ${stored}`);
+            // A carved voxel the aquifer made a barrier is rock with its tag cleared (SP7a D20).
+            const want = got !== 0 && view.block(lx, y, lz) !== AIR && barrierAt(aquiferOf(c), d, x, y, z) ? 0 : got;
+            if (want !== stored) bad.push(`(${x}, ${y}, ${z}): carvedAt ${got}${want !== got ? ' (a barrier: 0)' : ''} ≠ stored ${stored}`);
             if (got !== 0) { here++; kinds.add(got); }
           }
         }

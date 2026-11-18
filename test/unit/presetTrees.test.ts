@@ -29,7 +29,9 @@ import { surfaceEst3 } from '../../src/gen/column/surfaceEstimate';
 import { createGenContext, type GenContext } from '../../src/gen/context';
 import { cornerValueIndex } from '../../src/gen/density/compile';
 import { createDensityContext } from '../../src/gen/density/context';
-import { probe, solidAt } from '../../src/gen/density/probe';
+import { probe } from '../../src/gen/density/probe';
+import { aquiferOf } from '../../src/gen/fluids/aquifer';
+import { terrainSolidAt } from '../../src/gen/fluids/solidAt';
 import { createDensityReference, interpolatedNodes } from '../../src/gen/density/reference';
 import { resolveDensity } from '../../src/gen/density/source';
 import { densityColumnCost, structuralCost, workCost } from '../../src/gen/inspect/cost';
@@ -322,8 +324,8 @@ describe('amplified on real columns (seed 42; SP3e spec §1.2)', () => {
         const value = probe(dc, x, y, z);
         const block = view.block(lx, y, lz);
         voxels++;
-        // The stored solidity is solidAt's: density > 0 and not carved (SP6a spec §3.4).
-        expect(solidAt(dc, x, y, z), `(${x}, ${y}, ${z}) probe ${value}, block ${block}`).toBe(block !== AIR);
+        // The stored solidity is terrainSolidAt's: density > 0 and not carved (SP6a spec §3.4), or a barrier (SP7a D20).
+        expect(terrainSolidAt(aquiferOf(ctx), dc, x, y, z), `(${x}, ${y}, ${z}) probe ${value}, block ${block}`).toBe(block !== AIR);
         if (y >= 296 && block !== AIR) solidHigh++;
         if (mask[i] === 1) {
           masked++;
@@ -417,8 +419,10 @@ describe('amplified lakes hold water (seed 42; SP3e spec §1.2, Review Focus)', 
       }
     }
     // SP6a Task 7's spaghetti and noodles: one more centre held water in both worlds ([132, 120, 120, 130]), a cave
-    // opening a dry basin's bed below its level; the wet roof (Task 9) closes caves under the lake again.
-    expect([lakes, wetDefault, wetAmplified, same]).toEqual([132, 119, 119, 130]);
+    // opening a dry basin's bed below its level; the wet roof (Task 9) closes caves under the lake again. SP7a's aquifer
+    // (Task 13, D17): two more centres hold fluid in both worlds, cave water in the tagged air under a dry basin's bed
+    // (cells (−3, −27) and (−3, 25), no untagged water at either).
+    expect([lakes, wetDefault, wetAmplified, same]).toEqual([132, 121, 121, 130]);
     expect(high).toBeGreaterThan(50);
   });
 

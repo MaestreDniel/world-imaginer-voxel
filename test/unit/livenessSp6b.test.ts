@@ -118,17 +118,20 @@ describe('rule 4\'s noises (SP6b Task 22; spec §3.4, §12.7, Spec correction 5)
 describe('SP6b\'s leaves in U2 and U4 (SP6b spec §12.7, D15; Task 29)', () => {
   const SP6B_LEAVES = [...BIOME_LEAVES, ...FLOOR_LEAVES, ...RULE4_NOISES];
 
-  test('U2 covers SP6a\'s 172 leaves and SP6b\'s 21: the 15 cave-biome leaves, the rock floor\'s 4 and rule 4\'s 2 noises', () => {
+  test('U2 covers SP6a\'s 172 leaves and SP6b\'s 21: the 15 cave-biome leaves, the rock floor\'s 4 and rule 4\'s 2 noises (193, SP6b\'s count; SP7a\'s leaves follow, livenessSp7a.test.ts)', () => {
     const covered = new Set(u2Leaves().map((l) => l.path));
     for (const p of SP6B_LEAVES) expect([p, covered.has(p)]).toEqual([p, true]);
     expect([SP6B_LEAVES.length, covered.size]).toEqual([21, U2_LEAVES]);
-    expect(U2_LEAVES - SP6B_LEAVES.length).toBe(172);
+    // SP6b's count: 172 + 21 = 193; SP7a adds the 15 aquifer leaves (Task 13).
+    const sp7a = [...covered].filter((p) => p.startsWith('aquifer.')).length;
+    expect([193 - SP6B_LEAVES.length, U2_LEAVES - sp7a]).toEqual([172, 193]);
   });
 
   test('U4\'s registry check accepts the unchanged stage list: every SP6b leaf is homed in, and first hashed by, the terrain stage (D15)', () => {
     // D15: the leaves live under caves.* and surface.*, which the terrain stage already hashes; no stage is added.
     expect(STAGES.map((s) => s.id)).toEqual(['climate', 'shape', 'surfaceEst', 'biome2d', 'terrain', 'decorate', 'light', 'mesh', 'lod', 'map']);
-    expect(STAGES.find((s) => s.id === 'terrain')?.params).toEqual(['density', 'surface', 'caves']);
+    // SP7a appends 'aquifer' (its spec §15.3, Task 13), which no SP6b leaf is under.
+    expect(STAGES.find((s) => s.id === 'terrain')?.params).toEqual(['density', 'surface', 'caves', 'aquifer']);
     for (const p of SP6B_LEAVES) {
       const first = STAGES.find((s) => s.params.some((q) => prefixCovers(q, p)));
       expect([p, leaf(p).meta.scope, leaf(p).meta.stage, first?.id]).toEqual([p, 'terrain', 'terrain', 'terrain']);

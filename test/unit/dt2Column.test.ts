@@ -420,6 +420,42 @@ describe('DT2 tagProbe and the straddle stratum (SP6a spec §10.3, D22; Task 12)
   });
 });
 
+describe('DT2 with the aquifer\'s barriers (SP7a spec §13.4, D20; Task 13)', () => {
+  /** (40, 900): a cave-rich column at seed '42' whose aquifer places barriers (terrainStage.test.ts' "T's aquifer step"). */
+  const BARRIERS = [40, 900] as const;
+
+  it('probeBulk reads terrainSolidAt and tagProbe expects 0 where barrierAt holds: 0 on a column holding barriers, some of them checked as extras', () => {
+    const ctx = ctxOf();
+    const setup = dt2Setup(ctx, LABEL);
+    const acc = newDt2Acc(LABEL);
+    const seen: Dt2Voxel[] = [];
+    dt2Column(ctx, ...BARRIERS, new Xoshiro128(7), acc, { extra: { count: 1024, yLo: -63, yHi: 120 }, voxel: (v) => seen.push(v) });
+    let barriers = 0;
+    for (const v of seen) if (setup.barrierAt(v.x, v.y, v.z)) barriers++;
+    expect([...failures(acc), acc.tagProbe]).toEqual([0, 0, 0, 0, 0]);
+    expect(barriers, 'some checked voxel is a barrier').toBeGreaterThan(0);
+  }, 120_000);
+
+  it('an injected mismatch is counted in its own part: a wrong terrainSolidAt → probeBulk; a barrier everywhere → tagProbe at each tagged voxel', () => {
+    const ctx = ctxOf();
+    const setup = dt2Setup(ctx, LABEL);
+    const solidAt = setup.solidAt;
+    setup.solidAt = (x, y, z) => !solidAt(x, y, z);
+    const acc = newDt2Acc(LABEL);
+    dt2Column(ctx, ...BARRIERS, new Xoshiro128(7), acc);
+    setup.solidAt = solidAt;
+    expect([acc.probeBulk, acc.tagProbe]).toEqual([DT2_VOXELS_PER_COLUMN, 0]);
+    expect(acc.problems[0]).toMatch(/terrainSolidAt (true|false), block \d+$/);
+    const barrierAt = setup.barrierAt;
+    setup.barrierAt = () => true;
+    const acc2 = newDt2Acc(LABEL);
+    dt2Column(ctx, ...BARRIERS, new Xoshiro128(7), acc2, { extra: { count: 64, yLo: -63, yHi: 60 } });
+    setup.barrierAt = barrierAt;
+    expect(acc2.tagNonZero).toBeGreaterThan(0);
+    expect([acc2.probeBulk, acc2.tagProbe]).toEqual([0, acc2.tagNonZero]);
+  }, 120_000);
+});
+
 describe('DT2 tagProbe reads the cave kind (SP6b spec §2.1, Spec correction 4; Task 8)', () => {
   it('a column with every nibble set gives the same kind-level outputs as with them cleared: DT2\'s tagProbe comparison count', () => {
     const ctx = ctxOf();

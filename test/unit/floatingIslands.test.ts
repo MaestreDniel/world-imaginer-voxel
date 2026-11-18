@@ -5,7 +5,8 @@
  * - every island voxel (solid with the tree, air with the islands tap muted) lies in y 193-263, above
  *   `ISLAND_RUN_MIN_BOTTOM`;
  * - compiled == reference and probe == bulk on island columns (m = 1, and 0.25 < m < 1), voxels and corners of the band;
- * - water v0 under islands over the sea (D5 on real data): the column's fluid equals the muted column's, and the
+ * - water under islands over the sea (D5 on real data; SP7a D19's sky-open water since water v0 retired): the column's
+ *   fluid equals the muted column's, and the
  *   heightmaps equal a top-down scan (the island top + 1 at island positions).
  * The columns are `terrain.real` bench candidates (tc ≤ 216) found by scans; the tests re-derive what they rely on.
  * SP6a Task 9 (its spec §1.4, D8): the island cap, `caves.limits.capTop` 180 in floating_islands' overlay, leaves no
@@ -24,7 +25,9 @@ import { createGenContext, type GenContext } from '../../src/gen/context';
 import { cornerValueIndex } from '../../src/gen/density/compile';
 import { createDensityContext } from '../../src/gen/density/context';
 import type { Expr } from '../../src/gen/density/expr';
-import { probe, solidAt } from '../../src/gen/density/probe';
+import { probe } from '../../src/gen/density/probe';
+import { aquiferOf } from '../../src/gen/fluids/aquifer';
+import { terrainSolidAt } from '../../src/gen/fluids/solidAt';
 import { createDensityReference, interpolatedNodes } from '../../src/gen/density/reference';
 import { terrainDensityDebug } from '../../src/gen/pipeline/terrainStage';
 import { fillColumnT } from '../../src/metrics/region';
@@ -134,7 +137,7 @@ describe('§3.2: the window and the cluster gate cut nothing (the ungated BODY a
   });
 });
 
-describe('island voxels and water v0 under islands (SP3e spec §3.2, §3.5, D5)', () => {
+describe('island voxels and water under islands (SP3e spec §3.2, §3.5, D5; SP7a D19)', () => {
   const store = newStore();
   const mstore = newStore();
 
@@ -207,9 +210,9 @@ describe('compiled == reference and probe == bulk on island columns (SP3e spec �
         const value = probe(dc, x, y, z);
         const block = view.block(lx, y, lz);
         voxels++;
-        // The stored solidity is solidAt's: density > 0 and not carved (SP6a spec §3.4; the 512 uniform voxels reach the
-        // carvers under the sea bed).
-        expect(solidAt(dc, x, y, z), `(${x}, ${y}, ${z}) probe ${value}, block ${block}`).toBe(block !== AIR);
+        // The stored solidity is terrainSolidAt's: density > 0 and not carved (SP6a spec §3.4; the 512 uniform voxels reach
+        // the carvers under the sea bed), or a barrier (SP7a D20).
+        expect(terrainSolidAt(aquiferOf(ctx), dc, x, y, z), `(${x}, ${y}, ${z}) probe ${value}, block ${block}`).toBe(block !== AIR);
         if (y >= 193 && y <= 263 && block !== AIR) islandVoxels++;
         if (mask[i] === 1) {
           masked++;

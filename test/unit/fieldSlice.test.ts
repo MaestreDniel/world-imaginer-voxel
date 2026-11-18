@@ -3,6 +3,7 @@ import { CAVE_BIOME, CAVE_KIND, CAVE_SLICE_SOLID, caveBiomeOf, caveKindOf, DENSI
 import { caveBiomeAt } from '../../src/gen/biomes/cavePicker';
 import { caveTagAt, caveTagBatch, caveTagRun, chunkColumnOrder } from '../../src/gen/caves/tags';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
+import { aquiferOf, barrierAt } from '../../src/gen/fluids/aquifer';
 import type { GenContext } from '../../src/gen/context';
 import { createCornerMemo, createDensityReference } from '../../src/gen/density/reference';
 import { probe, solidAt } from '../../src/gen/density/probe';
@@ -559,11 +560,16 @@ describe('evaluateFieldSlice: biome3d, the cave biome (SP6b spec §9.2, D10)', (
     const bad: string[] = [];
     const seen = new Set<number>();
     let tagged = 0;
+    // The slice reads the point probes (`caveTagAt`, `solidAt`), not the aquifer: a barrier (SP7a D20), rock in T with its
+    // tag cleared, still reads as its cave there (the slice's aquifer fields are SP7a Task 41's).
+    const dc = createDensityContext(ctx);
+    const barrier = (x: number, y: number, z: number, want: number, got: number): boolean =>
+      want === CAVE_SLICE_SOLID && got !== CAVE_SLICE_SOLID && got !== 0 && barrierAt(aquiferOf(ctx), dc, x, y, z);
     for (const [geometry, r] of [[g, whole], [reversed, back]] as const) {
       for (const { i, x, y, z } of samples(geometry)) {
         const want = stored(views.get(x >> 4)!, x, y, z);
-        if (r.values[i] !== want.biome3d) bad.push(`biome3d (${x}, ${y}, ${z}): ${r.values[i]} ≠ ${want.biome3d}`);
-        if (geometry === g && caves.values[i] !== want.caves) bad.push(`caves (${x}, ${y}, ${z}): ${caves.values[i]} ≠ ${want.caves}`);
+        if (r.values[i] !== want.biome3d && !barrier(x, y, z, want.biome3d, r.values[i]!)) bad.push(`biome3d (${x}, ${y}, ${z}): ${r.values[i]} ≠ ${want.biome3d}`);
+        if (geometry === g && caves.values[i] !== want.caves && !barrier(x, y, z, want.caves, caves.values[i]!)) bad.push(`caves (${x}, ${y}, ${z}): ${caves.values[i]} ≠ ${want.caves}`);
         if (want.biome3d >= 1 && want.biome3d <= 4) { tagged++; seen.add(want.biome3d - 1); }
       }
     }

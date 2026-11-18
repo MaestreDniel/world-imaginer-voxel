@@ -6,7 +6,9 @@ import type { GenContext } from '../../src/gen/context';
 import { cornerValueIndex } from '../../src/gen/density/compile';
 import { caveTagAt } from '../../src/gen/caves/tags';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
-import { probe, solidAt } from '../../src/gen/density/probe';
+import { probe } from '../../src/gen/density/probe';
+import { aquiferOf, barrierAt } from '../../src/gen/fluids/aquifer';
+import { terrainSolidAt } from '../../src/gen/fluids/solidAt';
 import { createDensityReference, findTap, interpolatedNodes, type DensityReference } from '../../src/gen/density/reference';
 import { terrainDensityDebug, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf, type SurfaceContext } from '../../src/gen/surface/context';
@@ -36,6 +38,9 @@ import { createStore, type VoxelStore } from '../../src/world/store/store';
  * every quart holding a tagged voxel, the stored `caveBiomeQ` against 1 + the biome most of its tagged voxels get from
  * `caveBiomeAt` (ties to the lower id, §2.2). No draw: DT2's streams are unchanged. At most CAVE_BIOME_TEXTS mismatch
  * texts per column (every mismatch counts).
+ * SP7a (spec §13.4, D20; Task 13): `probeBulk` compares the stored solidity with `terrainSolidAt` (the density probe's
+ * solidity and no carve, or a tagged voxel the aquifer makes a barrier), and `tagProbe` expects 0 where `barrierAt` holds
+ * (barriers clear the tag); `caveBiomeProbe` reads the stored tagged voxels, which hold no barrier.
  */
 
 export const DT2_VOXELS_PER_COLUMN = 16;
@@ -123,8 +128,9 @@ export function newDt2Acc(label = ''): Dt2Acc {
  * What `dt2Column` reads of a GenContext, built once per context (as DT2 built it once per profile and seed): a
  * DensityContext compiled apart from the stage's and its reference interpreter, the `interpolated` nodes' corner
  * slots, the stage's compiled rule tree (`surfaceContextOf(ctx).compiled`) and a SurfaceContext built apart (the
- * probe and the reference evaluator), `tagAt` (`caveTagAt` on `dc`), `biomeAt` (`caveBiomeAt` on `dc`) and the
- * straddle stratum's `StraddleSetup`. The fields are writable so a test can inject a wrong reference.
+ * probe and the reference evaluator), `tagAt` (`caveTagAt` on `dc`), `biomeAt` (`caveBiomeAt` on `dc`), `solidAt`
+ * (`terrainSolidAt` on `dc`) and `barrierAt` (`barrierAt` on `dc`) with `aquiferOf(ctx)`, and the straddle stratum's
+ * `StraddleSetup`. The fields are writable so a test can inject a wrong reference.
  */
 export interface Dt2Setup {
   dc: DensityContext;
@@ -138,6 +144,10 @@ export interface Dt2Setup {
   tagAt: (x: number, y: number, z: number) => number;
   /** The cave biome at a world voxel (`caveBiomeAt(dc, …)`), compared with the stored nibble by `caveBiomeProbe`. */
   biomeAt: (x: number, y: number, z: number) => number;
+  /** SP7a: T's solidity at a world voxel (`terrainSolidAt(aquiferOf(ctx), dc, …)`), compared by `probeBulk`. */
+  solidAt: (x: number, y: number, z: number) => boolean;
+  /** SP7a: whether a tagged world voxel is a barrier (`barrierAt(aquiferOf(ctx), dc, …)`); `tagProbe` then expects 0. */
+  barrierAt: (x: number, y: number, z: number) => boolean;
   straddle: StraddleSetup;
 }
 
@@ -228,9 +238,12 @@ export function dt2Setup(ctx: GenContext, label: string): Dt2Setup {
   const compiled = surfaceContextOf(ctx).compiled;
   const sc = createSurfaceContext(ctx);
   if (compiled.fastPath === null) throw new Error(`DT2: ${label}: the default tree has no fast path`);
+  const aq = aquiferOf(ctx);
   setup = {
     dc, ref, interp, compiled, sc, maxSurfaceDepth: compiled.fastPath.maxSurfaceDepth,
-    tagAt: (x, y, z) => caveTagAt(dc, x, y, z), biomeAt: (x, y, z) => caveBiomeAt(dc, x, y, z), straddle: straddleSetup(dc),
+    tagAt: (x, y, z) => caveTagAt(dc, x, y, z), biomeAt: (x, y, z) => caveBiomeAt(dc, x, y, z),
+    solidAt: (x, y, z) => terrainSolidAt(aq, dc, x, y, z), barrierAt: (x, y, z) => barrierAt(aq, dc, x, y, z),
+    straddle: straddleSetup(dc),
   };
   SETUPS.set(ctx, setup);
   return setup;
@@ -304,10 +317,12 @@ export function dt2Column(ctx: GenContext, cx: number, cz: number, r: Xoshiro128
     const value = probe(dc, x, y, z);
     const block = view.block(lx, y, lz);
     acc.voxels++;
-    // The stored solidity is the point probe's after the carvers (SP6a spec §3.4): density > 0 and not carved.
-    if (solidAt(dc, x, y, z) !== (block !== AIR)) {
+    // The stored solidity is the point probe's after the carvers (SP6a spec §3.4) and the aquifer's barriers (SP7a D20):
+    // density > 0 and not carved, or a tagged voxel the aquifer makes rock (`terrainSolidAt`).
+    const solid = setup.solidAt(x, y, z);
+    if (solid !== (block !== AIR)) {
       acc.probeBulk++;
-      acc.problems.push(`${at}: (${x}, ${y}, ${z}) probe ${value}, solidAt ${solidAt(dc, x, y, z)}, block ${block}`);
+      acc.problems.push(`${at}: (${x}, ${y}, ${z}) probe ${value}, terrainSolidAt ${solid}, block ${block}`);
     }
     const surfaceState = surfaceProbe(sc, x, y, z).state;
     if (surfaceState !== block) {
@@ -329,11 +344,13 @@ export function dt2Column(ctx: GenContext, cx: number, cz: number, r: Xoshiro128
     }
     const tag = caveKindOf(view.cave(lx, y, lz));
     const tagAt = setup.tagAt(x, y, z);
+    // A barrier clears the tag (SP7a D20): the probe's tag reads 0 where `barrierAt` holds.
+    const want = tagAt !== 0 && setup.barrierAt(x, y, z) ? 0 : tagAt;
     acc.tagVoxels++;
     if (tag !== 0) acc.tagNonZero++;
-    if (tag !== tagAt) {
+    if (tag !== want) {
       acc.tagProbe++;
-      acc.problems.push(`${at}: (${x}, ${y}, ${z}) stored tag ${tag} ≠ caveTagAt ${tagAt}`);
+      acc.problems.push(`${at}: (${x}, ${y}, ${z}) stored tag ${tag} ≠ caveTagAt ${tagAt}${want !== tagAt ? ' (a barrier: 0)' : ''}`);
     }
     if (onVoxel !== undefined) {
       const k = runAt(SCAN, i & 255, y);

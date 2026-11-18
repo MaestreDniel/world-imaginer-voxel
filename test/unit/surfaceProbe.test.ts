@@ -4,13 +4,16 @@ import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import type { JsonValue } from '../../src/core/params/json';
 import { noiseFor, type GenContext } from '../../src/gen/context';
 import { cavePickerOf } from '../../src/gen/biomes/cavePicker';
-import { columnWaterV0, terrainStage, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
+import { aquiferColumn, aquiferOf, createAquiferScratch } from '../../src/gen/fluids/aquifer';
+import { terrainStage, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf, surfaceNoiseSource, type SurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbe, surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { RuleValidationError } from '../../src/gen/surface/rules';
 import { newSurfaceScan, surfaceScanSettings, type SurfaceScan } from '../../src/gen/surface/scan';
 import { CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import { AIR, BEDROCK, REGISTRY, STONE } from '../../src/world/blocks/index';
+import { FLUID_WATER, fluidType } from '../../src/world/blocks/fluid';
+import { newCaveColumnPass } from '../../src/gen/biomes/cavePicker';
 import type { ColumnView } from '../../src/world/store/api';
 import { createStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
@@ -118,7 +121,7 @@ describe('SurfaceContext (spec §3.6)', () => {
   });
 });
 
-describe('the probe\'s column rebuild (spec §3.6): the T stage\'s fill, the carve (SP6a §3.4), water v0 and biome buffer', () => {
+describe('the probe\'s column rebuild (spec §3.6): the T stage\'s fill, the carve (SP6a §3.4), the aquifer step (SP7a §1.7) and biome buffer', () => {
   test('8 columns with carvers: the rebuilt solidity and water equal the T stage\'s at every voxel, its states the stored blocks at every solid voxel within 16 blocks below a run\'s top (the carved floors\' skins among them)', () => {
     // Columns a worm, a ravine or an underground worm crosses at seed 42: the caverns' cave class column and its east
     // neighbour, a ravine open to the sky at (4, −10) and the columns along it, and (0, 0) and (3, 0).
@@ -138,7 +141,7 @@ describe('the probe\'s column rebuild (spec §3.6): the T stage\'s fill, the car
           const k = caveKindOf(view.cave(lx, y, lz));
           if (k === CAVE_KIND.worm || k === CAVE_KIND.ravine || k === CAVE_KIND.undergroundWorm) carved++;
           if ((c.solid[i] !== 0) !== (block !== AIR)) bad.push(`(${lx}, ${y}, ${lz}): rebuilt ${c.solid[i]}, block ${block}`);
-          if ((c.water[i] !== 0) !== (view.fluid(lx, y, lz) !== 0)) bad.push(`(${lx}, ${y}, ${lz}): rebuilt water ${c.water[i]}`);
+          if ((c.water[i] !== 0) !== (fluidType(view.fluid(lx, y, lz)) === FLUID_WATER)) bad.push(`(${lx}, ${y}, ${lz}): rebuilt water ${c.water[i]}`);
           if (block === AIR) { runTop = -65; continue; }
           if (runTop === -65) runTop = y;
           if (runTop - y >= 16) continue;
@@ -153,7 +156,7 @@ describe('the probe\'s column rebuild (spec §3.6): the T stage\'s fill, the car
     expect(skins).toBeGreaterThan(0);
   });
 
-  test.each(FIXTURES)('%s: solidity and water equal the T stage\'s blocks and fluid at every voxel; the biome buffer is aux A\'s surfaceBiome', (_name, col) => {
+  test.each(FIXTURES)('%s: solidity and water equal the T stage\'s blocks and water at every voxel; the biome buffer is aux A\'s surfaceBiome', (_name, col) => {
     const view = viewOf(col);
     const c = surfaceProbeColumn(SC, col[0], col[1]);
     expect([c.valid, c.cx, c.cz]).toEqual([true, col[0], col[1]]);
@@ -163,7 +166,7 @@ describe('the probe\'s column rebuild (spec §3.6): the T stage\'s fill, the car
         const i = ((y + 64) << 8) | p;
         const lx = p & 15, lz = p >> 4;
         if ((c.solid[i] !== 0) !== (view.block(lx, y, lz) !== AIR)) bad++;
-        if ((c.water[i] !== 0) !== (view.fluid(lx, y, lz) !== 0)) bad++;
+        if ((c.water[i] !== 0) !== (fluidType(view.fluid(lx, y, lz)) === FLUID_WATER)) bad++;
         if (c.solid[i] !== 0) solid++;
         if (c.water[i] !== 0) water++;
       }
@@ -216,17 +219,47 @@ describe('the probe\'s column rebuild (spec §3.6): the T stage\'s fill, the car
     expect(ceilings.size).toBeGreaterThan(2);
   }, 120_000);
 
-  test('columnWaterV0 checks its array sizes', () => {
+  test('aquiferColumn checks its array sizes', () => {
     const s = SC.density.columns.get(0, 0);
-    const ok = new Uint8Array(98304);
-    for (const flag of [false, true]) {
-      expect(() => columnWaterV0(s, new Uint8Array(4096), new Int32Array(256), new Int32Array(256), null, flag)).toThrow(RangeError);
-      expect(() => columnWaterV0(s, ok, new Int32Array(255), new Int32Array(256), null, flag)).toThrow(RangeError);
-      expect(() => columnWaterV0(s, ok, new Int32Array(256), new Int32Array(256), new Uint8Array(256), flag)).toThrow(RangeError);
-    }
+    const inp = aquiferOf(CTX);
+    const pick = cavePickerOf(CTX);
+    const pass = newCaveColumnPass();
+    const ok = (): Uint8Array => new Uint8Array(98304);
+    const sc = createAquiferScratch();
+    const t = new Int32Array(256);
+    expect(() => aquiferColumn(inp, s, pick, pass, new Uint8Array(4096), ok(), ok(), ok(), t, sc)).toThrow(RangeError);
+    expect(() => aquiferColumn(inp, s, pick, pass, ok(), new Uint8Array(4096), ok(), ok(), t, sc)).toThrow(RangeError);
+    expect(() => aquiferColumn(inp, s, pick, pass, ok(), ok(), new Uint8Array(256), ok(), t, sc)).toThrow(RangeError);
+    expect(() => aquiferColumn(inp, s, pick, pass, ok(), ok(), ok(), new Uint8Array(98303), t, sc)).toThrow(RangeError);
+    expect(() => aquiferColumn(inp, s, pick, pass, ok(), ok(), ok(), ok(), new Int32Array(255), sc)).toThrow(RangeError);
   });
 
-  test('with islands.enabled the rebuild applies water v0\'s island rule as the T stage does (SP3e spec §3.5): a slab island over the sea', () => {
+  test('SP7a §1.7 (Task 13): on 8 columns with flooded caves the probe\'s scan equals terrainSurfaceDebug\'s, runWaterAbove set on cave runs under aquifer water', () => {
+    const cols: ReadonlyArray<readonly [number, number]> = [SEA, COAST, OVERHANG, WALL, RIVER, LAKE, [0, 0], [40, 900]];
+    const sc = createSurfaceContext(CTX);
+    let caveRunsUnderWater = 0;
+    for (const [cx, cz] of cols) {
+      const view = generate(CTX, cx, cz);
+      const scan = newSurfaceScan();
+      terrainSurfaceDebug(CTX, cx, cz, scan);
+      const c = surfaceProbeColumn(sc, cx, cz);
+      const runs = scan.runFirst[256]!;
+      const per = (a: { subarray(b: number, e: number): ArrayLike<number> }) => Array.from(a.subarray(0, runs));
+      expect([cx, cz, Array.from(c.scan.runFirst), per(c.scan.runTop), per(c.scan.runBottom), per(c.scan.runWaterAbove), per(c.scan.runWaterTop)])
+        .toEqual([cx, cz, Array.from(scan.runFirst), per(scan.runTop), per(scan.runBottom), per(scan.runWaterAbove), per(scan.runWaterTop)]);
+      for (let p = 0; p < 256; p++) {
+        for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
+          if (scan.runWaterAbove[r] !== 1) continue;
+          // A run whose water above is cave water: the voxel above its top is a tagged water voxel.
+          const y = scan.runTop[r]! + 1;
+          if (caveKindOf(view.cave(p & 15, y, p >> 4)) !== 0 && fluidType(view.fluid(p & 15, y, p >> 4)) === FLUID_WATER) caveRunsUnderWater++;
+        }
+      }
+    }
+    expect(caveRunsUnderWater).toBeGreaterThan(0);
+  }, 120_000);
+
+  test('with islands.enabled the rebuild fills the sea under a slab island as the T stage does (SP3e spec §3.5, SP7a D19)', () => {
     // The default tree with the islands tap's child replaced by a slab solid at y 200 … 210 (voxel placement).
     const tree = JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE)) as { root: { b: { x: unknown } } };
     tree.root.b.x = { op: 'rangeChoice', x: { op: 'y' }, lo: 200, hi: 211, inside: { op: 'const', v: 1 }, outside: { op: 'const', v: -1000000 } };
@@ -239,7 +272,7 @@ describe('the probe\'s column rebuild (spec §3.6): the T stage\'s fill, the car
         const i = ((y + 64) << 8) | p;
         const lx = p & 15, lz = p >> 4;
         if ((c.solid[i] !== 0) !== (view.block(lx, y, lz) !== AIR)) bad++;
-        if ((c.water[i] !== 0) !== (view.fluid(lx, y, lz) !== 0)) bad++;
+        if ((c.water[i] !== 0) !== (fluidType(view.fluid(lx, y, lz)) === FLUID_WATER)) bad++;
         if (c.water[i] !== 0 && y < 200) under++;
       }
     }

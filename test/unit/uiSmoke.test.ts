@@ -57,7 +57,8 @@ import {
 } from '../tools/uiSmoke';
 import { EXAMPLE_IDS } from '../harness/caveMetrics';
 import { createDensityContext } from '../../src/gen/density/context';
-import { solidAt } from '../../src/gen/density/probe';
+import { aquiferOf } from '../../src/gen/fluids/aquifer';
+import { terrainSolidAt } from '../../src/gen/fluids/solidAt';
 import { XRAY_CLEAR } from '../../src/render/renderer';
 import { bandSet, bandStep, stripText, XRAY_ALL } from '../../src/ui/world/xrayStrip';
 import { CAVE_PARAMETERS_LEAF, sliderBand } from '../../src/ui/map/cavesTab';
@@ -1753,20 +1754,21 @@ describe('UI smoke test: the caves step, SP6a\'s review links and its review scr
     }
   });
 
-  test('each review pose\'s `at` is a corner of its voxel: the first clear at the eye\'s row, else the first whose rock lies behind the view; undergroundWorm\'s voxel, closed by SP6b\'s rock floor, pinned as closed (ruling P23)', () => {
+  test('each review pose\'s `at` is a corner of its voxel: the first clear at the eye\'s row, else the first whose rock lies behind the view; undergroundWorm\'s voxel, closed by SP6b\'s rock floor, and noodle\'s, closed by SP7a\'s barriers, pinned as closed (ruling P23)', () => {
     // `at` takes integers, so a link's eye stands on a corner of the pose's voxel (x, z). The corners in order (x, z),
     // (x + 1, z), (x, z + 1), (x + 1, z + 1); the four voxels of the eye's row touching a corner; the first corner where
-    // all four are air (the generator's solidity after the carvers, `solidAt`), else the first where every solid one
-    // lies strictly behind the view (its centre's offset from the corner against the yaw's direction). An eye on a rock
-    // face with the rock ahead opens inside it, whose faces are culled from behind: the view shows the sky through the
-    // ground (Task 49's first pillars shot, at (−4, 4) on the pillar's face).
+    // all four are air (the generator's solidity after the carvers and the aquifer's barriers, `terrainSolidAt`), else
+    // the first where every solid one lies strictly behind the view (its centre's offset from the corner against the
+    // yaw's direction). An eye on a rock face with the rock ahead opens inside it, whose faces are culled from behind:
+    // the view shows the sky through the ground (Task 49's first pillars shot, at (−4, 4) on the pillar's face).
     expect(Object.keys(CAVE_AT)).toEqual([...EXAMPLE_IDS]);
     const dc = createDensityContext(ctxFor('42'));
     const examples = readExamples();
-    // SP6b's rock floor (its spec §5.2, Task 20, ruling P23) closes the SP6a poses whose voxel lies within its reach:
-    // pinned by name as expected-closed, their literals kept; the corner rule is checked on the poses still open.
-    const CLOSED_BY_FLOOR: readonly string[] = ['undergroundWorm'];
-    const closed = EXAMPLE_IDS.filter((id) => { const [vx, vy, vz] = examples.poses[id]!.voxel; return solidAt(dc, vx, vy, vz); });
+    // SP6b's rock floor (its spec §5.2, Task 20, ruling P23) closes the SP6a poses whose voxel lies within its reach, and
+    // SP7a's aquifer barriers (Task 13, D20) the noodle's: pinned by name as expected-closed, their literals kept (SP7a's
+    // review poses are re-taken by its Tasks 24 and 51); the corner rule is checked on the poses still open.
+    const CLOSED_BY_FLOOR: readonly string[] = ['noodle', 'undergroundWorm'];
+    const closed = EXAMPLE_IDS.filter((id) => { const [vx, vy, vz] = examples.poses[id]!.voxel; return terrainSolidAt(aquiferOf(dc.ctx), dc, vx, vy, vz); });
     expect(closed, 'the SP6a poses whose voxel the live generator fills').toEqual(CLOSED_BY_FLOOR);
     for (const id of EXAMPLE_IDS.filter((i) => !CLOSED_BY_FLOOR.includes(i))) {
       const e = examples.poses[id]!;
@@ -1774,7 +1776,7 @@ describe('UI smoke test: the caves step, SP6a\'s review links and its review scr
       const [fx, , fz] = lookVector(e.yaw, 0);
       const corners: Array<[number, number]> = [[vx, vz], [vx + 1, vz], [vx, vz + 1], [vx + 1, vz + 1]];
       const solids = corners.map(([ax, az]) => ([[-1, -1], [0, -1], [-1, 0], [0, 0]] as const)
-        .filter(([dx, dz]) => solidAt(dc, ax + dx, vy, az + dz))
+        .filter(([dx, dz]) => terrainSolidAt(aquiferOf(dc.ctx), dc, ax + dx, vy, az + dz))
         .map(([dx, dz]) => [dx + 0.5, dz + 0.5] as const));
       const clear = solids.findIndex((s) => s.length === 0);
       const behind = solids.findIndex((s) => s.every(([ox, oz]) => ox * fx + oz * fz < -1e-9));
@@ -2049,11 +2051,11 @@ describe('UI smoke test: the caves step\'s SP6b checks: C, the HUD and the strip
     const [vx, vy, vz] = [Math.floor(LUSH_POSE.x), Math.floor(LUSH_POSE.y), Math.floor(LUSH_POSE.z)];
     expect([LUSH_POSE.x, LUSH_POSE.y, LUSH_POSE.z]).toEqual([vx + 0.5, vy + 0.5, vz + 0.5]);
     expect([LUSH_POSE.yaw, LUSH_POSE.pitch]).toEqual([270, 0]);
-    expect([solidAt(dc, vx, vy, vz), solidAt(dc, vx, vy - 1, vz)]).toEqual([false, true]);
+    expect([terrainSolidAt(aquiferOf(dc.ctx), dc, vx, vy, vz), terrainSolidAt(aquiferOf(dc.ctx), dc, vx, vy - 1, vz)]).toEqual([false, true]);
     const [fx, , fz] = lookVector(LUSH_POSE.yaw, 0);
     const corners: Array<[number, number]> = [[vx, vz], [vx + 1, vz], [vx, vz + 1], [vx + 1, vz + 1]];
     const solids = corners.map(([ax, az]) => ([[-1, -1], [0, -1], [-1, 0], [0, 0]] as const)
-      .filter(([dx, dz]) => solidAt(dc, ax + dx, vy, az + dz))
+      .filter(([dx, dz]) => terrainSolidAt(aquiferOf(dc.ctx), dc, ax + dx, vy, az + dz))
       .map(([dx, dz]) => [dx + 0.5, dz + 0.5] as const));
     const clear = solids.findIndex((s) => s.length === 0);
     const behind = solids.findIndex((s) => s.every(([ox, oz]) => ox * fx + oz * fz < -1e-9));
@@ -2196,7 +2198,7 @@ describe('UI smoke test: SP6b\'s review links and screenshots (SP6b spec §12.8,
     expect(LUSH_POSE).toEqual(lush);
   });
 
-  test('each SP6b pose\'s `at` is CAVE_AT\'s corner on its own profile\'s generator (solidAt); bottomCavern\'s is not the low corner, whose x = 184 rock put the eye on a wall (Tasks 24-25\'s near-plane patch)', () => {
+  test('each SP6b pose\'s `at` is CAVE_AT\'s corner on its own profile\'s generator (terrainSolidAt); bottomCavern\'s is not the low corner, whose x = 184 rock put the eye on a wall (Tasks 24-25\'s near-plane patch)', () => {
     expect(Object.keys(SP6B_AT)).toEqual([...SP6B_POSE_IDS]);
     const examples = readExamples();
     const dcs = { default: densityOf('default'), cave_heavy: densityOf('cave_heavy') } as const;
@@ -2204,13 +2206,13 @@ describe('UI smoke test: SP6b\'s review links and screenshots (SP6b spec §12.8,
       const pose = SP6B_POSES[id];
       const dc = dcs[pose.profile];
       const [vx, vy, vz] = examples.poses[id]!.voxel;
-      expect(solidAt(dc, vx, vy, vz), `${id}: its voxel is open`).toBe(false);
+      expect(terrainSolidAt(aquiferOf(dc.ctx), dc, vx, vy, vz), `${id}: its voxel is open`).toBe(false);
       const [fx, , fz] = lookVector(pose.yaw, 0);
       const corners: Array<[number, number]> = [[vx, vz], [vx + 1, vz], [vx, vz + 1], [vx + 1, vz + 1]];
       /** CAVE_AT's rule in the row y: the first clear corner, else the first whose rock lies behind the view; -1: none. */
       const cornerAt = (y: number): number => {
         const solids = corners.map(([ax, az]) => ([[-1, -1], [0, -1], [-1, 0], [0, 0]] as const)
-          .filter(([dx, dz]) => solidAt(dc, ax + dx, y, az + dz))
+          .filter(([dx, dz]) => terrainSolidAt(aquiferOf(dc.ctx), dc, ax + dx, y, az + dz))
           .map(([dx, dz]) => [dx + 0.5, dz + 0.5] as const));
         const clear = solids.findIndex((s) => s.length === 0);
         return clear >= 0 ? clear : solids.findIndex((s) => s.every(([ox, oz]) => ox * fx + oz * fz < -1e-9));
@@ -2219,7 +2221,7 @@ describe('UI smoke test: SP6b\'s review links and screenshots (SP6b spec §12.8,
       const k0 = cornerAt(vy);
       const raised = k0 < 0;
       expect(SP6B_RAISED.includes(id), `${id}: raised`).toBe(raised);
-      if (raised) expect(solidAt(dc, vx, vy + 1, vz), `${id}: the voxel above is open`).toBe(false);
+      if (raised) expect(terrainSolidAt(aquiferOf(dc.ctx), dc, vx, vy + 1, vz), `${id}: the voxel above is open`).toBe(false);
       const k = raised ? cornerAt(vy + 1) : k0;
       expect(k, `${id}: a corner of its voxel`).toBeGreaterThanOrEqual(0);
       expect(SP6B_AT[id], id).toEqual(corners[k]);
@@ -2227,7 +2229,7 @@ describe('UI smoke test: SP6b\'s review links and screenshots (SP6b spec §12.8,
     }
     // The low corner (185, −22) has the x = 184 deepslate column in the eye's row: an eye there clips the near plane into
     // the wall and shows the clear colour (Task 24's and 25's bottomCavern shots); the link opens at a clear corner.
-    expect(solidAt(dcs.default, 184, -39, -22)).toBe(true);
+    expect(terrainSolidAt(aquiferOf(dcs.default.ctx), dcs.default, 184, -39, -22)).toBe(true);
     expect(SP6B_AT.bottomCavern).not.toEqual([185, -22]);
   });
 

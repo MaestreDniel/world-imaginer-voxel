@@ -21,6 +21,7 @@ import { carverParamsOf, carverPath, type CarverKind } from '../../src/gen/caves
 import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
 import { createGenContext, noiseFor } from '../../src/gen/context';
 import { AIR, BEDROCK, STONE } from '../../src/world/blocks/index';
+import { barrierProbe } from '../harness/caveMetrics';
 import { NIBBLE_REGION, nibbleRegion } from '../harness/caveNibbles';
 import { referenceCarve } from '../harness/refs';
 import { genRegion, type RegionResult, type RegionView } from '../harness/region';
@@ -44,7 +45,9 @@ describe('referenceCarve (SP6a spec §10.1, C7.carverReference)', () => {
     const { view } = await generated();
     const ref = referenceCarve(view, SEED, PARAMS);
     expect(ref.length).toBe(64 * 64 * 384);
-    let carved = 0;
+    // SP7a (D20): a carved voxel the aquifer turned to rock is stored with no tag; told apart by `barrierProbe`.
+    const barrier = barrierProbe(SEED, PARAMS);
+    let carved = 0, barriers = 0;
     const diffs: string[] = [];
     for (let y = -64; y < 320; y++) {
       for (let z = 0; z < 64; z++) {
@@ -53,12 +56,15 @@ describe('referenceCarve (SP6a spec §10.1, C7.carverReference)', () => {
           const kind = isCarver(t) ? t : 0;
           if (kind !== 0) carved++;
           const r = ref[refIndex(view, x, y, z)]!;
-          if (r !== kind && diffs.length < 10) diffs.push(`(${x}, ${y}, ${z}) stored ${t}, reference ${r}`);
+          if (r === kind) continue;
+          if (t === 0 && view.block(x, y, z) !== AIR && barrier(x, y, z)) barriers++;
+          else if (diffs.length < 10) diffs.push(`(${x}, ${y}, ${z}) stored ${t}, reference ${r}`);
         }
       }
     }
     expect(diffs).toEqual([]);
     expect(carved).toBeGreaterThan(1000);
+    expect(barriers, 'the region\'s aquifer turns some carved voxels to rock').toBeGreaterThan(0);
   });
 
   test('a path from a source outside the region that crosses its border carves inside the region exactly what the stage carved', async () => {
@@ -67,6 +73,7 @@ describe('referenceCarve (SP6a spec §10.1, C7.carverReference)', () => {
     const ctx = createGenContext(seedFromInput(SEED), PARAMS);
     const p = carverParamsOf(PARAMS);
     const nf = noiseFor(ctx, 'caves.noises.floor');
+    const barrier = barrierProbe(SEED, PARAMS);
     const x0 = 16 * REGION.cx0, z0 = 16 * REGION.cz0, x1 = x0 + 63, z1 = z0 + 63;
     // wet′ and the density top per position, from the region's density-solid voxels (as the stage's carve reads them).
     const solidAt = (x: number, y: number, z: number): boolean => view.block(x, y, z) !== AIR || isCarver(caveKindOf(view.tag(x, y, z)));
@@ -109,8 +116,10 @@ describe('referenceCarve (SP6a spec §10.1, C7.carverReference)', () => {
                   const q = (z - z0) * 64 + (x - x0);
                   if (!solidAt(x, y, z) || carveTest(p, path, e, x, y, z, wet[q]!, top[q]!, floorYAt(p, nf, x, z)) !== 1) continue;
                   inside++;
-                  // The stage carved it (by this source or an earlier one), and the reference agrees.
+                  // The stage carved it (by this source or an earlier one), and the reference agrees; unless the aquifer
+                  // turned it to rock (SP7a D20: stored with no tag).
                   const t = caveKindOf(view.tag(x, y, z));
+                  if (t === 0 && view.block(x, y, z) !== AIR && barrier(x, y, z)) continue;
                   if (!isCarver(t) || ref[refIndex(view, x, y, z)] !== t) {
                     if (bad.length < 10) bad.push(`${kind} (${sx}, ${sz}) at (${x}, ${y}, ${z}): stored ${t}, reference ${ref[refIndex(view, x, y, z)]}`);
                   }

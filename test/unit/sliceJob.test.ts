@@ -86,7 +86,8 @@ describe('slice job: samples (SP3a spec §5.1)', () => {
     const cz0 = Math.min(...cols.map((c) => c[1]));
     const w = Math.max(...cols.map((c) => c[0])) - cx0 + 1;
     const h = Math.max(...cols.map((c) => c[1])) - cz0 + 1;
-    const store = createStore({ shared: false, maxBlockBytes: 32 * MiB, maxByteBytes: 16 * MiB });
+    // 32 MiB of byte slots: SP7a's aquifer fluid (Task 13) makes more fluid sections dense than water v0 did.
+    const store = createStore({ shared: false, maxBlockBytes: 32 * MiB, maxByteBytes: 32 * MiB });
     genRegionInProcess(store, ctx, cx0, cz0, w, h);
     const view = regionView(store, cx0, cz0, w, h);
     const job = createSliceJob();

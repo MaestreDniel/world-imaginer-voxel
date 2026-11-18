@@ -23,7 +23,7 @@ import {
   C7_C9_PARTS, caveC7C9Counts, caveComponents, caveExamples, caveRegionCounts, COMP_Y_MIN, countsTransfer, emptyCaveGrid, flatWallCounts, flatWallDetail,
   emptyBandCounts, floorCounts, floorFaceLattice, floorFaceResidues, floorPeak, GRID_H, GRID_Y0, jensenShannon, kindCounts, landCounts,
   largestCounts, latticeBias, latticeBiasAsDefined, layerCounts, ROW_Y0, ROWS,
-  localThickness, logSd, median, nearestEntranceDistances, openingMask, percentile, PILLAR_AREA_MAX, PILLAR_BACK, pillarTiles, PILLAR_VIEW, preCaveTops, ravineCounts, regionCounts,
+  localThickness, logSd, median, nearestEntranceDistances, openingMask, percentile, PILLAR_AREA_MAX, PILLAR_BACK, pillarTiles, PILLAR_VIEW, preCaveTops, ravineCounts, regionCounts, barrierProbe,
   setCell, skyCounts, surfaceCounts, switchWall, switchWallCounts, thinnestAxes, typeMixDivergences, verticalStep, verticalStepDetail,
   voidCounts,
   wallResidues, waterWallCount, worstToBound, type BandCounts, type CaveGrid,
@@ -1571,11 +1571,13 @@ describe('the stored side of C7.carverReference reads the cave kind (SP6b spec Â
     const { ctx, plain, nibbled } = nibbleRegion();
     const ref = referenceCarve(plain, NIBBLE_REGION.seed, ctx.params);
     // capY 0: the cap's tagged-air count runs too (a comparison with 0, unmasked).
-    const want = regionCounts(plain, ref, 0);
+    // SP7a (D20): the aquifer's barriers, carved voxels T turned to rock, are told apart by `barrierProbe`.
+    const barrier = barrierProbe(NIBBLE_REGION.seed, ctx.params);
+    const want = regionCounts(plain, ref, 0, barrier);
     expect(want.mismatches).toBe(0);
     expect(want.carved).toBeGreaterThan(1000);
     expect(want.capAir).toBeGreaterThan(0);
-    expect(regionCounts(nibbled, ref, 0)).toEqual(want);
+    expect(regionCounts(nibbled, ref, 0, barrier)).toEqual(want);
   }, 120_000); // the nibble fixture (a 5 Ã— 5 region, once per file) and its readers: about 1 s alone, more under load
 });
 

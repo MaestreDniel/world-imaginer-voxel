@@ -10,8 +10,9 @@ import { JAG, OFFSET, SIGMA } from '../../src/metrics/sp1Fixtures';
 
 describe('SP2a schema groups', () => {
   test('leaves, scopes and stages', () => {
-    // The SP3b/SP3c groups, SP3e's islands group and SP6a's caves group have their own tests (schemaSp3b, schemaSp3c, islandMask, caveTerms).
-    const rows = PARAM_META.filter((m) => !m.path.startsWith('climate.') && !m.path.startsWith('density.') && !m.path.startsWith('surface.') && !m.path.startsWith('islands.') && !m.path.startsWith('caves.')).map((m) => `${m.path}:${m.kind}:${m.scope}:${m.stage}`);
+    // The SP3b/SP3c groups, SP3e's islands group, SP6a's caves group and SP7a's aquifer group have their own tests
+    // (schemaSp3b, schemaSp3c, islandMask, caveTerms, stage and livenessSp7a).
+    const rows = PARAM_META.filter((m) => !m.path.startsWith('climate.') && !m.path.startsWith('density.') && !m.path.startsWith('surface.') && !m.path.startsWith('islands.') && !m.path.startsWith('caves.') && !m.path.startsWith('aquifer.')).map((m) => `${m.path}:${m.kind}:${m.scope}:${m.stage}`);
     const g = (prefix: string, stage: string, names: string) => names.split(' ').map((n) => {
       const [name, kind] = n.split(':');
       return `${prefix}.${name}:${kind ?? 'number'}:terrain:${stage}`;
@@ -44,13 +45,15 @@ describe('SP2a schema groups', () => {
   });
   test('the new noise instances have distinct seed names', () => {
     const names = noiseInstances(SCHEMA, DEFAULTS).map((i) => i.seedName);
-    expect(names.filter((n) => !n.startsWith('climate.') && !n.startsWith('density.') && !n.startsWith('surface.') && !n.startsWith('caves.'))).toEqual(['rivers.widthNoise', 'lakes.warpNoise.x', 'lakes.warpNoise.z', 'lakes.rimNoise', 'islands.noise']);
+    expect(names.filter((n) => !n.startsWith('climate.') && !n.startsWith('density.') && !n.startsWith('surface.') && !n.startsWith('caves.') && !n.startsWith('aquifer.'))).toEqual(['rivers.widthNoise', 'lakes.warpNoise.x', 'lakes.warpNoise.z', 'lakes.rimNoise', 'islands.noise']);
     // SP6a: the cave noises, seeded by their leaf paths.
     expect(names.filter((n) => n.startsWith('caves.'))).toEqual([
       ...Object.keys(DEFAULTS.caves.noises).map((id) => `caves.noises.${id}`),
       // SP6b Task 17: the cave-biome noises (the border leaf's schema instance is unused: the picker samples three named ones).
       'caves.biomes.noises.border', 'caves.biomes.noises.depth',
     ]);
+    // SP7a Task 13: the aquifer noises, seeded by their leaf paths (`aquiferOf` reads these instances).
+    expect(names.filter((n) => n.startsWith('aquifer.'))).toEqual(['aquifer.noises.floodedness', 'aquifer.noises.spread', 'aquifer.noises.lava', 'aquifer.noises.barrier']);
     expect(new Set(names).size).toBe(names.length);
   });
 });

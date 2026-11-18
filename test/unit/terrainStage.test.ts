@@ -15,11 +15,21 @@ import { caveReadersOf, caveTagAt, tagColumn } from '../../src/gen/caves/tags';
 import { fillDensityColumn } from '../../src/gen/density/bounds';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import { probe, solidAt } from '../../src/gen/density/probe';
-import { caveBiomeQuarts, columnWaterV0, terrainDensityDebug, terrainStage, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
+import {
+  aquiferColumn, aquiferInputs, aquiferOf, barrierAt, cellStatus, createAquiferScratch, fluidAt, type AquiferInputs,
+} from '../../src/gen/fluids/aquifer';
+import { DEFAULTS } from '../../src/core/params/defaults';
+import { completeNoiseDef } from '../../src/core/noise/types';
+import { terrainSolidAt } from '../../src/gen/fluids/solidAt';
+import { caveBiomeQuarts, terrainDensityDebug, terrainStage, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf, type SurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbe, surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { newSurfaceScan, runAt, type SurfaceScan } from '../../src/gen/surface/scan';
-import { WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { seedFromInput } from '../../src/core/seed';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { createGenContext } from '../../src/gen/context';
+import { caveBiomeAt } from '../../src/gen/biomes/cavePicker';
+import { FLUID_LAVA, fluidType, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, BEDROCK, COLLIDE, DEEPSLATE, GRASS_BLOCK, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { AuxBView, AuxView, ColumnView, ColumnWriter } from '../../src/world/store/api';
 import { protoAt, REC_AUX_B } from '../../src/world/store/columnTable';
@@ -94,14 +104,17 @@ interface Expected {
 }
 
 /**
- * SP3b §4 and SP3c §1 independently of the stage: solidity from the density probe (no early-outs) after the carvers
- * (`solidAt`: density > 0 and not `carvedAt`, SP6a spec §3.4), `top` and the water v0 rule; each solid voxel's state from `surfaceProbe` on a SurfaceContext built apart (the reference
- * evaluator, never the fast path; it rebuilds the column with its own early-outs, so a solidity disagreement shows as
- * air).
+ * SP3b §4, SP3c §1 and SP7a §1.7 independently of the stage: solidity from the density probe (no early-outs) after the
+ * carvers (`solidAt`: density > 0 and not `carvedAt`, SP6a spec §3.4) and the aquifer's barriers (`barrierAt` at a
+ * tagged voxel, D20; together `terrainSolidAt`), `top`; the fluid of a non-solid voxel by D19: untagged (`caveTagAt` 0)
+ * water iff y ≤ ⌊surfaceWaterLevel⌋ at the nearest corner, tagged the aquifer's point function `fluidAt`; each solid
+ * voxel's state from `surfaceProbe` on a SurfaceContext built apart (the reference evaluator, never the fast path; it
+ * rebuilds the column with its own early-outs, so a solidity disagreement shows as air).
  */
 function expectedOf(c: GenContext, cx: number, cz: number): Expected {
   const dc = dcOf(c);
   const sc = scOf(c);
+  const aq = aquiferOf(c);
   const s = buildColumnSample(c, cx, cz, newColumnSample());
   const blocks = new Uint16Array(98304);
   const fluid = new Uint8Array(98304);
@@ -111,19 +124,23 @@ function expectedOf(c: GenContext, cx: number, cz: number): Expected {
     for (let lx = 0; lx < 16; lx++) {
       const x = 16 * cx + lx;
       const z = 16 * cz + lz;
+      const level = readLevel(s, 'surfaceWaterLevel', x, z);
+      swl[lz * 16 + lx] = level;
       blocks[vi(lx, -64, lz)] = BEDROCK;
       for (let y = -63; y <= 319; y++) {
-        const solid = solidAt(dc, x, y, z);
+        let solid = solidAt(dc, x, y, z);
+        if (!solid) {
+          if (caveTagAt(dc, x, y, z) === 0) {
+            if (y <= Math.floor(level)) fluid[vi(lx, y, lz)] = WATER_SOURCE;
+          } else if (barrierAt(aq, dc, x, y, z)) {
+            solid = true;
+          } else {
+            fluid[vi(lx, y, lz)] = fluidAt(aq, dc, x, y, z);
+          }
+        }
         blocks[vi(lx, y, lz)] = solid ? surfaceProbe(sc, x, y, z).state : AIR;
         if (solid) top[lz * 16 + lx] = y;
       }
-      swl[lz * 16 + lx] = readLevel(s, 'surfaceWaterLevel', x, z);
-    }
-  }
-  for (let p = 0; p < 256; p++) {
-    for (let y = -63; y <= 319; y++) {
-      const i = vi(p & 15, y, p >> 4);
-      if (blocks[i] === AIR && y > top[p]! - 12 && y <= swl[p]!) fluid[i] = WATER_SOURCE;
     }
   }
   return { s, blocks, fluid, top, swl };
@@ -158,8 +175,8 @@ const expectedFor = (c: GenContext, [cx, cz]: readonly [number, number]): Expect
   return e;
 };
 
-describe('fill and water v0 (§4), surface (SP3c §1)', () => {
-  test.each(FIXTURES)('%s: every voxel is bedrock at −64, solid ⇔ density > 0 with surfaceProbe\'s state, water by the v0 rule', (_name, col) => {
+describe('fill and the aquifer step (§4, SP7a §1.7), surface (SP3c §1)', () => {
+  test.each(FIXTURES)('%s: every voxel is bedrock at −64, solid ⇔ density > 0 and not carved, or a barrier, with surfaceProbe\'s state, fluid by D19\'s rules', (_name, col) => {
     const e = expectedFor(ctx, col);
     expect(mismatches(generate(ctx, col[0], col[1]).view, e)).toBe(0);
   });
@@ -251,33 +268,32 @@ describe('fill and water v0 (§4), surface (SP3c §1)', () => {
     else if (sdMax <= 11) expect(deepSkin).toBe(0);
   });
 
-  test('air under an overhang near the water line fills', () => {
+  test('untagged air under an overhang below the water line fills (D19: sky-open water)', () => {
     const e = expectedFor(ctx, OVERHANG);
     const { view } = generate(ctx, ...OVERHANG);
     let under = 0;
     for (let p = 0; p < 256; p++) {
       const lx = p & 15, lz = p >> 4;
       for (let y = -63; y < e.top[p]!; y++) {
-        if (view.fluid(lx, y, lz) === 0) continue;
-        under++;
-        // Stone above it in its own position, and within 12 of the top.
-        expect(view.block(lx, y, lz)).toBe(AIR);
-        expect(y).toBeGreaterThan(e.top[p]! - 12);
+        if (view.block(lx, y, lz) !== AIR || caveKindOf(view.cave(lx, y, lz)) !== 0) continue;
+        // Stone above it in its own position; untagged, so its water is the position's level's, whatever the depth.
+        expect(view.fluid(lx, y, lz), `(${lx}, ${y}, ${lz})`).toBe(y <= Math.floor(e.swl[p]!) ? WATER_SOURCE : 0);
+        if (view.fluid(lx, y, lz) !== 0) under++;
       }
     }
     expect(under).toBeGreaterThan(0);
   });
 
-  test('deeper enclosed air stays dry (σ 40 sea): air at y ≤ top − 12 below the water level holds no water', () => {
+  test('deeper enclosed untagged air fills to the level (σ 40 sea; D19 retires water v0\'s 12-block rule): untagged air at y ≤ top − 12 below the water level holds water', () => {
     const e = expectedFor(ctx40, SEA);
     const { view } = generate(ctx40, ...SEA);
     let pockets = 0;
     for (let p = 0; p < 256; p++) {
       const lx = p & 15, lz = p >> 4;
       for (let y = -63; y <= e.top[p]! - 12; y++) {
-        if (view.block(lx, y, lz) !== AIR || y > e.swl[p]!) continue;
+        if (view.block(lx, y, lz) !== AIR || y > e.swl[p]! || caveKindOf(view.cave(lx, y, lz)) !== 0) continue;
         pockets++;
-        expect(view.fluid(lx, y, lz)).toBe(0);
+        expect(view.fluid(lx, y, lz)).toBe(WATER_SOURCE);
       }
     }
     expect(pockets).toBeGreaterThan(0);
@@ -436,7 +452,7 @@ describe('the cave channel (SP6a spec §3.1-§3.2, D20)', () => {
   /** The caverns' cave class column of seed 42 (pinned in test/unit/liveness.test.ts). */
   const CAVERNS = [546, 25857] as const;
 
-  test('a column\'s proto cave sections equal the carve\'s tags and then tagColumn\'s after the density fill, section by section', () => {
+  test('a column\'s proto cave sections equal the carve\'s tags and then tagColumn\'s after the density fill, section by section, 0 where the aquifer placed a barrier (SP7a D20)', () => {
     for (const col of [CAVERNS, LAND, COAST]) {
       const { view } = generate(ctx, col[0], col[1]);
       const dc = createDensityContext(ctx);
@@ -447,6 +463,10 @@ describe('the cave channel (SP6a spec §3.1-§3.2, D20)', () => {
       const cache = carverCacheOf(ctx);
       carveColumn(cache, cache.params, s, col[0], col[1], solid, tops, tags);
       tagColumn(dc.compiled, caveReadersOf(dc.compiled), ctx.params.caves.pillars.threshold, solid, cells, tags, dc.bounds, true);
+      // A barrier (air after the carve, rock in T) loses its tag (SP7a D20).
+      for (let j = 256; j < 98304; j++) {
+        if (solid[j] === 0 && view.block(j & 15, (j >> 8) - 64, (j >> 4) & 15) !== AIR) tags[j] = 0;
+      }
       let dense = 0;
       for (let sy = 0; sy < 24; sy++) {
         const want = tags.subarray(4096 * sy, 4096 * (sy + 1));
@@ -542,9 +562,10 @@ describe('the cave biome (SP6b spec §2.1-§2.2, D17)', () => {
   const ABYSS = [-3000, -1182] as const;
   const LUSH = [200, 467] as const;
 
-  test('T writes each tagged voxel\'s cave biome into bits 4-7 (§2.1): caveBiomeOfPass over the column\'s pass where the kind ≠ 0, 0 elsewhere; the kinds unchanged (caveTagAt)', () => {
+  test('T writes each tagged voxel\'s cave biome into bits 4-7 (§2.1): caveBiomeOfPass over the column\'s pass where the kind ≠ 0, 0 elsewhere; the kinds unchanged (caveTagAt), 0 at a barrier (barrierAt; SP7a D20)', () => {
     const inp = cavePickerOf(ctx);
     const dc = createDensityContext(ctx);
+    const aq = aquiferOf(ctx);
     const seen = new Set<number>();
     for (const [cx, cz] of [[0, 0], COAST, [40, 900], ABYSS, LUSH] as const) {
       const { view } = generate(ctx, cx, cz);
@@ -558,7 +579,9 @@ describe('the cave biome (SP6b spec §2.1-§2.2, D17)', () => {
           for (let y = -64; y <= 319; y++) {
             const byte = view.cave(lx, y, lz);
             const kind = caveKindOf(byte);
-            if (kind !== caveTagAt(dc, x, y, z)) bad.push(`(${x}, ${y}, ${z}): kind ${kind}, caveTagAt ${caveTagAt(dc, x, y, z)}`);
+            const tagAt = caveTagAt(dc, x, y, z);
+            const wantKind = tagAt !== 0 && barrierAt(aq, dc, x, y, z) ? 0 : tagAt;
+            if (kind !== wantKind) bad.push(`(${x}, ${y}, ${z}): kind ${kind}, caveTagAt ${tagAt}, want ${wantKind}`);
             const want = kind === 0 ? 0 : caveBiomeOfPass(inp, pass, x, y, z);
             if (caveBiomeOf(byte) !== want) bad.push(`(${x}, ${y}, ${z}): biome ${caveBiomeOf(byte)}, the pick ${want}`);
             if (kind !== 0) { tagged++; n[want]!++; seen.add(want); }
@@ -604,7 +627,7 @@ describe('the cave biome (SP6b spec §2.1-§2.2, D17)', () => {
     expect(() => caveBiomeQuarts(tags, new Uint8Array(1535))).toThrow(RangeError);
   });
 
-  test('caveBiomeQ: tagged voxels holding water v0\'s water count (σ 40 sea): quarts whose tagged voxels are all wet read 1 + their majority', () => {
+  test('caveBiomeQ: tagged voxels holding the aquifer\'s water count (σ 40 sea): quarts whose tagged voxels are all wet read 1 + their majority', () => {
     let allWet = 0, wet = 0;
     for (const col of [OVERHANG, SEA]) {
       const { view } = generate(ctx40, col[0], col[1]);
@@ -767,9 +790,11 @@ describe('terrainDensityDebug (§2.3, the DT2 hook)', () => {
             set++;
             const v = probe(dc, 16 * cx + lx, y, 16 * cz + lz);
             if (!Object.is(out[i], v)) bad.push(`${at}: bulk ${out[i]} ≠ probe ${v}`);
-            // The block is air where the density is ≤ 0 or a carver carved (SP6a §3.4).
+            // The block is air where the density is ≤ 0 or a carver carved (SP6a §3.4), unless the aquifer made it a
+            // barrier (SP7a D20).
             const carved = v > 0 && carvedAt(dc, 16 * cx + lx, y, 16 * cz + lz) !== 0;
-            if (y > -64 && (v > 0 && !carved) !== (e.blocks[i] !== AIR)) bad.push(`${at}: block ${e.blocks[i]} vs value ${v}${carved ? ' (carved)' : ''}`);
+            const barrier = !(v > 0 && !carved) && barrierAt(aquiferOf(ctx), dc, 16 * cx + lx, y, 16 * cz + lz);
+            if (y > -64 && ((v > 0 && !carved) || barrier) !== (e.blocks[i] !== AIR)) bad.push(`${at}: block ${e.blocks[i]} vs value ${v}${carved ? ' (carved)' : ''}${barrier ? ' (a barrier)' : ''}`);
           } else if (out[i] !== 12345) {
             bad.push(`${at}: out written at an early-out voxel`);
           }
@@ -843,11 +868,144 @@ describe('terrainSurfaceDebug (SP3c §5.2, the DT2 surface hook)', () => {
   });
 });
 
-describe('water v0 under island runs (SP3e spec §3.5, D5)', () => {
-  /** columnWaterV0's index `256·(y + 64) + p`. */
+describe('T\'s aquifer step (SP7a §1.7, D17-D20)', () => {
+  /** floating_islands at seed '42' and SP3e's island class column (test/unit/fixtures/liveness.ts' ISLAND_PIN). */
+  const FLOATING = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
+  const ISLAND = [975, -735] as const;
+  /** (0, 0), the coast, (40, 900) (cave-rich), the open sea, SP6b's abyss column and the island column. */
+  const COLUMNS: ReadonlyArray<readonly [string, GenContext, readonly [number, number]]> = [
+    ['(0, 0)', ctx, [0, 0]], ['coast', ctx, COAST], ['(40, 900)', ctx, [40, 900]], ['sea', ctx, SEA],
+    ['abyss', ctx, [-3000, -1182]], ['floating_islands island', FLOATING, ISLAND],
+  ];
+  /** Rule 1-4's rock states a barrier can take (the surface pass skins it as rock): stone, deepslate, rule 4's. */
+  const BARRIER_STATES: ReadonlySet<number> = new Set([STONE, DEEPSLATE, ...RULE4_STATES]);
+
+  test.each(COLUMNS)('%s: fluid = fluidAt at every non-solid voxel, solidity = terrainSolidAt at every voxel; barriers hold cave byte 0 and rock; tagged water keeps its kind and nibble; the heightmaps are the top-down scan\'s; caveBiomeQ counts no barrier', (name, c, [cx, cz]) => {
+    const aq: AquiferInputs = aquiferOf(c);
+    expect(aquiferOf(c), 'memoised per context').toBe(aq);
+    const dc = dcOf(c);
+    const { view } = generate(c, cx, cz);
+    const aux = view.aux()!;
+    const bad: string[] = [];
+    let barriers = 0, taggedWater = 0, lava = 0, crack = 0;
+    const states = new Set<string>();
+    for (let lz = 0; lz < 16; lz++) {
+      for (let lx = 0; lx < 16; lx++) {
+        const x = 16 * cx + lx, z = 16 * cz + lz;
+        let top = -64, topFluid = -65;
+        for (let y = -63; y <= 319; y++) {
+          const block = view.block(lx, y, lz);
+          const f = view.fluid(lx, y, lz);
+          const solid = block !== AIR;
+          if (terrainSolidAt(aq, dc, x, y, z) !== solid) bad.push(`(${x}, ${y}, ${z}): terrainSolidAt ≠ stored solidity ${solid}`);
+          if (solid) {
+            top = y;
+            if (f !== 0) bad.push(`(${x}, ${y}, ${z}): fluid ${f} in a solid voxel`);
+            if (!solidAt(dc, x, y, z)) {
+              barriers++;
+              states.add(REGISTRY.stateKey(block));
+              if (view.cave(lx, y, lz) !== 0) bad.push(`(${x}, ${y}, ${z}): barrier with cave byte ${view.cave(lx, y, lz)}`);
+              if (!BARRIER_STATES.has(block)) bad.push(`(${x}, ${y}, ${z}): barrier state ${REGISTRY.stateKey(block)}`);
+              if (!barrierAt(aq, dc, x, y, z)) bad.push(`(${x}, ${y}, ${z}): solid, not density-solid, but barrierAt false`);
+            }
+            continue;
+          }
+          const want = fluidAt(aq, dc, x, y, z);
+          if (f !== want) bad.push(`(${x}, ${y}, ${z}): fluid ${f} ≠ fluidAt ${want}`);
+          if (f !== 0) topFluid = y;
+          if (fluidType(f) === FLUID_LAVA) lava++;
+          const byte = view.cave(lx, y, lz);
+          if (f !== 0 && caveKindOf(byte) !== 0) {
+            taggedWater++;
+            // O31: the tag and the nibble are written before the aquifer and kept on fluid voxels.
+            const kind = caveTagAt(dc, x, y, z);
+            if (byte !== (kind | (caveBiomeAt(dc, x, y, z) << 4))) bad.push(`(${x}, ${y}, ${z}): fluid voxel's cave byte ${byte} ≠ kind ${kind}, nibble ${caveBiomeAt(dc, x, y, z)}`);
+          }
+        }
+        const p = lz * 16 + lx;
+        if (topFluid > top) crack++;
+        // SP3a §3.4's predicates over the stored column (a fluid voxel above `top` included) and OCEAN_FLOOR_WG = top + 1.
+        expect([p, aux.worldSurfaceWG[p], aux.oceanFloorWG[p]]).toEqual([p, ...topDownHeightmaps(view, lx, lz)]);
+        expect([p, aux.oceanFloorWG[p], aux.worldSurfaceWG[p]]).toEqual([p, top + 1, Math.max(top, topFluid) + 1]);
+      }
+    }
+    expect(bad.slice(0, 10), name).toEqual([]);
+    expect(view.auxB()!.caveBiomeQ).toEqual(quartMajority(view));
+    console.log(`T's aquifer step, ${name} (${cx}, ${cz}): ${barriers} barrier voxels (${[...states].join(', ')}), ${taggedWater} tagged fluid voxels, ${lava} lava, ${crack} positions with fluid above top`);
+    if (name === 'sea' || name === 'coast') expect(taggedWater, `${name}: caves under the sea flood`).toBeGreaterThan(0);
+  }, 300_000);
+
+  test('the columns hold barriers and lava between them (the rules above are exercised)', () => {
+    let barriers = 0, lava = 0;
+    for (const [, c, [cx, cz]] of COLUMNS) {
+      const dc = dcOf(c);
+      const { view } = generate(c, cx, cz);
+      for (let p = 0; p < 256; p++) {
+        const lx = p & 15, lz = p >> 4;
+        for (let y = -63; y <= 319; y++) {
+          if (view.block(lx, y, lz) !== AIR && !solidAt(dc, 16 * cx + lx, y, 16 * cz + lz)) barriers++;
+          if (fluidType(view.fluid(lx, y, lz)) === FLUID_LAVA) lava++;
+        }
+      }
+    }
+    expect(barriers).toBeGreaterThan(0);
+    expect(lava).toBeGreaterThan(0);
+  }, 120_000);
+
+  test('with aquifer.enabled false no tagged voxel holds fluid, and untagged air keeps D19\'s rule (the sea and the coast fill as before)', () => {
+    const off = ctxFor('42', { aquifer: { enabled: false } });
+    for (const col of [COAST, SEA, OVERHANG] as const) {
+      const e = expectedFor(ctx, col);
+      const { view } = generate(off, col[0], col[1]);
+      const on = generate(ctx, col[0], col[1]).view;
+      let tagged = 0, untagged = 0;
+      for (let p = 0; p < 256; p++) {
+        const lx = p & 15, lz = p >> 4;
+        for (let y = -63; y <= 319; y++) {
+          if (view.block(lx, y, lz) !== AIR) continue;
+          const f = view.fluid(lx, y, lz);
+          if (caveKindOf(view.cave(lx, y, lz)) !== 0) {
+            tagged++;
+            expect(f, `(${lx}, ${y}, ${lz})`).toBe(0);
+            continue;
+          }
+          untagged++;
+          expect(f, `(${lx}, ${y}, ${lz})`).toBe(y <= Math.floor(e.swl[p]!) ? WATER_SOURCE : 0);
+          if (on.block(lx, y, lz) === AIR && caveKindOf(on.cave(lx, y, lz)) === 0) expect(on.fluid(lx, y, lz)).toBe(f);
+        }
+      }
+      expect([tagged > 0, untagged > 0]).toEqual([true, true]);
+    }
+  }, 120_000);
+
+  test('aquiferOf(ctx) reads ctx.params.aquifer through the schema noises: equal cellStatus with aquiferInputs(ctx, DEFAULTS.aquifer, DEFAULTS.aquifer.noises) at 64 cells of seed \'42\' (rulings P4)', () => {
+    const viaSchema = aquiferOf(ctx);
+    const viaDefaults = aquiferInputs(ctx, DEFAULTS.aquifer, DEFAULTS.aquifer.noises);
+    expect(viaSchema.settings).toEqual(DEFAULTS.aquifer);
+    // §1.9's defaults as Tasks 5-6 pinned them before the schema (rulings P5; abyssMargin 0.06, Task 6's m).
+    const noise = (wavelength: number) => completeNoiseDef({ wavelength, octaves: 1, double: true, clampSigma: 3 });
+    expect(DEFAULTS.aquifer).toEqual({
+      enabled: true, surfaceBand: 12, thresholds: { fullInland: 0.8, fullOcean: -0.3, partialInland: 0.4, partialOcean: -0.8 },
+      lavaMaxLevel: -10, lavaThreshold: 0.3, lavaLevel: -54, barrierBand: 25, abyssMargin: 0.06,
+      noises: { floodedness: noise(128), spread: noise(32), lava: noise(2), barrier: noise(8) },
+    });
+    let flooded = 0;
+    for (let n = 0; n < 64; n++) {
+      const i = (n % 4) - 2, j = (n >> 2) % 8 - 6, k = (n >> 5) - 1;
+      const s = cellStatus(viaSchema, i * 7, j, k * 5);
+      expect([n, s]).toEqual([n, cellStatus(viaDefaults, i * 7, j, k * 5)]);
+      if (s !== 0) flooded++;
+    }
+    expect(flooded).toBeGreaterThan(0);
+  });
+});
+
+describe('sky-open water under island runs (SP7a D19, O56; SP3e spec §3.5)', () => {
+  /** aquiferColumn's index `256·(y + 64) + p`. */
   const wi = (y: number, p: number): number => ((y + 64) << 8) | p;
-  /** The SEA fixture's ColumnSample: its surfaceWaterLevel (63 at every position) is all columnWaterV0 reads of it. */
+  /** The SEA fixture's ColumnSample: its surfaceWaterLevel (63 at every position) is all D19's rule reads of it. */
   const S_SEA = buildColumnSample(ctx, SEA[0], SEA[1], newColumnSample());
+  const PASS_SEA = fillCaveColumnPass(cavePickerOf(ctx), S_SEA, newCaveColumnPass());
   /** A constructed solidity: at each position p the solid runs `runsAt(p)` ([bottom, top], inclusive). */
   const solidOf = (runsAt: (p: number) => ReadonlyArray<readonly [number, number]>): Uint8Array => {
     const solid = new Uint8Array(98304);
@@ -856,80 +1014,47 @@ describe('water v0 under island runs (SP3e spec §3.5, D5)', () => {
     }
     return solid;
   };
-  const waterOf = (solid: Uint8Array, skipIslandRuns: boolean) => {
-    const top = new Int32Array(256), waterTop = new Int32Array(256), water = new Uint8Array(98304);
-    columnWaterV0(S_SEA, solid, top, waterTop, water, skipIslandRuns);
-    return { top, waterTop, water };
+  /** The aquifer step over `solid` with no tagged voxel (every non-solid voxel is the terrain's own air). */
+  const fluidOf = (solid: Uint8Array) => {
+    const fluid = new Uint8Array(98304), waterV = new Uint8Array(98304), topFluid = new Int32Array(256), tags = new Uint8Array(98304);
+    const s = solid.slice();
+    aquiferColumn(aquiferOf(ctx), S_SEA, cavePickerOf(ctx), PASS_SEA, s, tags, waterV, fluid, topFluid, createAquiferScratch());
+    expect(s).toEqual(solid);
+    return { fluid, waterV, topFluid };
   };
-  const count = (a: Uint8Array): number => a.reduce((n, v) => n + v, 0);
   const GROUND = [-63, 20] as const;
   const B = ISLAND_RUN_MIN_BOTTOM;
 
-  test('ISLAND_RUN_MIN_BOTTOM is 181 (§4.1: one constant for water v0, the islands branch and Z3)', () => {
+  test('ISLAND_RUN_MIN_BOTTOM is 181 (§4.1: one constant for the islands branch, the density tops under islands and Z3)', () => {
     expect(ISLAND_RUN_MIN_BOTTOM).toBe(181);
   });
 
-  test('the sea fixture fills to y 63 at every position', () => {
-    const { waterTop } = waterOf(solidOf(() => [GROUND]), false);
-    expect([...new Set(waterTop)]).toEqual([63]);
-  });
-
-  test('an island run over the sea: with the flag the water equals the column\'s with the island removed; top stays the island\'s', () => {
-    const ground = waterOf(solidOf(() => [GROUND]), true);
-    const island = solidOf(() => [GROUND, [200, 230]]);
-    const on = waterOf(island, true);
-    expect(count(ground.water)).toBe(256 * (63 - 20));
-    expect(on.water).toEqual(ground.water);
-    expect([...new Set(on.top)]).toEqual([230]);
-    expect(on.waterTop).toEqual(ground.waterTop);
-    // Without the flag, today's rule: the island's top is the water base, so the sea under it is a dry hole.
-    const off = waterOf(island, false);
-    expect(count(off.water)).toBe(0);
-    expect(off.top).toEqual(on.top);
-    // Without the ground run the base is Y0: the water reaches down to y −63.
-    const alone = waterOf(solidOf(() => [[200, 230]]), true);
-    expect(alone.water).toEqual(waterOf(solidOf(() => []), false).water);
-    expect(count(alone.water)).toBe(256 * (63 + 63 + 1));
-  });
-
-  test('a run with bottom 180 is ground, one with bottom 181 an island; stacked islands are skipped; an overhang lip and a peak are ground', () => {
-    const ground = waterOf(solidOf(() => [GROUND]), true).water;
-    // The cases cycle over the positions, so each position's base is its own.
+  test('untagged air fills to y 63 under whatever lies above it (D19 reads no top): ground, islands with bottom 180 or 181, stacked islands, an overhang lip, a peak, a floating rock', () => {
     const CASES: ReadonlyArray<ReadonlyArray<readonly [number, number]>> = [
-      [GROUND, [B - 1, 230]], // bottom 180: ground, base 230, dry as today
-      [GROUND, [B, 230]], // bottom 181: an island, base 20
-      [GROUND, [200, 210], [240, 250]], // stacked islands, base 20
-      [GROUND, [150, 200]], // an overhang lip reaching above 180: ground, base 200
-      [[-63, 300]], // a peak: base = top
-      [GROUND, [B, B]], // a one-voxel island at 181
-      [GROUND, [30, 40], [B + 10, 260]], // an island over a low floating rock: base 40, so y 29 … 63 hold water around it
+      [GROUND], // the sea fixture's floor
+      [GROUND, [B - 1, 230]], // bottom 180: under water v0 a dry hole
+      [GROUND, [B, 230]], // bottom 181: an island
+      [GROUND, [200, 210], [240, 250]], // stacked islands
+      [GROUND, [150, 200]], // an overhang lip reaching above 180
+      [[-63, 300]], // a peak: no air at or below 63
+      [GROUND, [30, 40], [B + 10, 260]], // a low floating rock under an island
+      [[200, 230]], // an island with no ground: the water reaches y −63
     ];
     const solid = solidOf((p) => CASES[p % CASES.length]!);
-    const on = waterOf(solid, true);
-    const off = waterOf(solid, false);
+    const { fluid, waterV, topFluid } = fluidOf(solid);
     for (let p = 0; p < 256; p++) {
-      const k = p % CASES.length;
-      for (let y = -63; y <= 319; y++) {
+      let highest = -65;
+      for (let y = -64; y <= 319; y++) {
         const i = wi(y, p);
-        const expected = k === 1 || k === 2 || k === 5 ? ground[i]
-          : k === 6 ? (solid[i] === 0 && y > 40 - 12 && y <= 63 ? 1 : 0)
-          : off.water[i];
-        if (on.water[i] !== expected) throw new Error(`case ${k}, p ${p}, y ${y}: ${on.water[i]} ≠ ${expected}`);
+        const want = y > -64 && solid[i] === 0 && y <= 63 ? WATER_SOURCE : 0;
+        if (fluid[i] !== want || waterV[i] !== (want !== 0 ? 1 : 0)) throw new Error(`case ${p % CASES.length}, p ${p}, y ${y}: ${fluid[i]} ≠ ${want}`);
+        if (want !== 0) highest = y;
       }
+      expect([p, topFluid[p]]).toEqual([p, highest]);
     }
-    // The flag never touches `top`; off, the rule is today's.
-    expect(on.top).toEqual(off.top);
-    expect(count(on.water)).toBeGreaterThan(count(off.water));
-  });
-
-  test('with water null only top and waterTop are written, flag or not', () => {
-    const solid = solidOf(() => [GROUND, [200, 230]]);
-    for (const flag of [false, true]) {
-      const top = new Int32Array(256), waterTop = new Int32Array(256);
-      columnWaterV0(S_SEA, solid, top, waterTop, null, flag);
-      expect([...new Set(top)]).toEqual([230]);
-      expect([...new Set(waterTop)]).toEqual([63]);
-    }
+    // The peak holds none; the island with no ground fills y −63 … 63.
+    expect(topFluid[5]).toBe(-65);
+    expect(fluid.reduce((n, f, i) => n + ((i & 255) === 7 && f !== 0 ? 1 : 0), 0)).toBe(63 + 63 + 1);
   });
 
   /**
@@ -946,7 +1071,7 @@ describe('water v0 under island runs (SP3e spec §3.5, D5)', () => {
   const SLAB_OFF = ctxFor('42', { density: { defs: slabTree() } });
   const MUTED = ctxFor('42', { islands: { enabled: true } });
 
-  test('a slab island over the sea fixture: the water under it equals the muted column\'s; heightmaps are the island top + 1, the top-down scan', () => {
+  test('a slab island over the sea fixture: the water under it equals the muted column\'s, flag or not (O56); heightmaps are the island top + 1, the top-down scan', () => {
     const slab = generate(SLAB, ...SEA).view;
     const muted = generate(MUTED, ...SEA).view;
     const off = generate(SLAB_OFF, ...SEA).view;
@@ -960,14 +1085,16 @@ describe('water v0 under island runs (SP3e spec §3.5, D5)', () => {
         expect(slab.block(lx, y, lz) !== AIR).toBe(island || muted.block(lx, y, lz) !== AIR);
         expect(slab.fluid(lx, y, lz)).toBe(island ? 0 : muted.fluid(lx, y, lz));
         if (y < 200 && slab.fluid(lx, y, lz) !== 0) under++;
-        if (off.fluid(lx, y, lz) !== 0) offUnder++;
+        if (y < 200 && off.fluid(lx, y, lz) !== 0) offUnder++;
+        // Flag off, the sea under the slab fills as well (O56): D19's rule reads no top.
+        if (y < 200 && off.block(lx, y, lz) === AIR && caveKindOf(off.cave(lx, y, lz)) === 0) expect(off.fluid(lx, y, lz)).toBe(y <= 63 ? WATER_SOURCE : 0);
       }
       expect([aux.worldSurfaceWG[p], aux.oceanFloorWG[p]]).toEqual([211, 211]);
       expect(topDownHeightmaps(slab, lx, lz)).toEqual([211, 211]);
     }
     expect(under).toBeGreaterThan(256 * 20);
-    // Flag off (today's rule): no water anywhere in the column.
-    expect(offUnder).toBe(0);
+    // Flag off (water v0 left a dry hole there): the sea under the slab fills too (SP7a D19, O56).
+    expect(offUnder).toBeGreaterThan(256 * 20);
   });
 
   test('the probe column and terrainSurfaceDebug pass the flag: the slab column\'s scans agree and the sea floor runs have water above them', () => {
