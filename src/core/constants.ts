@@ -251,3 +251,19 @@ export const FLUID_LAST_LEVEL_LAVA = 6;
 export const CORNER_DRY = -1;
 export const CORNER_SOLID = -2;
 export const CORNER_FULL = 2;
+
+/**
+ * The aquifer's cells (SP7a spec §1.1, master §3.9; `gen/fluids/aquifer.ts`): 16 × 12 × 16 blocks on a grid offset by
+ * (5, 1, 5) (a voxel's cell is i = ⌊(x − 5)/16⌋, j = ⌊(y + 1)/12⌋, k = ⌊(z − 5)/16⌋, Minecraft's, **MC (memory)**), each
+ * centre jittered from the cell's corner (16i, 12j, 16k) by 0 … 9, 0 … 8, 0 … 9 (the jitter's moduli 10, 9, 10); the lava
+ * noise is read once per 64 × 40 × 64 block (§1.4); `AQUIFER_EMPTY` is the packed status of an empty cell (level −∞).
+ */
+export const AQUIFER_CELL_XZ = 16;
+export const AQUIFER_CELL_Y = 12;
+export const AQUIFER_OFFSET_XZ = 5;
+export const AQUIFER_OFFSET_Y = 1;
+export const AQUIFER_JITTER_XZ = 10;
+export const AQUIFER_JITTER_Y = 9;
+export const AQUIFER_LAVA_BLOCK_XZ = 64;
+export const AQUIFER_LAVA_BLOCK_Y = 40;
+export const AQUIFER_EMPTY = 0;

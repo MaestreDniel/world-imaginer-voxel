@@ -153,7 +153,7 @@ test/fixtures/gv9-surface-trees.json     the trees MIGRATIONS[4] maps (§15.4)
 
 ### 1.1 Cells
 
-As master :748: cells 16 × 12 × 16 blocks with the grid offset (5, 1, 5); each cell's centre jittered by (0-9, 0-8, 0-9) from `hash4(deriveSeed(seed, 'aquifer.cell'), cx, cy, cz)`; each voxel takes the 4 nearest centres among the 2 × 3 × 2 neighbourhood (squared distances, ties to the lower cell index; master :748's 4, where Minecraft keeps 3, **MC (memory)**; only the two nearest decide here, so the count is harmless). A cell's status is (level, fluid type): level an integer or −∞ (empty), type water or lava.
+As master :748: cells 16 × 12 × 16 blocks with the grid offset (5, 1, 5); each cell's centre jittered by (0-9, 0-8, 0-9) from h = `hash3(deriveSeed(seed, 'aquifer.cell'), i, j, k) >>> 0` (the cell's indices; `hash4` is a salted 2D hash, `src/core/hash.ts:36`, so the jitter is `hash3`, `:32`, as the cave biome's), x + h mod 10, y + (h >>> 8) mod 9, z + (h >>> 16) mod 10 from the cell's corner (16i, 12j, 16k); each voxel takes the 4 nearest centres among the 2 × 3 × 2 neighbourhood (squared distances, ties to the lower cell index; master :748's 4, where Minecraft keeps 3, **MC (memory)**; only the two nearest decide here, so the count is harmless). A cell's status is (level, fluid type): level an integer or −∞ (empty), type water or lava.
 
 ### 1.2 Levels near the surface (D18)
 
