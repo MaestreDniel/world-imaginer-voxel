@@ -99,6 +99,7 @@ import {
 } from './fixtures/heapGrowth';
 import { createClipboardStore, type ClipboardStore } from '../../src/ui/world/clipboardStore';
 import { createSelectTool, type SelectTool } from '../../src/ui/world/selectTool';
+import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { GLASS, STONE } from '../../src/world/blocks/index';
 import { createStore } from '../../src/world/store/store';
 import { installDom } from './fixtures/domShim';
@@ -228,7 +229,7 @@ interface AtRest {
   readonly counts: CoordinatorCounts;
   /** One frame step, at the next 144 Hz timestamp. */
   tick(): void;
-  readonly state: { readonly t: number; readonly eyeSky: number; readonly nightVision: number; readonly seconds: number };
+  readonly state: { readonly t: number; readonly eyeSky: number; readonly nightVision: number; readonly seconds: number; readonly eyeFluid: number };
   /** Ticks run, rendered frames, lightmap rebuilds. */
   stats(): { ticks: number; rendered: number; lightmapBuilds: number };
   readonly t0: number;
@@ -284,8 +285,8 @@ interface AtRest {
   setNightVision(on: boolean): void;
   /** The water tier on the batch materials (`MaterialSystem.setWaterTier`, SP7a spec §7, D28): Fancy (1) by default. */
   setWaterTier(tier: 0 | 1): void;
-  /** The water material's `waterTier` and `timeSeconds` uniforms. */
-  waterState(): { tier: number; seconds: number };
+  /** The water material's `waterTier` and `timeSeconds` uniforms, and the shared `eyeFluid` (SP7a spec §8). */
+  waterState(): { tier: number; seconds: number; eyeFluid: number };
   /** The X-ray's uniforms (SP6b's colour mode included), the sky dome's visibility, the clear colour and the strip's element. */
   xrayState(): { on: number; yMin: number; yMax: number; mode: number; sky: boolean; clear: number; strip: ReturnType<ReturnType<typeof installDom>['el']> };
   /**
@@ -355,9 +356,13 @@ async function buildAtRest(): Promise<AtRest> {
 
   // A real store with the camera's column Published, so the eye's light is a real read (spec §2.4), with a stone floor
   // at y 99 (section 10's layer 3), its top half a block below the eye: what SP5a's walk stands on and its DDA aims at.
+  // One water source at (8, 103, 8) (layer 7), above the eye, the walking body and every aim: the eye crosses its surface
+  // (103 + 8/9) only in SP7a's crossing test (spec §8).
   const store = createStore({ shared: false, maxBlockBytes: 1 << 20, maxByteBytes: 1 << 20 });
   const w = store.claimColumn(0, 0, 0);
-  w.setFinal(10, new Uint16Array(4096).fill(STONE, 3 * 256, 4 * 256), new Uint8Array(4096).fill(0xc0), new Uint8Array(4096));
+  const fluid10 = new Uint8Array(4096);
+  fluid10[7 * 256 + 8 * 16 + 8] = WATER_SOURCE;
+  w.setFinal(10, new Uint16Array(4096).fill(STONE, 3 * 256, 4 * 256), new Uint8Array(4096).fill(0xc0), fluid10);
   w.commit(3);
 
   const speed60 = TIME_SPEEDS.indexOf(60);
@@ -627,6 +632,7 @@ async function buildAtRest(): Promise<AtRest> {
     waterState: () => ({
       tier: materials.water.uniforms['waterTier']!.value as number,
       seconds: materials.water.uniforms['timeSeconds']!.value as number,
+      eyeFluid: materials.water.uniforms['eyeFluid']!.value as number,
     }),
     xrayState: () => ({
       on: materials.xray.uniforms['xrayOn']!.value as number,
@@ -1150,6 +1156,48 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     // Written every frame (a wrap at 3,600 s may land inside the window, so only that it moved).
     expect(w.seconds).not.toBe(s0);
     expect(w.seconds).toBe(f.state.seconds);
+  }, TIMEOUT_MS);
+
+  test(`${N} frame steps crossing a water surface every 500 frames (20 crossings) grow the heap by less than the boxing budget of 256 B per tick, the eyeFluid uniform written every frame (SP7a spec §8, D29; Review Focus 3)`, async () => {
+    const f = await atRest();
+    // Flying (SP5a's and SP5c's tests leave the fixture walking), the eye moved every 500 frames between the fixture's
+    // water source at (8, 103, 8), under its surface at 103 + 8/9, and the dry voxel above it; both in the camera's
+    // section (sy 10), so the cave culler's cell does not change.
+    const mode = f.fly.mode;
+    f.sp5a('fly');
+    const y0 = f.fly.y;
+    const UNDER = 103.5;
+    const ABOVE = 104.5;
+    let k = 0;
+    let changes = 0;
+    let last = f.state.eyeFluid;
+    const tick = (): void => {
+      if (k++ % 500 === 0) f.fly.y = f.fly.y === UNDER ? ABOVE : UNDER;
+      f.tick();
+      if (f.state.eyeFluid !== last) {
+        changes++;
+        last = f.state.eyeFluid;
+      }
+    };
+    try {
+      for (let i = 0; i < FRAME_WARM_UP; i++) tick();
+      expect(changes, 'the warm-up crossed the surface').toBe(FRAME_WARM_UP / 500);
+      const crossed = changes;
+      const before = f.stats();
+      const g = allocationOver(tick, 0, FRAME_STEP_ALLOC_MAX);
+      expectAtRest(g, FRAME_STEP_ALLOC_MAX);
+      expectSp4cAtRest(f);
+      expect(f.stats().rendered - before.rendered).toBe(g.calls);
+      // One change of the eye's fluid per move (every frame renders), 20 per 10,000 frames, and the uniform follows it.
+      expect(changes - crossed).toBe(g.calls / 500);
+      expect(f.state.eyeFluid).toBe(f.fly.y === UNDER ? 1 : 0);
+      expect(f.waterState().eyeFluid).toBe(f.state.eyeFluid);
+    } finally {
+      f.fly.y = y0;
+      f.sp5a(mode);
+    }
+    expect(f.state.eyeFluid).toBe(0);
+    expect(f.waterState().eyeFluid).toBe(0);
   }, TIMEOUT_MS);
 
   test(`${N} Water toggles (the page's applyWaterSetting, Fast and Fancy alternating) grow the heap by less than 256 KB, and frame steps after them stay within the boxing budget of 256 B per tick (SP7a spec §7, D10: a toggle writes one uniform, no remesh or relink)`, async () => {

@@ -3513,6 +3513,16 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(text, 'the pre-SP7a Fancy row is gone').not.toContain('2 scrolling ripple-normal octaves, animated texture, vertex waves');
   });
 
+  test('§4.6\'s underwater and lava fog (SP7a spec §16 item 12)', () => {
+    // Item 12's fog half (Task 38): §4.6's Fog paragraph ends with the fluid fog as built (SP7a spec §8, D11): water's
+    // and lava's f = 1 − 2^(−8·(d/L)²), their colours, the 0.25 tint and the sky dome at fogEnd.
+    const s46 = text.slice(text.indexOf('### 4.6 '), text.indexOf('### 4.7 '));
+    const fog = s46.split('\n').find((l) => l.startsWith('**Fog** is spherical'));
+    expect(fog, 'no **Fog** paragraph in §4.6').toBeDefined();
+    expect(fog!.endsWith(' and is darkened by the eye\'s sky light. When the eye is in a fluid (SP7a, its §8 and D11: `eyeFluid`, from the eye voxel\'s fluid and surface height), the fog switches to f = 1 − 2^(−8·(d/L)²) (less than 1/256 of the colour left at L): in water L = 56 blocks and the colour is Fast water\'s deep colour × the lightmap at the eye\'s sky light; in lava L = 3 blocks and the colour [255, 90, 20] × 0.6. Every fragment, the sky dome\'s included (at d = `fogEnd`), also mixes 0.25 toward that colour (the tint). The X-ray has no fog.'), 'the fluid fog as built').toBe(true);
+    expect(text, 'the pre-SP7a underwater sentence is gone').not.toContain('fog switches to exponential (about 48-60 blocks) with a screen tint');
+  });
+
   test('§4.11 and §4.12 name SP7b; the bench route\'s flood is SP7b\'s and R5\'s row is gated from SP7a (SP7a spec §16 item 13)', () => {
     const at = text.indexOf('### 4.11 ');
     const s411to412 = text.slice(at, text.indexOf('### 4.13 ', at));

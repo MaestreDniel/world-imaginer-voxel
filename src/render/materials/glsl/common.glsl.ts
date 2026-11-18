@@ -1,9 +1,14 @@
 /**
  * The GLSL the materials share (SP4a spec §6.4-§6.6, master §4.6): the GLSL3 fragment output, the lightmap lookup, the
- * sky colour, the fog, and the vertex placement of both section renderers. Each material's source is these strings
- * concatenated, so a test can read the whole shader from `material.fragmentShader`.
+ * sky colour, the fog (the underwater and lava fog included, SP7a spec §8), and the vertex placement of both section
+ * renderers. Each material's source is these strings concatenated, so a test can read the whole shader from
+ * `material.fragmentShader`.
  */
+import { FLUID_FOG_L_LAVA, FLUID_FOG_L_WATER, FLUID_FOG_SHARPNESS, FLUID_FOG_TINT } from '../../fogMath';
 import type { MaterialVariant } from '../index';
+
+/** A GLSL float literal. */
+export const glslFloat = (n: number): string => (Number.isInteger(n) ? n.toFixed(1) : String(n));
 
 /**
  * three emits `pc_fragColor` and the `gl_FragColor` define only for non-GLSL3 materials (WebGLProgram.js:817-820), and
@@ -57,17 +62,46 @@ vec3 skyColor(vec3 dir) {
 `;
 
 /**
+ * The underwater and lava fog (SP7a spec §8, D11), for a fragment `d` blocks from the eye while the eye is in a fluid
+ * (`eyeFluid` 1 water, 2 lava; the frame step's, SP7a D29): f = 1 − 2^(−8·(d/L)²), in water with L = 56 blocks and the
+ * colour `fluidFogWater` (Fast water's deep colour) × the lightmap's sky term at the eye's sky light, as the sky fog's;
+ * in lava with L = 3 blocks and the colour `fluidFogLava`. Every fragment also mixes 0.25 toward the fog colour (the
+ * tint). The numbers are `render/fogMath.ts`'. It never declares `waterDeep`, which the water fragment declares itself.
+ * Needs LIGHTMAP_GLSL and the `eyeSky` uniform before it.
+ */
+export const FLUID_FOG_GLSL = `
+uniform float eyeFluid;
+uniform vec3 fluidFogWater;
+uniform vec3 fluidFogLava;
+vec3 fluidFog(vec3 color, float d) {
+  vec3 fogColor;
+  float x;
+  if (eyeFluid > 1.5) {
+    fogColor = fluidFogLava;
+    x = d / ${glslFloat(FLUID_FOG_L_LAVA)};
+  } else {
+    fogColor = fluidFogWater * lightmapAt(0.0, eyeSky);
+    x = d / ${glslFloat(FLUID_FOG_L_WATER)};
+  }
+  float f = 1.0 - exp2(-${glslFloat(FLUID_FOG_SHARPNESS)} * x * x);
+  return mix(mix(color, fogColor, ${glslFloat(FLUID_FOG_TINT)}), fogColor, f);
+}
+`;
+
+/**
  * The fog (SP4a spec §6.6; SP4b spec §6.3, D17): spherical, f = smoothstep(fogStart, fogEnd, |viewPos|), with no
  * world-edge fade since the world streams around the camera (SP4b spec §6.2); its colour is the sky gradient towards
  * the fragment's horizon, without the sun's disc and glow (they would paint a bright stripe on the fogged terrain under
- * a low sun; final review B-M1), darkened by the lightmap's sky term at the eye's sky light (block 0, ruling P15). Needs
- * SKY_GLSL and LIGHTMAP_GLSL before it; `worldPos` is relative to the floating origin, as `cameraPosition` is.
+ * a low sun; final review B-M1), darkened by the lightmap's sky term at the eye's sky light (block 0, ruling P15). While
+ * the eye is in a fluid the fluid's fog and tint (FLUID_FOG_GLSL) take its place (SP7a spec §8). Needs SKY_GLSL and
+ * LIGHTMAP_GLSL before it; `worldPos` is relative to the floating origin, as `cameraPosition` is.
  */
 export const FOG_GLSL = `
 uniform float fogStart;
 uniform float fogEnd;
 uniform float eyeSky;
-vec3 applyFog(vec3 color, vec3 viewPos, vec3 worldPos) {
+${FLUID_FOG_GLSL}vec3 applyFog(vec3 color, vec3 viewPos, vec3 worldPos) {
+  if (eyeFluid > 0.5) return fluidFog(color, length(viewPos));
   float f = smoothstep(fogStart, fogEnd, length(viewPos));
   vec3 h = vec3(worldPos.x - cameraPosition.x, 0.0, worldPos.z - cameraPosition.z);
   vec3 horizonDir = dot(h, h) > 1e-8 ? normalize(h) : vec3(0.0, 0.0, -1.0);
