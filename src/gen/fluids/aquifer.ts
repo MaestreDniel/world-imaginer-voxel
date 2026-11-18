@@ -1,6 +1,6 @@
 /**
  * The aquifer (SP7a spec §1.1-§1.8, D18-D20; master §3.9): the cell grid, the jittered centres and each cell's status,
- * a level and a fluid type; the voxel rule and the column step T runs. Task 7 adds the point functions.
+ * a level and a fluid type; the voxel rule and the column step T runs; the point functions.
  * - **Cells.** 16 × 12 × 16 blocks on a grid offset by (5, 1, 5): a voxel's cell is (i, j, k) = (⌊(x − 5)/16⌋,
  *   ⌊(y + 1)/12⌋, ⌊(z − 5)/16⌋), and its 12 candidates are i … i + 1, j − 1 … j + 1, k … k + 1, enumerated i outer, j,
  *   k inner (`cellCandidates`); a tie between equal squared distances goes to the lower index in that order. A cell's
@@ -25,6 +25,10 @@
  *   nearest quart corner; tagged air the voxel rule, over a per-job status cache of 3 × 35 × 3 cells (Spec correction 14).
  *   Its fast path skips a voxel more than 4 blocks above every level of its 12 candidates (beyond the pressure's reach,
  *   so no barrier and no fluid) when none of them is lava and the voxel is not below `lavaLevel`.
+ * - **The point functions** (`fluidAt`, `barrierAt`; D19, D20): the column step's decision at one voxel, from the
+ *   density probe's solidity, `caveTagAt` and `caveBiomeAt` in place of T's arrays and the column sample through the
+ *   DensityContext's cache; neither rule reads the column's `top`, so they equal T at every voxel (DT2). They keep one
+ *   status cache and one cave-biome pass, for the column last asked (`terrainSolidAt`, `solidAt.ts`, builds on them).
  * Follows the gen determinism rules: every value in world coordinates, one fixed operation order.
  */
 import {
@@ -36,10 +40,15 @@ import { NormalNoise } from '../../core/noise/normal';
 import type { NormalNoise as NormalNoiseT } from '../../core/noise/normal';
 import type { NoiseDef } from '../../core/noise/types';
 import { FLUID_LAVA, FLUID_WATER, LAVA_SOURCE, WATER_SOURCE } from '../../world/blocks/fluid';
-import type { CaveColumnPass, CavePickerInputs } from '../biomes/cavePicker';
+import {
+  caveBiomeAt, cavePickerOf, fillCaveColumnPass, newCaveColumnPass, type CaveColumnPass, type CavePickerInputs,
+} from '../biomes/cavePicker';
+import { caveTagAt } from '../caves/tags';
 import { newPointRecord, samplePoint } from '../column/columnPoint';
 import { readLevel, type ColumnSample } from '../column/columnStage';
 import type { GenContext } from '../context';
+import type { DensityContext } from '../density/context';
+import { solidAt } from '../density/probe';
 
 const CELL_XZ = AQUIFER_CELL_XZ;
 const CELL_Y = AQUIFER_CELL_Y;
@@ -69,6 +78,12 @@ const Y0 = MIN_Y;
 const WATER_SRC = WATER_SOURCE;
 const LAVA_SRC = LAVA_SOURCE;
 const LEVEL = readLevel;
+const SOLID_AT = solidAt;
+const TAG_AT = caveTagAt;
+const BIOME_AT = caveBiomeAt;
+const PICKER_OF = cavePickerOf;
+const FILL_PASS = fillCaveColumnPass;
+const NEW_PASS = newCaveColumnPass;
 
 /** The ocean factor's span: t = clamp((63 − offset)/8, 0, 1). */
 const OCEAN_SPAN = 8;
@@ -407,6 +422,62 @@ function cachedHood(inp: AquiferInputs, sc: AquiferScratch, i0: number, j0: numb
   return h;
 }
 
+/** `sc` emptied for column (cx, cz). */
+function resetScratch(sc: AquiferScratch, cx: number, cz: number): void {
+  sc.cx = cx;
+  sc.cz = cz;
+  sc.filled.fill(0);
+  sc.hoodFilled.fill(0);
+  sc.pointFilled.fill(0);
+}
+
+/** `nearestTwo`'s result: the two nearest squared distances d1 ≤ d2 and their statuses s1, s2. */
+let N_D1 = 0;
+let N_D2 = 0;
+let N_S1 = EMPTY;
+let N_S2 = EMPTY;
+
+/**
+ * The two nearest centres of voxel (x, y, z) of `sc`'s column among its 12 candidates (base cell (i0, j0, k0) =
+ * `cellOf`'s), into `N_D1`, `N_S1`, `N_D2`, `N_S2`; a tie goes to the lower candidate index (`cellCandidates`' order).
+ * The one selection of the column step and the point functions.
+ */
+function nearestTwo(inp: AquiferInputs, sc: AquiferScratch, x: number, y: number, z: number, i0: number, j0: number, k0: number): void {
+  const centre = sc.centre;
+  const status = sc.status;
+  let d1 = Infinity;
+  let d2 = Infinity;
+  let s1 = EMPTY;
+  let s2 = EMPTY;
+  for (let di = 0; di <= 1; di++) {
+    for (let dj = -1; dj <= 1; dj++) {
+      for (let dk = 0; dk <= 1; dk++) {
+        const e = cachedCell(inp, sc, i0 + di, j0 + dj, k0 + dk);
+        const dx = x - centre[3 * e]!;
+        const dy = y - centre[3 * e + 1]!;
+        const dz = z - centre[3 * e + 2]!;
+        const d = dx * dx + dy * dy + dz * dz;
+        if (d < d1) {
+          d2 = d1;
+          s2 = s1;
+          d1 = d;
+          s1 = status[e]!;
+        } else if (d < d2) {
+          d2 = d;
+          s2 = status[e]!;
+        }
+      }
+    }
+  }
+  N_D1 = d1;
+  N_D2 = d2;
+  N_S1 = s1;
+  N_S2 = s2;
+}
+
+/** Whether the abyss margin can decide at height y: outside the abyss, where s1's water would fill (y ≤ its level). */
+const marginDecides = (y: number, s1: number, abyss: boolean): boolean => !abyss && typeOfStatus(s1) === WATER && y <= levelOfStatus(s1);
+
 /** Each position's ⌊`surfaceWaterLevel`⌋ at its nearest quart corner (−∞ on land), per column index `lz·16 + lx`. */
 const SKY_LEVEL = new Float64Array(256);
 
@@ -424,13 +495,7 @@ function columnStep(
   const noise = inp.barrier;
   const x0 = 16 * s.cx;
   const z0 = 16 * s.cz;
-  sc.cx = s.cx;
-  sc.cz = s.cz;
-  sc.filled.fill(0);
-  sc.hoodFilled.fill(0);
-  sc.pointFilled.fill(0);
-  const centre = sc.centre;
-  const status = sc.status;
+  resetScratch(sc, s.cx, s.cz);
   for (let p = 0; p < 256; p++) {
     SKY_LEVEL[p] = FLOOR(LEVEL(s, 'surfaceWaterLevel', x0 + (p & 15), z0 + (p >> 4)));
     topFluid[p] = Y0 - 1;
@@ -457,34 +522,10 @@ function columnStep(
           skip = sc.hoodLava[h] === 0 && y > sc.hoodMax[h]! + FAST_REACH;
         }
         if (!skip) {
-          let d1 = Infinity;
-          let d2 = Infinity;
-          let s1 = EMPTY;
-          let s2 = EMPTY;
-          for (let di = 0; di <= 1; di++) {
-            for (let dj = -1; dj <= 1; dj++) {
-              for (let dk = 0; dk <= 1; dk++) {
-                const e = cachedCell(inp, sc, i0 + di, j0 + dj, k0 + dk);
-                const dx = x - centre[3 * e]!;
-                const dy = y - centre[3 * e + 1]!;
-                const dz = z - centre[3 * e + 2]!;
-                const d = dx * dx + dy * dy + dz * dz;
-                if (d < d1) {
-                  d2 = d1;
-                  s2 = s1;
-                  d1 = d;
-                  s1 = status[e]!;
-                } else if (d < d2) {
-                  d2 = d;
-                  s2 = status[e]!;
-                }
-              }
-            }
-          }
+          nearestTwo(inp, sc, x, y, z, i0, j0, k0);
           const abyss = tag >> 4 === ABYSS;
-          // The margin decides only where s1's water would fill (y at or below its level).
-          const margin = !abyss && typeOfStatus(s1) === WATER && y <= levelOfStatus(s1) && inAbyssMargin(inp, pick, pass, x, y, z);
-          const r = ruleOf(st, y, d1, s1, d2, s2, 0, abyss, margin, noise, x, z);
+          const margin = marginDecides(y, N_S1, abyss) && inAbyssMargin(inp, pick, pass, x, y, z);
+          const r = ruleOf(st, y, N_D1, N_S1, N_D2, N_S2, 0, abyss, margin, noise, x, z);
           if (r === BARRIER) {
             solid[v] = 1;
             tags[v] = 0;
@@ -524,4 +565,66 @@ export function aquiferColumnSlow(
   waterV: Uint8Array, fluid: Uint8Array, topFluid: Int32Array, sc: AquiferScratch,
 ): void {
   columnStep(inp, s, pick, pass, solid, tags, waterV, fluid, topFluid, sc, false);
+}
+
+/** The point functions' status cache, for column (`POINT_SC.cx`, `POINT_SC.cz`) and inputs `POINT_INP` (null: empty). */
+const POINT_SC = createAquiferScratch();
+let POINT_INP: AquiferInputs | null = null;
+/** Their cave-biome pass (for the margin), for column (`POINT_PASS.cx`, `POINT_PASS.cz`) and `POINT_PICK` (null: empty). */
+const POINT_PASS = NEW_PASS();
+let POINT_PICK: CavePickerInputs | null = null;
+
+/**
+ * The column step's decision at world voxel (x, y, z): 0 where the density probe's solidity holds (`solidAt`) and at
+ * y −64 (T's bedrock); at an untagged voxel (`caveTagAt` 0) `WATER_SOURCE` iff y ≤ ⌊`surfaceWaterLevel`⌋ at its nearest
+ * quart corner (the column sample from `dc.columns`); at a tagged one, 0 when the aquifer is off, else `ruleOf` over
+ * its two nearest centres (`nearestTwo` on the point cache), its nibble from `caveBiomeAt`, its margin from the pass of
+ * its column (filled only where the margin decides): a fluid byte, 0 or `AQUIFER_BARRIER`.
+ */
+function pointRule(inp: AquiferInputs, dc: DensityContext, x: number, y: number, z: number): number {
+  if (SOLID_AT(dc, x, y, z) || y === Y0) return 0;
+  const cx = x >> 4;
+  const cz = z >> 4;
+  if (TAG_AT(dc, x, y, z) === 0) return y <= FLOOR(LEVEL(dc.columns.get(cx, cz), 'surfaceWaterLevel', x, z)) ? WATER_SRC : 0;
+  const st = inp.settings;
+  if (!st.enabled) return 0;
+  const sc = POINT_SC;
+  if (POINT_INP !== inp || sc.cx !== cx || sc.cz !== cz) {
+    POINT_INP = null;
+    resetScratch(sc, cx, cz);
+    POINT_INP = inp;
+  }
+  nearestTwo(inp, sc, x, y, z, FLOOR((x - OFFSET_XZ) / CELL_XZ), FLOOR((y + OFFSET_Y) / CELL_Y), FLOOR((z - OFFSET_XZ) / CELL_XZ));
+  const abyss = BIOME_AT(dc, x, y, z) === ABYSS;
+  let margin = false;
+  if (marginDecides(y, N_S1, abyss)) {
+    const pick = PICKER_OF(dc.ctx);
+    if (POINT_PICK !== pick || POINT_PASS.cx !== cx || POINT_PASS.cz !== cz) {
+      POINT_PICK = null;
+      FILL_PASS(pick, dc.columns.get(cx, cz), POINT_PASS);
+      POINT_PICK = pick;
+    }
+    margin = inAbyssMargin(inp, pick, POINT_PASS, x, y, z);
+  }
+  return ruleOf(st, y, N_D1, N_S1, N_D2, N_S2, 0, abyss, margin, inp.barrier, x, z);
+}
+
+/**
+ * The proto fluid byte T writes at world voxel (x, y, z) when no spring is there (D19, D20): 0 at a solid voxel (the
+ * density probe's, y −64 included) or a barrier; at an untagged non-solid voxel D19's rule, `WATER_SOURCE` iff y ≤
+ * ⌊`surfaceWaterLevel`⌋ at its nearest quart corner (no `top` read); at a tagged one `voxelRule`'s byte, with its nibble
+ * from `caveBiomeAt` and its margin from its column's pass. `dc` is a DensityContext of `inp.ctx`. Integers only, y in
+ * −64 … 319, (x, z) in the world window (a RangeError otherwise, as `probe`).
+ */
+export function fluidAt(inp: AquiferInputs, dc: DensityContext, x: number, y: number, z: number): number {
+  const r = pointRule(inp, dc, x, y, z);
+  return r === BARRIER ? 0 : r;
+}
+
+/**
+ * Whether world voxel (x, y, z) is a barrier (D20): a tagged non-solid voxel that `voxelRule` makes rock, where T sets
+ * the solidity and clears the tag. Arguments as `fluidAt`.
+ */
+export function barrierAt(inp: AquiferInputs, dc: DensityContext, x: number, y: number, z: number): boolean {
+  return pointRule(inp, dc, x, y, z) === BARRIER;
 }
