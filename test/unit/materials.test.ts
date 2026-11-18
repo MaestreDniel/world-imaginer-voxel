@@ -789,11 +789,20 @@ describe('the underwater and lava fog (SP7a spec §8, D11)', () => {
     expect(branch).toBeLessThan(fog.indexOf('smoothstep(fogStart, fogEnd'));
   });
 
-  test('each fogged fragment (terrain, cutout, ghost, water, sky) declares each fluid-fog uniform once and shares one object per name; no fragment declares waterDeep twice', () => {
+  test('each fogged fragment (terrain, cutout, ghost, water, sky) declares fogEnd, eyeSky, lightmap and each fluid-fog uniform once, before fluidFog\'s definition (ruling P40), and shares one object per name; no fragment declares waterDeep twice', () => {
+    // No test compiles GLSL: a declaration after its first use fails only in the browser, so the order is pinned here.
+    const declarations = ['uniform float fogEnd;', 'uniform float eyeSky;', 'uniform sampler2D lightmap;', ...FLUID_FOG_UNIFORMS];
     for (const v of VARIANTS) {
       const m = SYSTEMS[v];
       for (const [name, mat] of Object.entries(fogged(m))) {
-        for (const decl of FLUID_FOG_UNIFORMS) expect(count(mat.fragmentShader, decl), `${v} ${name} ${decl}`).toBe(1);
+        const src = mat.fragmentShader;
+        const definition = src.indexOf('vec3 fluidFog(vec3 color, float d)');
+        expect(definition, `${v} ${name}`).toBeGreaterThan(0);
+        expect(count(src, 'vec3 fluidFog(vec3 color, float d)'), `${v} ${name}`).toBe(1);
+        for (const decl of declarations) {
+          expect(count(src, decl), `${v} ${name} ${decl}`).toBe(1);
+          expect(src.indexOf(decl), `${v} ${name} ${decl}`).toBeLessThan(definition);
+        }
         for (const u of ['eyeFluid', 'fluidFogWater', 'fluidFogLava', 'eyeSky', 'fogEnd', 'lightmap']) {
           expect(mat.uniforms[u], `${v} ${name} ${u}`).toBeDefined();
           expect(mat.uniforms[u], `${v} ${name} ${u}`).toBe(m.terrainOpaque.uniforms[u]);
