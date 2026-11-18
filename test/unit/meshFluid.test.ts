@@ -7,16 +7,19 @@
  */
 import { describe, expect, test } from 'vitest';
 import { createMeshBuilder, type MeshBuilder } from '../../src/mesh/builder';
+import { createMeshScratch, meshColumnPayload, type ColumnMeshPayload } from '../../src/mesh/column';
 import { fluidDepths, meshFluid } from '../../src/mesh/fluid';
 import { LAVA_LAYER, type MeshTables } from '../../src/mesh/greedy';
-import { unpackFluid, unpackSolid, type FluidFields } from '../../src/mesh/packing';
+import { packFluid as packFluidWord, packSolid, unpackFluid, unpackSolid, type FluidFields } from '../../src/mesh/packing';
 import { AIR, GLASS, ICE, LADDER, REGISTRY, STONE, TORCH } from '../../src/world/blocks/index';
-import { FLUID_WATER, LAVA_SOURCE, NO_FLUID, WATER_SOURCE, packFluid } from '../../src/world/blocks/fluid';
-import { PASS_NONE, PASS_OPAQUE } from '../../src/world/blocks/kinds';
+import { FLUID_LAVA, FLUID_WATER, LAVA_SOURCE, NO_FLUID, WATER_SOURCE, packFluid } from '../../src/world/blocks/fluid';
+import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, PASS_NONE, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import { SECTIONS } from '../../src/world/store/columnTable';
 import { padIndex, type PaddedSection } from '../../src/world/store/padded';
-import { createStore } from '../../src/world/store/store';
+import { createStore, type VoxelStore } from '../../src/world/store/store';
 import type { ColumnView, NeighborhoodReader } from '../../src/world/store/api';
+import { bruteFaces, meshFaceCounts } from '../harness/refs';
+import { regionView } from '../harness/regionView';
 import { paddedFrom, quadsOf, type ReadQuad, type VoxelFn } from './fixtures/padded';
 
 /** Per face (north, east, south, west, up, down): the normal axis (0 x, 1 y, 2 z) and its sign (master face order). */
@@ -48,7 +51,10 @@ function depthFrom(fn: (x: number, y: number, z: number) => number): Uint8Array 
   return d;
 }
 
-/** The unit faces a quad covers, as `x,y,z,face` keys of the voxel that owns each face. */
+/**
+ * The unit faces a quad covers, as `x,y,z,face` keys of the voxel that owns each face; a side quad whose four positions
+ * share one y is a side strip (SP7a spec §6.2), covering the unit faces of the voxels whose top that y is.
+ */
 function unitFaces(q: ReadQuad): string[] {
   const f = faceOf(q);
   const a = AXIS[f];
@@ -57,6 +63,7 @@ function unitFaces(q: ReadQuad): string[] {
   const hi = [0, 1, 2].map((ax) => Math.max(...q.corners.map((c) => c[ax]!)) / 8);
   lo[a] = SIGN[f] > 0 ? plane - 1 : plane;
   hi[a] = lo[a]! + 1;
+  if (a !== 1 && lo[1] === hi[1]) lo[1] = hi[1]! - 1;
   const out: string[] = [];
   for (let y = lo[1]!; y < hi[1]!; y++) {
     for (let z = lo[2]!; z < hi[2]!; z++) {
@@ -299,7 +306,8 @@ describe('still lava (SP5a spec §1.3)', () => {
     const { passes } = mesh(p, depthFrom((x, y, z) => (x === 8 && y >= 7 && y <= 9 && z === 8 ? 3 : x === 9 && y === 8 && z === 8 ? 1 : 0)));
     const water = allUnitFaces(passes[2]);
     const lava = allUnitFaces(passes[0]);
-    // The planes the two share: the lava's full-height opaque face alone covers each one.
+    // The planes the two share: the lava's opaque face alone covers each one. On the side, no strip (SP7a spec §6.2):
+    // each fluid counts the other as solid, so the water's and the lava source's corners there are both (80/9)/12, drop 2.
     expect(water).not.toContain('8,8,8,1');
     expect(lava).toContain('9,8,8,3');
     expect(water).not.toContain('8,8,8,5');
@@ -494,6 +502,208 @@ describe('flowing water (SP7a spec §6.1-§6.2, D26)', () => {
       for (const w of q.words) expect(fieldsOf(w).cornerDrop).toBe(1);
     }
     expect(allUnitFaces(quads)).toHaveLength(64);
+  });
+});
+
+describe('side strips (SP7a spec §6.2)', () => {
+  const FALLING = packFluid(FLUID_WATER, 0, true);
+  const water = (level: number): number => packFluid(FLUID_WATER, level);
+  const lava = (level: number): number => packFluid(FLUID_LAVA, level);
+  /** Two voxels at y 4 on a stone floor, (8, 4, 8) holding `a` and (9, 4, 8) holding `b`, air (or `ring`) around them. */
+  const pair = (a: number, b: number, ring = AIR): PaddedSection => paddedFrom(
+    (x, y, z) => (y <= 3 || (y === 4 && ring === STONE && !(z === 8 && (x === 8 || x === 9))) ? STONE : AIR), () => 0xF0,
+    (x, y, z) => (y === 4 && z === 8 ? (x === 8 ? a : x === 9 ? b : NO_FLUID) : NO_FLUID),
+  );
+  const pairDepth = depthFrom((x, y, z) => (y === 4 && z === 8 && (x === 8 || x === 9) ? 1 : 0));
+  /** The water quads of `p` owning the unit face `key` (`x,y,z,face`). */
+  const owning = (quads: readonly ReadQuad[], key: string): ReadQuad[] => quads.filter((q) => unitFaces(q).includes(key));
+  /** A strip's vertices: all four positions at the owner's top (y 40 here), the drops by position `x,z`. */
+  function stripDrops(q: ReadQuad): Map<string, number[]> {
+    expect(ys(q), 'every strip position at the voxel\'s top').toEqual([40, 40, 40, 40]);
+    const out = new Map<string, number[]>();
+    q.corners.forEach((c, k) => {
+      const key = `${c[0]! / 8},${c[2]! / 8}`;
+      out.set(key, [...(out.get(key) ?? []), fieldsOf(q.words[k]!).cornerDrop].sort((a, b) => a - b));
+    });
+    return out;
+  }
+
+  test('a level-2 voxel beside a level-5 voxel at one y draws no face on the shared side (both read the same two corners); equal levels draw nothing', () => {
+    for (const [a, b] of [[2, 5], [3, 3]] as const) {
+      const quads = mesh(pair(water(a), water(b)), pairDepth).passes[2];
+      const faces = allUnitFaces(quads);
+      expect(faces, `levels ${a}, ${b}`).not.toContain('8,4,8,1');
+      expect(faces, `levels ${a}, ${b}`).not.toContain('9,4,8,3');
+      // Their two tops and their six sides against air, nothing else.
+      expect(faces, `levels ${a}, ${b}`).toEqual(['8,4,8,0', '8,4,8,2', '8,4,8,3', '8,4,8,4', '9,4,8,0', '9,4,8,1', '9,4,8,2', '9,4,8,4']);
+      expect(() => dropsByPosition(quads)).not.toThrow();
+    }
+  });
+
+  test('a falling voxel with no water above beside a flowing voxel: a strip from the flowing voxel\'s corner drops up to drop 0', () => {
+    // (8, 4, 8) falling with nothing above (a synthetic byte: in the settled world every fall has water above) beside
+    // level 3 at (9, 4, 8). The shared corners (9, 8) and (9, 9) average the fall (h 1, weight 10), the level-3 voxel
+    // (5/9) and two dry voxels: (10 + 5/9)/13 ≈ 0.812, drop 2.
+    const quads = mesh(pair(FALLING, water(3)), pairDepth).passes[2];
+    const strips = owning(quads, '8,4,8,1');
+    expect(strips).toHaveLength(1);
+    const strip = strips[0]!;
+    expect(unitFaces(strip)).toEqual(['8,4,8,1']);
+    expect(fieldsOf(strip.words[0]!).face).toBe(1);
+    // Its bottom vertices sit on the flowing voxel's top corners (the gap closed exactly), its top ones at drop 0.
+    const top = owning(quads, '9,4,8,4')[0]!;
+    const topDrop = (X: number, Z: number): number => fieldsOf(top.words[top.corners.findIndex((c) => c[0] === 8 * X && c[2] === 8 * Z)]!).cornerDrop;
+    expect([topDrop(9, 8), topDrop(9, 9)]).toEqual([2, 2]);
+    expect(stripDrops(strip)).toEqual(new Map([['9,8', [0, 2]], ['9,9', [0, 2]]]));
+    // The flowing voxel's side toward the fall: none (its neighbour is higher).
+    expect(allUnitFaces(quads)).not.toContain('9,4,8,3');
+  });
+
+  test('a water source beside flowing lava (level 4, h 4/9) draws a strip from lava\'s corners up to 8/9; beside a lava source (8/9) nothing', () => {
+    // A stone channel: only the two voxels are open at y 4, so the water's corners see only itself (8/9, drop 1) and
+    // lava's only itself (each fluid counts the other as solid): 4/9 is drop 5.
+    const flowing = mesh(pair(WATER_SOURCE, lava(4), STONE), pairDepth);
+    const strips = owning(flowing.passes[2], '8,4,8,1');
+    expect(strips).toHaveLength(1);
+    expect(stripDrops(strips[0]!)).toEqual(new Map([['9,8', [1, 5]], ['9,9', [1, 5]]]));
+    expect(allUnitFaces(flowing.passes[2])).toEqual(['8,4,8,1', '8,4,8,4']);
+    // Lava draws its side against the water (pass 0), as against any non-lava neighbour.
+    expect(allUnitFaces(flowing.passes[0])).toEqual(['9,4,8,3', '9,4,8,4']);
+    // A lava source: 8/9 against 8/9, no strip; the water's top alone.
+    const still = mesh(pair(WATER_SOURCE, LAVA_SOURCE, STONE), pairDepth);
+    expect(allUnitFaces(still.passes[2])).toEqual(['8,4,8,4']);
+    expect(allUnitFaces(still.passes[0])).toEqual(['9,4,8,3', '9,4,8,4']);
+  });
+
+  test('a fall into a pool: the pool\'s sides toward the falling column draw nothing (the column is full height)', () => {
+    // A 5 × 5 pool of sources at y 4 in a stone basin, a falling column at (8, 4 … 10, 8) under a source at (8, 11, 8).
+    const POOL = (x: number, z: number): boolean => x >= 6 && x <= 10 && z >= 6 && z <= 10;
+    const p = paddedFrom(
+      (x, y, z) => (y <= 3 || (y === 4 && !POOL(x, z)) ? STONE : AIR), () => 0xF0,
+      (x, y, z) => (x === 8 && z === 8 && y >= 4 && y <= 10 ? FALLING : x === 8 && z === 8 && y === 11 ? WATER_SOURCE
+        : y === 4 && POOL(x, z) ? WATER_SOURCE : NO_FLUID),
+    );
+    const quads = mesh(p, depthFrom((x, y, z) => (x === 8 && z === 8 && y >= 4 && y <= 11 ? 8 : y === 4 && POOL(x, z) ? 1 : 0))).passes[2];
+    const faces = allUnitFaces(quads);
+    // At y 4 only tops: the pool's sides meet stone or water, and none toward the column; the column's at y 4 none.
+    expect(faces.filter((k) => k.split(',')[1] === '4' && Number(k.split(',')[3]) < 4)).toEqual([]);
+    // The pool's corners at the column are 1 (it holds water with water above): drop 0 where its tops meet it.
+    const drops = dropsByPosition(quads.filter((q) => faceOf(q) === 4 && ys(q)[0] === 40));
+    for (const c of ['64,40,64', '72,40,64', '72,40,72', '64,40,72']) expect(drops.get(c), `corner ${c}`).toBe(0);
+    // The column's sides above the pool: full height (drop 0), y 5 … 10 merged per side.
+    for (const f of [0, 1, 2, 3]) {
+      const side = quads.filter((q) => faceOf(q) === f && Math.max(...ys(q)) === 88);
+      expect(side, `face ${f}`).toHaveLength(1);
+      expect(Math.min(...ys(side[0]!))).toBe(40);
+      for (const w of side[0]!.words) expect(fieldsOf(w).cornerDrop).toBe(0);
+    }
+  });
+});
+
+describe("R1's brute force in lockstep with the strips (SP7a spec §6.2, §13.3; ruling P11)", () => {
+  /** A face key as `bruteFaces` builds it: ((y + 64)·256 + lz·16 + lx)·6 + face. */
+  const key = (lx: number, y: number, lz: number, f: number): number => ((y + 64) * 256 + lz * 16 + lx) * 6 + f;
+  const FALLING = packFluid(FLUID_WATER, 0, true);
+  const water = (level: number): number => packFluid(FLUID_WATER, level);
+  const lava = (level: number): number => packFluid(FLUID_LAVA, level);
+
+  /**
+   * A hand-built 3 × 3 of Published columns around (0, 0) on a stone floor (y ≤ 3), with light 0xF0, at y 4 …:
+   * - a spill along z 2: a source at x 1, levels 1 … 7 at x 2 … 8;
+   * - a fall: falling water at (12, 4 … 8, 12) under a source at (12, 9, 12), landing in levels 1 and 2 around it;
+   * - a fall with nothing above at the seam: falling (15, 4, 6) between level 2 at x 14 and level 3 at x 16 (the east
+   *   column);
+   * - lava steps along z 10: a source at x 3, levels 2, 4, 6 at x 4 … 6, beside a row of water sources along z 11
+   *   (x 3 … 7); lava at (7, 5, 11) over the water at (7, 4, 11), and a water source at (3, 5, 10) over the lava source.
+   */
+  function scene(): VoxelStore {
+    const at = new Map<string, number>();
+    const put = (x: number, y: number, z: number, f: number): void => void at.set(`${x},${y},${z}`, f);
+    put(1, 4, 2, WATER_SOURCE);
+    for (let k = 1; k <= 7; k++) put(1 + k, 4, 2, water(k));
+    for (let y = 4; y <= 8; y++) put(12, y, 12, FALLING);
+    put(12, 9, 12, WATER_SOURCE);
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      put(12 + dx, 4, 12 + dz, water(1));
+      put(12 + 2 * dx, 4, 12 + 2 * dz, water(2));
+    }
+    put(15, 4, 6, FALLING);
+    put(14, 4, 6, water(2));
+    put(16, 4, 6, water(3));
+    put(3, 4, 10, LAVA_SOURCE);
+    for (let k = 1; k <= 3; k++) put(3 + k, 4, 10, lava(2 * k));
+    for (let x = 3; x <= 7; x++) put(x, 4, 11, WATER_SOURCE);
+    put(7, 5, 11, LAVA_SOURCE);
+    put(3, 5, 10, WATER_SOURCE);
+    const s = createStore({ shared: false, maxBlockBytes: 32 << 20, maxByteBytes: 32 << 20 });
+    for (let cz = -1; cz <= 1; cz++) {
+      for (let cx = -1; cx <= 1; cx++) {
+        const w = s.claimColumn(cx, cz, 0);
+        for (let sy = 0; sy < SECTIONS; sy++) {
+          const blocks = new Uint16Array(4096);
+          const fluid = new Uint8Array(4096);
+          for (let i = 0; i < 4096; i++) {
+            const [x, y, z] = [16 * cx + (i & 15), -64 + 16 * sy + (i >> 8), 16 * cz + ((i >> 4) & 15)];
+            blocks[i] = y <= 3 ? STONE : AIR;
+            fluid[i] = at.get(`${x},${y},${z}`) ?? NO_FLUID;
+          }
+          w.setFinal(sy, blocks, new Uint8Array(4096).fill(0xF0), fluid);
+        }
+        w.commit(3);
+      }
+    }
+    return s;
+  }
+
+  /** R1's two counts of one category: mesh keys missing from brute plus repeats, and brute keys missing from the mesh. */
+  function diff(mesh: Uint32Array, brute: Uint32Array): { hiddenEmitted: number; visibleMissing: number } {
+    const want = new Set(brute);
+    const seen = new Set<number>();
+    let hiddenEmitted = 0;
+    for (const k of mesh) {
+      if (!want.has(k) || seen.has(k)) hiddenEmitted++;
+      seen.add(k);
+    }
+    return { hiddenEmitted, visibleMissing: brute.filter((k) => !seen.has(k)).length };
+  }
+
+  test('a spill, a fall and lava steps: bruteFaces and meshFaceCounts agree (hiddenEmitted 0, visibleMissing 0 for water and opaque)', () => {
+    const s = scene();
+    const brute = bruteFaces(regionView(s, -1, -1, 3, 3), 0, 0);
+    // The strips are visible faces of the brute force: the seam fall's toward level 3, and water toward lava levels 4
+    // and 6 (lava's corners lower); none toward the lava source at x 3, whose corners there (its 8/9 at weight 10) meet
+    // water's.
+    for (const k of [key(15, 4, 6, FACE_EAST), key(5, 4, 11, FACE_NORTH), key(6, 4, 11, FACE_NORTH)]) expect(brute.water).toContain(k);
+    expect(brute.water).not.toContain(key(3, 4, 11, FACE_NORTH));
+    // Water's up face under lava shows, its down face over lava does not; lava's faces toward water are opaque.
+    expect(brute.water).toContain(key(7, 4, 11, FACE_UP));
+    expect(brute.water).not.toContain(key(3, 5, 10, FACE_DOWN));
+    for (const k of [key(7, 5, 11, FACE_DOWN), key(3, 4, 10, FACE_UP), key(4, 4, 10, FACE_SOUTH)]) expect(brute.opaque).toContain(k);
+    for (const o of [{ ao: true, smoothLight: true }, { ao: false, smoothLight: false }]) {
+      const m = meshFaceCounts(meshColumnPayload(s.neighborhood(0, 0), createMeshScratch(), o));
+      expect(diff(m.water, brute.water), 'water').toEqual({ hiddenEmitted: 0, visibleMissing: 0 });
+      expect(diff(m.opaque, brute.opaque), 'opaque').toEqual({ hiddenEmitted: 0, visibleMissing: 0 });
+    }
+  });
+
+  test('meshFaceCounts maps a side strip (four positions at one y) to its owner\'s one unit face: a water strip and a degenerate lava strip', () => {
+    // Section 4 (y 0 … 15). A lava strip of pass 0 (`LAVA_LAYER`, face north, all drops 0: no height) on the z = 5 plane
+    // over x 3 … 4 at position y 24 (owner (3, 2, 5)); a water strip of pass 2 (face east, drops 4 at the bottom) on the
+    // x = 8 plane over z 6 … 7 at position y 88 (owner (7, 10, 6)).
+    const solid = packSolid({ layer: LAVA_LAYER, face: FACE_NORTH, ao: 0, sky: 15, block: 15, tint: 0, flags: 0, frame: 0 });
+    const fluidWord = (drop: number): number => packFluidWord({ layer: 0, face: FACE_EAST, sky: 15, block: 0, depth: 1, tint: 0, cornerDrop: drop });
+    const payload: ColumnMeshPayload = {
+      cx: 0, cz: 0, versions: new Int32Array(18), connectivity: new Uint16Array(24),
+      position: new Uint8Array([24, 24, 40, 0, 32, 24, 40, 0, 32, 24, 40, 0, 24, 24, 40, 0, 64, 88, 48, 0, 64, 88, 48, 0, 64, 88, 56, 0, 64, 88, 56, 0]),
+      data: new Uint32Array([solid, solid, solid, solid, fluidWord(4), fluidWord(0), fluidWord(0), fluidWord(4)]),
+      index: new Uint32Array([0, 1, 2, 0, 2, 3, 0, 1, 2, 0, 2, 3]),
+      rows: new Int32Array([4, 0, 0, 4, 0, 6, 4, 2, 4, 4, 6, 6]),
+      spheres: new Float32Array(8),
+    };
+    const m = meshFaceCounts(payload);
+    expect([...m.opaque]).toEqual([key(3, 2, 5, FACE_NORTH)]);
+    expect([...m.water]).toEqual([key(7, 10, 6, FACE_EAST)]);
+    expect([m.quadsOpaque, m.quadsWater]).toEqual([1, 1]);
   });
 });
 

@@ -3452,6 +3452,16 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(text, 'the pre-SP7a corner sentence is gone').not.toContain('Top corner height is the average of neighbouring levels');
   });
 
+  test('§4.4\'s fluid mesh: the side strips between levels of one fluid and against lava (SP7a spec §16 item 11)', () => {
+    // Item 11's strip half (Task 10): "Sides are emitted only against non-fluid neighbours …" gains "… and between voxels
+    // of one fluid where the neighbour's surface is lower (a side strip; SP7a)", with water's strip against lava.
+    const at = text.indexOf('**Fluid mesh:**');
+    expect(at, 'no **Fluid mesh:** block in §4.4').toBeGreaterThan(text.indexOf('### 4.4 '));
+    const block = text.slice(at, text.indexOf('**Vertex = 8 B**', at)).split('\n');
+    expect(block[2], 'the sides as built').toBe('- Sides are emitted only against non-fluid neighbours that do not occlude them (predicate above), and between voxels of one fluid where the neighbour\'s surface is lower (a side strip; SP7a): its bottom vertices at the neighbour\'s corner drops on the shared edge, its top vertices at the voxel\'s, all four positions at the voxel\'s top. Water draws the same strip against lava where lava\'s corners on the shared edge are lower (each fluid\'s corners count the other as solid); its up face under lava stays, its down face over lava is not drawn.');
+    expect(text, 'the pre-SP7a sides sentence is gone').not.toContain('- Sides are emitted only against non-fluid neighbours that do not occlude them (predicate above).\n');
+  });
+
   test('§4.11 and §4.12 name SP7b; the bench route\'s flood is SP7b\'s and R5\'s row is gated from SP7a (SP7a spec §16 item 13)', () => {
     const at = text.indexOf('### 4.11 ');
     const s411to412 = text.slice(at, text.indexOf('### 4.13 ', at));

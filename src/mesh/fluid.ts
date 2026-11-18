@@ -3,8 +3,14 @@
  * spec §6.1-§6.2, D26), over one section's 18³ padded view, water into the translucent pass (2):
  * - **visibility:** a water voxel (fluid type water) draws a face against a neighbour that does not occlude it (PASS
  *   opaque with the facing bit in `fullFaces`) and is not water, so also against glass, ice and the box states, whose
- *   own faces toward the water are the ones culled (`greedy.ts`, `boxes.ts`; SP5a spec §1.3); against lava only its up
- *   face, since lava's opaque full-height face covers every plane the two share;
+ *   own faces toward the water are the ones culled (`greedy.ts`, `boxes.ts`; SP5a spec §1.3); against lava its up face,
+ *   and no down face;
+ * - **side strips** (SP7a spec §6.2): a water voxel's side toward water or lava is a strip where the neighbour's top
+ *   corners on the shared edge are lower than this voxel's drawn top there: its bottom vertices at the neighbour's
+ *   corner drops (this voxel's where the neighbour's is higher), its top vertices at this voxel's, all four positions at
+ *   the voxel's top, one quad per voxel. Each fluid computes its corners counting the other as solid, so water and lava
+ *   may differ on a shared corner; two water voxels share theirs (below), so a same-fluid strip only rises where a voxel
+ *   is drawn full (water above or falling) beside one that is not;
  * - **height** (SP7a spec §6.1): positions stay at the voxel's full height, `8·(ly + 1)` at the top (positions are
  *   whole 1/8 units); the water shader lowers each corner by its `cornerDrop` ninths. A surface voxel (no water above,
  *   not falling) takes on each top corner, of its top face and of its side faces, `cornerDrop(cornerHeight(…))` of the
@@ -27,8 +33,8 @@
  * (so also against glass, ice and the box states, whose faces toward it are culled), into the opaque pass (0) with the
  * solid word: `LAVA_LAYER`, water's smooth light, and AO, tint, flags and frame 0, at the voxel's full height. Its
  * block light 15 makes it bright through the lightmap. The face tables, the corner light, the merge loop and the
- * corner positions are `mesh/faces.ts`'s, shared with `mesh/greedy.ts`. Side strips between levels of one fluid and
- * flowing lava are SP7a's Tasks 10 and 11.
+ * corner positions are `mesh/faces.ts`'s, shared with `mesh/greedy.ts`. Lava's own corner drops and strips are SP7a's
+ * Task 11.
  */
 import { CORNER_DRY, CORNER_FULL, CORNER_SOLID } from '../core/constants';
 import { FLUID_LAVA, FLUID_NONE, FLUID_WATER, fluidFalling, fluidType, hasFluid } from '../world/blocks/fluid';
@@ -99,8 +105,9 @@ const PASS_LAVA = 0;
 const LOCAL = [1, 256, 16] as const;
 const UP = SIDE * SIDE;
 
-/** The face index of up (`mesh/faces.ts`'s face order). */
+/** The face indices of up and down (`mesh/faces.ts`'s face order); the four side faces come before them. */
 const FACE_UP = 4;
+const FACE_DOWN = 5;
 
 /**
  * Key A's bits: face 0-2, depth 3-6, cornerDrop of v0 … v3 7-22 (four bits each), bit 23 "a lava face" (depth and
@@ -118,6 +125,8 @@ const MASK_C = new Uint32Array(256);
 const VERTS = new Uint16Array(4);
 const CORNERS = new Uint8Array(12);
 const WORDS = new Uint32Array(4);
+/** A side strip's four vertex drops, in vertex order. */
+const STRIP = new Uint8Array(4);
 
 /**
  * Per section-local voxel (`y·256 + z·16 + x`), a water voxel's four top-corner drops, 4 bits each by xz corner: bits
@@ -131,6 +140,8 @@ const DROPS = new Uint16Array(4096);
  * when the vertex lies on the voxel's top, else 16 (which reads 0 from the 16-bit entry).
  */
 const DROP_SHIFT_OF = new Uint8Array(24);
+/** Per face and vertex (`f·4 + k`), the vertex's xz corner (`DROPS`' order), whether it lies on the top or not. */
+const CORNER_OF = new Uint8Array(24);
 for (let f = 0; f < 6; f++) {
   for (let k = 0; k < 4; k++) {
     const at = [0, 0, 0];
@@ -139,29 +150,56 @@ for (let f = 0; f < 6; f++) {
     at[AX_V[f]!] = k >= 2 ? 1 : 0;
     const corner = at[2] === 0 ? at[0]! : 3 - at[0]!;
     DROP_SHIFT_OF[f * 4 + k] = at[1] === 1 ? 4 * corner : 16;
+    CORNER_OF[f * 4 + k] = corner;
   }
 }
+/** Per xz corner (`DROPS`' order), the padded offset from a voxel to the voxel whose −x−z corner it is. */
+const CORNER_AT = [0, 1, 1 + SIDE, SIDE] as const;
 
 /**
- * A voxel's value in `cornerHeight` for water (SP7a spec §6.1): `CORNER_FULL` for water with water above, the
- * `surfaceHeight` of any other water voxel, `CORNER_DRY` for a passable voxel without fluid, else `CORNER_SOLID`.
+ * A voxel's value in `cornerHeight` for fluid type `ft` (SP7a spec §6.1): `CORNER_FULL` for that fluid with the same
+ * fluid above, the `surfaceHeight` of any other voxel of that fluid, `CORNER_DRY` for a passable voxel without fluid,
+ * else `CORNER_SOLID` (the other fluid included).
  */
-function heightCode(blocks: Uint16Array, fluid: Uint8Array, q: number): number {
+function heightCode(blocks: Uint16Array, fluid: Uint8Array, q: number, ft: number): number {
   const b = fluid[q]!;
   const t = typeOf(b);
-  if (t === WATER) return typeOf(fluid[q + UP]!) === WATER ? C_FULL : SURFACE_HEIGHT(b, false);
+  if (t === ft) return typeOf(fluid[q + UP]!) === ft ? C_FULL : SURFACE_HEIGHT(b, false);
   return t === NONE && PASSABLE(blocks[q]!) ? C_DRY : C_SOLID;
 }
 
 /**
- * The drop of the top corner at the −x−z corner of padded voxel `q`, from the 4 voxels around it read in one world
- * order (−x−z, +x−z, +x+z, −x+z of the corner), so every voxel sharing the corner computes the same double.
+ * The drop of fluid type `ft`'s top corner at the −x−z corner of padded voxel `q`, from the 4 voxels around it read in
+ * one world order (−x−z, +x−z, +x+z, −x+z of the corner), so every voxel sharing the corner computes the same double.
  */
-function cornerDropAt(blocks: Uint16Array, fluid: Uint8Array, q: number): number {
+function cornerDropAt(blocks: Uint16Array, fluid: Uint8Array, q: number, ft: number): number {
   return CORNER_DROP(CORNER_HEIGHT(
-    heightCode(blocks, fluid, q - 1 - SIDE), heightCode(blocks, fluid, q - SIDE), heightCode(blocks, fluid, q),
-    heightCode(blocks, fluid, q - 1),
+    heightCode(blocks, fluid, q - 1 - SIDE, ft), heightCode(blocks, fluid, q - SIDE, ft), heightCode(blocks, fluid, q, ft),
+    heightCode(blocks, fluid, q - 1, ft),
   ));
+}
+
+/**
+ * Fills `STRIP` with the side strip of water voxel `v` (padded; `drops` its `DROPS` entry) through side face `f`
+ * toward padded `q`, which holds fluid type `nt` (SP7a spec §6.2): top vertices at `v`'s corner drops, bottom vertices
+ * at `nt`'s corner drops on the shared edge where they are lower, else at `v`'s. Returns whether any bottom vertex lies
+ * below its top one (a strip to draw). A neighbour drawn full (the same fluid above, or falling) is never lower.
+ */
+function stripOf(blocks: Uint16Array, fluid: Uint8Array, f: number, v: number, q: number, nt: number, drops: number): boolean {
+  if (isFalling(fluid[q]!) || typeOf(fluid[q + UP]!) === nt) return false;
+  let lower = false;
+  for (let k = 0; k < 4; k++) {
+    const c = CORNER_OF[f * 4 + k]!;
+    const own = drops >>> (4 * c) & 15;
+    STRIP[k] = own;
+    if (DROP_SHIFT_OF[f * 4 + k] !== 16) continue;
+    const nb = cornerDropAt(blocks, fluid, v + CORNER_AT[c]!, nt);
+    if (nb > own) {
+      STRIP[k] = nb;
+      lower = true;
+    }
+  }
+  return lower;
 }
 
 /** Fills `DROPS` for every water voxel of the padded section (SP7a spec §6.1). */
@@ -177,8 +215,8 @@ function topCornerDrops(blocks: Uint16Array, fluid: Uint8Array): void {
           DROPS[li] = 0;
           continue;
         }
-        DROPS[li] = cornerDropAt(blocks, fluid, q) | cornerDropAt(blocks, fluid, q + 1) << 4
-          | cornerDropAt(blocks, fluid, q + 1 + SIDE) << 8 | cornerDropAt(blocks, fluid, q + SIDE) << 12;
+        DROPS[li] = cornerDropAt(blocks, fluid, q, WATER) | cornerDropAt(blocks, fluid, q + 1, WATER) << 4
+          | cornerDropAt(blocks, fluid, q + 1 + SIDE, WATER) << 8 | cornerDropAt(blocks, fluid, q + SIDE, WATER) << 12;
       }
     }
   }
@@ -229,7 +267,8 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
           const ns = blocks[q]!;
           if (pass[ns] === OPAQUE && (full[ns]! & oppBit) !== 0) continue;
           const nt = typeOf(fluid[q]!);
-          if (nt === ft) continue;
+          // Two water voxels share their corners, so only one drawn full beside one that is not can need a strip.
+          if (nt === ft && (ft !== WATER || f >= FACE_UP || !(isFalling(fluid[v]!) || typeOf(fluid[v + UP]!) === WATER))) continue;
           if (ft === LAVA) {
             MASK_A[m] = (KA_PRESENT | KA_LAVA | f) >>> 0;
             MASK_B[m] = CORNER_LIGHT(light, blocks, solid, SMOOTH, q, su, sv, VERTS);
@@ -237,12 +276,21 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
             any = true;
             continue;
           }
-          // Lava's opaque full-height face covers the plane the two share; water's surface under lava sits below it,
-          // on no shared plane, and stays. Its top face is drawn only when no water is above (the skip above).
-          if (nt === LAVA && f !== FACE_UP) continue;
+          // Water's surface under lava sits below lava's bottom face, on no shared plane, and stays; its down face over
+          // lava does not. Its top face is drawn only when no water is above (the skip above).
+          if (nt === LAVA && f === FACE_DOWN) continue;
           const li = d * la + i * lu + j * lv;
           const dep = depth[li]!;
           const drops = DROPS[li]!;
+          // Toward water or lava a side is a strip, drawn only where the neighbour's shared corners are lower.
+          if (nt !== NONE && f < FACE_UP) {
+            if (!stripOf(blocks, fluid, f, v, q, nt, drops)) continue;
+            const ka = (KA_PRESENT | f | dep << KA_DEPTH
+              | STRIP[0]! << KA_DROP | STRIP[1]! << (KA_DROP + 4) | STRIP[2]! << (KA_DROP + 8) | STRIP[3]! << (KA_DROP + 12)) >>> 0;
+            const s = blocks[v]!;
+            emitStrip(f, d, i, j, ka, CORNER_LIGHT(light, blocks, solid, SMOOTH, q, su, sv, VERTS), s | tint[s]! << 10, b);
+            continue;
+          }
           const d0 = drops >>> sh0 & 15;
           const d1 = drops >>> sh1 & 15;
           const d2 = drops >>> sh2 & 15;
@@ -281,6 +329,30 @@ function emit(f: number, d: number, i: number, j: number, w: number, h: number, 
     b.quad(PASS_LAVA, CORNERS, WORDS, false);
     return;
   }
+  waterWords(f, ka, kb, kc);
+  const flip = f === FACE_UP && !SPLIT_V0V2(
+    9 - (ka >>> KA_DROP & 15), 9 - (ka >>> (KA_DROP + 4) & 15), 9 - (ka >>> (KA_DROP + 8) & 15), 9 - (ka >>> (KA_DROP + 12) & 15),
+  );
+  b.quad(PASS_WATER, CORNERS, WORDS, flip);
+}
+
+/**
+ * Writes one side strip (SP7a spec §6.2): voxel (d, i, j)'s side quad with all four positions raised to the voxel's
+ * top, its vertices lowered by their `cornerDrop`s in the shader (the bottom ones by the neighbour's), split v0-v2.
+ */
+function emitStrip(f: number, d: number, i: number, j: number, ka: number, kb: number, kc: number, b: MeshBuilder): void {
+  QUAD_CORNERS(f, d, i, j, 1, 1, CORNERS);
+  const top = Math.max(CORNERS[1]!, CORNERS[4]!, CORNERS[7]!, CORNERS[10]!);
+  CORNERS[1] = top;
+  CORNERS[4] = top;
+  CORNERS[7] = top;
+  CORNERS[10] = top;
+  waterWords(f, ka, kb, kc);
+  b.quad(PASS_WATER, CORNERS, WORDS, false);
+}
+
+/** Fills `WORDS` with a water quad's four fluid data words from its keys. */
+function waterWords(f: number, ka: number, kb: number, kc: number): void {
   const base = (kc & 0x3FF) | f << FACE_SHIFT | (ka >>> KA_DEPTH & 15) << DEPTH_SHIFT | (kc >>> 10 & 7) << TINT_SHIFT;
   for (let k = 0; k < 4; k++) {
     const sky = kb >>> (4 * k) & 15;
@@ -288,10 +360,6 @@ function emit(f: number, d: number, i: number, j: number, w: number, h: number, 
     const drop = ka >>> (KA_DROP + 4 * k) & 15;
     WORDS[k] = (base | sky << SKY_SHIFT | blk << BLOCK_SHIFT | drop << DROP_SHIFT) >>> 0;
   }
-  const flip = f === FACE_UP && !SPLIT_V0V2(
-    9 - (ka >>> KA_DROP & 15), 9 - (ka >>> (KA_DROP + 4) & 15), 9 - (ka >>> (KA_DROP + 8) & 15), 9 - (ka >>> (KA_DROP + 12) & 15),
-  );
-  b.quad(PASS_WATER, CORNERS, WORDS, flip);
 }
 
 /** Sections per column and the clamp of `depth`. */

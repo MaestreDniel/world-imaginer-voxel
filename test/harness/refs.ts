@@ -11,7 +11,7 @@
  * D22): `raycastVisible`, R3's raycast visibility reference: 3D DDA rays in cube-map directions from the eye, the
  * sections they enter; it shares no code with `render/culling/caveCulling.ts`.
  */
-import { CARVER_WINDOW_R, CAVE_FILM_KIND, CAVE_KIND, caveKindOf } from '../../src/core/constants';
+import { CARVER_WINDOW_R, CAVE_FILM_KIND, CAVE_KIND, CORNER_DRY, CORNER_FULL, CORNER_SOLID, caveKindOf } from '../../src/core/constants';
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
 import { carveTest, densityTopOf, floorYAt, wetAt } from '../../src/gen/caves/carve';
@@ -21,7 +21,8 @@ import { createGenContext, noiseFor } from '../../src/gen/context';
 import { DEFAULT_MESH_TABLES, type MeshTables } from '../../src/mesh/greedy';
 import { PACK_LAYOUT } from '../../src/mesh/packing';
 import { MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, type ColumnMeshPayload } from '../../src/mesh/column';
-import { FLUID_WATER, fluidType, hasFluid } from '../../src/world/blocks/fluid';
+import { FLUID_LAVA, FLUID_NONE, FLUID_WATER, fluidFalling, fluidType, hasFluid } from '../../src/world/blocks/fluid';
+import { cornerDrop, cornerHeight, isPassable, surfaceHeight } from '../../src/world/blocks/fluidRules';
 import { AIR, BEDROCK } from '../../src/world/blocks/index';
 import { ALL_FACES, FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST, PASS_CUTOUT, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import { DEFAULT_LIGHT_TABLES, effEmit, effOpacity, fallBlocked, type LightTables } from '../../src/world/blocks/light';
@@ -121,12 +122,21 @@ const faceKey = (lx: number, y: number, lz: number, face: number): number => ((y
  * (`faceKey`), in two categories (ruling P32):
  * - `opaque`: the faces of PASS opaque and cutout states (passes 0 and 1) against a neighbour that does not occlude
  *   them (PASS opaque with the facing bit in `fullFaces`), a cutout face also not against the same block unless
- *   `leaves` marks it (SP4a's world has no cutout state);
- * - `water`: the faces of water voxels (fluid type water) against a neighbour that does not occlude them and is not
- *   water (§5.6).
- * Below y −64 is bedrock (opaque) and above y 319 air without fluid, as in the padded view (§5.1). PASS translucent
- * states are not counted (SP4a's world has none; SP8a meshes them). The column's four side neighbours must be in the
- * view (RangeError otherwise).
+ *   `leaves` marks it (SP4a's world has no cutout state); and the faces of any other voxel holding lava against a
+ *   neighbour that does not occlude them and does not hold lava (SP5a spec §1.3: lava meshes in pass 0);
+ * - `water`: the faces of water voxels (fluid type water) against a neighbour that does not occlude them (§5.6): one
+ *   holding neither water nor lava; one holding lava, through the up face, and through a side face as water's side
+ *   strip (below), never through the down face; one holding water, through a side face as a side strip only (SP7a spec
+ *   §6.2): when the neighbour's top corners on the shared edge are lower than this voxel's drawn top there, either
+ *   corner strictly lower.
+ * A drawn top corner is read voxel by voxel by SP7a spec §6.1 for the voxel's fluid type: 1 (drop 0) when the voxel
+ * holds the same fluid above it or is falling; else `cornerDrop(cornerHeight(…))` of the 4 voxels around the corner at
+ * the voxel's y, in the spec's world order (−x−z, +x−z, +x+z, −x+z), each `CORNER_FULL` when it holds that fluid with
+ * the same fluid above, its `surfaceHeight` when it holds that fluid, `CORNER_DRY` when passable without fluid, else
+ * `CORNER_SOLID` (the other fluid included). Below y −64 is bedrock (opaque) and above y 319 air without fluid, as in
+ * the padded view (§5.1). PASS translucent states are not counted (SP4a's world has none; SP8a meshes them). The
+ * column's four side neighbours must be in the view (RangeError otherwise), and with them, the view being a
+ * rectangle, its diagonal neighbours, which the corners read.
  */
 export function bruteFaces(view: RegionView, cx: number, cz: number, t: MeshTables = DEFAULT_MESH_TABLES): { opaque: Uint32Array; water: Uint32Array } {
   if (cx - 1 < view.cx0 || cx + 1 >= view.cx0 + view.w || cz - 1 < view.cz0 || cz + 1 >= view.cz0 + view.h) {
@@ -134,7 +144,27 @@ export function bruteFaces(view: RegionView, cx: number, cz: number, t: MeshTabl
   }
   const { pass, fullFaces, leaves } = t;
   const blockAt = (x: number, y: number, z: number): number => (y < -64 ? BEDROCK : y > 319 ? AIR : view.block(x, y, z));
-  const waterAt = (x: number, y: number, z: number): boolean => y >= -64 && y <= 319 && fluidType(view.fluid(x, y, z)) === FLUID_WATER;
+  const typeAt = (x: number, y: number, z: number): number => (y < -64 || y > 319 ? FLUID_NONE : fluidType(view.fluid(x, y, z)));
+  /** A voxel's value in `cornerHeight` for fluid type `t`. */
+  const code = (x: number, y: number, z: number, t: number): number => {
+    const own = typeAt(x, y, z);
+    if (own === t) return typeAt(x, y + 1, z) === t ? CORNER_FULL : surfaceHeight(view.fluid(x, y, z), false);
+    return own === FLUID_NONE && isPassable(blockAt(x, y, z)) ? CORNER_DRY : CORNER_SOLID;
+  };
+  /** The drawn top of voxel (x, y, z), holding fluid type `t`, at the corner point (X, Z), as a drop in ninths. */
+  const topDrop = (x: number, y: number, z: number, t: number, X: number, Z: number): number => {
+    if (fluidFalling(view.fluid(x, y, z)) || typeAt(x, y + 1, z) === t) return 0;
+    return cornerDrop(cornerHeight(code(X - 1, y, Z - 1, t), code(X, y, Z - 1, t), code(X, y, Z, t), code(X - 1, y, Z, t)));
+  };
+  /** Whether water voxel (x, y, z)'s side (dx, dz) shows a strip: the neighbour, of type `t`, lower at either shared corner. */
+  const stripShows = (x: number, y: number, z: number, dx: number, dz: number, t: number): boolean => {
+    for (const k of [0, 1]) {
+      const X = dx > 0 ? x + 1 : dx < 0 ? x : x + k;
+      const Z = dz > 0 ? z + 1 : dz < 0 ? z : z + k;
+      if (topDrop(x + dx, y, z + dz, t, X, Z) > topDrop(x, y, z, FLUID_WATER, X, Z)) return true;
+    }
+    return false;
+  };
   const opaque: number[] = [];
   const water: number[] = [];
   for (let y = -64; y < 320; y++) {
@@ -145,14 +175,22 @@ export function bruteFaces(view: RegionView, cx: number, cz: number, t: MeshTabl
         const s = view.block(x, y, z);
         const ps = pass[s];
         const solid = ps === PASS_OPAQUE || ps === PASS_CUTOUT;
-        const wet = fluidType(view.fluid(x, y, z)) === FLUID_WATER;
-        if (!solid && !wet) continue;
+        const ft = fluidType(view.fluid(x, y, z));
+        const wet = ft === FLUID_WATER;
+        const lava = !solid && ft === FLUID_LAVA;
+        if (!solid && !wet && !lava) continue;
         // FACES is in face order (north, east, south, west, up, down), so the keys come out sorted.
         for (const [f, dx, dy, dz, opp] of FACES) {
           const ns = blockAt(x + dx, y + dy, z + dz);
           if (pass[ns] === PASS_OPAQUE && ((fullFaces[ns]! >> opp) & 1) !== 0) continue;
+          const nt = typeAt(x + dx, y + dy, z + dz);
           if (solid && !(ps === PASS_CUTOUT && ns === s && (leaves === undefined || leaves[s] === 0))) opaque.push(faceKey(lx, y, lz, f));
-          if (wet && !waterAt(x + dx, y + dy, z + dz)) water.push(faceKey(lx, y, lz, f));
+          if (lava && nt !== FLUID_LAVA) opaque.push(faceKey(lx, y, lz, f));
+          if (!wet) continue;
+          const shows = nt === FLUID_NONE ? true
+            : dy !== 0 ? nt === FLUID_LAVA && dy > 0
+              : stripShows(x, y, z, dx, dz, nt);
+          if (shows) water.push(faceKey(lx, y, lz, f));
         }
       }
     }
@@ -237,7 +275,10 @@ export function bruteXrayFaces(view: RegionView, cx: number, cz: number, t: Mesh
  * `quadsXray`. Each quad is the row's next four vertices; its face is its first vertex's `face` field, its plane the
  * corners' common coordinate P on the face's axis (in blocks), and it covers every unit cell between its corners in the
  * plane, owned by the voxel at P − 1 for a + face (east, south, up) and at P for a − face (an X-ray wall's owner is its
- * hollow voxel). Water tops sit at the voxel's full height (ruling P25), so they need no special case. Throws on a quad
+ * hollow voxel). Water tops sit at the voxel's full height (ruling P25), so they need no special case. A side quad
+ * (face not up or down) whose four positions share one y Y is a side strip (SP7a spec §6.2, ruling P11; its heights
+ * are in its words' drops): it covers its owner voxels' unit faces along its horizontal extent at y Y − 1, in its
+ * row's category (a water strip of pass 2 in `water`, a `LAVA_LAYER` strip of pass 0 in `opaque`). Throws on a quad
  * that is not an axis-aligned rectangle on whole blocks, or whose owner lies outside its section.
  */
 export function meshFaceCounts(p: ColumnMeshPayload): {
@@ -285,6 +326,8 @@ export function meshFaceCounts(p: ColumnMeshPayload): {
         }
       }
       if (lo[axis] !== hi[axis]) throw new Error(`meshFaceCounts: row ${r} vertex ${v}: the quad is not in a plane of its face ${face}`);
+      // A side strip: every position at its owners' top, Y = ly + 1.
+      if (axis !== 1 && lo[1] === hi[1]) lo[1] = hi[1]! - 1;
       const u = axis === 0 ? 1 : 0;
       const w = axis === 2 ? 1 : 2;
       at[axis] = plus ? lo[axis]! - 1 : lo[axis]!;
