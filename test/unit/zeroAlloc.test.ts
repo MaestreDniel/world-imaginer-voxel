@@ -88,9 +88,10 @@ import { createModifyMode, createModifySwitch } from '../../src/ui/world/modifyM
 import { createPlaces, PLACE_COLOURS } from '../../src/ui/world/places';
 import { AUTOSAVE_MS } from '../../src/ui/world/autosave';
 import {
-  aimReach, createAim, createClickQueue, createPageAutosave, createPageXray, createSelectActions, newWorldRecord, pageKeyName, toolClicks, type Aim,
-  type GhostHost, type PageXray, type SelectActions,
+  aimReach, applyWaterSetting, createAim, createClickQueue, createPageAutosave, createPageXray, createSelectActions, newWorldRecord, pageKeyName, toolClicks,
+  type Aim, type GhostHost, type PageXray, type SelectActions,
 } from '../../src/ui/world/worldPage';
+import { SETTINGS_DEFAULTS, type WorldSettings } from '../../src/ui/settings';
 import { createXrayStrip } from '../../src/ui/world/xrayStrip';
 import { fakePayload } from './fixtures/payloads';
 import {
@@ -1149,6 +1150,34 @@ describe('zero allocation at rest (SP4b spec §3.10, D25)', () => {
     // Written every frame (a wrap at 3,600 s may land inside the window, so only that it moved).
     expect(w.seconds).not.toBe(s0);
     expect(w.seconds).toBe(f.state.seconds);
+  }, TIMEOUT_MS);
+
+  test(`${N} Water toggles (the page's applyWaterSetting, Fast and Fancy alternating) grow the heap by less than 256 KB, and frame steps after them stay within the boxing budget of 256 B per tick (SP7a spec §7, D10: a toggle writes one uniform, no remesh or relink)`, async () => {
+    const f = await atRest();
+    const fancy: WorldSettings = { ...SETTINGS_DEFAULTS, water: 'fancy' };
+    const fast: WorldSettings = { ...SETTINGS_DEFAULTS, water: 'fast' };
+    const renderer = { setWaterTier: (tier: 0 | 1) => f.setWaterTier(tier) };
+    let k = 0;
+    try {
+      const g = allocationOver(() => {
+        if ((k++ & 1) === 0) applyWaterSetting(fancy, fast, renderer);
+        else applyWaterSetting(fast, fancy, renderer);
+      }, WARM_UP, ZERO_ALLOC_MAX);
+      expectAtRest(g);
+      // The last call's tier: Fast after an odd count of calls, Fancy after an even one.
+      expect(f.waterState().tier).toBe(k & 1 ? 0 : 1);
+      // The frame at rest after the toggles: nothing was remeshed or rebuilt, so the steps stay at rest.
+      f.setWaterTier(0);
+      const before = f.stats();
+      const h = allocationOver(f.tick, 0, FRAME_STEP_ALLOC_MAX);
+      expectAtRest(h, FRAME_STEP_ALLOC_MAX);
+      expectSp4cAtRest(f);
+      expect(f.stats().rendered - before.rendered).toBe(h.calls);
+      expect(f.waterState().tier).toBe(0);
+    } finally {
+      f.setWaterTier(1);
+    }
+    expect(f.waterState().tier).toBe(1);
   }, TIMEOUT_MS);
 
   test(`${N} frame steps at rest with culling on, walking and filtering, grow the heap by less than the boxing budget of 256 B per tick (SP6b §8.1, §8.3)`, async () => {

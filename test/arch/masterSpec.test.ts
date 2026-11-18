@@ -1721,14 +1721,12 @@ describe('master spec amendments (SP5b §9)', () => {
     expect(s56.split('\n')).toContain('  - spawn, player with view cone, grid, column-status heatmap, saved places per saved world (SP5b: a section of each saved world\'s map, one map per saved world; coloured dots; a Places tab; B in the world and \'+ Add at the pin\' on the map).');
   });
 
-  test('§1\'s settings block is replaced by the Settings screen; §4.16 and §5.2 name its Graphics and Controls (SP5b spec §1.4, D9, §9)', () => {
+  test('§1\'s settings block is replaced by the Settings screen; §5.2 names its Graphics and Controls (§4.16\'s line in the SP7a describe) (SP5b spec §1.4, D9, §9)', () => {
     // Moved from the SP5a describe (SP5b spec §8), with the amendment it pins.
     const entry = layoutEntry(/^\s+ui\/world\/\* /);
     expect(entry).toContain('the world\'s small settings block (replaced by SP5b\'s Settings screen, `ui/settingsPanel.ts`);');
     expect(entry).not.toContain('(SP5b\'s graphics settings screen replaces it)');
-    const at416 = text.indexOf('### 4.16 ');
-    const lines416 = text.slice(at416, text.indexOf('### 4.17 ', at416)).split('\n');
-    expect(lines416.some((l) => l.startsWith('- Every setting can be overridden individually (SP5b: the Settings screen, G: Graphics with RD, FPS cap, FOV and brightness, the rest greyed until SP11; Controls with mouse sensitivity and hold to repeat): RD, LOD,')), 'no amended "Every setting can be overridden" line in §4.16').toBe(true);
+    // §4.16's "Every setting can be overridden" line: pinned in the SP7a describe since SP7a rewords it (SP7a spec §16 item 14).
     const at52 = text.indexOf('### 5.2 ');
     const lines52 = text.slice(at52, text.indexOf('### 5.3 ', at52)).split('\n');
     expect(lines52).toContain('- **Settings:** Graphics and Controls (SP5b), Audio (SP8c) (master, music, sfx and ambient volumes; music frequency Always / Frequent / Standard / Never; sound pack).');
@@ -3528,5 +3526,15 @@ describe('master spec amendments (SP7a §16)', () => {
     // correction 1): 'SP7b' has not started.
     expect(THRESHOLDS.R5?.waterQuadsPerFace).toEqual({ max: 0.1, activeFrom: 'SP7b' });
     expect(STARTED_SPS).not.toContain('SP7b');
+  });
+
+  test('§4.16\'s Water setting (SP7a spec §16 item 14)', () => {
+    // The water tier is a live Settings › Graphics row from SP7a (Fast / Fancy, one uniform), no longer one of the rows
+    // greyed until SP11. Moved here from the SP5b describe's §4.16 pin, whose parenthetical this rewords.
+    const at = text.indexOf('### 4.16 ');
+    const s416 = text.slice(at, text.indexOf('### 4.17 ', at)).split('\n');
+    const overridable = s416.find((l) => l.startsWith('- Every setting can be overridden individually'));
+    expect(overridable).toBe('- Every setting can be overridden individually (SP5b: the Settings screen, G: Graphics with RD, FPS cap, FOV and brightness, the water tier (Fast / Fancy, live from SP7a), the rest greyed until SP11; Controls with mouse sensitivity and hold to repeat): RD, LOD, FOV, brightness, night vision (SP6a), fog start, resolution scale, FPS cap, anisotropy, biome blend, water tier (live from SP7a), shadows, clouds, AO.');
+    expect(s416, 'Medium\'s water is Fancy').toContain('| water | Fast | Fancy | Fancy | Fabulous |');
   });
 });

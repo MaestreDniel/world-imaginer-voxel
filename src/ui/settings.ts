@@ -1,9 +1,10 @@
 /**
  * The settings schema (SP4a spec §7.4, D31; SP5b spec §1.4): render distance, FPS cap, field of view, mouse sensitivity,
- * brightness and night vision (SP6a spec §6.2), persisted in `localStorage` behind try/catch (master §4.16), shared by
- * every world of this browser. SP5b's Settings screen (`settingsPanel.ts`) shows and changes them; the map's mode and
- * Watch live stay in the map.
+ * brightness, night vision (SP6a spec §6.2) and the water tier (SP7a spec §7, D10), persisted in `localStorage` behind
+ * try/catch (master §4.16), shared by every world of this browser. SP5b's Settings screen (`settingsPanel.ts`) shows and
+ * changes them; the map's mode and Watch live stay in the map.
  */
+import { MEDIUM } from '../core/params/graphicsPresets';
 import { RD_MAX, RD_MIN } from '../engine/renderDistance';
 
 export interface WorldSettings {
@@ -26,6 +27,11 @@ export interface WorldSettings {
    * tint, eased over 0.3 s by the frame. Remembered in this browser like the brightness; off by default.
    */
   nightVision: boolean;
+  /**
+   * The water tier (SP7a spec §7, D10): Settings › Graphics' "Water", live (one uniform, `WorldRenderer.setWaterTier`).
+   * Fancy by default, Medium's (master §4.16); remembered in this browser.
+   */
+  water: 'fast' | 'fancy';
 }
 
 /** The `localStorage` key. */
@@ -33,7 +39,7 @@ export const SETTINGS_KEY = 'wi.world.settings';
 
 export const SETTINGS_DEFAULTS: Readonly<WorldSettings> = Object.freeze({
   rd: null, fpsCap: 0, fov: 70, sensitivity: 1, brightness: 0.3, mapMode: 'full', watchLive: true, holdRepeat: false,
-  nightVision: false,
+  nightVision: false, water: MEDIUM.water,
 });
 
 /** The FPS caps offered, in order (spec §6.8). */
@@ -51,10 +57,10 @@ const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.m
 
 /**
  * Settings from any value: each field clamped to its range (rd an integer in 4-16, the cap one of `FPS_CAPS`, the map's
- * mode 'full' or 'split', Watch live, hold to repeat and night vision booleans); a field that is missing, non-numeric
- * or of the wrong type takes its default (so an object stored before SP4c gets the map's defaults, one stored before
- * SP5a hold to repeat off, and one stored before SP6a night vision off, with no migration), and a non-object gives the
- * defaults.
+ * mode 'full' or 'split', Watch live, hold to repeat and night vision booleans, the water tier 'fast' or 'fancy'); a
+ * field that is missing, non-numeric or of the wrong type takes its default (so an object stored before SP4c gets the
+ * map's defaults, one stored before SP5a hold to repeat off, one stored before SP6a night vision off, and one stored
+ * before SP7a Fancy water, with no migration), and a non-object gives the defaults.
  */
 export function normalizeSettings(raw: unknown): WorldSettings {
   const o = (typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
@@ -73,6 +79,7 @@ export function normalizeSettings(raw: unknown): WorldSettings {
     watchLive: typeof o.watchLive === 'boolean' ? o.watchLive : SETTINGS_DEFAULTS.watchLive,
     holdRepeat: typeof o.holdRepeat === 'boolean' ? o.holdRepeat : SETTINGS_DEFAULTS.holdRepeat,
     nightVision: typeof o.nightVision === 'boolean' ? o.nightVision : SETTINGS_DEFAULTS.nightVision,
+    water: o.water === 'fast' || o.water === 'fancy' ? o.water : SETTINGS_DEFAULTS.water,
   };
 }
 

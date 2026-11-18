@@ -874,6 +874,78 @@ describe('the culled sections and the culling\'s main-thread time of the last fr
   });
 });
 
+describe('the live Water toggle at the materials (SP7a spec §7, §6.6, D10, D28; ruling P44)', () => {
+  test('RegionBatch: with 3 regions of translucent arenas, 6 toggles over 30 frames: `waterTier` is written once per toggle; no material is created or disposed, and every material\'s `version`, `defines`, `vertexShader` and `fragmentShader` are unchanged across the toggles; every arena\'s draw order and draw range are unchanged', () => {
+    const materials = createMaterialSystem({ variant: 'batch', ao: true, smoothLight: true }, createFlatColorArray());
+    const sections = createSectionRenderer('batch', materials);
+    // Three regions in a row along x, each with water and opaque rows.
+    for (let k = 0; k < 3; k++) sections.stage(fakePayload(8 * k + 3, 3, [{ sy: 4, pass: 0, quads: 1 }, { sy: 5, pass: MESH_PASS_TRANSLUCENT, quads: 2 }]), 1);
+    pumpAll(sections);
+    sections.revealAll();
+    const frame = { t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0, seconds: 0 };
+    const eye = new Vector3(-200, 100, 64);
+    materials.setFrameUniforms(frame);
+    sections.sortTranslucent(eye.x, eye.y, eye.z);
+
+    // Every material the system and the scene hold, with what a relink would change.
+    const reachable = (): Set<Material> => {
+      const out = new Set<Material>([materials.terrainOpaque, materials.terrainCutout, materials.water, materials.sky, materials.decodeDebug, materials.ghost, materials.xray]);
+      sections.root.traverse((o) => { if ((o as Mesh).isMesh === true) out.add((o as Mesh).material as Material); });
+      return out;
+    };
+    const programOf = (m: Material) => {
+      const sm = m as ShaderMaterial;
+      return { name: m.name, version: m.version, defines: JSON.stringify(sm.defines ?? null), vertexShader: sm.vertexShader, fragmentShader: sm.fragmentShader };
+    };
+    const before = reachable();
+    const programs = [...before].map(programOf);
+    let disposed = 0;
+    for (const m of before) m.addEventListener('dispose', () => { disposed++; });
+    const translucent = (): Object3D[] => {
+      const out: Object3D[] = [];
+      sections.root.traverse((o) => { if ((o as Mesh).isMesh === true && o.userData['pass'] === MESH_PASS_TRANSLUCENT) out.push(o); });
+      return out;
+    };
+    const arenas = translucent();
+    expect(arenas).toHaveLength(3);
+    // RegionBatch's draw order: three's transparent list, each water batch sorting its own instances (`sortObjects`).
+    const drawn = () => arenas.map((o) => ({
+      order: o.renderOrder, sortObjects: (o as BatchedMesh).sortObjects, visible: o.visible, range: { ...(o as Mesh).geometry.drawRange },
+    }));
+    const drawn0 = drawn();
+    expect(drawn0.every((d) => d.sortObjects && d.visible)).toBe(true);
+
+    // Count the writes to the water's `waterTier` uniform (the system's one shared uniform object).
+    const tier = materials.water.uniforms['waterTier']!;
+    let value = tier.value as number;
+    let writes = 0;
+    Object.defineProperty(tier, 'value', { get: () => value, set: (v: number) => { writes++; value = v; }, configurable: true });
+    expect(value, 'Fancy until the setting says otherwise').toBe(1);
+    const toggles: number[] = [];
+    for (let f = 0; f < 30; f++) {
+      if (f % 5 === 0) {
+        const next: 0 | 1 = value === 1 ? 0 : 1;
+        materials.setWaterTier(next);
+        toggles.push(next);
+      }
+      frame.seconds += 1 / 60;
+      materials.setFrameUniforms(frame);
+      sections.sortTranslucent(eye.x, eye.y, eye.z);
+    }
+    expect(toggles).toEqual([0, 1, 0, 1, 0, 1]);
+    expect(writes, 'one write per toggle, none per frame').toBe(6);
+    expect(value).toBe(1);
+    expect(disposed).toBe(0);
+    const after = reachable();
+    expect([...after]).toEqual([...before]);
+    expect([...after].map(programOf)).toEqual(programs);
+    expect(translucent()).toEqual(arenas);
+    expect(drawn()).toEqual(drawn0);
+    sections.dispose();
+    materials.dispose();
+  });
+});
+
 describe('the opaque list\'s order (spec §6.1; SP5a spec §3.5)', () => {
   test('`opaquePassSort` orders the outline after the cutout pass', () => {
     const terrainOpaque = new MeshBasicMaterial();

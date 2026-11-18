@@ -332,6 +332,66 @@ describe('RegionMesh (SP4a spec §6.2, D2; SP4b spec §4.3)', () => {
     far.dispose();
   });
 
+  test('a live Water toggle on the per-region translucent sort (SP7a spec §6.6, §7, D10, D28; ruling P44): with 3 regions of translucent arenas, 6 toggles over 30 frames: `waterTier` is written once per toggle; no material is created or disposed, every material\'s `version`, `defines`, `vertexShader` and `fragmentShader` unchanged; every arena\'s draw order, draw range and attribute versions unchanged', () => {
+    const materials = system('mesh');
+    // Three regions in a row along x, each with water and opaque rows.
+    const r = built([0, 1, 2].map((k) => fakePayload(8 * k + 3, 3, [{ sy: 4, pass: 0, quads: 1 }, { sy: 5, pass: MESH_PASS_TRANSLUCENT, quads: 2 }])), materials);
+    const frame = { t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0, seconds: 0 };
+    materials.setFrameUniforms(frame);
+    r.sortTranslucent(-200, 100, 64);
+
+    const reachable = (): Set<Material> => {
+      const out = new Set<Material>([materials.terrainOpaque, materials.terrainCutout, materials.water, materials.sky, materials.decodeDebug, materials.ghost, materials.xray]);
+      for (const m of meshes(r.root)) out.add(m.material as Material);
+      return out;
+    };
+    const programOf = (m: Material) => {
+      const sm = m as Material & { defines?: unknown; vertexShader?: string; fragmentShader?: string };
+      return { name: m.name, version: m.version, defines: JSON.stringify(sm.defines ?? null), vertexShader: sm.vertexShader, fragmentShader: sm.fragmentShader };
+    };
+    const before = reachable();
+    const programs = [...before].map(programOf);
+    let disposed = 0;
+    for (const m of before) m.addEventListener('dispose', () => { disposed++; });
+    const arenas = regionObjects(r.root);
+    const water = arenas.filter((m) => passOf(m) === MESH_PASS_TRANSLUCENT);
+    expect(water).toHaveLength(3);
+    // Every arena (opaque and water): its draw order, visibility, draw range and attribute versions.
+    const state = () => arenas.map((m) => ({
+      region: regionKey(m), pass: passOf(m), order: m.renderOrder, visible: m.visible, range: { ...m.geometry.drawRange },
+      versions: attributesOf(m).map((a) => a.version),
+    }));
+    const state0 = state();
+    expect(new Set(water.map((m) => m.renderOrder)).size, 'three distinct water draw orders').toBe(3);
+
+    const tier = materials.water.uniforms['waterTier']!;
+    let value = tier.value as number;
+    let writes = 0;
+    Object.defineProperty(tier, 'value', { get: () => value, set: (v: number) => { writes++; value = v; }, configurable: true });
+    expect(value, 'Fancy until the setting says otherwise').toBe(1);
+    const toggles: number[] = [];
+    for (let f = 0; f < 30; f++) {
+      if (f % 5 === 0) {
+        const next: 0 | 1 = value === 1 ? 0 : 1;
+        materials.setWaterTier(next);
+        toggles.push(next);
+      }
+      frame.seconds += 1 / 60;
+      materials.setFrameUniforms(frame);
+      r.sortTranslucent(-200, 100, 64);
+    }
+    expect(toggles).toEqual([0, 1, 0, 1, 0, 1]);
+    expect(writes, 'one write per toggle, none per frame').toBe(6);
+    expect(value).toBe(1);
+    expect(disposed).toBe(0);
+    const after = reachable();
+    expect([...after]).toEqual([...before]);
+    expect([...after].map(programOf)).toEqual(programs);
+    expect(regionObjects(r.root)).toEqual(arenas);
+    expect(state()).toEqual(state0);
+    r.dispose();
+  });
+
   test('the X-ray pass (SP6a spec §5.1, §5.2): a pass-3 arena per region with X-ray rows, over `materials.xray`, of 16,384 vertices and 24,576 indices, at `renderOrder` `XRAY_ORDER`; sortTranslucent orders the water regions and never touches it', () => {
     const materials = system('mesh');
     // Three regions along x, each with opaque, water and X-ray rows.
