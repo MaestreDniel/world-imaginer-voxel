@@ -1,7 +1,9 @@
 /**
- * The still-water mesher and the water depth (SP4a spec §5.5, §5.6; rulings P24, P25): faces against non-occluders
- * that are not water, full-height positions with `cornerDrop` 1 on a surface voxel's top corners, the column's
- * `depth` in every word and key, the translucent pass only, and `fluidDepths` on a hand-built store.
+ * The water mesher and the water depth (SP4a spec §5.5, §5.6; rulings P24, P25; SP7a spec §6.1-§6.2, D26): faces
+ * against non-occluders that are not water, full-height positions with each top corner's `cornerDrop` from the 4
+ * voxels around it (a still source among stone keeps drop 1), sloped tops one quad per voxel with the fixed split,
+ * falls at full height, the column's `depth` in every word and key, the translucent pass only, and `fluidDepths` on a
+ * hand-built store.
  */
 import { describe, expect, test } from 'vitest';
 import { createMeshBuilder, type MeshBuilder } from '../../src/mesh/builder';
@@ -9,7 +11,7 @@ import { fluidDepths, meshFluid } from '../../src/mesh/fluid';
 import { LAVA_LAYER, type MeshTables } from '../../src/mesh/greedy';
 import { unpackFluid, unpackSolid, type FluidFields } from '../../src/mesh/packing';
 import { AIR, GLASS, ICE, LADDER, REGISTRY, STONE, TORCH } from '../../src/world/blocks/index';
-import { LAVA_SOURCE, NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { FLUID_WATER, LAVA_SOURCE, NO_FLUID, WATER_SOURCE, packFluid } from '../../src/world/blocks/fluid';
 import { PASS_NONE, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import { SECTIONS } from '../../src/world/store/columnTable';
 import { padIndex, type PaddedSection } from '../../src/world/store/padded';
@@ -147,9 +149,10 @@ describe('meshFluid (SP4a spec §5.6)', () => {
     expect(passes[2].length).toBeGreaterThan(0);
   });
 
-  test("a still source's cornerDrop is 1 on its four top corners", () => {
-    // One source on a stone floor in open air: its top quad has drop 1 on all four corners at y = 8·(ly + 1);
-    // its side faces drop their two top corners by 1 and keep their bottom corners at 0.
+  test("a lone source in open air: cornerDrop 3 on its four top corners (SP7a spec §6.1: 8/9 at weight 10 beside three dry voxels)", () => {
+    // One source on a stone floor in open air: each top corner averages the source (8/9, weight 10) with three dry
+    // voxels (0, weight 1 each): (80/9)/13 ≈ 0.684, drop round(2.85) = 3. Its top quad has drop 3 on all four
+    // corners at y = 8·(ly + 1); its side faces drop their two top corners by 3 and keep their bottom corners at 0.
     const p = paddedFrom(
       (_x, y) => (y <= 3 ? STONE : AIR), () => 0xF0, (x, y, z) => (x === 8 && y === 4 && z === 8 ? WATER_SOURCE : NO_FLUID),
     );
@@ -161,15 +164,15 @@ describe('meshFluid (SP4a spec §5.6)', () => {
         const drop = fieldsOf(q.words[k]!).cornerDrop;
         if (f === 4) {
           expect(c[1]).toBe(40);
-          expect(drop).toBe(1);
+          expect(drop).toBe(3);
         } else {
           expect(f).toBeLessThan(4);
-          expect(drop).toBe(c[1] === 40 ? 1 : 0);
+          expect(drop).toBe(c[1] === 40 ? 3 : 0);
           expect([32, 40]).toContain(c[1]);
         }
       });
     }
-    // Under water the top corners meet the voxel above: a two-high column's lower sides keep drop 0.
+    // Under water the top corners meet the voxel above: a two-high column's lower sides keep drop 0 (full height).
     const tall = paddedFrom(
       (_x, y) => (y <= 3 ? STONE : AIR), () => 0xF0,
       (x, y, z) => (x === 8 && (y === 4 || y === 5) && z === 8 ? WATER_SOURCE : NO_FLUID),
@@ -178,7 +181,7 @@ describe('meshFluid (SP4a spec §5.6)', () => {
     expect(sides).toHaveLength(8);
     for (const q of sides) {
       const lower = Math.max(...ys(q)) === 40;
-      q.corners.forEach((c, k) => expect(fieldsOf(q.words[k]!).cornerDrop).toBe(!lower && c[1] === 48 ? 1 : 0));
+      q.corners.forEach((c, k) => expect(fieldsOf(q.words[k]!).cornerDrop).toBe(!lower && c[1] === 48 ? 3 : 0));
     }
   });
 
@@ -301,13 +304,196 @@ describe('still lava (SP5a spec §1.3)', () => {
     expect(lava).toContain('9,8,8,3');
     expect(water).not.toContain('8,8,8,5');
     expect(lava).toContain('8,7,8,4');
-    // The water's surface under the lava sits a ninth below it (cornerDrop 1), on no shared plane: both are drawn.
+    // The water's surface under the lava sits below it, on no shared plane: both are drawn. Its corners follow §6.1
+    // (SP7a): lava is not counted, so the corners on the lava's edge (x 9) average the water with two dry voxels,
+    // (80/9)/12 ≈ 0.741, drop 2, and those on x 8 with three, drop 3.
     expect(water).toContain('8,8,8,4');
     const top = passes[2].find((q) => faceOf(q) === 4)!;
-    for (const w of top.words) expect(fieldsOf(w).cornerDrop).toBe(1);
+    top.corners.forEach((c, k) => expect(fieldsOf(top.words[k]!).cornerDrop).toBe(c[0] === 72 ? 2 : 3));
     expect(lava).toContain('8,9,8,5');
     // Its faces against air stay.
     expect(water).toEqual(['8,8,8,0', '8,8,8,2', '8,8,8,3', '8,8,8,4']);
+  });
+});
+
+/** The drop of every vertex of the water quads, by its position `x,y,z` in 1/8 units; throws on two drops at one position. */
+function dropsByPosition(quads: readonly ReadQuad[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const q of quads) {
+    q.corners.forEach((c, k) => {
+      const key = c.join(',');
+      const drop = fieldsOf(q.words[k]!).cornerDrop;
+      const had = out.get(key);
+      if (had !== undefined && had !== drop) throw new Error(`a crack at ${key}: drops ${had} and ${drop}`);
+      out.set(key, drop);
+    });
+  }
+  return out;
+}
+
+/** The six indices of a quad split along v0-v2 (the builder's default) and along v1-v3 (`flip`). */
+const SPLIT_02 = [0, 1, 2, 0, 2, 3];
+const SPLIT_13 = [1, 2, 3, 1, 3, 0];
+
+describe('flowing water (SP7a spec §6.1-§6.2, D26)', () => {
+  /** A 5 × 5 pool of sources at y 4 (x, z 6 … 10) on a stone floor, the ring around it at y 4 from `ring`. */
+  const POOL = (x: number, z: number): boolean => x >= 6 && x <= 10 && z >= 6 && z <= 10;
+  const pool = (ring: number): PaddedSection => paddedFrom(
+    (x, y, z) => (y <= 3 || (y === 4 && !POOL(x, z) && ring === STONE) ? STONE : AIR), () => 0xF0,
+    (x, y, z) => (y === 4 && POOL(x, z) ? WATER_SOURCE : NO_FLUID),
+  );
+  const poolDepth = depthFrom((x, y, z) => (y === 4 && POOL(x, z) ? 1 : 0));
+
+  test('a 5 × 5 pool of sources against stone: one top quad, every corner drop 1 (as before)', () => {
+    const { passes } = mesh(pool(STONE), poolDepth);
+    expect(passes[2]).toHaveLength(1);
+    const top = passes[2][0]!;
+    expect(faceOf(top)).toBe(4);
+    expect(ys(top)).toEqual([40, 40, 40, 40]);
+    for (const w of top.words) expect(fieldsOf(w).cornerDrop).toBe(1);
+    expect(top.index).toEqual(SPLIT_02);
+  });
+
+  test('the same pool against air at the same y: edge corners drop 2, outer corners 3, inner corners 1', () => {
+    // An edge corner: two sources and two dry voxels, (2·80/9)/22 ≈ 0.808, (1 − 0.808)·9 ≈ 1.73 → 2; an outer corner:
+    // one source and three dry voxels, (80/9)/13 ≈ 0.684 → 2.85 → 3; an inner corner: four sources, 8/9 → 1.
+    const p = pool(AIR);
+    const { passes } = mesh(p, poolDepth);
+    expect(allUnitFaces(passes[2])).toEqual(bruteWaterFaces(p));
+    const tops = passes[2].filter((q) => faceOf(q) === 4);
+    const drops = dropsByPosition(tops);
+    // Every rim corner is a vertex; an inner corner is one where a rim voxel's quad meets the inner quad.
+    const edgesOf = (X: number, Z: number): number => (X === 6 || X === 11 ? 1 : 0) + (Z === 6 || Z === 11 ? 1 : 0);
+    for (let X = 6; X <= 11; X++) {
+      for (let Z = 6; Z <= 11; Z++) if (edgesOf(X, Z) > 0) expect(drops.get(`${8 * X},40,${8 * Z}`), `corner (${X}, ${Z})`).toBe([1, 2, 3][edgesOf(X, Z)]);
+    }
+    for (const [key, drop] of drops) {
+      const [x8, y8, z8] = key.split(',').map(Number) as [number, number, number];
+      expect(y8).toBe(40);
+      expect(drop, `corner ${key}`).toBe([1, 2, 3][edgesOf(x8 / 8, z8 / 8)]);
+    }
+    expect(drops.get('56,40,56'), 'the inner corner (7, 7)').toBe(1);
+    // The inner 3 × 3 is flat (drop 1) and merges into one quad; the 16 rim voxels are sloped, one quad each.
+    expect(tops).toHaveLength(17);
+    expect(tops.filter((q) => q.words.every((w) => fieldsOf(w).cornerDrop === 1))).toHaveLength(1);
+    // The sides against air take the same top corners: per side the middle three merge (2, 2), the ends (3, 2), (2, 3).
+    const sides = passes[2].filter((q) => faceOf(q) < 4);
+    expect(sides).toHaveLength(12);
+    const all = dropsByPosition(passes[2]);
+    for (const [key, drop] of drops) expect(all.get(key)).toBe(drop);
+  });
+
+  /**
+   * A two-wide spill at y 4 on a stone floor, a stone wall at x −1: row z 8 holds a source at x 0 and level x at x 1 … 7,
+   * row z 9 level x + 1 at x 0 … 6; air elsewhere at y 4 and above.
+   */
+  const spillLevel = (x: number, z: number): number => (z === 8 && x >= 0 && x <= 7 ? x : z === 9 && x >= 0 && x <= 6 ? x + 1 : -1);
+  const spill = paddedFrom(
+    (x, y) => (y <= 3 || (y === 4 && x === -1) ? STONE : AIR), () => 0xF0,
+    (x, y, z) => (y === 4 && spillLevel(x, z) >= 0 ? packFluid(FLUID_WATER, spillLevel(x, z)) : NO_FLUID),
+  );
+  const spillDepth = depthFrom((x, y, z) => (y === 4 && spillLevel(x, z) >= 0 ? 1 : 0));
+
+  test('a level-1 … 7 spill: each top one quad with the corner drops of §6.1, split along the lower-sum diagonal', () => {
+    // Per voxel [x, z, drops at (x, z), (x + 1, z), (x + 1, z + 1), (x, z + 1)], from §6.1: h = (8 − level)/9, a height
+    // ≥ 0.8 weighing 10, other water 1, a dry voxel 0 with weight 1, stone not counted; drop round((1 − h)·9). E.g.
+    // (1, 9) averages the source (weight 10) with levels 1, 2, 1: (80/9 + 7/9 + 6/9 + 7/9)/13 ≈ 0.855 → 1; (2, 9)
+    // levels 1, 2, 3, 2: (24/9)/4 ≈ 0.667 → 3; (2, 8) levels 1, 2 with two dry voxels: (13/9)/4 ≈ 0.361 → 5.75 → 6.
+    const want: Array<[number, number, [number, number, number, number]]> = [
+      [0, 8, [2, 2, 1, 1]], [1, 8, [2, 6, 3, 1]], [2, 8, [6, 6, 4, 3]], [3, 8, [6, 7, 5, 4]], [4, 8, [7, 7, 6, 5]],
+      [5, 8, [7, 8, 7, 6]], [6, 8, [8, 8, 8, 7]], [7, 8, [8, 8, 8, 8]],
+      [0, 9, [1, 1, 6, 6]], [1, 9, [1, 3, 6, 6]], [2, 9, [3, 4, 7, 6]], [3, 9, [4, 5, 7, 7]], [4, 9, [5, 6, 8, 7]],
+      [5, 9, [6, 7, 8, 8]], [6, 9, [7, 8, 8, 8]],
+    ];
+    // The voxels whose v1-v3 diagonal has the lower summed height (the builder's flip); every other one splits v0-v2.
+    const flipped = new Set(['1,8', '1,9', '3,9', '5,9', '6,9']);
+    const tops = mesh(spill, spillDepth).passes[2].filter((q) => faceOf(q) === 4);
+    expect(tops).toHaveLength(want.length);
+    for (const [x, z, [c0, c1, c2, c3]] of want) {
+      const owned = tops.filter((q) => q.corners.every((c) => c[0] >= 8 * x && c[0] <= 8 * x + 8 && c[2] >= 8 * z && c[2] <= 8 * z + 8));
+      expect(owned, `voxel (${x}, ${z}): one top quad`).toHaveLength(1);
+      const q = owned[0]!;
+      const at = (X: number, Z: number): number => {
+        const k = q.corners.findIndex((c) => c[0] === 8 * X && c[2] === 8 * Z);
+        expect(k, `voxel (${x}, ${z}) has a vertex at (${X}, ${Z})`).toBeGreaterThanOrEqual(0);
+        expect(q.corners[k]![1]).toBe(40);
+        return fieldsOf(q.words[k]!).cornerDrop;
+      };
+      expect([at(x, z), at(x + 1, z), at(x + 1, z + 1), at(x, z + 1)], `voxel (${x}, ${z})`).toEqual([c0, c1, c2, c3]);
+      const h = q.words.map((w) => 9 - fieldsOf(w).cornerDrop);
+      expect(q.index, `voxel (${x}, ${z})'s split`).toEqual(h[0]! + h[2]! <= h[1]! + h[3]! ? SPLIT_02 : SPLIT_13);
+      expect(q.index, `voxel (${x}, ${z})'s split, pinned`).toEqual(flipped.has(`${x},${z}`) ? SPLIT_13 : SPLIT_02);
+    }
+  });
+
+  test('a falling column: full-height sides and no top under water; a falling top with nothing above is full height', () => {
+    const FALLING = packFluid(FLUID_WATER, 0, true);
+    // Falling water at (8, 4 … 10, 8) on a stone floor, air above: the top voxel (nothing above) is full height too.
+    const bare = paddedFrom(
+      (_x, y) => (y <= 3 ? STONE : AIR), () => 0xF0, (x, y, z) => (x === 8 && z === 8 && y >= 4 && y <= 10 ? FALLING : NO_FLUID),
+    );
+    const one = mesh(bare, depthFrom((x, y, z) => (x === 8 && z === 8 && y >= 4 && y <= 10 ? 7 : 0))).passes[2];
+    // One top quad at y 88 (8·11) with drop 0, and one merged side quad per side spanning y 32 … 88, every drop 0.
+    expect(one.map(faceOf).sort()).toEqual([0, 1, 2, 3, 4]);
+    for (const q of one) {
+      for (const w of q.words) expect(fieldsOf(w).cornerDrop).toBe(0);
+      if (faceOf(q) === 4) expect(ys(q)).toEqual([88, 88, 88, 88]);
+      else expect([Math.min(...ys(q)), Math.max(...ys(q))]).toEqual([32, 88]);
+    }
+    // Falling at y 4 … 9 under a source at y 10: no top below the source; the falling sides stay full height (drop 0)
+    // and merge into one quad per side (y 32 … 80); the source's top and side top corners drop 3 (alone in the air).
+    const fed = paddedFrom(
+      (_x, y) => (y <= 3 ? STONE : AIR), () => 0xF0,
+      (x, y, z) => (x === 8 && z === 8 ? (y >= 4 && y <= 9 ? FALLING : y === 10 ? WATER_SOURCE : NO_FLUID) : NO_FLUID),
+    );
+    const quads = mesh(fed, depthFrom((x, y, z) => (x === 8 && z === 8 && y >= 4 && y <= 10 ? 7 : 0))).passes[2];
+    const tops = quads.filter((q) => faceOf(q) === 4);
+    expect(tops).toHaveLength(1);
+    expect(ys(tops[0]!)).toEqual([88, 88, 88, 88]);
+    for (const w of tops[0]!.words) expect(fieldsOf(w).cornerDrop).toBe(3);
+    const sides = quads.filter((q) => faceOf(q) < 4);
+    expect(sides).toHaveLength(8);
+    for (const q of sides) {
+      const [lo, hi] = [Math.min(...ys(q)), Math.max(...ys(q))];
+      if (hi === 80) {
+        expect(lo).toBe(32);
+        for (const w of q.words) expect(fieldsOf(w).cornerDrop).toBe(0);
+      } else {
+        expect([lo, hi]).toEqual([80, 88]);
+        q.corners.forEach((c, k) => expect(fieldsOf(q.words[k]!).cornerDrop).toBe(c[1] === 88 ? 3 : 0));
+      }
+    }
+  });
+
+  test('two neighbouring voxels share each corner\'s drop exactly (no crack: the shared vertices\' y equal)', () => {
+    // Every vertex of every water quad, tops and sides, of the spill and of the pool against air: one drop per position.
+    for (const [p, depth] of [[spill, spillDepth], [pool(AIR), poolDepth]] as const) {
+      const quads = mesh(p, depth).passes[2];
+      expect(() => dropsByPosition(quads)).not.toThrow();
+      // Each interior corner of the spill or pool is a vertex of all four voxels' top quads around it.
+      const tops = quads.filter((q) => faceOf(q) === 4);
+      const seen = new Map<string, number>();
+      for (const q of tops) for (const c of q.corners) seen.set(c.join(','), (seen.get(c.join(',')) ?? 0) + 1);
+      expect(Math.max(...seen.values())).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  test('a still water body\'s quads per face unchanged where every corner is 8/9 (R5\'s still case)', () => {
+    // An L-shaped lake of sources at y 4 in a stone basin: x 0 … 9 × z 0 … 3 and x 0 … 3 × z 4 … 9. Every corner sees
+    // only sources and stone, so every drop is 1 and the top merges greedily as before: two quads, nothing else.
+    const lake = (x: number, z: number): boolean => (x >= 0 && x <= 9 && z >= 0 && z <= 3) || (x >= 0 && x <= 3 && z >= 4 && z <= 9);
+    const p = paddedFrom(
+      (x, y, z) => (y <= 3 || (y === 4 && !lake(x, z)) ? STONE : AIR), () => 0xF0,
+      (x, y, z) => (y === 4 && lake(x, z) ? WATER_SOURCE : NO_FLUID),
+    );
+    const quads = mesh(p, depthFrom((x, y, z) => (y === 4 && lake(x, z) ? 1 : 0))).passes[2];
+    expect(quads).toHaveLength(2);
+    for (const q of quads) {
+      expect(faceOf(q)).toBe(4);
+      expect(q.index).toEqual(SPLIT_02);
+      for (const w of q.words) expect(fieldsOf(w).cornerDrop).toBe(1);
+    }
+    expect(allUnitFaces(quads)).toHaveLength(64);
   });
 });
 

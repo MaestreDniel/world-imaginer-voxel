@@ -3443,6 +3443,15 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(union.slice(union.indexOf('SP6b'), union.indexOf('SP8a') + 1)).toEqual(['SP6b', 'SP7a', 'SP7b', 'SP8a']);
   });
 
+  test('§4.4\'s fluid mesh: the corner rule as built, rounded to ninths (SP7a spec §16 item 11)', () => {
+    // Item 11's corner half (Task 9); the side strips and lava's drops are Tasks 10 and 11's halves.
+    const at = text.indexOf('**Fluid mesh:**');
+    expect(at, 'no **Fluid mesh:** block in §4.4').toBeGreaterThan(text.indexOf('### 4.4 '));
+    const block = text.slice(at, text.indexOf('**Vertex = 8 B**', at)).split('\n');
+    expect(block[1], 'the corner rule as built').toBe('- Top corner height (SP7a, its spec §6.1, Minecraft\'s average): over the up to 4 voxels around the corner at the voxel\'s y, 1 if any holds the same fluid with the same fluid above; else the weighted mean of their heights h (1 when falling, else (8 − level)/9, so a source is 8/9), a height ≥ 0.8 weighing 10 and any other voxel of that fluid 1, a passable fluid-free voxel counting 0 with weight 1, a solid voxel or the other fluid not counted; rounded to ninths as `cornerDrop` = round((1 − h)·9), clamped to 0 … 8. The 4 voxels are read in one world order, so neighbouring quads (and sections) share their corners exactly. A voxel with the same fluid above, or falling, is full height. Flat tops (four equal drops) merge greedily; a sloped top is one quad per voxel, split along the diagonal joining the two corners of lower summed height.');
+    expect(text, 'the pre-SP7a corner sentence is gone').not.toContain('Top corner height is the average of neighbouring levels');
+  });
+
   test('§4.11 and §4.12 name SP7b; the bench route\'s flood is SP7b\'s and R5\'s row is gated from SP7a (SP7a spec §16 item 13)', () => {
     const at = text.indexOf('### 4.11 ');
     const s411to412 = text.slice(at, text.indexOf('### 4.13 ', at));

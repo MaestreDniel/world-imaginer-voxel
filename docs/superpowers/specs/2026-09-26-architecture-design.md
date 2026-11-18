@@ -1057,7 +1057,7 @@ In AO, smooth light and connectivity15, "opaque" means PASS opaque with `FULL_FA
 **Shape grid.** Box coordinates are multiples of 1/8 block (1/16 would overflow the Uint8 position, and 2 spare bits cannot hold a 3-axis offset). Quantisation rule: centred thin parts (torch, pane, fence arms, fence-gate bars) are 2/8 thick and span 3/8..5/8; wall-hugging thin parts (door, trapdoor, ladder) are 1/8 thick and flush with their side; the lantern body spans 2/8..6/8; the wall torch is an upright 2/8 stick touching the wall, not tilted. The SP8a spec lists every box, and M1 enforces the grid.
 
 **Fluid mesh:**
-- Top corner height is the average of neighbouring levels (a source is 8/9; full height when the same fluid is above).
+- Top corner height (SP7a, its spec §6.1, Minecraft's average): over the up to 4 voxels around the corner at the voxel's y, 1 if any holds the same fluid with the same fluid above; else the weighted mean of their heights h (1 when falling, else (8 − level)/9, so a source is 8/9), a height ≥ 0.8 weighing 10 and any other voxel of that fluid 1, a passable fluid-free voxel counting 0 with weight 1, a solid voxel or the other fluid not counted; rounded to ninths as `cornerDrop` = round((1 − h)·9), clamped to 0 … 8. The 4 voxels are read in one world order, so neighbouring quads (and sections) share their corners exactly. A voxel with the same fluid above, or falling, is full height. Flat tops (four equal drops) merge greedily; a sloped top is one quad per voxel, split along the diagonal joining the two corners of lower summed height.
 - Sides are emitted only against non-fluid neighbours that do not occlude them (predicate above).
 - Still surfaces merge greedily (about 0.06 quads per face).
 
