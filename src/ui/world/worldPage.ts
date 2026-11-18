@@ -4456,7 +4456,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // One FrameState for every frame, rewritten in place (SP4b spec §3.10); the frame step writes it after the reveal.
     // Night vision starts at the saved setting, not eased (SP6a spec §6.2); the frame step eases it after the reveal.
     const frame = {
-      t, brightness: settings.brightness, eyeSky: 15, rd: loadRd, fogBand: MEDIUM.fogBand, nightVision: settings.nightVision ? 1 : 0, seconds: 0,
+      t, brightness: settings.brightness, eyeSky: 15, rd: loadRd, fogBand: MEDIUM.fogBand, nightVision: settings.nightVision ? 1 : 0, seconds: 0, eyeFluid: 0,
     };
     const frameState = (): FrameState => {
       frame.t = t;

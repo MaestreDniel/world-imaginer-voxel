@@ -364,7 +364,7 @@ async function buildAtRest(): Promise<AtRest> {
   expect(speed60).toBeGreaterThanOrEqual(0);
   const fog = createFogEase(12);
   const frames = createFrameStats();
-  const state = { t: OPENING_T, brightness: 0.5, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand, nightVision: 0, seconds: 0 };
+  const state = { t: OPENING_T, brightness: 0.5, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand, nightVision: 0, seconds: 0, eyeFluid: 0 };
   let nightVision = false;
   const none: ReadonlySet<Action> = new Set();
   // A 144 Hz display under a cap of 144: the limiter's median runs on every tick and every tick renders. Enough

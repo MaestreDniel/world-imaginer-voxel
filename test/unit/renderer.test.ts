@@ -882,7 +882,7 @@ describe('the live Water toggle at the materials (SP7a spec §7, §6.6, D10, D28
     for (let k = 0; k < 3; k++) sections.stage(fakePayload(8 * k + 3, 3, [{ sy: 4, pass: 0, quads: 1 }, { sy: 5, pass: MESH_PASS_TRANSLUCENT, quads: 2 }]), 1);
     pumpAll(sections);
     sections.revealAll();
-    const frame = { t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0, seconds: 0 };
+    const frame = { t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0, seconds: 0, eyeFluid: 0 };
     const eye = new Vector3(-200, 100, 64);
     materials.setFrameUniforms(frame);
     sections.sortTranslucent(eye.x, eye.y, eye.z);
@@ -1027,7 +1027,7 @@ describe('the X-ray toggle and band (SP6a spec §5.3)', () => {
   };
   const setup = () => {
     const materials = createMaterialSystem({ variant: 'mesh', ao: true, smoothLight: true }, createFlatColorArray());
-    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0, seconds: 0 });
+    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0, seconds: 0, eyeFluid: 0 });
     const sky = createSky(materials);
     const clear = fakeClear(0x123456, 0.5);
     const shown: boolean[] = [];
@@ -1043,7 +1043,7 @@ describe('the X-ray toggle and band (SP6a spec §5.3)', () => {
     x.setXray(true);
     x.setXray(true);
     x.setXrayBand(-40, -9);
-    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 8, fogBand: 64, nightVision: 0, seconds: 0 });
+    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 8, fogBand: 64, nightVision: 0, seconds: 0, eyeFluid: 0 });
     x.syncRadius();
     x.setXray(false);
     expect(shown).toEqual([true, true, false]);
@@ -1087,14 +1087,14 @@ describe('the X-ray toggle and band (SP6a spec §5.3)', () => {
   test('the radius follows the fog end (no radius forced): `syncRadius` after a render distance change', () => {
     const { materials, x, values } = setup();
     x.setXray(true);
-    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 16.5, fogBand: 64, nightVision: 0, seconds: 0 });
+    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 16.5, fogBand: 64, nightVision: 0, seconds: 0, eyeFluid: 0 });
     x.syncRadius();
     expect(values()).toEqual([1, -64, 319, 248]);
   });
 
   test('setColorMode (SP6b spec §7.2, §7.3) reaches xrayColorMode and writes nothing else: the toggle, the band, the radius, the sky dome and the clear colour unchanged, and no remesh (no `stage` call)', () => {
     const materials = createMaterialSystem({ variant: 'batch', ao: true, smoothLight: true }, createFlatColorArray());
-    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0, seconds: 0 });
+    materials.setFrameUniforms({ t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0, seconds: 0, eyeFluid: 0 });
     const sky = createSky(materials);
     const clear = fakeClear(0x123456, 0.5);
     const calls = { setXray: 0, stage: 0 };

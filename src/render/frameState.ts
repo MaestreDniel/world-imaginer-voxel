@@ -26,4 +26,9 @@ export interface FrameState {
    * required, so every frame writes it.
    */
   readonly seconds: number;
+  /**
+   * The fluid at the eye (SP7a spec §8, D29): 0 none, 1 water, 2 lava, by the eye voxel's fluid and its surface height
+   * (the frame step's `eyeFluidAt`); the underwater and lava fog follow it. Required, so every frame writes it.
+   */
+  readonly eyeFluid: number;
 }

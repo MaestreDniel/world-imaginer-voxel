@@ -767,7 +767,7 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   const origin = firstOrigin(o.originAt);
   sections.setOrigin(origin.x, origin.y, origin.z);
   // Valid uniforms for `compile` and any frame before the page's first FrameState: the opening time and the load RD's fog.
-  materials.setFrameUniforms({ t: OPENING_T, brightness: o.brightness, eyeSky: 15, rd: o.rd, fogBand: MEDIUM.fogBand, nightVision: 0, seconds: 0 });
+  materials.setFrameUniforms({ t: OPENING_T, brightness: o.brightness, eyeSky: 15, rd: o.rd, fogBand: MEDIUM.fogBand, nightVision: 0, seconds: 0, eyeFluid: 0 });
 
   const renderer = new WebGLRenderer({ antialias: false });
   renderer.outputColorSpace = SRGBColorSpace;

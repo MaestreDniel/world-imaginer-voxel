@@ -336,7 +336,7 @@ describe('RegionMesh (SP4a spec §6.2, D2; SP4b spec §4.3)', () => {
     const materials = system('mesh');
     // Three regions in a row along x, each with water and opaque rows.
     const r = built([0, 1, 2].map((k) => fakePayload(8 * k + 3, 3, [{ sy: 4, pass: 0, quads: 1 }, { sy: 5, pass: MESH_PASS_TRANSLUCENT, quads: 2 }])), materials);
-    const frame = { t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0, seconds: 0 };
+    const frame = { t: 0.25, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0, seconds: 0, eyeFluid: 0 };
     materials.setFrameUniforms(frame);
     r.sortTranslucent(-200, 100, 64);
 
