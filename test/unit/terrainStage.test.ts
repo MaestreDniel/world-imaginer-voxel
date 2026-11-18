@@ -672,7 +672,7 @@ function spyWriter(): { w: ColumnWriter; sections: number[]; aux: number; auxB: 
     motionBlocking: new Int16Array(256), oceanFloor: new Int16Array(256), lightBlocking: new Int16Array(256),
     surfaceBiome: new Uint8Array(256), tintTH: new Uint8Array(768),
   };
-  const auxBView: AuxBView = { caveBiomeQ: new Uint8Array(1536), surfaceBiomeQ: new Uint8Array(16) };
+  const auxBView: AuxBView = { caveBiomeQ: new Uint8Array(1536), surfaceBiomeQ: new Uint8Array(16), seedSections: new Uint32Array(1) };
   const w: ColumnWriter = {
     cx: 0, cz: 0,
     setProto(sy, blocks, fluid, cave) {
@@ -686,6 +686,9 @@ function spyWriter(): { w: ColumnWriter; sections: number[]; aux: number; auxB: 
     aux() { log.aux++; return auxView; },
     auxB() { log.auxB++; return auxBView; },
     replaceBlocks() { throw new Error('the T stage writes no final set'); },
+    replaceFluid() { throw new Error('the T stage writes no final set'); },
+    setGeneratedFluid() { throw new Error('the T stage writes no generated-fluid layer'); },
+    clearGeneratedFluid() { throw new Error('the T stage writes no generated-fluid layer'); },
     setDiffFlag() { throw new Error('the T stage sets no diff flag'); },
     commit() { log.commits++; },
   };

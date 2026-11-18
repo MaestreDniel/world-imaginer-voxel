@@ -1,5 +1,5 @@
 /**
- * The column table (SP3a spec §3.2, master §2.3): a fixed buffer of 64 × 64 records of 208 int32, one per torus
+ * The column table (SP3a spec §3.2, master §2.3): a fixed buffer of 64 × 64 records of 232 int32, one per torus
  * slot `(cx & 63) + 64·(cz & 63)`. A record holds at most one column; `claimed` (int 11) says whether it is held,
  * and cx, cz say by which column. `status`, `epoch`, `claimed`, the versions, protoFlags and the generation are read
  * and written with Atomics.
@@ -7,9 +7,13 @@
  * Record layout: 0-3 cx, cz, status, epoch; 4-5 blockVersion, lightVersion (never reset by a claim: monotone over
  * the record's life, SP4b spec §2.3); 6 protoFlags (bit 0 `PROTO_ALIVE`, bit 1 pinnedByTuning reserved for SP8b);
  * 7-8 aux A and aux B slots (−1 when not allocated); 9-10 unsettledCount, diffFlag; 11 claimed; 12 the claim
- * generation (`REC_GEN`, SP4b spec §2.2); 13-15 unassigned; 16-135 the final section descriptors (24 × 5: blocks,
- * light, fluid, meta, cave); 136-207 the proto descriptors (24 × 3: blocks, fluid, cave). The cave entries are SP6a's
- * (its spec §3.3): the record grew from 160 ints, the table from 2.6 to 3.4 MB.
+ * generation (`REC_GEN`, SP4b spec §2.2); 13 the generated-fluid mask (`REC_GEN_FLUID_MASK`, bit sy set when the
+ * layer holds section sy); 14-15 unassigned; 16-135 the final section descriptors (24 × 5: blocks, light, fluid, meta,
+ * cave); 136-207 the proto descriptors (24 × 3: blocks, fluid, cave); 208-231 the generated-fluid layer (24 fluid
+ * entries, `REC_GEN_FLUID`). The cave entries are SP6a's (its spec §3.3): the record grew from 160 ints, the table from
+ * 2.6 to 3.4 MB. The layer is SP7a's (its spec D23, Spec correction 10): D's settled fluid of each section it changed,
+ * before the diff overlay, a reference to a fluid slot (retained) or a uniform code; the record grew from 208 ints,
+ * the table from 3.4 to 3.8 MB.
  *
  * A free record has cx = cz = `NO_COLUMN`, and a claim writes cx and cz only after it holds the record, so `find`
  * never matches a record that is free or being taken by another column. The generation is even while the record is
@@ -22,7 +26,7 @@
  */
 
 export const TORUS = 64;
-export const RECORD_INTS = 208;
+export const RECORD_INTS = 232;
 export const RECORD_COUNT = TORUS * TORUS;
 export const COLUMN_TABLE_BYTES = RECORD_COUNT * RECORD_INTS * 4;
 /** Sections per column (y −64 … 319). */
@@ -42,8 +46,12 @@ export const REC_DIFF_FLAG = 10;
 export const REC_CLAIMED = 11;
 /** The claim generation (SP4b spec §2.2): even while free, odd while held; bumped by `claim` and `unclaim`. */
 export const REC_GEN = 12;
+/** The generated-fluid mask (SP7a D23): bit sy set when the layer holds section sy; published by `status`, as descriptors are. */
+export const REC_GEN_FLUID_MASK = 13;
 export const REC_FINAL = 16;
 export const REC_PROTO = 136;
+/** The generated-fluid layer (SP7a D23): 24 fluid entries, one per section (`section.ts`' encoding), −1 when not held. */
+export const REC_GEN_FLUID = 208;
 
 export const STATUS_ABSENT = 0;
 export const STATUS_PROTO = 1;
@@ -99,8 +107,8 @@ export interface ColumnTable {
   readonly ints: Int32Array;
   /**
    * Takes the record of (cx, cz) (compare-exchange of `claimed` 0 → 1; `SlotBusy` if held), resets it to its initial
-   * values (status Absent, protoFlags 0, descriptors −1, meta 0, aux ids −1; the versions are kept, SP4b spec §2.3),
-   * writes cx, cz and `epoch`, then bumps the generation (odd). Returns the record's base.
+   * values (status Absent, protoFlags 0, descriptors and layer entries −1, meta 0, mask 0, aux ids −1; the versions are
+   * kept, SP4b spec §2.3), writes cx, cz and `epoch`, then bumps the generation (odd). Returns the record's base.
    */
   claim(cx: number, cz: number, epoch: number): number;
   /**
@@ -135,6 +143,7 @@ function clearRecord(ints: Int32Array, base: number): void {
   ints[base + REC_AUX_B] = -1;
   ints[base + REC_UNSETTLED] = 0;
   ints[base + REC_DIFF_FLAG] = 0;
+  ints[base + REC_GEN_FLUID_MASK] = 0;
   for (let sy = 0; sy < SECTIONS; sy++) {
     const f = finalAt(base, sy);
     ints[f] = -1;
@@ -146,6 +155,7 @@ function clearRecord(ints: Int32Array, base: number): void {
     ints[p] = -1;
     ints[p + 1] = -1;
     ints[p + 2] = -1;
+    ints[base + REC_GEN_FLUID + sy] = -1;
   }
 }
 

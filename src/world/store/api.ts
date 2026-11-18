@@ -18,10 +18,12 @@ export interface AuxView {
   readonly tintTH: Uint8Array;
 }
 
-/** Aux B of a column (SP3a spec §3.4): the biome quarts. */
+/** Aux B of a column (SP3a spec §3.4): the biome quarts and, from SP7a, the seed sections. */
 export interface AuxBView {
   readonly caveBiomeQ: Uint8Array;
   readonly surfaceBiomeQ: Uint8Array;
+  /** One Uint32 (SP7a §1.7): bit sy set when section sy holds an in-column seed (T writes it after its springs step). */
+  readonly seedSections: Uint32Array;
 }
 
 /** The six aux A heightmaps, by field name (`store.heightAt`, SP4b spec §2.4). */
@@ -99,11 +101,28 @@ export interface ColumnWriter {
    * (unlike `setFinal`). D's diff overlay.
    */
   replaceBlocks(sy: number, blocks: Uint16Array, fluid: Uint8Array): void;
+  /**
+   * The final fluid of section `sy` only (SP7a D23, §4.2): copy-on-write (a new slot or a uniform code, the old entry
+   * released, so a slot shared with the proto stays the proto's), the blocks and cave entries kept (their slots stay
+   * shared with the proto), the meta word recomputed. Counts as a block write. D's settle.
+   */
+  replaceFluid(sy: number, fluid: Uint8Array): void;
+  /**
+   * The generated-fluid layer's entry of `sy` (SP7a D23, §9.3) becomes a reference to the final fluid entry as it
+   * stands (a dense slot retained, or its uniform code), and the mask bit sy is set: D's settled fluid, kept before
+   * the diff overlay rewrites the final set. No block write.
+   */
+  setGeneratedFluid(sy: number): void;
+  /**
+   * Releases every entry of the generated-fluid layer (deferred reclamation, SP4b spec §2.5) and clears the mask: D's
+   * first step, so a retry after a stopped D starts from an empty layer (`reopenColumn` clears nothing). No block write.
+   */
+  clearGeneratedFluid(): void;
   /** Sets the record's diff flag (`REC_DIFF_FLAG`, an `Atomics.store` of 1; SP5a spec §1.2, D23). */
   setDiffFlag(): void;
   /**
    * `blockVersion` + 1 when this writer wrote blocks or fluid since its previous commit (`setProto`, `setFinal`,
-   * `shareFinal`, `replaceBlocks`), `lightVersion` + 1 when it wrote light (`setFinal`, `setLight`, or `shareFinal` with a non-zero
+   * `shareFinal`, `replaceBlocks`, `replaceFluid`), `lightVersion` + 1 when it wrote light (`setFinal`, `setLight`, or `shareFinal` with a non-zero
    * light byte; the D skeleton's all-zero light is no light change), then `status` (stored last, so a reader never
    * sees a partial column). A commit with no write bumps no version (SP4a spec §2.5). `status` is a status above the
    * one the writer opened at, never below its last commit (SP4b): anything else throws `RangeError` before any version

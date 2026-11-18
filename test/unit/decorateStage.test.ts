@@ -78,6 +78,9 @@ function recordingWriter(): { w: ColumnWriter; calls: string[] } {
     aux: () => { calls.push('aux'); return auxA; },
     auxB: () => { calls.push('auxB'); return null as unknown as AuxBView; },
     replaceBlocks: () => { calls.push('replaceBlocks'); },
+    replaceFluid: () => { calls.push('replaceFluid'); },
+    setGeneratedFluid: () => { calls.push('setGeneratedFluid'); },
+    clearGeneratedFluid: () => { calls.push('clearGeneratedFluid'); },
     setDiffFlag: () => { calls.push('setDiffFlag'); },
     commit: () => { calls.push('commit'); },
   };

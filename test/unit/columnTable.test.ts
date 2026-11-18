@@ -2,7 +2,8 @@ import { describe, expect, test } from 'vitest';
 import {
   attachColumnTable, COLUMN_TABLE_BYTES, createColumnTable, finalAt, NO_COLUMN, protoAt, RECORD_COUNT, RECORD_INTS, recordBase,
   REC_AUX_A, REC_AUX_B, REC_BLOCK_VERSION, REC_CLAIMED, REC_CX, REC_CZ, REC_DIFF_FLAG, REC_EPOCH, REC_FINAL, REC_GEN,
-  REC_LIGHT_VERSION, REC_PROTO, REC_PROTO_FLAGS, REC_STATUS, REC_UNSETTLED, SECTIONS, SlotBusy, STATUS_ABSENT,
+  REC_GEN_FLUID, REC_GEN_FLUID_MASK, REC_LIGHT_VERSION, REC_PROTO, REC_PROTO_FLAGS, REC_STATUS, REC_UNSETTLED, SECTIONS,
+  SlotBusy, STATUS_ABSENT,
   STATUS_DECORATED, STATUS_PROTO, STATUS_PUBLISHED, TORUS, type ColumnTable,
 } from '../../src/world/store/columnTable';
 
@@ -20,20 +21,24 @@ function expectFree(t: ColumnTable, base: number): void {
     expect([r[f], r[f + 1], r[f + 2], r[f + 3], r[f + 4]]).toEqual([-1, -1, -1, 0, -1]);
     const p = protoAt(base, sy);
     expect([r[p], r[p + 1], r[p + 2]]).toEqual([-1, -1, -1]);
+    expect(r[base + REC_GEN_FLUID + sy]).toBe(-1);
   }
+  expect(r[base + REC_GEN_FLUID_MASK]).toBe(0);
 }
 
-test('record layout (SP3a spec §3.2, master §2.3; the cave entries, SP6a spec §3.3)', () => {
+test('record layout (SP3a spec §3.2, master §2.3; the cave entries, SP6a spec §3.3; the generated-fluid layer, SP7a D23)', () => {
   expect(TORUS).toBe(64);
-  expect(RECORD_INTS).toBe(208);
+  expect(RECORD_INTS).toBe(232);
   expect(RECORD_COUNT).toBe(4096);
-  expect(COLUMN_TABLE_BYTES).toBe(64 * 64 * 208 * 4);
-  expect(COLUMN_TABLE_BYTES).toBe(3_407_872);
+  expect(COLUMN_TABLE_BYTES).toBe(64 * 64 * 232 * 4);
+  expect(COLUMN_TABLE_BYTES).toBe(3_801_088);
   expect(SECTIONS).toBe(24);
   expect([REC_CX, REC_CZ, REC_STATUS, REC_EPOCH]).toEqual([0, 1, 2, 3]);
   expect([REC_BLOCK_VERSION, REC_LIGHT_VERSION, REC_PROTO_FLAGS]).toEqual([4, 5, 6]);
   expect([REC_AUX_A, REC_AUX_B, REC_UNSETTLED, REC_DIFF_FLAG, REC_CLAIMED]).toEqual([7, 8, 9, 10, 11]);
   expect(REC_GEN).toBe(12);
+  // The generated-fluid mask in int 13 and the layer's 24 fluid entries after the proto descriptors (SP7a D23).
+  expect([REC_GEN_FLUID_MASK, REC_GEN_FLUID]).toEqual([13, 208]);
   expect([REC_FINAL, REC_PROTO]).toEqual([16, 136]);
   expect([STATUS_ABSENT, STATUS_PROTO, STATUS_DECORATED, STATUS_PUBLISHED]).toEqual([0, 1, 2, 3]);
   // 24 final descriptors of 5 ints (blocks, light, fluid, meta, cave) fill 16-135, 24 proto descriptors of 3 ints
@@ -42,6 +47,7 @@ test('record layout (SP3a spec §3.2, master §2.3; the cave entries, SP6a spec 
   expect(finalAt(0, 23) + 5).toBe(136);
   expect(protoAt(0, 0)).toBe(136);
   expect(protoAt(0, 23) + 3).toBe(208);
+  expect(REC_GEN_FLUID + SECTIONS).toBe(RECORD_INTS);
   expect(finalAt(RECORD_INTS, 1)).toBe(RECORD_INTS + 21);
   expect(protoAt(RECORD_INTS, 1)).toBe(RECORD_INTS + 139);
 });
@@ -130,7 +136,7 @@ describe.each([true, false])('shared %s', (shared) => {
     expect(t.ints[base + REC_DIFF_FLAG]).toBe(0);
   });
 
-  test('claim resets a record left dirty by a holder (descriptors, aux ids), versions kept (SP4b spec §2.3)', () => {
+  test('claim resets a record left dirty by a holder (descriptors, aux ids, the generated-fluid layer), versions kept (SP4b spec §2.3)', () => {
     const t = createColumnTable(shared);
     const base = t.claim(1, 2, 0);
     t.ints[finalAt(base, 3) + 3] = 99;
@@ -139,6 +145,9 @@ describe.each([true, false])('shared %s', (shared) => {
     t.ints[finalAt(base, 5) + 4] = 7;
     t.ints[protoAt(base, 5) + 2] = 8;
     t.ints[base + REC_AUX_A] = 4;
+    // The generated-fluid mask and a layer entry (SP7a D23).
+    t.ints[base + REC_GEN_FLUID_MASK] = 1 << 5;
+    t.ints[base + REC_GEN_FLUID + 5] = 3;
     t.bumpBlockVersion(base);
     t.unclaim(base);
     t.claim(1, 2, 1);

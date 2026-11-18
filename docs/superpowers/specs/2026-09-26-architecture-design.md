@@ -357,7 +357,7 @@ Each channel is stored on its own: uniform when every value of that channel is e
 
 **Proto section descriptor**, 3 × int32: blocks, fluid and `cave` (amended by SP6a). This is the pre-decoration state (terrain, aquifer, surface rules, carvers). It is immutable once T finishes. D's share (`shareFinal`) makes the final blocks, fluid and `cave` entries reference the proto's slots; `replaceBlocks` (D's diff overlay, the sim's edits) replaces blocks and fluid only, so an edited section keeps its `cave` entry (amended by SP6a).
 
-**Column record** (208 × int32 = 832 B; the 64² torus is about 3.4 MB; amended by SP6a):
+**Column record** (232 × int32 = 928 B; the 64² torus is about 3.8 MB; amended by SP7a):
 
 | ints | fields |
 |---|---|
@@ -368,8 +368,10 @@ Each channel is stored on its own: uniform when every value of that channel is e
 | 9-10 | unsettledCount, diffFlag |
 | 11 | `claimed` (Atomics: 0 free, 1 held; claiming a held record throws `SlotBusy`, and a read of a record that holds another column returns absent; amended by SP3a) |
 | 12 | claim generation (Atomics; even free, odd held; bumped by claim and unclaim; lookups and writers validate it; SP4b) |
+| 13 | the generated-fluid mask (bit sy set when the layer holds section sy; SP7a) |
 | 16-135 | final descriptors (24 × 5) |
 | 136-207 | proto descriptors (24 × 3) |
+| 208-231 | the generated-fluid layer (24 fluid entries; SP7a): D's settled fluid of each section its settle changed, before the diff overlay, each a retained reference to the final fluid entry as it stood (a slot, or its uniform code), so it costs a slot of its own only where the overlay rewrote a settled section; released with the final set and by D's `clearGeneratedFluid`; `store.generated(cx, cz)` reads the proto set with this fluid over it (the SP7a spec D23) |
 
 **Aux slot A (exactly 4 KiB):**
 - proto heightmaps `WORLD_SURFACE_WG` and `OCEAN_FLOOR_WG` (Int16[256] ×2);
@@ -379,7 +381,7 @@ Each channel is stored on its own: uniform when every value of that channel is e
 
 Byte offsets (amended by SP3a): `WORLD_SURFACE_WG` 0, `OCEAN_FLOOR_WG` 512, `WORLD_SURFACE` 1024, `MOTION_BLOCKING` 1536, `OCEAN_FLOOR` 2048, `LIGHT_BLOCKING` 2560, `surfaceBiome` 3072, `tintTH` 3328; per-position arrays use the column index `lz·16 + lx`, and Int16 values are little-endian. A heightmap value is the absolute y of the highest qualifying voxel plus one, −64 when none qualifies: `WORLD_SURFACE_WG` and `WORLD_SURFACE` count a state ≠ air or a fluid type ≠ 0; `OCEAN_FLOOR_WG` and `OCEAN_FLOOR` count `COLLIDE` ≠ none (the fluid byte is ignored); `MOTION_BLOCKING` counts `COLLIDE` ≠ none or a fluid type ≠ 0; `LIGHT_BLOCKING` follows the §2.2 light rule (SP4a spec §4.1: 1 + the highest voxel the fall does not enter).
 
-**Aux slot B:** `caveBiomeQ` Uint8[4·96·4 = 1536] at 0 and `surfaceBiomeQ` Uint8[16] at 1536 (offsets amended by SP3a). The index orders are `surfaceBiomeQ[qz·4 + qx]` (the quart's 2D biome before the zoom) and `caveBiomeQ[(qy·4 + qz)·4 + qx]` with `qy = (y + 64) >> 2`; SP3b's T writes `surfaceBiomeQ` (amended by SP3b; the SP3b spec §4); `caveBiomeQ`: 0 for a quart with no tagged voxel, else 1 + the biome most of its tagged voxels carry; written by T (SP6b). A tie goes to the lower id, and tagged voxels holding water count like dry ones (amended by SP6b). Both aux slots are zero-filled when allocated (a recycled slot included), so a field no stage has written reads 0.
+**Aux slot B:** `caveBiomeQ` Uint8[4·96·4 = 1536] at 0 and `surfaceBiomeQ` Uint8[16] at 1536 (offsets amended by SP3a). The index orders are `surfaceBiomeQ[qz·4 + qx]` (the quart's 2D biome before the zoom) and `caveBiomeQ[(qy·4 + qz)·4 + qx]` with `qy = (y + 64) >> 2`; SP3b's T writes `surfaceBiomeQ` (amended by SP3b; the SP3b spec §4); `caveBiomeQ`: 0 for a quart with no tagged voxel, else 1 + the biome most of its tagged voxels carry; written by T (SP6b). A tie goes to the lower id, and tagged voxels holding water count like dry ones (amended by SP6b). `seedSections` Uint32[1] at 1552: bit sy set for a section holding an in-column seed, written by T after its springs step and rescanned by D's settle (amended by SP7a; the SP7a spec §1.7). Both aux slots are zero-filled when allocated (a recycled slot included), so a field no stage has written reads 0.
 
 **Reclamation.** Every slot release (a descriptor rewritten, shared over or released, an aux slot, a column or proto freed) goes through the post-commit reclamation protocol (`reclaim.ts`; the SP4b spec §2.5) (SP4b). A 192-byte buffer beside the table holds a global epoch, one reader epoch per thread (0 the main thread, the pool's workers 1 … N, SP5a's sim worker 15), the dead-owner mask, the store id and each thread's limbo count. A thread reads the store inside a read section (`enterRead` announces the global epoch, `exitRead` clears it); a release tags itself with the global epoch and is freed at once when no reader is inside a read section (or the store is unshared), otherwise it waits in the releasing thread's limbo list until every reader that could hold it has finished (a drain at `exitRead`, after a worker's reply, and once per frame on the main thread). A dead thread's epoch is cleared (`markDead`), so a failed worker never holds later releases. The pools count limbo slots as used. In SP4b the coordinator's reader pins order the writes it issues, so the protocol is defence in depth; SP5a's sim worker is its first necessary consumer.
 
@@ -451,6 +453,9 @@ interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Arra
   resetLight(): void /* the 24 light entries to 0, released through reclamation; L's first step (SP4b) */;
   aux(): AuxView; auxB(): AuxBView;
   replaceBlocks(sy:number, blocks:Uint16Array, fluid:Uint8Array): void /* copy-on-write, blocks and fluid only (SP5a) */;
+  replaceFluid(sy:number, fluid:Uint8Array): void /* copy-on-write, fluid only: blocks and cave stay shared with the proto; D's settle (SP7a) */;
+  setGeneratedFluid(sy:number): void /* the generated-fluid layer's entry of sy references the final fluid entry (retained), its mask bit set (SP7a) */;
+  clearGeneratedFluid(): void /* releases the layer's 24 entries through reclamation and clears the mask; D's first step (SP7a) */;
   setDiffFlag(): void /* REC_DIFF_FLAG (SP5a) */;
   commit(status: 1|2|3): void /* blockVersion += 1 when blocks or fluid were written, lightVersion += 1 when light was, then status last;
     a status above the one the writer opened at (SP4b) */ }

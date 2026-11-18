@@ -3,7 +3,8 @@
  * - Aux A: six Int16[256] heightmaps (`WORLD_SURFACE_WG` 0, `OCEAN_FLOOR_WG` 512, `WORLD_SURFACE` 1024,
  *   `MOTION_BLOCKING` 1536, `OCEAN_FLOOR` 2048, `LIGHT_BLOCKING` 2560), `surfaceBiome` Uint8[256] at 3072 and
  *   `tintTH` Uint8[768] at 3328. Int16 values are little-endian (native on every target).
- * - Aux B: `caveBiomeQ` Uint8[1536] at 0 and `surfaceBiomeQ` Uint8[16] at 1536; the rest of the slot is 0.
+ * - Aux B: `caveBiomeQ` Uint8[1536] at 0, `surfaceBiomeQ` Uint8[16] at 1536 and `seedSections` Uint32[1] at 1552 (SP7a
+ *   §1.7: bit sy set for a section holding an in-column seed, written by T, rescanned by D); the rest of the slot is 0.
  * An aux slot is zero-filled when allocated, a recycled slot included, so a field no stage wrote reads 0.
  * `createScratchAux` lays the same views over two worker-local buffers (`ProtoWriter`'s discarded aux, SP4b spec §2.4).
  */
@@ -25,7 +26,7 @@ export const AUX_A_OFFSETS = {
 } as const;
 
 /** Byte offsets of the aux B fields in their slot. */
-export const AUX_B_OFFSETS = { caveBiomeQ: 0, surfaceBiomeQ: 1536 } as const;
+export const AUX_B_OFFSETS = { caveBiomeQ: 0, surfaceBiomeQ: 1536, seedSections: 1552 } as const;
 
 /** A heightmap value when no voxel of the column qualifies: the bottom of the world. */
 export const HEIGHT_NONE = -64;
@@ -64,6 +65,7 @@ function auxBViewAt(buf: ArrayBufferLike, at: number): AuxBView {
   return {
     caveBiomeQ: new Uint8Array(buf, at + AUX_B_OFFSETS.caveBiomeQ, 1536),
     surfaceBiomeQ: new Uint8Array(buf, at + AUX_B_OFFSETS.surfaceBiomeQ, 16),
+    seedSections: new Uint32Array(buf, at + AUX_B_OFFSETS.seedSections, 1),
   };
 }
 

@@ -11,8 +11,9 @@
  * sets and `freeProto` clears, SP4b spec §2.4); `freeProto` releases the proto set; `reopenProto` returns a
  * `ProtoWriter` that rewrites a freed proto of a Decorated or Published column (`T(protoOnly)`, SP4b spec §2.4, §3.7);
  * `freeColumn` releases every reference the record holds and frees the record; `reopenPublished` returns the sim's
- * copy-on-write `EditWriter` for a Published column (SP5a spec §2.2, D18). A writer captures the record's claim
- * generation and throws `WriterStale` once the record was freed or claimed again (SP4b spec §2.2).
+ * copy-on-write `EditWriter` for a Published column (SP5a spec §2.2, D18). `generated` reads the proto set with D's
+ * generated-fluid layer over its fluid (SP7a D23, §9.3: the column's generated value). A writer captures the record's
+ * claim generation and throws `WriterStale` once the record was freed or claimed again (SP4b spec §2.2).
  *
  * The main thread's per-frame reads take no view (SP4b spec §2.4, §3.10): `lightAt` and `heightAt` read a Published
  * column directly, as SP5a's walk-step reads `blockAt`, `fluidAt` and `publishedAt` do (D25), `versionsInto` fills the
@@ -34,8 +35,8 @@ import type {
 import { allocAux, AUX_A_OFFSETS, AUX_BYTES, auxBView, auxView, createScratchAux } from './aux';
 import {
   attachColumnTable, createColumnTable, finalAt, PROTO_ALIVE, protoAt, recordBase, REC_AUX_A, REC_AUX_B, REC_CLAIMED,
-  REC_CX, REC_CZ, REC_DIFF_FLAG, REC_GEN, REC_PROTO_FLAGS, SECTIONS, STATUS_ABSENT, STATUS_DECORATED, STATUS_PROTO,
-  STATUS_PUBLISHED, WriterStale, type ColumnTable,
+  REC_CX, REC_CZ, REC_DIFF_FLAG, REC_GEN, REC_GEN_FLUID, REC_GEN_FLUID_MASK, REC_PROTO_FLAGS, SECTIONS, STATUS_ABSENT,
+  STATUS_DECORATED, STATUS_PROTO, STATUS_PUBLISHED, WriterStale, type ColumnTable,
 } from './columnTable';
 import { attachEpochCells, createEpochCells, type EpochCells } from './epochs';
 import {
@@ -116,7 +117,8 @@ export interface VoxelStore {
   /**
    * A writer for the committed column (cx, cz) (SP4a spec §2.5): D reopens at Proto (1), L at Decorated (2).
    * Throws `reopenColumn: (cx, cz) is not at status <from>` unless the record holds (cx, cz) at status `from`. It
-   * clears nothing, and its `aux()`/`auxB()` return the record's existing slots, allocating only when there are none.
+   * clears nothing (a stopped D's generated-fluid layer included: D's `clearGeneratedFluid` releases it, SP7a D23), and
+   * its `aux()`/`auxB()` return the record's existing slots, allocating only when there are none.
    */
   reopenColumn(cx: number, cz: number, from: 1 | 2): ColumnWriter;
   /**
@@ -139,6 +141,12 @@ export interface VoxelStore {
   proto(cx: number, cz: number): ColumnView | null;
   /** The final set, or null unless the record holds (cx, cz) at status ≥ Decorated. */
   final(cx: number, cz: number): ColumnView | null;
+  /**
+   * The column's generated value (SP7a D23, §9.3): the proto view, with `fluid`/`sectionFluid` read from the
+   * generated-fluid layer in the sections its mask holds (D's settled fluid before the diff overlay); null where
+   * `proto` is null.
+   */
+  generated(cx: number, cz: number): ColumnView | null;
   neighborhood(cx: number, cz: number): NeighborhoodReader;
   /**
    * `T(protoOnly)`'s writer (SP4b spec §2.4, §3.7). Throws `reopenProto: (cx, cz) is not at status ≥ 2 with a freed
@@ -274,10 +282,17 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
   const { pass } = h;
   const ints = table.ints;
 
-  /** The proto (`final` false) or final view of the record at `base`, holding (cx, cz). */
-  function view(base: number, cx: number, cz: number, final: boolean): ColumnView {
+  /**
+   * The proto (`final` false) or final view of the record at `base`, holding (cx, cz); a proto view with `generated`
+   * reads the fluid of the sections the generated-fluid mask holds from the layer (SP7a D23), the mask read live.
+   */
+  function view(base: number, cx: number, cz: number, final: boolean, generated = false): ColumnView {
     const blocksAt = (sy: number) => (final ? finalAt(base, sy) + FINAL_BLOCKS : protoAt(base, sy) + PROTO_BLOCKS);
-    const fluidAt = (sy: number) => (final ? finalAt(base, sy) + FINAL_FLUID : protoAt(base, sy) + PROTO_FLUID);
+    const fluidAt = (sy: number) => {
+      if (final) return finalAt(base, sy) + FINAL_FLUID;
+      if (generated && ((ints[base + REC_GEN_FLUID_MASK]! >>> sy) & 1) !== 0) return base + REC_GEN_FLUID + sy;
+      return protoAt(base, sy) + PROTO_FLUID;
+    };
     // The cave channel (SP6a spec §3.3): each view reads its own set's entry.
     const caveAt = (sy: number) => (final ? finalAt(base, sy) + FINAL_CAVE : protoAt(base, sy) + PROTO_CAVE);
     return {
@@ -389,6 +404,12 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
     return ints[at]!;
   }
 
+  /** Retires the 24 generated-fluid layer entries of the record at `base` (SP7a D23), resets them to −1 and the mask to 0. */
+  function releaseGeneratedFluid(base: number): void {
+    for (let sy = 0; sy < SECTIONS; sy++) releaseEntry(bytePool, ints, base + REC_GEN_FLUID + sy, retire);
+    ints[base + REC_GEN_FLUID_MASK] = 0;
+  }
+
   /** Retires the proto entries of the record at `base` (SP4b spec §2.5), the cave's included, and resets them to −1. */
   function releaseProto(base: number): void {
     for (let sy = 0; sy < SECTIONS; sy++) {
@@ -494,6 +515,26 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
         storeWords(blockPool, ints, f + FINAL_BLOCKS, blocks, retire);
         storeBytes(bytePool, ints, f + FINAL_FLUID, fluid, retire);
         setMeta(base, sy);
+      },
+      replaceFluid(sy, fluid) {
+        check();
+        checkSy(sy);
+        checkLength(fluid, 'fluid');
+        // Fluid only (SP7a D23): the blocks and cave entries keep the slots they share with the proto.
+        wroteBlocks = true;
+        storeBytes(bytePool, ints, finalAt(base, sy) + FINAL_FLUID, fluid, retire);
+        setMeta(base, sy);
+      },
+      setGeneratedFluid(sy) {
+        check();
+        checkSy(sy);
+        // The layer references the settled entry (retained), so the overlay's copy-on-write leaves it the settled slot.
+        shareEntry(bytePool, ints, finalAt(base, sy) + FINAL_FLUID, base + REC_GEN_FLUID + sy, retire);
+        ints[base + REC_GEN_FLUID_MASK] = ints[base + REC_GEN_FLUID_MASK]! | (1 << sy);
+      },
+      clearGeneratedFluid() {
+        check();
+        releaseGeneratedFluid(base);
       },
       setDiffFlag() {
         check();
@@ -714,6 +755,8 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
         releaseEntry(bytePool, ints, f + FINAL_FLUID, retire);
         releaseEntry(bytePool, ints, f + FINAL_CAVE, retire);
       }
+      // The generated-fluid layer lives with the final set (SP7a D23).
+      releaseGeneratedFluid(base);
       releaseEntry(bytePool, ints, base + REC_AUX_A, retire);
       releaseEntry(bytePool, ints, base + REC_AUX_B, retire);
       table.clear(base);
@@ -735,6 +778,11 @@ export function attachStore(h: StoreHandles, thread = MAIN_THREAD): VoxelStore {
     final(cx, cz) {
       const base = committed(cx, cz, STATUS_DECORATED);
       return base < 0 ? null : view(base, cx, cz, true);
+    },
+
+    generated(cx, cz) {
+      const base = committed(cx, cz, STATUS_PROTO);
+      return base < 0 || (Atomics.load(ints, base + REC_PROTO_FLAGS) & PROTO_ALIVE) === 0 ? null : view(base, cx, cz, false, true);
     },
 
     neighborhood(cx, cz) {

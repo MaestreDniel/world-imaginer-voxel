@@ -8,14 +8,14 @@ import { AIR, BEDROCK, PASS } from '../../src/world/blocks/index';
 import { AUX_A_OFFSETS, AUX_B_OFFSETS } from '../../src/world/store/aux';
 import {
   finalAt, NO_COLUMN, protoAt, RECORD_COUNT, RECORD_INTS, REC_AUX_A, REC_AUX_B, REC_BLOCK_VERSION, REC_CLAIMED,
-  REC_CX, REC_CZ, REC_DIFF_FLAG, REC_EPOCH, REC_LIGHT_VERSION, REC_PROTO_FLAGS, REC_STATUS, SECTIONS, STATUS_ABSENT,
-  PROTO_ALIVE, WriterStale,
+  REC_CX, REC_CZ, REC_DIFF_FLAG, REC_EPOCH, REC_GEN_FLUID, REC_GEN_FLUID_MASK, REC_LIGHT_VERSION, REC_PROTO_FLAGS, REC_STATUS,
+  SECTIONS, STATUS_ABSENT, PROTO_ALIVE, WriterStale,
 } from '../../src/world/store/columnTable';
 import { EPOCH_CELL } from '../../src/world/store/epochs';
 import { DEFAULT_MAX_BLOCK_BYTES, DEFAULT_MAX_BYTE_BYTES, type SlabPool } from '../../src/world/store/pool';
 import {
   FINAL_BLOCKS, FINAL_CAVE, FINAL_FLUID, FINAL_LIGHT, FINAL_META, META_CUTOUT, META_FLUID, META_OPAQUE, PROTO_BLOCKS, PROTO_CAVE,
-  PROTO_FLUID,
+  PROTO_FLUID, uniformCode,
 } from '../../src/world/store/section';
 import {
   attachStore, createStore, DEFAULT_PASS, SlotBusy, StoreCorrupt, StoreFull, type VoxelStore,
@@ -410,6 +410,224 @@ describe.each([true, false])('shared %s', (shared) => {
     expect(s.final(4, 4)!.cave(0, -16, 0)).toBe(1);
     s.freeColumn(4, 4);
     expect(snapStore(s)).toEqual(before);
+  });
+
+  /**
+   * The generated-fluid layer's fixture (SP7a D23, §4.2): T of (cx, cz) writes section 5 (y 16 … 31) with dense blocks,
+   * fluid and cave, section 6 (y 32 … 47) with stone and dense fluid, commit 1; D reopens at Proto and shares the 24
+   * sections into the final set. Returns D's open writer and the record's base.
+   */
+  function protoThenShare(s: VoxelStore, cx: number, cz: number): { d: ReturnType<VoxelStore['reopenColumn']>; base: number } {
+    const w = s.claimColumn(cx, cz, 0);
+    const cave = bytes(0);
+    cave[vi(3, 0, 0)] = 1;
+    w.setProto(5, mixedBlocks(), mixedFluid(), cave);
+    w.setProto(6, words(1), mixedFluid());
+    w.commit(1);
+    const d = s.reopenColumn(cx, cz, 1);
+    for (let sy = 0; sy < SECTIONS; sy++) d.shareFinal(sy, bytes(0));
+    return { d, base: s.table.find(cx, cz) };
+  }
+
+  /** Section 5's settled fluid: the proto's water plus a level-2 flow at (1, 8, 1) (y 24), dense. */
+  function settledFluid(): Uint8Array {
+    const f = mixedFluid();
+    f[vi(1, 8, 1)] = WATER | 2;
+    return f;
+  }
+
+  test('replaceFluid (SP7a D23, §4.2): after shareFinal the final view reads the new bytes; the proto view, the final blocks slot and the cave entry are untouched; the proto fluid slot\'s refcount is back to its proto-only count', () => {
+    const s = newStore();
+    const { d, base } = protoThenShare(s, 2, 2);
+    const ints = s.table.ints;
+    const pb = ints[protoAt(base, 5) + PROTO_BLOCKS]!;
+    const pf = ints[protoAt(base, 5) + PROTO_FLUID]!;
+    const pc = ints[protoAt(base, 5) + PROTO_CAVE]!;
+    expect([pb, pf, pc].every((c) => c >= 0)).toBe(true);
+    expect(s.bytePool.refcount(pf)).toBe(2);
+    d.replaceFluid(5, settledFluid());
+    // Blocks and cave keep the slots shared with the proto (one slot, two references each).
+    expect(ints[finalAt(base, 5) + FINAL_BLOCKS]).toBe(pb);
+    expect(s.blockPool.refcount(pb)).toBe(2);
+    expect(ints[finalAt(base, 5) + FINAL_CAVE]).toBe(pc);
+    expect(s.bytePool.refcount(pc)).toBe(2);
+    // The fluid moved to a slot of its own (copy-on-write); the proto's is back to its one reference.
+    const ff = ints[finalAt(base, 5) + FINAL_FLUID]!;
+    expect(ff).toBeGreaterThanOrEqual(0);
+    expect(ff).not.toBe(pf);
+    expect(s.drain()).toBe(0);
+    expect(s.bytePool.refcount(pf)).toBe(1);
+    expect(s.bytePool.refcount(ff)).toBe(1);
+    d.commit(2);
+    const f = s.final(2, 2)!;
+    const p = s.proto(2, 2)!;
+    expect(f.fluid(1, 24, 1)).toBe(WATER | 2);
+    expect(p.fluid(1, 24, 1)).toBe(0);
+    expect(f.sectionFluid(5)).toEqual(settledFluid());
+    expect(p.sectionFluid(5)).toEqual(mixedFluid());
+    expect(f.block(0, 16, 0)).toBe(2);
+    expect(f.cave(3, 16, 0)).toBe(1);
+    // A uniform settled section costs no slot: the entry is the uniform code.
+    const usedBefore = s.bytePool.slotCount() - s.bytePool.freeCount();
+    const l = s.reopenColumn(2, 2, 2);
+    l.replaceFluid(7, bytes(WATER));
+    expect(ints[finalAt(base, 7) + FINAL_FLUID]).toBe(uniformCode(WATER));
+    expect(s.bytePool.slotCount() - s.bytePool.freeCount()).toBe(usedBefore);
+  });
+
+  test('replaceFluid bumps blockVersion once at commit (lightVersion unchanged) and recomputes the meta word\'s hasFluid bit', () => {
+    const s = newStore();
+    const { d, base } = protoThenShare(s, 0, 3);
+    d.commit(2);
+    const ints = s.table.ints;
+    const v = [s.table.blockVersion(base), s.table.lightVersion(base)];
+    expect(ints[finalAt(base, 5) + FINAL_META]).toBe((8 * 256) | META_OPAQUE | META_FLUID);
+    expect(ints[finalAt(base, 7) + FINAL_META]).toBe(0);
+    const w = s.reopenColumn(0, 3, 2);
+    w.replaceFluid(5, bytes(0)); // the section's water drained: hasFluid off, the blocks' bits kept
+    w.replaceFluid(7, bytes(WATER)); // an air section filled: hasFluid on, nonAir 0
+    expect([s.table.blockVersion(base), s.table.lightVersion(base)]).toEqual(v);
+    expect(ints[finalAt(base, 5) + FINAL_META]).toBe((8 * 256) | META_OPAQUE);
+    expect(ints[finalAt(base, 7) + FINAL_META]).toBe(META_FLUID);
+    w.commit(3);
+    expect([s.table.blockVersion(base), s.table.lightVersion(base)]).toEqual([v[0]! + 1, v[1]]);
+    expect(() => w.replaceFluid(24, bytes(0))).toThrow(RangeError);
+    expect(() => w.replaceFluid(0, new Uint8Array(10))).toThrow(RangeError);
+    expect(() => w.setGeneratedFluid(-1)).toThrow(RangeError);
+  });
+
+  test('the generated-fluid layer (SP7a D23, §9.3): setGeneratedFluid then D\'s overlay through replaceBlocks; generated() reads the settled fluid where the mask holds the section, the proto\'s elsewhere, and the proto\'s blocks', () => {
+    const s = newStore();
+    const { d, base } = protoThenShare(s, -2, 5);
+    const ints = s.table.ints;
+    expect(ints[base + REC_GEN_FLUID_MASK]).toBe(0);
+    d.clearGeneratedFluid(); // D's first step: nothing to release on a fresh column
+    d.replaceFluid(5, settledFluid());
+    d.setGeneratedFluid(5);
+    const ff = ints[finalAt(base, 5) + FINAL_FLUID]!;
+    // A retained reference to the final fluid entry as it stands: one slot, two references, the mask bit set.
+    expect(ints[base + REC_GEN_FLUID + 5]).toBe(ff);
+    expect(s.bytePool.refcount(ff)).toBe(2);
+    expect(ints[base + REC_GEN_FLUID_MASK]).toBe(1 << 5);
+    // D's diff overlay: stone placed at (1, 8, 1), its water removed. The layer keeps the settled slot.
+    const blocks = mixedBlocks();
+    blocks[vi(1, 8, 1)] = 1;
+    const overlay = settledFluid();
+    overlay[vi(1, 8, 1)] = 0;
+    d.replaceBlocks(5, blocks, overlay);
+    expect(ints[base + REC_GEN_FLUID + 5]).toBe(ff);
+    expect(ints[finalAt(base, 5) + FINAL_FLUID]).not.toBe(ff);
+    expect(s.drain()).toBe(0);
+    expect(s.bytePool.refcount(ff)).toBe(1);
+    // generated() is null until the column is committed at Proto with its proto alive: here it is (status 1).
+    expect(s.generated(-2, 5)).not.toBeNull();
+    d.commit(2);
+    const g = s.generated(-2, 5)!;
+    const f = s.final(-2, 5)!;
+    const p = s.proto(-2, 5)!;
+    expect([g.cx, g.cz]).toEqual([-2, 5]);
+    expect(g.fluid(1, 24, 1)).toBe(WATER | 2);
+    expect(f.fluid(1, 24, 1)).toBe(0);
+    expect(g.block(1, 24, 1)).toBe(0); // the proto's air, not the overlay's stone
+    expect(f.block(1, 24, 1)).toBe(1);
+    expect(g.sectionFluid(5)).toEqual(settledFluid());
+    expect(g.sectionBlocks(5)).toEqual(p.sectionBlocks(5));
+    expect(g.sectionCave(5)).toEqual(p.sectionCave(5));
+    expect(g.cave(3, 16, 0)).toBe(1);
+    // A section without the mask bit reads the proto's fluid through generated().
+    expect(g.sectionFluid(6)).toEqual(mixedFluid());
+    expect(g.fluid(0, 32, 0)).toBe(WATER);
+    expect(g.sectionFluid(7)).toBe(0);
+    // A proto view: no light.
+    expect([g.light(0, 24, 0), g.sectionLight(5)]).toEqual([0, 0]);
+    expect(g.auxB()).toBeNull();
+    // A uniform settled section (all water) costs no slot in the layer: the entry is the uniform code.
+    const used = () => s.bytePool.slotCount() - s.bytePool.freeCount();
+    const l = s.reopenColumn(-2, 5, 2);
+    l.replaceFluid(7, bytes(WATER));
+    const usedBefore = used();
+    l.setGeneratedFluid(7);
+    expect(used()).toBe(usedBefore);
+    expect(ints[base + REC_GEN_FLUID + 7]).toBe(uniformCode(WATER));
+    expect(ints[base + REC_GEN_FLUID_MASK]).toBe((1 << 5) | (1 << 7));
+    expect(s.generated(-2, 5)!.sectionFluid(7)).toBe(WATER);
+    expect(s.generated(-2, 5)!.fluid(15, 56, 15)).toBe(WATER);
+  });
+
+  test('generated() is null where proto() is: an absent column, a claimed uncommitted one, another column\'s record, a freed proto', () => {
+    const s = newStore();
+    expect(s.generated(0, 0)).toBeNull();
+    const w = s.claimColumn(0, 0, 0);
+    w.setProto(5, mixedBlocks(), mixedFluid());
+    expect(s.generated(0, 0)).toBeNull();
+    w.commit(1);
+    expect(s.generated(0, 0)).not.toBeNull();
+    expect(s.generated(64, 0)).toBeNull();
+    const d = s.reopenColumn(0, 0, 1);
+    for (let sy = 0; sy < SECTIONS; sy++) d.shareFinal(sy, bytes(0));
+    d.replaceFluid(5, settledFluid());
+    d.setGeneratedFluid(5);
+    d.commit(2);
+    expect(s.generated(0, 0)!.fluid(1, 24, 1)).toBe(WATER | 2);
+    s.freeProto(0, 0);
+    expect(s.proto(0, 0)).toBeNull();
+    expect(s.generated(0, 0)).toBeNull();
+    // The layer lives with the final set: freeProto leaves it.
+    const base = s.table.find(0, 0);
+    expect(s.table.ints[base + REC_GEN_FLUID_MASK]).toBe(1 << 5);
+  });
+
+  test('clearGeneratedFluid releases every layer entry and clears the mask; then freeColumn returns the pools to their counts before the column (no leak)', () => {
+    const s = newStore();
+    warm(s);
+    const before = snapStore(s);
+    const { d, base } = protoThenShare(s, 6, 6);
+    const ints = s.table.ints;
+    d.replaceFluid(5, settledFluid());
+    d.setGeneratedFluid(5);
+    d.replaceBlocks(5, mixedBlocks(), mixedFluid()); // the layer holds the settled slot alone
+    d.replaceFluid(6, settledFluid());
+    d.setGeneratedFluid(6); // shared with the final fluid entry
+    d.replaceFluid(7, bytes(WATER));
+    d.setGeneratedFluid(7); // uniform
+    d.commit(2);
+    const g5 = ints[base + REC_GEN_FLUID + 5]!;
+    const g6 = ints[base + REC_GEN_FLUID + 6]!;
+    expect([s.bytePool.refcount(g5), s.bytePool.refcount(g6)]).toEqual([1, 2]);
+    const w = s.reopenColumn(6, 6, 2);
+    w.clearGeneratedFluid();
+    expect(ints[base + REC_GEN_FLUID_MASK]).toBe(0);
+    for (let sy = 0; sy < SECTIONS; sy++) expect(ints[base + REC_GEN_FLUID + sy], `layer entry ${sy}`).toBe(-1);
+    expect(s.drain()).toBe(0);
+    expect(s.bytePool.refcount(g6)).toBe(1);
+    // The generated view reads the proto's fluid again.
+    expect(s.generated(6, 6)!.sectionFluid(5)).toEqual(mixedFluid());
+    // A clear is no block write: commit(3) bumps no blockVersion.
+    const bv = s.table.blockVersion(base);
+    w.commit(3);
+    expect(s.table.blockVersion(base)).toBe(bv);
+    s.freeColumn(6, 6);
+    expect(snapStore(s)).toEqual(before);
+  });
+
+  test('freeColumn releases the generated-fluid layer with the final set, the mask included (no leak); the writer\'s three methods are stale after it', () => {
+    const s = newStore();
+    warm(s);
+    const before = snapStore(s);
+    const { d, base } = protoThenShare(s, 1, -1);
+    d.replaceFluid(5, settledFluid());
+    d.setGeneratedFluid(5);
+    d.replaceBlocks(5, mixedBlocks(), mixedFluid());
+    d.replaceFluid(6, settledFluid());
+    d.setGeneratedFluid(6);
+    d.commit(2);
+    s.freeColumn(1, -1);
+    expect(snapStore(s)).toEqual(before);
+    expect(s.table.ints[base + REC_GEN_FLUID_MASK]).toBe(0);
+    expect(s.table.ints[base + REC_GEN_FLUID + 5]).toBe(-1);
+    expect(() => d.replaceFluid(5, bytes(0))).toThrow(WriterStale);
+    expect(() => d.setGeneratedFluid(5)).toThrow(WriterStale);
+    expect(() => d.clearGeneratedFluid()).toThrow(WriterStale);
   });
 
   test('sharing and release: free the proto set, then the final set; every refcount and the stack come back', () => {
@@ -1072,6 +1290,34 @@ describe('deferred reclamation in the store (SP4b spec §2.5)', () => {
     s.freeColumn(4, 4);
     expect(s.limboCount(0)).toBe(1);
     s.exitRead();
+    expect(s.limboCount(0)).toBe(0);
+    expect([s.blockPool.freeCount(), s.bytePool.freeCount()]).toEqual(before);
+  });
+
+  test('clearGeneratedFluid and freeColumn under an active reader (SP7a D23): the layer\'s releases wait in limbo until exitRead; the free-slot counts then equal those before the column', () => {
+    const s = createStore({ shared: true, maxBlockBytes: 4 * MiB, maxByteBytes: 4 * MiB });
+    warm(s);
+    const before = [s.blockPool.freeCount(), s.bytePool.freeCount()];
+    const w = s.claimColumn(3, 3, 0);
+    w.setProto(5, mixedBlocks(), mixedFluid());
+    w.commit(1);
+    const d = s.reopenColumn(3, 3, 1);
+    for (let sy = 0; sy < SECTIONS; sy++) d.shareFinal(sy, bytes(0));
+    const settled = mixedFluid();
+    settled[0] = WATER | 1;
+    d.replaceFluid(5, settled);
+    d.setGeneratedFluid(5);
+    d.replaceBlocks(5, mixedBlocks(), mixedFluid()); // the layer holds the settled slot alone
+    d.commit(2);
+    const reader = attachStore(s.handles(), 2);
+    reader.enterRead();
+    s.reopenColumn(3, 3, 2).clearGeneratedFluid();
+    // The settled slot's last reference: in limbo, not yet free.
+    expect(s.limboCount(0)).toBe(1);
+    s.freeColumn(3, 3);
+    expect(s.drain()).toBeGreaterThan(0);
+    reader.exitRead();
+    expect(s.drain()).toBe(0);
     expect(s.limboCount(0)).toBe(0);
     expect([s.blockPool.freeCount(), s.bytePool.freeCount()]).toEqual(before);
   });

@@ -208,6 +208,10 @@
  * §1 names each SP7a module in its entry, which exists (`SP7A_MODULES`, item 19): the shared fluid rules (Task 2) add
  * its first row, `world/blocks/fluidRules.ts` "(SP7a; also the fluid surface and corner heights)" on the line that
  * names it (rulings P6: the bare file name was already in §1).
+ * Task 4 lands item 4's store lines (the plan's Spec correction 10): §2.3's column record at 232 ints with the
+ * generated-fluid mask (int 13) and layer (ints 208-231), aux B's `seedSections`, and §2.5's `interface ColumnWriter`
+ * with `replaceFluid`, `setGeneratedFluid` and `clearGeneratedFluid`; the SP6a describe's record-line pin moved here.
+ * Item 4's bit-6 sentence (§2.2) lands with the settle in D (Task 16).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -224,6 +228,8 @@ import { MAX_STEP_EDITS, SUB_BATCH } from '../../src/sim/edits';
 import { PIN_MAX } from '../../src/ui/inspector/sliceModel';
 import { MAX_HISTORY_EDITS } from '../../src/ui/world/blockHistory';
 import { REGISTRY } from '../../src/world/blocks';
+import { AUX_B_OFFSETS } from '../../src/world/store/aux';
+import { COLUMN_TABLE_BYTES, REC_GEN_FLUID, REC_GEN_FLUID_MASK, RECORD_INTS } from '../../src/world/store/columnTable';
 import { PACK_LAYOUT } from '../../src/mesh/packing';
 import { RULE_KINDS } from '../../src/gen/surface/rules';
 import {
@@ -2182,7 +2188,7 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(block).toContain('`cave` (u8 per voxel: the cave kind in bits 0-3;');
     expect(block).toContain('**Final section descriptor**, 5 × int32 per section (the `cave` entry amended by SP6a):');
     expect(block).toContain('**Proto section descriptor**, 3 × int32: blocks, fluid and `cave` (amended by SP6a).');
-    expect(block).toContain('**Column record** (208 × int32 = 832 B; the 64² torus is about 3.4 MB; amended by SP6a):');
+    // The record line moved to 'master spec amendments (SP7a §16)' (SP7a §16 item 4 grows the record to 232 ints).
     expect(block).toContain('| 16-135 | final descriptors (24 × 5) |');
     expect(block).toContain('| 136-207 | proto descriptors (24 × 3) |');
     expect(text).toContain('interface ColumnWriter { setProto(sy:number, blocks:Uint16Array, fluid:Uint8Array, cave?:Uint8Array): void');
@@ -3441,6 +3447,29 @@ describe('master spec amendments (SP7a §16)', () => {
     const union = [...line('type SubProjectId =').matchAll(/'(SP[^']*)'/g)].map((m) => m[1]);
     expect(union).toEqual([...SUB_PROJECTS]);
     expect(union.slice(union.indexOf('SP6b'), union.indexOf('SP8a') + 1)).toEqual(['SP6b', 'SP7a', 'SP7b', 'SP8a']);
+  });
+
+  test('§2.3\'s column record at 232 ints with the generated-fluid mask and layer, aux B\'s seedSections; §2.5\'s ColumnWriter names replaceFluid, setGeneratedFluid and clearGeneratedFluid (SP7a spec §16 item 4)', () => {
+    const lines = text.split('\n');
+    const from = lines.findIndex((l) => l.startsWith('### 2.3 '));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('### 2.4 '));
+    expect(from, 'no §2.3').toBeGreaterThanOrEqual(0);
+    const block = lines.slice(from, to).join('\n');
+    // Moved from the SP6a describe (MST:2185's pin), on the new text; the sizes are the code's.
+    expect(block).toContain('**Column record** (232 × int32 = 928 B; the 64² torus is about 3.8 MB; amended by SP7a):');
+    expect([RECORD_INTS, RECORD_INTS * 4, (COLUMN_TABLE_BYTES / 1e6).toFixed(1)]).toEqual([232, 928, '3.8']);
+    expect(block).toContain('| 13 | the generated-fluid mask (bit sy set when the layer holds section sy; SP7a) |');
+    expect(block).toContain('| 208-231 | the generated-fluid layer (24 fluid entries; SP7a):');
+    expect([REC_GEN_FLUID_MASK, REC_GEN_FLUID, REC_GEN_FLUID + 23]).toEqual([13, 208, 231]);
+    const auxB = lines.find((l) => l.startsWith('**Aux slot B:**'));
+    expect(auxB, 'no **Aux slot B:** line').toBeDefined();
+    expect(auxB).toContain(`\`seedSections\` Uint32[1] at ${AUX_B_OFFSETS.seedSections}: bit sy set for a section holding an in-column seed, written by T after its springs step and rescanned by D's settle (amended by SP7a; the SP7a spec §1.7).`);
+    // §2.5's interface (checked method by method against api.ts by the SP3b describe's "§2.5 %s names every method").
+    const at = text.indexOf('interface ColumnWriter {');
+    const writer = text.slice(at, text.indexOf('interface ProtoWriter', at));
+    expect(writer).toContain('replaceFluid(sy:number, fluid:Uint8Array): void /* copy-on-write, fluid only: blocks and cave stay shared with the proto; D\'s settle (SP7a) */');
+    expect(writer).toContain('setGeneratedFluid(sy:number): void /* the generated-fluid layer\'s entry of sy references the final fluid entry (retained), its mask bit set (SP7a) */');
+    expect(writer).toContain('clearGeneratedFluid(): void /* releases the layer\'s 24 entries through reclamation and clears the mask; D\'s first step (SP7a) */');
   });
 
   test('§4.11 and §4.12 name SP7b; the bench route\'s flood is SP7b\'s and R5\'s row is gated from SP7a (SP7a spec §16 item 13)', () => {

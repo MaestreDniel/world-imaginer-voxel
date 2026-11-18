@@ -5,10 +5,11 @@
  */
 import { describe, expect, test } from 'vitest';
 import {
-  finalAt, PROTO_ALIVE, REC_AUX_A, REC_AUX_B, REC_PROTO_FLAGS, RECORD_INTS, SECTIONS, WriterStale,
+  finalAt, PROTO_ALIVE, REC_AUX_A, REC_AUX_B, REC_GEN_FLUID, REC_GEN_FLUID_MASK, REC_PROTO_FLAGS, RECORD_INTS, SECTIONS,
+  WriterStale,
 } from '../../src/world/store/columnTable';
 import { attachPool, type SlabPool } from '../../src/world/store/pool';
-import { FINAL_LIGHT } from '../../src/world/store/section';
+import { FINAL_FLUID, FINAL_LIGHT } from '../../src/world/store/section';
 import { attachStore, createStore, type StoreHandles, type VoxelStore } from '../../src/world/store/store';
 
 const MiB = 1 << 20;
@@ -178,6 +179,40 @@ describe.each([true, false])('shared %s', (shared) => {
     // A write through the reopened writer lands in the record's slot.
     a.oceanFloor[5] = -12;
     expect(s.proto(-1, 9)!.aux()!.oceanFloor[5]).toBe(-12);
+  });
+
+  test("reopenColumn(1) leaves a stopped D's generated-fluid layer as it is; the retry's clearGeneratedFluid releases it (SP7a D23)", () => {
+    const s = newStore();
+    runT(s, 5, -5);
+    const base = s.table.find(5, -5);
+    const ints = s.table.ints;
+    const usedT = [used(s.blockPool), used(s.bytePool)];
+    // A D stopped after its settle wrote section 3's layer, before its commit: the column stays at Proto.
+    const d1 = s.reopenColumn(5, -5, 1);
+    for (let sy = 0; sy < SECTIONS; sy++) d1.shareFinal(sy, bytes(0));
+    const settled = mixedFluid();
+    settled[4095] = WATER | 3;
+    d1.replaceFluid(3, settled);
+    d1.setGeneratedFluid(3);
+    const slot = ints[base + REC_GEN_FLUID + 3]!;
+    expect(slot).toBe(ints[finalAt(base, 3) + FINAL_FLUID]);
+    expect(s.bytePool.refcount(slot)).toBe(2);
+    const r0 = Array.from(ints.subarray(base, base + RECORD_INTS));
+    // The retry's reopen clears nothing: the layer and its mask are still there, and generated() reads them.
+    const d2 = s.reopenColumn(5, -5, 1);
+    expect(Array.from(ints.subarray(base, base + RECORD_INTS))).toEqual(r0);
+    expect(ints[base + REC_GEN_FLUID_MASK]).toBe(1 << 3);
+    expect(s.generated(5, -5)!.fluid(15, -1, 15)).toBe(WATER | 3);
+    // D's clearGeneratedFluid releases the layer's reference; its shareFinal then releases the final one.
+    d2.clearGeneratedFluid();
+    expect(ints[base + REC_GEN_FLUID_MASK]).toBe(0);
+    expect(ints[base + REC_GEN_FLUID + 3]).toBe(-1);
+    expect(s.bytePool.refcount(slot)).toBe(1);
+    expect(s.generated(5, -5)!.fluid(15, -1, 15)).toBe(0);
+    for (let sy = 0; sy < SECTIONS; sy++) d2.shareFinal(sy, bytes(0));
+    d2.commit(2);
+    // The final set shares the proto's slots again: the pools hold what T allocated plus nothing.
+    expect([used(s.blockPool), used(s.bytePool)]).toEqual(usedT);
   });
 
   test('a reopened writer allocates an aux slot only when the record has none (zero-filled)', () => {
