@@ -7,9 +7,11 @@
 import v8 from 'node:v8';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
-import { BODY_H, BODY_W, STEP_UP, SUBSTEP, moveBody, solidAt, type MoveOut, type VoxelReader } from '../../src/player/physics';
+import {
+  BODY_H, BODY_W, STEP_UP, SUBSTEP, bodyIntersects, moveBody, solidAt, type MoveOut, type VoxelReader,
+} from '../../src/player/physics';
 import { AIR, DIRT, LADDER, STONE, TORCH } from '../../src/world/blocks/index';
-import { WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { FLUID_LAVA, FLUID_WATER, WATER_SOURCE, packFluid } from '../../src/world/blocks/fluid';
 
 const newOut = (): MoveOut => ({ x: 0, y: 0, z: 0, hitX: false, hitY: false, hitZ: false, onGround: false });
 
@@ -165,6 +167,34 @@ describe('moveBody (SP5a spec §3.2)', () => {
   test('solidAt: cube and boxes collide (as cube until SP8a); air, torches, ladders and water never', () => {
     const r = canned(-Infinity).set(0, 70, 0, STONE).set(1, 70, 0, TORCH).set(2, 70, 0, LADDER).set(3, 70, 0, AIR, WATER_SOURCE);
     expect([0, 1, 2, 3, 4].map((x) => solidAt(r, x, 70, 0))).toEqual([true, false, false, false, false]);
+  });
+
+  test('thin films and falls (SP7a spec §9.2, master :1492): a level-7 water film, a level-6 lava film and a falling column never collide; the fall, the step-up and the unstuck test read as in air', () => {
+    const fluids: Array<[name: string, byte: number, top: number]> = [
+      ['water film', packFluid(FLUID_WATER, 7), 70],
+      ['lava film', packFluid(FLUID_LAVA, 6), 70],
+      ['falling column', packFluid(FLUID_WATER, 0, true), 89],
+    ];
+    for (const [name, byte, top] of fluids) {
+      // The fluid over y 70 … top at x −8 … 0, z −8 … 8, on stone below 70.
+      const fill = (r: Canned): Canned => {
+        for (let x = -8; x <= 0; x++) for (let y = 70; y <= top; y++) for (let z = -8; z <= 8; z++) r.set(x, y, z, AIR, byte);
+        return r;
+      };
+      const r = fill(canned(70));
+      expect(solidAt(r, 0, 70, 0), name).toBe(false);
+      expect(bodyIntersects(r, 0.5, 70, 0.5), name).toBe(false);
+      // Falling 10 blocks through it onto stone stops with the feet at the stone's top.
+      const fall = move(r, [-0.5, 80, 0.5], 0, -11, 0, false);
+      expect(fall.y, name).toBeCloseTo(70, 6);
+      expect([fall.hitY, fall.onGround], name).toEqual([true, true]);
+      // Walking out of it onto a 0.5 ledge at block x 1 steps up as on dry ground.
+      const ledge = fill(canned(70, Infinity, DIRT));
+      for (let z = -8; z <= 8; z++) ledge.set(1, 70, z, DIRT);
+      const up = move(ledge, [0.5, 70, 0.5], 0.5, GRAVITY_TICK, 0, true);
+      expect(up.y, name).toBeCloseTo(70.5, 6);
+      expect([up.hitX, up.onGround], name).toEqual([false, true]);
+    }
   });
 
   test('allocates nothing over 10,000 moves', () => {

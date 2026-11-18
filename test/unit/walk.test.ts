@@ -16,7 +16,8 @@ import { toggleMode, type FlyState } from '../../src/player/fly';
 import { bodyIntersects } from '../../src/player/physics';
 import type { Action } from '../../src/player/keymap';
 import { AIR, ICE, LADDER, PACKED_ICE, STONE } from '../../src/world/blocks/index';
-import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { FLUID_LAVA, FLUID_WATER, LAVA_SOURCE, WATER_SOURCE, packFluid } from '../../src/world/blocks/fluid';
+import { FLUID_WADE_DEPTH } from '../../src/core/constants';
 
 interface Canned extends WalkReader {
   /** Sets one voxel (block and fluid byte); the rest follows the floor and the fluid layer. */
@@ -269,6 +270,70 @@ describe('walkTick in fluids (SP5a spec §3.2, D3; Point 5)', () => {
     expect(w.x).toBeGreaterThan(5.5);
     expect(w.y).toBeCloseTo(71, 6);
     expect(w.onGround).toBe(true);
+  });
+});
+
+describe('walkTick in thin water (SP7a spec §9.2, D15; Spec correction 15)', () => {
+  const near = (v: number, want: number): void => expect(Math.abs(v - want), `${v} vs ${want}`).toBeLessThanOrEqual(0.0005);
+  /** Stone below y 70 and one layer of `byte` at y 70 (the body on the ground has its feet at the film voxel's y + 0). */
+  const film = (byte: number): Canned => canned({ fluid: (_x, y) => (y === 70 ? byte : 0) });
+
+  test('the wade depth is 0.25 block', () => {
+    expect(FLUID_WADE_DEPTH).toBe(0.25);
+  });
+
+  test('on the ground in a level-7 water film (h 1/9) the body keeps walking speed (no swim drag) and can jump', () => {
+    const r = film(packFluid(FLUID_WATER, 7));
+    const w = bodyAt(-60.5, 70, 0.5);
+    const walk = steady(w, r, { wishX: 1 });
+    near(walk[0], 0.2203);
+    expect(walk[1]).toBe(0);
+    expect(w.onGround).toBe(true);
+    run(w, r, 1, { jump: true });
+    expect(w.y).toBeGreaterThan(70.3);
+  });
+
+  test('in a level-4 water voxel (h 4/9) the body swims: horizontal 0.1 per tick, as in deep water', () => {
+    const r = film(packFluid(FLUID_WATER, 4));
+    near(steady(bodyAt(-60.5, 70, 0.5), r, { wishX: 1 })[0], 0.1);
+  });
+
+  test('a level-6 lava film (h 2/9) is not entered: walking speed, no lava drag', () => {
+    const r = film(packFluid(FLUID_LAVA, 6));
+    const walk = steady(bodyAt(-60.5, 70, 0.5), r, { wishX: 1 });
+    near(walk[0], 0.2203);
+    expect(walk[1]).toBe(0);
+  });
+
+  test('a source pool swims as before: one layer on the ground (h 8/9) at 0.1 per tick; a deep pool sinks at −0.025', () => {
+    near(steady(bodyAt(-60.5, 70, 0.5), film(WATER_SOURCE), { wishX: 1 })[0], 0.1);
+    const pool = canned({ floorTop: 40, fluid: (_x, y) => (y >= 40 && y < 63 ? WATER_SOURCE : 0) });
+    near(steady(bodyAt(0.5, 55, 0.5, false), pool, {})[1], -0.025);
+  });
+
+  test('the edge: the feet 0.259 under a source\'s surface (70 + 8/9) swim, 0.239 under it do not', () => {
+    const r = film(WATER_SOURCE);
+    // One tick from rest: the water row gives vy 0 · 0.8 − 0.005, the air row (0 − 0.08) · 0.98.
+    const swim = bodyAt(0.5, 70.63, 0.5, false);
+    run(swim, r, 1);
+    expect(swim.vy).toBeCloseTo(-0.005, 12);
+    const wade = bodyAt(0.5, 70.65, 0.5, false);
+    run(wade, r, 1);
+    expect(wade.vy).toBeCloseTo(-0.0784, 12);
+  });
+
+  test('a falling column slows a fall as before (drag 0.8): vy −1 becomes −0.805 in one tick; it sinks at −0.025 and holds the body at its foot', () => {
+    // A falling water column at x 0, z 0 over y 70 … 199, stone below 70.
+    const r = canned({ fluid: (x, y, z) => (x === 0 && z === 0 && y >= 70 && y < 200 ? packFluid(FLUID_WATER, 0, true) : 0) });
+    const fall = bodyAt(0.5, 150, 0.5, false);
+    fall.vy = -1;
+    run(fall, r, 1);
+    expect(fall.vy).toBeCloseTo(-1 * 0.8 - 0.005, 12);
+    near(steady(bodyAt(0.5, 150, 0.5, false), r, {})[1], -0.025);
+    // At its foot (the feet on the stone at 70, the falling voxel's height 1) the water row applies: vy 0 · 0.8 − 0.005.
+    const foot = bodyAt(0.5, 70, 0.5);
+    run(foot, r, 1);
+    expect(foot.vy).toBeCloseTo(-0.005, 12);
   });
 });
 

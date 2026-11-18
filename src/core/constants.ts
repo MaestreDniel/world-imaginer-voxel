@@ -244,6 +244,13 @@ export const FLUID_STEP_LAVA = 2;
 export const FLUID_LAST_LEVEL_WATER = 7;
 export const FLUID_LAST_LEVEL_LAVA = 6;
 /**
+ * The walk's wade depth, blocks (SP7a spec §9.2, D15; Spec correction 15; `player/walk.ts`): a voxel's fluid counts for
+ * the body only when its surface (y + `surfaceHeight`) is more than this above the feet, so a body on the ground (feet
+ * at the film voxel's y + 0) walks through water levels 6-7 (h 2/9, 1/9) and lava level 6 (h 2/9), and swims from
+ * water level 5 (h 3/9) up. 0.25 **(plan)**.
+ */
+export const FLUID_WADE_DEPTH = 0.25;
+/**
  * The codes a top corner's voxel takes in `cornerHeight` besides its fluid height in [0, 1] (SP7a spec §6.1): a passable
  * fluid-free voxel (height 0, weight 1), a solid voxel (not counted) and a voxel holding the same fluid with the same
  * fluid above (the corner is 1).

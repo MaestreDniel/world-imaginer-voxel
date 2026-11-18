@@ -5,9 +5,11 @@
  * them, so the camera is smooth at any refresh rate.
  *
  * One tick, from the state at its start:
- * - the horizontal row: in water or lava (the body overlaps a voxel holding it) v += 0.02 · wish; on the ground
- *   v += a · wish, a = `WALK_ACCEL` / f³ (× `SPRINT_MUL` sprinting), f = slip · 0.91 with slip 0.98 when the block under
- *   the body's centre at feet − 0.5 is `SLIPPERY`, else 0.6; in the air v += 0.02 (0.026 sprinting) · wish;
+ * - the horizontal row: in water or lava (the body overlaps a voxel holding it whose surface, y + `surfaceHeight`, is
+ *   more than `FLUID_WADE_DEPTH` above the feet: SP7a spec §9.2, D15, so a thin film is walked through) v += 0.02 · wish;
+ *   on the ground v += a · wish, a = `WALK_ACCEL` / f³ (× `SPRINT_MUL` sprinting), f = slip · 0.91 with slip 0.98 when
+ *   the block under the body's centre at feet − 0.5 is `SLIPPERY`, else 0.6; in the air v += 0.02 (0.026 sprinting) ·
+ *   wish;
  * - the vertical input: in a fluid Space +0.04 and Shift −0.04; out of one, Space on the ground jumps (vy = 0.42); on a
  *   ladder (the body overlaps a `CLIMBABLE` voxel), after the fluid row, vy is clamped to ±0.1175, Space sets +0.1175
  *   and Shift 0;
@@ -36,6 +38,8 @@ import { BODY_H, BODY_W, bodyIntersects, moveBody, type MoveOut, type VoxelReade
 import { STATE_TYPE } from '../world/blocks/index';
 import { CLIMBABLE, SLIPPERY } from '../world/blocks/tags';
 import { FLUID_LAVA, FLUID_WATER } from '../world/blocks/fluid';
+import { surfaceHeight } from '../world/blocks/fluidRules';
+import { FLUID_WADE_DEPTH } from '../core/constants';
 
 /** The tick, seconds (20 Hz), and the most ticks one frame runs (`MAX_STEP_S` 0.25 bounds the frame). */
 export const TICK_S = 0.05;
@@ -132,6 +136,8 @@ const CLIMB = CLIMBABLE;
 const SLIPS = SLIPPERY;
 const WATER = FLUID_WATER;
 const LAVA = FLUID_LAVA;
+const HEIGHT = surfaceHeight;
+const WADE = FLUID_WADE_DEPTH;
 const HALF = BODY_W / 2;
 const H = BODY_H;
 /** How much higher the bank hop looks for room. */
@@ -199,9 +205,13 @@ export function walkTick(
         continue;
       }
       for (let by = Math.floor(y); by <= y1; by++) {
-        const t = (r.fluidAt(bx, by, bz) >> 4) & 3;
-        if (t === WATER) water = true;
-        else if (t === LAVA) lava = true;
+        const f = r.fluidAt(bx, by, bz);
+        const t = (f >> 4) & 3;
+        // A fluid counts only where its surface is more than the wade depth above the feet (SP7a D15).
+        if (t !== 0 && by + HEIGHT(f, ((r.fluidAt(bx, by + 1, bz) >> 4) & 3) === t) - y > WADE) {
+          if (t === WATER) water = true;
+          else if (t === LAVA) lava = true;
+        }
         const s = r.blockAt(bx, by, bz);
         if (s >= 0 && CLIMB[TYPE[s]!] === 1) ladder = true;
       }
