@@ -5,16 +5,20 @@
  * - **Reads.** Every fluid-deciding read is the proto's, through `SettleSource` (blocks, proto fluid, cave bytes) at
  *   world voxels inside the window x0 ≤ x < x1, z0 ≤ z < z1, y −64 … 319; outside it a voxel is `block`, and its
  *   proto fluid and nibble read NO_FLUID and 0 (rulings R7). Passability is `isPassable` over `modes` (`FLUID_MODE`).
- * - **State.** Per visited voxel and per type, a value (`FLUID_VALUE_SOURCE` 0 < falling 1 < flowing level k as 1 + k
- *   < `FLUID_VALUE_DRY` 9) and a horizontal distance (255 when dry), each only ever lowered, independently, plus the
- *   type's `unsettled` flag from the voxel's last pop. A voxel first touched holding the type's proto fluid starts as
- *   (source, 0) (every proto fluid voxel is a source, §4.2), any other as (dry, ∞). Held in open-addressing tables
- *   keyed by the packed position and sized by the visits (no full-height window copy, §4.2).
+ * - **State.** Per visited voxel and per type, one least horizontal distance per value code (`FLUID_VALUE_SOURCE` 0
+ *   < falling 1 < flowing level k as 1 + k; 255 where no derivation gives that code), only ever lowered (rulings
+ *   R9): the voxel's value is its best code below `FLUID_VALUE_DRY` 9 and its distance that code's, so its level and
+ *   distance come from one derivation; plus the type's `unsettled` flag from the voxel's last pop. A voxel first
+ *   touched holding the type's proto fluid starts as (source, 0) (every proto fluid voxel is a source, §4.2), any
+ *   other as dry. Held in open-addressing tables keyed by the packed position and sized by the visits (no
+ *   full-height window copy, §4.2).
  * - **The fixed point.** Water first, then lava: the worklist starts from the seeds holding the type's proto fluid
- *   (seeds farther than the type's cap 12 / 14 from the box, by Manhattan distance, are skipped: a front never
- *   travels farther), pops a voxel, applies `ruleOffers` at its current (value, distance) and lowers each offered
- *   voxel's value and distance, pushing it when either fell; a pop also records the cap flag (`unsettled`). The rules
- *   are monotone, so the result is their least fixed point whatever the pop order (`popOrder`, a test hook, draws it).
+ *   (seeds farther than the type's cap 12 / 14 from the box, by Manhattan distance, are skipped: a derivation's
+ *   distance grows by one per sideways step, so no level travels farther from its source), pops a voxel, applies
+ *   `ruleOffers` once per code whose distance is below every better code's (each offers along its own derivation),
+ *   and accepts an offer (v, d) when d is below the target's least distance over the codes ≤ v, pushing it; a pop
+ *   records the cap flag (`unsettled`) from the voxel's value. The rules are monotone, so the result is their least
+ *   fixed point whatever the pop order (`popOrder`, a test hook, draws it).
  * - **The merge.** Per voxel of the box: a voxel both types reached takes lava's byte with `unsettled` set (a contact,
  *   SP7b's reactions); else its type's `packFluid(type, level, falling, unsettled)`; every voxel whose byte differs
  *   from its proto byte goes to the sink, in packed-position order, after convergence. A stop writes nothing.
@@ -48,6 +52,8 @@ const MODES = FLUID_MODE;
 
 /** The distance of a voxel the type has not reached. */
 const DIST_DRY = 255;
+/** The value codes below dry (source, falling, flowing 1 … 7): each voxel keeps one least distance per code. */
+const CODES = VALUE_DRY;
 /** `flags` bits: water's and lava's `unsettled`, and "in the worklist" (one type runs at a time). */
 const FLAG_WATER_UNSETTLED = 1;
 const FLAG_LAVA_UNSETTLED = 2;
@@ -55,6 +61,8 @@ const FLAG_QUEUED = 4;
 /** `ruleOffers`' cap bit in its return value (u's `unsettled`); the low 4 bits count the offers. */
 const OFFERS_CAP = 16;
 const OFFERS_COUNT = 15;
+/** The packed keys' bound: 384·W² keys must fit an Int32 (W ≤ 2,364). */
+const MAX_KEYS = 0x7fffffff;
 /** `stop()` is polled when the pop count is a multiple of 1,024 (§4.2). */
 const POLL_MASK = 1023;
 
@@ -94,11 +102,14 @@ class Scratch implements SettleScratch, FluidRuleReader {
   keys: Int32Array;
   ids: Int32Array;
   mask: number;
+  /** 32 − log2(table size): the hash keeps the product's high bits. */
+  shift: number;
   // The entries.
   n = 0;
   ekey: Int32Array;
   eslot: Int32Array;
   vW: Uint8Array;
+  /** Per entry e and value code k, at e·CODES + k: the least distance of a derivation with value exactly k. */
   dW: Uint8Array;
   vL: Uint8Array;
   dL: Uint8Array;
@@ -126,13 +137,14 @@ class Scratch implements SettleScratch, FluidRuleReader {
     this.keys = new Int32Array(size).fill(-1);
     this.ids = new Int32Array(size);
     this.mask = size - 1;
+    this.shift = Math.clz32(size) + 1;
     const entries = size >> 1;
     this.ekey = new Int32Array(entries);
     this.eslot = new Int32Array(entries);
     this.vW = new Uint8Array(entries);
-    this.dW = new Uint8Array(entries);
+    this.dW = new Uint8Array(entries * CODES);
     this.vL = new Uint8Array(entries);
-    this.dL = new Uint8Array(entries);
+    this.dL = new Uint8Array(entries * CODES);
     this.flags = new Uint8Array(entries);
     this.queue = new Int32Array(entries);
     this.changed = new Float64Array(entries);
@@ -156,9 +168,12 @@ class Scratch implements SettleScratch, FluidRuleReader {
     this.qLen = 0;
   }
 
+  /** The home slot of `key`: multiplicative hashing, the product's high bits. */
+  slotOf(key: number): number { return Math.imul(key, 0x9e3779b1) >>> this.shift; }
+
   /** The entry of `key`, or −1. */
   find(key: number): number {
-    let slot = Math.imul(key, 0x9e3779b1) & this.mask;
+    let slot = this.slotOf(key);
     for (;;) {
       const k = this.keys[slot]!;
       if (k === key) return this.ids[slot]!;
@@ -169,7 +184,7 @@ class Scratch implements SettleScratch, FluidRuleReader {
 
   /** The entry of `key` at (x, y, z), created with its proto start values when new. */
   entry(key: number, x: number, y: number, z: number): number {
-    let slot = Math.imul(key, 0x9e3779b1) & this.mask;
+    let slot = this.slotOf(key);
     for (;;) {
       const k = this.keys[slot]!;
       if (k === key) return this.ids[slot]!;
@@ -187,9 +202,11 @@ class Scratch implements SettleScratch, FluidRuleReader {
     this.eslot[e] = slot;
     const type = typeOf(this.protoFluid(x, y, z));
     this.vW[e] = type === WATER ? VALUE_SOURCE : VALUE_DRY;
-    this.dW[e] = type === WATER ? 0 : DIST_DRY;
+    this.dW.fill(DIST_DRY, e * CODES, e * CODES + CODES);
+    if (type === WATER) this.dW[e * CODES] = 0;
     this.vL[e] = type === LAVA ? VALUE_SOURCE : VALUE_DRY;
-    this.dL[e] = type === LAVA ? 0 : DIST_DRY;
+    this.dL.fill(DIST_DRY, e * CODES, e * CODES + CODES);
+    if (type === LAVA) this.dL[e * CODES] = 0;
     this.flags[e] = 0;
     return e;
   }
@@ -200,8 +217,9 @@ class Scratch implements SettleScratch, FluidRuleReader {
     this.keys = new Int32Array(size).fill(-1);
     this.ids = new Int32Array(size);
     this.mask = size - 1;
+    this.shift = Math.clz32(size) + 1;
     for (let e = 0; e < this.n; e++) {
-      let slot = Math.imul(this.ekey[e]!, 0x9e3779b1) & this.mask;
+      let slot = this.slotOf(this.ekey[e]!);
       while (this.keys[slot] !== -1) slot = (slot + 1) & this.mask;
       this.keys[slot] = this.ekey[e]!;
       this.ids[slot] = e;
@@ -211,9 +229,9 @@ class Scratch implements SettleScratch, FluidRuleReader {
     this.ekey = widen(this.ekey, entries);
     this.eslot = widen(this.eslot, entries);
     this.vW = widen8(this.vW, entries);
-    this.dW = widen8(this.dW, entries);
+    this.dW = widen8(this.dW, entries * CODES);
     this.vL = widen8(this.vL, entries);
-    this.dL = widen8(this.dL, entries);
+    this.dL = widen8(this.dL, entries * CODES);
     this.flags = widen8(this.flags, entries);
     // The ring keeps its order, unwrapped to the front.
     const q = new Int32Array(entries);
@@ -235,8 +253,8 @@ class Scratch implements SettleScratch, FluidRuleReader {
     if (this.src === null || x < this.x0 || x >= this.x1 || z < this.z0 || z >= this.z1 || y < Y_MIN || y >= Y_END) return -1;
     const e = this.find(this.keyOf(x, y, z));
     if (e < 0) return -1;
-    if (this.vL[e]! < VALUE_DRY) return this.dL[e]!;
-    return this.vW[e]! < VALUE_DRY ? this.dW[e]! : -1;
+    if (this.vL[e]! < VALUE_DRY) return this.dL[e * CODES + this.vL[e]!]!;
+    return this.vW[e]! < VALUE_DRY ? this.dW[e * CODES + this.vW[e]!]! : -1;
   }
 }
 
@@ -298,37 +316,59 @@ function fixedPoint(type: number, s: Scratch, seeds: Int32Array, nSeeds: number,
     const x = s.x0 + (key % w);
     const z = s.z0 + (((key / w) | 0) % w);
     const y = Y_MIN + ((key / (w * w)) | 0);
-    const ret = OFFERS(type, s, x, y, z, water ? s.vW[e]! : s.vL[e]!, water ? s.dW[e]! : s.dL[e]!, out);
-    const flags = s.flags[e]! & ~FLAG_QUEUED;
-    s.flags[e] = (ret & OFFERS_CAP) !== 0 ? flags | unsettled : flags & ~unsettled;
-    const count = ret & OFFERS_COUNT;
-    for (let o = 0; o < count * 5; o += 5) {
-      const tx = x + out[o]!;
-      const ty = y + out[o + 1]!;
-      const tz = z + out[o + 2]!;
-      const t = s.entry(s.keyOf(tx, ty, tz), tx, ty, tz);
-      const vs = water ? s.vW : s.vL;
-      const ds = water ? s.dW : s.dL;
-      let lowered = false;
-      if (out[o + 3]! < vs[t]!) { vs[t] = out[o + 3]!; lowered = true; }
-      if (out[o + 4]! < ds[t]!) { ds[t] = out[o + 4]!; lowered = true; }
-      if (lowered && (s.flags[t]! & FLAG_QUEUED) === 0) s.push(t);
+    // Every Pareto pair (value k, least distance at k below every lower value's) offers along its own derivation;
+    // the voxel's value is its lowest pair, whose distance is the largest, so only that pair can be at the cap.
+    let best = DIST_DRY;
+    let first = true;
+    for (let k = 0; k < CODES; k++) {
+      const dk = (water ? s.dW : s.dL)[e * CODES + k]!;
+      if (dk >= best) continue;
+      best = dk;
+      const ret = OFFERS(type, s, x, y, z, k, dk, out);
+      if (first) {
+        const flags = s.flags[e]! & ~FLAG_QUEUED;
+        s.flags[e] = (ret & OFFERS_CAP) !== 0 ? flags | unsettled : flags & ~unsettled;
+        first = false;
+      }
+      const count = ret & OFFERS_COUNT;
+      for (let o = 0; o < count * 5; o += 5) {
+        const tx = x + out[o]!;
+        const ty = y + out[o + 1]!;
+        const tz = z + out[o + 2]!;
+        const t = s.entry(s.keyOf(tx, ty, tz), tx, ty, tz);
+        const vs = water ? s.vW : s.vL;
+        const ds = water ? s.dW : s.dL;
+        const v = out[o + 3]!;
+        const d = out[o + 4]!;
+        let least = DIST_DRY;
+        for (let j = 0; j <= v; j++) if (ds[t * CODES + j]! < least) least = ds[t * CODES + j]!;
+        if (d >= least) continue;
+        ds[t * CODES + v] = d;
+        if (v < vs[t]!) vs[t] = v;
+        if ((s.flags[t]! & FLAG_QUEUED) === 0) s.push(t);
+      }
     }
+    if (first) s.flags[e] = s.flags[e]! & ~FLAG_QUEUED;
   }
   return visits;
 }
 
 /**
  * Settles water and lava over the window `src` from `seeds` (world voxels packed `((y + 64)·W + (z − z0))·W +
- * (x − x0)`, W = x1 − x0, the window square) and writes to `out` every voxel of `box` (`[bx0, bz0, bx1, bz1]`,
- * bx0 ≤ x < bx1, bz0 ≤ z < bz1, every y) whose merged byte differs from its proto byte (SP7a spec §4.1, D22).
- * Returns the pops (each applies `ruleOffers` once), or −1 when `stop()` returned true (polled before the first pop
- * and once per 1,024 pops), in which case `out` receives nothing.
+ * (x − x0)`, W = x1 − x0; the window must be square with W ≤ 2,364, so a packed key fits an Int32, or it throws) and
+ * writes to `out` every voxel of `box` (`[bx0, bz0, bx1, bz1]`, bx0 ≤ x < bx1, bz0 ≤ z < bz1, every y) whose merged
+ * byte differs from its proto byte (SP7a spec §4.1, D22). Returns the pops (each applies `ruleOffers` once per
+ * spreading value, rulings R9), or −1 when `stop()` returned true (polled before the first pop and once per 1,024
+ * pops), in which case `out` receives nothing.
  */
 export function settleWindow(
   src: SettleSource, seeds: Int32Array, nSeeds: number, box: Int32Array, out: SettleSink, s: SettleScratch, stop: () => boolean,
   modes: ArrayLike<number> = MODES,
 ): number {
+  const width = src.x1 - src.x0;
+  if (src.z1 - src.z0 !== width || Y_SPAN * width * width > MAX_KEYS) {
+    throw new Error(`settleWindow: the window must be square with W ≤ 2,364, got ${width} × ${src.z1 - src.z0}`);
+  }
   const sc = s as Scratch;
   sc.clear();
   sc.src = src;
@@ -337,7 +377,7 @@ export function settleWindow(
   sc.z0 = src.z0;
   sc.x1 = src.x1;
   sc.z1 = src.z1;
-  sc.width = src.x1 - src.x0;
+  sc.width = width;
   let visits = fixedPoint(WATER, sc, seeds, nSeeds, box, stop, 0);
   if (visits < 0) return -1;
   visits = fixedPoint(LAVA, sc, seeds, nSeeds, box, stop, visits);

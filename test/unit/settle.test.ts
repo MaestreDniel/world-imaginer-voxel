@@ -164,7 +164,7 @@ describe('settleWindow: the converged shapes (SP7a spec §4.1, §13.7)', () => {
     expect(r.s.distAt(1, 1, 1)).toBe(2);
   });
 
-  test('the distance is the least over feeders, independent of the level (Spec correction 13)', () => {
+  test('the distance belongs to the level\'s own derivation (Spec correction 13; rulings R9)', () => {
     // Fed at level 2 from 9 blocks along a corridor with a fall on the way (B at (−7, 4, 0): 7 blocks east on y 4,
     // down the shaft at x 0, 2 blocks east on y 1) and at level 3 from 3 blocks across (A at (5, 1, 0)).
     const w = rock();
@@ -175,9 +175,13 @@ describe('settleWindow: the converged shapes (SP7a spec §4.1, §13.7)', () => {
     const r = settle(w);
     expect(r.at(0, 4, 0)).toBe(water(7));
     expect(r.at(0, 1, 0)).toBe(water(0, true));
+    expect(r.s.distAt(0, 1, 0)).toBe(7);
+    // The voxel's level 2 comes from B's path, so its distance is that path's 9, not A's 3; A's own voxels keep A's.
     expect(r.at(2, 1, 0)).toBe(water(2));
-    expect(r.s.distAt(2, 1, 0)).toBe(3);
-    // Without A the same voxel reads level 2 at distance 9.
+    expect(r.s.distAt(2, 1, 0)).toBe(9);
+    expect(r.at(3, 1, 0)).toBe(water(2));
+    expect(r.s.distAt(3, 1, 0)).toBe(2);
+    // Without A the same voxel reads the same level at the same distance.
     w.setFluid(5, 1, 0, NO_FLUID);
     const onlyB = settle(w);
     expect(onlyB.at(2, 1, 0)).toBe(water(2));
@@ -207,15 +211,20 @@ describe('settleWindow: the converged shapes (SP7a spec §4.1, §13.7)', () => {
     for (let y = -4; y <= 13; y++) expect(rl.at(15, y, 0)).toBe(NO_FLUID);
   });
 
-  test('a distance lowered alone re-spreads: the cap counts from the nearer feeder, and a front it frees loses bit 6', () => {
+  test('a nearer feeder at a higher level spreads along its own derivation: past the next fall the cap counts from it, and a front it frees loses bit 6', () => {
     // A second source falls down a shaft at z = 1 and enters the staircase's landing (6, 9, 0) sideways at level 1,
-    // distance 1, after the staircase's own fall (value falling, distance 6) reached it.
+    // distance 1, beside the staircase's own fall (value falling, distance 6). The landing reads falling at 6 (its
+    // value's derivation), its level-1 derivation spreads level 2 at distance 2, and the next fall takes the least.
     const w = staircase(WATER_SOURCE);
     for (let y = 9; y <= 19; y++) w.setBlock(6, y, 1, AIR);
     w.setFluid(6, 19, 1, WATER_SOURCE);
     const r = settle(w);
     expect(r.at(6, 9, 0)).toBe(water(0, true));
-    expect(r.s.distAt(6, 9, 0)).toBe(1);
+    expect(r.s.distAt(6, 9, 0)).toBe(6);
+    expect(r.at(7, 9, 0)).toBe(water(1));
+    expect(r.s.distAt(7, 9, 0)).toBe(7);
+    expect(r.at(8, 8, 0)).toBe(water(0, true));
+    expect(r.s.distAt(8, 8, 0)).toBe(3);
     expect(r.at(12, 6, 0)).toBe(water(0, true));
     expect(r.s.distAt(12, 6, 0)).toBe(7);
     expect(r.at(17, 4, 0)).toBe(water(1, false, true));
@@ -443,6 +452,38 @@ describe('settleWindow: the least fixed point, the visits and stop (SP7a spec §
     expect(second.set.size).toBe(0);
   });
 
+  test('the box does not change the result on the box: S1 beyond the cap, falling onto S2\'s landing (review T3 Important 1)', () => {
+    // S1 at (−7, 4, 0) runs 7 blocks east on y 4 and falls down the shaft at x 0 onto the landing L (0, 1, 0); S2, a
+    // pocket source at (0, 1, 1), feeds L sideways at distance 1; the lower corridor runs east on y 1 to x 15.
+    const w = rock();
+    for (let x = 0; x <= 15; x++) w.setBlock(x, 1, 0, AIR);
+    w.setBlock(0, 2, 0, AIR).setBlock(0, 3, 0, AIR);
+    for (let x = -7; x <= 0; x++) w.setBlock(x, 4, 0, AIR);
+    w.setFluid(-7, 4, 0, WATER_SOURCE).setFluid(0, 1, 1, WATER_SOURCE);
+    const full = settle(w);
+    const boxed = settle(w, { box: [6, -16, 16, 16] });
+    for (let x = 6; x <= 15; x++) for (let y = -4; y <= 13; y++) expect([x, y, boxed.at(x, y, 0)]).toEqual([x, y, full.at(x, y, 0)]);
+  });
+
+  test('the box does not change the result on the box: random windows, 4 boxes each (review T3 Important 1)', () => {
+    let compared = 0;
+    for (let seed = 21; seed <= 36; seed++) {
+      const w = randomWorld(seed);
+      const full = settle(w);
+      for (const box of [[100, -40, 116, -24], [116, -40, 132, -24], [100, -24, 116, -8], [110, -30, 122, -18]]) {
+        const boxed = settle(w, { box });
+        for (const [key, byte] of full.set) {
+          const [x, , z] = key.split(',').map(Number);
+          if (x! < box[0]! || x! >= box[2]! || z! < box[1]! || z! >= box[3]!) continue;
+          expect([key, boxed.set.get(key)]).toEqual([key, byte]);
+          compared++;
+        }
+        for (const key of boxed.set.keys()) expect([key, full.set.has(key)]).toEqual([key, true]);
+      }
+    }
+    expect(compared).toBeGreaterThan(1000);
+  });
+
   test('a scratch is reused across windows and grows by doubling: the results equal a fresh scratch', () => {
     const small = createSettleScratch(16);
     for (let seed = 11; seed <= 13; seed++) {
@@ -451,5 +492,14 @@ describe('settleWindow: the least fixed point, the visits and stop (SP7a spec §
     }
     const w = plane().setFluid(0, 1, 0, WATER_SOURCE);
     expect(settle(w, { s: small }).calls).toEqual(settle(w).calls);
+  });
+
+  test('the packed keys need a square window with W at most 2,364: anything else throws (review T3 minor 1)', () => {
+    const run = (x1: number, z1: number) => () => settleWindow({ x0: 0, z0: 0, x1, z1, block: () => STONE, fluid: () => NO_FLUID, cave: () => 0 },
+      new Int32Array(0), 0, Int32Array.from([0, 0, 1, 1]), { set() {} }, createSettleScratch(16), () => false);
+    expect(run(32, 48)).toThrow(/square/);
+    expect(run(48, 32)).toThrow(/square/);
+    expect(run(2365, 2365)).toThrow(/square/);
+    expect(run(2364, 2364)()).toBe(0);
   });
 });
