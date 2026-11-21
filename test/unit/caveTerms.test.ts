@@ -775,7 +775,7 @@ describe('the depth bands and their caps (SP6a spec §1.4)', () => {
     expect(at(DEFAULT_DENSITY_TREE, `${P.noodle}.x.a`)).toMatchObject({ op: 'max', b: { op: 'const', v: -48 } });
   });
 
-  test('the cap evaluates to §1.4\'s formula at every y, for the defaults, a narrow span, an inverted band and the island cap, on a dry and a sea column', () => {
+  test('the cap evaluates to §1.4\'s formula at every y, for the defaults, a narrow span, an inverted band and the island cap, on a dry and a lake column', () => {
     const cases: Array<[ParamsPatch, number, number]> = [
       [{}, 16, 344], [{ caves: { limits: { bandSpan: 1 } } }, 1, 344], [{ caves: { limits: { bandSpan: 32 } } }, 32, 344],
       [{ caves: { limits: { capTop: 180 } } }, 16, 180], [{ caves: { limits: { capTop: 207, bandSpan: 5 } } }, 5, 207],
@@ -791,7 +791,8 @@ describe('the depth bands and their caps (SP6a spec §1.4)', () => {
           const capNode = at(e, CAP[name]) as Expr;
           const floorNode = at(e, FLOOR_Y_PATH) as Expr;
           const ref = createDensityReference(dc.expr, dc.noises);
-          for (const [cx, cz] of [[0, 0], WET_COLUMNS.sea] as const) {
+          // A lake column: wet′ is 1 there (the lake roof, SP7a D24; a sea column's wet′ is 0 since).
+          for (const [cx, cz] of [[0, 0], WET_COLUMNS.lake] as const) {
             const sample = dc.column(cx, cz);
             const x = 16 * cx + 5, z = 16 * cz + 9;
             const wet = ref.voxel(sample, x, 0, z, WET as Expr);
@@ -857,7 +858,7 @@ describe('the depth bands and their caps (SP6a spec §1.4)', () => {
         if (name === 'noodle') {
           const t = at(narrow.expr, P.noodle) as Expr, to = at(open.expr, P.noodle) as Expr;
           for (let y = 20; y <= 40; y++) {
-            // Under water within 40 blocks of the bed the wet roof's g_w shares the gentle part's min(1, …) (§1.4).
+            // Under a lake within 40 blocks of the bed the wet roof's g_w shares the gentle part's min(1, …) (§1.4; SP7a D24).
             const wx = 16 * cx + 3, wz = 16 * cz + 5;
             if (refNarrow.voxel(sample, wx, y, wz, WET as Expr) > 0 && refNarrow.voxel(sample, wx, y, wz, D_NOODLE as Expr) < 40) continue;
             const d = refNarrow.voxel(sample, 16 * cx + 3, y, 16 * cz + 5, t) - refOpen.voxel(sample, 16 * cx + 3, y, 16 * cz + 5, to);
@@ -869,7 +870,7 @@ describe('the depth bands and their caps (SP6a spec §1.4)', () => {
           for (let k = 11; k <= 13; k++) {
             for (let j = 0; j <= 4; j++) for (let i = 0; i <= 4; i++) {
               if (name !== 'entrances' && refNarrow.corner(sample, body, i, k, j) < -8) continue;
-              // Under water within 40 blocks of the bed the wet roof's g_w shares the gentle part's min(1, …) (§1.4).
+              // Under a lake within 40 blocks of the bed the wet roof's g_w shares the gentle part's min(1, …) (§1.4; SP7a D24).
               if (refNarrow.corner(sample, WET as Expr, i, k, j) > 0 && refNarrow.corner(sample, body, i, k, j) < 40) continue;
               const d = refNarrow.corner(sample, slot, i, k, j) - refOpen.corner(sample, slotOpen, i, k, j);
               expect(d).toBeGreaterThanOrEqual(rise - 1e-9);
@@ -999,8 +1000,11 @@ describe('the island cap (SP6a spec §1.4, D8)', () => {
   });
 });
 
-/** wet′ = 1 positions' family values with and without the wet roof (SP6a §1.4, D7, Spec correction 14, ruling P7). */
-describe('the wet roof (SP6a spec §1.4, D7)', () => {
+/**
+ * wet′ = 1 positions' family values with and without the wet roof (SP6a §1.4, D7, Spec correction 14, ruling P7). Since
+ * SP7a D24 the wet roof is the lake roof: closed under the lake column, open under the river and sea columns.
+ */
+describe('the wet roof (SP6a spec §1.4, D7; the lake roof, SP7a D24)', () => {
   const WET_STREAM = 'sp6a.caveTerms.wet';
   type WetKind = keyof typeof WET_COLUMNS;
 
@@ -1044,16 +1048,17 @@ describe('the wet roof (SP6a spec §1.4, D7)', () => {
   }
 
   /**
-   * Under a lake, a river and a sea column, at the positions whose wet′ is 1 (a 4 × 4 grid of each column), from the bed
+   * Under the lake column, at the positions whose wet′ is 1 (a 4 × 4 grid of the column), from the bed
    * (the column's pre-cave top) down 64 blocks, with d = `ref body` (§1.4) at the 8 corners of the voxel's cell:
    * - closed where every corner has d ≤ waterDepth + 4 = 20 (then interpolated d ≤ 20, h_w ≥ 1/2 and S_w ≥ 64): every
    *   carving family's value with the wet roof (its tap plus S_w) is > 0;
    * - unaffected where every corner has d ≥ waterDepth + 8 + bandSpan = 40: every family's tap, S_w (0) and the root
    *   equal the no-roof tree's.
    * At the defaults and with the entrances and cheese opened (offsets −0.5 each: a lower offset opens both, "lower →
-   * larger caverns"), where the no-roof tree holds air in the closed zone, so the check is not vacuous.
+   * larger caverns"), where the no-roof tree holds air in the closed zone, so the check is not vacuous. (Until SP7a D24
+   * the river and sea columns were checked here too; they moved to the next test, open.)
    */
-  test('closed (> 0) where every cell corner has d ≤ 20, unaffected where every corner has d ≥ 40, under a lake, a river and a sea', () => {
+  test('closed (> 0) where every cell corner has d ≤ 20, unaffected where every corner has d ≥ 40, under a lake', () => {
     const dw = DEFAULTS.caves.limits.waterDepth, span = DEFAULTS.caves.limits.bandSpan;
     expect([dw + 4, dw + 8 + span]).toEqual([20, 40]);
     const families = ['entrances', 'cheese', 'spag3d', 'spag2d', 'noodle'] as const;
@@ -1068,7 +1073,7 @@ describe('the wet roof (SP6a spec §1.4, D7)', () => {
       const body = dc.expr.defs['body']!;
       // S_w, the wet roof's part of `defs.steep` (S_w + S_b since SP6b §5.2; the no-roof tree keeps S_b).
       const wetSteep = at(dc.expr, 'defs.steep.a') as Expr;
-      for (const kind of ['lake', 'river', 'sea'] as const) {
+      for (const kind of ['lake'] as const) {
         const [cx, cz] = WET_COLUMNS[kind];
         const sample = dc.column(cx, cz);
         dn.column(cx, cz);
@@ -1128,6 +1133,46 @@ describe('the wet roof (SP6a spec §1.4, D7)', () => {
     }
     console.log(`the wet roof (bed-relative block depths):\n${lines.join('\n')}`);
     expect(openedWithoutRoof).toBeGreaterThan(0);
+  }, 120_000);
+
+  /**
+   * SP7a D24 (the assertions the river and sea columns had above, moved to lakes): under the river and sea columns wet′
+   * is 0 at every position of the 4 × 4 grid, so from the bed down 64 blocks S_w is 0 and every family's tap and the root
+   * equal the no-roof tree's: caves are as open as anywhere (with the entrances and cheese opened, some family holds air
+   * there, so the check is not vacuous).
+   */
+  test('open under a river and a sea: wet′ 0, S_w 0, every family and the root as without the roof (SP7a D24)', () => {
+    const families = ['entrances', 'cheese', 'spag3d', 'spag2d', 'noodle', 'pillars'] as const;
+    const GRID = [1, 6, 10, 14] as const;
+    const ctx = ctxFor('42', { caves: { entrances: { offset: -0.5 }, cheese: { offset: -0.5 } } });
+    const dc = createDensityContext(ctx);
+    const dn = createDensityContext(ctx, noRoof(dc.expr));
+    const ref = createDensityReference(dc.expr, dc.noises);
+    const wetSteep = at(dc.expr, 'defs.steep.a') as Expr;
+    for (const kind of ['river', 'sea'] as const) {
+      const [cx, cz] = WET_COLUMNS[kind];
+      const sample = dc.column(cx, cz);
+      dn.column(cx, cz);
+      let voxels = 0, air = 0;
+      for (const lz of GRID) for (const lx of GRID) {
+        const x = 16 * cx + lx, z = 16 * cz + lz;
+        expect([kind, x, z, ref.voxel(sample, x, 0, z, WET as Expr)]).toEqual([kind, x, z, 0]);
+        let bed = 319;
+        while (bed > -64 && !(dc.compiled.tapFn('precave', lx, bed, lz) > 0)) bed--;
+        for (let y = bed; y >= Math.max(-63, bed - 64); y--) {
+          if (!Object.is(ref.voxel(sample, x, y, z, wetSteep), 0)) throw new Error(`${kind} (${x}, ${y}, ${z}): S_w ≠ 0`);
+          for (const f of families) {
+            const a = dc.compiled.tapFn(f, lx, y, lz), b = dn.compiled.tapFn(f, lx, y, lz);
+            if (a !== b) throw new Error(`${kind} ${f} (${x}, ${y}, ${z}): ${a} with the roof, ${b} without`);
+          }
+          const a = dc.compiled.voxelFn(lx, y, lz), b = dn.compiled.voxelFn(lx, y, lz);
+          if (a !== b) throw new Error(`${kind} root (${x}, ${y}, ${z}): ${a} with the roof, ${b} without`);
+          voxels++;
+          if (!(a > 0) && dc.compiled.tapFn('precave', lx, y, lz) > 0) air++;
+        }
+      }
+      expect([kind, voxels > 0, air > 0]).toEqual([kind, true, true]);
+    }
   }, 120_000);
 });
 

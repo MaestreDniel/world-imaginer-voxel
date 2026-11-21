@@ -222,6 +222,11 @@
  * with barriers, `aquiferProbe`; the SP6b describe's pin of the row's end moved here) and item 19's `sp7aGoldens.ts`
  * (§1's metrics entry, an `SP7A_MODULES` row, and "Banned APIs", which must equal `DET_FILES`; the SP6b describe's pins
  * of that list's end moved here).
+ * The lake roof (Task 15, D24) lands item 5's §3.6 and §3.8 text: §2.4's `wetMask` sentence (1 inside a lake mask), §3.6's
+ * paragraph as "the lake roof" (caves open under the sea and rivers; every lake position has wet′ = 1), the `col` line's
+ * parenthesis, §3.8's "under lakes" (the CARVABLE sentence's pin re-pinned) and §6.4's U2 clause for
+ * `caves.limits.waterDepth` on its bounded lake witness (rulings P13, P14); the SP6a describe's pins of that text moved
+ * here.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2069,7 +2074,7 @@ describe('master spec amendments (SP6a §13)', () => {
     expect(line('- **Ops.**')).toContain('caves add their ops on the same base in SP6a.');
     // Item 11's early-out line (Task 9) and item 7's D19 sentence as ruling R8 words it (the wet roof reads `wetMask`).
     expect(line('- **Interval rules.**')).toContain('(SP6a: the cave taps\' intervals come from their noises\' ±clampSigma, so underground cells need their corners)');
-    expect(line('- **`col`**')).toContain('SP6a\'s wet roof reads `wetMask` (1 where `surfaceWaterLevel` is finite), so no level-field rule is needed (amended by SP6a)');
+    // The `col` line moved to 'master spec amendments (SP7a §16)' (SP7a §16 item 5 rewords its parenthesis).
     // §3.7's caching line (moved here from the SP4c describe) moved to 'master spec amendments (SP7a §16)' (SP7a §16
     // item 6 rewords it).
     // §3.11's Conditions line and the Default rules' order sentence moved to 'master spec amendments (SP6b §15)' (SP6b §15
@@ -2140,7 +2145,9 @@ describe('master spec amendments (SP6a §13)', () => {
     // Task 8: the two scan slots (Task 7) and the amplified base of three maxY leaves (ruling P3); Task 9: capTop's
     // floating_islands base and waterDepth's coast class column; Task 27: the carver leaves' bounded witness (ruling P18).
     // The schema's count moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 20: SP6b adds leaves); SP6a's 172 stays.
-    expect(u2).toContain('; SP6a: the caves.* leaves are decided on the cave class columns (two scan slots) or a bounded witness, the maxY leaves of cheese, spaghetti 3D and the entrances on an amplified base, the island cap\'s `caves.limits.capTop` on a floating_islands base, the wet roof\'s `caves.limits.waterDepth` on the coast class column, the carver leaves (`caves.worms.*`, `caves.undergroundWorms.*`, `caves.ravines.*`) on a bounded carver witness where the class columns leave them dead; U2 covers 172 leaves (amended by SP6a)');
+    // waterDepth's clause moved to 'master spec amendments (SP7a §16)' (SP7a §16 item 5: the lake roof's witness).
+    expect(u2).toContain('; SP6a: the caves.* leaves are decided on the cave class columns (two scan slots) or a bounded witness, the maxY leaves of cheese, spaghetti 3D and the entrances on an amplified base, the island cap\'s `caves.limits.capTop` on a floating_islands base, ');
+    expect(u2).toContain(', the carver leaves (`caves.worms.*`, `caves.undergroundWorms.*`, `caves.ravines.*`) on a bounded carver witness where the class columns leave them dead; U2 covers 172 leaves (amended by SP6a)');
   });
 
   test('§3.6 holds the default expression as built, with the schema defaults of DEFAULTS.caves; §2.4 names wetMask (SP6a spec §13 items 7 and 11)', () => {
@@ -2176,16 +2183,15 @@ describe('master spec amendments (SP6a §13)', () => {
     for (const w of want) expect(block, `§3.6 lacks: ${w}`).toContain(w);
     expect([n.spag3dA.wavelength, n.entranceA.wavelength, n.noodleRidgeA.wavelength, n.pillarRare.wavelength]).toEqual([n.spag3dB.wavelength, n.entranceB.wavelength, n.noodleRidgeB.wavelength, n.pillarThickness.wavelength]);
     // §1.4's floors and caps, wet roof and island cap with the schema defaults; §1.3's continuity rule.
-    const s = c.limits.bandSpan, dw = c.limits.waterDepth;
+    const s = c.limits.bandSpan;
     expect(block).toContain(`With s = \`caves.limits.bandSpan\` ${s}, a family's depth band`);
     expect(block).toContain(`the bands are cheese ${c.cheese.minY} … ${c.cheese.maxY}, spaghetti 3D ${c.spaghetti3d.minY} … ${c.spaghetti3d.maxY}, spaghetti 2D ${c.spaghetti2d.minY} … ${c.spaghetti2d.maxY}, noodle ${c.noodles.minY} … ${c.noodles.maxY}, entrances ${c.entrances.minY} … ${c.entrances.maxY}.`.replace(/-(\d)/g, '−$1'));
-    expect(block).toContain(`with ${dw} = \`caves.limits.waterDepth\`. Under a lake, a river or a sea caves are closed within ${dw + 4} blocks of the bed, narrow over the ${s} below and are fully open from ${dw + 8 + s}`);
+    // The wet roof's closure sentence moved to 'master spec amendments (SP7a §16)' (SP7a §16 item 5: the lake roof).
     expect(block).toContain(`capTop = \`caves.limits.capTop\` ${c.limits.capTop}, which has no effect while s ≤ 16; floating_islands sets ${resolveProfile('floating_islands').caves.limits.capTop}`);
     expect(block).toContain('- **Continuity (§1.3 of the SP6a spec).** The master\'s five hard switches are continuous');
     expect(block).toContain('every cave family is a tap (SP6a: the shared terms, roughness, the ramp, the caps and the wet roof, are not, so the inspector mutes and probes a family, not a shared term)');
     expect(block).not.toContain('lakeRoof  =');
-    // §2.4's derived fields name wetMask (R8).
-    expect(text).toContain('`wetMask` is 1 where `surfaceWaterLevel` is finite (a lake, a river\'s wet flag or the sea) and 0 elsewhere: the finite field the wet roof reads (§3.6) (amended by SP6a).');
+    // §2.4's derived fields name wetMask (R8): moved to 'master spec amendments (SP7a §16)' (SP7a §16 item 5 rewords it).
   });
 
   test('§2.3\'s section channels gain `cave` and the column record 208 ints; §2.5\'s ColumnView reads it and setProto takes it (SP6a spec §13 item 9, D20; ruling P10)', () => {
@@ -3541,15 +3547,44 @@ describe('master spec amendments (SP7a §16)', () => {
   });
 
   test('§3.8\'s aquifer sentence (SP7a spec §16 item 5)', () => {
-    // Moved from the SP6a describe (its §3.8 carving rules), on the new text; "under water" becomes "under lakes" with
+    // Moved from the SP6a describe (its §3.8 carving rules), on the new text; "under water" became "under lakes" with
     // the lake roof (Task 15).
     const lines = text.split('\n');
     const from = lines.findIndex((l) => l.startsWith('### 3.8 '));
     const to = lines.findIndex((l, i) => i > from && l.startsWith('### 3.9 '));
     const block = lines.slice(from, to).join('\n');
-    expect(block).toContain('Only `CARVABLE` blocks; carvers shrink to nothing under water and below `caves.limits.capTop` (from y 172 in floating_islands) (SP6a); structure piece boxes (SP9) shrink them the same way; every tagged (cave) non-solid voxel asks the aquifer in T; untagged air takes the position\'s `surfaceWaterLevel` (SP7a); carving runs before the surface pass, which skins the carved column (SP6a).');
+    expect(block).toContain('Only `CARVABLE` blocks; carvers shrink to nothing under lakes and below `caves.limits.capTop` (from y 172 in floating_islands) (SP6a); structure piece boxes (SP9) shrink them the same way; every tagged (cave) non-solid voxel asks the aquifer in T; untagged air takes the position\'s `surfaceWaterLevel` (SP7a); carving runs before the surface pass, which skins the carved column (SP6a).');
     expect(block).toContain('every tagged (cave) non-solid voxel asks the aquifer in T; untagged air takes the position\'s `surfaceWaterLevel` (SP7a)');
     expect(text).not.toContain('each carved voxel asks `aquifer.fluidAt`');
+  });
+
+  test('§3.6 and §3.8: the lake roof (SP7a spec §16 item 5)', () => {
+    // D24: wetMask is 1 inside a lake mask only, so the wet roof is the lake roof and caves open under the sea and rivers.
+    // Moved from the SP6a describe on the new text: §2.4's wetMask sentence, §3.6's closure sentence, the `col` line's
+    // parenthesis and §6.4's U2 clause for waterDepth (rulings P13, P14).
+    const c = DEFAULTS.caves;
+    const s = c.limits.bandSpan, dw = c.limits.waterDepth;
+    expect(text).toContain('`wetMask` is 1 inside a lake mask (`lakeMask` 1 with a finite `lakeLevel`) and 0 elsewhere, the sea and rivers included: the finite field the lake roof reads (§3.6) (amended by SP6a and SP7a).');
+    expect(text).not.toContain('`wetMask` is 1 where `surfaceWaterLevel` is finite');
+    const lines = text.split('\n');
+    const roof = lines.find((l) => l.startsWith('- **The lake roof (D7, D19 of the SP6a spec; D24 of the SP7a spec)**'));
+    expect(roof, 'no lake roof paragraph in §3.6').toBeDefined();
+    expect(roof).toContain(`with ${dw} = \`caves.limits.waterDepth\`, the lake roof's depth. Under a lake caves are closed within ${dw + 4} blocks of the bed, narrow over the ${s} below and are fully open from ${dw + 8 + s}, measured from the terrain's own surface there; under the sea and rivers they are as open as anywhere (SP7a: the aquifer floods them, §3.9); every lake position has wet′ = 1 (the \`wetCover\` scan) (amended by SP7a).`);
+    expect(text).not.toContain('covers rivers and seas');
+    expect(text).not.toContain('Under a lake, a river or a sea caves are closed');
+    const col = lines.find((l) => l.startsWith('- **`col`**'));
+    expect(col).toBe('- **`col`** reads finite fields only; SP6a\'s wet roof reads `wetMask` (1 inside a lake mask since SP7a, the lake roof), so no level-field rule is needed (amended by SP6a and SP7a).');
+    // §3.8: the carvers' shrink σ_w acts under lakes only.
+    const from = lines.findIndex((l) => l.startsWith('### 3.8 '));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('### 3.9 '));
+    const block = lines.slice(from, to).join('\n');
+    expect(block).toContain('carvers shrink to nothing under lakes and below `caves.limits.capTop`');
+    expect(block).toContain('- The shrink under lakes (σ_w) reads the position\'s density top, the lake roof\'s depths (`caves.limits.waterDepth`, `bandSpan`) and its wet′ (SP6a; under lakes only, SP7a)');
+    expect(block).not.toContain('under water');
+    // §6.4's U2 row: waterDepth is decided on a lake witness (ruling P13).
+    const u2 = lines.find((l) => l.startsWith('| U2 |'));
+    expect(u2).toContain('the wet roof\'s `caves.limits.waterDepth` on a bounded lake witness (since SP7a\'s lake roof: the column holding an enabled lake cell\'s centre, in a spiral from (0, 0), where a step changes the T column; amended by SP7a), the carver leaves');
+    expect(u2).not.toContain('`caves.limits.waterDepth` on the coast class column');
   });
 
   test('§3.9 as built (SP7a spec §16 item 7)', () => {

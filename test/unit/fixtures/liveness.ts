@@ -135,8 +135,13 @@ export const RAVINE_VIA = 'carver witness column (5, 1)';
 
 /** The island cap's top (SP6a Task 9), decided on a floating_islands base at its own witness. */
 export const CAP_TOP = 'caves.limits.capTop';
-/** The wet roof's depth (SP6a Task 9), meant for the coast class column (it acts under water only). */
+/**
+ * The wet roof's depth (SP6a Task 9); since SP7a D24 the lake roof's (it acts under lakes only), meant for the basin
+ * class column and decided on its bounded lake witness (Task 15, ruling P13).
+ */
 export const WATER_DEPTH = 'caves.limits.waterDepth';
+/** waterDepth's lake witness at seed 42: its cell and column and the scan's figures (spiral cells visited, columns hashed). */
+export const LAKE_ROOF_PIN = { via: 'lake witness cell (-2, -1) → column (-37, -8)', cells: 25, checks: 2 } as const;
 /** capTop's witness at seed 42: its column and the scan's figures (draws of sp6a.liveness.capTop, examined, hashed). */
 export const CAP_TOP_PIN = { via: 'floating_islands witness column (-4875, 15131)', draws: 59, examined: 3, checks: 1 } as const;
 

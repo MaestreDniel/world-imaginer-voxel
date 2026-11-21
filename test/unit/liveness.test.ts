@@ -13,7 +13,7 @@ import { cellEligible, lakeCell } from '../../src/gen/column/lakes';
 import { fnv1a32, hex64 } from '../../src/core/hash';
 import {
   carverWitness, CAVE_SLOTS, caveColumn, caveFamilyCounts, caveLeaves, caveSlotLeaves, cellProbe, findWitness, intendedClass, islandColumn, islandLeaves,
-  leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance, scaleBandCarves, scaleWitness, SURFACE_CLASSES, surfacePrefilter,
+  lakeRoofWitness, leafLiveness, livenessColumns, perturbations, stageOutputHash, surfaceAcceptance, scaleBandCarves, scaleWitness, SURFACE_CLASSES, surfacePrefilter,
   surfaceSlotLeaves, u2Leaves,
   type CaveSlot,
   type LivenessClass,
@@ -31,7 +31,7 @@ import { createDensityContext } from '../../src/gen/density/context';
 import { ctxFor } from '../harness/gen';
 import {
   ISLAND_PIN, ISLAND_DRAW, CAVE_PINS, CAVERNS_VIA, U2_LEAVES, BIOME_LEAVES, FLOOR_LEAVES, CARVER_LEAVES, SCALE_LEAVES,
-  BAND_LEAVES, ONE_STEP, CARVER_PINS, RAVINE_VIA, CAP_TOP, WATER_DEPTH, leaf, CTX, moved, CLASSES, SP3B_COLUMNS,
+  BAND_LEAVES, ONE_STEP, CARVER_PINS, RAVINE_VIA, CAP_TOP, WATER_DEPTH, LAKE_ROOF_PIN, leaf, CTX, moved, CLASSES, SP3B_COLUMNS,
   SURFACE_PINS, SURFACE_LEAVES, RULE4_NOISES, columns, surfaceShows,
 } from './fixtures/liveness';
 
@@ -540,13 +540,20 @@ describe('the cave class columns (SP6a spec §4)', () => {
     }
   });
 
-  test('the wet roof\'s waterDepth is meant for the coast class column and live on it, through the T stage (SP6a §1.4, Task 9)', () => {
-    expect(intendedClass(WATER_DEPTH)).toBe('coast');
-    const coast = columns().filter((c) => c.cls === 'coast');
-    expect(coast.length).toBe(2);
+  test('the lake roof\'s waterDepth is meant for the basin class column, dead on every class column, and live on its lake witness, through the T stage (SP6a §1.4, Task 9; SP7a D24, Task 15, ruling P13)', () => {
+    expect(intendedClass(WATER_DEPTH)).toBe('basin');
+    const basin = columns().filter((c) => c.cls === 'basin');
+    expect(basin.length).toBe(2);
+    // Decided on the witness (cls null): the class columns, the basin ones tried first for this leaf despite
+    // TERRAIN_CLASSES, hold no lake whose roof a step moves.
     const r = leafLiveness(CTX, WATER_DEPTH, [...columns(), ...caves()]);
-    expect([r.live, r.cls]).toEqual([true, 'coast']);
-    expect(coast.map((c) => `coast column (${c.cx}, ${c.cz})`)).toContain(r.via);
+    expect(r).toEqual({ path: WATER_DEPTH, live: true, via: LAKE_ROOF_PIN.via, cls: null });
+    // The witness: the column holding an enabled lake cell's centre, inside the mask (wetMask 1), whose T column a step changes.
+    const w = lakeRoofWitness(CTX, [...columns(), ...caves()]);
+    expect(w).toEqual(LAKE_ROOF_PIN);
+    const [cx, cz] = LAKE_ROOF_PIN.via.match(/column \((-?\d+), (-?\d+)\)$/)!.slice(1).map(Number) as [number, number];
+    const s = buildColumnSample(CTX, cx, cz, newColumnSample());
+    expect(Array.from(s.f.wetMask).some((m) => m === 1)).toBe(true);
     // U2's steps of 16 (int, 8 … 48): 14 and 18.
     expect(perturbations(leaf(WATER_DEPTH), DEFAULTS.caves.limits.waterDepth)).toEqual([14, 18]);
   });

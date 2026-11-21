@@ -25,13 +25,14 @@ import { AQUIFER_LEAVES, CTX, U2_LEAVES, columns, leaf } from './fixtures/livene
  * and barrier noises on the cave columns, `partialInland` on the cliffSteep column, the lava noise on a land column;
  * the ocean thresholds, `surfaceBand`, the lava leaves and `abyssMargin` on their witness (the first columns of
  * `sp7a.liveness.aquifer` whose tagged air holds what the leaf acts on, `aquiferWants`, where a step changes the T
- * column; the margin's in its lateral band, where a step moves a barrier).
+ * column; the margin's in its lateral band, where a step moves a barrier). `surfaceBand`'s witness moved from (21939,
+ * −12751) to (−24882, 19024) with the lake roof (Task 15, D24: caves open under the sea and rivers).
  */
 const CAVERNS = 'cave column (18487, -15384)';
 const TUNNELS = 'cave column (-1986, -30779)';
 const VERDICT: Readonly<Record<(typeof AQUIFER_LEAVES)[number], string>> = {
   'aquifer.enabled': CAVERNS,
-  'aquifer.surfaceBand': 'aquifer witness column (21939, -12751)',
+  'aquifer.surfaceBand': 'aquifer witness column (-24882, 19024)',
   'aquifer.thresholds.fullInland': TUNNELS,
   'aquifer.thresholds.fullOcean': 'aquifer witness column (-24882, 19024)',
   'aquifer.thresholds.partialInland': 'cliffSteep column (-24200, -4864)',
@@ -49,7 +50,7 @@ const VERDICT: Readonly<Record<(typeof AQUIFER_LEAVES)[number], string>> = {
 /** Each leaf's own witness, searched past the class columns (`aquiferWitness(CTX, path, all)`). */
 const WITNESS: Readonly<Record<(typeof AQUIFER_LEAVES)[number], string>> = {
   'aquifer.enabled': 'aquifer witness column (-24882, 19024)',
-  'aquifer.surfaceBand': 'aquifer witness column (21939, -12751)',
+  'aquifer.surfaceBand': 'aquifer witness column (-24882, 19024)',
   'aquifer.thresholds.fullInland': 'aquifer witness column (-29063, 7580)',
   'aquifer.thresholds.fullOcean': 'aquifer witness column (-24882, 19024)',
   'aquifer.thresholds.partialInland': 'aquifer witness column (2268, -18044)',

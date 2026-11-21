@@ -41,8 +41,9 @@ const SPAWN = findSpawn;
 const PAINT = paintTile;
 const LEVELS = MAP_LEVELS;
 /**
- * The SP2a sample digest's fields: every continuous field but SP6a's `wetMask` (derived from `surfaceWaterLevel`, which
- * the digest already hashes), so `sp2a.sample` stays SP2a's (SP6a spec §12.3: every sp2a.* golden unchanged).
+ * The SP2a sample digest's fields: every continuous field but SP6a's `wetMask` (derived from `surfaceWaterLevel`; since
+ * SP7a D24 from `lakeMask` and `lakeLevel`; the digest already hashes both), so `sp2a.sample` stays SP2a's (SP6a spec
+ * §12.3: every sp2a.* golden unchanged).
  */
 const ALL_SAMPLE_FIELDS = SAMPLE_FIELDS;
 const FIELDS = ALL_SAMPLE_FIELDS.filter((f) => f !== 'wetMask');

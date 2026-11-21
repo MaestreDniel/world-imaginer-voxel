@@ -104,7 +104,7 @@ export function buildColumnSample(ctx: GenContext, cx: number, cz: number, out: 
       f.surfaceWaterLevel[k] = WATER(l.offset, r.wet, l.lakeMask, l.lakeLevel);
       f.surfaceEst[k] = l.offset;
       f.islandMask[k] = ISLAND_MASK(ctx, x, z);
-      f.wetMask[k] = WET_MASK(f.surfaceWaterLevel[k]!);
+      f.wetMask[k] = WET_MASK(f.lakeMask[k]!, f.lakeLevel[k]!);
       out.flags[k] = (r.wet ? 1 : 0) | (r.gorge ? 2 : 0);
       out.biome[k] = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, o[k]!, r.wet);
     }

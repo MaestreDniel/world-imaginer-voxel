@@ -15,7 +15,7 @@ describe('registry', () => {
   test('the SP2a schema and stage list satisfy every invariant', () => {
     expect(checkRegistry(SCHEMA, STAGES)).toEqual([]);
     expect(ALL).toEqual(['climate', 'shape', 'surfaceEst', 'biome2d', 'terrain', 'decorate', 'light', 'mesh', 'lod', 'map']);
-    expect(STAGES.map((s) => `${s.id}@${s.version}`)).toEqual(['climate@1', 'shape@2', 'surfaceEst@2', 'biome2d@2', 'terrain@6', 'decorate@1', 'light@1', 'mesh@1', 'lod@1', 'map@2']);
+    expect(STAGES.map((s) => `${s.id}@${s.version}`)).toEqual(['climate@1', 'shape@3', 'surfaceEst@2', 'biome2d@2', 'terrain@6', 'decorate@1', 'light@1', 'mesh@1', 'lod@1', 'map@2']);
   });
   test('SP7a: terrain is version 6 and hashes the aquifer group; every aquifer.* leaf\'s badge is Terrain', () => {
     const terrain = STAGES.find((s) => s.id === 'terrain')!;
@@ -68,7 +68,7 @@ describe('stage hashes', () => {
   test('preimages', () => {
     expect(hex64(H.climate!)).toBe(hex64(fnv1a64(`climate|1|${canonicalJSON({ climate: DEFAULTS.climate })}|`)));
     const shapeSlice = { islands: DEFAULTS.islands, lakes: DEFAULTS.lakes, rivers: DEFAULTS.rivers, shape: DEFAULTS.shape };
-    expect(hex64(H.shape!)).toBe(hex64(fnv1a64(`shape|2|${canonicalJSON(shapeSlice)}|${hex64(H.climate!)}`)));
+    expect(hex64(H.shape!)).toBe(hex64(fnv1a64(`shape|3|${canonicalJSON(shapeSlice)}|${hex64(H.climate!)}`)));
     expect(hex64(H.surfaceEst!)).toBe(hex64(fnv1a64(`surfaceEst|2|{}|${hex64(H.shape!)}`)));
     expect(hex64(H.biome2d!)).toBe(hex64(fnv1a64(`biome2d|2|${canonicalJSON({ biomes: DEFAULTS.biomes })}|${hex64(H.climate!)},${hex64(H.shape!)},${hex64(H.surfaceEst!)}`)));
   });

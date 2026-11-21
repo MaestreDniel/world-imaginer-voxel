@@ -10,6 +10,8 @@ import { probe } from '../../src/gen/density/probe';
 import type { Expr } from '../../src/gen/density/expr';
 import { createDensityReference, findTap, interpolatedNodes } from '../../src/gen/density/reference';
 import { caveTagAt } from '../../src/gen/caves/tags';
+import { aquiferOf } from '../../src/gen/fluids/aquifer';
+import { terrainSolidAt } from '../../src/gen/fluids/solidAt';
 import { CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import { terrainDensityDebug, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf } from '../../src/gen/surface/context';
@@ -56,6 +58,7 @@ function inlineDt2(ctx: GenContext, cx: number, cz: number, r: Xoshiro128): Inli
   const masked = new Int32Array(98304);
   const scan = newSurfaceScan();
   const dc = createDensityContext(ctx);
+  const aq = aquiferOf(ctx);
   const ref = createDensityReference(dc.expr, dc.noises);
   const c = dc.compiled;
   const interp = interpolatedNodes(dc.expr).map((n) => ({ inner: n.x, slot: c.interpolatedSlot(n) }));
@@ -94,7 +97,10 @@ function inlineDt2(ctx: GenContext, cx: number, cz: number, r: Xoshiro128): Inli
     const value = probe(dc, x, y, z);
     const block = view.block(lx, y, lz);
     o.voxels++;
-    if ((value > 0) !== (block !== AIR)) o.probeBulk++;
+    // The stored solidity: the density probe's after the carvers and the aquifer's barriers (SP6a §3.4, SP7a D20), as
+    // `dt2Column` reads it since SP7a; the pre-extraction loop compared `value > 0`, which a carved or barrier voxel
+    // breaks (SP7a Task 15: with caves open under the sea, the stream's draws on this column meet one).
+    if (terrainSolidAt(aq, dc, x, y, z) !== (block !== AIR)) o.probeBulk++;
     if (surfaceProbe(sc, x, y, z).state !== block) o.surfaceProbeBulk++;
     checkSurface(i & 255, y);
     if (mask[i] === 1) {

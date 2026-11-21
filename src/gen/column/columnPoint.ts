@@ -1,6 +1,6 @@
 /**
  * The point reference (SP2a spec §2.6): climate → shape → steep → rivers → lakes → water level →
- * surfaceEst → islandMask (SP3e spec §2.3) → wetMask (SP6a spec §1.4) → biome, in this order, at one world position. samplePoint writes into a reused record
+ * surfaceEst → islandMask (SP3e spec §2.3) → wetMask (SP6a spec §1.4; the lake roof, SP7a D24) → biome, in this order, at one world position. samplePoint writes into a reused record
  * (map tiles skip steep); columnPoint returns a fresh record with steep. buildColumnSample must
  * reproduce every field bit for bit at quart corners.
  */
@@ -37,7 +37,7 @@ export interface PointRecord {
   lakeMask: number; lakeLevel: number; lakeFloor: number;
   offset: number; sigma: number; jag: number;
   surfaceWaterLevel: number; surfaceEst: number; islandMask: number;
-  /** 1 where `surfaceWaterLevel` is finite (a lake, a river's wet flag or the sea), else 0 (SP6a §1.4: the wet roof's wet′). */
+  /** 1 inside a lake mask (`lakeMask` 1 with a finite `lakeLevel`), else 0, the sea and rivers included (SP6a §1.4: the wet roof's wet′; the lake roof, SP7a D24). */
   wetMask: number;
   biome: number;
 }
@@ -56,11 +56,12 @@ export function waterLevel(offset: number, riverWet: boolean, lakeMask: number, 
 }
 
 /**
- * The wet mask of a water level (SP6a spec §1.4, D19): 1 where the level is finite (water v0 fills the position's
- * column from it), else 0; a finite `col` field the wet roof reads, so no level-field −∞ rule is needed.
+ * The wet mask of a position's lake fields (SP6a spec §1.4, D19; SP7a spec §2, D24, the lake roof): 1 inside a lake
+ * (`lakeMask` 1 with a finite `lakeLevel`, `lakes.ts`' `lakeTerms`), else 0, so the wet roof closes caves under lakes
+ * only and caves open under the sea and rivers; a finite `col` field the roof reads, so no level-field −∞ rule is needed.
  */
-export function wetMaskOf(level: number): number {
-  return Number.isFinite(level) ? 1 : 0;
+export function wetMaskOf(lakeMask: number, lakeLevel: number): number {
+  return lakeMask === 1 && Number.isFinite(lakeLevel) ? 1 : 0;
 }
 
 const C_ = NEW_CLIMATE();
@@ -84,7 +85,7 @@ export function samplePoint(ctx: GenContext, x: number, z: number, withSteep: bo
   out.surfaceWaterLevel = waterLevel(l.offset, r.wet, l.lakeMask, l.lakeLevel);
   out.surfaceEst = l.offset;
   out.islandMask = ISLAND_MASK(ctx, x, z);
-  out.wetMask = wetMaskOf(out.surfaceWaterLevel);
+  out.wetMask = wetMaskOf(l.lakeMask, l.lakeLevel);
   out.biome = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, s.offset0, r.wet);
   return out;
 }
@@ -110,7 +111,8 @@ export function sampleCoarse(ctx: GenContext, x: number, z: number, out: PointRe
   out.surfaceWaterLevel = waterLevel(s.offset0, false, 0, -Infinity);
   out.surfaceEst = s.offset0;
   out.islandMask = ISLAND_MASK(ctx, x, z);
-  out.wetMask = wetMaskOf(out.surfaceWaterLevel);
+  // No lake at the preview level, so no lake roof (SP7a D24).
+  out.wetMask = 0;
   out.biome = PICK(ctx, c.C, c.E, c.PV, c.T, c.H, c.W, s.offset0, false);
   return out;
 }

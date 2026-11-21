@@ -351,7 +351,7 @@ describe('the density top under a floating island (SP6a spec §2.4)', () => {
   const SEA_CORE = [19358, -22222] as const;
   const floating = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
 
-  test('with islands.enabled densityTopOf is the sea bed\'s top, not the island\'s; nothing is carved within 16 blocks of the bed', () => {
+  test('with islands.enabled densityTopOf is the sea bed\'s top, not the island\'s; under a lake roof nothing is carved within 16 blocks of the bed', () => {
     expect(floating.params.islands.enabled).toBe(true);
     const fdc = createDensityContext(floating);
     const c = filled(fdc, SEA_CORE[0], SEA_CORE[1], true);
@@ -363,9 +363,14 @@ describe('the density top under a floating island (SP6a spec §2.4)', () => {
       expect(c.solid[256 * (bed + 64) + p], `position ${p}: the bed is solid`).toBe(1);
       for (let y = bed + 1; y < ISLAND_RUN_MIN_BOTTOM; y++) expect(c.solid[256 * (y + 64) + p], `position ${p} y ${y}`).toBe(0);
       if (islandTops[p]! >= ISLAND_RUN_MIN_BOTTOM) islands++;
-      expect(wetAt(c.s, 16 * c.cx + (p & 15), 16 * c.cz + (p >> 4)), `position ${p} is under the sea`).toBe(1);
+      // The lake roof (SP7a D24): wet′ is 0 under the sea, so the carvers are full size under its bed.
+      expect(wetAt(c.s, 16 * c.cx + (p & 15), 16 * c.cz + (p >> 4)), `position ${p} is under the sea`).toBe(0);
     }
     expect(islands, 'no island over the column').toBeGreaterThan(0);
+    // σ_w still reads the bed under an island where wet′ is 1 (an island over a lake): the column stands in for one, its
+    // own copy of the sample's wetMask set to 1 everywhere.
+    c.s.f.wetMask.fill(1);
+    for (let p = 0; p < 256; p++) expect(wetAt(c.s, 16 * c.cx + (p & 15), 16 * c.cz + (p >> 4))).toBe(1);
     // A stack of spheres through the whole column below the island cap, with the floating_islands limits.
     const pf: CarverParams = withLimits(CARVER_DEFAULTS, floating.params.caves.limits);
     expect(pf.limits.capTop).toBe(180);
@@ -662,8 +667,8 @@ describe('carverCacheOf and carvedAt (SP6a spec §2.5, §3.4; Task 27)', () => {
     const floating = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
     const cols: ReadonlyArray<readonly [typeof ctx, number, number]> = [
       [ctx, 546, 25857], [ctx, 4, -10], [ctx, 5, -9], [ctx, 0, 0], [ctx, 3, 0], [ctx, -20, 0], [ctx, -18, 1],
-      // Beside test/unit/floatingIslands.test.ts' SEA_CORE: an island over the sea at all 256 positions (wet′ 1; the density
-      // top is the sea bed's), with carvers under the bed.
+      // Beside test/unit/floatingIslands.test.ts' SEA_CORE: an island over the sea at all 256 positions (the density top is
+      // the sea bed's; wet′ 0 since SP7a D24, the lake roof), with carvers under the bed.
       [floating, 19357, -22223],
     ];
     const kinds = new Set<number>();
@@ -713,7 +718,9 @@ describe('carverCacheOf and carvedAt (SP6a spec §2.5, §3.4; Task 27)', () => {
   test('carvedAt\'s density-top memo (ruling R18): probes interleaved over two contexts and two columns, voxel by voxel, answer as a fresh scan of the density top does', () => {
     // Two worlds whose density tops differ at one position and whose wet roof is as deep as it goes (waterDepth 48,
     // bandSpan 32: σ_w reaches 88 blocks under a wet top), so which top a voxel reads changes its answer: floating_islands
-    // at seeds 42 and 1, beside its island-over-sea column (wet′ 1, the density top the sea bed's under the island rule).
+    // at seeds 42 and 1, beside its island-over-sea column (the density top the sea bed's under the island rule). Since
+    // SP7a D24 wet′ is 0 under the sea (the lake roof), so the columns stand in for an island over a lake: each context's
+    // cached sample of each streamed column has its wetMask set to 1 (wet′ 1), which carvedAt and the fresh scan both read.
     const fi = resolveProfile('floating_islands');
     const deep = { ...fi, caves: { ...fi.caves, limits: { ...fi.caves.limits, waterDepth: 48, bandSpan: 32 } } };
     const s42 = createDensityContext(createGenContext(seedFromInput('42'), deep));
@@ -724,6 +731,7 @@ describe('carverCacheOf and carvedAt (SP6a spec §2.5, §3.4; Task 27)', () => {
     const streams: ReadonlyArray<readonly [DensityContext, number, number]> = [
       [s1, 19356, -22221], [s42, 19356, -22221], [s42, 19358, -22221],
     ];
+    for (const [d, cx, cz] of streams) d.column(cx, cz).f.wetMask.fill(1);
     /** carvedAt as Task 27 wrote it: the position's top by a fresh downward scan, no memo. */
     const fresh = (d: DensityContext, x: number, y: number, z: number): number => {
       const cx = x >> 4, cz = z >> 4;

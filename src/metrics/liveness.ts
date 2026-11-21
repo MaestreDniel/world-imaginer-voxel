@@ -29,7 +29,9 @@
  * `caves.limits.capTop` (Task 9; its default 344 lies above the world, so it is dead on the default base) is decided on
  * a floating_islands base (capTop 180, U2's one effective step 207) at its own witness (`capTopWitness`), not on the
  * island class column, which the island noise picks. The wet roof's `caves.limits.waterDepth` (Task 9) acts under water
- * only: it is left out of the slots' acceptance and meant for the coast class column (`LEAF_CLASS`). The carver leaves
+ * only: it is left out of the slots' acceptance and was meant for the coast class column (`LEAF_CLASS`); since SP7a D24
+ * (Task 15, ruling P13) it is the lake roof's depth, acting under lakes only, meant for the basin class column and,
+ * dead on the class columns, decided on a bounded lake witness (`lakeRoofWitness`). The carver leaves
  * (`caves.worms.*` with `caves.worms.shape.*`, `caves.undergroundWorms.*`, `caves.ravines.*`; Task 27, ruling P18) act
  * only where a carver's path passes, so they are left out of the slots' acceptance too: each is tried on the class
  * columns (the cave columns among them), then, dead there, decided on a bounded carver witness search
@@ -207,8 +209,10 @@ const LEAF_CLASS: ReadonlyMap<string, LivenessClass> = new Map<string, LivenessC
   ['lakes.rimWidth', 'rim'], ['lakes.rimRise', 'rim'], ['lakes.rimSigma', 'rim'],
   ['rivers.gorgeDepth', 'gorge'], ['rivers.altFadeLo', 'gorge'], ['rivers.altFadeHi', 'gorge'],
   ['rivers.coastFadeLo', 'coast'], ['rivers.coastFadeHi', 'coast'],
-  // SP6a spec §1.4 (Task 9): the wet roof acts under water, so its depth is meant for the coast class column.
-  ['caves.limits.waterDepth', 'coast'],
+  // SP6a spec §1.4 (Task 9): the wet roof acts under water, so its depth was meant for the coast class column; since SP7a
+  // D24 (Task 15, ruling P13) it is the lake roof, acting under lakes only: meant for the basin class column (a lake),
+  // tried for this leaf despite `TERRAIN_CLASSES`.
+  ['caves.limits.waterDepth', 'basin'],
   ['surface.cliffMinY', 'cliffY'], ['surface.cliffSteep', 'cliffSteep'],
   ['surface.snowline', 'snowline'], ['surface.lapse', 'snowline'], ['surface.lapseBase', 'snowline'],
   ['surface.noises.patch', 'patch'], ['surface.patchThreshold', 'patch'],
@@ -285,8 +289,17 @@ const isBandLeaf = (path: string): boolean => BAND_LEAF.test(path);
  * the base's capTop, and whose T column the step changes.
  */
 const CAP_TOP_PATH = 'caves.limits.capTop';
-/** SP6a spec §1.4 (Task 9): the wet roof's depth, left out of the slots' acceptance (it acts under water only). */
+/** SP6a spec §1.4 (Task 9): the wet roof's depth, left out of the slots' acceptance (it acts under lakes only, SP7a D24). */
 const WATER_DEPTH_PATH = 'caves.limits.waterDepth';
+/**
+ * SP7a D24 (Task 15, ruling P13): the lake roof's depth acts under lakes only, and no class column (the basin ones
+ * included) holds a lake whose roof a step moves, so it is decided on a bounded lake witness (`lakeRoofWitness`): the
+ * enabled lake cells of a square spiral from (0, 0), up to `LAKE_ROOF_CELLS`, each giving the chunk column holding its
+ * centre (inside the lake mask: `wetMask` 1 there); up to `LAKE_ROOF_CHECKS` such columns hashed, the first whose T
+ * column a step changes.
+ */
+const LAKE_ROOF_CELLS = 16384;
+const LAKE_ROOF_CHECKS = 64;
 const CAP_STREAM = 'sp6a.liveness.capTop';
 const CAP_DRAWS = 32768;
 const CAP_EXAMINED = 2048;
@@ -1013,8 +1026,9 @@ export function caveLeaves(): readonly LeafInfo[] {
  * every other `caves.*` leaf for `caverns`; never a spaghetti scale leaf (ruling P5), a depth-band leaf (`minY`,
  * `maxY`; Task 8), a carver leaf (Task 27, ruling P18), a cave-biome leaf (SP6b Task 17) or `caves.limits.capTop`
  * (Task 9), each decided on its bounded witness search when the class columns leave it dead, never a rock-floor leaf
- * (SP6b Task 19), decided on the class columns, and never `caves.limits.waterDepth` (Task 9), the wet roof's
- * depth, decided on the coast class column (it acts under water only, and the cave columns are land columns).
+ * (SP6b Task 19), decided on the class columns, and never `caves.limits.waterDepth` (Task 9), the lake roof's
+ * depth since SP7a D24, decided on its bounded lake witness (it acts under lakes only, and the cave columns are land
+ * columns).
  */
 export function caveSlotLeaves(slot: CaveSlot): readonly LeafInfo[] {
   return caveLeaves().filter((l) => !isScaleLeaf(l.path) && !isBandLeaf(l.path) && !isCarverLeaf(l.path) && !isBiomeLeaf(l.path)
@@ -1760,6 +1774,41 @@ export function capTopWitness(base: GenContext): CapTopWitnessScan {
   return capTopWitnessOf(fb, info, variantContexts(fb, info), hash);
 }
 
+/** The figures of the lake roof's witness search: the deciding column, the spiral cells visited, the columns hashed. */
+export interface LakeRoofWitnessScan { readonly via: string | null; readonly cells: number; readonly checks: number }
+
+function lakeRoofWitnessOf(base: GenContext, info: LeafInfo, variants: readonly GenContext[], skip: readonly LivenessColumn[], baseHash: BaseHash): LakeRoofWitnessScan {
+  const stage = stageOf(info);
+  const seen = new Set<number>(skip.map((c) => (c.cx + 32768) * 65536 + (c.cz + 32768)));
+  let cells = 0, checks = 0;
+  let via: string | null = null;
+  someSpiralCell(LAKE_ROOF_CELLS, (i, j) => {
+    cells++;
+    const cell = CELL(base, i, j);
+    if (!cell.enabled) return false;
+    const cx = Math.floor(cell.cx / 16);
+    const cz = Math.floor(cell.cz / 16);
+    const key = (cx + 32768) * 65536 + (cz + 32768);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    checks++;
+    const h = baseHash(stage, cx, cz);
+    if (variants.some((v) => stageOutputHash(v, stage, cx, cz) !== h)) via = `lake witness cell (${i}, ${j}) → column (${cx}, ${cz})`;
+    return via !== null || checks >= LAKE_ROOF_CHECKS;
+  });
+  return { via, cells, checks };
+}
+
+/**
+ * The lake roof's `caves.limits.waterDepth` bounded witness search (SP7a Task 15, ruling P13) on `base` over the columns
+ * not in `skip`: the deciding column (`lake witness cell (i, j) → column (cx, cz)`) or null, with the spiral cells
+ * visited and the columns hashed (see `LAKE_ROOF_CELLS`).
+ */
+export function lakeRoofWitness(base: GenContext, skip: readonly LivenessColumn[] = []): LakeRoofWitnessScan {
+  const info = leafInfo(WATER_DEPTH_PATH);
+  return lakeRoofWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
+}
+
 /** The families each slot's column must hold (`caveFamilyCounts` > 0). */
 const SLOT_FAMILIES: Readonly<Record<CaveSlot, readonly (keyof CaveFamilyCounts)[]>> = {
   caverns: ['entrances', 'cheese', 'pillars'],
@@ -1889,7 +1938,7 @@ function decide(base: GenContext, info: LeafInfo, columns: readonly LivenessColu
   const stage = stageOf(info);
   const intended = intendedClass(info.path);
   const variants = variantContexts(base, info);
-  const tried = stage === 'terrain' ? columns.filter((c) => TERRAIN_CLASSES.includes(c.cls)) : columns;
+  const tried = stage === 'terrain' ? columns.filter((c) => TERRAIN_CLASSES.includes(c.cls) || (info.path === WATER_DEPTH_PATH && c.cls === 'basin')) : columns;
   const order = [...tried.filter((c) => c.cls === intended), ...tried.filter((c) => c.cls !== intended)];
   const hit = order.find((c) => variants.some((v) => stageOutputHash(v, stage, c.cx, c.cz) !== baseHash(stage, c.cx, c.cz)));
   if (hit !== undefined) return { path: info.path, live: true, via: `${hit.cls} column (${hit.cx}, ${hit.cz})`, cls: hit.cls };
@@ -1900,7 +1949,8 @@ function decide(base: GenContext, info: LeafInfo, columns: readonly LivenessColu
           : isBiomeLeaf(info.path) ? biomeWitnessOf(base, info, variants, columns, baseHash).via
             : isCaveRuleNoise(info.path) ? caveRuleWitnessOf(base, info, variants, columns, baseHash).via
               : isAquiferLeaf(info.path) ? aquiferWitnessOf(base, info, variants, columns, baseHash).via
-                : info.path === CAP_TOP_PATH ? capTopWitness(base).via : null;
+                : info.path === CAP_TOP_PATH ? capTopWitness(base).via
+                  : info.path === WATER_DEPTH_PATH ? lakeRoofWitnessOf(base, info, variants, columns, baseHash).via : null;
   return w !== null ? { path: info.path, live: true, via: w, cls: null } : { path: info.path, live: false, via: null, cls: intended };
 }
 
@@ -1916,9 +1966,10 @@ function bandVia(base: GenContext, info: LeafInfo, variants: readonly GenContext
  * One leaf's U2 verdict over `columns` (the class columns of `base`): its stage output hash on the class columns (the
  * intended class first; a `terrain` leaf only on the land, coast, surface, island and cave ones), then, except for a
  * `terrain` leaf, the witness search; a spaghetti scale leaf, a depth-band leaf, a carver leaf, a cave-biome leaf, a
- * rule-4 noise, an aquifer leaf and `caves.limits.capTop` (`terrain` leaves) have their own (ruling P5; Task 8's
- * `bandWitness`; Task 27's `carverWitness`; SP6b Task 17's `biomeWitness`; SP6b Task 22's `caveRuleWitness`; SP7a Task
- * 13's `aquiferWitness`; Task 9's `capTopWitness`).
+ * rule-4 noise, an aquifer leaf, `caves.limits.capTop` and `caves.limits.waterDepth` (`terrain` leaves) have their own
+ * (ruling P5; Task 8's `bandWitness`; Task 27's `carverWitness`; SP6b Task 17's `biomeWitness`; SP6b Task 22's
+ * `caveRuleWitness`; SP7a Task 13's `aquiferWitness`; Task 9's `capTopWitness`; SP7a Task 15's `lakeRoofWitness`).
+ * `caves.limits.waterDepth` is also tried on the basin class columns (ruling P13).
  */
 export function leafLiveness(base: GenContext, path: string, columns: readonly LivenessColumn[]): LivenessResult {
   return decide(base, leafInfo(path), columns, baseHasher(base));

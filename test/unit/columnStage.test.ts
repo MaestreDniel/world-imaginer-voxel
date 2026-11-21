@@ -60,6 +60,34 @@ describe('DT2: batch == point, bit for bit at every lattice point', () => {
   }, 60_000);
 });
 
+/**
+ * SP7a D24 (spec §2): `wetMask` is 1 inside a lake mask (`lakeMask` 1 with a finite `lakeLevel`) and 0 elsewhere, the
+ * sea and rivers included. Spec correction 8: `sp3b.density.default`'s fixture, column (0, 0) of seed '42', is dry under
+ * the old rule (`surfaceWaterLevel` finite) and the new one, so the key is expected unchanged.
+ */
+describe('the lake roof\'s wetMask (SP7a D24)', () => {
+  const ctx = ctxFor('42');
+  test('column (0, 0) of seed \'42\' is dry under both wet rules (Spec correction 8)', () => {
+    const s = buildColumnSample(ctx, 0, 0, newColumnSample());
+    expect(Array.from(s.f.wetMask)).toEqual(new Array(49).fill(0));
+    expect(Array.from(s.f.surfaceWaterLevel, (w) => (Number.isFinite(w) ? 1 : 0))).toEqual(new Array(49).fill(0));
+  });
+  test('a lake column\'s lattice corners inside the mask read 1, a sea column\'s 0', () => {
+    // test/unit/caveTerms.test.ts' WET_COLUMNS of seed 42: every quart corner in a lake, every quart corner at sea.
+    const lake = buildColumnSample(ctx, -14488, -20872, newColumnSample());
+    let inside = 0;
+    for (let k = 0; k < 49; k++) {
+      const inLake = lake.f.lakeMask[k] === 1 && Number.isFinite(lake.f.lakeLevel[k]!);
+      if (inLake) inside++;
+      expect([k, lake.f.wetMask[k]]).toEqual([k, inLake ? 1 : 0]);
+    }
+    expect(inside).toBeGreaterThanOrEqual(25);
+    const sea = buildColumnSample(ctx, 18896, 17558, newColumnSample());
+    for (let j = 0; j <= 4; j++) for (let i = 0; i <= 4; i++) expect(sea.f.surfaceWaterLevel[latticeIndex(i, j)]).toBe(63);
+    expect(Array.from(sea.f.wetMask)).toEqual(new Array(49).fill(0));
+  });
+});
+
 describe('readout', () => {
   const ctx = ctxFor();
   const s = buildColumnSample(ctx, 3, -5, newColumnSample());

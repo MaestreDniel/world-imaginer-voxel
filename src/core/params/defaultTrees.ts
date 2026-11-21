@@ -70,14 +70,15 @@ const bandSpan = (): JsonValue => param('caves.limits.bandSpan');
 const CAP_GENTLE = { entrances: 0.4, cheese: 5.8, spaghetti3d: 0.5, spaghetti2d: 0.3, noodles: 0.4 } as const;
 const col = (field: string): JsonValue => ({ op: 'col', field });
 /**
- * wet′ = clamp(4·wetMask, 0, 1) (SP6a §1.4, D7, D19): `wetMask` is the finite `col` field that is 1 at a lattice point
- * whose `surfaceWaterLevel` is finite (a lake, a river's wet flag or the sea) and 0 elsewhere. A `col`-only subtree
- * (COLUMN class): inside a slot it reads the cell's lattice corners, at voxel level the position's bilinear readout, which
- * at a voxel's quart offsets t ∈ {0, ¼, ½, ¾} is exact and gives the nearest corner a weight ≥ ¼, so wet′ is 1 at every
- * position water v0 fills (it reads `surfaceWaterLevel` at the nearest corner): `wetCover` holds by construction.
+ * wet′ = clamp(4·wetMask, 0, 1) (SP6a §1.4, D7, D19; the lake roof, SP7a D24): `wetMask` is the finite `col` field that
+ * is 1 at a lattice point inside a lake mask (`lakeMask` 1 with a finite `lakeLevel`) and 0 elsewhere, the sea and rivers
+ * included, so the wet terms (g_w in each cap, S_w in `defs.steep`) act under lakes only and caves open under the sea and
+ * rivers. A `col`-only subtree (COLUMN class): inside a slot it reads the cell's lattice corners, at voxel level the
+ * position's bilinear readout, which at a voxel's quart offsets t ∈ {0, ¼, ½, ¾} is exact and gives the nearest corner a
+ * weight ≥ ¼, so wet′ is 1 at every lake position (its nearest corner inside the mask): `wetCover` holds by construction.
  */
 const wet = (): JsonValue => clamp(mul(c(4), col('wetMask')), 0, 1);
-/** d_w = `caves.limits.waterDepth` (8 … 48 blocks). */
+/** d_w = `caves.limits.waterDepth` (8 … 48 blocks), the lake roof's depth. */
 const waterDepth = (): JsonValue => param('caves.limits.waterDepth');
 /** capTop = `caves.limits.capTop` (180 … 344; the default 344, above the world's top y 319, has no effect while bandSpan ≤ 16). */
 const capTop = (): JsonValue => param('caves.limits.capTop');
@@ -103,8 +104,8 @@ const floorGentle = (): JsonValue => clamp(mul(add(add(add(floorY(), c(8)), floo
  *   blocks outside the band (the family narrows), h_f = clamp((minY − s − y)·(1/8), 0, 1) + clamp((y − maxY − s)·(1/8),
  *   0, 1) over the next 8 (it closes: wherever h_f ≥ 1/2 the slot is ≥ −48 + 64 > 0 over every leaf value, the floor
  *   `fl` bounding the family below);
- * - the wet roof's gentle part: g_w = wet′·clamp((waterDepth + 8 + s − d)·(1/s), 0, 1) (D7); its steep part 128·h_w is
- *   added at voxel level, outside the slots (S_w in `steep`);
+ * - the wet roof's gentle part: g_w = wet′·clamp((waterDepth + 8 + s − d)·(1/s), 0, 1) (D7; under lakes only, SP7a
+ *   D24); its steep part 128·h_w is added at voxel level, outside the slots (S_w in `steep`);
  * - the island cap: g_i = clamp((y − capTop + 8 + s)·(1/s), 0, 1), h_i = clamp((y − capTop + 8)·(1/8), 0, 1), so with
  *   capTop 180 (floating_islands) the families narrow over y 156 … 172 and every corner at y ≥ 176 has h_i ≥ 1/2: no
  *   noise cave air at y ≥ 176, below ISLAND_RUN_MIN_BOTTOM (D8). At the default 344 both are 0 at every corner (y ≤ 320) while bandSpan ≤ 16;
@@ -132,7 +133,7 @@ const cap = (family: keyof typeof CAP_GENTLE, d: () => JsonValue): JsonValue => 
  * steep = S_w + S_b, the steep parts at voxel level, written once as `defs.steep` and added to the caves slot and to the
  * noodle (SP6a §1.4, D7; SP6b §5.2, D6: `defs.wetSteep` became `defs.steep`, so the root's paths stay):
  * - S_w = 128·h_w, h_w = wet′·clamp((waterDepth + 8 − d)·(1/8), 0, 1), d = interpolated(ref body): the wet roof's steep
- *   part, with wet′ read at the position. Wherever wet′ = 1 and d ≤ waterDepth + 4, S_w ≥ 64;
+ *   part (under lakes only, SP7a D24), with wet′ read at the position. Wherever wet′ = 1 and d ≤ waterDepth + 4, S_w ≥ 64;
  * - S_b = 128·clamp((floorY + 8 − y)·(1/8), 0, 1): the rock floor's, with floorY read at the position. At y ≤ floorY + 4,
  *   S_b ≥ 64 > F = 48, so no noise-family air lies there and none below `caves.floor.y` + 5 (floorY ≥ `caves.floor.y`).
  * Both are ≥ 0, so a voxel open with them is open without them; where either is ≥ 64 both sums are > 0 (each is ≥ −48 below it).

@@ -11,8 +11,9 @@
  *   operation order (world coordinates, so two columns compute the same doubles for one voxel); the voxel is carved when
  *   y > −64 (the bedrock stays), `d < 1 − σ`, and for worms `dy > floor`.
  * - **The shrink** σ = max(σ_w, σ_i, σ_u, σ_b), each linear in [0, 1], so a carver narrows to nothing over a span:
- *   σ_w = wet′·clamp((waterDepth + 8 + bandSpan − (densityTop − y))·(1/(8 + bandSpan)), 0, 1) (the wet roof: nothing
- *   within 16 blocks of a wet position's density top, full size from 40 below it at the defaults);
+ *   σ_w = wet′·clamp((waterDepth + 8 + bandSpan − (densityTop − y))·(1/(8 + bandSpan)), 0, 1) (the wet roof, under
+ *   lakes only since SP7a D24: nothing within 16 blocks of a lake position's density top, full size from 40 below it at
+ *   the defaults; under the sea and rivers σ_w is 0);
  *   σ_i = clamp((y − capTop + 8 + bandSpan)·(1/bandSpan), 0, 1) (the island cap: 1 from y 172 when capTop is 180);
  *   σ_u = clamp((y − maxY + 16)·(1/16), 0, 1) for underground worms only (nothing from maxY, full size below maxY − 16);
  *   σ_b = clamp((floorY + 8 + span − y)·(1/span), 0, 1) (the rock floor, SP6b spec §5.2, D6: nothing at y ≤ floorY + 8,
@@ -21,7 +22,8 @@
  *   at the voxel's (x, z), in the default tree's operation order (its `floorY` at voxel level; a unit test pins them
  *   equal), computed once per position by `carveColumn` and once per call by `carvedKind`.
  * - **wet′** = clamp(4·wetMask, 0, 1) with `wetMask` the column sample's bilinear readout at the voxel's (x, z), in the
- *   default tree's operation order (S_w's wet′ in `defs.steep`, `core/params/defaultTrees.ts`; a unit test pins them equal).
+ *   default tree's operation order (S_w's wet′ in `defs.steep`, `core/params/defaultTrees.ts`; a unit test pins them
+ *   equal); `wetMask` is 1 inside a lake mask only (SP7a D24).
  * - **The density top** (`densityTopOf`) of a position: its highest solid voxel after the density fill, before carving
  *   (y −64, the bedrock, never counts; −65 when there is none); with `islands.enabled` the top of its highest maximal
  *   solid run whose bottom lies below `ISLAND_RUN_MIN_BOTTOM` (water v0's base rule, `columnWaterV0`), so σ_w sees the
