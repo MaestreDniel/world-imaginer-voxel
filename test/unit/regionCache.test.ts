@@ -6,15 +6,19 @@ import { fnv1a64, fnv1a64Bytes, hex64, type Hash64 } from '../../src/core/hash';
 import { seedFromInput } from '../../src/core/seed';
 import { genKey, stageHashes } from '../../src/core/stage/hash';
 import { regionHash } from '../../src/metrics/region';
-import { finalAt, protoAt, REC_AUX_B } from '../../src/world/store/columnTable';
+import { fillColumnD } from '../../src/workers/worldJobs';
+import { WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { AIR, STONE } from '../../src/world/blocks/index';
+import { finalAt, protoAt, REC_AUX_B, REC_GEN_FLUID, REC_GEN_FLUID_MASK } from '../../src/world/store/columnTable';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import {
   encodeRegionDump, parseRegionDump, rebuildRegion, REGION_CACHE_DIR, REGION_CACHE_FORMAT, REGION_CACHE_PRUNE_MS, regionCacheKey,
   regionCachePath, SRC_KEY_SCOPE, srcKey, srcKeyOf, type RegionCacheHeader,
 } from '../harness/cache';
-import { paramsWith } from '../harness/gen';
+import { ctxFor, paramsWith } from '../harness/gen';
 import { genRegion, litRegionHash, type GenRegionOptions } from '../harness/region';
 
+const MiB = 1 << 20;
 const DIR = fileURLToPath(new URL('../.cache/regionCacheUnit/', import.meta.url));
 const SCRATCH = fileURLToPath(new URL('../.cache/regionCacheUnitSrc/', import.meta.url));
 
@@ -33,8 +37,8 @@ const header = (over: Partial<RegionCacheHeader> = {}): RegionCacheHeader => ({
 });
 
 describe('the cache key (§6.1)', () => {
-  test('REGION_CACHE_FORMAT is 4 (SP6a spec §3.3: the proto cave channel joined the dump); the dumps live in test/.cache/regions/<hex64 of the key>.bin', () => {
-    expect(REGION_CACHE_FORMAT).toBe(4);
+  test('REGION_CACHE_FORMAT is 5 (SP7a D23: the settled final fluid of the masked sections joined the dump); the dumps live in test/.cache/regions/<hex64 of the key>.bin', () => {
+    expect(REGION_CACHE_FORMAT).toBe(5);
     expect(REGION_CACHE_DIR).toBe(fileURLToPath(new URL('../.cache/regions/', import.meta.url)));
     const h = header();
     expect(regionCachePath(h)).toBe(join(REGION_CACHE_DIR, `${hex64(regionCacheKey(h))}.bin`));
@@ -292,7 +296,7 @@ describe('genRegion with the cache (§6.1)', () => {
     const r = await genRegion(base);
     expect(r.cacheHit).toBe(false);
     expect(r.view.hash()).toBe(first.view.hash());
-    expect(readFileSync(path).readUInt32LE(4)).toBe(4);
+    expect(readFileSync(path).readUInt32LE(4)).toBe(5);
     const old = new Date(Date.now() - 2 * REGION_CACHE_PRUNE_MS);
     utimesSync(join(DIR, name2), old, old);
     await genRegion({ ...base, cx0: 4 });
@@ -328,10 +332,14 @@ describe('the dump of D and L regions (SP4a spec §9.2, format 3; ruling P31)', 
         const [ls, ld] = [fs.sectionLight(sy), fd.sectionLight(sy)];
         expect(typeof ld).toBe(typeof ls);
         expect(typeof ld === 'number' ? ld : [...ld]).toEqual(typeof ls === 'number' ? ls : [...ls]);
-        // D shares the proto into the final set, and the rebuild shares it too.
+        // D shares the proto into the final set, the fluid of the sections its settle changed aside (the generated-fluid
+        // layer's, SP7a D23), and the rebuild does the same.
         expect(dst.table.ints[finalAt(bd, sy)]).toBe(dst.table.ints[protoAt(bd, sy)]);
-        expect(dst.table.ints[finalAt(bd, sy) + 2]).toBe(dst.table.ints[protoAt(bd, sy) + 1]);
+        const settled = ((src.table.ints[bs + REC_GEN_FLUID_MASK]! >>> sy) & 1) !== 0;
+        expect(dst.table.ints[finalAt(bd, sy) + 2]).toBe(dst.table.ints[settled ? bd + REC_GEN_FLUID + sy : protoAt(bd, sy) + 1]);
         expect(dst.table.ints[finalAt(bd, sy) + 4]).toBe(dst.table.ints[protoAt(bd, sy) + 2]);
+        const [ff, fe] = [fs.sectionFluid(sy), fd.sectionFluid(sy)];
+        expect(typeof fe === 'number' ? fe : [...fe]).toEqual(typeof ff === 'number' ? ff : [...ff]);
       }
       const aux = (v: typeof fs) => [...new Uint8Array(v.aux()!.worldSurfaceWG.buffer, v.aux()!.worldSurfaceWG.byteOffset, 4096)];
       expect(aux(fd)).toEqual(aux(fs));
@@ -345,6 +353,63 @@ describe('the dump of D and L regions (SP4a spec §9.2, format 3; ruling P31)', 
     const damaged = Buffer.from(b);
     damaged[damaged.length - 8 - 2 * 4096 - 100]! ^= 1;
     expect(parseRegionDump(damaged, h)).toBeNull();
+  });
+
+  test('a settled D column round-trips (SP7a D23, rulings P1, P10): final fluid, the generated-fluid layer and its mask, generated(), the versions and the proto hash equal', () => {
+    // A 3 × 3 around (0, 0) built through setProto: stone below y 60, air above, a water source at (8, 75, 8) of the
+    // centre in a stone face (lx ≥ 8, y 60 … 79) that falls west into the open; D settles the centre.
+    const src = createStore({ shared: false, maxBlockBytes: 16 * MiB, maxByteBytes: 16 * MiB });
+    const blocks = new Uint16Array(4096);
+    const fluid = new Uint8Array(4096);
+    for (let cz = -1; cz <= 1; cz++) {
+      for (let cx = -1; cx <= 1; cx++) {
+        const w = src.claimColumn(cx, cz, 0);
+        for (let sy = 0; sy < 24; sy++) {
+          for (let i = 0; i < 4096; i++) {
+            const lx = i & 15, lz = (i >> 4) & 15, y = 16 * sy + (i >> 8) - 64;
+            const centre = cx === 0 && cz === 0;
+            const spring = centre && lx === 8 && lz === 8 && y === 75;
+            blocks[i] = y < 60 || (centre && lx >= 8 && y < 80 && !spring) ? STONE : AIR;
+            fluid[i] = spring ? WATER_SOURCE : 0;
+          }
+          w.setProto(sy, blocks, fluid);
+        }
+        w.auxB().seedSections[0] = cx === 0 && cz === 0 ? 1 << ((75 + 64) >> 4) : 0;
+        w.aux();
+        w.commit(1);
+      }
+    }
+    expect(fillColumnD(src, ctxFor('42'), 0, 0, () => false)).toBe(true);
+    const bs = src.table.find(0, 0);
+    const mask = src.table.ints[bs + REC_GEN_FLUID_MASK]!;
+    expect(mask, 'D settled at least one section').not.toBe(0);
+    const hd: RegionCacheHeader = { genKey: [5, 6], srcKey: [7, 8], cx0: 0, cz0: 0, w: 1, h: 1, upTo: 'D' };
+    const dst = createStore({ shared: false, maxBlockBytes: 16 * MiB, maxByteBytes: 16 * MiB });
+    rebuildRegion(dst, parseRegionDump(encodeRegionDump(src, hd), hd)!);
+    const bd = dst.table.find(0, 0);
+    expect([dst.table.status(bd), dst.table.blockVersion(bd), dst.table.lightVersion(bd), dst.table.ints[bd + REC_GEN_FLUID_MASK]])
+      .toEqual([src.table.status(bs), src.table.blockVersion(bs), src.table.lightVersion(bs), mask]);
+    expect(hex64(regionHash(dst, 0, 0, 1, 1))).toBe(hex64(regionHash(src, 0, 0, 1, 1)));
+    const [fs, fd, gs, gd] = [src.final(0, 0)!, dst.final(0, 0)!, src.generated(0, 0)!, dst.generated(0, 0)!];
+    for (let sy = 0; sy < 24; sy++) {
+      const settled = ((mask >>> sy) & 1) !== 0;
+      // The layer references the final fluid entry in a settled section; elsewhere the final fluid is the proto's.
+      expect(dst.table.ints[bd + REC_GEN_FLUID + sy]).toBe(settled ? dst.table.ints[finalAt(bd, sy) + 2] : -1);
+      if (!settled) expect(dst.table.ints[finalAt(bd, sy) + 2]).toBe(dst.table.ints[protoAt(bd, sy) + 1]);
+      const [a, b] = [fs.sectionFluid(sy), fd.sectionFluid(sy)];
+      expect(typeof b).toBe(typeof a);
+      expect(typeof b === 'number' ? b : [...b]).toEqual(typeof a === 'number' ? a : [...a]);
+      const [ga, gb] = [gs.sectionFluid(sy), gd.sectionFluid(sy)];
+      expect(typeof gb === 'number' ? gb : [...gb]).toEqual(typeof ga === 'number' ? ga : [...ga]);
+    }
+    expect(gd.fluid(7, 70, 8)).toBe(fs.fluid(7, 70, 8));
+    expect(gd.fluid(7, 70, 8)).not.toBe(0);
+    // A final fluid entry that is neither the proto's nor the layer's is refused.
+    const settledSy = 31 - Math.clz32(mask & -mask);
+    const keep = src.table.ints[bs + REC_GEN_FLUID + settledSy]!;
+    src.table.ints[bs + REC_GEN_FLUID + settledSy] = -1;
+    expect(() => encodeRegionDump(src, hd)).toThrow(/generated-fluid layer/);
+    src.table.ints[bs + REC_GEN_FLUID + settledSy] = keep;
   });
 
   test("a dump of R needs R at upTo's status; 'MESH' is never dumped", async () => {

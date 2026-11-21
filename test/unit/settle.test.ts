@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { CAVE_BIOME, FLUID_CAP_LAVA, FLUID_CAP_WATER, MIN_Y } from '../../src/core/constants';
 import { Xoshiro128 } from '../../src/core/rng';
-import { createSettleScratch, settleWindow, type SettleScratch, type SettleSource } from '../../src/gen/fluids/settle';
+import { createSettleScratch, seedSectionsOf, settleWindow, type SettleScratch, type SettleSource } from '../../src/gen/fluids/settle';
 import { FLUID_LAVA, FLUID_WATER, LAVA_SOURCE, NO_FLUID, packFluid, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, COBBLESTONE, FLUID_MODE, SANDSTONE, STONE } from '../../src/world/blocks/index';
 import { FLUID_MODE_DISPLACE, FLUID_MODE_HOLD } from '../../src/world/blocks/kinds';
@@ -501,5 +501,44 @@ describe('settleWindow: the least fixed point, the visits and stop (SP7a spec §
     expect(run(48, 32)).toThrow(/square/);
     expect(run(2365, 2365)).toThrow(/square/);
     expect(run(2364, 2364)()).toBe(0);
+  });
+});
+
+describe('seedSectionsOf: aux B\'s seed sections (SP7a spec §1.7; rulings P17)', () => {
+  /** T's column arrays (index ((y + 64)·16 + lz)·16 + lx): solid below `ground`, air above, no fluid. */
+  const column = (ground: number): { solid: Uint8Array; fluid: Uint8Array; j: (lx: number, y: number, lz: number) => number } => {
+    const solid = new Uint8Array(98304);
+    const j = (lx: number, y: number, lz: number): number => (((y + 64) << 4) | lz) << 4 | lx;
+    for (let y = -64; y < ground; y++) for (let i = 0; i < 256; i++) solid[j(i & 15, y, i >> 4)] = 1;
+    return { solid, fluid: new Uint8Array(98304), j };
+  };
+
+  test('an all-water ocean section with no dry neighbour: unset (the air above is not read)', () => {
+    const c = column(0);
+    // Water fills y 0 … 31 (sections 4 and 5) over the stone; above it is air, below it stone.
+    for (let y = 0; y < 32; y++) for (let i = 0; i < 256; i++) c.fluid[c.j(i & 15, y, i >> 4)] = WATER_SOURCE;
+    expect(seedSectionsOf(c.solid, c.fluid)).toBe(0);
+  });
+
+  test('a sky-open water voxel beside dry air in the column: its section set', () => {
+    const c = column(0);
+    c.fluid[c.j(3, 10, 3)] = WATER_SOURCE;
+    // (4, 10, 3) is dry air beside it; y 10 lies in section (10 + 64) >> 4 = 4.
+    expect(seedSectionsOf(c.solid, c.fluid)).toBe(1 << 4);
+  });
+
+  test('a source in a rock face over open air: its section set', () => {
+    const c = column(320);
+    // A shaft of air at (5, 80 … 99, 5) under a source at (5, 100, 5), all else rock.
+    for (let y = 80; y <= 100; y++) c.solid[c.j(5, y, 5)] = 0;
+    c.fluid[c.j(5, 100, 5)] = WATER_SOURCE;
+    expect(seedSectionsOf(c.solid, c.fluid)).toBe(1 << ((100 + 64) >> 4));
+    // Sealed below as well, it seeds nothing.
+    c.solid[c.j(5, 99, 5)] = 1;
+    expect(seedSectionsOf(c.solid, c.fluid)).toBe(0);
+  });
+
+  test('other sizes throw', () => {
+    expect(() => seedSectionsOf(new Uint8Array(10), new Uint8Array(98304))).toThrow(RangeError);
   });
 });

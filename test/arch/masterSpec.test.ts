@@ -227,12 +227,20 @@
  * parenthesis, §3.8's "under lakes" (the CARVABLE sentence's pin re-pinned) and §6.4's U2 clause for
  * `caves.limits.waterDepth` on its bounded lake witness (rulings P13, P14); the SP6a describe's pins of that text moved
  * here.
+ * The settle in D (Task 16) lands item 4's bit-6 sentence (§2.2), item 7's Borders paragraph (§3.9; T's seed sections,
+ * D's cross-column seeds), item 9's D order (§3.12: step 2 settle, step 5 on settled output; the decorate stage 2) and
+ * item 10 (§3.14's radius argument, the caps 12 and 14, the seeds, `FLUID_MODE`, the two fixed points merged with lava
+ * winning, the abyss, the least fixed point, the budget as a target; §3.16's and §9's settle rows), and the Region
+ * cache paragraph's format 5 (rulings P1).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { SUB_PROJECTS, type SubProjectId } from '../../src/core/ids';
-import { CARVER_CACHE_PATHS, CARVER_WINDOW_R, GENERATOR_VERSION, ISLAND_RUN_MIN_BOTTOM } from '../../src/core/constants';
+import {
+  CARVER_CACHE_PATHS, CARVER_WINDOW_R, FLUID_CAP_LAVA, FLUID_CAP_WATER, FLUID_SEARCH_LAVA, FLUID_SEARCH_WATER, GENERATOR_VERSION,
+  ISLAND_RUN_MIN_BOTTOM,
+} from '../../src/core/constants';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { DEFAULT_SURFACE_RULES } from '../../src/core/params/defaultTrees';
 import { STAGES } from '../../src/core/stage/registry';
@@ -3620,8 +3628,7 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(abyss).not.toContain('Aquifers are disabled where');
     // The fast path.
     expect(block).toContain('A tagged voxel more than 4 blocks above that level (beyond the pressure\'s reach), with no lava cell among them and not below `aquifer.lavaLevel`, is air without a distance computation (amended by SP7a).');
-    // The Borders paragraph stays the master's until the settle in D (Task 16).
-    expect(block).toContain('**Borders.** Fluid voxels with an air neighbour are flagged `unsettled` for settle (3.14).');
+    // The Borders paragraph is pinned by its own test (item 7's Borders part, the settle in D).
     // The parameters equal DEFAULTS.aquifer.
     const n = q.noises;
     expect([n.floodedness, n.spread, n.lava, n.barrier].map((d) => [d.octaves, d.yScale])).toEqual([[1, 1], [1, 1], [1, 1], [1, 1]]);
@@ -3657,6 +3664,56 @@ describe('master spec amendments (SP7a §16)', () => {
     // Moved from the SP6b describe: the list's end and its "amended by".
     expect(line).toContain('and the SP6b goldens, `metrics/sp6bGoldens.ts`, and the SP7a goldens, `metrics/sp7aGoldens.ts`):');
     expect(line).toContain('(amended by SP1, SP2a, SP2b, SP3a, SP3c, SP3e, SP6a, SP6b and SP7a)');
+  });
+
+  test('§2.2\'s bit 6 (SP7a spec §16 item 4)', () => {
+    expect(text.split('\n')).toContain('| 6 | `unsettled` (a truncated generation front): never set in the proto; in the final set only on truncated fronts and water/lava contacts (SP7a) |');
+  });
+
+  test('§3.9\'s Borders paragraph (SP7a spec §16 item 7)', () => {
+    const borders = text.split('\n').filter((l) => l.startsWith('**Borders.**'));
+    expect(borders).toEqual(['**Borders.** T records the sections holding in-column seeds in aux B; D adds the cross-column seeds (3.14; amended by SP7a, the SP7a spec §1.7, §4.2). No voxel is flagged: the proto carries no bit 6.']);
+  });
+
+  test('§3.12\'s D order (SP7a spec §16 item 9)', () => {
+    const lines = text.split('\n');
+    const from = lines.indexOf('**Order inside D:**');
+    expect(from, 'no **Order inside D:**').toBeGreaterThanOrEqual(0);
+    expect(lines[from + 2]).toBe('2. Settle (3.14).');
+    expect(lines[from + 5]).toBe('5. Overlay K\'s diff (absolute states).');
+    expect(lines[from + 8]).toBe('SP7a: step 2 settle; step 5 overlays on settled output (a section the settle changed is rebuilt from its settled fluid, which the generated-fluid layer keeps as the column\'s generated value; step 6 reads the final blocks and fluid, so WORLD_SURFACE and MOTION_BLOCKING count the waterfalls; amended by SP7a, the SP7a spec §4.2).');
+    expect(STAGES.find((st) => st.id === 'decorate')!.version).toBe(2);
+  });
+
+  test('§3.14, §3.16 and §9\'s settle as built (SP7a spec §16 item 10)', () => {
+    const lines = text.split('\n');
+    const from = lines.findIndex((l) => l.startsWith('### 3.14 '));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('### 3.15 '));
+    expect(from, 'no §3.14').toBeGreaterThanOrEqual(0);
+    const block = lines.slice(from, to).join('\n');
+    expect(block).toContain('**Input:** the 3×3 proto fluid (T places the springs, which reach settle as proto sources; SP7a) plus the lava-lake sources from step 1 of D (SP8b).');
+    // The radius argument, the caps, the least fixed point, FLUID_MODE, the two fixed points and the abyss.
+    expect(block).toContain('Every fluid-deciding read is the proto\'s, never another front\'s result.');
+    expect(block).toContain('the least over the feeders that give the voxel its level (+1 per sideways step, +0 for a fall), never restarted by a new source');
+    expect(block).toContain('A front stops at **12 (water) and 14 (lava)**');
+    expect(block).toContain('cap + search ≤ 16 blocks of it (12 + 4 for water, 14 + 2 for lava)');
+    expect(block).toContain('the settled world is their least fixed point from the proto, whatever the processing order');
+    expect(block).toContain('Every non-AIR state\'s `FLUID_MODE` is read from the table');
+    expect(block).toContain('merged per voxel with lava winning (a contact, kept `unsettled` for SP7b\'s reactions)');
+    expect(block).toContain('A water front never enters a voxel whose cave nibble is the abyss.');
+    expect(block).not.toContain('**stops at 16**');
+    // The seeds and the budget as a target.
+    expect(block).toContain('**Seeds** (SP7a): T records the sections holding in-column seeds in aux B (`seedSections`;');
+    expect(block).toContain('D rescans those sections and adds the cross-column seeds of the 12 boundaries between the 3×3\'s columns.');
+    expect(block).toContain('**Budget:** 20k voxel visits per job as a target, with the visits recorded on the D bench row; never a visit cap');
+    expect(lines).toContain('| settle | 3 × 3 proto (with springs) | 3 × 3 proto | own final + the generated-fluid layer | every fluid-deciding read from the proto; cap + search ≤ 16 blocks (12 + 4 for water, 14 + 2 for lava) (amended by SP7a) |');
+    expect(lines).toContain('| settle | 3 × 3 with distance cap 12 / 14 (amended by SP7a) | own column (water walls); 2-cycle CA (not exact) |');
+    expect([FLUID_CAP_WATER, FLUID_CAP_LAVA, FLUID_CAP_WATER + FLUID_SEARCH_WATER, FLUID_CAP_LAVA + FLUID_SEARCH_LAVA]).toEqual([12, 14, 16, 16]);
+  });
+
+  test('the Region cache paragraph names format 5: the final fluid and the generated-fluid layer (rulings P1)', () => {
+    const line = text.split('\n').find((l) => l.startsWith('**Region cache** (`cache.ts`)'));
+    expect(line).toContain('Format 5 adds the final fluid and the generated-fluid layer of the sections D\'s settle changed (amended by SP7a).');
   });
 
   test('§6.4\'s DT2 row: probeBulk with barriers and aquiferProbe (SP7a spec §16 item 16)', () => {

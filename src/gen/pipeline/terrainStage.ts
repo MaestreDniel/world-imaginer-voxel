@@ -29,6 +29,9 @@
  * - Surface pass (SP3c §3, `surfacePass`): after a `stop()` poll (the 8th), the whole-column scan (with the cave bytes
  *   and the picker's pass, SP6b spec §3.1) and the compiled rules (fast path included) give every solid voxel at
  *   y −63 … 319 its final state in a column-wide state scratch.
+ * - Seed sections (SP7a spec §1.7): after the surface pass (a springs step goes before it, so springs seed too),
+ *   `seedSectionsOf` over the solidity and the fluid scratch, the sections holding an in-column seed, for aux B (T
+ *   writes no bit in the fluid byte: the proto carries no bit 6).
  * - Fill: y = −64 bedrock; a solid voxel its surface state; anything else air (with the aquifer's fluid byte).
  * - Sections 0 … 23 go to `setProto` in order with their cave tags (each channel uniform or dense), `stop()` before each
  *   (24 polls). On a
@@ -39,7 +42,7 @@
  * - Aux B: `surfaceBiomeQ[qz·4 + qx]` is the 2D biome of lattice point (qx, qz), qx, qz ∈ 0 … 3, before the zoom;
  *   `caveBiomeQ[(qy·4 + qz)·4 + qx]`, qy = (y + 64) >> 2, is 0 for a quart with no tagged voxel, else 1 + the cave
  *   biome most of its tagged voxels carry, a tie to the lower id (SP6b spec §2.2; wet tagged voxels count, barriers,
- *   whose tag the aquifer cleared, do not).
+ *   whose tag the aquifer cleared, do not); `seedSections[0]` the seed sections' mask.
  * The stage uses the SurfaceContext of its GenContext (`surfaceContextOf`, memoised), which holds the DensityContext.
  * Follows the gen determinism rules.
  * `terrainDensityDebug` is a test hook (SP3b §2.3, DT2): the same density phase, recording the bulk-evaluated values.
@@ -59,6 +62,7 @@ import { buildColumnSample, latticeIndex, newColumnSample, type ColumnSample } f
 import type { GenContext } from '../context';
 import { fillDensityColumn, type DensityBounds } from '../density/bounds';
 import { aquiferColumn, aquiferOf, createAquiferScratch } from '../fluids/aquifer';
+import { seedSectionsOf } from '../fluids/settle';
 import { surfaceContextOf } from '../surface/context';
 import { surfacePass } from '../surface/pass';
 import { fillSurfaceBiomes, type SurfaceScan } from '../surface/scan';
@@ -84,6 +88,7 @@ const BIOME_OF_PASS = caveBiomeOfPass;
 const NEW_PASS = newCaveColumnPass;
 const AQUIFER_OF = aquiferOf;
 const AQUIFER_COLUMN = aquiferColumn;
+const SEED_SECTIONS = seedSectionsOf;
 const NEW_AQUIFER_SCRATCH = createAquiferScratch;
 
 const SAMPLE = NEW_SAMPLE();
@@ -224,6 +229,7 @@ export function terrainStage(ctx: GenContext, cx: number, cz: number, w: Terrain
   SURFACE_BIOMES(s, ctx, BIOMES);
   if (stop()) return false;
   SURFACE_PASS(sc, s, SOLID, WATER_V, BIOMES, STATE, undefined, TAG, caveScan);
+  const seeds = SEED_SECTIONS(SOLID, FLUID_V);
   for (let sy = 0; sy < 24; sy++) {
     if (stop()) return false;
     const base = 4096 * sy;
@@ -260,6 +266,7 @@ export function terrainStage(ctx: GenContext, cx: number, cz: number, w: Terrain
     for (let qx = 0; qx < 4; qx++) q[qz * 4 + qx] = s.biome[LATTICE(qx, qz)]!;
   }
   caveBiomeQuarts(TAG, auxB.caveBiomeQ);
+  auxB.seedSections[0] = seeds;
   return true;
 }
 

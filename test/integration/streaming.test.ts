@@ -15,6 +15,9 @@
  *   section by section (the final set still shares the original proto's slots, D11, so this compares with the original).
  * - After `dispose()` and every job settled, every thread's limbo drains to 0 (bounded, 5 s) and every pool slot is
  *   free: no slot leaked through a free, a claim collision or the deferred reclamation.
+ * - SP7a: the `T(protoOnly)` check skips the fluid of the sections D's settle changed (their final fluid is the settled
+ *   one); Review Focus 5's flight (shuffled steps, a teleport, RD 4 → 6 → 4) over a window holding settled sections
+ *   equals `genRegion` on its inner 6 × 6, with no D issued while a column of its 3 × 3 was below Proto.
  */
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, expect, test } from 'vitest';
@@ -26,6 +29,7 @@ import { createThrottle } from '../../src/engine/throttle';
 import { createWorkerPool, type WorkerLike, type WorkerPool } from '../../src/engine/workerPool';
 import { payloadProblem } from '../../src/mesh/column';
 import type { ColumnView } from '../../src/world/store/api';
+import { REC_GEN_FLUID_MASK } from '../../src/world/store/columnTable';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { buildNodeTaskWorker } from '../harness/nodeWorker';
 import { genRegion, litRegionHash } from '../harness/region';
@@ -89,15 +93,20 @@ function sectionArray(v: ColumnView, sy: number, what: 'blocks' | 'fluid'): Uint
   return typeof f === 'number' ? new Uint8Array(4096).fill(f) : f.slice();
 }
 
-/** The first section where column (cx, cz)'s proto and final set differ, or null when they are equal. */
+/**
+ * The first section where column (cx, cz)'s proto and final set differ, or null when they are equal; the fluid of a
+ * section D's settle changed (the generated-fluid mask, SP7a D23) is the settled one, so only its blocks are compared.
+ */
 function protoVersusFinal(store: VoxelStore, cx: number, cz: number): string | null {
   store.enterRead();
   try {
     const p = store.proto(cx, cz);
     const f = store.final(cx, cz);
     if (p === null || f === null) return `(${cx}, ${cz}): proto ${p === null ? 'absent' : 'live'}, final ${f === null ? 'absent' : 'live'}`;
+    const mask = store.table.ints[store.table.find(cx, cz) + REC_GEN_FLUID_MASK]!;
     for (let sy = 0; sy < 24; sy++) {
       for (const what of ['blocks', 'fluid'] as const) {
+        if (what === 'fluid' && ((mask >>> sy) & 1) !== 0) continue;
         if (!Buffer.from(sectionArray(p, sy, what).buffer).equals(Buffer.from(sectionArray(f, sy, what).buffer))) return `(${cx}, ${cz}): ${what} of section ${sy}`;
       }
     }
@@ -270,3 +279,110 @@ test('the real coordinator and pool equal genRegion after the first fill, a flig
     pool.terminate();
   }
 }, 120_000);
+
+/**
+ * Review Focus 5 (SP7a): the 10 × 10 window at (−8, −3), whose inner 6 × 6 holds sections D's settle changes (spills
+ * and falls near the spawn's coast, from a scan of seed '42'); the camera over its centre.
+ */
+const SETTLE_WIN = { cx0: -8, cz0: -3, w: 10, h: 10 } as const;
+const SETTLE_INNER = { cx0: SETTLE_WIN.cx0 + 2, cz0: SETTLE_WIN.cz0 + 2, w: 6, h: 6 } as const;
+/** The camera positions of the flight inside the window, in a shuffled order (columns), each held a few frames. */
+const FLIGHT_STEPS: ReadonlyArray<readonly [number, number]> = [[-1, 4], [-7, -2], [-4, 6], [0, -3], [-8, 2], [-3, 1], [-6, 5], [-2, -1]];
+/** The window's centre column, where the camera ends. */
+const SETTLE_HOME = [-4, 1] as const;
+
+test('Review Focus 5 (SP7a): a flight in shuffled order with a teleport and RD 4 → 6 → 4 over a window holding settled spills equals genRegion on its inner 6 × 6, and no D was issued while a column of its 3 × 3 was below Proto', async () => {
+  const ref = await genRegion({ seed: '42', params: DEFAULTS, ...SETTLE_INNER, upTo: 'L', order: 'spiral', threads: 1 });
+  const expected = ref.view.litHash();
+  // The inner window holds settled sections (the test is not vacuous).
+  const refStore = ref.view.store;
+  let settled = 0;
+  for (let cz = SETTLE_INNER.cz0; cz < SETTLE_INNER.cz0 + SETTLE_INNER.h; cz++) {
+    for (let cx = SETTLE_INNER.cx0; cx < SETTLE_INNER.cx0 + SETTLE_INNER.w; cx++) {
+      if (refStore.table.ints[refStore.table.find(cx, cz) + REC_GEN_FLUID_MASK] !== 0) settled++;
+    }
+  }
+  expect(settled, 'columns of the inner 6 × 6 with a settled section').toBeGreaterThan(0);
+
+  const store = createStore({ shared: true, maxBlockBytes: 384 * MiB, maxByteBytes: 384 * MiB });
+  const pool: WorkerPool = createWorkerPool(2, spawnNode, { epochCells: store.epochs.cells, onWorkerDead: (t) => store.markDead(t) });
+  try {
+    await pool.attachStore(store.handles());
+    expect((await pool.configure('42', DEFAULTS)).type).toBe('ready');
+    const probe: Probe = { d: 0, deadProtos: [], protoOnly: 0, mismatches: [], inFlight: 0 };
+    const events: StreamEvent[] = [];
+    const live = new Set<number>();
+    const coordinator = createCoordinator({
+      jobs: watched(worldJobsOf(pool), store, probe),
+      store,
+      sink: {
+        stage(p) { live.add(colKey(p.cx, p.cz)); },
+        unstage: () => false,
+        remove(cx, cz) { live.delete(colKey(cx, cz)); },
+      },
+      throttle: createThrottle({ max: 1 }),
+      rd: 4,
+      rdMax: 6,
+      retainAllProtos: false,
+      strict: true,
+      generation: pool.epoch,
+      epoch: 1,
+      onEvent: (e) => { events.push(e); },
+    });
+    const at = (cx: number, cz: number): StreamCamera => ({ x: cx * 16 + 8, z: cz * 16 + 8, yawDeg: 0 });
+    const frames = async (cam: StreamCamera, n: number): Promise<void> => {
+      for (let k = 0; k < n; k++) {
+        coordinator.update(cam);
+        store.drain();
+        await new Promise((r) => setTimeout(r, FRAME_MS));
+        const f = events.find((e) => e.kind === 'fatal');
+        if (f !== undefined) throw new Error(`fatal: ${JSON.stringify(f)}`);
+      }
+    };
+    const until = async (cam: StreamCamera, done: () => boolean, ms: number, what: string): Promise<void> => {
+      const end = Date.now() + ms;
+      for (;;) {
+        await frames(cam, 1);
+        if (done()) return;
+        if (Date.now() > end) throw new Error(`${what}: not done after ${ms} ms`);
+      }
+    };
+
+    // The first entry, strict, as the page; then non-strict (dropped results are expected under a teleport).
+    await until(at(SETTLE_HOME[0], SETTLE_HOME[1]), () => coordinator.firstFill(), 90_000, 'the first fill');
+    coordinator.setStrict(false);
+    // The flight: each step held a few frames only, so streams cross column borders in a shuffled order mid-fill.
+    for (const [cx, cz] of FLIGHT_STEPS) await frames(at(cx, cz), 25);
+    // A teleport mid-stream, far away and back.
+    await frames(at(SETTLE_HOME[0] + 40, SETTLE_HOME[1] - 30), 25);
+    await frames(at(SETTLE_HOME[0], SETTLE_HOME[1]), 10);
+    // RD 4 → 6 → 4.
+    coordinator.setRenderDistance(6);
+    await frames(at(SETTLE_HOME[0], SETTLE_HOME[1]), 40);
+    coordinator.setRenderDistance(4);
+    await until(at(SETTLE_HOME[0], SETTLE_HOME[1]), () => coordinator.firstFill(), 90_000, 'the fill at home');
+
+    store.enterRead();
+    let hash: string;
+    try {
+      hash = litRegionHash(store, SETTLE_INNER.cx0, SETTLE_INNER.cz0, SETTLE_INNER.w, SETTLE_INNER.h);
+    } finally {
+      store.exitRead();
+    }
+    expect(hash).toBe(expected);
+    expect(probe.d).toBeGreaterThan(0);
+    expect(probe.deadProtos).toEqual([]);
+    expect(probe.mismatches).toEqual([]);
+    expect(events).toEqual([]);
+
+    coordinator.dispose();
+    const settleEnd = Date.now() + 30_000;
+    while (probe.inFlight > 0 && Date.now() < settleEnd) {
+      store.drain();
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(probe.inFlight).toBe(0);
+  } finally {
+    pool.terminate();
+  }
+}, 240_000);

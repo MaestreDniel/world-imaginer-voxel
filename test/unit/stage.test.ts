@@ -15,7 +15,7 @@ describe('registry', () => {
   test('the SP2a schema and stage list satisfy every invariant', () => {
     expect(checkRegistry(SCHEMA, STAGES)).toEqual([]);
     expect(ALL).toEqual(['climate', 'shape', 'surfaceEst', 'biome2d', 'terrain', 'decorate', 'light', 'mesh', 'lod', 'map']);
-    expect(STAGES.map((s) => `${s.id}@${s.version}`)).toEqual(['climate@1', 'shape@3', 'surfaceEst@2', 'biome2d@2', 'terrain@6', 'decorate@1', 'light@1', 'mesh@1', 'lod@1', 'map@2']);
+    expect(STAGES.map((s) => `${s.id}@${s.version}`)).toEqual(['climate@1', 'shape@3', 'surfaceEst@2', 'biome2d@2', 'terrain@6', 'decorate@2', 'light@1', 'mesh@1', 'lod@1', 'map@2']);
   });
   test('SP7a: terrain is version 6 and hashes the aquifer group; every aquifer.* leaf\'s badge is Terrain', () => {
     const terrain = STAGES.find((s) => s.id === 'terrain')!;

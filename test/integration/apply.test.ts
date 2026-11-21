@@ -21,7 +21,10 @@
  * 2400 → 600, which changes the window); a biome-table climate limit (`meadow`'s lower temperature bound −0.2 → 0,
  * which changes it too); D7 on the real store (one D's OK reply held after it committed, a configure adopted with the
  * same genKey, then the reply delivered: the column is Decorated, no D is issued for it again, and its L runs and
- * succeeds); and after unloading everything and draining the limbo, every pool slot is free.
+ * succeeds); Review Focus 2's aquifer half (SP7a): an aquifer Apply (`aquifer.barrierBand`, the default + 5) issued after
+ * 5 D jobs of the fill a terrain Apply starts, compared on the final params, with every D of the applied generation
+ * reading nine protos committed under it (the jobs' wrapper records each T's generation and each D's 3 × 3 at its
+ * issue); and after unloading everything and draining the limbo, every pool slot is free.
  */
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -40,6 +43,7 @@ import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
 import { createPreviewDriver, createReplayingCanvas, draftOf, type DriverClock, type PreviewDriver } from '../../src/ui/map/previewDriver';
 import { createApplyControl, createEpochs, updateAuxPolicy, type ApplyControl } from '../../src/ui/world/applyControl';
 import { RECLAIM_THREADS } from '../../src/world/store/reclaim';
+import { DEFAULTS } from '../../src/core/params/defaults';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { buildNodeTaskWorker } from '../harness/nodeWorker';
 import { genRegion, litRegionHash } from '../harness/region';
@@ -127,6 +131,14 @@ function realClock(): DriverClock & { clearAll(): void } {
   };
 }
 
+/**
+ * Review Focus 2 (SP7a): the leaf and value of the aquifer Apply, derived from the default so it always changes the
+ * world (rulings P30), and the number of a fill's D jobs that must have started before it is issued.
+ */
+const BARRIER = 'aquifer.barrierBand';
+const BARRIER_APPLIED = Math.min(DEFAULTS.aquifer.barrierBand + 5, 64);
+const D_BEFORE_APPLY = 5;
+
 /** One world job the coordinator issued, in issue order, and how it settled. */
 interface Issued {
   readonly stage: Stage;
@@ -151,6 +163,10 @@ interface World {
 }
 
 let world: World | null = null;
+/** Per column (colKey), the generation of its last T that settled 'ok' (its proto's epoch in the store). */
+const tGeneration = new Map<number, number>();
+/** Each D at its issue: its column, the pool's generation and the generations of its 3 × 3's protos, (dz, dx) order. */
+const dReads: Array<{ readonly cx: number; readonly cz: number; readonly generation: number; readonly sources: number[] }> = [];
 const events: StreamEvent[] = [];
 const problems: string[] = [];
 const issued: Issued[] = [];
@@ -270,8 +286,18 @@ beforeAll(async () => {
       const rec: Issued = { stage, cx, cz, settled: null, generation: -1 };
       issued.push(rec);
       inFlight++;
+      if (stage === 'D') {
+        const sources: number[] = [];
+        for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) sources.push(tGeneration.get(colKey(cx + dx, cz + dz)) ?? -1);
+        dReads.push({ cx, cz, generation: inner.generation(), sources });
+      }
       const job = inner.run(stage, cx, cz, protoOnly, edit);
-      job.then((out) => { rec.settled = 'ok'; rec.generation = out.generation; inFlight--; }, () => { rec.settled = 'rejected'; inFlight--; });
+      job.then((out) => {
+        rec.settled = 'ok';
+        rec.generation = out.generation;
+        if (stage === 'T') tGeneration.set(colKey(cx, cz), out.generation);
+        inFlight--;
+      }, () => { rec.settled = 'rejected'; inFlight--; });
       return job;
     },
     cancel: (pred) => inner.cancel(pred),
@@ -502,6 +528,30 @@ describe('Apply v1 on the real store (SP4c spec §8.5)', () => {
     expect(w.coordinator.isSkipped(held.cx, held.cz)).toBe(false);
     expect(windowHash()).toBe(await expected(w.session.state.params));
     clean('D7');
+  });
+
+  test('Review Focus 2 (SP7a): an aquifer Apply (aquifer.barrierBand) issued after 5 D jobs of a fill started: settled, the inner region equals genRegion on the new params, and no D of the applied epoch read a source column committed under an older epoch', async () => {
+    const w = W();
+    expect(BARRIER_APPLIED, 'the applied value differs from the default').not.toBe(DEFAULTS.aquifer.barrierBand);
+    expect(w.session.state.params.aquifer.barrierBand).toBe(DEFAULTS.aquifer.barrierBand);
+    // A terrain Apply starts a fill (every column from T); the aquifer Apply comes once 5 of its D jobs started. (The
+    // world's own first fill is the first case's, which compares it before the apply control is wired.)
+    const n = applies.length;
+    const mark = issued.length;
+    expect(w.session.set(AMP, AMP_APPLIED).ok).toBe(true);
+    await until(() => applies.length === n + 1 && issued.slice(mark).filter((j) => j.stage === 'D').length >= D_BEFORE_APPLY, SETTLE_MS, 'the fill\'s first D jobs');
+    const dStarted = issued.slice(mark).filter((j) => j.stage === 'D').length;
+    expect(dStarted).toBeGreaterThanOrEqual(D_BEFORE_APPLY);
+    const epoch = await applyEdit(() => { expect(w.session.set(BARRIER, BARRIER_APPLIED).ok).toBe(true); }, 'the aquifer Apply');
+    const applied = applies[n + 1]!;
+    expect([epoch, applied.from]).toEqual([applied.epoch, 'T']);
+    expect(w.session.state.params.aquifer.barrierBand).toBe(BARRIER_APPLIED);
+    expect(windowHash()).toBe(await expected(w.session.state.params));
+    // The epoch check: every D issued under the aquifer Apply's generation read nine protos committed under it.
+    const stale = dReads.filter((d) => d.generation >= applied.generation && d.sources.some((g) => g < applied.generation));
+    expect(stale.map((d) => `D (${d.cx}, ${d.cz}) at ${d.generation}: ${d.sources.join(' ')}`)).toEqual([]);
+    expect(dReads.filter((d) => d.generation >= applied.generation).length).toBeGreaterThan(0);
+    clean('the aquifer Apply');
   });
 
   test('after unloading everything and draining the limbo, every pool slot is free', async () => {

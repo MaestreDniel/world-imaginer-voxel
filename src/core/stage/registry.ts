@@ -18,7 +18,7 @@ export const STAGES: readonly StageDef[] = [
   { id: 'surfaceEst', version: 2, reads: ['shape'], params: [], checkpoint: 'columnSample' },
   { id: 'biome2d', version: 2, reads: ['climate', 'shape', 'surfaceEst'], params: ['biomes'], checkpoint: 'columnSample' },
   { id: 'terrain', version: 6, reads: ['shape', 'surfaceEst', 'biome2d'], params: ['density', 'surface', 'caves', 'aquifer'], checkpoint: 'proto' },
-  { id: 'decorate', version: 1, reads: ['terrain'], params: [], checkpoint: 'final' },
+  { id: 'decorate', version: 2, reads: ['terrain'], params: [], checkpoint: 'final' },
   { id: 'light', version: 1, reads: ['decorate'], params: [], checkpoint: 'none' },
   { id: 'mesh', version: 1, reads: ['light'], params: [], checkpoint: 'none' },
   { id: 'lod', version: 1, reads: ['surfaceEst', 'biome2d'], params: [], checkpoint: 'none' },

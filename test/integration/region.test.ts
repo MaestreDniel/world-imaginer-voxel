@@ -141,7 +141,7 @@ describe('genRegion up to L and MESH on 4 threads (SP4a spec §9.2, rulings P31,
     expect(lit).toBeGreaterThan(0);
   }, 120_000);
 
-  test('upTo L writes a format-4 dump (SP6a spec §3.3: the cave channel) and a second call reads it (no worker spawned)', async () => {
+  test('upTo L writes a format-5 dump (SP7a D23: the settled final fluid) and a second call reads it (no worker spawned)', async () => {
     rmSync(LDIR, { recursive: true, force: true });
     const o: GenRegionOptions = { ...base, w: 3, h: 2, order: 'shuffled', threads: 4, cache: true, cacheDir: LDIR };
     const cold = await genRegion({ ...o, threads: 1, cache: false });
@@ -150,7 +150,7 @@ describe('genRegion up to L and MESH on 4 threads (SP4a spec §9.2, rulings P31,
     expect(regionWorkersSpawned() - s0).toBe(4);
     const files = readdirSync(LDIR);
     expect(files).toHaveLength(1);
-    expect(readFileSync(`${LDIR}${files[0]!}`).readUInt32LE(4)).toBe(4);
+    expect(readFileSync(`${LDIR}${files[0]!}`).readUInt32LE(4)).toBe(5);
     const s1 = regionWorkersSpawned();
     const b = await genRegion(o);
     expect(regionWorkersSpawned()).toBe(s1);

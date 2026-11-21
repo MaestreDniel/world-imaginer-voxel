@@ -23,6 +23,10 @@
  *   SP7b's reactions); else its type's `packFluid(type, level, falling, unsettled)`; every voxel whose byte differs
  *   from its proto byte goes to the sink, in packed-position order, after convergence. A stop writes nothing.
  * `stop()` is polled before the first pop and once per 1,024 pops; `settleWindow` returns the pops (−1 on a stop).
+ * - **Seeds** (§1.7, rulings P17): one per-voxel predicate, `isInColumnSeed` (a fluid voxel whose voxel below, or a
+ *   horizontal neighbour inside the column, is passable with no fluid, `isSeedTarget`), read by T's `seedSectionsOf`
+ *   (aux B's `seedSections`) and by D's rescan of those sections; D's cross-column scan asks `isSeedTarget` across a
+ *   boundary. The cap skip of far seeds is `settleWindow`'s alone.
  * Follows the gen determinism rules.
  */
 import { caveBiomeOf, HEIGHT, MIN_Y } from '../../core/constants';
@@ -49,6 +53,75 @@ const CAP_OF = capOf;
 const PASSABLE = isPassable;
 const OFFERS = ruleOffers;
 const MODES = FLUID_MODE;
+
+/**
+ * One column's voxels as §1.7's seed test reads them (lx, lz 0 … 15, y −64 … 319): whether a voxel is passable
+ * (`isPassable` over its state) and its proto fluid byte.
+ */
+export interface SeedColumn {
+  passable(lx: number, y: number, lz: number): boolean;
+  fluid(lx: number, y: number, lz: number): number;
+}
+
+/** Whether (lx, y, lz) of `c` is a seed's target: passable with no fluid (§1.7). */
+export function isSeedTarget(c: SeedColumn, lx: number, y: number, lz: number): boolean {
+  return c.passable(lx, y, lz) && c.fluid(lx, y, lz) === DRY_BYTE;
+}
+
+/**
+ * §1.7's in-column seed (rulings P17): a fluid voxel of `c` whose voxel below, or a horizontal neighbour inside the
+ * column, is a seed target (`isSeedTarget`). The voxel above is not read (fluid never rises); y −64 has no voxel below.
+ */
+export function isInColumnSeed(c: SeedColumn, lx: number, y: number, lz: number): boolean {
+  if (c.fluid(lx, y, lz) === DRY_BYTE) return false;
+  return (y > Y_MIN && isSeedTarget(c, lx, y - 1, lz))
+    || (lx > 0 && isSeedTarget(c, lx - 1, y, lz)) || (lx < 15 && isSeedTarget(c, lx + 1, y, lz))
+    || (lz > 0 && isSeedTarget(c, lx, y, lz - 1)) || (lz < 15 && isSeedTarget(c, lx, y, lz + 1));
+}
+
+/**
+ * T's column arrays as a `SeedColumn`, read as T writes its proto: a non-solid voxel above the bedrock row is AIR
+ * (passable) with its fluid byte; a solid voxel and the bedrock row hold no fluid.
+ */
+const T_COLUMN = {
+  solid: null as Uint8Array | null,
+  fluids: null as Uint8Array | null,
+  passable(lx: number, y: number, lz: number): boolean {
+    return y > Y_MIN && this.solid![(((y - Y_MIN) << 4) | lz) << 4 | lx] === 0;
+  },
+  fluid(lx: number, y: number, lz: number): number {
+    return this.passable(lx, y, lz) ? this.fluids![(((y - Y_MIN) << 4) | lz) << 4 | lx]! : DRY_BYTE;
+  },
+};
+
+/**
+ * Aux B's `seedSections` of a T column (SP7a spec §1.7): the 24-bit mask whose bit sy is set when section sy holds an
+ * in-column seed (`isInColumnSeed`), over T's column-wide `solid` (1 solid) and `fluid` (proto fluid bytes) arrays,
+ * index `((y + 64)·16 + lz)·16 + lx` (98,304 entries each; the bedrock row y −64 is solid whatever `solid` says).
+ * Throws a RangeError on other sizes.
+ */
+export function seedSectionsOf(solid: Uint8Array, fluid: Uint8Array): number {
+  if (solid.length !== 98304 || fluid.length !== 98304) throw new RangeError('seedSectionsOf: solid and fluid need 98,304 entries');
+  T_COLUMN.solid = solid;
+  T_COLUMN.fluids = fluid;
+  let mask = 0;
+  try {
+    for (let sy = 0; sy < 24; sy++) {
+      const end = (sy + 1) << 12;
+      for (let j = sy << 12; j < end; j++) {
+        if (fluid[j] === DRY_BYTE) continue;
+        if (isInColumnSeed(T_COLUMN, j & 15, Y_MIN + (j >> 8), (j >> 4) & 15)) {
+          mask |= 1 << sy;
+          break;
+        }
+      }
+    }
+  } finally {
+    T_COLUMN.solid = null;
+    T_COLUMN.fluids = null;
+  }
+  return mask >>> 0;
+}
 
 /** The distance of a voxel the type has not reached. */
 const DIST_DRY = 255;

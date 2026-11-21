@@ -20,6 +20,7 @@ import {
 } from '../../src/gen/fluids/aquifer';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { completeNoiseDef } from '../../src/core/noise/types';
+import { seedSectionsOf } from '../../src/gen/fluids/settle';
 import { terrainSolidAt } from '../../src/gen/fluids/solidAt';
 import { caveBiomeQuarts, terrainDensityDebug, terrainStage, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf, type SurfaceContext } from '../../src/gen/surface/context';
@@ -394,7 +395,7 @@ function quartMajority(view: ColumnView): Uint8Array {
 }
 
 describe('aux B (§4)', () => {
-  test('surfaceBiomeQ[qz·4 + qx] is lattice point (qx, qz)\'s 2D biome; caveBiomeQ is the quarts\' majority (SP6b §2.2); the rest of the slot is 0', () => {
+  test('surfaceBiomeQ[qz·4 + qx] is lattice point (qx, qz)\'s 2D biome; caveBiomeQ is the quarts\' majority (SP6b §2.2); seedSections at 1552 (SP7a §1.7); the rest of the slot is 0', () => {
     let asymmetric = 0;
     for (const [, [cx, cz]] of FIXTURES) {
       const { store, view } = generate(ctx, cx, cz);
@@ -410,7 +411,7 @@ describe('aux B (§4)', () => {
       expect(b.caveBiomeQ).toEqual(quartMajority(view));
       const slot = new Uint8Array(b.caveBiomeQ.buffer, b.caveBiomeQ.byteOffset, 4096);
       let nonZero = 0;
-      for (let i = 1552; i < 4096; i++) if (slot[i] !== 0) nonZero++;
+      for (let i = 1556; i < 4096; i++) if (slot[i] !== 0) nonZero++;
       expect(nonZero).toBe(0);
     }
     // Some fixture's quarts are not symmetric, so the test pins qz·4 + qx against qx·4 + qz.
@@ -934,6 +935,26 @@ describe('T\'s aquifer step (SP7a §1.7, D17-D20)', () => {
     console.log(`T's aquifer step, ${name} (${cx}, ${cz}): ${barriers} barrier voxels (${[...states].join(', ')}), ${taggedWater} tagged fluid voxels, ${lava} lava, ${crack} positions with fluid above top`);
     if (name === 'sea' || name === 'coast') expect(taggedWater, `${name}: caves under the sea flood`).toBeGreaterThan(0);
   }, 300_000);
+
+  test('aux B seedSections equals seedSectionsOf over T\'s arrays on the six columns (SP7a §1.7)', () => {
+    const solid = new Uint8Array(98304);
+    const fluid = new Uint8Array(98304);
+    const masks: number[] = [];
+    for (const [name, c, [cx, cz]] of COLUMNS) {
+      const { view } = generate(c, cx, cz);
+      for (let j = 0; j < 98304; j++) {
+        const lx = j & 15, lz = (j >> 4) & 15, y = (j >> 8) - 64;
+        solid[j] = view.block(lx, y, lz) !== AIR ? 1 : 0;
+        fluid[j] = view.fluid(lx, y, lz);
+      }
+      const want = seedSectionsOf(solid, fluid);
+      expect([name, view.auxB()!.seedSections[0]]).toEqual([name, want]);
+      masks.push(want);
+    }
+    // The coast's shore and the cave water beside cave air seed somewhere; no mask reaches past section 23.
+    expect(masks.some((m) => m !== 0)).toBe(true);
+    for (const m of masks) expect(m >>> 24).toBe(0);
+  }, 120_000);
 
   test('the columns hold barriers and lava between them (the rules above are exercised)', () => {
     let barriers = 0, lava = 0;

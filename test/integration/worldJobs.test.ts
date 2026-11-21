@@ -12,6 +12,8 @@
  * holds lava), shown in process with a torch written into a neighbour's final set as D's overlay writes it.
  * SP5a (spec §2.5, D21): a D whose message carries a diff overlays it through the worker; the L that follows lights the
  * overlaid finals, its light equal to `lightRegion` run here over the same finals.
+ * SP7a (spec §4.2, D23): the workers' D settles as `fillColumnD` in process (the generated-fluid mask and the final
+ * fluid of the 3 × 3 around (0, 0), which holds settled sections).
  */
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, expect, test } from 'vitest';
@@ -25,7 +27,7 @@ import { createMeshScratch, payloadProblem } from '../../src/mesh/column';
 import { NO_FLUID } from '../../src/world/blocks/fluid';
 import { AIR, GLASS, STONE, TORCH } from '../../src/world/blocks/index';
 import type { ColumnDiff } from '../../src/world/store/api';
-import { STATUS_DECORATED, STATUS_PUBLISHED } from '../../src/world/store/columnTable';
+import { REC_GEN_FLUID_MASK, STATUS_DECORATED, STATUS_PUBLISHED } from '../../src/world/store/columnTable';
 import { copyLightRegion } from '../../src/world/store/padded';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { fillColumnD, fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
@@ -114,6 +116,21 @@ test('attach, configure, then T, D, L and MESH_COLUMN through two workers on the
     for (const [cx, cz] of square(1)) expect(fillColumnD(copy, ctx, cx, cz, NEVER)).toBe(true);
     expect(fillColumnL(copy, 0, 0, createLightScratch(), NEVER)).not.toBeNull();
     for (let sy = 0; sy < 24; sy++) expect(Buffer.from(lightOf(store, sy)).equals(Buffer.from(lightOf(copy, sy))), `sy ${sy}`).toBe(true);
+    // SP7a (spec §4.2, D23): the workers' D settles as in process: over the 3 × 3 around (0, 0), the generated-fluid mask
+    // and the final fluid equal the copy's, and the 3 × 3 holds a settled section.
+    let settled = 0;
+    for (const [cx, cz] of square(1)) {
+      const [a, b] = [store.table.find(cx, cz), copy.table.find(cx, cz)];
+      const mask = store.table.ints[a + REC_GEN_FLUID_MASK]!;
+      expect([cx, cz, mask]).toEqual([cx, cz, copy.table.ints[b + REC_GEN_FLUID_MASK]]);
+      if (mask !== 0) settled++;
+      const [fw, fc] = [store.final(cx, cz)!, copy.final(cx, cz)!];
+      for (let sy = 0; sy < 24; sy++) {
+        const [x, y] = [fw.sectionFluid(sy), fc.sectionFluid(sy)];
+        expect(typeof x === 'number' ? x : Buffer.from(x).toString('hex'), `(${cx}, ${cz}) fluid of ${sy}`).toEqual(typeof y === 'number' ? y : Buffer.from(y).toString('hex'));
+      }
+    }
+    expect(settled, 'columns of the 3 × 3 with a settled section').toBeGreaterThan(0);
 
     // SP4b: the attach is idempotent per worker; T(protoOnly) regenerates (0, 0)'s freed proto as it was.
     await pool.attachStore(store.handles());

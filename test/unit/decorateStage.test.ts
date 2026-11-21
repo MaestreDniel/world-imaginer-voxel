@@ -1,22 +1,28 @@
 /**
- * The D skeleton (SP4a spec §3.1, §2.3, §2.5): `decorateStage` over a 3 × 3 shared store filled to T by `fillColumnT`,
- * through `fillColumnD` on the centre. With zero features the final set shares the proto slots, the final heightmaps
- * equal the proto's where they coincide, and a stop before the shares leaves the column as T committed it.
- * SP5a (spec §2.5, D21): D's diff overlay. With a diff, the final equals the proto plus the entries, the proto keeps its
- * slots and values and the heightmaps are the final's; without one, the output is today's (a fixture recorded before the
- * overlay existed). `REC_DIFF_FLAG` is set only by an overlay that writes a state emitting light (SP5a D23; SP5b lever
- * 18f): generated terrain holds no emitter, so an overlay of anything else gives L's block-light scan nothing to find.
+ * D (SP4a spec §3.1, §2.3, §2.5): `decorateStage` over a 3 × 3 shared store filled to T by `fillColumnT`, through
+ * `fillColumnD` on the centre. With zero features the final set shares the proto's blocks slots and, outside the
+ * sections SP7a's settle changes, its fluid slots; the final heightmaps are the final's; a stop leaves the column as T
+ * committed it.
+ * SP5a (spec §2.5, D21): D's diff overlay. With a diff, the final equals the generated value (the settled proto) plus
+ * the entries, the proto keeps its slots and values and the heightmaps are the final's. `REC_DIFF_FLAG` is set only by
+ * an overlay that writes a state emitting light (SP5a D23; SP5b lever 18f): generated terrain holds no emitter, so an
+ * overlay of anything else gives L's block-light scan nothing to find.
+ * SP7a (spec §4.2, D22, D23): D's settle at step 2 on synthetic 3 × 3 stores built through `setProto`: the in-column
+ * seeds through aux B's `seedSections`, the 12 boundaries' cross-column seeds, the cap, the shared and replaced
+ * entries, the generated-fluid layer, the overlay on settled output, the heightmaps counting a waterfall, the stops, and
+ * Review Focus 5's missing source column.
  */
 import { beforeAll, describe, expect, test } from 'vitest';
 import { STAGES } from '../../src/core/stage/registry';
 import { hex64, fnv1a64Bytes } from '../../src/core/hash';
-import { decorateStage } from '../../src/gen/pipeline/decorateStage';
+import { decorateStage, decorateStatsInto } from '../../src/gen/pipeline/decorateStage';
+import { seedSectionsOf } from '../../src/gen/fluids/settle';
 import { writeFinalHeightmaps } from '../../src/gen/pipeline/finalHeightmaps';
 import { fillColumnT } from '../../src/metrics/region';
-import { NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { FLUID_WATER, NO_FLUID, packFluid, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, GLASS, OAK_PLANKS, STONE, TORCH } from '../../src/world/blocks/index';
 import type { AuxBView, AuxView, ColumnDiff, ColumnWriter } from '../../src/world/store/api';
-import { finalAt, protoAt, SECTIONS, STATUS_DECORATED, STATUS_PROTO } from '../../src/world/store/columnTable';
+import { finalAt, protoAt, REC_GEN_FLUID, REC_GEN_FLUID_MASK, SECTIONS, STATUS_DECORATED, STATUS_PROTO } from '../../src/world/store/columnTable';
 import { FINAL_BLOCKS, FINAL_FLUID, PROTO_BLOCKS, PROTO_FLUID } from '../../src/world/store/section';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { fillColumnD } from '../../src/workers/worldJobs';
@@ -89,8 +95,9 @@ function recordingWriter(): { w: ColumnWriter; calls: string[] } {
 
 describe('decorateStage and fillColumnD (SP4a spec §3.1)', () => {
   let s: VoxelStore;
-  /** The number of `stop` polls of a whole run. */
+  /** The number of `stop` polls of a whole run, and its settle's visits. */
   let polls = 0;
+  let visits = 0;
   /** The centre's status and versions after each stopped or throwing D, in order: always, at the last poll, a throw. */
   const stopped: Array<{ result: boolean | 'threw'; status: number; versions: number[] }> = [];
   let tVersions: number[] = [];
@@ -101,6 +108,9 @@ describe('decorateStage and fillColumnD (SP4a spec §3.1)', () => {
     const nb = s.neighborhood(CX, CZ);
     const r = recordingWriter();
     expect(decorateStage(ctx, nb, r.w, () => { polls++; return false; })).toBe(true);
+    const stats = new Int32Array(3);
+    decorateStatsInto(stats);
+    visits = stats[0]!;
 
     stopped.push({ result: fillColumnD(s, ctx, CX, CZ, () => true), status: statusOf(s, CX, CZ), versions: versionsOf(s) });
     let n = 0;
@@ -120,16 +130,19 @@ describe('decorateStage and fillColumnD (SP4a spec §3.1)', () => {
     expect(tVersions).toEqual([1, 0]);
   });
 
-  test('the skeleton polls stop between steps: the nine source columns times the ten steps, then once more', () => {
-    expect(polls).toBe(9 * 10 + 1);
+  test('D polls stop between steps (the nine source columns times the ten steps, then once more) and once per 1,024 settle visits', () => {
+    expect(polls).toBe(9 * 10 + 1 + Math.ceil(visits / 1024));
+    expect(visits, 'the coast settles something').toBeGreaterThan(0);
   });
 
-  test('a stop at the last poll (just before the shares) writes nothing', () => {
+  test('a stop at the last step poll (before the settle) or at the last settle poll writes nothing', () => {
     const nb = s.neighborhood(CX, CZ);
-    const r = recordingWriter();
-    let n = 0;
-    expect(decorateStage(ctx, nb, r.w, () => ++n === polls)).toBe(false);
-    expect(r.calls).toEqual([]);
+    for (const at of [9 * 10 + 1, polls]) {
+      const r = recordingWriter();
+      let n = 0;
+      expect(decorateStage(ctx, nb, r.w, () => ++n === at)).toBe(false);
+      expect(r.calls, `stop at poll ${at}`).toEqual([]);
+    }
   });
 
   test('a stop before the shares (or a throw) leaves status 1 and the versions unchanged', () => {
@@ -148,8 +161,8 @@ describe('decorateStage and fillColumnD (SP4a spec §3.1)', () => {
     for (let k = 0; k < 9; k++) if (k !== 4) expect([v[2 * k], v[2 * k + 1]]).toEqual([1, 0]);
   });
 
-  test('final blocks and fluid equal proto at every voxel; the light is all zero', () => {
-    const p = s.proto(CX, CZ)!;
+  test('final blocks equal proto at every voxel, final fluid the generated value (the settled sections, else the proto\'s); the light is all zero', () => {
+    const p = s.generated(CX, CZ)!;
     const f = s.final(CX, CZ)!;
     for (let sy = 0; sy < SECTIONS; sy++) {
       const pb = p.sectionBlocks(sy);
@@ -175,10 +188,14 @@ describe('decorateStage and fillColumnD (SP4a spec §3.1)', () => {
     }
   });
 
-  test('every dense proto slot now has refcount 2 (the neighbours\' stay 1)', () => {
+  test('every dense proto slot now has refcount 2 but the fluid of a settled section, 1 (the neighbours\' stay 1)', () => {
     const slots = denseProtoSlots(s, CX, CZ);
     expect(slots.length).toBeGreaterThan(0);
-    for (const slot of slots) expect(refcount(s, slot)).toBe(2);
+    const base = s.table.find(CX, CZ);
+    const mask = s.table.ints[base + REC_GEN_FLUID_MASK]!;
+    const settled = new Set<number>();
+    for (let sy = 0; sy < SECTIONS; sy++) if (((mask >>> sy) & 1) !== 0) settled.add(s.table.ints[protoAt(base, sy) + PROTO_FLUID]!);
+    for (const slot of slots) expect(refcount(s, slot)).toBe(slot[0] === 'bytes' && settled.has(slot[1]) ? 1 : 2);
     for (let dz = -1; dz <= 1; dz++) {
       for (let dx = -1; dx <= 1; dx++) {
         if (dx === 0 && dz === 0) continue;
@@ -187,9 +204,12 @@ describe('decorateStage and fillColumnD (SP4a spec §3.1)', () => {
     }
   });
 
-  test('worldSurface equals worldSurfaceWG and oceanFloor equals oceanFloorWG at every position (zero features)', () => {
-    const a = s.final(CX, CZ)!.aux()!;
-    expect([...a.worldSurface]).toEqual([...a.worldSurfaceWG]);
+  test('the final heightmaps are writeFinalHeightmaps over the final; oceanFloor equals oceanFloorWG at every position (zero features)', () => {
+    const f = s.final(CX, CZ)!;
+    const a = f.aux()!;
+    const want = recordingWriter().w.aux();
+    writeFinalHeightmaps((lx, y, lz) => f.block(lx, y, lz), (lx, y, lz) => f.fluid(lx, y, lz), want);
+    for (const k of ['worldSurface', 'motionBlocking', 'oceanFloor', 'lightBlocking'] as const) expect([...a[k]], k).toEqual([...want[k]]);
     expect([...a.oceanFloor]).toEqual([...a.oceanFloorWG]);
     // The coast column holds both sea and land, so the two maps differ somewhere.
     expect([...a.worldSurface]).not.toEqual([...a.oceanFloor]);
@@ -203,8 +223,8 @@ describe('decorateStage and fillColumnD (SP4a spec §3.1)', () => {
     expect(s.final(CX, CZ)!.aux()!.tintTH.every((v) => v === 0)).toBe(true);
   });
 
-  test("STAGES' decorate version is 1", () => {
-    expect(STAGES.find((d) => d.id === 'decorate')!.version).toBe(1);
+  test("STAGES' decorate version is 2 (SP7a's settle)", () => {
+    expect(STAGES.find((d) => d.id === 'decorate')!.version).toBe(2);
   });
 });
 
@@ -214,12 +234,19 @@ function auxHash(a: AuxView): string {
   return hex64(fnv1a64Bytes(new Uint8Array(Buffer.concat(fields.map((v) => Buffer.from(v.buffer, v.byteOffset, v.byteLength))))));
 }
 
-/**
- * The centre's aux A after D without a diff, and its [blockVersion, lightVersion], recorded before SP5a's overlay
- * existed (seed '42', column (−1667, −2000)).
- */
-const AUX_FIXTURE = '3074899a9d1d6735';
+/** The centre's [blockVersion, lightVersion] after D, with or without a diff. */
 const VERSIONS_FIXTURE = [2, 0];
+
+/** The centre's generated value (state << 8 | fluid) at (sy, idx): the proto's blocks, the settled fluid (SP7a D23). */
+function generatedValue(s: VoxelStore): (sy: number, idx: number) => number {
+  const g = s.generated(CX, CZ)!;
+  return (sy, idx) => {
+    const lx = idx & 15;
+    const lz = (idx >> 4) & 15;
+    const y = sy * 16 + (idx >> 8) - 64;
+    return (g.block(lx, y, lz) << 8) | g.fluid(lx, y, lz);
+  };
+}
 
 /** The proto's 24 sections of (CX, CZ): its table entries and a copy of its values. */
 function protoSnapshot(s: VoxelStore): { entries: number[]; blocks: Uint16Array[]; fluid: Uint8Array[] } {
@@ -270,7 +297,7 @@ describe("D's diff overlay (SP5a spec §2.5, D21)", () => {
     return { sy: Uint8Array.from(sy), idx: Uint16Array.from(idx), value: Uint32Array.from(value) };
   }
 
-  test('with a diff of 40 entries over 3 sections: the final equals proto + entries, the proto\'s slots unchanged, REC_DIFF_FLAG set (its torches emit), the heightmaps equal writeFinalHeightmaps over the final', () => {
+  test('with a diff of 40 entries over 3 sections: the final equals the generated value (the settled proto) + entries, the proto\'s slots unchanged, REC_DIFF_FLAG set (its torches emit), the heightmaps equal writeFinalHeightmaps over the final', () => {
     const s = filledT();
     const before = protoSnapshot(s);
     const d = diff40();
@@ -282,7 +309,8 @@ describe("D's diff overlay (SP5a spec §2.5, D21)", () => {
 
     const entry = new Map<number, number>();
     for (let k = 0; k < d.sy.length; k++) entry.set(d.sy[k]! * 4096 + d.idx[k]!, d.value[k]!);
-    expectFinal(s, (sy, idx) => entry.get(sy * 4096 + idx) ?? ((before.blocks[sy]![idx]! << 8) | before.fluid[sy]![idx]!));
+    const gen = generatedValue(s);
+    expectFinal(s, (sy, idx) => entry.get(sy * 4096 + idx) ?? gen(sy, idx));
 
     // The proto keeps its entries and values; a section the overlay replaced no longer shares the proto's slots.
     const after = protoSnapshot(s);
@@ -318,20 +346,25 @@ describe("D's diff overlay (SP5a spec §2.5, D21)", () => {
     }
   });
 
-  test('without a diff: the final shares the proto\'s slots and the versions and aux equal today\'s (a fixture recorded before the change)', () => {
+  test('without a diff: the final shares the proto\'s blocks slots, and its fluid slots outside the settled sections; versions [2, 0]', () => {
     const s = filledT();
     expect(fillColumnD(s, ctx, CX, CZ, NEVER)).toBe(true);
     const base = s.table.find(CX, CZ);
+    const mask = s.table.ints[base + REC_GEN_FLUID_MASK]!;
     for (let sy = 0; sy < SECTIONS; sy++) {
       expect(s.table.ints[finalAt(base, sy) + FINAL_BLOCKS], `blocks of ${sy}`).toBe(s.table.ints[protoAt(base, sy) + PROTO_BLOCKS]);
+      if (((mask >>> sy) & 1) !== 0) continue;
       expect(s.table.ints[finalAt(base, sy) + FINAL_FLUID], `fluid of ${sy}`).toBe(s.table.ints[protoAt(base, sy) + PROTO_FLUID]);
     }
     expect(versionsOf(s)).toEqual(VERSIONS_FIXTURE);
-    expect(auxHash(s.final(CX, CZ)!.aux()!)).toBe(AUX_FIXTURE);
     expect(s.diffFlag(CX, CZ)).toBe(false);
   });
 
-  test('a diff equal to the proto everywhere leaves the column\'s values unchanged and the column unflagged (generated terrain holds no emitter)', () => {
+  test('a diff equal to the generated value everywhere leaves the column\'s values and aux unchanged and the column unflagged (generated terrain holds no emitter)', () => {
+    const plain = filledT();
+    expect(fillColumnD(plain, ctx, CX, CZ, NEVER)).toBe(true);
+    const gen = generatedValue(plain);
+    const aux = auxHash(plain.final(CX, CZ)!.aux()!);
     const s = filledT();
     const before = protoSnapshot(s);
     const n = SECTIONS * 4096;
@@ -341,13 +374,13 @@ describe("D's diff overlay (SP5a spec §2.5, D21)", () => {
       const idx = k & 4095;
       d.sy[k] = sy;
       d.idx[k] = idx;
-      d.value[k] = (before.blocks[sy]![idx]! << 8) | before.fluid[sy]![idx]!;
+      d.value[k] = gen(sy, idx);
     }
     expect(fillColumnD(s, ctx, CX, CZ, NEVER, d)).toBe(true);
-    expectFinal(s, (sy, idx) => (before.blocks[sy]![idx]! << 8) | before.fluid[sy]![idx]!);
+    expectFinal(s, gen);
     expect(protoSnapshot(s).entries).toEqual(before.entries);
     expect(versionsOf(s)).toEqual(VERSIONS_FIXTURE);
-    expect(auxHash(s.final(CX, CZ)!.aux()!)).toBe(AUX_FIXTURE);
+    expect(auxHash(s.final(CX, CZ)!.aux()!)).toBe(aux);
     expect(s.diffFlag(CX, CZ)).toBe(false);
   });
 
@@ -363,5 +396,237 @@ describe("D's diff overlay (SP5a spec §2.5, D21)", () => {
     expect(flagAfter(TORCH << 8)).toBe(true);
     expect(flagAfter(AIR << 8)).toBe(false);
     expect(flagAfter(OAK_PLANKS << 8)).toBe(false);
+  });
+});
+
+/** K of the synthetic 3 × 3 stores, and its world origin. */
+const KX = 2;
+const KZ = 3;
+const X0 = 16 * KX;
+const Z0 = 16 * KZ;
+const water = (level: number, falling = false, unsettled = false): number => packFluid(FLUID_WATER, level, falling, unsettled);
+
+/**
+ * A 3 × 3 store around (KX, KZ) built through `setProto`: each voxel `world(x, y, z)` (state << 8 | fluid), cave byte 0;
+ * aux B's `seedSections` is `seedSectionsOf` over the column, as T writes it. Columns `skip` names stay unclaimed.
+ */
+function synthetic(world: (x: number, y: number, z: number) => number, skip: (cx: number, cz: number) => boolean = () => false): VoxelStore {
+  const s = createStore({ shared: true, maxBlockBytes: 16 * MiB, maxByteBytes: 16 * MiB });
+  const blocks = new Uint16Array(4096);
+  const fluid = new Uint8Array(4096);
+  const solid = new Uint8Array(98304);
+  const fluids = new Uint8Array(98304);
+  for (let cz = KZ - 1; cz <= KZ + 1; cz++) {
+    for (let cx = KX - 1; cx <= KX + 1; cx++) {
+      if (skip(cx, cz)) continue;
+      const w = s.claimColumn(cx, cz, 0);
+      for (let sy = 0; sy < SECTIONS; sy++) {
+        for (let i = 0; i < 4096; i++) {
+          const v = world(16 * cx + (i & 15), 16 * sy + (i >> 8) - 64, 16 * cz + ((i >> 4) & 15));
+          blocks[i] = v >>> 8;
+          fluid[i] = v & 255;
+          solid[4096 * sy + i] = v >>> 8 === AIR ? 0 : 1;
+          fluids[4096 * sy + i] = v & 255;
+        }
+        w.setProto(sy, blocks, fluid);
+      }
+      w.auxB().seedSections[0] = seedSectionsOf(solid, fluids);
+      w.commit(1);
+    }
+  }
+  return s;
+}
+
+/** D of (KX, KZ) on `s` through `fillColumnD`, then the stats of the run. */
+function runD(s: VoxelStore, diff: ColumnDiff | null = null): { visits: number; seeds: number; changed: number } {
+  expect(fillColumnD(s, ctx, KX, KZ, NEVER, diff)).toBe(true);
+  const out = new Int32Array(3);
+  decorateStatsInto(out);
+  return { visits: out[0]!, seeds: out[1]!, changed: out[2]! };
+}
+
+/** K's final descriptors (blocks, fluid per section), its layer mask and its 24 layer entries. */
+function finalState(s: VoxelStore, cx = KX, cz = KZ): number[] {
+  const base = s.table.find(cx, cz);
+  const out: number[] = [];
+  for (let sy = 0; sy < SECTIONS; sy++) out.push(s.table.ints[finalAt(base, sy) + FINAL_BLOCKS]!, s.table.ints[finalAt(base, sy) + FINAL_FLUID]!);
+  out.push(s.table.ints[base + REC_GEN_FLUID_MASK]!);
+  for (let sy = 0; sy < SECTIONS; sy++) out.push(s.table.ints[base + REC_GEN_FLUID + sy]!);
+  return out;
+}
+
+/**
+ * Stone below y 60 and air above, with a rock face in K: stone at lx ≥ 8 for y 60 … 79, a water source in it at
+ * (8, 75, 8) (a spring as T writes it) whose outlet (7, 75, 8) is open air inside K.
+ */
+const FACE_SOURCE = [X0 + 8, 75, Z0 + 8] as const;
+function rockFace(x: number, y: number, z: number): number {
+  if (y < 60) return STONE << 8;
+  if (x === FACE_SOURCE[0] && y === FACE_SOURCE[1] && z === FACE_SOURCE[2]) return (AIR << 8) | WATER_SOURCE;
+  if (x >= X0 + 8 && x < X0 + 16 && z >= Z0 && z < Z0 + 16 && y < 80) return STONE << 8;
+  return AIR << 8;
+}
+
+describe("D's settle (SP7a spec §4.2, D22, D23)", () => {
+  test('a proto source in a rock face whose outlet lies inside its own column falls in D through seedSections: the fall\'s voxels falling, the spill below', () => {
+    const s = synthetic(rockFace);
+    expect(s.proto(KX, KZ)!.auxB()!.seedSections[0]).toBe(1 << ((75 + 64) >> 4));
+    const r = runD(s);
+    expect(r.seeds).toBe(1);
+    const f = s.final(KX, KZ)!;
+    expect(f.fluid(8, 75, 8)).toBe(WATER_SOURCE);
+    expect(f.fluid(7, 75, 8)).toBe(water(1));
+    for (let y = 60; y <= 74; y++) expect([y, f.fluid(7, y, 8)]).toEqual([y, water(0, true)]);
+    // The landing spreads as a source would: level 1 beside it, 7 at Manhattan distance 7 on the floor.
+    expect(f.fluid(6, 60, 8)).toBe(water(1));
+    expect(f.fluid(7, 60, 7)).toBe(water(1));
+    expect(f.fluid(0, 60, 8)).toBe(water(7));
+    expect(f.fluid(7, 59, 8)).toBe(NO_FLUID);
+  });
+
+  test('seeds across each of the 12 boundaries are found: one seed per boundary, each spilling across it', () => {
+    // [the source A at the boundary, its neighbour B across it]; every other side of A is stone, the floor y < 60.
+    const cases: Array<[readonly [number, number], readonly [number, number]]> = [
+      [[X0 - 1, Z0 - 1], [X0, Z0 - 1]], [[X0 + 16, Z0 - 1], [X0 + 15, Z0 - 1]], [[X0 - 1, Z0 + 2], [X0, Z0 + 2]],
+      [[X0 + 16, Z0 + 2], [X0 + 15, Z0 + 2]], [[X0 - 1, Z0 + 16], [X0, Z0 + 16]], [[X0 + 16, Z0 + 16], [X0 + 15, Z0 + 16]],
+      [[X0 - 1, Z0 - 1], [X0 - 1, Z0]], [[X0 + 16, Z0 - 1], [X0 + 16, Z0]], [[X0 + 8, Z0 - 1], [X0 + 8, Z0]],
+      [[X0 + 8, Z0 + 16], [X0 + 8, Z0 + 15]], [[X0 - 1, Z0 + 16], [X0 - 1, Z0 + 15]], [[X0 + 16, Z0 + 16], [X0 + 16, Z0 + 15]],
+    ];
+    const inK = (x: number, z: number): boolean => x >= X0 && x < X0 + 16 && z >= Z0 && z < Z0 + 16;
+    const boundaries = new Set<string>();
+    for (const [[ax, az], [bx, bz]] of cases) {
+      boundaries.add([`${Math.floor(ax / 16)},${Math.floor(az / 16)}`, `${Math.floor(bx / 16)},${Math.floor(bz / 16)}`].sort().join(' | '));
+      const s = synthetic((x, y, z) => {
+        if (y < 60) return STONE << 8;
+        if (y > 60) return AIR << 8;
+        if (x === ax && z === az) return (AIR << 8) | WATER_SOURCE;
+        // A's other three sides are stone.
+        if (Math.abs(x - ax) + Math.abs(z - az) === 1 && (x !== bx || z !== bz)) return STONE << 8;
+        return AIR << 8;
+      });
+      const r = runD(s);
+      const what = `A (${ax}, ${az}) → B (${bx}, ${bz})`;
+      expect(r.seeds, what).toBe(1);
+      // B takes level 1 across the boundary; when B lies outside K, K's voxel beside B takes level 2.
+      const [tx, tz] = inK(bx, bz) ? [bx, bz] : [Math.min(Math.max(bx, X0), X0 + 15), Math.min(Math.max(bz, Z0), Z0 + 15)];
+      expect([what, s.final(KX, KZ)!.fluid(tx - X0, 60, tz - Z0)]).toEqual([what, water(inK(bx, bz) ? 1 : 2)]);
+    }
+    expect(boundaries.size).toBe(12);
+  });
+
+  test('the cap: a front from a source at x = −12 relative to K down a staircase reaches K\'s x = 0 voxel at the cap (bit 6), and from x = −13 does not (rulings P16)', () => {
+    /** Rock, with a staircase corridor at z = Z0 + 5 descending toward +x from a source at x = X0 + d (y 100 − ⌊(x − X0 − d)/2⌋). */
+    const stair = (d: number) => (x: number, y: number, z: number): number => {
+      const u = x - (X0 + d);
+      if (z !== Z0 + 5 || u < 0 || y < 100 - (u >> 1) || y > 101) return STONE << 8;
+      return u === 0 && y === 100 ? (AIR << 8) | WATER_SOURCE : AIR << 8;
+    };
+    const near = synthetic(stair(-12));
+    runD(near);
+    const f = near.final(KX, KZ)!;
+    // As settle.test.ts' staircase at x = 12: level 2 on the step, a falling voxel at distance 12 below it with bit 6.
+    expect(f.fluid(0, 95, 5)).toBe(water(2));
+    expect(f.fluid(0, 94, 5)).toBe(water(0, true, true));
+    for (let y = 80; y <= 101; y++) expect([y, f.fluid(1, y, 5)]).toEqual([y, NO_FLUID]);
+
+    const far = synthetic(stair(-13));
+    const r = runD(far);
+    expect(r.changed).toBe(0);
+    const base = far.table.find(KX, KZ);
+    for (let sy = 0; sy < SECTIONS; sy++) {
+      expect(far.table.ints[finalAt(base, sy) + FINAL_FLUID], `fluid of ${sy}`).toBe(far.table.ints[protoAt(base, sy) + PROTO_FLUID]);
+    }
+  });
+
+  test('an unchanged section keeps the proto\'s fluid slot and no bit 6; a changed section\'s blocks entry stays the proto\'s (replaceFluid); generated() reads the settled bytes', () => {
+    const s = synthetic(rockFace);
+    const r = runD(s);
+    expect(r.changed).toBeGreaterThan(0);
+    const base = s.table.find(KX, KZ);
+    const ints = s.table.ints;
+    const changed = ints[base + REC_GEN_FLUID_MASK]!;
+    expect(changed).not.toBe(0);
+    let n = 0;
+    const p = s.proto(KX, KZ)!;
+    const f = s.final(KX, KZ)!;
+    const g = s.generated(KX, KZ)!;
+    for (let sy = 0; sy < SECTIONS; sy++) {
+      const pb = ints[protoAt(base, sy) + PROTO_BLOCKS]!;
+      const pf = ints[protoAt(base, sy) + PROTO_FLUID]!;
+      expect(ints[finalAt(base, sy) + FINAL_BLOCKS], `blocks of ${sy}`).toBe(pb);
+      if (((changed >>> sy) & 1) === 0) {
+        expect(ints[finalAt(base, sy) + FINAL_FLUID], `fluid of ${sy}`).toBe(pf);
+        const sf = f.sectionFluid(sy);
+        if (typeof sf === 'number') expect(sf & 64).toBe(0);
+        else expect(sf.some((b) => (b & 64) !== 0), `bit 6 in ${sy}`).toBe(false);
+        continue;
+      }
+      n++;
+      expect(ints[finalAt(base, sy) + FINAL_FLUID], `fluid of ${sy}`).not.toBe(pf);
+      // The layer references the settled entry (no diff: the final's own slot).
+      expect(ints[base + REC_GEN_FLUID + sy]).toBe(ints[finalAt(base, sy) + FINAL_FLUID]);
+    }
+    expect(n).toBe(r.changed);
+    for (let y = 60; y <= 75; y++) {
+      expect([y, g.fluid(7, y, 8)]).toEqual([y, f.fluid(7, y, 8)]);
+      expect(p.fluid(7, y, 8)).toBe(NO_FLUID);
+    }
+    expect(g.fluid(7, 70, 8)).toBe(water(0, true));
+  });
+
+  test('an edit beside a spill: the rebuilt section holds the edit and the settled bytes around it; the layer keeps the settled byte', () => {
+    const s = synthetic(rockFace);
+    const sy = (60 + 64) >> 4;
+    const idx = ((60 + 64 - 16 * sy) << 8) | (8 << 4) | 5;
+    const d: ColumnDiff = { sy: Uint8Array.of(sy), idx: Uint16Array.of(idx), value: Uint32Array.of(STONE << 8) };
+    runD(s, d);
+    const f = s.final(KX, KZ)!;
+    expect(f.block(5, 60, 8)).toBe(STONE);
+    expect(f.fluid(5, 60, 8)).toBe(NO_FLUID);
+    expect(f.fluid(6, 60, 8)).toBe(water(1));
+    expect(f.fluid(4, 60, 8)).toBe(water(3));
+    expect(f.fluid(7, 60, 8)).toBe(water(0, true));
+    expect(s.generated(KX, KZ)!.fluid(5, 60, 8)).toBe(water(2));
+  });
+
+  test('worldSurface at a waterfall\'s position is the fall\'s top + 1', () => {
+    const s = synthetic(rockFace);
+    runD(s);
+    const a = s.final(KX, KZ)!.aux()!;
+    expect(a.worldSurface[8 * 16 + 7]).toBe(76);
+    expect(a.motionBlocking[8 * 16 + 7]).toBe(76);
+    // Beside the fall the spill's surface is the floor's water: y 60 + 1.
+    expect(a.worldSurface[8 * 16 + 5]).toBe(61);
+  });
+
+  test('a stop at each of the polls writes nothing (K\'s final set and layer as before the run)', () => {
+    // More than 1,024 visits: a sheet of sources at y 80 over open air west of x = X0 + 4, falling to the floor at y 60.
+    const sheet = (x: number, y: number): number => (y < 60 ? STONE << 8 : y === 80 && x < X0 + 4 ? (AIR << 8) | WATER_SOURCE : AIR << 8);
+    const s = synthetic(sheet);
+    const before = finalState(s);
+    let polls = 0;
+    const w = s.reopenColumn(KX, KZ, 1);
+    expect(decorateStage(ctx, s.neighborhood(KX, KZ), w, () => { polls++; return false; })).toBe(true);
+    const out = new Int32Array(3);
+    decorateStatsInto(out);
+    expect(out[0]).toBeGreaterThan(1024);
+    expect(polls).toBe(9 * 10 + 1 + Math.ceil(out[0]! / 1024));
+    // The run above wrote K (uncommitted); a fresh store for the stops.
+    const t = synthetic(sheet);
+    expect(finalState(t)).toEqual(before);
+    for (let k = 1; k <= polls; k++) {
+      let n = 0;
+      expect(fillColumnD(t, ctx, KX, KZ, () => ++n === k), `stop at poll ${k}`).toBe(false);
+      expect(finalState(t), `stop at poll ${k}`).toEqual(before);
+      expect(statusOf(t, KX, KZ)).toBe(STATUS_PROTO);
+    }
+  }, 60_000);
+
+  test('Review Focus 5: with one source column of K\'s 3 × 3 at status 0, decorateStage throws \'is not at Proto\' before any write (K\'s final set and layer untouched)', () => {
+    const s = synthetic(rockFace, (cx, cz) => cx === KX + 1 && cz === KZ - 1);
+    const before = finalState(s);
+    expect(() => fillColumnD(s, ctx, KX, KZ, NEVER)).toThrow(/is not at Proto/);
+    expect(finalState(s)).toEqual(before);
+    expect(statusOf(s, KX, KZ)).toBe(STATUS_PROTO);
   });
 });

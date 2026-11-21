@@ -44,12 +44,15 @@ function referenceHash(s: VoxelStore, cx0: number, cz0: number, w: number, h: nu
       i16(a.worldSurfaceWG); i16(a.oceanFloorWG); i16(a.worldSurface); i16(a.motionBlocking); i16(a.oceanFloor); i16(a.lightBlocking);
       for (const x of a.surfaceBiome) out[o++] = x;
       for (const x of a.tintTH) out[o++] = x;
-      // Aux B (SP3b spec §7): caveBiomeQ, surfaceBiomeQ, then zeros to 4096 bytes; all zeros without a slot.
+      // Aux B (SP3b spec §7): caveBiomeQ, surfaceBiomeQ, seedSections (Uint32 LE, SP7a §1.7), then zeros to 4096 bytes;
+      // all zeros without a slot.
       const b = v.auxB();
       if (b !== null) {
         for (const x of b.caveBiomeQ) out[o++] = x;
         for (const x of b.surfaceBiomeQ) out[o++] = x;
-        o += 4096 - 1536 - 16;
+        const seeds = b.seedSections[0]!;
+        for (let k = 0; k < 4; k++) out[o++] = (seeds >>> (8 * k)) & 255;
+        o += 4096 - 1536 - 16 - 4;
       } else o += 4096;
     }
   }

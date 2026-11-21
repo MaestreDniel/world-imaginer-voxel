@@ -329,7 +329,7 @@ Per-state SoA tables:
 | 0-2 | level (0 = source … 7) |
 | 3 | falling |
 | 4-5 | type (0 none, 1 water, 2 lava) |
-| 6 | `unsettled` (a truncated generation front) |
+| 6 | `unsettled` (a truncated generation front): never set in the proto; in the final set only on truncated fronts and water/lava contacts (SP7a) |
 | 7 | reserved |
 
 A pure fluid voxel is AIR plus a fluid byte. Waterlogging comes free: a state whose `FLUID_MODE` is `hold` plus a fluid byte. Effective opacity is `max(OPACITY[b], fluid?1:0)`, and lava emits 15.
@@ -769,7 +769,7 @@ SP2a uses the 2D estimate `surfaceEst = offset` (after rivers and lakes). SP3b a
 
 **Fast path.** Cell statuses are cached per T job (the 3 × 35 × 3 cells a column's candidates reach), together with each neighbourhood's highest level and whether one of its cells is lava. A tagged voxel more than 4 blocks above that level (beyond the pressure's reach), with no lava cell among them and not below `aquifer.lavaLevel`, is air without a distance computation (amended by SP7a).
 
-**Borders.** Fluid voxels with an air neighbour are flagged `unsettled` for settle (3.14).
+**Borders.** T records the sections holding in-column seeds in aux B; D adds the cross-column seeds (3.14; amended by SP7a, the SP7a spec §1.7, §4.2). No voxel is flagged: the proto carries no bit 6.
 
 **Parameters** (the `aquifer` group, Terrain scope; SP7a): `aquifer.enabled` true; `surfaceBand` 12; `thresholds.{fullInland 0.8, fullOcean −0.3, partialInland 0.4, partialOcean −0.8}`; `lavaMaxLevel` −10; `lavaThreshold` 0.3; `lavaLevel` −54; `barrierBand` 25; `abyssMargin` 0.06; `noises.{floodedness λ 128, spread λ 32, lava λ 2, barrier λ 8}`, 3D, one octave each.
 
@@ -904,6 +904,8 @@ The result is order-independent and identical in every receiving column. Canopie
 5. Overlay K's diff (absolute states).
 6. Write the final heightmaps.
 
+SP7a: step 2 settle; step 5 overlays on settled output (a section the settle changed is rebuilt from its settled fluid, which the generated-fluid layer keeps as the column's generated value; step 6 reads the final blocks and fluid, so WORLD_SURFACE and MOTION_BLOCKING count the waterfalls; amended by SP7a, the SP7a spec §4.2).
+
 ### 3.13 Structures (random_spread sets, jigsaw-lite, beardifier)
 
 **Placement.** `region = floor(chunk/spacing)`, `rng = hash(seed, rx, rz, salt)`, and an offset in `[0, spacing − separation)` (linear) or the mean of two draws (triangular). A start is checked against biome, frequency, exclusion zones and `prelim slope ≤ 6` over its footprint.
@@ -928,7 +930,7 @@ Map markers come from the same start function. Structure starts never lie below 
 
 ### 3.14 Gen-time fluid settle (inside D; exact and neighbour-consistent)
 
-**Input:** the 3×3 proto fluid plus the spring and lava-lake sources from step 1 of D.
+**Input:** the 3×3 proto fluid (T places the springs, which reach settle as proto sources; SP7a) plus the lava-lake sources from step 1 of D (SP8b).
 
 **Rules** (shared `fluidRules.ts`):
 - falling is unlimited;
@@ -936,11 +938,13 @@ Map markers come from the same start function. Structure starts never lie below 
 - flow prefers the nearest drop within 4 (water) or 2 (lava);
 - a new source forms between ≥ 2 horizontal sources over solid ground.
 
-**Exactness.** Each front carries the cumulative horizontal distance from its origin and **stops at 16**. Any fluid reaching K therefore originated inside K's 3×3, so the result is exact and identical from any receiver.
+**Exactness** (amended by SP7a; the SP7a spec §4.1, D22). Every fluid-deciding read is the proto's, never another front's result. Each voxel keeps one least horizontal distance per value, the least over the feeders that give the voxel its level (+1 per sideways step, +0 for a fall), never restarted by a new source, so its level and its distance come from one derivation. A front stops at **12 (water) and 14 (lava)**; the nearest-drop search reads up to 4 (2) blocks beyond a front, so every read that decides a voxel of K lies within cap + search ≤ 16 blocks of it (12 + 4 for water, 14 + 2 for lava), inside K's 3×3: the result on K equals a global settle and is identical from any receiver. The rules are monotone, so the settled world is their least fixed point from the proto, whatever the processing order. Every non-AIR state's `FLUID_MODE` is read from the table (`block` stops fluid, `hold` takes the byte, `displace` becomes AIR plus fluid). Water and lava settle as two fixed points, each treating the other type's proto fluid as `block`, merged per voxel with lava winning (a contact, kept `unsettled` for SP7b's reactions). A water front never enters a voxel whose cave nibble is the abyss.
+
+**Seeds** (SP7a): T records the sections holding in-column seeds in aux B (`seedSections`; a fluid voxel whose voxel below, or a horizontal neighbour inside the column, is passable with no fluid); D rescans those sections and adds the cross-column seeds of the 12 boundaries between the 3×3's columns. D writes the sections whose fluid changed copy-on-write (`replaceFluid`) and keeps them as the generated-fluid layer.
 
 **Truncation.** A front that reaches the cap keeps `unsettled = 1`. The runtime sim does not tick it until a user-caused block update touches it (D18). A2 bounds the share of unsettled voxels.
 
-**Budget:** at most 20k voxel visits per job.
+**Budget:** 20k voxel visits per job as a target, with the visits recorded on the D bench row; never a visit cap, which would make the result depend on the window (amended by SP7a).
 
 ### 3.15 Extreme presets (data only: splines + climate params + DAG terms; SP3e adds the island cluster mask, water v0's island rule and the sky-open run under islands as code)
 
@@ -965,7 +969,7 @@ The built-in presets are the `PROFILES` entries of `core/params/profiles.ts` (SP
 | surface rules | own column (whole 384) + column stage | own proto | own proto | column-global depth; steep from the halo |
 | features and ores | source-chunk RNG + S's proto (rule 1) | 3×3 proto (rule 2) | own final | priority writes are order-independent |
 | structures | region RNG + surfaceEst | pure | own final (stamp) + beard in T | layout is a pure function |
-| settle | 3×3 proto + feature sources | 3×3 proto | own final | distance cap 16 ≤ window margin |
+| settle | 3 × 3 proto (with springs) | 3 × 3 proto | own final + the generated-fluid layer | every fluid-deciding read from the proto; cap + search ≤ 16 blocks (12 + 4 for water, 14 + 2 for lava) (amended by SP7a) |
 | light | 3×3 final | neighbours at ≥ Decorated (immutable until Published) | own light | light reach ≤ 14 < 15-block padding |
 | runtime (edits, fluids, relight) | sim worker, the single writer of Published columns | SAB | SAB + diffs | versions discard stale job results |
 
@@ -1451,7 +1455,7 @@ WASD; Space (up/jump); Shift (down/sneak); R or double-tap W (sprint; SP5a, Ctrl
 - 3D sky flood and components; a global carver reference (SP6a);
 - the raycast visibility reference: DDA rays in cube-map directions from the eye, the sections they enter (SP6b, `harness/refs.ts`) (amended by SP6a and SP6b).
 
-**Region cache** (`cache.ts`): binary dumps keyed by `genKey + srcKey + REGION_CACHE_FORMAT + region + upTo` (SP4a: upTo 'MESH' meshes the cached 'L' region in process and is not cached; format 3 dumps the final light), in `test/.cache/regions`. `srcKey` hashes the generator sources and the format version is bumped when the dump layout changes, because `genKey` does not track code changes made without a stage bump (amended by SP3a). Format 2 stores each column's aux A and then aux B, and the region hash covers aux B too; CI restores `test/.cache/regions` with `actions/cache` before `npm run test:metrics` (amended by SP3b), with a key of its own in each metrics job (amended 2026-10-20: parallel CI jobs).
+**Region cache** (`cache.ts`): binary dumps keyed by `genKey + srcKey + REGION_CACHE_FORMAT + region + upTo` (SP4a: upTo 'MESH' meshes the cached 'L' region in process and is not cached; format 3 dumps the final light), in `test/.cache/regions`. `srcKey` hashes the generator sources and the format version is bumped when the dump layout changes, because `genKey` does not track code changes made without a stage bump (amended by SP3a). Format 2 stores each column's aux A and then aux B, and the region hash covers aux B too; CI restores `test/.cache/regions` with `actions/cache` before `npm run test:metrics` (amended by SP3b), with a key of its own in each metrics job (amended 2026-10-20: parallel CI jobs). Format 5 adds the final fluid and the generated-fluid layer of the sections D's settle changed (amended by SP7a).
 
 **Suites:**
 
@@ -1783,7 +1787,7 @@ High adds MSAA, a shadow cascade (about 2 ms), LOD 1 km and RD16 (dGPU target). 
 |---|---|---|
 | voxel store | SAB, 8 KiB block / 4 KiB byte channels, worker allocation | main-thread canonical store (main-thread gathers, fluid sim on main thread); fixed 16 KB slots with residency eviction (thrash and memory contradiction) |
 | decorate contract | pull model over 3×3 proto with priority writes | own column + T-summaries (cannot do cross-border settle or ores) |
-| settle | 3×3 with distance cap 16 | own column (water walls); 2-cycle CA (not exact) |
+| settle | 3 × 3 with distance cap 12 / 14 (amended by SP7a) | own column (water walls); 2-cycle CA (not exact) |
 | relight | removal/add BFS with heightmap re-seed | ±15 slab (wrong for sky shafts) |
 | batching | per-region BatchedMesh, 56 B/quad, real `position` | one batch per pass (whole-world `optimize` stalls); shared index (impossible) |
 | tint | tint texture + colormap | per-section UBO (impossible under multi-draw) |
