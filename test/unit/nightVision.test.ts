@@ -22,7 +22,7 @@ const HALF_FRAMES = 9;
 function rig(brightness = 0.3) {
   const materials = createMaterialSystem({ variant: 'batch', ao: true, smoothLight: true }, createFlatColorArray());
   const frame: { -readonly [K in keyof FrameState]: FrameState[K] } = {
-    t: 0.25, brightness, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand, nightVision: 0,
+    t: 0.25, brightness, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand, nightVision: 0, seconds: 0, eyeFluid: 0,
   };
   materials.setFrameUniforms(frame);
   const texture = materials.lightmap.texture;

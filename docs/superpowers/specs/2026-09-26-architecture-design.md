@@ -1112,7 +1112,7 @@ On Ultra, passes 2-4 (after the LOD depth clear) render into a `WebGLRenderTarge
 
 ### 4.6 Materials (`render/materials`, the only GLSL boundary)
 
-`createMaterialSystem(settings)` returns `terrainOpaque`, `terrainCutout`, `water(tier)`, `lava`, `sky`, `clouds`, `lod`, `shadowDepth` and `selection`, plus `setFrameUniforms(frame)`. All are `ShaderMaterial({glslVersion: GLSL3})` and include `batching_pars_vertex` and `batching_vertex`.
+`createMaterialSystem(settings)` returns `terrainOpaque`, `terrainCutout`, `water(tier)` (one program for every tier: a `waterTier` uniform branches, SP7a), `lava`, `sky`, `clouds`, `lod`, `shadowDepth` and `selection`, plus `setFrameUniforms(frame)`. All are `ShaderMaterial({glslVersion: GLSL3})` and include `batching_pars_vertex` and `batching_vertex`.
 
 **terrain.frag:**
 - `layer = base + hash(floor(worldPos)) % variantCount`, where the variant count comes from a layer-info `usampler2D`;
@@ -1125,7 +1125,7 @@ On Ultra, passes 2-4 (after the LOD depth clear) render into a `WebGLRenderTarge
 
 **No Lambert and no sun term on terrain.** Caves go dark and block light does not dim at night.
 
-**Fog** is spherical, `f = smoothstep(fogStart, fogEnd, length(viewPos))` (SP4a: end (RD − 0.5)·16, start 64 blocks before; an edge fade around the load centre until SP4b streams. SP4b: end (RD − 1)·16, start 64 blocks before, no edge fade; after a live RD raise the end follows the filled radius outward). Its colour comes from the sky gradient towards the fragment's horizon (`skyGradient(horizonDir)` in `common.glsl`: the sky without the sun's disc and glow, which would paint a stripe on the fogged terrain under a low sun; amended by SP4a) and is darkened by the eye's sky light. When the eye is in water, fog switches to exponential (about 48-60 blocks) with a screen tint.
+**Fog** is spherical, `f = smoothstep(fogStart, fogEnd, length(viewPos))` (SP4a: end (RD − 0.5)·16, start 64 blocks before; an edge fade around the load centre until SP4b streams. SP4b: end (RD − 1)·16, start 64 blocks before, no edge fade; after a live RD raise the end follows the filled radius outward). Its colour comes from the sky gradient towards the fragment's horizon (`skyGradient(horizonDir)` in `common.glsl`: the sky without the sun's disc and glow, which would paint a stripe on the fogged terrain under a low sun; amended by SP4a) and is darkened by the eye's sky light. When the eye is in a fluid (SP7a, its §8 and D11: `eyeFluid`, from the eye voxel's fluid and surface height), the fog switches to f = 1 − 2^(−8·(d/L)²) (less than 1/256 of the colour left at L): in water L = 56 blocks and the colour is Fast water's deep colour × the lightmap at the eye's sky light; in lava L = 3 blocks and the colour [255, 90, 20] × 0.6. Every fragment, the sky dome's included (at d = `fogEnd`), also mixes 0.25 toward that colour (the tint). The X-ray has no fog.
 
 **Colour management:** textures use `SRGBColorSpace`, output is sRGB, and tints are converted to linear on the CPU.
 
@@ -1189,8 +1189,10 @@ This is a custom depth pass (the `shadowDepth` material decodes the same vertex 
 | tier | technique |
 |---|---|
 | Fast | alpha 0.72, biome water tint, shallow-to-deep colour from the mesher's depth-to-floor |
-| Fancy | adds Schlick Fresnel (F0 0.02) toward `skyColor`, 2 scrolling ripple-normal octaves, animated texture, vertex waves on ungreedy near-camera water (High+) |
+| Fancy | adds Schlick Fresnel (F0 0.02) toward `skyColor(reflect(view, n))`, 2 scrolling procedural ripple-normal octaves (value-noise gradients at λ 4 and 1.7 blocks, no texture; SP7a), on sloped surfaces the normal from `dFdx`/`dFdy` of the world position, alpha 0.6 + 0.3·Fresnel (SP7a); animated texture (SP8a's animation frames, cut to SP11); vertex waves on ungreedy near-camera water (High+; SP11) |
 | Fabulous | adds refraction and Beer-Lambert absorption from the opaque colour/depth copy |
+
+Fast and Fancy are one water program (SP7a, its D28): the `waterTier` uniform (0 Fast, 1 Fancy) branches in the fragment shader and `timeSeconds` (the frame's clock, wrapped every 3,600 s) scrolls the ripples, so a toggle writes one uniform and relinks nothing.
 
 MeshPhysicalMaterial transmission and Reflector are never used.
 
@@ -1282,7 +1284,7 @@ Target: edit → visible ≤ 50 ms p95, measured in the HUD (SP5a: gated from th
 | audio: emitter+SFX voice cap / spatialisation / reverb | 16 / equal-power / off | 24 / equal-power / on | 32 / HRTF / on | 48 / HRTF / on |
 | upload budget | 1.5 ms | 2 ms | 3 ms | 4 ms |
 
-- Every setting can be overridden individually (SP5b: the Settings screen, G: Graphics with RD, FPS cap, FOV and brightness, the rest greyed until SP11; Controls with mouse sensitivity and hold to repeat): RD, LOD, FOV, brightness, night vision (SP6a), fog start, resolution scale, FPS cap, anisotropy, biome blend, water tier, shadows, clouds, AO.
+- Every setting can be overridden individually (SP5b: the Settings screen, G: Graphics with RD, FPS cap, FOV and brightness, the water tier (Fast / Fancy, live from SP7a), the rest greyed until SP11; Controls with mouse sensitivity and hold to repeat): RD, LOD, FOV, brightness, night vision (SP6a), fog start, resolution scale, FPS cap, anisotropy, biome blend, water tier (live from SP7a), shadows, clouds, AO.
 - Changes are Live (the render distance live since SP4b, within the reservation's cap), except MSAA (a controlled renderer rebuild that keeps the world store) and AO or leaves (a remesh of loaded sections through mesh jobs).
 - Settings persist in localStorage (try/catch).
 - `core/params/graphicsPresets.ts` is created by SP4a with the Medium fields it uses; SP8c adds the audio rows, SP11 the other rows.

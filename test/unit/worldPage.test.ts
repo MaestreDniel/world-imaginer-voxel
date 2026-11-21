@@ -3,7 +3,7 @@ import { PerspectiveCamera } from 'three';
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Color } from 'three';
 import {
-  createCoordinator, createCoordinatorCounts, type CoordinatorJobs, type StreamSink, type StreamStore,
+  createCoordinator, createCoordinatorCounts, type Coordinator, type CoordinatorJobs, type StreamSink, type StreamStore,
 } from '../../src/engine/coordinator';
 import { appliedDraftOf, regenFrom } from '../../src/engine/invalidation';
 import type { Stage } from '../../src/engine/rings';
@@ -13,7 +13,7 @@ import { createMaterialSystem, fogRange } from '../../src/render/materials/index
 import { createXrayControl } from '../../src/render/renderer';
 import { createFlatColorArray } from '../../src/render/textureArray';
 import { createEpochs } from '../../src/ui/world/applyControl';
-import { cavePlace, createCaveFind, createPageXray, NIGHT_VISION_NOTICE_MS, nightVisionNotice, toggleNightVision, xrayColorNotice, XRAY_NOTICE_MS, xrayNotice, xrayRadiusOf } from '../../src/ui/world/worldPage';
+import { applyWaterSetting, cavePlace, createCaveFind, createPageXray, NIGHT_VISION_NOTICE_MS, nightVisionNotice, toggleNightVision, waterTierOf, xrayColorNotice, XRAY_NOTICE_MS, xrayNotice, xrayRadiusOf } from '../../src/ui/world/worldPage';
 import type { FindCaveRequest, FindCaveResult } from '../../src/engine/workerPool';
 import { easeNightVision } from '../../src/ui/world/frameStep';
 import { bandSet, createXrayStrip, XRAY_ALL } from '../../src/ui/world/xrayStrip';
@@ -25,7 +25,7 @@ import { defaultRenderDistance, lowerRd } from '../../src/engine/renderDistance'
 import { WorldSession, type SessionListener } from '../../src/engine/session';
 import { validateParamTrees } from '../../src/gen/trees';
 import { DEFAULT_KEYMAP } from '../../src/player/keymap';
-import { applyRenderDistance, cameraFar } from '../../src/render/renderer';
+import { applyRenderDistance, cameraFar, type WorldRenderer } from '../../src/render/renderer';
 import { mountHelp } from '../../src/ui/help';
 import type { DriverStatus } from '../../src/ui/map/previewDriver';
 import { loadSettings, saveSettings, SETTINGS_DEFAULTS, SETTINGS_KEY, type WorldSettings } from '../../src/ui/settings';
@@ -7111,7 +7111,7 @@ describe('night vision in the page: L, the notice, the setting and the Settings 
 
     // The page's frame over a real material system (the lightmap), its L and the Settings screen.
     const materials = createMaterialSystem({ variant: 'batch', ao: true, smoothLight: true }, createFlatColorArray());
-    const frame = { t: 0.75, brightness: 0.3, eyeSky: 0, rd: 4, fogBand: 64, nightVision: 0 };
+    const frame = { t: 0.75, brightness: 0.3, eyeSky: 0, rd: 4, fogBand: 64, nightVision: 0, seconds: 0, eyeFluid: 0 };
     materials.setFrameUniforms(frame);
     const lightmap = materials.lightmap.texture;
     const before = (lightmap.image.data as Uint8Array).slice();
@@ -7141,6 +7141,66 @@ describe('night vision in the page: L, the notice, the setting and the Settings 
     expect(view.litHash()).toBe(lit0);
     expect(p.shown.map(([t]) => t)).toEqual(['Night vision on', 'Night vision off']);
   }, 120_000);
+});
+
+describe('the Water setting in the page (SP7a spec §7, D10, D28; ruling P44)', () => {
+  let dom: ReturnType<typeof installDom>;
+  beforeEach(() => { dom = installDom(); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+  const SRC = (): string => readFileSync(new URL('../../src/ui/world/worldPage.ts', import.meta.url), 'utf8');
+
+  /** A fake whose every method records its call in `log` (`name.method(args)`), but the properties `own` gives. */
+  const recorder = (name: string, log: string[], own: Record<string, unknown> = {}): unknown =>
+    new Proxy(own, {
+      get: (t, k) => (k in t ? t[k as string] : (...args: unknown[]) => { log.push(`${name}.${String(k)}(${args.join(',')})`); }),
+    });
+
+  test('a Water change calls renderer.setWaterTier once with 0 (Fast) or 1 (Fancy) and no other renderer, section-renderer or coordinator method; any other change and the same tier call none', () => {
+    expect([waterTierOf('fast'), waterTierOf('fancy')]).toEqual([0, 1]);
+    const log: string[] = [];
+    const sections = recorder('sections', log);
+    const renderer = recorder('renderer', log, { sections }) as Pick<WorldRenderer, 'setWaterTier' | 'setRenderDistance' | 'camera'>;
+    const coordinator = recorder('coordinator', log) as Pick<Coordinator, 'setRenderDistance'>;
+    // The page's wiring: the screen's onSettings is the page's applySettings (settingsChange, the Water setting, the RD
+    // control), every hook a recorder.
+    let page: WorldSettings = { ...SETTINGS_DEFAULTS };
+    const control = createRdControl({ coordinator, world: renderer, fog: createFogEase(12), panel: { setRd: () => {} }, save: () => {}, defaultRd: 12 });
+    mountSettingsPanel(dom.body as unknown as HTMLElement, {
+      settings: page,
+      onSettings: (s) => {
+        const c = settingsChange(page, s, null);
+        applyWaterSetting(page, s, renderer);
+        page = c.settings;
+        if (c.applyRd) control.apply(s.rd);
+      },
+      rdMax: 16,
+      defaultRd: 12,
+      onClose: () => {},
+    });
+    const water = dom.el('setting-water');
+    const set = (v: string): void => {
+      water.value = v;
+      water.dispatchEvent(new Event('change'));
+    };
+    set('fast');
+    expect(log).toEqual(['renderer.setWaterTier(0)']);
+    expect(page.water).toBe('fast');
+    set('fancy');
+    expect(log).toEqual(['renderer.setWaterTier(0)', 'renderer.setWaterTier(1)']);
+    // The same tier again and another setting's change: nothing.
+    set('fancy');
+    const fov = dom.el('setting-fov');
+    fov.value = '90';
+    fov.dispatchEvent(new Event('input'));
+    expect(log).toHaveLength(2);
+    expect(page).toEqual({ ...SETTINGS_DEFAULTS, fov: 90 });
+    // The page: applySettings applies the Water change before keeping the new settings, and the saved setting is
+    // written once at load, right after the renderer is created (the materials start at Fancy).
+    const src = SRC();
+    expect(src).toMatch(/const applySettings = \(s: WorldSettings\): void => \{[\s\S]*?applyWaterSetting\(settings, s, world\);\n\s+settings = change\.settings;/);
+    expect(src).toMatch(/\n\s+wr = world;\n(\s+\/\/[^\n]*\n)+\s+world\.setWaterTier\(waterTierOf\(settings\.water\)\);\n/);
+    expect(src.match(/setWaterTier\(/g)).toHaveLength(2);
+  });
 });
 
 describe('the Caves tab\'s Find on the page (SP6a spec §7.3, D12, D16; Task 44)', () => {

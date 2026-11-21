@@ -4,16 +4,20 @@ import { runInNewContext } from 'node:vm';
 import { AdditiveBlending, Color, DoubleSide, GLSL3, NoColorSpace, SRGBColorSpace, type ShaderMaterial } from 'three';
 import { describe, expect, test } from 'vitest';
 import { skyColors, sunDirection } from '../../src/daynight/dayNight';
-import { FOG_GLSL } from '../../src/render/materials/glsl/common.glsl';
+import { FLUID_FOG_GLSL, FOG_GLSL } from '../../src/render/materials/glsl/common.glsl';
 import { LAVA_LAYER } from '../../src/mesh/greedy';
 import { packingGlsl } from '../../src/render/materials/glsl/packing.glsl';
-import { GHOST_LIGHT_FLOOR, TERRAIN_FRAGMENT, terrainVertex } from '../../src/render/materials/glsl/terrain.glsl';
+import { GHOST_LIGHT_FLOOR, glslFloat, TERRAIN_FRAGMENT, terrainVertex } from '../../src/render/materials/glsl/terrain.glsl';
 import { createMaterialSystem, fogRange, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
 import { GHOST_ALPHA } from '../../src/render/materials/uniforms';
 import { XRAY_BIOME_COLORS, XRAY_COLORS } from '../../src/render/xrayPalette';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
 import type { FrameState } from '../../src/render/frameState';
 import { createFlatColorArray } from '../../src/render/textureArray';
+import {
+  FLUID_FOG_L_LAVA, FLUID_FOG_L_WATER, FLUID_FOG_SHARPNESS, FLUID_FOG_TINT,
+} from '../../src/render/fogMath';
+import { allocationOver, expectAtRest, N } from './fixtures/heapGrowth';
 
 const ALBEDO = createFlatColorArray();
 const system = (variant: MaterialVariant, ao = true, smoothLight = true): MaterialSystem =>
@@ -28,7 +32,7 @@ const all = (m: MaterialSystem): Record<string, ShaderMaterial> => ({
 /** The terrain and water materials: the ones with a batched and a RegionMesh variant. */
 const terrainAndWater = (m: MaterialSystem): ShaderMaterial[] => [m.terrainOpaque, m.terrainCutout, m.water];
 
-const FRAME: FrameState = { t: 1 / 12, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0 };
+const FRAME: FrameState = { t: 1 / 12, brightness: 0.3, eyeSky: 15, rd: 12, fogBand: 64, nightVision: 0, seconds: 0, eyeFluid: 0 };
 
 /** The index of the `#endif` that closes the conditional block opened at `start` (nested blocks skipped). */
 function blockEnd(src: string, start: number): number {
@@ -422,8 +426,12 @@ describe('the ghost material (SP5c spec §6.2, D25)', () => {
 
   test('the source with GHOST undefined equals today\'s TERRAIN_FRAGMENT (no ghost code outside #ifdef GHOST), so the terrain materials are unchanged', () => {
     const plain = resolveGhost(TERRAIN_FRAGMENT, false);
-    expect(plain.length).toBe(SP5A_TERRAIN_FRAGMENT.length);
-    expect(createHash('sha256').update(plain).digest('hex')).toBe(SP5A_TERRAIN_FRAGMENT.sha256);
+    // SP7a's fluid fog (its spec §8: FLUID_FOG_GLSL in FOG_GLSL and applyFog's branch) is the one change since SP5a.
+    const fluidFog = [FLUID_FOG_GLSL, '  if (eyeFluid > 0.5) return fluidFog(color, length(viewPos));\n'];
+    for (const added of fluidFog) expect(plain.split(added), 'SP7a\'s fluid fog, once').toHaveLength(2);
+    const sp5a = fluidFog.reduce((src, added) => src.replace(added, ''), plain);
+    expect(sp5a.length).toBe(SP5A_TERRAIN_FRAGMENT.length);
+    expect(createHash('sha256').update(sp5a).digest('hex')).toBe(SP5A_TERRAIN_FRAGMENT.sha256);
     expect(plain).not.toMatch(/ghost/i);
     expect(plain).not.toContain('uint face');
     expect(TERRAIN_FRAGMENT).toContain('#ifdef GHOST');
@@ -667,5 +675,207 @@ describe('the X-ray material and the collapse uniform (SP6a spec §5.2, §5.3)',
     }
     expect(readings.length, 'every attempt saw a GC').toBeGreaterThan(0);
     expect(readings[readings.length - 1]!, `heap growth over 10,000 calls (attempts: ${readings.join(', ')})`).toBeLessThan(256 * 1024);
+  });
+});
+
+describe('the water tiers (SP7a spec §7, D10, D28)', () => {
+  const mainOf = (src: string): string => src.slice(src.indexOf('void main() {'));
+
+  test('the water fragment declares waterTier and timeSeconds once and branches on waterTier: Fast keeps today\'s colour and the alpha uniform (0.72), Fancy the dFdx/dFdy normal, both ripple octaves, Schlick Fresnel (F0 0.02) toward skyColor(reflect(…)) and alpha 0.6 + 0.3·Fresnel', () => {
+    for (const v of VARIANTS) {
+      const src = SYSTEMS[v].water.fragmentShader;
+      for (const decl of ['uniform float waterTier;', 'uniform float timeSeconds;']) {
+        expect(src.split(decl).length - 1, `${v} ${decl}`).toBe(1);
+      }
+      const body = mainOf(src);
+      // Fast: today's colour, the alpha uniform; Fancy overrides both inside the one uniform branch.
+      expect(body).toContain('vec3 color = mix(waterShallow, waterDeep, vDepth / 15.0) * lightmapAt(vBlock, vSky);');
+      expect(body).toContain('float a = alpha;');
+      const branch = body.indexOf('if (waterTier > 0.5) {');
+      expect(branch, `${v}: the waterTier branch`).toBeGreaterThan(body.indexOf('float a = alpha;'));
+      expect(body.split('waterTier').length - 1, `${v}: one branch`).toBe(1);
+      const fancy = body.slice(branch, body.indexOf('\n  }\n', branch));
+      expect(fancy).toContain('vec3 n = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));');
+      expect(fancy).toContain('n = normalize(n + rippleTilt(vWorldPos.xz, timeSeconds));');
+      expect(fancy).toContain('float fresnel = 0.02 + 0.98 * pow(1.0 - clamp(dot(-viewDir, n), 0.0, 1.0), 5.0);');
+      expect(fancy).toContain('skyColor(reflect(viewDir, n))');
+      expect(fancy).toContain('a = 0.6 + 0.3 * fresnel;');
+      expect(body).toContain('gl_FragColor = vec4(applyFog(color, vViewPos, vWorldPos), a);');
+      // Both octaves: λ 4 and 1.7 blocks, scrolling 0.4 and 0.9 blocks/s along (1, 0) and (−0.6, 0.8), value-noise
+      // gradients (no texture).
+      expect(src).toContain('vec2 g = valueNoiseGrad((xz - vec2(1.0, 0.0) * (0.4 * t)) / 4.0)');
+      expect(src).toContain('+ valueNoiseGrad((xz - vec2(-0.6, 0.8) * (0.9 * t)) / 1.7);');
+      expect(src.split('valueNoiseGrad(').length - 1, `${v}: the definition and two octaves`).toBe(3);
+      expect(src).not.toMatch(/sampler2D(?!\s+lightmap)/);
+    }
+  });
+
+  test('one water material per variant (no second program): the tier is a uniform, not a define', () => {
+    for (const v of VARIANTS) {
+      const m = SYSTEMS[v];
+      const materialKeys = Object.entries(m).filter(([, x]) => (x as { isShaderMaterial?: boolean })?.isShaderMaterial === true).map(([k]) => k);
+      expect(materialKeys.filter((k) => /water/i.test(k)), v).toEqual(['water']);
+      const tiered = Object.values(all(m)).filter((mat) => mat.fragmentShader.includes('waterTier'));
+      expect(tiered, v).toEqual([m.water]);
+      expect(Object.keys(m.water.defines).filter((d) => /TIER|FANCY|FAST/.test(d)), v).toEqual([]);
+    }
+  });
+
+  test('defaults: waterTier 1 (Fancy, Medium\'s) and timeSeconds 0, one shared uniform object each in the water material', () => {
+    for (const v of VARIANTS) {
+      const fresh = system(v);
+      expect(fresh.water.uniforms['waterTier']!.value, v).toBe(1);
+      expect(fresh.water.uniforms['timeSeconds']!.value, v).toBe(0);
+      for (const name of ['waterTier', 'timeSeconds']) {
+        for (const mat of [fresh.terrainOpaque, fresh.terrainCutout, fresh.sky, fresh.ghost, fresh.xray]) {
+          expect(mat.uniforms[name], `${v} ${mat.name} ${name}`).toBeUndefined();
+        }
+      }
+    }
+  });
+
+  test('setFrameUniforms writes timeSeconds from FrameState.seconds', () => {
+    const m = system('batch');
+    m.setFrameUniforms({ ...FRAME, seconds: 12.5 });
+    expect(m.water.uniforms['timeSeconds']!.value).toBe(12.5);
+    m.setFrameUniforms({ ...FRAME, seconds: 3599.75 });
+    expect(m.water.uniforms['timeSeconds']!.value).toBe(3599.75);
+  });
+
+  test('setWaterTier(0) then (1) writes the uniform and changes no material\'s version (no recompile)', () => {
+    for (const v of VARIANTS) {
+      const m = system(v);
+      const versions = (): number[] => Object.values(all(m)).map((mat) => mat.version);
+      const before = versions();
+      const sources = Object.values(all(m)).map((mat) => mat.vertexShader + mat.fragmentShader);
+      m.setWaterTier(0);
+      expect(m.water.uniforms['waterTier']!.value, v).toBe(0);
+      expect(versions(), v).toEqual(before);
+      m.setWaterTier(1);
+      expect(m.water.uniforms['waterTier']!.value, v).toBe(1);
+      expect(versions(), v).toEqual(before);
+      expect(Object.values(all(m)).map((mat) => mat.vertexShader + mat.fragmentShader), v).toEqual(sources);
+    }
+  });
+});
+
+describe('the underwater and lava fog (SP7a spec §8, D11)', () => {
+  /** The occurrences of `needle` in `src`. */
+  const count = (src: string, needle: string): number => src.split(needle).length - 1;
+  /** The fragments that fog: terrain (opaque, cutout), the ghost (terrain's source with `GHOST`), water and the sky dome. */
+  const fogged = (m: MaterialSystem): Record<string, ShaderMaterial> => ({
+    terrainOpaque: m.terrainOpaque, terrainCutout: m.terrainCutout, ghost: m.ghost, water: m.water, sky: m.sky,
+  });
+  const FLUID_FOG_UNIFORMS = ['uniform float eyeFluid;', 'uniform vec3 fluidFogWater;', 'uniform vec3 fluidFogLava;'];
+
+  test('the fog source holds both branches, water (L 56, the deep colour × the lightmap at the eye\'s sky light) and lava (L 3), f = 1 − 2^(−8·(d/L)²), and the 0.25 tint, from fogMath\'s constants', () => {
+    const body = FLUID_FOG_GLSL.slice(FLUID_FOG_GLSL.indexOf('vec3 fluidFog(vec3 color, float d) {'));
+    expect(body).toContain(`fogColor = fluidFogWater * lightmapAt(0.0, eyeSky);\n    x = d / ${glslFloat(FLUID_FOG_L_WATER)};`);
+    expect(body).toContain(`fogColor = fluidFogLava;\n    x = d / ${glslFloat(FLUID_FOG_L_LAVA)};`);
+    expect(body).toContain('if (eyeFluid > 1.5) {');
+    expect(body).toContain(`float f = 1.0 - exp2(-${glslFloat(FLUID_FOG_SHARPNESS)} * x * x);`);
+    expect(body).toContain(`return mix(mix(color, fogColor, ${glslFloat(FLUID_FOG_TINT)}), fogColor, f);`);
+    // The literals the formula interpolates are fogMath's values.
+    expect([glslFloat(FLUID_FOG_L_WATER), glslFloat(FLUID_FOG_L_LAVA), glslFloat(FLUID_FOG_SHARPNESS), glslFloat(FLUID_FOG_TINT)])
+      .toEqual(['56.0', '3.0', '8.0', '0.25']);
+    for (const decl of FLUID_FOG_UNIFORMS) expect(count(FLUID_FOG_GLSL, decl), decl).toBe(1);
+    // The water fragment declares waterDeep itself (Fast's colour); the fog has its own uniform.
+    expect(FLUID_FOG_GLSL).not.toContain('waterDeep');
+    // FOG_GLSL includes it, and applyFog takes the fluid's fog in place of the sky's while the eye is in a fluid.
+    expect(FOG_GLSL).toContain(FLUID_FOG_GLSL);
+    const fog = FOG_GLSL.slice(FOG_GLSL.indexOf('vec3 applyFog('));
+    const branch = fog.indexOf('if (eyeFluid > 0.5) return fluidFog(color, length(viewPos));');
+    expect(branch).toBeGreaterThan(0);
+    expect(branch).toBeLessThan(fog.indexOf('smoothstep(fogStart, fogEnd'));
+  });
+
+  test('each fogged fragment (terrain, cutout, ghost, water, sky) declares fogEnd, eyeSky, lightmap and each fluid-fog uniform once, before fluidFog\'s definition (ruling P40), and shares one object per name; no fragment declares waterDeep twice', () => {
+    // No test compiles GLSL: a declaration after its first use fails only in the browser, so the order is pinned here.
+    const declarations = ['uniform float fogEnd;', 'uniform float eyeSky;', 'uniform sampler2D lightmap;', ...FLUID_FOG_UNIFORMS];
+    for (const v of VARIANTS) {
+      const m = SYSTEMS[v];
+      for (const [name, mat] of Object.entries(fogged(m))) {
+        const src = mat.fragmentShader;
+        const definition = src.indexOf('vec3 fluidFog(vec3 color, float d)');
+        expect(definition, `${v} ${name}`).toBeGreaterThan(0);
+        expect(count(src, 'vec3 fluidFog(vec3 color, float d)'), `${v} ${name}`).toBe(1);
+        for (const decl of declarations) {
+          expect(count(src, decl), `${v} ${name} ${decl}`).toBe(1);
+          expect(src.indexOf(decl), `${v} ${name} ${decl}`).toBeLessThan(definition);
+        }
+        for (const u of ['eyeFluid', 'fluidFogWater', 'fluidFogLava', 'eyeSky', 'fogEnd', 'lightmap']) {
+          expect(mat.uniforms[u], `${v} ${name} ${u}`).toBeDefined();
+          expect(mat.uniforms[u], `${v} ${name} ${u}`).toBe(m.terrainOpaque.uniforms[u]);
+        }
+      }
+      for (const [name, mat] of Object.entries(all(m))) {
+        expect(count(mat.fragmentShader, 'uniform vec3 waterDeep;'), `${v} ${name}`).toBe(name === 'water' ? 1 : 0);
+      }
+    }
+  });
+
+  test('the X-ray material\'s sources hold no eyeFluid and no fluid fog, and its uniforms neither (it has no fog)', () => {
+    for (const v of VARIANTS) {
+      const x = SYSTEMS[v].xray;
+      for (const s of [x.vertexShader, x.fragmentShader]) {
+        expect(s, v).not.toContain('eyeFluid');
+        expect(s, v).not.toContain('fluidFog');
+      }
+      for (const u of ['eyeFluid', 'fluidFogWater', 'fluidFogLava']) expect(x.uniforms[u], `${v} ${u}`).toBeUndefined();
+      expect(SYSTEMS[v].decodeDebug.fragmentShader, v).not.toContain('eyeFluid');
+    }
+  });
+
+  test('the sky dome applies the fluid fog at d = fogEnd while the eye is in a fluid, over its own uniforms and the fog\'s', () => {
+    for (const v of VARIANTS) {
+      const sky = SYSTEMS[v].sky;
+      const src = sky.fragmentShader;
+      expect(src).toContain('vec3 lightmapAt(float block, float sky)');
+      for (const decl of ['uniform float fogEnd;', 'uniform float eyeSky;']) expect(count(src, decl), `${v} ${decl}`).toBe(1);
+      expect(src).not.toContain('applyFog');
+      const body = src.slice(src.indexOf('void main() {'));
+      expect(body).toContain('vec3 c = skyColor(normalize(vDir));\n  if (eyeFluid > 0.5) c = fluidFog(c, fogEnd);\n  gl_FragColor = vec4(c, 1.0);');
+      expect(Object.keys(sky.uniforms).sort(), v).toEqual(
+        ['eyeFluid', 'eyeSky', 'fluidFogLava', 'fluidFogWater', 'fogEnd', 'lightmap', 'skyHorizon', 'skyZenith', 'sunDir'],
+      );
+    }
+  });
+
+  test('the fog colours: water\'s is Fast water\'s deep colour in linear, lava\'s [255, 90, 20] in linear × 0.6; eyeFluid 0 (none) by default', () => {
+    const m = system('batch');
+    const linear = (r: number, g: number, b: number): Color => new Color().setRGB(r / 255, g / 255, b / 255, SRGBColorSpace);
+    expect((m.water.uniforms['fluidFogWater']!.value as Color).equals(m.water.uniforms['waterDeep']!.value as Color)).toBe(true);
+    expect((m.water.uniforms['fluidFogWater']!.value as Color).equals(linear(16, 40, 96))).toBe(true);
+    expect((m.water.uniforms['fluidFogLava']!.value as Color).equals(linear(255, 90, 20).multiplyScalar(0.6))).toBe(true);
+    expect(m.water.uniforms['eyeFluid']!.value).toBe(0);
+  });
+
+  test('setFrameUniforms copies FrameState.eyeFluid into the eyeFluid uniform each frame, without allocation (Review Focus 3)', () => {
+    const m = system('mesh');
+    const u = m.terrainOpaque.uniforms['eyeFluid']!;
+    const seen: number[] = [];
+    for (const eyeFluid of [0, 1, 2, 1, 0, 2, 0]) {
+      m.setFrameUniforms({ ...FRAME, eyeFluid });
+      seen.push(u.value as number);
+      expect(m.sky.uniforms['eyeFluid']).toBe(u);
+      expect(m.water.uniforms['eyeFluid']).toBe(u);
+    }
+    expect(seen).toEqual([0, 1, 2, 1, 0, 2, 0]);
+    // setFrameUniforms boxes the time and the day and dusk factors it hands on (about 35 B per call measured on Node 24;
+    // `zeroAlloc.test.ts`' boxing budget of 256 B per tick covers them), so the copy is read against the same calls at a
+    // constant eyeFluid: a surface crossed every 500 frames (20 crossings per 10,000; the frames reuse three states, as
+    // the page reuses one) adds under 8 B per call, where one boxed number per call would add 16.
+    const BOXING_MAX = 256 * N;
+    const frames = [{ ...FRAME, eyeFluid: 0 }, { ...FRAME, eyeFluid: 1 }, { ...FRAME, eyeFluid: 2 }];
+    const still = allocationOver(() => m.setFrameUniforms(frames[0]!), 10 * N, BOXING_MAX);
+    expectAtRest(still, BOXING_MAX);
+    let k = 0;
+    const crossing = allocationOver(() => {
+      const i = k++;
+      m.setFrameUniforms(frames[((i / 500) | 0) % 3]!);
+    }, 10 * N, BOXING_MAX);
+    expectAtRest(crossing, BOXING_MAX);
+    expect(crossing.bytes - still.bytes, `crossing ${crossing.bytes} B, still ${still.bytes} B over ${N} calls`).toBeLessThan(8 * N);
+    expect(u.value).toBe(frames[(((k - 1) / 500) | 0) % 3]!.eyeFluid);
   });
 });

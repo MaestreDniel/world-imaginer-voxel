@@ -278,6 +278,11 @@ export interface WorldRenderer {
    */
   setXrayColorMode(mode: 0 | 1): void;
   /**
+   * The water tier (SP7a spec §7, D28): Fast (0) or Fancy (1); the materials' one uniform, no remesh or relink, allocates
+   * nothing (`MaterialSystem.setWaterTier`).
+   */
+  setWaterTier(tier: 0 | 1): void;
+  /**
    * Follows the host's size now (aspect, pixel ratio, drawing buffer; `applyViewport`), as the ResizeObserver does a
    * frame later: the map's mode B calls it at the switch, then `frame`, so the painted frame is drawn (SP4c spec §2.2).
    */
@@ -762,7 +767,7 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
   const origin = firstOrigin(o.originAt);
   sections.setOrigin(origin.x, origin.y, origin.z);
   // Valid uniforms for `compile` and any frame before the page's first FrameState: the opening time and the load RD's fog.
-  materials.setFrameUniforms({ t: OPENING_T, brightness: o.brightness, eyeSky: 15, rd: o.rd, fogBand: MEDIUM.fogBand, nightVision: 0 });
+  materials.setFrameUniforms({ t: OPENING_T, brightness: o.brightness, eyeSky: 15, rd: o.rd, fogBand: MEDIUM.fogBand, nightVision: 0, seconds: 0, eyeFluid: 0 });
 
   const renderer = new WebGLRenderer({ antialias: false });
   renderer.outputColorSpace = SRGBColorSpace;
@@ -926,6 +931,9 @@ export function createWorldRenderer(host: HTMLElement, o: WorldRendererOptions):
     },
     setXrayColorMode(mode) {
       xray.setColorMode(mode);
+    },
+    setWaterTier(tier) {
+      materials.setWaterTier(tier);
     },
     resize,
     gpuEstimate(out) {

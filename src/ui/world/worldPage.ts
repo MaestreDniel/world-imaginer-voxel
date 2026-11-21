@@ -2336,6 +2336,19 @@ export function toggleNightVision(settings: WorldSettings, o: {
   return next;
 }
 
+/** The water tier of a Water setting (SP7a spec §7, D10): the `waterTier` uniform's Fast 0 and Fancy 1. */
+export const waterTierOf = (water: WorldSettings['water']): 0 | 1 => (water === 'fancy' ? 1 : 0);
+
+/**
+ * The Water setting applied live (SP7a spec §7, D10, D28): a change from `saved` to `next` writes the renderer's water
+ * tier once and does nothing else (one uniform: no remesh, no relink, no worker message, nothing allocated); an
+ * unchanged tier writes nothing. The page's `applySettings` calls it for each Settings change; the saved setting is
+ * written once at load, right after the renderer is created.
+ */
+export function applyWaterSetting(saved: WorldSettings, next: WorldSettings, world: Pick<WorldRenderer, 'setWaterTier'>): void {
+  if (next.water !== saved.water) world.setWaterTier(waterTierOf(next.water));
+}
+
 /** The aim's reach (SP5c spec §1.2, D2): `SELECT_REACH` with the selection tool on, else `REACH_WALK` / `REACH_FLY`. */
 export function aimReach(tool: Pick<SelectTool, 'mode'>, fly: Pick<FlyState, 'mode'>): number {
   return tool.mode !== 'off' ? SELECT_REACH : fly.mode === 'walk' ? REACH_WALK : REACH_FLY;
@@ -4340,6 +4353,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
       originAt: at,
     });
     wr = world;
+    // The saved Water setting (SP7a spec §7, D10): the materials start at Fancy; a saved Fast is written before any frame.
+    world.setWaterTier(waterTierOf(settings.water));
     // A context lost before the reveal is a load failure; after it, the page's handler takes over (Review Focus 5).
     world.onContextLost(() => { if (state === 'loading') fail('The graphics context was lost.', null); });
     const sections = world.sections;
@@ -4441,7 +4456,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
     // One FrameState for every frame, rewritten in place (SP4b spec §3.10); the frame step writes it after the reveal.
     // Night vision starts at the saved setting, not eased (SP6a spec §6.2); the frame step eases it after the reveal.
     const frame = {
-      t, brightness: settings.brightness, eyeSky: 15, rd: loadRd, fogBand: MEDIUM.fogBand, nightVision: settings.nightVision ? 1 : 0,
+      t, brightness: settings.brightness, eyeSky: 15, rd: loadRd, fogBand: MEDIUM.fogBand, nightVision: settings.nightVision ? 1 : 0, seconds: 0, eyeFluid: 0,
     };
     const frameState = (): FrameState => {
       frame.t = t;
@@ -5335,6 +5350,8 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
         world.camera.fov = s.fov;
         world.camera.updateProjectionMatrix();
       }
+      // The water tier: one uniform (SP7a spec §7, D10).
+      applyWaterSetting(settings, s, world);
       settings = change.settings;
       frame.brightness = s.brightness;
       saveSettings(storage, settings);

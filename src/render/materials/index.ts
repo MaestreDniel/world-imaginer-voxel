@@ -8,13 +8,14 @@ import { SKY_FRAGMENT, SKY_VERTEX } from './glsl/sky.glsl';
 import { DECODE_DEBUG_FRAGMENT, decodeDebugVertex, TERRAIN_FRAGMENT, terrainVertex } from './glsl/terrain.glsl';
 import { WATER_FRAGMENT, waterVertex } from './glsl/water.glsl';
 import { XRAY_FRAGMENT, xrayVertex } from './glsl/xray.glsl';
-import { createSharedUniforms, ghostUniforms, skyUniforms, terrainUniforms, waterUniforms, xrayUniforms } from './uniforms';
+import { createSharedUniforms, ghostUniforms, skyDomeUniforms, terrainUniforms, waterUniforms, xrayUniforms } from './uniforms';
 
 /**
- * Materials v1 (SP4a spec §6.4-§6.6, master §4.6): terrain (opaque and cutout), Fast water, the sky dome and the
- * spike's decode-debug material, all `ShaderMaterial`s with `glslVersion: GLSL3`. The terrain and water materials come
- * in a RegionBatch variant (`'batch'`, three's batching chunks) and a RegionMesh variant (`'mesh'`, `REGION_MESH`, no
- * batching chunks), generated from the same GLSL (spec §6.2, D7). The selection tool's ghost (SP5c spec §6.2, D25) is
+ * Materials v1 (SP4a spec §6.4-§6.6, master §4.6): terrain (opaque and cutout), water (Fast and Fancy in one program,
+ * the `waterTier` uniform branching; SP7a spec §7, D28), the sky dome and the spike's decode-debug material, all
+ * `ShaderMaterial`s with `glslVersion: GLSL3`. The terrain and water materials come in a RegionBatch variant
+ * (`'batch'`, three's batching chunks) and a RegionMesh variant (`'mesh'`, `REGION_MESH`, no batching chunks),
+ * generated from the same GLSL (spec §6.2, D7). The selection tool's ghost (SP5c spec §6.2, D25) is
  * the cutout terrain with a `GHOST` define, translucent, turned by a uniform and floored in light; its boxes and the
  * outline use three's built-in line materials (`render/selection.ts`). The X-ray (SP6a spec §5.2, §5.3) has its own
  * material in both variants (`glsl/xray.glsl.ts`), additive and unlit, and the shared uniform `xrayOn` collapses either
@@ -50,8 +51,9 @@ export interface MaterialSystem {
   readonly xray: ShaderMaterial;
   readonly lightmap: ReturnType<typeof createLightmap>;
   /**
-   * Writes the frame's fog, eye light, sky and sun uniforms and hands the lightmap the frame's day, dusk, brightness and
-   * night vision (it rebuilds only when they moved a step); allocates nothing (SP4b spec §3.10, SP6a spec §6.2).
+   * Writes the frame's fog, eye light, eye fluid (`eyeFluid`, SP7a spec §8), sky, sun and clock (`timeSeconds`, SP7a
+   * spec §7) uniforms and hands the lightmap the frame's day, dusk, brightness and night vision (it rebuilds only when
+   * they moved a step); allocates nothing (SP4b spec §3.10, SP6a spec §6.2).
    */
   setFrameUniforms(f: FrameState): void;
   /** Writes the ghost's `ghostTurns` uniform, its quarter turns `q` (0-3); allocates nothing (SP5c spec §6.2). */
@@ -66,6 +68,11 @@ export interface MaterialSystem {
    * allocates nothing.
    */
   setXrayColorMode(mode: 0 | 1): void;
+  /**
+   * Writes the water's `waterTier` (SP7a spec §7, D28): Fast (0) or Fancy (1); one uniform, no recompile, allocates
+   * nothing.
+   */
+  setWaterTier(tier: 0 | 1): void;
   /** Frees the materials and the lightmap; the albedo array stays its owner's. */
   dispose(): void;
 }
@@ -117,7 +124,7 @@ export function createMaterialSystem(s: MaterialSettings, albedo: DataArrayTextu
   const sky = new ShaderMaterial({
     name: 'sky',
     glslVersion: GLSL3,
-    uniforms: skyUniforms(u),
+    uniforms: skyDomeUniforms(u),
     vertexShader: SKY_VERTEX,
     fragmentShader: SKY_FRAGMENT,
     depthWrite: false,
@@ -183,6 +190,8 @@ export function createMaterialSystem(s: MaterialSettings, albedo: DataArrayTextu
       u.fogStart.value = fog.start;
       u.fogEnd.value = fog.end;
       u.eyeSky.value = f.eyeSky;
+      u.timeSeconds.value = f.seconds;
+      u.eyeFluid.value = f.eyeFluid;
       skyColorsInto(f.t, zenith, horizon);
       u.skyZenith.value.setRGB(zenith[0]!, zenith[1]!, zenith[2]!, SRGBColorSpace);
       u.skyHorizon.value.setRGB(horizon[0]!, horizon[1]!, horizon[2]!, SRGBColorSpace);
@@ -201,6 +210,9 @@ export function createMaterialSystem(s: MaterialSettings, albedo: DataArrayTextu
     },
     setXrayColorMode(mode) {
       u.xrayColorMode.value = mode;
+    },
+    setWaterTier(tier) {
+      u.waterTier.value = tier;
     },
     dispose() {
       for (const m of materials) m.dispose();

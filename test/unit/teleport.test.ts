@@ -37,10 +37,10 @@ function camera(): FlyState {
   return { x: 10.25, y: 120, z: -7.75, yaw: 123, pitch: -31, vx: 3, vy: -2, vz: 1.5, speed: SPEED_DEFAULT * 2, mode: 'fly' };
 }
 
-/** A teleport over `pool` with a fresh camera and eye light 4; its arrivals and failures recorded. */
+/** A teleport over `pool` with a fresh camera, eye light 4 and the eye in water; its arrivals and failures recorded. */
 function rig(pool: { landing(x: number, z: number): Promise<Landing> }) {
   const fly = camera();
-  const state = { eyeSky: 4 };
+  const state = { eyeSky: 4, eyeFluid: 1 };
   const arrivals: Arrival[] = [];
   let fails = 0;
   const causes: unknown[] = [];
@@ -145,6 +145,15 @@ describe('createTeleport (SP4c spec §3.2, §3.3, D12)', () => {
     expect([r.fly.yaw, r.fly.pitch, r.fly.speed]).toEqual([123, -31, SPEED_DEFAULT * 2]);
     expect(r.state.eyeSky).toBe(15);
     expect(r.arrivals).toEqual([[100.5, 200.5, { surface: 64, water: -Infinity, y: 88 }]]);
+  });
+
+  test('a teleport resets `eyeFluid` to 0 with `eyeSky` (SP7a spec §8); a landing that fails keeps both', async () => {
+    const r = rig(scriptedPool([{ surface: 64, water: -Infinity }]));
+    await expect(r.tp.go(100.5, 200.5)).resolves.toBe(true);
+    expect([r.state.eyeSky, r.state.eyeFluid]).toEqual([15, 0]);
+    const failed = rig(scriptedPool([new WorkerFailed('boom')]));
+    await expect(failed.tp.go(1, 2)).resolves.toBe(false);
+    expect([failed.state.eyeSky, failed.state.eyeFluid]).toEqual([4, 1]);
   });
 
   test('two JobCancelled then success lands; four cancels or one WorkerFailed call `onFail` and move nothing', async () => {
@@ -265,7 +274,7 @@ describe('the walking teleport (SP5a spec §3.4, D15)', () => {
     walk.vz = 0.1;
     walk.acc = 0.02;
     walk.onGround = true;
-    const state = { eyeSky: 4 };
+    const state = { eyeSky: 4, eyeFluid: 1 };
     const arrivals: Arrival[] = [];
     const tp = createTeleport({
       pool,

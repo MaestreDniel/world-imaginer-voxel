@@ -20,4 +20,15 @@ export interface FrameState {
    * lightmap with the day, dusk and brightness; required, so every frame writes it.
    */
   readonly nightVision: number;
+  /**
+   * The frame's clock in seconds (SP7a spec §7): the rendered deltas summed by the frame step, wrapped every 3,600 s to
+   * keep the shader's precision; Fancy water's ripples scroll with it (`timeSeconds`). Not the time of day (`t`);
+   * required, so every frame writes it.
+   */
+  readonly seconds: number;
+  /**
+   * The fluid at the eye (SP7a spec §8, D29): 0 none, 1 water, 2 lava, by the eye voxel's fluid and its surface height
+   * (the frame step's `eyeFluidAt`); the underwater and lava fog follow it. Required, so every frame writes it.
+   */
+  readonly eyeFluid: number;
 }

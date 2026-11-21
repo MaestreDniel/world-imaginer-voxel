@@ -12,8 +12,8 @@ export interface GraphicsPreset {
   readonly uploadSections: number;
   readonly ao: boolean;
   readonly smoothLight: boolean;
-  /** The water tier: SP4a builds Fast only (master §4.10). */
-  readonly water: 'fast';
+  /** The water tier (master §4.10): SP4a built Fast only; SP7a adds Fancy, Medium's (spec §7, D10). */
+  readonly water: 'fast' | 'fancy';
   /** The pixel ratio is min(devicePixelRatio, pixelRatioCap). */
   readonly pixelRatioCap: number;
   /** Blocks from the fog's start to its end, which is (RD − 1)·16 (SP4b spec §6.3). */
@@ -27,7 +27,7 @@ export const MEDIUM: GraphicsPreset = Object.freeze({
   uploadSections: 32,
   ao: true,
   smoothLight: true,
-  water: 'fast',
+  water: 'fancy',
   pixelRatioCap: 1,
   fogBand: 64,
 });

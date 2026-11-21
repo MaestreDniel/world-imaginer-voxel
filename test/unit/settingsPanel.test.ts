@@ -201,6 +201,42 @@ describe('mountSettingsPanel (SP5b spec §1.4, D9; the rows moved from the help,
     expect(o.onSettings).toHaveBeenCalledTimes(1);
   });
 
+  test('"Water": a Fast / Fancy select right after Night vision and before the greyed rows under Graphics, Fancy by default, in step with the setting; a change calls onSettings with the whole new settings, live (SP7a spec §7, D10)', () => {
+    const items = new Map<string, string>();
+    const storage = { getItem: (k: string) => items.get(k) ?? null, setItem: (k: string, v: string) => { items.set(k, v); } };
+    const { o } = mount({ settings: loadSettings(storage) });
+    o.onSettings.mockImplementation((s) => saveSettings(storage, s));
+    const graphics = dom.el('settings-graphics');
+    const select = dom.el('setting-water');
+    expect(select.tagName).toBe('SELECT');
+    expect(select.options.map((op) => [op.value, op.textContent])).toEqual([['fast', 'Fast'], ['fancy', 'Fancy']]);
+    expect(select.value).toBe('fancy');
+    // The rows in order: Night vision, Water, then the greyed rows.
+    const rows = graphics.children;
+    const nvRow = rows.findIndex((r) => r.querySelector('#setting-night-vision') !== null);
+    const waterRow = rows.findIndex((r) => r.querySelector('#setting-water') !== null);
+    expect(nvRow).toBeGreaterThanOrEqual(0);
+    expect(waterRow).toBe(nvRow + 1);
+    expect(rows[waterRow]!.querySelectorAll('span').map((sp) => sp.textContent)).toEqual(['Water']);
+    expect(rows[waterRow + 1]).toBe(dom.el('settings-greyed'));
+    expect(select.disabled).toBe(false);
+    // A change is reported at once (live) and saved by the owner.
+    change('setting-water', 'fast');
+    expect(o.onSettings).toHaveBeenCalledTimes(1);
+    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, water: 'fast' });
+    expect(loadSettings(storage).water).toBe('fast');
+    // The screen's copy has it: a later FOV change sends it on.
+    change('setting-fov', '90', 'input');
+    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, water: 'fast', fov: 90 });
+    change('setting-water', 'fancy');
+    expect(o.onSettings).toHaveBeenLastCalledWith({ ...SETTINGS_DEFAULTS, fov: 90 });
+    // A saved Fast shows selected on the next page.
+    change('setting-water', 'fast');
+    dom.body.replaceChildren();
+    mount({ settings: loadSettings(storage) });
+    expect(dom.el('setting-water').value).toBe('fast');
+  });
+
   test('the greyed rows are disabled and change nothing', () => {
     const { o } = mount();
     const greyed = dom.el('settings-greyed');

@@ -11,12 +11,12 @@ import { LAVA_LAYER } from '../../../mesh/greedy';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../../world/blocks/kinds';
 import type { MaterialVariant } from '../index';
 import {
-  COLLAPSED_GLSL, FOG_GLSL, FRAGMENT_OUTPUT, LIGHT_INTERP_GLSL, LIGHTMAP_GLSL, SKY_GLSL, vertexHead, vertexPlace,
+  COLLAPSED_GLSL, FOG_GLSL, FRAGMENT_OUTPUT, glslFloat, LIGHT_INTERP_GLSL, LIGHTMAP_GLSL, SKY_GLSL, vertexHead, vertexPlace,
 } from './common.glsl';
 import { packingGlsl } from './packing.glsl';
 
-/** A GLSL float literal. */
-export const glslFloat = (n: number): string => (Number.isInteger(n) ? n.toFixed(1) : String(n));
+// The GLSL float literal moved to common.glsl.ts (the fluid fog's literals, SP7a); its importers still find it here.
+export { glslFloat };
 /** A GLSL `const float name[n]` array of `values`. */
 export const floatArray = (name: string, values: readonly number[]): string =>
   `const float ${name}[${values.length}] = float[${values.length}](${values.map(glslFloat).join(', ')});`;

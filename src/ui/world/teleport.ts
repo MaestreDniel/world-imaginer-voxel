@@ -68,8 +68,8 @@ export interface TeleportOptions {
   readonly pool: Pick<WorkerPool, 'landing'>;
   /** The camera, moved in place on arrival. */
   readonly fly: FlyState;
-  /** The frame step's state: `eyeSky` is reset to 15 on arrival (SP4c spec §3.4). */
-  readonly state: { eyeSky: number };
+  /** The frame step's state: `eyeSky` is reset to 15 (SP4c spec §3.4) and `eyeFluid` to 0 (SP7a spec §8) on arrival. */
+  readonly state: { eyeSky: number; eyeFluid: number };
   /**
    * The walk (SP5a spec §3.4): while `active()`, the arrival calls `arrive` with the feet (the block's centre,
    * `walkFeetY`), which sets both feet with the snap pending (`arriveFeet`); a place calls `setFeet` (both feet, no
@@ -160,6 +160,7 @@ export function createTeleport(o: TeleportOptions): Teleport {
       fly.vz = 0;
       if (walk !== null) walk.arrive(fly.x, feetY, fly.z);
       state.eyeSky = 15;
+      state.eyeFluid = 0;
       o.onArrive(fly.x, fly.z, { surface: landing.surface, water: landing.water, y });
       return true;
     },

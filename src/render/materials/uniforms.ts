@@ -37,6 +37,16 @@ export interface SharedUniforms {
   readonly xrayBiomePalette: IUniform<Color[]>;
   /** The X-ray's colour mode (SP6b spec §7.2), 0 or 1: its walls by kind (0) or by cave biome (1); the film by kind. */
   readonly xrayColorMode: IUniform<number>;
+  /** The water tier (SP7a spec §7, D28), 0 Fast or 1 Fancy: one water program, its fragment shader branches on it. */
+  readonly waterTier: IUniform<number>;
+  /** The frame's clock in seconds, wrapped every 3,600 s (`FrameState.seconds`): Fancy's ripples scroll with it. */
+  readonly timeSeconds: IUniform<number>;
+  /** The fluid at the eye (`FrameState.eyeFluid`, SP7a spec §8, D29): 0 none, 1 water, 2 lava; the fluid fog follows it. */
+  readonly eyeFluid: IUniform<number>;
+  /** The underwater fog's colour before the lightmap: Fast water's deep colour, linear (SP7a spec §8). */
+  readonly fluidFogWater: IUniform<Color>;
+  /** The lava fog's colour, linear (SP7a spec §8). */
+  readonly fluidFogLava: IUniform<Color>;
 }
 
 /** Shared uniforms over `albedo` and the lightmap texture, at full day until the first `setFrameUniforms`. */
@@ -57,17 +67,38 @@ export function createSharedUniforms(albedo: DataArrayTexture, lightmap: DataTex
     xrayPalette: { value: XRAY_COLORS.map((hex) => new Color().setStyle(hex, SRGBColorSpace)) },
     xrayBiomePalette: { value: XRAY_BIOME_COLORS.map((hex) => new Color().setStyle(hex, SRGBColorSpace)) },
     xrayColorMode: { value: 0 },
+    waterTier: { value: 1 },
+    timeSeconds: { value: 0 },
+    eyeFluid: { value: 0 },
+    fluidFogWater: { value: linear(...WATER_DEEP) },
+    fluidFogLava: { value: linear(...LAVA_FOG).multiplyScalar(LAVA_FOG_SCALE) },
   };
 }
 
 type Uniforms = Record<string, IUniform>;
 
-/** The sky dome's uniforms: the gradient stops and the sun. */
+/** The sky's uniforms: the gradient stops and the sun (the sky dome's own, and the base of the lit materials'). */
 export function skyUniforms(u: SharedUniforms): Uniforms {
   return { skyZenith: u.skyZenith, skyHorizon: u.skyHorizon, sunDir: u.sunDir };
 }
 
-/** The lightmap, the sky colour and the fog: what terrain and water read besides their own uniforms. */
+/**
+ * The sky dome's material (SP7a spec §8): its own uniforms, and what the fluid fog at `fogEnd` reads (the eye's fluid,
+ * the fog's end, the eye's sky light, the lightmap and the two fog colours).
+ */
+export function skyDomeUniforms(u: SharedUniforms): Uniforms {
+  return {
+    ...skyUniforms(u),
+    eyeFluid: u.eyeFluid,
+    fogEnd: u.fogEnd,
+    eyeSky: u.eyeSky,
+    lightmap: u.lightmap,
+    fluidFogWater: u.fluidFogWater,
+    fluidFogLava: u.fluidFogLava,
+  };
+}
+
+/** The lightmap, the sky colour and the fog (the fluid fog included): what terrain and water read besides their own uniforms. */
 function litUniforms(u: SharedUniforms): Uniforms {
   return {
     ...skyUniforms(u),
@@ -75,6 +106,9 @@ function litUniforms(u: SharedUniforms): Uniforms {
     fogStart: u.fogStart,
     fogEnd: u.fogEnd,
     eyeSky: u.eyeSky,
+    eyeFluid: u.eyeFluid,
+    fluidFogWater: u.fluidFogWater,
+    fluidFogLava: u.fluidFogLava,
   };
 }
 
@@ -95,15 +129,20 @@ const linear = (r: number, g: number, b: number): Color => new Color().setRGB(r 
 export const WATER_ALPHA = 0.72;
 const WATER_SHALLOW = [64, 128, 230] as const;
 const WATER_DEEP = [16, 40, 96] as const;
+/** The lava fog's colour, sRGB [255, 90, 20], scaled by 0.6 in linear (SP7a spec §8). */
+const LAVA_FOG = [255, 90, 20] as const;
+const LAVA_FOG_SCALE = 0.6;
 
 /**
- * Water's uniforms: the shared ones, the X-ray toggle (its vertex shader collapses on it, SP6a spec §5.3), its alpha
- * and its two colours in linear (one tint until SP8a).
+ * Water's uniforms: the shared ones, the X-ray toggle (its vertex shader collapses on it, SP6a spec §5.3), the tier and
+ * the clock (SP7a spec §7, D28), Fast's alpha and its two colours in linear (one tint until SP8a).
  */
 export function waterUniforms(u: SharedUniforms): Uniforms {
   return {
     ...litUniforms(u),
     xrayOn: u.xrayOn,
+    waterTier: u.waterTier,
+    timeSeconds: u.timeSeconds,
     alpha: { value: WATER_ALPHA },
     waterShallow: { value: linear(...WATER_SHALLOW) },
     waterDeep: { value: linear(...WATER_DEEP) },

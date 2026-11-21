@@ -1744,14 +1744,12 @@ describe('master spec amendments (SP5b §9)', () => {
     expect(s56.split('\n')).toContain('  - spawn, player with view cone, grid, column-status heatmap, saved places per saved world (SP5b: a section of each saved world\'s map, one map per saved world; coloured dots; a Places tab; B in the world and \'+ Add at the pin\' on the map).');
   });
 
-  test('§1\'s settings block is replaced by the Settings screen; §4.16 and §5.2 name its Graphics and Controls (SP5b spec §1.4, D9, §9)', () => {
+  test('§1\'s settings block is replaced by the Settings screen; §5.2 names its Graphics and Controls (§4.16\'s line in the SP7a describe) (SP5b spec §1.4, D9, §9)', () => {
     // Moved from the SP5a describe (SP5b spec §8), with the amendment it pins.
     const entry = layoutEntry(/^\s+ui\/world\/\* /);
     expect(entry).toContain('the world\'s small settings block (replaced by SP5b\'s Settings screen, `ui/settingsPanel.ts`);');
     expect(entry).not.toContain('(SP5b\'s graphics settings screen replaces it)');
-    const at416 = text.indexOf('### 4.16 ');
-    const lines416 = text.slice(at416, text.indexOf('### 4.17 ', at416)).split('\n');
-    expect(lines416.some((l) => l.startsWith('- Every setting can be overridden individually (SP5b: the Settings screen, G: Graphics with RD, FPS cap, FOV and brightness, the rest greyed until SP11; Controls with mouse sensitivity and hold to repeat): RD, LOD,')), 'no amended "Every setting can be overridden" line in §4.16').toBe(true);
+    // §4.16's "Every setting can be overridden" line: pinned in the SP7a describe since SP7a rewords it (SP7a spec §16 item 14).
     const at52 = text.indexOf('### 5.2 ');
     const lines52 = text.slice(at52, text.indexOf('### 5.3 ', at52)).split('\n');
     expect(lines52).toContain('- **Settings:** Graphics and Controls (SP5b), Audio (SP8c) (master, music, sfx and ambient volumes; music frequency Always / Frequent / Standard / Never; sound pack).');
@@ -3529,6 +3527,27 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(vertex, 'the solid word\'s flags name the lava drop').toBe('  - opaque/cutout: `layer10 | face3 | ao2 | sky4 | block4 | tint3 | flags4 (emissive, waving, randomRotate, upper; for `LAVA_LAYER` the vertex\'s corner drop, SP7a) | 2 spare`;');
   });
 
+  test('§4.6/§4.10\'s water tier as built (SP7a spec §16 item 12)', () => {
+    // Item 12's Fancy half (Task 35): `water(tier)` is one program with a `waterTier` uniform; Fancy as built (Fresnel and
+    // procedural ripples; the animated texture SP8a/SP11, vertex waves SP11). The underwater fog half is Task 38's.
+    const s46 = text.slice(text.indexOf('### 4.6 '), text.indexOf('### 4.7 '));
+    expect(s46.split('\n')[2], '§4.6\'s material list').toBe('`createMaterialSystem(settings)` returns `terrainOpaque`, `terrainCutout`, `water(tier)` (one program for every tier: a `waterTier` uniform branches, SP7a), `lava`, `sky`, `clouds`, `lod`, `shadowDepth` and `selection`, plus `setFrameUniforms(frame)`. All are `ShaderMaterial({glslVersion: GLSL3})` and include `batching_pars_vertex` and `batching_vertex`.');
+    const s410 = text.slice(text.indexOf('### 4.10 '), text.indexOf('### 4.11 ')).split('\n');
+    expect(s410.find((l) => l.startsWith('| Fancy |')), 'the Fancy row as built').toBe('| Fancy | adds Schlick Fresnel (F0 0.02) toward `skyColor(reflect(view, n))`, 2 scrolling procedural ripple-normal octaves (value-noise gradients at λ 4 and 1.7 blocks, no texture; SP7a), on sloped surfaces the normal from `dFdx`/`dFdy` of the world position, alpha 0.6 + 0.3·Fresnel (SP7a); animated texture (SP8a\'s animation frames, cut to SP11); vertex waves on ungreedy near-camera water (High+; SP11) |');
+    expect(s410, 'the one-program paragraph').toContain('Fast and Fancy are one water program (SP7a, its D28): the `waterTier` uniform (0 Fast, 1 Fancy) branches in the fragment shader and `timeSeconds` (the frame\'s clock, wrapped every 3,600 s) scrolls the ripples, so a toggle writes one uniform and relinks nothing.');
+    expect(text, 'the pre-SP7a Fancy row is gone').not.toContain('2 scrolling ripple-normal octaves, animated texture, vertex waves');
+  });
+
+  test('§4.6\'s underwater and lava fog (SP7a spec §16 item 12)', () => {
+    // Item 12's fog half (Task 38): §4.6's Fog paragraph ends with the fluid fog as built (SP7a spec §8, D11): water's
+    // and lava's f = 1 − 2^(−8·(d/L)²), their colours, the 0.25 tint and the sky dome at fogEnd.
+    const s46 = text.slice(text.indexOf('### 4.6 '), text.indexOf('### 4.7 '));
+    const fog = s46.split('\n').find((l) => l.startsWith('**Fog** is spherical'));
+    expect(fog, 'no **Fog** paragraph in §4.6').toBeDefined();
+    expect(fog!.endsWith(' and is darkened by the eye\'s sky light. When the eye is in a fluid (SP7a, its §8 and D11: `eyeFluid`, from the eye voxel\'s fluid and surface height), the fog switches to f = 1 − 2^(−8·(d/L)²) (less than 1/256 of the colour left at L): in water L = 56 blocks and the colour is Fast water\'s deep colour × the lightmap at the eye\'s sky light; in lava L = 3 blocks and the colour [255, 90, 20] × 0.6. Every fragment, the sky dome\'s included (at d = `fogEnd`), also mixes 0.25 toward that colour (the tint). The X-ray has no fog.'), 'the fluid fog as built').toBe(true);
+    expect(text, 'the pre-SP7a underwater sentence is gone').not.toContain('fog switches to exponential (about 48-60 blocks) with a screen tint');
+  });
+
   test('§4.11 and §4.12 name SP7b; the bench route\'s flood is SP7b\'s and R5\'s row is gated from SP7a (SP7a spec §16 item 13)', () => {
     const at = text.indexOf('### 4.11 ');
     const s411to412 = text.slice(at, text.indexOf('### 4.13 ', at));
@@ -3721,5 +3740,15 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(dt2, 'no DT2 row in §6.4').toBeDefined();
     expect(dt2).toContain('(amended by SP6b). SP7a: `probeBulk` compares the stored solidity with `terrainSolidAt` (the density probe\'s solidity, or a tagged voxel the aquifer makes a barrier) and `tagProbe` reads 0 where `barrierAt` holds (barriers clear the tag); `aquiferProbe` counts the checked voxels T left non-solid, tagged and untagged, whose stored proto fluid byte ≠ `fluidAt` (both of T\'s fluid rules are point functions; spring voxels excluded) (amended by SP7a) |');
     expect(THRESHOLDS.DT2?.aquiferProbe).toEqual({ max: 0, activeFrom: 'SP7a' });
+  });
+
+  test('§4.16\'s Water setting (SP7a spec §16 item 14)', () => {
+    // The water tier is a live Settings › Graphics row from SP7a (Fast / Fancy, one uniform), no longer one of the rows
+    // greyed until SP11. Moved here from the SP5b describe's §4.16 pin, whose parenthetical this rewords.
+    const at = text.indexOf('### 4.16 ');
+    const s416 = text.slice(at, text.indexOf('### 4.17 ', at)).split('\n');
+    const overridable = s416.find((l) => l.startsWith('- Every setting can be overridden individually'));
+    expect(overridable).toBe('- Every setting can be overridden individually (SP5b: the Settings screen, G: Graphics with RD, FPS cap, FOV and brightness, the water tier (Fast / Fancy, live from SP7a), the rest greyed until SP11; Controls with mouse sensitivity and hold to repeat): RD, LOD, FOV, brightness, night vision (SP6a), fog start, resolution scale, FPS cap, anisotropy, biome blend, water tier (live from SP7a), shadows, clouds, AO.');
+    expect(s416, 'Medium\'s water is Fancy').toContain('| water | Fast | Fancy | Fancy | Fabulous |');
   });
 });

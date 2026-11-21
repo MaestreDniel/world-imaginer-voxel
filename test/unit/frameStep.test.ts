@@ -9,9 +9,10 @@ import type { Action } from '../../src/player/keymap';
 import { createFloatingOrigin } from '../../src/render/floatingOrigin';
 import { createFpsLimiter, type FpsCap } from '../../src/render/fpsLimiter';
 import { createFrameClock } from '../../src/ui/world/frameNotice';
-import { createFrameStep, displayInterval, eyeSkyLight, NIGHT_VISION_EASE_S, type FrameStepDeps } from '../../src/ui/world/frameStep';
+import { createFrameStep, displayInterval, eyeFluidAt, eyeSkyLight, NIGHT_VISION_EASE_S, SECONDS_WRAP, type FrameStepDeps } from '../../src/ui/world/frameStep';
 import { createTeleport } from '../../src/ui/world/teleport';
 import { EYE, createWalkState, type WalkState } from '../../src/player/walk';
+import { FLUID_LAVA, FLUID_WATER, LAVA_SOURCE, NO_FLUID, packFluid, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR } from '../../src/world/blocks/index';
 
 const HZ60 = 1000 / 60;
@@ -26,7 +27,12 @@ interface Rig {
   readonly fly: FlyState;
   readonly walk: WalkState;
   light: number;
+  /** The fluid byte the store holds at each voxel (none by default), and whether every column is Published. */
+  fluid: (bx: number, by: number, bz: number) => number;
+  published: boolean;
   readonly frames: number[];
+  /** `eyeFluid` as each rendered frame saw it. */
+  readonly fluids: number[];
   readonly rendered: number[];
   generating: boolean;
   /** The store the frame step was given, and each reader `aim` received. */
@@ -40,21 +46,23 @@ interface Rig {
    */
   ms: number;
   readonly timed: number[];
-  /** The walk step's reads (`blockAt`, `fluidAt`, `publishedAt`). */
+  /** The store's view-free reads (`blockAt`, `fluidAt`, `publishedAt`): the walk step's and the eye's fluid. */
   reads: number;
+  /** `reads` when `aim` ran: the walk step's reads alone (the eye's fluid is read after `aim`). */
+  readsAtAim: number;
   /** The night-vision setting the frame step eases toward (SP6a spec §6.2). */
   nightVision: boolean;
 }
 
 /** A frame step over fakes: every call it makes is logged in order; the clock, limiter and throttle are real. */
-function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; paused?: () => boolean; fatalInUpdate?: () => boolean; hooks?: boolean; mode?: FlyState['mode']; timing?: boolean } = {}): Rig {
+function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; paused?: () => boolean; fatalInUpdate?: () => boolean; hooks?: boolean; mode?: FlyState['mode']; timing?: boolean; timeSpeed?: number } = {}): Rig {
   const log: string[] = [];
   const counts = createCoordinatorCounts();
   const throttle = createThrottle({ max: o.max ?? 3 });
   const pushes: Rig['pushes'] = [];
   const fly: FlyState = { x: 8, y: o.y ?? 100, z: 8, yaw: 0, pitch: 0, vx: 0, vy: 0, vz: 0, speed: SPEED_DEFAULT, mode: o.mode ?? 'fly' };
   const walk = createWalkState();
-  const state = { t: 0.1, brightness: 0.5, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand, nightVision: 0 };
+  const state = { t: 0.1, brightness: 0.5, eyeSky: 15, rd: 12, fogBand: MEDIUM.fogBand, nightVision: 0, seconds: 0, eyeFluid: 0 };
   const held: ReadonlySet<Action> = new Set(o.held ?? []);
   const origin = createFloatingOrigin(0, 0, 0);
   // The page's `stopped` flag, set by `update` when it raises a fatal synchronously (the page's failAfterReveal).
@@ -63,7 +71,10 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
     step: null as unknown as Rig['step'],
     log, counts, throttle, pushes, state, fly, walk,
     light: 0xa0,
+    fluid: () => NO_FLUID,
+    published: true,
     frames: [],
+    fluids: [],
     rendered: [],
     generating: false,
     store: null as unknown as FrameStepDeps['store'],
@@ -72,6 +83,7 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
     ms: 0,
     timed: [],
     reads: 0,
+    readsAtAim: 0,
     nightVision: false,
   };
   const store: FrameStepDeps['store'] = {
@@ -87,10 +99,11 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
       r.ms += 10;
       return 0;
     },
-    // Air everywhere, every column Published (the walk step's view-free reads, logged once per run of reads).
+    // Air everywhere, no fluid and every column Published unless the case says otherwise (the walk step's and the
+    // eye's view-free reads, logged once per run of reads).
     blockAt: () => { readLog(); return AIR; },
-    fluidAt: () => { readLog(); return 0; },
-    publishedAt: () => { readLog(); return true; },
+    fluidAt: (bx, by, bz) => { readLog(); return r.fluid(bx, by, bz); },
+    publishedAt: () => { readLog(); return r.published; },
     heightAt: () => null,
   };
   function readLog(): void {
@@ -158,6 +171,7 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
         log.push('frame');
         r.ms += 25;
         r.frames.push(s.eyeSky);
+        r.fluids.push(s.eyeFluid);
       },
       sections: { setOrigin: () => { log.push('setOrigin'); } },
     } as unknown as FrameStepDeps['world'],
@@ -166,10 +180,11 @@ function rig(o: { cap?: FpsCap; max?: number; y?: number; held?: Action[]; pause
     aim: (read, paused) => {
       log.push(paused ? 'aim paused' : 'aim');
       r.aimReads.push(read);
+      r.readsAtAim = r.reads;
       r.ms += 3;
     },
     state,
-    timeSpeed: () => 1,
+    timeSpeed: () => o.timeSpeed ?? 1,
     fogStep: () => 12,
     nightVision: () => r.nightVision,
     onRendered: (dt) => { r.rendered.push(dt); },
@@ -205,14 +220,14 @@ describe('createFrameStep (SP4b spec §7.2)', () => {
     expect(r.rendered.slice(1).every((dt) => Math.abs(dt - 2 * HZ60) < 1e-6)).toBe(true);
   });
 
-  test('the order on a rendered tick: update, pump, origin, drain, aim and eye light inside one read section, render', () => {
+  test('the order on a rendered tick: update, pump, origin, drain, aim, eye light and eye fluid inside one read section, render', () => {
     const r = rig();
     r.step.tick(HZ60);
     // The pump reads the last rebuild's centre and yaw from the counts the coordinator just wrote.
-    expect(r.log).toEqual(['update', 'pump 3,-4,90', 'origin', 'drain', 'enterRead', 'aim', 'lightAt 8,100,8', 'exitRead', 'frame']);
+    expect(r.log).toEqual(['update', 'pump 3,-4,90', 'origin', 'drain', 'enterRead', 'aim', 'lightAt 8,100,8', 'read', 'exitRead', 'frame']);
   });
 
-  test('the tick order: motion, update, counts, uploads, origin, drain, then one read section holding `aim` and the eye light, then `world.frame` (SP5a spec §3.5)', () => {
+  test('the tick order: motion, update, counts, uploads, origin, drain, then one read section holding `aim`, the eye light and the eye fluid, then `world.frame` (SP5a spec §3.5)', () => {
     const r = rig({ held: ['forward'], hooks: true });
     r.step.tick(HZ60);
     // Yaw 0 faces −z: the fly step moved the camera before the coordinator's update.
@@ -220,7 +235,7 @@ describe('createFrameStep (SP4b spec §7.2)', () => {
     expect(r.zAtUpdate[0]!).toBeLessThan(8);
     expect(r.log).toEqual([
       'beforeUpdate', 'update', 'counts', 'afterCounts', 'pump 3,-4,90', 'origin', 'drain',
-      'enterRead', 'aim', `lightAt 8,100,${Math.floor(r.fly.z)}`, 'exitRead', 'frame',
+      'enterRead', 'aim', `lightAt 8,100,${Math.floor(r.fly.z)}`, 'read', 'exitRead', 'frame',
     ]);
     // aim reads through the frame's store, inside its read section.
     expect(r.aimReads).toEqual([r.store]);
@@ -332,6 +347,92 @@ describe('createFrameStep (SP4b spec §7.2)', () => {
     expect(eyeSkyLight({ lightAt: (bx, by, bz) => (bx === -1 && by === -64 && bz === 3 ? 0xf3 : 0) }, -0.5, -63.5, 3.9, 7)).toBe(15);
   });
 
+  test('eyeFluidAt: the eye is in a fluid only below its surface height, 1 with the same fluid above or falling (SP7a spec §8, D29; Review Focus 3)', () => {
+    /** `here` at (0, 64, 0) and `above` at (0, 65, 0), no fluid elsewhere, every column Published. */
+    const at = (here: number, above: number = NO_FLUID) => ({
+      fluidAt: (bx: number, by: number, bz: number) => (bx !== 0 || bz !== 0 ? NO_FLUID : by === 64 ? here : by === 65 ? above : NO_FLUID),
+      publishedAt: () => true,
+    });
+    // A source, h 8/9 ≈ 0.889.
+    expect(eyeFluidAt(at(WATER_SOURCE), 0.5, 64.85, 0.5, 0)).toBe(1);
+    expect(eyeFluidAt(at(WATER_SOURCE), 0.5, 64.95, 0.5, 0)).toBe(0);
+    // A level-3 voxel, h 5/9.
+    expect(eyeFluidAt(at(packFluid(FLUID_WATER, 3)), 0.5, 64.5, 0.5, 0)).toBe(1);
+    expect(eyeFluidAt(at(packFluid(FLUID_WATER, 3)), 0.5, 64.6, 0.5, 0)).toBe(0);
+    // A falling voxel, and a voxel with water above: h 1.
+    expect(eyeFluidAt(at(packFluid(FLUID_WATER, 1, true)), 0.5, 64.99, 0.5, 0)).toBe(1);
+    expect(eyeFluidAt(at(WATER_SOURCE, packFluid(FLUID_WATER, 2)), 0.5, 64.99, 0.5, 0)).toBe(1);
+    // Lava above is not the same fluid: the source keeps its 8/9.
+    expect(eyeFluidAt(at(WATER_SOURCE, LAVA_SOURCE), 0.5, 64.95, 0.5, 0)).toBe(0);
+    // Lava level 2, h 6/9.
+    expect(eyeFluidAt(at(packFluid(FLUID_LAVA, 2)), 0.5, 64.6, 0.5, 0)).toBe(2);
+    expect(eyeFluidAt(at(packFluid(FLUID_LAVA, 2)), 0.5, 64.7, 0.5, 0)).toBe(0);
+    // Dry air in a Published column: none, whatever the last value.
+    expect(eyeFluidAt(at(NO_FLUID), 0.5, 64.5, 0.5, 2)).toBe(0);
+  });
+
+  test('eyeFluidAt: 0 above y 319 and below −64 without a read; `last` for a column not Published (SP7a spec §8)', () => {
+    const throws = { fluidAt: (): number => { throw new RangeError('outside'); }, publishedAt: (): boolean => { throw new RangeError('outside'); } };
+    expect(eyeFluidAt(throws, 0.5, 320, 0.5, 1)).toBe(0);
+    expect(eyeFluidAt(throws, 0.5, -64.5, 0.5, 2)).toBe(0);
+    // The top voxel reads, with nothing above it to read.
+    const top = {
+      fluidAt: (_bx: number, by: number): number => {
+        if (by > 319) throw new RangeError('outside');
+        return by === 319 ? WATER_SOURCE : NO_FLUID;
+      },
+      publishedAt: () => true,
+    };
+    expect(eyeFluidAt(top, 0.5, 319.5, 0.5, 0)).toBe(1);
+    // The camera's column freed by an Apply, or not yet generated (`fluidAt` 0): the last value stays.
+    const unpublished = { fluidAt: () => NO_FLUID, publishedAt: () => false };
+    expect(eyeFluidAt(unpublished, 0.5, 64.5, 0.5, 1)).toBe(1);
+    expect(eyeFluidAt(unpublished, 0.5, 64.5, 0.5, 2)).toBe(2);
+    expect(eyeFluidAt(unpublished, 0.5, 64.5, 0.5, 0)).toBe(0);
+  });
+
+  test('a scripted eye moving +0.01 per frame from y + 0.80 to y + 0.95 in a source: `eyeFluid` changes once, at the first frame above 8/9 (Review Focus 3)', () => {
+    const r = rig({ y: 64.8 });
+    r.fluid = (bx, by, bz) => (bx === 8 && by === 64 && bz === 8 ? WATER_SOURCE : NO_FLUID);
+    const ys: number[] = [];
+    for (let i = 0; i <= 15; i++) {
+      r.fly.y = 64 + (80 + i) / 100;
+      ys.push(r.fly.y);
+      r.step.tick((i + 1) * HZ60);
+    }
+    expect(r.fluids).toHaveLength(16);
+    const changes = r.fluids.flatMap((f, i) => (i > 0 && f !== r.fluids[i - 1] ? [i] : []));
+    expect(changes).toHaveLength(1);
+    expect(r.fluids[0]).toBe(1);
+    expect(r.fluids.at(-1)).toBe(0);
+    // The change lands on the first frame whose eye is above the source's surface.
+    expect(ys[changes[0]!]! - 64).toBeGreaterThan(8 / 9);
+    expect(ys[changes[0]! - 1]! - 64).toBeLessThan(8 / 9);
+    expect(r.state.eyeFluid).toBe(0);
+  });
+
+  test('the frame step keeps the last `eyeFluid` while the eye\'s column is not Published; a teleport resets it to 0', async () => {
+    const r = rig({ y: 64.5 });
+    r.fluid = (bx, by, bz) => (bx === 8 && by === 64 && bz === 8 ? LAVA_SOURCE : NO_FLUID);
+    r.step.tick(HZ60);
+    // The column freed: `fluidAt` reads 0, and the eye stays in the lava.
+    r.fluid = () => NO_FLUID;
+    r.published = false;
+    r.step.tick(2 * HZ60);
+    expect(r.fluids).toEqual([2, 2]);
+    const tp = createTeleport({
+      pool: { landing: () => Promise.resolve({ surface: 64, water: -Infinity }) },
+      fly: r.fly,
+      state: r.state,
+      onArrive: () => {},
+      onFail: () => {},
+    });
+    await expect(tp.go(5000, -3000)).resolves.toBe(true);
+    expect(r.state.eyeFluid).toBe(0);
+    r.step.tick(3 * HZ60);
+    expect(r.fluids.at(-1)).toBe(0);
+  });
+
   test('the time advances by the rendered delta and the fog RD comes from fogStep on rendered ticks', () => {
     const r = rig();
     const t0 = r.state.t;
@@ -339,6 +440,31 @@ describe('createFrameStep (SP4b spec §7.2)', () => {
     // ×1: 1 s of a 20-minute day.
     expect(r.state.t - t0).toBeCloseTo(1000 / 1_200_000, 12);
     expect(r.state.rd).toBe(12);
+  });
+
+  test('the water clock: state.seconds advances by the rendered delta, on rendered ticks only, and wraps from 3,599.99 to 0 (SP7a spec §7)', () => {
+    const r = rig({ cap: 30 });
+    const seen: number[] = [];
+    for (let i = 1; i <= 20; i++) {
+      r.step.tick(i * HZ60);
+      seen.push(r.state.seconds);
+    }
+    // Every rendered frame adds its delta in seconds; a skipped tick leaves it.
+    expect(r.rendered.length).toBeGreaterThan(5);
+    expect(r.state.seconds).toBeCloseTo(r.rendered.reduce((a, b) => a + b, 0) / 1000, 9);
+    expect(new Set(seen).size).toBe(r.rendered.length);
+    // The clock runs with the time of day fixed too (×0): the ripples do not stop with it.
+    expect(SECONDS_WRAP).toBe(3600);
+    const w = rig({ timeSpeed: 0 });
+    const t0 = w.state.t;
+    w.state.seconds = 3599.99;
+    w.step.tick(10);
+    expect(w.rendered).toEqual([10]);
+    expect(w.state.t).toBe(t0);
+    expect(w.state.seconds).toBeGreaterThanOrEqual(0);
+    expect(w.state.seconds).toBeLessThan(1e-9);
+    w.step.tick(1010);
+    expect(w.state.seconds).toBeCloseTo(1, 9);
   });
 
   test('night vision eases toward the setting by the rendered delta over NIGHT_VISION_EASE_S, on rendered ticks only (SP6a spec §6.2)', () => {
@@ -512,7 +638,7 @@ describe('the frame step\'s dispatch by mode (SP5a spec §3.1, §3.2)', () => {
     r.step.tick(160);
     expect(r.log).toEqual([
       'enterRead', 'read', 'exitRead', 'beforeUpdate', 'update', 'counts', 'afterCounts', 'pump 3,-4,90', 'origin', 'drain',
-      'enterRead', 'aim', `lightAt 8,${Math.floor(r.fly.y)},${Math.floor(r.fly.z)}`, 'exitRead', 'frame',
+      'enterRead', 'aim', `lightAt 8,${Math.floor(r.fly.y)},${Math.floor(r.fly.z)}`, 'read', 'exitRead', 'frame',
     ]);
     expect(r.walk.acc).toBeCloseTo(0.01, 12);
     // Space in the air does nothing walking (flight would rise 12 blocks/s): the body falls, and the drawn eye is the
@@ -531,7 +657,9 @@ describe('the frame step\'s dispatch by mode (SP5a spec §3.1, §3.2)', () => {
     r.walk.py = r.walk.y = 100 - EYE;
     r.step.tick(100);
     expect(r.log.slice(0, 2)).toEqual(['update', 'pump 3,-4,90']);
-    expect(r.log).not.toContain('read');
+    // The only reads are the eye's fluid, in the frame's second read section.
+    expect(r.log.slice(r.log.indexOf('enterRead'))).toEqual(['enterRead', 'aim paused', 'lightAt 8,100,8', 'read', 'exitRead', 'frame']);
+    expect(r.log.slice(0, r.log.indexOf('enterRead'))).not.toContain('read');
     expect([r.walk.x, r.walk.y, r.walk.z, r.walk.acc]).toEqual([0, 100 - EYE, 0, 0]);
     expect([r.fly.x, r.fly.y, r.fly.z]).toEqual([8, 100, 8]);
   });
@@ -545,8 +673,8 @@ describe('the frame step\'s main-thread timing (SP5a spec §6.2, `mainP95Ms`; ru
     r.walk.pz = r.walk.z = 8;
     r.step.tick(160);
     // `held` 2, the walk step's reads 1 each, `aim` 3: one span for the one rendered frame, recorded before onRendered.
-    expect(r.reads).toBeGreaterThan(0);
-    expect(r.timed).toEqual([2 + r.reads + 3]);
+    expect(r.readsAtAim).toBeGreaterThan(0);
+    expect(r.timed).toEqual([2 + r.readsAtAim + 3]);
     expect(r.rendered).toHaveLength(1);
   });
 
@@ -565,6 +693,6 @@ describe('the frame step\'s main-thread timing (SP5a spec §6.2, `mainP95Ms`; ru
     const r = rig();
     r.step.tick(HZ60);
     expect(r.timed).toEqual([]);
-    expect(r.log).toEqual(['update', 'pump 3,-4,90', 'origin', 'drain', 'enterRead', 'aim', 'lightAt 8,100,8', 'exitRead', 'frame']);
+    expect(r.log).toEqual(['update', 'pump 3,-4,90', 'origin', 'drain', 'enterRead', 'aim', 'lightAt 8,100,8', 'read', 'exitRead', 'frame']);
   });
 });

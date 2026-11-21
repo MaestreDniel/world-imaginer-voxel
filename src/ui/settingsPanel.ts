@@ -1,14 +1,15 @@
 /**
  * The Settings screen (SP5b spec §1.4, D9), over the start screen (its Settings) or over the world (G, and the help's
  * "Settings (G)"); it replaces the help's settings block (SP4a spec §7.4, D31). Two tabs: **Graphics**, the render
- * distance (applied live since SP4b, spec §5), the FPS cap, the field of view, the brightness and "Night vision (L)"
- * (SP6a spec §6.2, D15), then the rows SP11 fills, greyed (disabled elements with no setting behind them); **Controls**,
- * the mouse sensitivity and "Hold mouse button to repeat" (SP5a spec §4.1). The rows keep the help's ids
- * (`#setting-rd`, `#setting-fps-cap`, `#setting-fov`, `#setting-brightness`, `#setting-sensitivity`,
- * `#setting-hold-repeat`), and night vision's is `#setting-night-vision`. Every change applies at once: `onSettings`
- * gets the whole new settings, which its owner keeps in this browser (`wi.world.settings`, `settings.ts`). The render
- * distance's choices are "Default (n)" and 4 … `rdMax` in the world; from the start screen, where no capability probe
- * runs, "Default" with no number and 4 … 16. Esc closes it and is consumed. All text goes through `textContent`.
+ * distance (applied live since SP4b, spec §5), the FPS cap, the field of view, the brightness, "Night vision (L)"
+ * (SP6a spec §6.2, D15) and "Water" (Fast / Fancy, SP7a spec §7, D10), then the rows SP11 fills, greyed (disabled
+ * elements with no setting behind them); **Controls**, the mouse sensitivity and "Hold mouse button to repeat" (SP5a spec
+ * §4.1). The rows keep the help's ids (`#setting-rd`, `#setting-fps-cap`, `#setting-fov`, `#setting-brightness`,
+ * `#setting-sensitivity`, `#setting-hold-repeat`), night vision's is `#setting-night-vision` and the water's
+ * `#setting-water`. Every change applies at once: `onSettings` gets the whole new settings, which its owner keeps in this
+ * browser (`wi.world.settings`, `settings.ts`). The render distance's choices are "Default (n)" and 4 … `rdMax` in the
+ * world; from the start screen, where no capability probe runs, "Default" with no number and 4 … 16. Esc closes it and is
+ * consumed. All text goes through `textContent`.
  */
 import { RD_MAX, RD_MIN } from '../engine/renderDistance';
 import { el } from './common/dom';
@@ -56,6 +57,8 @@ export const GREYED_ROWS: readonly string[] = ['Fog distance', 'Clouds', 'Shadow
 /** The greyed rows' note. */
 export const GREYED_NOTE = 'Coming in SP11';
 const QUALITY_PRESETS = ['Low', 'Medium', 'High', 'Ultra'] as const;
+/** The Water row's choices (SP7a spec §7, D10): the setting's value and its label. */
+const WATER_TIERS: readonly (readonly [WorldSettings['water'], string])[] = [['fast', 'Fast'], ['fancy', 'Fancy']];
 
 /** The RD choices: "Default (n)" (or "Default"), then RD_MIN … rdMax (SP4b spec §5). */
 function rdSelect(defaultRd: number | null, rdMax: number): HTMLSelectElement {
@@ -195,6 +198,17 @@ export function mountSettingsPanel(host: HTMLElement, o: SettingsPanelOptions): 
   nightVision.checked = settings.nightVision;
   nightVision.addEventListener('change', () => change({ nightVision: nightVision.checked }));
   graphics.append(settingRow('Night vision (L)', nightVision));
+  // The water tier (SP7a spec §7, D10): right after night vision, live (the page writes one uniform).
+  const water = el('select');
+  water.id = 'setting-water';
+  for (const [value, text] of WATER_TIERS) {
+    const opt = el('option', '', text);
+    opt.value = value;
+    water.append(opt);
+  }
+  water.value = settings.water;
+  water.addEventListener('change', () => change({ water: water.value as WorldSettings['water'] }));
+  graphics.append(settingRow('Water', water));
   graphics.append(greyedRows());
   // Hold to repeat (SP5a spec §4.1, D6): off by default, remembered with the other settings.
   const holdRepeat = el('input');

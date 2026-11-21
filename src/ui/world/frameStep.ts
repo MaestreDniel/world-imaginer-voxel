@@ -25,9 +25,10 @@
  * 5. the floating origin (`setOrigin` on a rebase, O(regions)) and the camera; the store's reclamation drain (§2.5);
  * 6. the frame's second read section (SP5a spec §3.5): `aim` (the page's DDA, queued clicks and outline), then the
  *    eye's sky light (`lightAt` >> 4; its last value, `state.eyeSky`, for a column not Published, SP4c spec §3.4; 15
- *    above y 319, 0 below −64); then the time, the fog's RD (`fogStep`), night vision eased toward the setting
- *    (`easeNightVision`, SP6a spec §6.2), `world.frame` (materials, translucent sort, render), then `onRendered`. A
- *    skipped tick never aims.
+ *    above y 319, 0 below −64) and the eye's fluid (`eyeFluidAt`, SP7a spec §8, D29); then the time, the fog's RD
+ *    (`fogStep`), night vision eased toward the setting (`easeNightVision`, SP6a spec §6.2), the frame clock
+ *    (`advanceSeconds`, SP7a spec §7), `world.frame` (materials, translucent sort, render), then `onRendered`. A skipped
+ *    tick never aims.
  *
  * With `timing` (the bench, SP5a spec §6.2) the frame's input and motion step (1) and its `aim` (6) are timed on the
  * bench's clock, and their sum since the last rendered frame is recorded once per rendered frame, before `onRendered`:
@@ -45,6 +46,8 @@ import { walkStep, type WalkState } from '../../player/walk';
 import { onTimeIntervalInto, snapFrameTime } from '../../render/frameTiming';
 import type { WorldRenderer } from '../../render/renderer';
 import type { SectionRenderer } from '../../render/sectionRenderer';
+import { FLUID_NONE, fluidType } from '../../world/blocks/fluid';
+import { surfaceHeight } from '../../world/blocks/fluidRules';
 import type { VoxelStore } from '../../world/store/store';
 import type { FrameClock } from './frameNotice';
 
@@ -76,6 +79,15 @@ export function easeNightVision(nv: number, on: boolean, dtMs: number): number {
   return next <= NIGHT_VISION_SNAP ? 0 : next;
 }
 
+/** The frame clock's wrap, s (SP7a spec §7): `timeSeconds` stays small enough for the shader's float precision. */
+export const SECONDS_WRAP = 3600;
+
+/** The frame clock after a rendered frame of `dtMs` (SP7a spec §7): `s` + dtMs / 1000, less `SECONDS_WRAP` past it. */
+export function advanceSeconds(s: number, dtMs: number): number {
+  const next = s + dtMs / 1000;
+  return next >= SECONDS_WRAP ? next - SECONDS_WRAP : next;
+}
+
 export interface FrameStepDeps {
   readonly fly: FlyState;
   /** The walk controller's state, stepped instead of the flight while `fly.mode` is `'walk'` (SP5a spec §3.1). */
@@ -103,10 +115,11 @@ export interface FrameStepDeps {
    */
   aim(read: Pick<VoxelStore, 'blockAt' | 'fluidAt'>, paused: boolean): void;
   /**
-   * The one reused FrameState (SP4b spec §3.10): `t`, `eyeSky`, `rd` and `nightVision` are written here, `brightness` by
-   * the page; a teleport resets `eyeSky` to 15 (SP4c spec §3.4).
+   * The one reused FrameState (SP4b spec §3.10): `t`, `eyeSky`, `rd`, `nightVision`, `seconds` and `eyeFluid` are
+   * written here, `brightness` by the page; a teleport resets `eyeSky` to 15 (SP4c spec §3.4) and `eyeFluid` to 0
+   * (SP7a spec §8).
    */
-  readonly state: { t: number; brightness: number; eyeSky: number; rd: number; fogBand: number; nightVision: number };
+  readonly state: { t: number; brightness: number; eyeSky: number; rd: number; fogBand: number; nightVision: number; seconds: number; eyeFluid: number };
   /** One of `TIME_SPEEDS`, or 0 when the clock is fixed. */
   timeSpeed(): number;
   /** The fog's RD after `dtMs` (the page's easing toward the target RD, `fogEase.ts`, SP4b spec §5). */
@@ -144,6 +157,25 @@ export function eyeSkyLight(store: Pick<VoxelStore, 'lightAt'>, x: number, y: nu
   if (by < -64) return 0;
   const v = store.lightAt(Math.floor(x), by, Math.floor(z));
   return v < 0 ? last : v >> 4;
+}
+
+/**
+ * The fluid at the eye (SP7a spec §8, D29): 0 none, 1 water, 2 lava. The eye is in its voxel's fluid only while its
+ * height in the voxel is below the fluid's surface height (`surfaceHeight`, §6.1: 8/9 for a source, (8 − level)/9
+ * flowing, 1 when falling or with the same fluid in the voxel above), so the fog switches where the surface is drawn.
+ * 0 above y 319 and below −64; `last` for a column that is not Published (`fluidAt`'s 0 there is no answer), as
+ * `eyeSkyLight` keeps its last value. Call it inside a read section.
+ */
+export function eyeFluidAt(store: Pick<VoxelStore, 'fluidAt' | 'publishedAt'>, x: number, y: number, z: number, last: number): number {
+  const by = Math.floor(y);
+  if (by > 319 || by < -64) return 0;
+  const bx = Math.floor(x);
+  const bz = Math.floor(z);
+  const byte = store.fluidAt(bx, by, bz);
+  const type = fluidType(byte);
+  if (type === FLUID_NONE) return store.publishedAt(bx, bz) ? 0 : last;
+  const sameAbove = by < 319 && fluidType(store.fluidAt(bx, by + 1, bz)) === type;
+  return y - by < surfaceHeight(byte, sameAbove) ? type : 0;
 }
 
 export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
@@ -207,20 +239,24 @@ export function createFrameStep(d: FrameStepDeps): { tick(now: number): void } {
       world.camera.position.set(fly.x - origin.x, fly.y - origin.y, fly.z - origin.z);
       applyCameraRotation(world.camera, fly);
       store.drain();
-      // 6. The second read section: the aim (DDA, queued clicks, outline), then the eye's light; the time, the fog, the
-      // render.
+      // 6. The second read section: the aim (DDA, queued clicks, outline), then the eye's light and fluid; the time, the
+      // fog, the render.
       store.enterRead();
       try {
         if (timing !== undefined) spans[1] = timing.now();
         d.aim(store, paused);
         if (timing !== undefined) spans[0] = spans[0]! + timing.now() - spans[1]!;
         state.eyeSky = eyeSkyLight(store, fly.x, fly.y, fly.z, state.eyeSky);
+        // x and z cross floored (small integers, unboxed); only y, whose fraction the test needs, crosses as a double
+        // (each fresh double at a call not inlined is a 16 B HeapNumber, the frame's boxing budget, SP4b D25).
+        state.eyeFluid = eyeFluidAt(store, Math.floor(fly.x), fly.y, Math.floor(fly.z), state.eyeFluid);
       } finally {
         store.exitRead();
       }
       state.t = advanceTime(state.t, dt, d.timeSpeed());
       state.rd = d.fogStep(dt);
       state.nightVision = easeNightVision(state.nightVision, d.nightVision(), dt);
+      state.seconds = advanceSeconds(state.seconds, dt);
       world.frame(state);
       if (timing !== undefined) {
         timing.record(spans[0]!);
