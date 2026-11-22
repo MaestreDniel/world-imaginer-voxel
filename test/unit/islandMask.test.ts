@@ -34,8 +34,8 @@ describe('SP3e islands group (spec §2.1, D9, D10)', () => {
     // The islands leaves come right before the first caves.* leaf (SP6a spec §4: the caves group is appended after islands).
     const firstCave = PARAM_META.findIndex((m) => m.path.startsWith('caves.'));
     expect(PARAM_META.slice(firstCave - 4, firstCave).map((m) => m.path)).toEqual(['islands.enabled', 'islands.noise', 'islands.lo', 'islands.hi']);
-    // SP7a appends its aquifer group after caves (Task 13).
-    expect(Object.keys(DEFAULTS).slice(-3)).toEqual(['islands', 'caves', 'aquifer']);
+    // SP7a appends its aquifer group after caves (Task 13), then its springs group (Task 19).
+    expect(Object.keys(DEFAULTS).slice(-4)).toEqual(['islands', 'caves', 'aquifer', 'springs']);
     const g = SCHEMA.byPath.get('islands');
     expect(g?.tag).toBe('group');
     if (g?.tag === 'group') expect(g.label).toBe('Islands');

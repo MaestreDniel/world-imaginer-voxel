@@ -13,6 +13,11 @@
  * - `contact`: S(1, 0) at ring 1: 6 lava voxels beside water (1,149 settled voxels).
  * - `streamOverPool`: S(0, 0) at ring 0: 25 settle-made falling voxels under a settle-made stream, beside a settle-made
  *   pool (285 settled voxels).
+ * Task 19's re-scan of `coast` (the water springs; the coast now holds a water spring too, `scanSettleWindow` with the
+ * springs prefilter `interiorSprings`, taking S(1, 0) and S(0, 0) as taken): S(19, −30) at ring 30, the 273rd coast
+ * candidate and the first whose interior's springs step accepts a spring: 1,285 sea and 7,033 land positions, 589
+ * settled voxels, 27 spills, 482 settle-made voxels in caves, 38 falls over a settle-made stream, 1 water spring.
+ * `contact` and `streamOverPool` keep their windows (each still holds its feature).
  */
 import type { SettleFeature } from './windowScans';
 
@@ -25,7 +30,7 @@ export interface SettleWindow {
 
 /** DT1's settle windows, in `SETTLE_FEATURES` order (header). */
 export const SETTLE_WINDOWS: readonly SettleWindow[] = [
-  { feature: 'coast', a: -10, b: -10 },
+  { feature: 'coast', a: 19, b: -30 },
   { feature: 'contact', a: 1, b: 0 },
   { feature: 'streamOverPool', a: 0, b: 0 },
 ];

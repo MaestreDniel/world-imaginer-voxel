@@ -3,8 +3,10 @@ import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { columnPoint, newPointRecord, samplePoint } from '../../src/gen/column/columnPoint';
 import { createGenContext } from '../../src/gen/context';
+import { newSpringList } from '../../src/gen/fluids/springs';
+import { terrainSpringsDebug } from '../../src/gen/pipeline/terrainStage';
 import { ringCandidates } from '../../src/metrics/sp3eGoldens';
-import { FLUID_LAVA, FLUID_WATER, NO_FLUID, fluidFalling, fluidType } from '../../src/world/blocks/fluid';
+import { FLUID_LAVA, FLUID_WATER, NO_FLUID, WATER_SOURCE, fluidFalling, fluidType } from '../../src/world/blocks/fluid';
 import { AIR, GRASS_BLOCK } from '../../src/world/blocks/index';
 import { genRegion, type RegionView } from './region';
 
@@ -31,7 +33,10 @@ import { genRegion, type RegionView } from './region';
  *   candidate that holds it (`settleWindowHolds`) and is not already another feature's window. The coast's scan
  *   skips a candidate whose 12 × 12 lattice over the interior (block (96a + 8i + 4, 96b + 8j + 4)) holds fewer than 16
  *   sea points (`samplePoint`'s offset below SEA_LEVEL, no river, no lake) or fewer than 16 land points (offset above
- *   SEA_LEVEL): seed '42' has no coast within ring 9.
+ *   SEA_LEVEL): seed '42' has no coast within ring 9. Since the springs (SP7a Task 19) the coast window also holds a
+ *   water spring (`SettleFeatures.springs`), so DT1's first window settles a spring's stream as well as a coast's
+ *   spills; the coast's scan then also skips a candidate whose interior's springs step accepts no water spring
+ *   (`interiorSprings`, no region generated).
  */
 
 /** A window's region: its chunk origin and its side in chunks; the interior is the region minus its border ring. */
@@ -270,6 +275,11 @@ export interface SettleFeatures {
    * reaching a pool the settle made falls into it).
    */
   readonly streamOverPool: number;
+  /**
+   * Water springs (SP7a §3.2; Task 19): untagged proto water sources above the sea level (y > SEA_LEVEL) in a voxel
+   * with a block above and below it and on three sides, the fourth side air with no proto fluid (the spring's outlet).
+   */
+  readonly springs: number;
 }
 
 /**
@@ -285,8 +295,20 @@ export function settleFeatures(box: SettleBox): SettleFeatures {
   const made = (i: number): boolean => proto[i] === NO_FLUID && final[i] !== NO_FLUID;
   const madeWater = (i: number): boolean => made(i) && fluidType(final[i]!) === FLUID_WATER;
   const madeFlowing = (i: number): boolean => madeWater(i) && !fluidFalling(final[i]!);
-  let settled = 0, sea = 0, land = 0, spills = 0, caveBorder = 0, contacts = 0, streamOverPool = 0;
+  let settled = 0, sea = 0, land = 0, spills = 0, caveBorder = 0, contacts = 0, streamOverPool = 0, springs = 0;
   const sides = [1, -1, side, -side];
+  /** Whether voxel i (y > −64, y < 319) is a water spring (`SettleFeatures.springs`). */
+  const spring = (i: number): boolean => {
+    if (proto[i] !== WATER_SOURCE || blocks[i] !== AIR || caveKindOf(cave[i]!) !== 0) return false;
+    if (blocks[i + layer] === AIR || blocks[i - layer] === AIR) return false;
+    let open = 0;
+    for (const d of sides) {
+      if (blocks[i + d] !== AIR) continue;
+      if (proto[i + d] !== NO_FLUID) return false;
+      open++;
+    }
+    return open === 1;
+  };
   for (let z = lo; z < hi; z++) {
     for (let x = lo; x < hi; x++) {
       const above = (SEA_LEVEL + 65) * layer + z * side + x;
@@ -295,6 +317,7 @@ export function settleFeatures(box: SettleBox): SettleFeatures {
       for (let y = -64; y < 320; y++) {
         const i = (y + 64) * layer + z * side + x;
         if (final[i] !== proto[i]) settled++;
+        if (y > SEA_LEVEL && y < 319 && spring(i)) springs++;
         if (fluidType(final[i]!) === FLUID_LAVA) {
           const below = y > -64 && fluidType(final[i - layer]!) === FLUID_WATER;
           const above = y < 319 && fluidType(final[i + layer]!) === FLUID_WATER;
@@ -307,7 +330,7 @@ export function settleFeatures(box: SettleBox): SettleFeatures {
       }
     }
   }
-  return { settled, sea, land, spills, caveBorder, contacts, streamOverPool };
+  return { settled, sea, land, spills, caveBorder, contacts, streamOverPool, springs };
 }
 
 /** The coast's prefilter counts at S(a, b) of the default profile at `seed` (header). */
@@ -325,9 +348,26 @@ export function coastPoints(seed: string, a: number, b: number): { sea: number; 
   return { sea, land };
 }
 
+/**
+ * The water springs T's springs step accepts over S(a, b)'s interior 6 × 6 columns of the default profile at `seed`
+ * (`terrainSpringsDebug`; the coast's second prefilter since Task 19, no region generated).
+ */
+export function interiorSprings(seed: string, a: number, b: number): number {
+  const ctx = createGenContext(seedFromInput(seed), resolveProfile('default'));
+  const list = newSpringList();
+  let n = 0;
+  for (let cz = 6 * b; cz < 6 * b + 6; cz++) {
+    for (let cx = 6 * a; cx < 6 * a + 6; cx++) {
+      terrainSpringsDebug(ctx, cx, cz, list);
+      n += list.n;
+    }
+  }
+  return n;
+}
+
 /** Whether a settle window's interior holds `feature` (`SETTLE_FEATURES`). */
 export function settleWindowHolds(feature: SettleFeature, f: SettleFeatures): boolean {
-  if (feature === 'coast') return f.sea >= MIN_COAST_POSITIONS && f.land >= MIN_COAST_POSITIONS && f.spills >= 1 && f.caveBorder >= 1;
+  if (feature === 'coast') return f.sea >= MIN_COAST_POSITIONS && f.land >= MIN_COAST_POSITIONS && f.spills >= 1 && f.caveBorder >= 1 && f.springs >= 1;
   if (feature === 'contact') return f.contacts >= 1;
   return f.streamOverPool >= 1;
 }
@@ -346,6 +386,7 @@ export async function scanSettleWindow(
       if (feature === 'coast') {
         const c = coastPoints(seed, a, b);
         if (c.sea < MIN_COAST_POINTS || c.land < MIN_COAST_POINTS) continue;
+        if (interiorSprings(seed, a, b) === 0) continue;
       }
       const r = settleWindowAt(a, b);
       const { view } = await genRegion({ seed, params, cx0: r.cx0, cz0: r.cz0, w: r.size, h: r.size, upTo: 'D', order: 'spiral', threads: 4, workerDir: 'windowScanWorker' });

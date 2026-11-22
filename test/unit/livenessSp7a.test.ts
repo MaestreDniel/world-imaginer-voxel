@@ -1,8 +1,8 @@
 /**
- * U2's liveness tests (`src/metrics/liveness.ts`) for SP7a's aquifer leaves (its spec §1.9, §13.7, Task 13; the plan's
- * Spec correction 5: each leaf group lands with its reader and its witnesses). In the `liveness` shard of CI's unit
- * jobs (`.github/scripts/unitShards.mjs`); the pins and helpers it shares with the other liveness files are in
- * `fixtures/liveness.ts`.
+ * U2's liveness tests (`src/metrics/liveness.ts`) for SP7a's aquifer leaves (its spec §1.9, §13.7, Task 13) and its
+ * springs' leaves (§3.5, Task 19; the plan's Spec correction 5: each leaf group lands with its reader and its
+ * witnesses). In the `liveness` shard of CI's unit jobs (`.github/scripts/unitShards.mjs`); the pins and helpers it
+ * shares with the other liveness files are in `fixtures/liveness.ts`.
  */
 import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
@@ -10,14 +10,16 @@ import { getPath } from '../../src/core/params/kit';
 import { SCHEMA } from '../../src/core/params/schema';
 import { checkRegistry, prefixCovers, STAGES } from '../../src/core/stage/registry';
 import {
-  aquiferWitness, CAVE_SLOTS, caveColumn, caveSlotLeaves, intendedClass, leafLiveness, perturbations, u2Leaves,
+  aquiferWitness, CAVE_SLOTS, caveColumn, caveSlotLeaves, intendedClass, leafLiveness, perturbations, springWitness, u2Leaves,
 } from '../../src/metrics/liveness';
+import { newSpringList } from '../../src/gen/fluids/springs';
+import { terrainSpringsDebug } from '../../src/gen/pipeline/terrainStage';
 import { fillColumnT } from '../../src/metrics/region';
 import { cavePickerOf, fillCaveColumnPass, newCaveColumnPass } from '../../src/gen/biomes/cavePicker';
 import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
 import { aquiferInputs, inAbyssMargin } from '../../src/gen/fluids/aquifer';
 import { createStore } from '../../src/world/store/store';
-import { AQUIFER_LEAVES, CTX, U2_LEAVES, columns, leaf } from './fixtures/liveness';
+import { AQUIFER_LEAVES, CTX, SPRING_LEAVES, U2_LEAVES, columns, leaf } from './fixtures/liveness';
 
 /**
  * Each aquifer leaf's U2 verdict at seed 42 (the class columns, the cave columns among them and the intended cave class
@@ -67,10 +69,10 @@ const WITNESS: Readonly<Record<(typeof AQUIFER_LEAVES)[number], string>> = {
 };
 
 describe('the aquifer\'s leaves in U2 (SP7a spec §1.9, §13.7; Task 13, Spec correction 5)', () => {
-  test('U2_LEAVES is 208: SP6b\'s 193 and the 15 aquifer leaves, each a U2 leaf of the T stage meant for the cave class, in no cave slot\'s acceptance', () => {
+  test('the 15 aquifer leaves join SP6b\'s 193 (208; the springs\' follow), each a U2 leaf of the T stage meant for the cave class, in no cave slot\'s acceptance', () => {
     expect(SCHEMA.leaves.filter((l) => l.path.startsWith('aquifer.')).map((l) => l.path)).toEqual([...AQUIFER_LEAVES]);
     const covered = new Set(u2Leaves().map((l) => l.path));
-    expect([covered.size, U2_LEAVES, U2_LEAVES - AQUIFER_LEAVES.length]).toEqual([208, 208, 193]);
+    expect([covered.size, U2_LEAVES, U2_LEAVES - SPRING_LEAVES.length, U2_LEAVES - SPRING_LEAVES.length - AQUIFER_LEAVES.length]).toEqual([210, 210, 208, 193]);
     const slotted = new Set(CAVE_SLOTS.flatMap((slot) => caveSlotLeaves(slot).map((l) => l.path)));
     for (const p of AQUIFER_LEAVES) {
       expect([p, covered.has(p), leaf(p).meta.scope, leaf(p).meta.stage, intendedClass(p), slotted.has(p)]).toEqual([p, true, 'terrain', 'terrain', 'cave', false]);
@@ -120,5 +122,52 @@ describe('the aquifer\'s leaves in U2 (SP7a spec §1.9, §13.7; Task 13, Spec co
     }
     console.log(`the aquifer's leaves:\n${lines.join('\n')}`);
     expect(() => aquiferWitness(CTX, 'caves.cheese.offset')).toThrow('not an aquifer leaf');
+  }, 600_000);
+});
+
+/**
+ * Each water springs leaf's U2 verdict at seed 42: dead on the class columns (no class column's springs step accepts a
+ * spring, and no step makes one), live on its bounded mountain witness (`springWitness`: the first examined column of
+ * `sp7a.liveness.springs` whose springs step accepts a water spring at the defaults and whose T column a step changes).
+ */
+const SPRING_VERDICT: Readonly<Record<(typeof SPRING_LEAVES)[number], string>> = {
+  'springs.water.tries': 'mountain witness column (8652, -18898)',
+  'springs.water.minFall': 'mountain witness column (11344, 3591)',
+};
+
+describe('the water springs\' leaves in U2 (SP7a spec §3.5, §13.7; Task 19, Spec correction 5)', () => {
+  test('U2_LEAVES is 210: SP6b\'s 193, the 15 aquifer leaves and the 2 water springs leaves, each a U2 leaf of the T stage (Terrain scope, D21), in no cave slot\'s acceptance', () => {
+    expect(SCHEMA.leaves.filter((l) => l.path.startsWith('springs.')).map((l) => l.path)).toEqual([...SPRING_LEAVES]);
+    const covered = new Set(u2Leaves().map((l) => l.path));
+    expect([covered.size, U2_LEAVES]).toEqual([210, 210]);
+    const slotted = new Set(CAVE_SLOTS.flatMap((slot) => caveSlotLeaves(slot).map((l) => l.path)));
+    for (const p of SPRING_LEAVES) {
+      expect([p, covered.has(p), leaf(p).meta.scope, leaf(p).meta.stage, slotted.has(p)]).toEqual([p, true, 'terrain', 'terrain', false]);
+      expect(STAGES.find((s) => s.params.some((q) => prefixCovers(q, p)))?.id).toBe('terrain');
+    }
+    expect(checkRegistry(SCHEMA, STAGES)).toEqual([]);
+  });
+
+  test('each of the 2 is decided on the mountain witness: a column whose springs step accepts a water spring at the defaults, where a step changes the T column', () => {
+    const all = [...columns(), ...CAVE_SLOTS.map((slot) => caveColumn(CTX, slot)!)];
+    const lines: string[] = [];
+    const list = newSpringList();
+    for (const p of SPRING_LEAVES) {
+      const r = leafLiveness(CTX, p, all);
+      lines.push(`${p}: ${r.live ? 'live' : 'DEAD'} via ${r.via}`);
+      const w = springWitness(CTX, p, all);
+      lines.push(`${p}: witness ${w.via} (draws ${w.draws}, examined ${w.examined}, checks ${w.checks})`);
+      expect([p, r.live, r.via]).toEqual([p, true, SPRING_VERDICT[p]]);
+      expect([p, w.via]).toEqual([p, SPRING_VERDICT[p]]);
+      expect(w.checks, p).toBeLessThanOrEqual(64);
+      expect(w.examined, p).toBeLessThanOrEqual(1024);
+      expect(w.draws, p).toBeLessThanOrEqual(65536);
+      // The witness column's springs step accepts a water spring at the defaults (re-derived).
+      const [cx, cz] = w.via!.slice('mountain witness column ('.length, -1).split(', ').map(Number) as [number, number];
+      terrainSpringsDebug(CTX, cx, cz, list);
+      expect(list.n, p).toBeGreaterThan(0);
+    }
+    console.log(`the water springs' leaves:\n${lines.join('\n')}`);
+    expect(() => springWitness(CTX, 'aquifer.enabled')).toThrow('not a springs leaf');
   }, 600_000);
 });

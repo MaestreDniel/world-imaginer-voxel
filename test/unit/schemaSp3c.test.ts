@@ -87,7 +87,7 @@ describe('SP3c surface group (spec §3.5)', () => {
 
   test('the terrain stage hashes the density and surface groups (U4 registry invariants hold)', () => {
     // SP6a appends the caves group, SP7a the aquifer group (stage.test.ts).
-    expect(STAGES.find((s) => s.id === 'terrain')!.params).toEqual(['density', 'surface', 'caves', 'aquifer']);
+    expect(STAGES.find((s) => s.id === 'terrain')!.params).toEqual(['density', 'surface', 'caves', 'aquifer', 'springs']);
     expect(checkRegistry(SCHEMA, STAGES)).toEqual([]);
     const moved = applyPatch(SCHEMA, DEFAULTS, { surface: { snowline: -0.5 } });
     if (!moved.ok) throw new Error('bad patch');

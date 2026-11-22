@@ -17,22 +17,25 @@ describe('registry', () => {
     expect(ALL).toEqual(['climate', 'shape', 'surfaceEst', 'biome2d', 'terrain', 'decorate', 'light', 'mesh', 'lod', 'map']);
     expect(STAGES.map((s) => `${s.id}@${s.version}`)).toEqual(['climate@1', 'shape@3', 'surfaceEst@2', 'biome2d@2', 'terrain@6', 'decorate@2', 'light@1', 'mesh@1', 'lod@1', 'map@2']);
   });
-  test('SP7a: terrain is version 6 and hashes the aquifer group; every aquifer.* leaf\'s badge is Terrain', () => {
+  test('SP7a: terrain is version 6 and hashes the aquifer and springs groups; every aquifer.* and springs.* leaf\'s badge is Terrain', () => {
     const terrain = STAGES.find((s) => s.id === 'terrain')!;
-    expect([terrain.version, terrain.params]).toEqual([6, ['density', 'surface', 'caves', 'aquifer']]);
+    expect([terrain.version, terrain.params]).toEqual([6, ['density', 'surface', 'caves', 'aquifer', 'springs']]);
     // SP6a/SP6b's caves group stays the terrain stage's: every caves.* leaf's badge is Terrain, the caves.biomes.* among them.
     const caves = SCHEMA.leaves.filter((l) => l.path.startsWith('caves.'));
     expect(caves.filter((l) => l.path.startsWith('caves.biomes.')).length).toBe(15);
     // SP7a spec §1.9: the 15 aquifer leaves (each noise one leaf), all first hashed by the terrain stage.
     const aquifer = SCHEMA.leaves.filter((l) => l.path.startsWith('aquifer.'));
     expect(aquifer.length).toBe(15);
-    for (const { path, meta } of [...caves, ...aquifer]) {
+    // SP7a spec §3.5, D21 (Task 19): the water springs' 2 leaves are Terrain scope, first hashed by the terrain stage.
+    const springs = SCHEMA.leaves.filter((l) => l.path.startsWith('springs.'));
+    expect(springs.map((l) => l.path)).toEqual(['springs.water.tries', 'springs.water.minFall']);
+    for (const { path, meta } of [...caves, ...aquifer, ...springs]) {
       const first = STAGES.find((s) => s.params.some((p) => prefixCovers(p, path)));
       expect([path, first?.id, meta.scope, SCOPE_OF_STAGE[first!.id]]).toEqual([path, 'terrain', 'terrain', 'terrain']);
     }
-    // A cave edit dirties the terrain stage and what reads it, never the 2D stages (no map tile is redrawn); so does an
-    // aquifer edit.
-    for (const patch of [{ caves: { cheese: { offset: 0.2 } } }, { aquifer: { barrierBand: 30 } }] as const) {
+    // A cave edit dirties the terrain stage and what reads it, never the 2D stages (no map tile is redrawn); so do an
+    // aquifer edit and a springs edit.
+    for (const patch of [{ caves: { cheese: { offset: 0.2 } } }, { aquifer: { barrierBand: 30 } }, { springs: { water: { tries: 5 } } }] as const) {
       const moved = applyPatch(SCHEMA, DEFAULTS, patch);
       if (!moved.ok) throw new Error('bad patch');
       expect(dirtyStages(stageHashes(DEFAULTS), stageHashes(moved.value))).toEqual(['terrain', 'decorate', 'light', 'mesh']);

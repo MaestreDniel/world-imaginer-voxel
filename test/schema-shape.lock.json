@@ -196,6 +196,8 @@
     "shape.jag": "spline",
     "shape.offset": "spline",
     "shape.sigma": "spline",
+    "springs.water.minFall": "int",
+    "springs.water.tries": "int",
     "surface.cliffMinY": "int",
     "surface.cliffSteep": "number",
     "surface.depthMul": "number",

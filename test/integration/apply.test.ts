@@ -24,7 +24,9 @@
  * succeeds); Review Focus 2's aquifer half (SP7a): an aquifer Apply (`aquifer.barrierBand`, the default + 5) issued after
  * 5 D jobs of the fill a terrain Apply starts, compared on the final params, with every D of the applied generation
  * reading nine protos committed under it (the jobs' wrapper records each T's generation and each D's 3 × 3 at its
- * issue); and after unloading everything and draining the limbo, every pool slot is free.
+ * issue); Review Focus 2's spring half (SP7a, Task 19): a spring Apply (`springs.water.tries`, the default + 2) undone
+ * after ⌈69 / 4⌉ = 18 swaps, compared on the params before it, with the same epoch check on the undo's generation; and
+ * after unloading everything and draining the limbo, every pool slot is free.
  */
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -138,6 +140,9 @@ function realClock(): DriverClock & { clearAll(): void } {
 const BARRIER = 'aquifer.barrierBand';
 const BARRIER_APPLIED = Math.min(DEFAULTS.aquifer.barrierBand + 5, 64);
 const D_BEFORE_APPLY = 5;
+/** Review Focus 2's spring half (SP7a, Task 19): the leaf and value of the spring Apply, derived from the default (P30). */
+const SPRING_TRIES = 'springs.water.tries';
+const SPRING_TRIES_APPLIED = Math.min(DEFAULTS.springs.water.tries + 2, 32);
 
 /** One world job the coordinator issued, in issue order, and how it settled. */
 interface Issued {
@@ -552,6 +557,29 @@ describe('Apply v1 on the real store (SP4c spec §8.5)', () => {
     expect(stale.map((d) => `D (${d.cx}, ${d.cz}) at ${d.generation}: ${d.sources.join(' ')}`)).toEqual([]);
     expect(dReads.filter((d) => d.generation >= applied.generation).length).toBeGreaterThan(0);
     clean('the aquifer Apply');
+  });
+
+  test('Review Focus 2 (SP7a): a spring Apply (springs.water.tries) undone after ⌈69 / 4⌉ = 18 swaps: settled, the inner region equals genRegion on the params before it, and no D of the undo\'s epoch read a source column committed under an older epoch', async () => {
+    const w = W();
+    expect(SPRING_TRIES_APPLIED, 'the applied value differs from the default').not.toBe(DEFAULTS.springs.water.tries);
+    expect(w.session.state.params.springs.water.tries).toBe(DEFAULTS.springs.water.tries);
+    const before = JSON.stringify(w.session.state.params);
+    const n = applies.length;
+    expect(w.session.set(SPRING_TRIES, SPRING_TRIES_APPLIED).ok).toBe(true);
+    await until(() => applies.length === n + 1 && swapsSinceApply >= UNDO_AFTER_SWAPS, SETTLE_MS, 'the spring Apply\'s first swaps');
+    // A springs leaf is Terrain scope (D21): its Apply regenerates from T.
+    expect(applies[n]!.from).toBe('T');
+    expect(swapsSinceApply, 'columns swapped to the spring Apply before the undo').toBeGreaterThanOrEqual(UNDO_AFTER_SWAPS);
+    const epoch = await applyEdit(() => { expect(w.session.undo()).toBe(true); }, 'the spring Apply\'s undo');
+    const undone = applies[n + 1]!;
+    expect([epoch, undone.from]).toEqual([undone.epoch, 'T']);
+    expect(JSON.stringify(w.session.state.params)).toBe(before);
+    expect(windowHash()).toBe(await expected(w.session.state.params));
+    // The epoch check: every D issued under the undo's generation read nine protos committed under it.
+    const stale = dReads.filter((d) => d.generation >= undone.generation && d.sources.some((g) => g < undone.generation));
+    expect(stale.map((d) => `D (${d.cx}, ${d.cz}) at ${d.generation}: ${d.sources.join(' ')}`)).toEqual([]);
+    expect(dReads.filter((d) => d.generation >= undone.generation).length).toBeGreaterThan(0);
+    clean('the spring Apply');
   });
 
   test('after unloading everything and draining the limbo, every pool slot is free', async () => {

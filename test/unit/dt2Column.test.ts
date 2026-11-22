@@ -18,6 +18,7 @@ import { createSurfaceContext, surfaceContextOf } from '../../src/gen/surface/co
 import { surfaceProbe } from '../../src/gen/surface/probe';
 import { newSurfaceScan, runAt } from '../../src/gen/surface/scan';
 import { fillColumnT } from '../../src/metrics/region';
+import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR } from '../../src/world/blocks/index';
 import type { ColumnWriter } from '../../src/world/store/api';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
@@ -499,6 +500,32 @@ describe('DT2 aquiferProbe (SP7a spec §13.4, D19; Task 14)', () => {
     expect([...failures(acc), acc.tagProbe, acc.aquiferProbe]).toEqual([0, 0, 0, 0, 0, acc.aquiferVoxels]);
     expect(acc.problems).toHaveLength(acc.aquiferVoxels);
     expect(acc.problems[0]).toMatch(new RegExp(`^profile default, seed '42', column \\(${SEA[0]}, ${SEA[1]}\\): \\(-?\\d+, -?\\d+, -?\\d+\\) stored fluid \\d+ ≠ fluidAt \\d+$`));
+  }, 120_000);
+});
+
+describe('DT2 spring voxels (SP7a spec §3, D21; Task 19)', () => {
+  /** (11344, 3591): a column holding one water spring at the defaults, at (7, 121, 3) facing east (springs.test.ts). */
+  const SPRING = [11344, 3591] as const;
+  const AT = [16 * SPRING[0] + 7, 121, 16 * SPRING[1] + 3] as const;
+
+  it('a column holding a water spring, the spring voxel checked, reads probeBulk, surfaceProbeBulk and aquiferProbe 0: T stores air plus WATER_SOURCE where terrainSolidAt says solid, fluidAt dry and surfaceProbe a rock state', () => {
+    const ctx = ctxOf();
+    const setup = dt2Setup(ctx, LABEL);
+    const [x, y, z] = AT;
+    // What the exclusion is for: the point functions are blind to springs.
+    expect([setup.solidAt(x, y, z), setup.fluidAt(x, y, z), surfaceProbe(setup.sc, x, y, z).state !== AIR]).toEqual([true, 0, true]);
+    const acc = newDt2Acc(LABEL);
+    const seen: Dt2Voxel[] = [];
+    let block = -1;
+    dt2Column(ctx, ...SPRING, new Xoshiro128(19), acc, {
+      extra: { count: 2048, yLo: y, yHi: y }, voxel: (v) => seen.push(v), column: (view) => { block = view.block(x & 15, y, z & 15) * 256 + view.fluid(x & 15, y, z & 15); },
+    });
+    expect(block, 'the stored spring: air, WATER_SOURCE').toBe(AIR * 256 + WATER_SOURCE);
+    const hits = seen.filter((v) => v.x === x && v.y === y && v.z === z).length;
+    expect(hits, 'the spring voxel is checked').toBeGreaterThan(0);
+    expect(acc.springVoxels).toBe(hits);
+    expect(acc.problems).toEqual([]);
+    expect([acc.probeBulk, acc.surfaceProbeBulk, acc.aquiferProbe, acc.tagProbe]).toEqual([0, 0, 0, 0]);
   }, 120_000);
 });
 

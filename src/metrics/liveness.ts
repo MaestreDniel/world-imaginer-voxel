@@ -58,6 +58,11 @@
  * `lavaMaxLevel` of the base and the steps for the lava leaves; below the highest `lavaLevel` for the lava floor; and,
  * for `abyssMargin`, a position in the margin's lateral band between the base's m and its steps' (on the picker's
  * pass) and a tagged voxel there whose barrier a step moves), the first whose T column a step changes.
+ * SP7a (its spec §3.5, §13.7, Task 19): the water springs' 2 leaves (`springs.water.*`) act only where a try is accepted
+ * (or would be under a step): each is tried on the class columns, then, dead there, decided on a bounded mountain
+ * witness search (`springWitness`): stream columns whose ColumnSample lattice reaches y `SPRING_LAND_Y` and holds a
+ * relief of at least `SPRING_RELIEF`, examined by their springs step (`terrainSpringsDebug`), the first whose springs
+ * step accepts a water spring at the base's params and whose T column a step changes.
  */
 import { CAVE_BIOME, SEA_LEVEL, SPAGHETTI_BANDS } from '../core/constants';
 import { fnv1a32, hash4, hashF64, hex64 } from '../core/hash';
@@ -80,6 +85,8 @@ import { newRiver, sampleRivers } from '../gen/column/rivers';
 import { newShape, sampleShape } from '../gen/column/shape';
 import { createDensityContext, type DensityContext } from '../gen/density/context';
 import { aquiferOf, barrierAt, inAbyssMargin } from '../gen/fluids/aquifer';
+import { newSpringList } from '../gen/fluids/springs';
+import { terrainSpringsDebug } from '../gen/pipeline/terrainStage';
 import { biomeId, type SurfaceBiome } from '../gen/biomes/registry';
 import { createSurfaceContext, surfaceContextOf, type SurfaceContext } from '../gen/surface/context';
 import { surfaceProbeColumn } from '../gen/surface/probe';
@@ -147,6 +154,8 @@ const NEW_PASS = newCaveColumnPass;
 const AQUIFER_OF = aquiferOf;
 const IN_MARGIN = inAbyssMargin;
 const BARRIER_AT = barrierAt;
+const SPRINGS_OF = terrainSpringsDebug;
+const NEW_SPRING_LIST = newSpringList;
 
 /** SP3c's surface class slots (SP3c spec §3.5), in the order a third-pass column is offered to them. */
 export const SURFACE_CLASSES = ['cliffY', 'cliffSteep', 'snowline', 'patch', 'badlands'] as const;
@@ -363,6 +372,23 @@ const AQUIFER_CHECKS = 64;
 const isAquiferLeaf = (path: string): boolean => path.startsWith('aquifer.');
 /** The aquifer leaves read by deep partial cells only (§1.4): lava where the level is at most `lavaMaxLevel`. */
 const AQUIFER_LAVA: ReadonlySet<string> = new Set(['aquifer.lavaMaxLevel', 'aquifer.lavaThreshold', 'aquifer.noises.lava']);
+
+/**
+ * SP7a spec §3.5, §13.7 (Task 19): the springs' leaves, decided on the class columns, else on their bounded mountain
+ * witness (`springWitness`): up to `SPRING_DRAWS` draws of `samplePoints('sp7a.liveness.springs', …)`; a draw's column is
+ * examined (its springs step run on the base, `terrainSpringsDebug`) when its ColumnSample's 7 × 7 offset lattice reaches
+ * y `SPRING_LAND_Y` and its relief (highest less lowest offset) is at least `SPRING_RELIEF` blocks; up to
+ * `SPRING_EXAMINED` columns examined and `SPRING_CHECKS` hashed; the witness is the first examined column whose springs
+ * step accepts a water spring at the base's params and whose T column a step changes.
+ */
+const SPRING_STREAM = 'sp7a.liveness.springs';
+const SPRING_DRAWS = 65536;
+const SPRING_EXAMINED = 1024;
+const SPRING_CHECKS = 64;
+const SPRING_RELIEF = 8;
+/** Above sea level: the land a water spring's outlet stands on (the 64 the dropped `springs.water.minY` gave, Task 19). */
+const SPRING_LAND_Y = SEA + 1;
+const isSpringLeaf = (path: string): boolean => path.startsWith('springs.');
 
 /** The cave class column's scan slots (SP6a spec §4): the caverns' families, then the tunnels'. */
 export type CaveSlot = 'caverns' | 'tunnels';
@@ -1533,6 +1559,65 @@ export function aquiferWitness(base: GenContext, path: string, skip: readonly Li
   return aquiferWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
 }
 
+// ---------------------------------------------------------------- the springs' leaves' witness (SP7a Task 19)
+
+/** The accepted springs of base T columns by chunk key, per base (shared by the leaves of one U2 run). */
+const SPRING_MEMO = new WeakMap<GenContext, Map<number, number>>();
+const SPRING_LIST = NEW_SPRING_LIST();
+
+/** The number of water springs `base`'s springs step accepts in column (cx, cz) (`terrainSpringsDebug`, memoised per base). */
+function baseSprings(base: GenContext, cx: number, cz: number): number {
+  let byBase = SPRING_MEMO.get(base);
+  if (byBase === undefined) { byBase = new Map(); SPRING_MEMO.set(base, byBase); }
+  const key = (cx + 32768) * 65536 + (cz + 32768);
+  let n = byBase.get(key);
+  if (n === undefined) {
+    SPRINGS_OF(base, cx, cz, SPRING_LIST);
+    n = SPRING_LIST.n;
+    byBase.set(key, n);
+  }
+  return n;
+}
+
+/** The figures of a springs leaf's witness search: the deciding column, the draws taken, the columns examined and hashed. */
+export interface SpringWitnessScan { readonly via: string | null; readonly draws: number; readonly examined: number; readonly checks: number }
+
+function springWitnessOf(base: GenContext, info: LeafInfo, variants: readonly GenContext[], skip: readonly LivenessColumn[], baseHash: BaseHash): SpringWitnessScan {
+  const stage = stageOf(info);
+  const pts = POINTS(SPRING_STREAM, SPRING_DRAWS);
+  const seen = new Set<number>(skip.map((c) => (c.cx + 32768) * 65536 + (c.cz + 32768)));
+  let examined = 0, checks = 0, n = 0;
+  for (; n < SPRING_DRAWS && examined < SPRING_EXAMINED && checks < SPRING_CHECKS; n++) {
+    const cx = Math.floor(pts.x[n]! / 16);
+    const cz = Math.floor(pts.z[n]! / 16);
+    const key = (cx + 32768) * 65536 + (cz + 32768);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // The mountain prefilter: a lattice reaching SPRING_LAND_Y with a relief of SPRING_RELIEF (no T generated otherwise).
+    const off = BUILD(base, cx, cz, BIOME_SAMPLE).f.offset;
+    let hi = -Infinity, lo = Infinity;
+    for (let k = 0; k < 49; k++) { const v = off[k]!; if (v > hi) hi = v; if (v < lo) lo = v; }
+    if (hi < SPRING_LAND_Y || hi - lo < SPRING_RELIEF) continue;
+    examined++;
+    if (baseSprings(base, cx, cz) === 0) continue;
+    checks++;
+    const h = baseHash(stage, cx, cz);
+    if (variants.some((v) => stageOutputHash(v, stage, cx, cz) !== h)) return { via: `mountain witness column (${cx}, ${cz})`, draws: n + 1, examined, checks };
+  }
+  return { via: null, draws: n, examined, checks };
+}
+
+/**
+ * A springs leaf's bounded mountain witness search (SP7a Task 19) over the columns not in `skip`: the deciding column
+ * (`mountain witness column (cx, cz)`) or null, with the draws taken and the columns examined and hashed (see
+ * `SPRING_STREAM`).
+ */
+export function springWitness(base: GenContext, path: string, skip: readonly LivenessColumn[] = []): SpringWitnessScan {
+  const info = leafInfo(path);
+  if (!isSpringLeaf(path)) throw new Error(`${path} is not a springs leaf`);
+  return springWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
+}
+
 // ---------------------------------------------------------------- the depth-band leaves' witnesses (SP6a Task 8)
 
 /** A depth-band leaf's family, end and stream, or null for any other path. */
@@ -1949,6 +2034,7 @@ function decide(base: GenContext, info: LeafInfo, columns: readonly LivenessColu
           : isBiomeLeaf(info.path) ? biomeWitnessOf(base, info, variants, columns, baseHash).via
             : isCaveRuleNoise(info.path) ? caveRuleWitnessOf(base, info, variants, columns, baseHash).via
               : isAquiferLeaf(info.path) ? aquiferWitnessOf(base, info, variants, columns, baseHash).via
+                : isSpringLeaf(info.path) ? springWitnessOf(base, info, variants, columns, baseHash).via
                 : info.path === CAP_TOP_PATH ? capTopWitness(base).via
                   : info.path === WATER_DEPTH_PATH ? lakeRoofWitnessOf(base, info, variants, columns, baseHash).via : null;
   return w !== null ? { path: info.path, live: true, via: w, cls: null } : { path: info.path, live: false, via: null, cls: intended };
@@ -1966,9 +2052,10 @@ function bandVia(base: GenContext, info: LeafInfo, variants: readonly GenContext
  * One leaf's U2 verdict over `columns` (the class columns of `base`): its stage output hash on the class columns (the
  * intended class first; a `terrain` leaf only on the land, coast, surface, island and cave ones), then, except for a
  * `terrain` leaf, the witness search; a spaghetti scale leaf, a depth-band leaf, a carver leaf, a cave-biome leaf, a
- * rule-4 noise, an aquifer leaf, `caves.limits.capTop` and `caves.limits.waterDepth` (`terrain` leaves) have their own
- * (ruling P5; Task 8's `bandWitness`; Task 27's `carverWitness`; SP6b Task 17's `biomeWitness`; SP6b Task 22's
- * `caveRuleWitness`; SP7a Task 13's `aquiferWitness`; Task 9's `capTopWitness`; SP7a Task 15's `lakeRoofWitness`).
+ * rule-4 noise, an aquifer leaf, a springs leaf, `caves.limits.capTop` and `caves.limits.waterDepth` (`terrain` leaves)
+ * have their own (ruling P5; Task 8's `bandWitness`; Task 27's `carverWitness`; SP6b Task 17's `biomeWitness`; SP6b
+ * Task 22's `caveRuleWitness`; SP7a Task 13's `aquiferWitness`; SP7a Task 19's `springWitness`; Task 9's
+ * `capTopWitness`; SP7a Task 15's `lakeRoofWitness`).
  * `caves.limits.waterDepth` is also tried on the basin class columns (ruling P13).
  */
 export function leafLiveness(base: GenContext, path: string, columns: readonly LivenessColumn[]): LivenessResult {
@@ -2021,8 +2108,8 @@ export function islandColumn(base: GenContext, leaves: readonly LeafInfo[] = isl
  * search (ruling P5), the depth-band leaves on their band witness, then (three maxY leaves) on the amplified base (P3),
  * the carver leaves on their carver witness (`carverWitness`, Task 27, ruling P18), the cave-biome leaves on their biome
  * witness (`biomeWitness`, SP6b Task 17), rule 4's noises on theirs (`caveRuleWitness`, SP6b Task 22), the aquifer
- * leaves on theirs (`aquiferWitness`, SP7a Task 13) and `caves.limits.capTop` on its floating_islands witness
- * (`capTopWitness`, Task 9).
+ * leaves on theirs (`aquiferWitness`, SP7a Task 13), the springs' leaves on their mountain witness (`springWitness`,
+ * SP7a Task 19) and `caves.limits.capTop` on its floating_islands witness (`capTopWitness`, Task 9).
  */
 export function u2(seedText = '42'): { readonly value: number; readonly results: readonly LivenessResult[] } {
   const base = CREATE(SEED(seedText), RESOLVE('default'));

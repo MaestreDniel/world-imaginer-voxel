@@ -9,12 +9,14 @@ import { createDensityContext, type DensityContext } from '../../src/gen/density
 import { probe } from '../../src/gen/density/probe';
 import { aquiferOf, barrierAt, fluidAt } from '../../src/gen/fluids/aquifer';
 import { terrainSolidAt } from '../../src/gen/fluids/solidAt';
+import { springTries, type SpringKind } from '../../src/gen/fluids/springs';
 import { createDensityReference, findTap, interpolatedNodes, type DensityReference } from '../../src/gen/density/reference';
 import { terrainDensityDebug, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf, type SurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbe } from '../../src/gen/surface/probe';
 import { newSurfaceScan, runAt } from '../../src/gen/surface/scan';
 import { fillColumnT } from '../../src/metrics/region';
+import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR } from '../../src/world/blocks/index';
 import type { ColumnView } from '../../src/world/store/api';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
@@ -43,8 +45,14 @@ import { createStore, type VoxelStore } from '../../src/world/store/store';
  * (barriers clear the tag); `caveBiomeProbe` reads the stored tagged voxels, which hold no barrier.
  * SP7a (spec §13.4, D19; Task 14): every checked voxel T left non-solid (block AIR), tagged or untagged, also runs
  * `aquiferProbe`: the stored proto fluid byte against `fluidAt` on the setup's DensityContext (both of T's fluid rules,
- * the untagged one and the aquifer's, are point functions). Spring voxels are excluded once T places springs (Task 19);
- * until then there are none. No draw: DT2's streams are unchanged.
+ * the untagged one and the aquifer's, are point functions). No draw: DT2's streams are unchanged.
+ * SP7a (spec §3, D21; Task 19): spring voxels are excluded from `probeBulk`, `surfaceProbeBulk` (and so the presets'
+ * `presetProbeBulk` and `presetSurfaceProbeBulk`) and `aquiferProbe`: T stores air plus a source at a spring, where
+ * `terrainSolidAt` says solid, `fluidAt` dry and `surfaceProbe` a rock state (the point functions are blind to springs).
+ * A spring voxel is a checked voxel T left air holding a source (`WATER_SOURCE` or `LAVA_SOURCE`) where `terrainSolidAt`
+ * says solid, whose position matches a try of `springTries` for its chunk, of any kind group in `params.springs` (each
+ * kind its own tries, rulings P23), whose outlet (the neighbour in the try's direction) is open (`terrainSolidAt` false,
+ * `fluidAt` 0). They are counted in `springVoxels`; every other part checks them as before.
  */
 
 export const DT2_VOXELS_PER_COLUMN = 16;
@@ -126,6 +134,8 @@ export interface Dt2Acc {
   caveBiomeProbe: number;
   caveBiomeVoxels: number;
   caveBiomeQuarts: number;
+  /** SP7a (Task 19): checked spring voxels, left out of `probeBulk`, `surfaceProbeBulk` and `aquiferProbe` (header). */
+  springVoxels: number;
 }
 
 export function newDt2Acc(label = ''): Dt2Acc {
@@ -133,7 +143,7 @@ export function newDt2Acc(label = ''): Dt2Acc {
     label, problems: [], probeBulk: 0, compiledReference: 0, surfaceProbeBulk: 0, surfaceReference: 0, voxels: 0,
     maskedVoxels: 0, corners: 0, columns: 0, surfaceVoxels: 0, surfaceExtraVoxels: 0, surfaceExtraSkipped: 0,
     tagProbe: 0, tagVoxels: 0, tagNonZero: 0, straddleVoxels: 0, aquiferProbe: 0, aquiferVoxels: 0, aquiferTagged: 0, aquiferWet: 0,
-    caveBiomeProbe: 0, caveBiomeVoxels: 0, caveBiomeQuarts: 0,
+    caveBiomeProbe: 0, caveBiomeVoxels: 0, caveBiomeQuarts: 0, springVoxels: 0,
   };
 }
 
@@ -276,6 +286,11 @@ const STRADDLING = new Int32Array(768);
 const QUART_PICKS = new Int32Array(16 * 1536);
 /** The mismatch texts `caveBiomeProbe` adds per column at most (every mismatch is counted). */
 const CAVE_BIOME_TEXTS = 8;
+/** `springVoxel`'s tries (5 values each, up to the leaves' 64 per kind). */
+const SPRING_TRIES = new Float64Array(5 * 64);
+/** The try directions in face order (N −z, E +x, S +z, W −x). */
+const SPRING_DX = [0, 1, 0, -1] as const;
+const SPRING_DZ = [-1, 0, 1, 0] as const;
 const SURFACE_SEED = fnv1a32('DT2.surface');
 const STRADDLE_SEED = fnv1a32('DT2.straddle');
 
@@ -333,15 +348,18 @@ export function dt2Column(ctx: GenContext, cx: number, cz: number, r: Xoshiro128
     const value = probe(dc, x, y, z);
     const block = view.block(lx, y, lz);
     acc.voxels++;
+    // SP7a D21: a spring voxel (header) is left out of probeBulk, surfaceProbeBulk and aquiferProbe.
+    const spring = springVoxel(ctx, setup, cx, cz, x, y, z, block, view.fluid(lx, y, lz));
+    if (spring) acc.springVoxels++;
     // The stored solidity is the point probe's after the carvers (SP6a spec §3.4) and the aquifer's barriers (SP7a D20):
     // density > 0 and not carved, or a tagged voxel the aquifer makes rock (`terrainSolidAt`).
     const solid = setup.solidAt(x, y, z);
-    if (solid !== (block !== AIR)) {
+    if (!spring && solid !== (block !== AIR)) {
       acc.probeBulk++;
       acc.problems.push(`${at}: (${x}, ${y}, ${z}) probe ${value}, terrainSolidAt ${solid}, block ${block}`);
     }
     const surfaceState = surfaceProbe(sc, x, y, z).state;
-    if (surfaceState !== block) {
+    if (!spring && surfaceState !== block) {
       acc.surfaceProbeBulk++;
       acc.problems.push(`${at}: (${x}, ${y}, ${z}) surfaceProbe state ${surfaceState} ≠ block ${block}`);
     }
@@ -369,8 +387,8 @@ export function dt2Column(ctx: GenContext, cx: number, cz: number, r: Xoshiro128
       acc.problems.push(`${at}: (${x}, ${y}, ${z}) stored tag ${tag} ≠ caveTagAt ${tagAt}${want !== tagAt ? ' (a barrier: 0)' : ''}`);
     }
     // SP7a D19: at a voxel T left non-solid, the stored fluid is the point rules' (sky-open water untagged, the aquifer
-    // tagged). Spring voxels are excluded from Task 19 (none before).
-    if (block === AIR) {
+    // tagged); a spring voxel is excluded (D21).
+    if (block === AIR && !spring) {
       const fluid = view.fluid(lx, y, lz);
       const wantFluid = setup.fluidAt(x, y, z);
       acc.aquiferVoxels++;
@@ -442,6 +460,26 @@ export function dt2Column(ctx: GenContext, cx: number, cz: number, r: Xoshiro128
   ext?.column?.(view);
   store.freeColumn(cx, cz);
   return indices;
+}
+
+/**
+ * Whether the checked voxel (x, y, z) of column (cx, cz), whose stored block is `block` and fluid `fluid`, is a spring
+ * (header): air holding a source where `terrainSolidAt` says solid, at the position of a try of any kind group in
+ * `params.springs` whose outlet is open.
+ */
+function springVoxel(ctx: GenContext, setup: Dt2Setup, cx: number, cz: number, x: number, y: number, z: number, block: number, fluid: number): boolean {
+  if (block !== AIR || (fluid !== WATER_SOURCE && fluid !== LAVA_SOURCE) || !setup.solidAt(x, y, z)) return false;
+  const lx = x & 15, lz = z & 15;
+  for (const [kind, group] of Object.entries(ctx.params.springs) as Array<[SpringKind, { readonly tries: number }]>) {
+    springTries(ctx.seed, kind, cx, cz, group.tries, SPRING_TRIES);
+    for (let t = 0; t < group.tries; t++) {
+      if (SPRING_TRIES[5 * t] !== lx || SPRING_TRIES[5 * t + 1] !== lz) continue;
+      const d = SPRING_TRIES[5 * t + 2]!;
+      const ox = x + SPRING_DX[d]!, oz = z + SPRING_DZ[d]!;
+      if (!setup.solidAt(ox, y, oz) && setup.fluidAt(ox, y, oz) === 0) return true;
+    }
+  }
+  return false;
 }
 
 /** `caveBiomeProbe` on a generated column (header): every tagged voxel, then every quart holding one. */

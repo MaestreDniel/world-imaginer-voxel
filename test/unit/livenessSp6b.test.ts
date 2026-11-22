@@ -122,8 +122,8 @@ describe('SP6b\'s leaves in U2 and U4 (SP6b spec §12.7, D15; Task 29)', () => {
     const covered = new Set(u2Leaves().map((l) => l.path));
     for (const p of SP6B_LEAVES) expect([p, covered.has(p)]).toEqual([p, true]);
     expect([SP6B_LEAVES.length, covered.size]).toEqual([21, U2_LEAVES]);
-    // SP6b's count: 172 + 21 = 193; SP7a adds the 15 aquifer leaves (Task 13).
-    const sp7a = [...covered].filter((p) => p.startsWith('aquifer.')).length;
+    // SP6b's count: 172 + 21 = 193; SP7a adds the 15 aquifer leaves (Task 13) and the springs' (Tasks 19-21).
+    const sp7a = [...covered].filter((p) => p.startsWith('aquifer.') || p.startsWith('springs.')).length;
     expect([193 - SP6B_LEAVES.length, U2_LEAVES - sp7a]).toEqual([172, 193]);
   });
 
@@ -131,7 +131,7 @@ describe('SP6b\'s leaves in U2 and U4 (SP6b spec §12.7, D15; Task 29)', () => {
     // D15: the leaves live under caves.* and surface.*, which the terrain stage already hashes; no stage is added.
     expect(STAGES.map((s) => s.id)).toEqual(['climate', 'shape', 'surfaceEst', 'biome2d', 'terrain', 'decorate', 'light', 'mesh', 'lod', 'map']);
     // SP7a appends 'aquifer' (its spec §15.3, Task 13), which no SP6b leaf is under.
-    expect(STAGES.find((s) => s.id === 'terrain')?.params).toEqual(['density', 'surface', 'caves', 'aquifer']);
+    expect(STAGES.find((s) => s.id === 'terrain')?.params).toEqual(['density', 'surface', 'caves', 'aquifer', 'springs']);
     for (const p of SP6B_LEAVES) {
       const first = STAGES.find((s) => s.params.some((q) => prefixCovers(q, p)));
       expect([p, leaf(p).meta.scope, leaf(p).meta.stage, first?.id]).toEqual([p, 'terrain', 'terrain', 'terrain']);

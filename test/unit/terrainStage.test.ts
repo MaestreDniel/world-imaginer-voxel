@@ -22,7 +22,8 @@ import { DEFAULTS } from '../../src/core/params/defaults';
 import { completeNoiseDef } from '../../src/core/noise/types';
 import { seedSectionsOf } from '../../src/gen/fluids/settle';
 import { terrainSolidAt } from '../../src/gen/fluids/solidAt';
-import { caveBiomeQuarts, terrainDensityDebug, terrainStage, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
+import { newSpringList } from '../../src/gen/fluids/springs';
+import { caveBiomeQuarts, terrainDensityDebug, terrainSpringsDebug, terrainStage, terrainSurfaceDebug } from '../../src/gen/pipeline/terrainStage';
 import { createSurfaceContext, surfaceContextOf, type SurfaceContext } from '../../src/gen/surface/context';
 import { surfaceProbe, surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { newSurfaceScan, runAt, type SurfaceScan } from '../../src/gen/surface/scan';
@@ -30,7 +31,7 @@ import { seedFromInput } from '../../src/core/seed';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { createGenContext } from '../../src/gen/context';
 import { caveBiomeAt } from '../../src/gen/biomes/cavePicker';
-import { FLUID_LAVA, fluidType, WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { FLUID_LAVA, fluidType, LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, BEDROCK, COLLIDE, DEEPSLATE, GRASS_BLOCK, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { AuxBView, AuxView, ColumnView, ColumnWriter } from '../../src/world/store/api';
 import { protoAt, REC_AUX_B } from '../../src/world/store/columnTable';
@@ -110,7 +111,8 @@ interface Expected {
  * tagged voxel, D20; together `terrainSolidAt`), `top`; the fluid of a non-solid voxel by D19: untagged (`caveTagAt` 0)
  * water iff y ≤ ⌊surfaceWaterLevel⌋ at the nearest corner, tagged the aquifer's point function `fluidAt`; each solid
  * voxel's state from `surfaceProbe` on a SurfaceContext built apart (the reference evaluator, never the fast path; it
- * rebuilds the column with its own early-outs, so a solidity disagreement shows as air).
+ * rebuilds the column with its own early-outs, so a solidity disagreement shows as air); the springs
+ * T's springs step accepts (SP7a D21) as air plus a source.
  */
 function expectedOf(c: GenContext, cx: number, cz: number): Expected {
   const dc = dcOf(c);
@@ -143,6 +145,15 @@ function expectedOf(c: GenContext, cx: number, cz: number): Expected {
         if (solid) top[lz * 16 + lx] = y;
       }
     }
+  }
+  // SP7a D21: the column's springs (`springsColumn`'s list, decided by springs.test.ts' rules) are air plus a source;
+  // `top` is unchanged (a spring lies at or below top − 2).
+  const springs = newSpringList();
+  terrainSpringsDebug(c, cx, cz, springs);
+  for (let k = 0; k < springs.n; k++) {
+    const j = springs.pos[k]!;
+    blocks[j] = AIR;
+    fluid[j] = springs.kind[k] === 2 ? LAVA_SOURCE : WATER_SOURCE;
   }
   return { s, blocks, fluid, top, swl };
 }
@@ -886,6 +897,10 @@ describe('T\'s aquifer step (SP7a §1.7, D17-D20)', () => {
     expect(aquiferOf(c), 'memoised per context').toBe(aq);
     const dc = dcOf(c);
     const { view } = generate(c, cx, cz);
+    // SP7a D21: the column's springs (`springsColumn`'s list): T stores air plus a source where the probes say rock.
+    const springs = newSpringList();
+    terrainSpringsDebug(c, cx, cz, springs);
+    const springAt = new Set(springs.pos.subarray(0, springs.n));
     const aux = view.aux()!;
     const bad: string[] = [];
     let barriers = 0, taggedWater = 0, lava = 0, crack = 0;
@@ -898,7 +913,8 @@ describe('T\'s aquifer step (SP7a §1.7, D17-D20)', () => {
           const block = view.block(lx, y, lz);
           const f = view.fluid(lx, y, lz);
           const solid = block !== AIR;
-          if (terrainSolidAt(aq, dc, x, y, z) !== solid) bad.push(`(${x}, ${y}, ${z}): terrainSolidAt ≠ stored solidity ${solid}`);
+          const spring = springAt.has((((y + 64) << 4) | lz) << 4 | lx);
+          if (!spring && terrainSolidAt(aq, dc, x, y, z) !== solid) bad.push(`(${x}, ${y}, ${z}): terrainSolidAt ≠ stored solidity ${solid}`);
           if (solid) {
             top = y;
             if (f !== 0) bad.push(`(${x}, ${y}, ${z}): fluid ${f} in a solid voxel`);
@@ -912,7 +928,7 @@ describe('T\'s aquifer step (SP7a §1.7, D17-D20)', () => {
             continue;
           }
           const want = fluidAt(aq, dc, x, y, z);
-          if (f !== want) bad.push(`(${x}, ${y}, ${z}): fluid ${f} ≠ fluidAt ${want}`);
+          if (!spring && f !== want) bad.push(`(${x}, ${y}, ${z}): fluid ${f} ≠ fluidAt ${want}`);
           if (f !== 0) topFluid = y;
           if (fluidType(f) === FLUID_LAVA) lava++;
           const byte = view.cave(lx, y, lz);

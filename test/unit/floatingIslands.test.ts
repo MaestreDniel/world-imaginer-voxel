@@ -29,7 +29,8 @@ import { probe } from '../../src/gen/density/probe';
 import { aquiferOf } from '../../src/gen/fluids/aquifer';
 import { terrainSolidAt } from '../../src/gen/fluids/solidAt';
 import { createDensityReference, interpolatedNodes } from '../../src/gen/density/reference';
-import { terrainDensityDebug } from '../../src/gen/pipeline/terrainStage';
+import { newSpringList } from '../../src/gen/fluids/springs';
+import { terrainDensityDebug, terrainSpringsDebug } from '../../src/gen/pipeline/terrainStage';
 import { fillColumnT } from '../../src/metrics/region';
 import { AIR } from '../../src/world/blocks/index';
 import type { ColumnView } from '../../src/world/store/api';
@@ -200,6 +201,10 @@ describe('compiled == reference and probe == bulk on island columns (SP3e spec ย
       const [cx, cz] = col;
       const view = generate(ctx, store, col);
       terrainDensityDebug(ctx, cx, cz, out, mask);
+      // SP7a D21: the column's springs (T's springs step, `springsColumn`'s list): T stores air plus a source there.
+      const springs = newSpringList();
+      terrainSpringsDebug(ctx, cx, cz, springs);
+      const springAt = new Set(springs.pos.subarray(0, springs.n));
       const s = dc.column(cx, cz);
       const idx: number[] = [];
       for (let y = 184; y <= 272; y++) for (let p = 0; p < 256; p++) idx.push(((y + 64) << 8) | p);
@@ -211,8 +216,8 @@ describe('compiled == reference and probe == bulk on island columns (SP3e spec ย
         const block = view.block(lx, y, lz);
         voxels++;
         // The stored solidity is terrainSolidAt's: density > 0 and not carved (SP6a spec ยง3.4; the 512 uniform voxels reach
-        // the carvers under the sea bed), or a barrier (SP7a D20).
-        expect(terrainSolidAt(aquiferOf(ctx), dc, x, y, z), `(${x}, ${y}, ${z}) probe ${value}, block ${block}`).toBe(block !== AIR);
+        // the carvers under the sea bed), or a barrier (SP7a D20); a spring voxel is skipped (SP7a D21).
+        if (!springAt.has(i)) expect(terrainSolidAt(aquiferOf(ctx), dc, x, y, z), `(${x}, ${y}, ${z}) probe ${value}, block ${block}`).toBe(block !== AIR);
         if (y >= 193 && y <= 263 && block !== AIR) islandVoxels++;
         if (mask[i] === 1) {
           masked++;

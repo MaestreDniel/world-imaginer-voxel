@@ -16,8 +16,9 @@
  * - After `dispose()` and every job settled, every thread's limbo drains to 0 (bounded, 5 s) and every pool slot is
  *   free: no slot leaked through a free, a claim collision or the deferred reclamation.
  * - SP7a: the `T(protoOnly)` check skips the fluid of the sections D's settle changed (their final fluid is the settled
- *   one); Review Focus 5's flight (shuffled steps, a teleport, RD 4 → 6 → 4) over a window holding settled sections
- *   equals `genRegion` on its inner 6 × 6, with no D issued while a column of its 3 × 3 was below Proto.
+ *   one); Review Focus 5's flight (shuffled steps, a teleport, RD 4 → 6 → 4) over DT1's first settle window (settled
+ *   sections and a water spring, Task 19) equals `genRegion` on its inner 6 × 6, with no D issued while a column of its
+ *   3 × 3 was below Proto.
  */
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, expect, test } from 'vitest';
@@ -33,6 +34,8 @@ import { REC_GEN_FLUID_MASK } from '../../src/world/store/columnTable';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { buildNodeTaskWorker } from '../harness/nodeWorker';
 import { genRegion, litRegionHash } from '../harness/region';
+import { SETTLE_WINDOWS } from '../harness/settleWindows';
+import { interiorSprings, settleWindowAt } from '../harness/windowScans';
 
 const MiB = 1 << 20;
 const RD = 4;
@@ -281,17 +284,20 @@ test('the real coordinator and pool equal genRegion after the first fill, a flig
 }, 120_000);
 
 /**
- * Review Focus 5 (SP7a): the 10 × 10 window at (−8, −3), whose inner 6 × 6 holds sections D's settle changes (spills
- * and falls near the spawn's coast, from a scan of seed '42'); the camera over its centre.
+ * Review Focus 5 (SP7a): DT1's first settle window (`SETTLE_WINDOWS[0]`, `settleWindowAt`: 10 × 10 chunks whose inner
+ * 6 × 6 holds a coast's spills, a flooded cave border and a water spring, Task 19's re-scan of seed '42'); the camera
+ * over its centre.
  */
-const SETTLE_WIN = { cx0: -8, cz0: -3, w: 10, h: 10 } as const;
+const SETTLE_AT = settleWindowAt(SETTLE_WINDOWS[0]!.a, SETTLE_WINDOWS[0]!.b);
+const SETTLE_WIN = { cx0: SETTLE_AT.cx0, cz0: SETTLE_AT.cz0, w: SETTLE_AT.size, h: SETTLE_AT.size } as const;
 const SETTLE_INNER = { cx0: SETTLE_WIN.cx0 + 2, cz0: SETTLE_WIN.cz0 + 2, w: 6, h: 6 } as const;
-/** The camera positions of the flight inside the window, in a shuffled order (columns), each held a few frames. */
-const FLIGHT_STEPS: ReadonlyArray<readonly [number, number]> = [[-1, 4], [-7, -2], [-4, 6], [0, -3], [-8, 2], [-3, 1], [-6, 5], [-2, -1]];
+/** The camera positions of the flight inside the window (columns from its origin), in a shuffled order, each held a few frames. */
+const FLIGHT_STEPS: ReadonlyArray<readonly [number, number]> = [[7, 7], [1, 1], [4, 9], [8, 0], [0, 5], [5, 4], [2, 8], [6, 2]]
+  .map(([dx, dz]) => [SETTLE_WIN.cx0 + dx!, SETTLE_WIN.cz0 + dz!] as const);
 /** The window's centre column, where the camera ends. */
-const SETTLE_HOME = [-4, 1] as const;
+const SETTLE_HOME = [SETTLE_WIN.cx0 + 4, SETTLE_WIN.cz0 + 4] as const;
 
-test('Review Focus 5 (SP7a): a flight in shuffled order with a teleport and RD 4 → 6 → 4 over a window holding settled spills equals genRegion on its inner 6 × 6, and no D was issued while a column of its 3 × 3 was below Proto', async () => {
+test('Review Focus 5 (SP7a): a flight in shuffled order with a teleport and RD 4 → 6 → 4 over SETTLE_WINDOWS[0] (settled spills and a water spring) equals genRegion on its inner 6 × 6, and no D was issued while a column of its 3 × 3 was below Proto', async () => {
   const ref = await genRegion({ seed: '42', params: DEFAULTS, ...SETTLE_INNER, upTo: 'L', order: 'spiral', threads: 1 });
   const expected = ref.view.litHash();
   // The inner window holds settled sections (the test is not vacuous).
@@ -303,6 +309,8 @@ test('Review Focus 5 (SP7a): a flight in shuffled order with a teleport and RD 4
     }
   }
   expect(settled, 'columns of the inner 6 × 6 with a settled section').toBeGreaterThan(0);
+  // The inner 6 × 6 holds a water spring (Task 19: the settle reads its stream).
+  expect(interiorSprings('42', SETTLE_WINDOWS[0]!.a, SETTLE_WINDOWS[0]!.b), 'water springs in the inner 6 × 6').toBeGreaterThan(0);
 
   const store = createStore({ shared: true, maxBlockBytes: 384 * MiB, maxByteBytes: 384 * MiB });
   const pool: WorkerPool = createWorkerPool(2, spawnNode, { epochCells: store.epochs.cells, onWorkerDead: (t) => store.markDead(t) });

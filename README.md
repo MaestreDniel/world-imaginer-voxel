@@ -268,6 +268,8 @@ Generated from `src/core/params/schema.ts` by `npm run docs:params`; a test fail
 | `aquifer.noises.spread` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":1,"persistence":0.5,"remap":"none","wavelength":32,"yScale":1} | wavelength 1 … 4096 |  | terrain | Spread noise: Nspread at a cell's centre: moves a partial level by up to 9 blocks around its band's middle. |
 | `aquifer.noises.lava` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":1,"persistence":0.5,"remap":"none","wavelength":2,"yScale":1} | wavelength 1 … 4096 |  | terrain | Lava noise: Nlava at the corner of a cell's 64 × 40 × 64 block: whether a deep partial cell holds lava. |
 | `aquifer.noises.barrier` | noise | {"amplitudes":null,"clampSigma":3,"double":true,"lacunarity":2,"octaves":1,"persistence":0.5,"remap":"none","wavelength":8,"yScale":1} | wavelength 1 … 4096 |  | terrain | Barrier noise: Nb at the voxel: added to the pressure where two cells meet; positive → rock. |
+| `springs.water.tries` | int | 3 | 0 … 32 |  | terrain | Tries: Tries per chunk: each picks a position, a direction and a height, and becomes a spring where the rule holds (more tries → more waterfalls). |
+| `springs.water.minFall` | int | 8 | 2 … 64 | blocks | terrain | Least fall: The outlet and this many voxels below it must be open air, and the spring sits at least this many blocks above the surface estimate at its outlet. |
 <!-- params:end -->
 
 ## Requirements

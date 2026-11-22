@@ -29,10 +29,16 @@
  * - Surface pass (SP3c §3, `surfacePass`): after a `stop()` poll (the 8th), the whole-column scan (with the cave bytes
  *   and the picker's pass, SP6b spec §3.1) and the compiled rules (fast path included) give every solid voxel at
  *   y −63 … 319 its final state in a column-wide state scratch.
- * - Seed sections (SP7a spec §1.7): after the surface pass (a springs step goes before it, so springs seed too),
- *   `seedSectionsOf` over the solidity and the fluid scratch, the sections holding an in-column seed, for aux B (T
- *   writes no bit in the fluid byte: the proto carries no bit 6).
- * - Fill: y = −64 bedrock; a solid voxel its surface state; anything else air (with the aquifer's fluid byte).
+ * - Springs (SP7a spec §3, D17, D21): after the surface pass, `springsColumn` over the column's arrays as they stand
+ *   (the solidity, the states, the cave bytes, the aquifer's fluid and `top`) with the springs' own point probes
+ *   (`springProbesOf`) for the voxels outside the column; each accepted spring becomes air plus a source (water; lava
+ *   for the lava kind) with cave byte 0 in the solidity and fluid scratches, so the voxels around it keep the skin of a
+ *   solid run and the seed sections see it. `top` and the heightmaps are unchanged (a spring lies at or below `top` − 2).
+ * - Seed sections (SP7a spec §1.7): after the springs step (so springs seed too), `seedSectionsOf` over the solidity
+ *   and the fluid scratch, the sections holding an in-column seed, for aux B (T writes no bit in the fluid byte: the
+ *   proto carries no bit 6).
+ * - Fill: y = −64 bedrock; a solid voxel its surface state; anything else air (with the aquifer's or a spring's fluid
+ *   byte).
  * - Sections 0 … 23 go to `setProto` in order with their cave tags (each channel uniform or dense), `stop()` before each
  *   (24 polls). On a
  *   true `stop()` in any phase the stage returns false at once, without aux.
@@ -48,8 +54,11 @@
  * `terrainDensityDebug` is a test hook (SP3b §2.3, DT2): the same density phase, recording the bulk-evaluated values.
  * `terrainSurfaceDebug` is another (SP3c §5.2, DT2's `surfaceReference`): the same phases up to the surface pass (the
  * carve, the tag, the cave-biome step and the aquifer step included), which scans into the caller's scan context.
+ * `terrainSpringsDebug` is a third (SP7a §3, the springs' tests and U2's mountain witness): the same phases up to the
+ * springs step, the column's accepted springs into the caller's list.
  */
 import { MIN_Y } from '../../core/constants';
+import { LAVA_SOURCE, WATER_SOURCE } from '../../world/blocks/fluid';
 import { AIR, BEDROCK } from '../../world/blocks/index';
 import type { TerrainWriter } from '../../world/store/api';
 import {
@@ -63,6 +72,7 @@ import type { GenContext } from '../context';
 import { fillDensityColumn, type DensityBounds } from '../density/bounds';
 import { aquiferColumn, aquiferOf, createAquiferScratch } from '../fluids/aquifer';
 import { seedSectionsOf } from '../fluids/settle';
+import { newSpringList, springProbesOf, springsColumn, type SpringList } from '../fluids/springs';
 import { surfaceContextOf } from '../surface/context';
 import { surfacePass } from '../surface/pass';
 import { fillSurfaceBiomes, type SurfaceScan } from '../surface/scan';
@@ -90,6 +100,11 @@ const AQUIFER_OF = aquiferOf;
 const AQUIFER_COLUMN = aquiferColumn;
 const SEED_SECTIONS = seedSectionsOf;
 const NEW_AQUIFER_SCRATCH = createAquiferScratch;
+const SPRINGS_COLUMN = springsColumn;
+const NEW_SPRING_LIST = newSpringList;
+const SPRING_PROBES = springProbesOf;
+const WATER_SOURCE_ = WATER_SOURCE;
+const LAVA_SOURCE_ = LAVA_SOURCE;
 
 const SAMPLE = NEW_SAMPLE();
 /** Solidity per voxel `((y + 64)·16 + lz)·16 + lx` (fillDensityColumn's order): section sy is 4096·sy … + 4095. */
@@ -120,6 +135,8 @@ const PASS = NEW_PASS();
 const DEBUG_PASS = NEW_PASS();
 /** Tagged voxels per quart and nibble (`caveBiomeQuarts`): entry `16·q + biome`, q = (qy·4 + qz)·4 + qx (≤ 64 each). */
 const QUART_BIOMES = new Uint8Array(16 * 1536);
+/** The springs step's accepted springs (SP7a §3; `springsColumn`'s list). */
+const SPRINGS = NEW_SPRING_LIST();
 const BLOCKS = new Uint16Array(4096);
 const FLUID = new Uint8Array(4096);
 const CAVE = new Uint8Array(4096);
@@ -166,6 +183,20 @@ export function columnCaveBiomes(inp: CavePickerInputs, s: ColumnSample, tags: U
     const t = tags[j]!;
     if (t === 0) continue;
     tags[j] = t | (BIOME_OF_PASS(inp, pass, x0 + (j & 15), (j >> 8) + Y0, z0 + ((j >> 4) & 15)) << 4);
+  }
+}
+
+/**
+ * Writes the accepted springs of `list` into the column's scratches (SP7a §3.1): each spring voxel becomes non-solid
+ * with a source (`WATER_SOURCE`, `LAVA_SOURCE` for the lava kind, 2) and cave byte 0; the water scratch, the states and
+ * `top` are not read again, so they are left as they are.
+ */
+function writeSprings(list: SpringList): void {
+  for (let k = 0; k < list.n; k++) {
+    const j = list.pos[k]!;
+    SOLID[j] = 0;
+    FLUID_V[j] = list.kind[k] === 2 ? LAVA_SOURCE_ : WATER_SOURCE_;
+    TAG[j] = 0;
   }
 }
 
@@ -229,6 +260,8 @@ export function terrainStage(ctx: GenContext, cx: number, cz: number, w: Terrain
   SURFACE_BIOMES(s, ctx, BIOMES);
   if (stop()) return false;
   SURFACE_PASS(sc, s, SOLID, WATER_V, BIOMES, STATE, undefined, TAG, caveScan);
+  SPRINGS_COLUMN(ctx, s, PASS, SOLID, STATE, TAG, FLUID_V, TOP, SPRING_PROBES(ctx), SPRINGS);
+  writeSprings(SPRINGS);
   const seeds = SEED_SECTIONS(SOLID, FLUID_V);
   for (let sy = 0; sy < 24; sy++) {
     if (stop()) return false;
@@ -304,4 +337,25 @@ export function terrainSurfaceDebug(ctx: GenContext, cx: number, cz: number, sca
   AQUIFER_COLUMN(AQUIFER_OF(ctx), s, inputs, DEBUG_PASS, SOLID, TAG, WATER_V, FLUID_V, TOP_FLUID, AQUIFER_SCRATCH);
   SURFACE_BIOMES(s, ctx, BIOMES);
   return SURFACE_PASS(sc, s, SOLID, WATER_V, BIOMES, STATE, scan, TAG, { inputs, pass: DEBUG_PASS });
+}
+
+/**
+ * Test hook (SP7a spec §3, the springs' tests, DT2's spring exclusion checks and U2's mountain witness): runs column (cx,
+ * cz) exactly as `terrainStage` does up to and including the springs step (the density fill, the carve, the tag and the
+ * cave-biome step, the aquifer step, `top`, the biome buffer and the surface pass, never stopped), with the hook's own
+ * cave pass, and writes no store; `out` receives the column's accepted springs (`springsColumn`'s list).
+ */
+export function terrainSpringsDebug(ctx: GenContext, cx: number, cz: number, out: SpringList): void {
+  const sc = SURFACE_CONTEXT(ctx);
+  const s = BUILD(ctx, cx, cz, SAMPLE);
+  const bounds = sc.density.bounds;
+  FILL(bounds, s, SOLID, null, null, NEVER, CELLS);
+  DENSITY_TOPS(SOLID, ctx.params.islands.enabled, DENSITY_TOP);
+  carve(ctx, s, cx, cz);
+  const inputs = tagAndPick(ctx, s, bounds, DEBUG_PASS);
+  AQUIFER_COLUMN(AQUIFER_OF(ctx), s, inputs, DEBUG_PASS, SOLID, TAG, WATER_V, FLUID_V, TOP_FLUID, AQUIFER_SCRATCH);
+  columnTops(SOLID, TOP);
+  SURFACE_BIOMES(s, ctx, BIOMES);
+  SURFACE_PASS(sc, s, SOLID, WATER_V, BIOMES, STATE, undefined, TAG, { inputs, pass: DEBUG_PASS });
+  SPRINGS_COLUMN(ctx, s, DEBUG_PASS, SOLID, STATE, TAG, FLUID_V, TOP, SPRING_PROBES(ctx), out);
 }

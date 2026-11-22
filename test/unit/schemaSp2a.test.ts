@@ -10,9 +10,9 @@ import { JAG, OFFSET, SIGMA } from '../../src/metrics/sp1Fixtures';
 
 describe('SP2a schema groups', () => {
   test('leaves, scopes and stages', () => {
-    // The SP3b/SP3c groups, SP3e's islands group, SP6a's caves group and SP7a's aquifer group have their own tests
+    // The SP3b/SP3c groups, SP3e's islands group, SP6a's caves group and SP7a's aquifer and springs groups have their own tests
     // (schemaSp3b, schemaSp3c, islandMask, caveTerms, stage and livenessSp7a).
-    const rows = PARAM_META.filter((m) => !m.path.startsWith('climate.') && !m.path.startsWith('density.') && !m.path.startsWith('surface.') && !m.path.startsWith('islands.') && !m.path.startsWith('caves.') && !m.path.startsWith('aquifer.')).map((m) => `${m.path}:${m.kind}:${m.scope}:${m.stage}`);
+    const rows = PARAM_META.filter((m) => !m.path.startsWith('climate.') && !m.path.startsWith('density.') && !m.path.startsWith('surface.') && !m.path.startsWith('islands.') && !m.path.startsWith('caves.') && !m.path.startsWith('aquifer.') && !m.path.startsWith('springs.')).map((m) => `${m.path}:${m.kind}:${m.scope}:${m.stage}`);
     const g = (prefix: string, stage: string, names: string) => names.split(' ').map((n) => {
       const [name, kind] = n.split(':');
       return `${prefix}.${name}:${kind ?? 'number'}:terrain:${stage}`;

@@ -406,6 +406,16 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       barrier: aquiferNoise('Barrier noise', 'Nb at the voxel: added to the pressure where two cells meet; positive → rock.', 8),
     }),
   }),
+  // SP7a spec §3.5 (Task 19): the springs' leaves, appended after `aquifer`, so randomParams and randomPatch draw every
+  // earlier leaf as before. Read by `springsColumn` (`gen/fluids/springs.ts`) in T's springs step; Terrain scope (a change
+  // re-runs T, D21). `water.tries` defaults to 3 (Point 2's 50 per km², the plan's Spec correction 6); the ranges are the
+  // plan's; no `water.minY` (Task 19's Spec correction: yLo already keeps a land spring above y 64; it never bound).
+  springs: group('Springs', 'Springs placed by T in rock faces (SP7a spec §3): a source voxel with rock above, below and on three sides, its one open side over a drop, so a permanent waterfall falls from it. Each kind draws its tries per chunk.', {
+    water: group('Water', 'Water springs in mountain faces (SP7a spec §3.2): a try\'s height lies between minFall above the surface estimate at its outlet and 2 below the top of its position; natural rock only, never sand or gravel.', {
+      tries: int(3, { ...TERRAIN, label: 'Tries', doc: 'Tries per chunk: each picks a position, a direction and a height, and becomes a spring where the rule holds (more tries → more waterfalls).', min: 0, max: 32 }),
+      minFall: int(8, { ...TERRAIN, label: 'Least fall', doc: 'The outlet and this many voxels below it must be open air, and the spring sits at least this many blocks above the surface estimate at its outlet.', unit: 'blocks', min: 2, max: 64 }),
+    }),
+  }),
 });
 
 export const SCHEMA = buildSchema(ROOT);
@@ -421,3 +431,4 @@ export interface SurfaceParams extends Value<typeof ROOT.children.surface> {}
 export interface IslandParams extends Value<typeof ROOT.children.islands> {}
 export interface CaveParams extends Value<typeof ROOT.children.caves> {}
 export interface AquiferParams extends Value<typeof ROOT.children.aquifer> {}
+export interface SpringParams extends Value<typeof ROOT.children.springs> {}

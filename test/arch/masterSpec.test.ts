@@ -235,6 +235,10 @@
  * The settle reference (Task 17) lands item 16's DT1 part (§6.4's DT1 row: `settleReference` over the three settle
  * windows, `settleIsolated`, `DT1.light` on the first settle window) and item 19's test entry ("(SP7a: the settle
  * reference in harness/refs.ts", an `SP7A_MODULES` row; Task 22 adds the caves metric to the same parenthesis).
+ * The water springs (Task 19) land item 9's springs sentence (§3.12's cave decoration line: springs placed by T, lava
+ * lakes D step 1's; the steps line and D's step 1 say so), item 19's `gen/fluids/` line (`aquifer.ts springs.ts
+ * settle.ts solidAt.ts (SP7a)`, four `SP7A_MODULES` rows) and item 16's U2 count, 210 (the mountain witness's clause);
+ * the terrain stage's params gain 'springs'.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -3385,11 +3389,17 @@ describe('master spec amendments (SP6b §15)', () => {
 });
 
 describe('master spec amendments (SP7a §16)', () => {
+  /** §6.4's U2 clause for the springs' leaves (Task 19's mountain witness). */
+  const U2_SPRINGS_CLAUSE = 'the springs.water.* leaves on a bounded mountain witness (stream columns whose springs step accepts a water spring, where a step changes the T column)';
   /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 17, 19 and 22 append theirs. */
   const SP7A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+blocks\/kinds\.ts /, 'fluidRules.ts (SP7a; also the fluid surface', 'src/world/blocks/fluidRules.ts'],
     [/^\s+metrics\/\*\.ts\s/, 'SP7a: sp7aGoldens.ts', 'src/metrics/sp7aGoldens.ts'],
     [/^\s+test\/ unit\/ metrics\//, '(SP7a: the settle reference in harness/refs.ts', 'test/harness/refs.ts'],
+    [/^\s+fluids\//, 'fluids/aquifer.ts springs.ts', 'src/gen/fluids/aquifer.ts'],
+    [/^\s+fluids\//, 'springs.ts settle.ts', 'src/gen/fluids/springs.ts'],
+    [/^\s+fluids\//, 'settle.ts solidAt.ts', 'src/gen/fluids/settle.ts'],
+    [/^\s+fluids\//, 'solidAt.ts (SP7a)', 'src/gen/fluids/solidAt.ts'],
   ];
 
   test('§1 names each SP7a module in its entry, which exists (SP7a spec §16 item 19)', () => {
@@ -3660,20 +3670,21 @@ describe('master spec amendments (SP7a §16)', () => {
   });
 
   test('§6.4\'s U2 row (SP7a spec §16 item 16)', () => {
-    // The schema's count, moved from the SP6b describe: 193 and the 15 aquifer leaves (Task 13); the springs add 7
-    // (Tasks 19-21).
+    // The schema's count, moved from the SP6b describe: 193 and the 15 aquifer leaves (Task 13), 208; the springs add 6
+    // (Tasks 19-21): 210 with springs.water.* (Task 19; no minY, its Spec correction).
     const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
     expect(u2, 'no U2 row in §6.4').toBeDefined();
     const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
-    expect(n).toBe(208);
-    expect(u2).toContain(`; SP7a: the aquifer.* leaves are decided on the class columns, the cave columns first, else on a bounded aquifer witness (stream columns whose tagged air holds what the leaf acts on: cave air at or below y 63, under land or sea, below the lava levels for the lava leaves, the abyss for \`aquifer.abyssMargin\`, where a step changes the T column); U2 covers ${n} leaves (amended by SP7a) |`);
+    expect(n).toBe(210);
+    expect(u2).toContain('; SP7a: the aquifer.* leaves are decided on the class columns, the cave columns first, else on a bounded aquifer witness (stream columns whose tagged air holds what the leaf acts on: cave air at or below y 63, under land or sea, below the lava levels for the lava leaves, the abyss for `aquifer.abyssMargin`, where a step changes the T column); U2 covers 208 leaves (amended by SP7a);');
+    expect(u2).toContain(`; U2 covers 208 leaves (amended by SP7a); ${U2_SPRINGS_CLAUSE}; U2 covers ${n} leaves (amended by SP7a) |`);
   });
 
   test('the terrain stage 6 and GENERATOR_VERSION 10 (SP7a §15.3)', () => {
     // A code-only test (rulings P25): the checks of the SP6b describe's rule 4 "As built" paragraph moved here; Task 29
     // (§16 item 8) adds the "As built by SP7a" paragraph and pins its text beside it.
     expect(STAGES.find((st) => st.id === 'terrain')!.version).toBe(6);
-    expect(STAGES.find((st) => st.id === 'terrain')!.params).toEqual(['density', 'surface', 'caves', 'aquifer']);
+    expect(STAGES.find((st) => st.id === 'terrain')!.params).toEqual(['density', 'surface', 'caves', 'aquifer', 'springs']);
     expect(GENERATOR_VERSION).toBe(10);
   });
 
@@ -3696,6 +3707,24 @@ describe('master spec amendments (SP7a §16)', () => {
   test('§3.9\'s Borders paragraph (SP7a spec §16 item 7)', () => {
     const borders = text.split('\n').filter((l) => l.startsWith('**Borders.**'));
     expect(borders).toEqual(['**Borders.** T records the sections holding in-column seeds in aux B; D adds the cross-column seeds (3.14; amended by SP7a, the SP7a spec §1.7, §4.2). No voxel is flagged: the proto carries no bit 6.']);
+  });
+
+  test('§3.12\'s springs (SP7a spec §16 item 9)', () => {
+    const lines = text.split('\n');
+    expect(lines).toContain('- springs (water in mountain faces, island edges, lava in the abyss) are placed by T (SP7a, the SP7a spec §3) and reach settle as proto sources; lava lakes stay a D step-1 feature (SP8b) (amended by SP7a).');
+    expect(text).not.toContain('springs and lava lakes are fluid-producing features (3.14)');
+    const steps = lines.find((l) => l.startsWith('**Steps:** raw_generation'));
+    expect(steps).toContain(', fluid_springs (lava lakes only since SP7a: springs are placed by T, the cave decoration\'s springs line), ');
+    const from = lines.indexOf('**Order inside D:**');
+    expect(lines[from + 1]).toBe('1. Compute placements for the fluid-producing features (lava lakes; springs are T\'s since SP7a).');
+    // The springs are T's: its params hash the springs group (Terrain scope, D21).
+    expect(STAGES.find((st) => st.id === 'terrain')!.params).toContain('springs');
+  });
+
+  test('§1\'s gen/fluids entry (SP7a spec §16 item 19)', () => {
+    const entry = layoutEntry(/^\s+fluids\//);
+    expect(entry.trim()).toBe('fluids/aquifer.ts springs.ts settle.ts solidAt.ts (SP7a)');
+    for (const f of ['aquifer', 'springs', 'settle', 'solidAt']) expect(existsSync(`${ROOT_DIR}src/gen/fluids/${f}.ts`), f).toBe(true);
   });
 
   test('§3.12\'s D order (SP7a spec §16 item 9)', () => {
