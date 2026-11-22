@@ -15,6 +15,15 @@
  * X-ray shows no wall toward the dug voxel and none owned by it. Task 22 extends it: the stone is placed where SP6b's
  * rule 4 would put a cave block (moss, clay, dripstone, ash or the abyss's strata) were the voxel generated solid, and it
  * keeps its state: rule 4 never runs on a published edit.
+ *
+ * SP7a's Review Focus 1 (Task 18; spec §9.3, §15.4, D23, D34): a GV9 world (schema 5, the GV9 default surface tree of
+ * `test/fixtures/gv9-surface-trees.json`) whose diff digs three voxels of a cave that today's aquifer floods (air with
+ * fluid 0 at three tagged voxels stacked on the cave's floor voxel, each where today's `fluidAt` is water) and places
+ * stone at that floor voxel, opens with today's surface tree and the older-generator flag; the dug voxels stay a dry
+ * pocket (no sim until SP7b) with the water around them as D generated it (`WATER_SOURCE`, or the settled byte where
+ * the generated-fluid layer holds the section); the stone keeps its state and its column's cave byte; a `revert` of a
+ * dug voxel writes the generated value (`store.generated`), removes its entry, and reads the same after a reload; and
+ * `meshFluid` draws the water's faces toward the pocket.
  */
 import { expect, test } from 'vitest';
 import { CAVE_KIND, caveKindOf } from '../../src/core/constants';
@@ -26,10 +35,14 @@ import { resolveProfile } from '../../src/core/params/profiles';
 import type { JsonObject } from '../../src/core/params/migrate';
 import { cavePickerOf } from '../../src/gen/biomes/cavePicker';
 import { terrainStage } from '../../src/gen/pipeline/terrainStage';
+import { createDensityContext } from '../../src/gen/density/context';
+import { aquiferOf, fluidAt } from '../../src/gen/fluids/aquifer';
 import { surfaceContextOf } from '../../src/gen/surface/context';
 import { surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { newSurfaceScan, scanColumn } from '../../src/gen/surface/scan';
 import { createMeshBuilder } from '../../src/mesh/builder';
+import { fluidDepths, meshFluid } from '../../src/mesh/fluid';
+import { unpackFluid } from '../../src/mesh/packing';
 import { unpackXray } from '../../src/mesh/packing';
 import { meshXray } from '../../src/mesh/xray';
 import { encodeColumnDiff } from '../../src/persist/diffCodec';
@@ -38,15 +51,20 @@ import { createSaves, loadParams, newState } from '../../src/persist/saves';
 import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
 import { newWorldRecord, OLDER_GENERATOR_NOTICE } from '../../src/ui/world/worldPage';
+import { FLUID_WATER, fluidType, NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, FULL_FACES, PASS, REGISTRY, STONE } from '../../src/world/blocks/index';
 import { ALL_FACES, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import type { NeighborhoodReader } from '../../src/world/store/api';
+import { REC_GEN_FLUID_MASK } from '../../src/world/store/columnTable';
 import { copyPaddedSection, createPaddedSection, padIndex } from '../../src/world/store/padded';
-import { createStore } from '../../src/world/store/store';
+import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
 import { gv8DensityTrees, gv8SurfaceTrees } from '../harness/gv8Trees';
+import { gv9SurfaceTrees } from '../harness/gv9Trees';
 import { openPersistWorld } from '../harness/persistWorld';
+import { genRegion } from '../harness/region';
 import { sp5cTrees } from '../harness/sp5cTrees';
+import { quadsOf } from '../unit/fixtures/padded';
 
 const MiB = 1 << 20;
 /** A generator key no world of today's generator has (the record's, from SP5c). */
@@ -323,5 +341,206 @@ test('a GV8 world with edits where the rock floor closes opens with the floor an
     }
   } finally {
     p.dispose();
+  }
+});
+
+/**
+ * A cave floor under water in seed 42 (default, today's generator), found by a scan of the 7 × 7 columns around (0, 0)
+ * generated up to 'D' (`genRegion`), each at local x and z 1 … 14 and y upward: a tagged air voxel holding water on a
+ * solid voxel (the floor voxel, `stone`) with three more tagged water voxels stacked on it (`dug`, bottom first), each
+ * with water beside it in the column, every one of the four where today's `fluidAt` is water. The first such floor
+ * (columns row-major) whose dug voxels lie in sections the column's generated-fluid layer holds (the settle changed
+ * them), else the first one.
+ */
+async function findFloodedFloor(): Promise<{ cx: number; cz: number; stone: Voxel; dug: Voxel[]; settled: boolean }> {
+  const ctx = ctxFor('42');
+  const inp = aquiferOf(ctx);
+  const dc = createDensityContext(ctx);
+  const store = (await genRegion({ seed: '42', params: resolveProfile('default'), cx0: -3, cz0: -3, w: 7, h: 7, upTo: 'D', order: 'spiral', threads: 1 })).view.store;
+  let first: { cx: number; cz: number; stone: Voxel; dug: Voxel[]; settled: boolean } | null = null;
+  for (let cz = -3; cz <= 3; cz++) {
+    for (let cx = -3; cx <= 3; cx++) {
+      const v = store.proto(cx, cz)!;
+      const mask = store.table.ints[store.table.find(cx, cz) + REC_GEN_FLUID_MASK]!;
+      const wet = (lx: number, y: number, lz: number): boolean =>
+        v.block(lx, y, lz) === AIR && caveKindOf(v.cave(lx, y, lz)) !== 0 && fluidType(v.fluid(lx, y, lz)) === FLUID_WATER;
+      const waterBeside = (lx: number, y: number, lz: number): boolean =>
+        [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([ox, oz]) => fluidType(v.fluid(lx + ox!, y, lz + oz!)) === FLUID_WATER);
+      for (let lz = 1; lz < 15; lz++) {
+        for (let lx = 1; lx < 15; lx++) {
+          for (let y = -62; y < 316; y++) {
+            if (v.block(lx, y - 1, lz) === AIR || v.fluid(lx, y - 1, lz) !== NO_FLUID) continue;
+            if (![0, 1, 2, 3].every((k) => wet(lx, y + k, lz)) || ![1, 2, 3].every((k) => waterBeside(lx, y + k, lz))) continue;
+            const four = [0, 1, 2, 3].map((k): Voxel => ({ x: 16 * cx + lx, y: y + k, z: 16 * cz + lz }));
+            // Today's point function agrees with T at each (DT2's `aquiferProbe`): water.
+            for (const q of four) expect(fluidAt(inp, dc, q.x, q.y, q.z), `fluidAt (${q.x}, ${q.y}, ${q.z})`).toBe(v.fluid(lx, q.y, lz));
+            const settled = [1, 2, 3].every((k) => ((mask >>> ((y + k + 64) >> 4)) & 1) !== 0);
+            const found = { cx, cz, stone: four[0]!, dug: four.slice(1), settled };
+            if (settled) return found;
+            first ??= found;
+          }
+        }
+      }
+    }
+  }
+  if (first === null) throw new Error('no flooded cave floor within 3 columns of (0, 0)');
+  return first;
+}
+
+/**
+ * The unit faces of section `sy` of column (cx, cz) that `meshFluid` emits in the translucent pass, keyed
+ * `x,y,z,face` by the world voxel that owns each (as the mesh job runs it: `copyPaddedSection`, `fluidDepths`).
+ */
+function waterFaces(nb: NeighborhoodReader, cx: number, cz: number, sy: number): Set<string> {
+  const padded = createPaddedSection();
+  copyPaddedSection(nb, sy, padded);
+  const depth = new Uint8Array(4096);
+  fluidDepths(nb, sy, depth);
+  const b = createMeshBuilder();
+  meshFluid(padded, depth, b);
+  const faces = new Set<string>();
+  for (const q of quadsOf(b.view(2))) {
+    const f = unpackFluid(q.words[0]!).face;
+    const a = AXIS[f]!;
+    const plane = q.corners[0]![a]! / 8;
+    const lo = [0, 1, 2].map((ax) => Math.min(...q.corners.map((c) => c[ax]!)) / 8);
+    const hi = [0, 1, 2].map((ax) => Math.max(...q.corners.map((c) => c[ax]!)) / 8);
+    lo[a] = SIGN[f]! > 0 ? plane - 1 : plane;
+    hi[a] = lo[a]! + 1;
+    // A side strip (all four positions at one y) covers the voxels whose top that y is.
+    if (a !== 1 && lo[1] === hi[1]) lo[1] = hi[1]! - 1;
+    for (let y = Math.floor(lo[1]!); y < hi[1]!; y++) {
+      for (let z = lo[2]!; z < hi[2]!; z++) {
+        for (let x = lo[0]!; x < hi[0]!; x++) faces.add(`${16 * cx + x},${16 * sy - 64 + y},${16 * cz + z},${f}`);
+      }
+    }
+  }
+  return faces;
+}
+
+test('a GV9 world with edits in a cave that now floods opens with the water: today\'s surface tree, the older-generator flag, the dug voxels a dry pocket in the generated water, the stone keeps its state and cave byte; a revert writes the generated value, removes its entry and survives a reload; meshFluid draws the water toward the pocket (SP7a Review Focus 1)', async () => {
+  const { cx, cz, stone, dug, settled } = await findFloodedFloor();
+  const kv = createMemoryKV();
+  const id = 'gv9';
+  const session = openMapSession({ ...DEFAULT_MAP_STATE, seed: '42', profile: 'default' }, () => [1, 2]);
+  const world = newWorldRecord(id, 'A GV9 world', session.state, 1_700_000_000_000);
+  const state = { ...newState(id, STATE_BOUNDS), player: { x: 16 * cx + 8.5, y: 140.25, z: 16 * cz + 7.5, yaw: 0, pitch: -10, mode: 'fly' as const, speed: 12 } };
+  expect((await createSaves(kv).create(world, state)).status).toBe('complete');
+  // The GV9 record: schema 5, the default profile's params with the GV9 default surface tree, generator version 9 and
+  // a genKey no world of today's generator has; one column of edits: the three dug voxels and the stone on the floor.
+  const params = JSON.parse(canonicalJSON(resolveProfile('default'))) as Record<string, Record<string, unknown>>;
+  // (Canonically equal to today's tree until rule 4's under-water branches, SP7a Task 29; the migration maps it by its
+  // hash to the live built-in tree either way.)
+  params['surface']!['rules'] = gv9SurfaceTrees().default;
+  const sectionOf = (v: Voxel): number => (v.y + 64) >> 4;
+  const indexOf = (v: Voxel): number => (((v.y + 64) & 15) << 8) | ((v.z & 15) << 4) | (v.x & 15);
+  const entry = (v: Voxel, value: number) => ({ sy: sectionOf(v), idx: indexOf(v), value });
+  const entries = [...dug.map((v) => entry(v, (AIR << 8) | NO_FLUID)), entry(stone, STONE << 8)];
+  expect((await kv.write([
+    { op: 'put', store: 'worlds', key: id, value: { ...world, params: params as unknown as JsonObject, schemaVersion: 5, generatorVersion: 9, genKey: OLD } },
+    { op: 'put', store: 'diffs', key: [id, colKey(cx, cz)], value: encodeColumnDiff({
+      sy: Uint8Array.from(entries, (e) => e.sy), idx: Uint16Array.from(entries, (e) => e.idx), value: Uint32Array.from(entries, (e) => e.value),
+    }, parseHex64(OLD)) },
+  ])).status).toBe('complete');
+
+  const key = (v: Voxel): string => `${v.x},${v.y},${v.z}`;
+  const edited = new Set([...dug, stone].map(key));
+  const valueAt = (s: VoxelStore, v: Voxel): number => ((s.blockAt(v.x, v.y, v.z) << 8) | s.fluidAt(v.x, v.y, v.z)) >>> 0;
+  const reverted = dug[1]!;
+  let generatedValue = -1;
+  const p = await openPersistWorld({ kv, worldId: id, rd: 4 });
+  try {
+    expect([p.centre.cx, p.centre.cz]).toEqual([cx, cz]);
+    // Today's surface tree (MIGRATIONS[4] maps the GV9 tree to the live built-in one, D34); flagged older.
+    const loaded = loadParams(p.kept());
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.value.surface.rules).toBe(resolveProfile('default').surface.rules);
+    expect(p.opened.older).toBe(true);
+    expect(p.notices.filter((t) => t === OLDER_GENERATOR_NOTICE).length).toBe(1);
+    p.store.enterRead();
+    try {
+      const fin = p.store.final(cx, cz)!;
+      const gen = p.store.generated(cx, cz)!;
+      const proto = p.store.proto(cx, cz)!;
+      const mask = p.store.table.ints[p.store.table.find(cx, cz) + REC_GEN_FLUID_MASK]!;
+      // The open's D settles as the scan's did: the layer holds the dug voxels' sections exactly when the scan found so.
+      expect(dug.every((v) => ((mask >>> sectionOf(v)) & 1) !== 0)).toBe(settled);
+      // The dug voxels: air with fluid 0, a dry pocket (saved diffs are absolute; no sim until SP7b).
+      for (const v of dug) expect([key(v), valueAt(p.store, v)]).toEqual([key(v), (AIR << 8) | NO_FLUID]);
+      // Their unedited neighbours: the water D generated, a proto source or, where the layer holds the section, the
+      // settled byte.
+      let water = 0;
+      for (const v of dug) {
+        for (const [ox, oy, oz] of NORMAL) {
+          const n = { x: v.x + ox, y: v.y + oy, z: v.z + oz };
+          if (edited.has(key(n))) continue;
+          const f = p.store.fluidAt(n.x, n.y, n.z);
+          const g = gen.fluid(n.x & 15, n.y, n.z & 15);
+          expect([key(n), f]).toEqual([key(n), g]);
+          if (((mask >>> sectionOf(n)) & 1) === 0 && fluidType(proto.fluid(n.x & 15, n.y, n.z & 15)) === FLUID_WATER) expect([key(n), f]).toEqual([key(n), WATER_SOURCE]);
+          if (fluidType(f) === FLUID_WATER) water++;
+        }
+      }
+      expect(water, 'water around the pocket').toBeGreaterThanOrEqual(3);
+      // The stone on the floor keeps its state and its column's cave byte (`replaceBlocks` keeps the cave entry).
+      expect(p.store.blockAt(stone.x, stone.y, stone.z)).toBe(STONE);
+      expect(fin.block(stone.x & 15, stone.y, stone.z & 15)).toBe(STONE);
+      expect(fin.cave(stone.x & 15, stone.y, stone.z & 15)).toBe(proto.cave(stone.x & 15, stone.y, stone.z & 15));
+      expect(caveKindOf(fin.cave(stone.x & 15, stone.y, stone.z & 15))).not.toBe(0);
+
+      // The mesher (SP7a §6.2): each water neighbour of a dug voxel shows its face toward the pocket.
+      const nb = p.store.neighborhood(cx, cz);
+      const meshed = new Map<number, Set<string>>();
+      let faces = 0;
+      for (const v of dug) {
+        for (let f = 0; f < 6; f++) {
+          const [ox, oy, oz] = NORMAL[f]!;
+          const n = { x: v.x + ox, y: v.y + oy, z: v.z + oz };
+          if (edited.has(key(n)) || fluidType(p.store.fluidAt(n.x, n.y, n.z)) !== FLUID_WATER) continue;
+          const sy = sectionOf(n);
+          if (!meshed.has(sy)) meshed.set(sy, waterFaces(nb, cx, cz, sy));
+          expect(meshed.get(sy), `the water at ${key(n)} draws no face toward the pocket`).toContain(`${key(n)},${OPPOSITE[f]}`);
+          faces++;
+        }
+      }
+      expect(faces).toBe(water);
+      generatedValue = ((gen.block(reverted.x & 15, reverted.y, reverted.z & 15) << 8) | gen.fluid(reverted.x & 15, reverted.y, reverted.z & 15)) >>> 0;
+    } finally {
+      p.store.exitRead();
+    }
+    expect(fluidType(generatedValue & 255)).toBe(FLUID_WATER);
+
+    // A revert of the middle dug voxel (the block history's undo of a dig): the generated value, its entry removed.
+    const out = await p.edit([{ ...reverted, op: 'revert', value: 0, expect: (AIR << 8) | NO_FLUID }]);
+    expect(out.ok).toBe(true);
+    p.store.enterRead();
+    try {
+      expect(valueAt(p.store, reverted)).toBe(generatedValue);
+    } finally {
+      p.store.exitRead();
+    }
+    const diff = (await p.settle(p.simClient.diff(cx, cz), 'the column\'s diff'))!;
+    const left = Array.from(diff.idx, (idx, k) => `${diff.sy[k]},${idx}`);
+    expect(left).not.toContain(`${sectionOf(reverted)},${indexOf(reverted)}`);
+    expect(left.length).toBe(3);
+    expect((await p.flushNow()).ok).toBe(true);
+  } finally {
+    p.dispose();
+  }
+
+  // A reload reads the same: the reverted voxel's generated value, the other two dug voxels dry, the stone.
+  const q = await openPersistWorld({ kv, worldId: id, rd: 4 });
+  try {
+    q.store.enterRead();
+    try {
+      expect(valueAt(q.store, reverted)).toBe(generatedValue);
+      for (const v of [dug[0]!, dug[2]!]) expect([key(v), valueAt(q.store, v)]).toEqual([key(v), (AIR << 8) | NO_FLUID]);
+      expect(q.store.blockAt(stone.x, stone.y, stone.z)).toBe(STONE);
+    } finally {
+      q.store.exitRead();
+    }
+  } finally {
+    q.dispose();
   }
 });

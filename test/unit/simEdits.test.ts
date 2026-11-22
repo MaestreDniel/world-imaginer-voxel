@@ -21,10 +21,10 @@ import {
   applyEdits, createEditScratch, headroom, HEADROOM_BLOCK_SLOTS, HEADROOM_BYTE_SLOTS, MAX_COPY_SIDE, MAX_STEP_EDITS, readDiff, readVolume, SUB_BATCH,
   validateStats, type Edit, type EditRefusal, type EditResult,
 } from '../../src/sim/edits';
-import { WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { FLUID_WATER, fluidType, NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, DIRT, GLASS, ICE, OAK_PLANKS, STONE, TORCH, WALL_TORCH } from '../../src/world/blocks/index';
 import type { ColumnDiff } from '../../src/world/store/api';
-import { protoAt, REC_DIFF_FLAG, SECTIONS } from '../../src/world/store/columnTable';
+import { protoAt, REC_DIFF_FLAG, REC_GEN_FLUID_MASK, SECTIONS } from '../../src/world/store/columnTable';
 import { copyLightRegion, lightIndex } from '../../src/world/store/padded';
 import { PROTO_BLOCKS, PROTO_FLUID } from '../../src/world/store/section';
 import type { SlabPool } from '../../src/world/store/pool';
@@ -73,7 +73,8 @@ const lightScratch = createLightScratch();
 
 /**
  * The reference for SP5c D20: `validate`'s backward scan as it stood before the `Map` (`src/sim/edits.ts` at 7f371c5,
- * `:250-269`), each edit's current value found by scanning back over the batch's earlier edits of the same voxel.
+ * `:250-269`), each edit's current value found by scanning back over the batch's earlier edits of the same voxel; a
+ * `revert`'s value read through `store.generated` since SP7a D23 (the proto there before).
  */
 function validateScan(store: VoxelStore, edits: readonly Edit[]): EditRefusal | null {
   for (let k = 0; k < edits.length; k++) {
@@ -81,7 +82,7 @@ function validateScan(store: VoxelStore, edits: readonly Edit[]): EditRefusal | 
     const cx = e.x >> 4;
     const cz = e.z >> 4;
     for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (!store.publishedAt((cx + dx) << 4, (cz + dz) << 4)) return 'unloaded';
-    const p = store.proto(cx, cz);
+    const p = store.generated(cx, cz);
     let current = -1;
     for (let j = k - 1; j >= 0 && current < 0; j--) {
       const o = edits[j]!;
@@ -268,9 +269,9 @@ describe('applyEdits on a seed-42 region (SP5a spec §2.1, §2.2, §2.4)', () =>
     expect(snapshot()).toEqual(before);
   });
 
-  /** The voxel's generated (proto) value. */
+  /** The voxel's generated value (`store.generated`: the proto with D's settled fluid, SP7a D23). */
   const generated = (x: number, y: number, z: number): number => {
-    const p = store.proto(x >> 4, z >> 4)!;
+    const p = store.generated(x >> 4, z >> 4)!;
     return val(p.block(x & 15, y, z & 15), p.fluid(x & 15, y, z & 15));
   };
   /** One edit putting the voxel to `value` from what it holds now. */
@@ -409,6 +410,126 @@ describe('applyEdits on a seed-42 region (SP5a spec §2.1, §2.2, §2.4)', () =>
     expect(valueAt(store, x, y, z)).toBe(before);
     expect(versions(store, cx0, cz0, 5)).toEqual(vs);
     expect(diffs.size).toBe(size);
+  });
+});
+
+/**
+ * SP7a D23, §9.3: the generated value an edit is compared with, and a `revert` writes, is D's output (`store.generated`:
+ * the proto's blocks, with the settled fluid in the sections the generated-fluid layer holds), not the proto. Its own
+ * seed-42 region (the same 5 × 5 at the spawn, so no earlier case's edits are in it), where the settle changed
+ * sections of some inner columns; the spill voxel is found by a scan: in the first inner column (row-major) whose layer
+ * holds a section, the first voxel there whose settled fluid is water over a proto voxel that is dry air.
+ */
+describe('the generated value is D\'s settled output (SP7a D23, §9.3)', () => {
+  let store: VoxelStore;
+  const diffs = createDiffStore();
+  const scratch = createEditScratch();
+  const run = (edits: readonly Edit[]): EditResult => applyEdits(store, diffs, scratch, edits, now);
+  /** The settled column and its spill voxel (world coordinates), and a voxel of a section its layer does not hold. */
+  let K: [number, number] = [0, 0];
+  let S = { x: 0, y: 0, z: 0 };
+  let U = { x: 0, y: 0, z: 0 };
+  const protoOf = (v: { x: number; y: number; z: number }): number => {
+    const p = store.proto(v.x >> 4, v.z >> 4)!;
+    return val(p.block(v.x & 15, v.y, v.z & 15), p.fluid(v.x & 15, v.y, v.z & 15));
+  };
+  const generatedOf = (v: { x: number; y: number; z: number }): number => {
+    const g = store.generated(v.x >> 4, v.z >> 4)!;
+    return val(g.block(v.x & 15, v.y, v.z & 15), g.fluid(v.x & 15, v.y, v.z & 15));
+  };
+  const revert = (v: { x: number; y: number; z: number }, expectV: number): Edit => ({ ...v, op: 'revert', value: 0, expect: expectV });
+
+  beforeAll(async () => {
+    const params = resolveProfile('default');
+    const sp = findSpawn(createGenContext(seedFromInput('42'), params));
+    const [scx, scz] = [sp.x >> 4, sp.z >> 4];
+    store = (await genRegion({ seed: '42', params, cx0: scx - 2, cz0: scz - 2, w: 5, h: 5, upTo: 'L', order: 'spiral', threads: 1 })).view.store;
+    let found = false;
+    for (let cz = scz - 1; cz <= scz + 1 && !found; cz++) {
+      for (let cx = scx - 1; cx <= scx + 1 && !found; cx++) {
+        const mask = store.table.ints[store.table.find(cx, cz) + REC_GEN_FLUID_MASK]!;
+        if (mask === 0) continue;
+        const p = store.proto(cx, cz)!;
+        const g = store.generated(cx, cz)!;
+        for (let sy = 0; sy < SECTIONS && !found; sy++) {
+          if (((mask >>> sy) & 1) === 0) continue;
+          for (let i = 0; i < 4096 && !found; i++) {
+            const [lx, y, lz] = [i & 15, 16 * sy - 64 + (i >> 8), (i >> 4) & 15];
+            if (p.block(lx, y, lz) !== AIR || p.fluid(lx, y, lz) !== NO_FLUID || fluidType(g.fluid(lx, y, lz)) !== FLUID_WATER) continue;
+            K = [cx, cz];
+            S = { x: 16 * cx + lx, y, z: 16 * cz + lz };
+            const usy = [...Array(SECTIONS).keys()].find((s) => ((mask >>> s) & 1) === 0 && 16 * s - 64 > 0)!;
+            U = { x: 16 * cx + 7, y: 16 * usy - 64 + 8, z: 16 * cz + 7 };
+            found = true;
+          }
+        }
+      }
+    }
+    expect(found, 'an inner column with a settled spill voxel over dry proto air').toBe(true);
+  }, 120_000);
+
+  test('a spill voxel: a `set` to its settled byte leaves no diff entry, to the proto\'s byte (dry air) leaves one; `revert` writes the settled byte; a batch\'s revert counts as the settled byte for the next `expect`', () => {
+    const settled = generatedOf(S);
+    const dry = protoOf(S);
+    expect([dry, settled === dry]).toEqual([val(AIR), false]);
+    // No diff yet: the world shows D's settled byte.
+    expect(valueAt(store, S.x, S.y, S.z)).toBe(settled);
+
+    expect(run([set(S.x, S.y, S.z, val(STONE), settled)]).refused).toBeNull();
+    expect(entry(diffs, S.x, S.y, S.z)).toBe(val(STONE));
+    const back = run([set(S.x, S.y, S.z, settled, val(STONE))]);
+    expect(back.refused).toBeNull();
+    expect([[...back.prev], [...back.next]]).toEqual([[val(STONE)], [NO_ENTRY]]);
+    expect(entry(diffs, S.x, S.y, S.z)).toBe(NO_ENTRY);
+    expect(valueAt(store, S.x, S.y, S.z)).toBe(settled);
+
+    // The proto's dry air differs from the generated value: kept as an entry (a dry pocket in the spill).
+    const pocket = run([set(S.x, S.y, S.z, dry, settled)]);
+    expect(pocket.refused).toBeNull();
+    expect([[...pocket.prev], [...pocket.next]]).toEqual([[NO_ENTRY], [dry]]);
+    expect(entry(diffs, S.x, S.y, S.z)).toBe(dry);
+    expect(valueAt(store, S.x, S.y, S.z)).toBe(dry);
+    expect(cols(pocket.entryAdded)).toEqual(names(K));
+
+    // A revert in a batch: the next edit's `expect` is the settled byte.
+    const r = run([revert(S, dry), set(S.x, S.y, S.z, val(GLASS), settled)]);
+    expect(r.refused).toBeNull();
+    expect([[...r.prev], [...r.next]]).toEqual([[dry, NO_ENTRY], [NO_ENTRY, val(GLASS)]]);
+
+    const rev = run([revert(S, val(GLASS))]);
+    expect(rev.refused).toBeNull();
+    expect([[...rev.prev], [...rev.next]]).toEqual([[val(GLASS)], [NO_ENTRY]]);
+    expect(valueAt(store, S.x, S.y, S.z)).toBe(settled);
+    expect(entry(diffs, S.x, S.y, S.z)).toBe(NO_ENTRY);
+    expect(diffs.size).toBe(0);
+    expectLightFresh(store, K[0], K[1]);
+  });
+
+  test('in a section the settle left alone the generated value is the proto\'s, as before', () => {
+    const base = store.table.find(K[0], K[1]);
+    expect((store.table.ints[base + REC_GEN_FLUID_MASK]! >>> sectionOf(U.y)) & 1).toBe(0);
+    const g = protoOf(U);
+    expect(generatedOf(U)).toBe(g);
+    expect(valueAt(store, U.x, U.y, U.z)).toBe(g);
+    const other = g === val(GLASS) ? val(STONE) : val(GLASS);
+    expect(run([set(U.x, U.y, U.z, other, g)]).refused).toBeNull();
+    expect(entry(diffs, U.x, U.y, U.z)).toBe(other);
+    const rev = run([revert(U, other)]);
+    expect([[...rev.prev], [...rev.next]]).toEqual([[other], [NO_ENTRY]]);
+    expect(valueAt(store, U.x, U.y, U.z)).toBe(g);
+    expect(run([set(U.x, U.y, U.z, other, g)]).refused).toBeNull();
+    const same = run([set(U.x, U.y, U.z, g, other)]);
+    expect([[...same.prev], [...same.next]]).toEqual([[other], [NO_ENTRY]]);
+    expect(entry(diffs, U.x, U.y, U.z)).toBe(NO_ENTRY);
+  });
+
+  test('`readVolume` with `gen` reads the settled byte at the spill voxel, the proto\'s where the layer holds no section', () => {
+    const r = readVolume(store, S.x - 1, S.y, S.z, 3, 1, 1, true);
+    expect(r.why).toBeNull();
+    expect([...r.generated!]).toEqual([-1, 0, 1].map((dx) => generatedOf({ x: S.x + dx, y: S.y, z: S.z })));
+    expect(r.generated![1]).not.toBe(protoOf(S));
+    const u = readVolume(store, U.x, U.y, U.z, 1, 1, 1, true);
+    expect([...u.generated!]).toEqual([protoOf(U)]);
   });
 });
 
@@ -784,9 +905,9 @@ describe('a paste in sub-batches (SP5c spec §3.2)', () => {
     for (let y = 0; y < h; y++) for (let z = 0; z < d; z++) for (let x = 0; x < w; x++) out[(y * d + z) * w + x] = of(x0 + x, y0 + y, z0 + z);
     return out;
   };
-  /** The proto's (generated) value of world voxel (x, y, z). */
-  const protoValue = (x: number, y: number, z: number): number => {
-    const p = store.proto(x >> 4, z >> 4)!;
+  /** The generated value of world voxel (x, y, z) (`store.generated`: the proto with D's settled fluid, SP7a D23). */
+  const generatedValue = (x: number, y: number, z: number): number => {
+    const p = store.generated(x >> 4, z >> 4)!;
     return val(p.block(x & 15, y, z & 15), p.fluid(x & 15, y, z & 15));
   };
 
@@ -836,7 +957,7 @@ describe('a paste in sub-batches (SP5c spec §3.2)', () => {
     expect(readVolume(store, x, 290, z, 1, 30, 1, false).why).toBeNull();
   });
 
-  test('with `gen`, `generated` equals the region\'s proto values, and after a placed block the two differ only there', () => {
+  test('with `gen`, `generated` equals the region\'s generated values, and after a placed block the two differ only there', () => {
     // Columns C + 1 and C + 2, which no paste of this describe touches.
     const x0 = 16 * (C[0] + 2) - 10;
     const z0 = 16 * (C[1] + 2) - 10;
@@ -847,7 +968,7 @@ describe('a paste in sub-batches (SP5c spec §3.2)', () => {
     const at = ((yp - y0) * 20 + (zp - z0)) * 20 + (xp - x0);
     const before = readVolume(store, x0, y0, z0, 20, 10, 20, true);
     expect(before.why).toBeNull();
-    const want = expectedVolume(x0, y0, z0, 20, 10, 20, protoValue);
+    const want = expectedVolume(x0, y0, z0, 20, 10, 20, generatedValue);
     expect([...before.generated!]).toEqual([...want]);
     expect([...before.values!]).toEqual([...want]);
     const placed = set(xp, yp, zp, val(STONE), valueAt(store, xp, yp, zp));

@@ -15,20 +15,27 @@
  * Each check compares the 7 × 7 window centred on the spawn column (inside the RD 4 MESH disc) with `genRegion`'s
  * `litRegionHash` at upTo 'L' on 1 thread, with the sim's entries as its `diff` (the sim's `diff` replies over the
  * window grown by one ring, D's set); those entries are first checked against the test's own record of each edited
- * voxel's latest value (an entry exactly where that value differs from the proto's). The cases, in order: 50 edits of
+ * voxel's latest value (an entry exactly where that value differs from the generated value, `store.generated`: the
+ * proto with D's settled fluid, SP7a D23, §9.3). The cases, in order: 50 edits of
  * every kind (stone, glass, ice, torch, wall torch, ladder, waterlogged ladder, water, lava, breaks; a quarter on a
  * column border; the first one's stone broken again by the 46th, which leaves no entry, rulings R27) after the fill;
  * a terrain Apply (`density.detailAmpHi` 4.0), with the same entries; undo of all 50 through the block history, after
- * which the DiffStore is empty and the window equals `genRegion` on the Apply's params with no diff; a saved world's
+ * which the DiffStore is empty and the window equals `genRegion` on the Apply's params with no diff; an edit in a
+ * spill (SP7a D23, §9.3; E3 and E5 with an edit in a spill): stone at one voxel the settle filled over dry proto air
+ * and the proto's dry air at another, each keeping its entry, the window equal to `genRegion` with them (E5: D's
+ * overlay equals the runtime world) before and after the camera goes 640 columns east and back (the columns unloaded
+ * and regenerated, D reading the sim's entries through), the boxes around both voxels reading byte for byte the same
+ * after (E3), then both undone through the block history (each a `revert`: the settled byte), which leaves no entry
+ * and the window equal to `genRegion` with no diff; a saved world's
  * round trip through the sim's worker (SP5b spec §6.3): `load` of an empty world, 20 edits, a `flush`, the handler
  * renewed in the same worker (the wrapper's harness-only `__renew`, `renew: true`, over the same in-worker `MemoryKV`),
  * `attach` and `load` again, which give back the same entries, then one more edit and a `flush` of a history that shares
  * the first one's steps (the client posts it whole after its `load`, rulings R9); a paste of `MAX_STEP_EDITS` changed
  * cells (SP5c spec §10.6: its target read by a `copy` through the worker, its batch from `pasteBatch`, y ascending,
  * posted through the action post as one bulk step), after which the sim's entries are the earlier ones outside its box
- * plus each pasted cell that differs from its proto, and the window equals `genRegion` with them; a `copy` of a
- * 40 × 20 × 40 box with its generated values through the worker's guard and transfer, equal to the store's values and
- * protos cell for cell, then a `copy` outside the window answered `outside` and a later edit accepted (the sim not
+ * plus each pasted cell that differs from its generated value, and the window equals `genRegion` with them; a `copy`
+ * of a 40 × 20 × 40 box with its generated values through the worker's guard and transfer, equal to the store's values
+ * and generated values cell for cell, then a `copy` outside the window answered `outside` and a later edit accepted (the sim not
  * latched); and, after one more edit answered
  * while a main-thread read section holds its retired slots in thread 15's limbo (freed by the sim's own retries once the
  * section closes), the sim stopped before the world (rulings R35), then everything unloaded and the limbo drained, every
@@ -59,9 +66,10 @@ import { createEditPath, workingNotice, type EditOutcome, type EditPath } from '
 import { pasteBatch, type Box } from '../../src/ui/world/pasteBatch';
 import type { Edit, FlushedMsg } from '../../src/workers/protocol';
 import { SIM_DRAIN_MS } from '../../src/workers/simHandler';
-import { LAVA_SOURCE, NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { FLUID_WATER, fluidType, LAVA_SOURCE, NO_FLUID, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, GLASS, ICE, REGISTRY, STONE, TORCH } from '../../src/world/blocks/index';
 import type { ColumnDiff } from '../../src/world/store/api';
+import { REC_GEN_FLUID_MASK } from '../../src/world/store/columnTable';
 import { RECLAIM_THREADS, SIM_THREAD } from '../../src/world/store/reclaim';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { buildNodeTaskWorker } from '../harness/nodeWorker';
@@ -74,8 +82,11 @@ const RD = 4;
 const WIN = { cx0: -3, cz0: -3, w: 7, h: 7 } as const;
 /** D's set of `genRegion` upTo 'L' over the window: the window grown by one ring, where the entries are read. */
 const D_SET = { cx0: WIN.cx0 - 1, cz0: WIN.cz0 - 1, w: WIN.w + 2, h: WIN.h + 2 } as const;
-/** The camera, held at seed 42's spawn column. */
+/** The camera, held at seed 42's spawn column (the spill's case moves it 640 columns east and back). */
 const CAM: StreamCamera = { x: 0, z: 0, yawDeg: 45 };
+let cam: StreamCamera = CAM;
+/** The spill's case's teleport, in columns (as E5's, `edit.metric.ts`). */
+const TELEPORT_COLUMNS = 640;
 /** The leaf of the terrain Apply and its value (spec §6.3); 1.5 is the default profile's. */
 const AMP = 'density.detailAmpHi';
 const AMP_APPLIED = 4.0;
@@ -233,7 +244,7 @@ const fatal = (): string | null => {
 async function frame(): Promise<void> {
   const w = W();
   w.control?.tick();
-  w.coordinator.update(CAM);
+  w.coordinator.update(cam);
   w.coordinator.counts(counts);
   if (w.control !== null) updateAuxPolicy(w.pool, w.control.generation, false, counts, w.coordinator.regenerating);
   w.store.drain();
@@ -288,12 +299,15 @@ async function simEntries(): Promise<{ readonly diff: Map<number, ColumnDiff>; r
   return { diff, lines: lines.sort() };
 }
 
-/** The entries the record implies: each edited voxel whose latest value differs from its column's proto (D20). */
+/**
+ * The entries the record implies: each edited voxel whose latest value differs from its column's generated value (D20;
+ * `store.generated`, the proto with D's settled fluid, SP7a D23).
+ */
 const recordedEntries = (): string[] => reading((s) => {
   const out: string[] = [];
   for (const [k, v] of latest) {
     const [x, y, z] = k.split(',').map(Number) as [number, number, number];
-    const p = s.proto(x >> 4, z >> 4);
+    const p = s.generated(x >> 4, z >> 4);
     if (p === null) throw new Error(`(${x}, ${y}, ${z}): no proto`);
     if (val(p.block(x & 15, y, z & 15), p.fluid(x & 15, y, z & 15)) !== v) out.push(`${k}=${v}`);
   }
@@ -531,6 +545,97 @@ describe('edits on the real store equal genRegion with the same entries (SP5a sp
     clean('the undos');
   });
 
+  test('an edit in a spill (SP7a D23, §9.3): stone and the proto\'s dry air at two settled voxels keep their entries; the window equals genRegion with them before and after an unload and reload (E5), the voxels around them read the same after it (E3); the undo writes the settled bytes and leaves no entry', async () => {
+    const w = W();
+    const epoch = applies.at(-1)!.epoch;
+    const noticesBefore = notices.length;
+    const stepsBefore = w.history.size;
+    await until(() => !w.editPath.pending() && inFlight === 0 && settledAt(epoch), SETTLE_MS, 'the world settled before the spill');
+    // Two spill voxels in columns −2 … 2 (their 3 × 3s in the window): the first voxels (columns row-major, sections
+    // and voxels in order, at most one per column) of a section the generated-fluid layer holds whose settled fluid is
+    // water over a proto voxel of dry air.
+    const spills = reading((s) => {
+      const out: Array<{ readonly x: number; readonly y: number; readonly z: number; readonly settled: number; readonly dry: number }> = [];
+      for (let cz = -2; cz <= 2 && out.length < 2; cz++) {
+        for (let cx = -2; cx <= 2 && out.length < 2; cx++) {
+          const mask = s.table.ints[s.table.find(cx, cz) + REC_GEN_FLUID_MASK]!;
+          const p = s.proto(cx, cz)!;
+          const g = s.generated(cx, cz)!;
+          let found = false;
+          for (let sy = 0; sy < 24 && !found; sy++) {
+            if (((mask >>> sy) & 1) === 0) continue;
+            for (let i = 0; i < 4096 && !found; i++) {
+              const [lx, y, lz] = [i & 15, 16 * sy - 64 + (i >> 8), (i >> 4) & 15];
+              if (p.block(lx, y, lz) !== AIR || p.fluid(lx, y, lz) !== NO_FLUID || fluidType(g.fluid(lx, y, lz)) !== FLUID_WATER) continue;
+              out.push({ x: 16 * cx + lx, y, z: 16 * cz + lz, settled: val(AIR, g.fluid(lx, y, lz)), dry: val(AIR) });
+              found = true;
+            }
+          }
+        }
+      }
+      return out;
+    });
+    expect(spills.length, 'two settled spill voxels in columns −2 … 2').toBe(2);
+    const [a, b] = spills as [typeof spills[0], typeof spills[0]];
+    for (const v of spills) expect(valueAt(v.x, v.y, v.z), `(${v.x}, ${v.y}, ${v.z}) shows the settled byte`).toBe(v.settled);
+    /** The 5 × 5 × 5 box around each spill voxel, as `x,y,z=value` lines. */
+    const boxes = (): string[] => reading((s) => {
+      const out: string[] = [];
+      for (const v of spills) {
+        for (let y = v.y - 2; y <= v.y + 2; y++) {
+          for (let z = v.z - 2; z <= v.z + 2; z++) for (let x = v.x - 2; x <= v.x + 2; x++) out.push(`${x},${y},${z}=${val(s.blockAt(x, y, z), s.fluidAt(x, y, z))}`);
+        }
+      }
+      return out;
+    });
+
+    // Stone into the first spill voxel, the proto's dry air into the second (a dry pocket): both differ from the
+    // generated value, so both keep an entry.
+    const outcomes = [
+      w.actionPost([{ x: a.x, y: a.y, z: a.z, op: 'set', value: val(STONE), expect: a.settled }]),
+      w.actionPost([{ x: b.x, y: b.y, z: b.z, op: 'set', value: b.dry, expect: b.settled }]),
+    ];
+    const results = await settle(Promise.all(outcomes), 'the spill edits');
+    expect(results.filter((o) => !o.ok), 'refused edits').toEqual([]);
+    await until(() => !w.editPath.pending() && inFlight === 0 && settledAt(epoch), SETTLE_MS, 'the spill edits settled');
+    const want = [`${a.x},${a.y},${a.z}=${val(STONE)}`, `${b.x},${b.y},${b.z}=${b.dry}`].sort();
+    const before = await simEntries();
+    expect(before.lines, 'the spill edits\' entries').toEqual(want);
+    // E5: D's overlay of the entries over the settled world equals the runtime world.
+    const hash = windowHash();
+    expect(hash, 'the window after the spill edits').toBe(await expected(w.session.state.params, before.diff));
+    const around = boxes();
+
+    // The camera 640 columns east until the spill's columns left the store and the disc filled, then back.
+    const edited = [a, b].map((v) => [v.x >> 4, v.z >> 4] as const);
+    const gone = (): boolean => edited.every(([cx, cz]) => {
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (w.store.holder(cx + dx, cz + dz) === 'self') return false;
+      return true;
+    });
+    cam = { ...CAM, x: CAM.x + 16 * TELEPORT_COLUMNS };
+    try {
+      await until(() => gone() && w.coordinator.firstFill() && inFlight === 0, SETTLE_MS, 'the teleport east');
+    } finally {
+      cam = CAM;
+    }
+    await until(() => inFlight === 0 && settledAt(epoch), SETTLE_MS, 'back at the spawn');
+    // E3: the reload reads the edits and the settled water around them byte for byte; E5 again.
+    expect(boxes(), 'the boxes around the spill voxels after the reload').toEqual(around);
+    const after = await simEntries();
+    expect(after.lines, 'the entries after the reload').toEqual(want);
+    expect(windowHash(), 'the window after the reload').toBe(hash);
+
+    // The undo of both through the block history: each a `revert` (no entry before), which writes the settled byte.
+    w.history.undo();
+    w.history.undo();
+    await until(() => w.history.size === stepsBefore && !w.editPath.pending() && inFlight === 0 && settledAt(epoch), SETTLE_MS, 'the spill undos');
+    for (const v of spills) expect(valueAt(v.x, v.y, v.z), `(${v.x}, ${v.y}, ${v.z}) after the undo`).toBe(v.settled);
+    expect((await simEntries()).lines, 'the entries after the undos').toEqual([]);
+    expect(windowHash()).toBe(await expected(w.session.state.params, undefined));
+    expect(notices.slice(noticesBefore), 'notices').toEqual(['Undo · blocks', 'Undo · blocks']);
+    clean('the spill');
+  });
+
   test('a saved world\'s load, flush and load round trip through the sim\'s Node worker: the same entries back (SP5b spec §6.3)', async () => {
     const w = W();
     const epoch = applies.at(-1)!.epoch;
@@ -660,14 +765,15 @@ describe('edits on the real store equal genRegion with the same entries (SP5a sp
     });
     expect(wrong, 'cells not at their pasted value').toBe(0);
 
-    // The entries: the earlier ones outside the box, and each pasted cell whose value differs from its proto's (D20).
+    // The entries: the earlier ones outside the box, and each pasted cell whose value differs from its generated value
+    // (D20; SP7a D23).
     const want = before.lines.filter((l) => {
       const [x, y, z] = l.slice(0, l.indexOf('=')).split(',').map(Number) as [number, number, number];
       return !inBox(x, y, z);
     });
     reading((s) => {
       for (const e of batch) {
-        const p = s.proto(e.x >> 4, e.z >> 4);
+        const p = s.generated(e.x >> 4, e.z >> 4);
         if (p === null) throw new Error(`(${e.x}, ${e.y}, ${e.z}): no proto`);
         if (val(p.block(e.x & 15, e.y, e.z & 15), p.fluid(e.x & 15, e.y, e.z & 15)) !== e.value) want.push(`${e.x},${e.y},${e.z}=${e.value}`);
       }
@@ -705,7 +811,7 @@ describe('edits on the real store equal genRegion with the same entries (SP5a sp
           for (let x = 0; x < box.w; x++, i++) {
             const [bx, by, bz] = [box.x0 + x, box.y0 + y, box.z0 + z];
             if (values[i] !== val(s.blockAt(bx, by, bz), s.fluidAt(bx, by, bz))) v++;
-            const p = s.proto(bx >> 4, bz >> 4);
+            const p = s.generated(bx >> 4, bz >> 4);
             if (p === null || generated[i] !== val(p.block(bx & 15, by, bz & 15), p.fluid(bx & 15, by, bz & 15))) g++;
             if (values[i] !== generated[i]) e++;
           }
@@ -714,7 +820,7 @@ describe('edits on the real store equal genRegion with the same entries (SP5a sp
       return [v, g, e];
     });
     expect(wrongValue, 'cells whose copied value is not the store\'s').toBe(0);
-    expect(wrongGen, 'cells whose generated value is not the proto\'s').toBe(0);
+    expect(wrongGen, 'cells whose generated value is not `store.generated`\'s').toBe(0);
     expect(edited, 'the box holds edited cells').toBeGreaterThan(0);
 
     // A box past the window's edge, and one above y 319: answered `outside` with nothing read, and the sim not latched.

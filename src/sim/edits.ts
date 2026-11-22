@@ -6,11 +6,13 @@
  *    batch through a `Map` from the packed voxel position, SP5c D20), its column's proto retained (`'noProto'`). Any
  *    refusal refuses the batch with nothing written.
  * 2. **Per edit** (§2.2): the column's `EditWriter` (`reopenPublished`); the voxel's section copied into scratch and
- *    the voxel set (`revert`: the proto's value); `replaceBlocks` (copy-on-write, so the proto's shared slot stays the
+ *    the voxel set (`revert`: the generated value); `replaceBlocks` (copy-on-write, so the proto's shared slot stays the
  *    proto's); `setDiffFlag` (D23); `patchHeightmaps` from the old heights; `relight` over the 3 × 3 (D19) through a
  *    sparse section cache that reads the sections in place and copies a section's light on its first write; each
  *    changed light section written back with `replaceLight`; the DiffStore entry (a `revert`, or a `set` equal to the
- *    proto's value, removes it; D20).
+ *    generated value, removes it; D20). The generated value is D's output before the diff overlay (SP7a D23, §9.3:
+ *    `store.generated`, the proto's blocks with the settled fluid in the sections the generated-fluid layer holds), so
+ *    an edit restoring a voxel to its settled value leaves no entry and a reload reproduces the runtime world.
  *    **By section** (SP5c spec §10.4, D28's lever 4): a sub-batch's edits are written one section at a time, in the
  *    order of each section's first edit (within a section, the batch's order): the section copied once with all its
  *    voxels set, one `replaceBlocks`, each written block column's heightmaps patched once, and one `relightMany` of
@@ -75,7 +77,7 @@ import { NO_ENTRY, type DiffStore } from './diffStore';
 
 /**
  * One voxel edit (§2.1): world block coordinates (y −64 … 319), `value` the voxel's new `state << 8 | fluid` (ignored
- * by `revert`, which writes the proto's value), `expect` the voxel's value the main thread saw when it decided.
+ * by `revert`, which writes the generated value), `expect` the voxel's value the main thread saw when it decided.
  */
 export interface Edit {
   readonly x: number;
@@ -311,7 +313,11 @@ function checkEdit(e: Edit): void {
   if (e.op !== 'set' && e.op !== 'revert') throw new RangeError(`edits: op ${String(e.op)}`);
 }
 
-/** The proto's (generated) value of world voxel (x, y, z) of the column `p` views. */
+/**
+ * The generated value of world voxel (x, y, z) of the column `p` views, `p` the column's `store.generated` view (SP7a
+ * D23, §9.3): the proto's block, and D's settled fluid where the generated-fluid layer holds the section, else the
+ * proto's.
+ */
 const generatedAt = (p: ColumnView, x: number, y: number, z: number): number => (p.block(x & 15, y, z & 15) << 8) | p.fluid(x & 15, y, z & 15);
 
 /** @internal Test-only counter (SP5c D20): the `Map`s `validate` built, one per batch of more than one edit. */
@@ -334,7 +340,7 @@ function validate(store: VoxelStore, edits: readonly Edit[], prevValue: Uint32Ar
     const cx = e.x >> 4;
     const cz = e.z >> 4;
     for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (!published(store, cx + dx, cz + dz)) return 'unloaded';
-    const p = store.proto(cx, cz);
+    const p = store.generated(cx, cz);
     const key = colKey(cx, cz) * 98_304 + (e.y + 64) * 256 + (e.z & 15) * 16 + (e.x & 15);
     const current = inBatch?.get(key) ?? ((store.blockAt(e.x, e.y, e.z) << 8) | store.fluidAt(e.x, e.y, e.z));
     if (current !== e.expect) return 'changed';
@@ -693,7 +699,7 @@ export function applyEdits(
               const k = s0 + j;
               hooks?.beforeEdit?.(k);
               const e = edits[k]!;
-              values[k] = e.op === 'revert' ? generatedAt(store.proto(e.x >> 4, e.z >> 4)!, e.x, e.y, e.z) : e.value;
+              values[k] = e.op === 'revert' ? generatedAt(store.generated(e.x >> 4, e.z >> 4)!, e.x, e.y, e.z) : e.value;
               ks[nk++] = k;
             }
             writeSection(ks, nk, values);
@@ -705,7 +711,7 @@ export function applyEdits(
               const sy = (e.y + 64) >> 4;
               const idx = (((e.y + 64) & 15) << 8) | ((e.z & 15) << 4) | (e.x & 15);
               const value = values[k]!;
-              const generated = e.op === 'revert' ? value : generatedAt(store.proto(cx, cz)!, e.x, e.y, e.z);
+              const generated = e.op === 'revert' ? value : generatedAt(store.generated(cx, cz)!, e.x, e.y, e.z);
               // The DiffStore (D20): a revert, or a set equal to the generated value, removes the entry.
               prev[k] = diffs.get(cx, cz, sy, idx);
               if (e.op === 'revert' || value === generated) diffs.remove(cx, cz, sy, idx);
@@ -776,8 +782,9 @@ export function readDiff(diffs: DiffStore, cx: number, cz: number): ColumnDiff |
 
 /**
  * A box's voxels as the sim read them (SP5c spec §3.3): `values` each cell's `state << 8 | fluid`, `generated` its
- * proto's value (with `gen`; else null), in index order `(y · d + z) · w + x`, fresh (transferable); or both null with
- * `why` `'outside'` (a cell outside the world) or `'unloaded'` (a column not Published, or with `gen` its proto gone).
+ * generated value (`generatedAt`'s, with `gen`; else null), in index order `(y · d + z) · w + x`, fresh
+ * (transferable); or both null with `why` `'outside'` (a cell outside the world) or `'unloaded'` (a column not
+ * Published, or with `gen` its proto gone).
  */
 export interface VolumeRead {
   readonly values: Uint32Array | null;
@@ -791,8 +798,9 @@ const UNLOADED: VolumeRead = Object.freeze({ values: null, generated: null, why:
 /**
  * Reads the box of w × h × d voxels from (x0, y0, z0) (SP5c spec §3.3, D22). A box with any cell outside y −64 … 319
  * or the window [−524,288, 524,288) is `'outside'`, with nothing read. Otherwise one read section, cells in index order
- * `(y · d + z) · w + x` (x fastest, then z, then y): with `gen` the cell's generated value from its column's proto
- * (`generatedAt`'s rule; each column's proto taken once, `'unloaded'` when one is gone), then `fluidAt`, then `blockAt`.
+ * `(y · d + z) · w + x` (x fastest, then z, then y): with `gen` the cell's generated value from its column's
+ * `store.generated` view (`generatedAt`'s rule; each column's view taken once, `'unloaded'` when its proto is gone),
+ * then `fluidAt`, then `blockAt`.
  * Streaming frees columns on the main thread at any moment and `blockAt` of a column not Published is −1, so the read
  * stops at the first −1 with `'unloaded'` (a −1 is never shifted into a value); since a free clears the Published
  * status before it releases any slot, a cell whose `blockAt`, read last, is not −1 read its proto and fluid whole.
@@ -806,19 +814,19 @@ export function readVolume(
   if (!yInWorld(y0) || !yInWorld(y0 + h - 1) || x0 < -WINDOW_HALF || x0 + w > WINDOW_HALF || z0 < -WINDOW_HALF || z0 + d > WINDOW_HALF) return OUTSIDE;
   const values = new Uint32Array(w * h * d);
   const generated = gen ? new Uint32Array(w * h * d) : null;
-  // The box's columns' protos (at most 5 × 5), taken once inside the read section.
+  // The box's columns' generated views (at most 5 × 5), taken once inside the read section.
   const cx0 = x0 >> 4;
   const cz0 = z0 >> 4;
   const ncx = ((x0 + w - 1) >> 4) - cx0 + 1;
-  const protos: ColumnView[] = [];
+  const views: ColumnView[] = [];
   store.enterRead();
   try {
     if (generated !== null) {
       for (let cz = cz0; cz <= (z0 + d - 1) >> 4; cz++) {
         for (let cx = cx0; cx < cx0 + ncx; cx++) {
-          const p = store.proto(cx, cz);
+          const p = store.generated(cx, cz);
           if (p === null) return UNLOADED;
-          protos.push(p);
+          views.push(p);
         }
       }
     }
@@ -827,7 +835,7 @@ export function readVolume(
       for (let z = z0; z < z0 + d; z++) {
         const pRow = ((z >> 4) - cz0) * ncx - cx0;
         for (let x = x0; x < x0 + w; x++, i++) {
-          if (generated !== null) generated[i] = generatedAt(protos[pRow + (x >> 4)]!, x, y, z);
+          if (generated !== null) generated[i] = generatedAt(views[pRow + (x >> 4)]!, x, y, z);
           const fluid = store.fluidAt(x, y, z);
           const block = store.blockAt(x, y, z);
           if (block < 0) return UNLOADED;
