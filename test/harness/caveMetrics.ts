@@ -60,7 +60,15 @@
  * - C7.switchWall: T is the `terrain` tap's value at the voxel (`RegionView.terrainT`, recomputed per column, so read on
  *   the columns of every 4th chunk in x and z on quick and full, every 2nd on fast); the shell's share of the walls (a
  *   wall in the shell when its cave voxel is) over its share of the pre-cave rock (solid or tagged voxels, y ≥ −56).
- * - C7.waterWall: a fluid voxel with a horizontal neighbour that is tagged air (tagged, neither solid nor fluid).
+ * - C7.waterWall (SP7a spec §13.2): read after the settle reference (`waterWallCount` over the settled bytes, on the
+ *   region's interior, per km² of that interior), the true walls: a settled fluid voxel that is neither falling nor a
+ *   spill rim (water level 7, lava level 6: flow, not walls) with a horizontal neighbour that is dry tagged air (tagged,
+ *   neither solid nor fluid after settle) into which §4.1's rules would flow but for the cap (the voxel's bit 6) or the
+ *   abyss stop (a water voxel beside air of nibble 3): the neighbour lies on one of the voxel's spread sides
+ *   (`spreadSides`: `nearestDropDirs` over the proto, every open side when no drop is in reach; none when the voxel
+ *   falls instead), so a front cut at the cap whose dry neighbour lies off its nearest-drop sides is not one. SP6a's count,
+ *   a fluid voxel of T with a horizontal neighbour that is tagged air (tagged, neither solid nor fluid), is recorded as
+ *   `C7.waterWallAny` (`waterWallAnyCount`, over the whole region, per km² of it).
  * - C7's bottom parts (SP6b spec §12.3, D6): `bottomPlane` the flat floor faces (C7.flatWallShare's 6 × 6 patches, over
  *   every position) whose cave voxel lies at y −63, on the bedrock, over all flat faces; `bedrockExposed` the cave-air
  *   voxels (tagged, neither solid nor fluid, ruling R16) face-adjacent to a bedrock voxel, read from the grid's block
@@ -120,7 +128,7 @@
  * plain objects of numbers, strings, number arrays and typed arrays that each own their whole buffer, so a structured
  * clone carries them and `countsTransfer` lists the buffers to move.
  */
-import { CARVER_WINDOW_R, CAVE_BIOME_NAMES, CAVE_KIND, caveBiomeOf, caveKindOf } from '../../src/core/constants';
+import { CARVER_WINDOW_R, CAVE_BIOME, CAVE_BIOME_NAMES, CAVE_KIND, caveBiomeOf, caveKindOf } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
 import type { Params } from '../../src/core/params/schema';
 import { Xoshiro128 } from '../../src/core/rng';
@@ -131,7 +139,8 @@ import { buildColumnSample, nearestCornerIndex, newColumnSample } from '../../sr
 import { createGenContext, noiseFor } from '../../src/gen/context';
 import { createDensityContext } from '../../src/gen/density/context';
 import { aquiferOf, barrierAt } from '../../src/gen/fluids/aquifer';
-import { hasFluid } from '../../src/world/blocks/fluid';
+import { FLUID_LAVA, FLUID_WATER, fluidFalling, fluidLevel, fluidType, fluidUnsettled, hasFluid, NO_FLUID } from '../../src/world/blocks/fluid';
+import { lastLevelOf, nearestDropDirs, type FluidRuleReader } from '../../src/world/blocks/fluidRules';
 import { AIR, BEDROCK, REGISTRY } from '../../src/world/blocks/index';
 import { components3d, type Components3d } from './flood';
 import type { RegionView } from './region';
@@ -1539,8 +1548,101 @@ export function switchWall(c: SwitchCounts): number {
   return ratio(ratio(c.shellFaces, c.faces), ratio(c.shellVoxels, c.voxels));
 }
 
-/** C7.waterWall's count: the fluid voxels with a horizontal neighbour in the grid that is tagged air (no fluid). */
-export function waterWallCount(g: CaveGrid): number {
+/** The horizontal sides in `fluidRules.ts`' order (N −z, E +x, S +z, W −x); mask bit i is side i. */
+const SIDE_DX = [0, 1, 0, -1] as const;
+const SIDE_DZ = [-1, 0, 1, 0] as const;
+
+/**
+ * The sides §4.1's spread offers to from a fluid voxel holding `byte` at world (x, y, z) (SP7a spec §4.1: `ruleOffers`'
+ * spread branch, through `nearestDropDirs`, over `r`'s proto), as a 4-bit mask in `fluidRules.ts`' side order: 0 when the
+ * voxel does not spread (it is not a source, and its voxel below is open for its type and holds no proto fluid of its
+ * type: it falls instead); else the sides toward the nearest drop over the voxels open for its type (passable, not
+ * holding the other type's proto fluid, which is `block` for its rules), or every open side when no drop is in reach.
+ * Unlike `ruleOffers`' targets it keeps the abyss sides (where a water front stops, the abyss stop) and reads no cap
+ * (the byte's bit 6 says whether the front is cut there). A falling byte reads as not a source.
+ */
+export function spreadSides(r: FluidRuleReader, byte: number, x: number, y: number, z: number): number {
+  const type = fluidType(byte);
+  const other = type === FLUID_WATER ? FLUID_LAVA : FLUID_WATER;
+  const open = (qx: number, qy: number, qz: number): boolean => r.passable(qx, qy, qz) && fluidType(r.protoFluid(qx, qy, qz)) !== other;
+  const source = fluidLevel(byte) === 0 && !fluidFalling(byte);
+  if (!source && open(x, y - 1, z) && fluidType(r.protoFluid(x, y - 1, z)) !== type) return 0;
+  const dirs = nearestDropDirs(type, { passable: open }, x, y, z);
+  if (dirs !== 0) return dirs;
+  let sides = 0;
+  for (let f = 0; f < 4; f++) if (open(x + SIDE_DX[f]!, y, z + SIDE_DZ[f]!)) sides |= 1 << f;
+  return sides;
+}
+
+/**
+ * A hand-built grid's proto as §4.1's rules read it (`waterWallCount`'s default): a voxel of the grid is passable when
+ * its block is air (not `SOLID_BIT`), its nibble the cell's biome bits; no voxel holds proto fluid; beyond the grid is
+ * `block`. A region's metric passes its proto's own reader (`water.ts`' `protoRuleReader`) instead.
+ */
+export function gridRuleReader(g: CaveGrid): FluidRuleReader {
+  const { x0, z0, w, d, cells } = g;
+  const cell = (x: number, y: number, z: number): number =>
+    (x < x0 || x >= x0 + w || z < z0 || z >= z0 + d || y < GRID_Y0 || y >= GRID_Y0 + GRID_H ? SOLID_BIT : cells[((y - GRID_Y0) * d + (z - z0)) * w + (x - x0)]!);
+  return {
+    passable: (x, y, z) => (cell(x, y, z) & SOLID_BIT) === 0,
+    protoFluid: () => NO_FLUID,
+    nibble: (x, y, z) => {
+      const c = cell(x, y, z);
+      return (c & SOLID_BIT) === 0 ? c >> BIOME_SHIFT : 0;
+    },
+  };
+}
+
+/**
+ * C7.waterWall's count after settle (SP7a spec §13.2; see the header): over the voxels of `box` (world x0 ≤ x < x1,
+ * z0 ≤ z < z1, every y; default the grid), `settled` reading each voxel's settled fluid byte, the fluid voxels neither
+ * falling nor at their type's last level (`lastLevelOf`: the spill rims) with a horizontal neighbour in the grid that is
+ * dry tagged air (tagged, not solid, no settled fluid) into which §4.1's rules would flow but for a stop: the neighbour
+ * lies on one of the voxel's spread sides (`spreadSides` over `rules`, the proto's reader; default `gridRuleReader`) and
+ * either the voxel's bit 6 is set (a truncated front with a dry target) or, for water, the neighbour's nibble is the
+ * abyss (an abyss stop).
+ */
+export function waterWallCount(
+  g: CaveGrid, settled: (x: number, y: number, z: number) => number,
+  box: { readonly x0: number; readonly z0: number; readonly x1: number; readonly z1: number } = { x0: g.x0, z0: g.z0, x1: g.x0 + g.w, z1: g.z0 + g.d },
+  rules: FluidRuleReader = gridRuleReader(g),
+): number {
+  const { x0, z0, w, d, cells } = g;
+  const plane = w * d;
+  const lx0 = Math.max(0, box.x0 - x0);
+  const lz0 = Math.max(0, box.z0 - z0);
+  const lx1 = Math.min(w, box.x1 - x0);
+  const lz1 = Math.min(d, box.z1 - z0);
+  let count = 0;
+  for (let y = GRID_Y0; y < GRID_Y0 + GRID_H; y++) {
+    for (let z = lz0; z < lz1; z++) {
+      for (let x = lx0; x < lx1; x++) {
+        const b = settled(x0 + x, y, z0 + z);
+        if (!hasFluid(b) || fluidFalling(b)) continue;
+        const type = fluidType(b);
+        if (fluidLevel(b) === lastLevelOf(type)) continue;
+        const cap = fluidUnsettled(b);
+        const i = (y - GRID_Y0) * plane + z * w + x;
+        // The sides whose neighbour is dry tagged air with a stop (the cap, or the abyss for water); then, only for such
+        // a voxel, whether one of them is a spread side.
+        let stopped = 0;
+        for (let f = 0; f < 4; f++) {
+          const nx = x + SIDE_DX[f]!;
+          const nz = z + SIDE_DZ[f]!;
+          if (nx < 0 || nx >= w || nz < 0 || nz >= d) continue;
+          const c = cells[i + SIDE_DZ[f]! * w + SIDE_DX[f]!]!;
+          if ((c & TAG_MASK) === 0 || (c & SOLID_BIT) !== 0 || hasFluid(settled(x0 + nx, y, z0 + nz))) continue;
+          if (cap || (type === FLUID_WATER && c >> BIOME_SHIFT === CAVE_BIOME.abyss)) stopped |= 1 << f;
+        }
+        if (stopped !== 0 && (stopped & spreadSides(rules, b, x0 + x, y, z0 + z)) !== 0) count++;
+      }
+    }
+  }
+  return count;
+}
+
+/** C7.waterWallAny (SP6a's C7.waterWall): the fluid voxels with a horizontal neighbour in the grid that is tagged air (no fluid). */
+export function waterWallAnyCount(g: CaveGrid): number {
   const { w, d, cells } = g;
   const air = (c: number): boolean => (c & TAG_MASK) !== 0 && (c & (SOLID_BIT | FLUID_BIT)) === 0;
   let count = 0;
@@ -2647,7 +2749,11 @@ export interface CaveC7C9Counts {
   readonly flat: ReturnType<typeof flatWallDetail>;
   /** Null where T is not read (the preset regions). */
   readonly switchWall: SwitchCounts | null;
+  /** C7.waterWall's count after settle (`waterWallCount`; NaN without settled bytes) and the area it covers, km². */
   readonly waterWall: number;
+  readonly waterWallKm2: number;
+  /** C7.waterWallAny's count (`waterWallAnyCount`, over the whole region, per `areaKm2`). */
+  readonly waterWallAny: number;
   readonly lags: LagCount[];
   readonly mix: number[];
   /** The volumes of the components ≥ 64 voxels, and the largest component's. */
@@ -2674,6 +2780,16 @@ export interface C7C9Options {
   readonly seaFloor: Uint8Array | null;
   /** C8.typeMixVariation's tile (128; a fixture passes a smaller one). */
   readonly tile?: number;
+  /**
+   * C7.waterWall's settled fluid byte at a world voxel (SP7a spec §13.2) and the box it counts (world x0 ≤ x < x1,
+   * z0 ≤ z < z1: the region's interior); absent, C7.waterWall is NaN.
+   */
+  readonly water?: {
+    readonly settled: (x: number, y: number, z: number) => number;
+    readonly box: { readonly x0: number; readonly z0: number; readonly x1: number; readonly z1: number };
+    /** The proto as §4.1's rules read it (the spread sides); default `gridRuleReader(g)`. */
+    readonly rules?: FluidRuleReader;
+  };
 }
 
 /** Every C7-C9 count of one region, over its pre-cave tops and components. */
@@ -2693,7 +2809,9 @@ export function caveC7C9Counts(g: CaveGrid, tops: Int16Array, c: CaveComponents,
     layers: layerCounts(g, tops),
     flat: flatWallDetail(g, o.seaFloor),
     switchWall: o.T === null ? null : switchWallCounts(g, o.T, o.stride),
-    waterWall: waterWallCount(g),
+    waterWall: o.water === undefined ? Number.NaN : waterWallCount(g, o.water.settled, o.water.box, o.water.rules),
+    waterWallKm2: o.water === undefined ? 0 : ((o.water.box.x1 - o.water.box.x0) * (o.water.box.z1 - o.water.box.z0)) / 1e6,
+    waterWallAny: waterWallAnyCount(g),
     lags: aperiodicCounts(g),
     mix: typeMixDivergences(g, o.tile ?? 128),
     volumes,
@@ -2723,9 +2841,11 @@ export interface C7C9Region {
 
 /** The parts measured per group ("default and presets"): each group's value, its regions pooled. */
 export function c7c9Groups(regions: readonly C7C9Region[]): Record<string, {
-  verticalStep: number; flatWallShare: number; waterWall: number; nearestEntrance: number; holedSurface: number;
+  verticalStep: number; flatWallShare: number; waterWall: number; waterWallAny: number; nearestEntrance: number; holedSurface: number;
 }> {
-  const out: Record<string, { verticalStep: number; flatWallShare: number; waterWall: number; nearestEntrance: number; holedSurface: number }> = {};
+  const out: Record<string, {
+    verticalStep: number; flatWallShare: number; waterWall: number; waterWallAny: number; nearestEntrance: number; holedSurface: number;
+  }> = {};
   for (const group of [...new Set(regions.map((r) => r.group))]) {
     const rs = regions.filter((r) => r.group === group).map((r) => r.counts);
     const layers = emptyLayerCounts();
@@ -2739,7 +2859,8 @@ export function c7c9Groups(regions: readonly C7C9Region[]): Record<string, {
     out[group] = {
       verticalStep: verticalStep(layers),
       flatWallShare: ratio(sum((r) => r.flat.flat), sum((r) => r.flat.faces)),
-      waterWall: ratio(sum((r) => r.waterWall), sum((r) => r.areaKm2)),
+      waterWall: ratio(sum((r) => r.waterWall), sum((r) => r.waterWallKm2)),
+      waterWallAny: ratio(sum((r) => r.waterWallAny), sum((r) => r.areaKm2)),
       nearestEntrance: percentile(rs.flatMap((r) => r.distances), 0.9),
       holedSurface: ratio(sum((r) => r.surface.holed), sum((r) => r.surface.land)),
     };
@@ -2834,7 +2955,7 @@ export const PILLAR_VIEW = 20;
  * The yaw (0°, 45° … 315°) of the longest straight run of non-solid voxels from (x, y, z) (grid-local x, z; world y),
  * up to `LOOK_STEPS`; ties to the smaller yaw.
  */
-function longestRunYaw(g: CaveGrid, x: number, y: number, z: number): number {
+export function longestRunYaw(g: CaveGrid, x: number, y: number, z: number): number {
   return longestRun(g, x, y, z).yaw;
 }
 

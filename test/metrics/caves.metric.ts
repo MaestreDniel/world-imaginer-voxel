@@ -22,6 +22,7 @@ import { caveZoneGrid, caveZoneParts, ZONE_CELLS, ZONE_DEPTHS, ZONE_LAGS, ZONE_O
 import { r3PathCounts, r3Paths, r3PoseCounts, r3Poses, r3Region, R3_POSE_COUNTS, type CaveRegion, type R3PathCounts, type R3PoseCounts } from '../harness/cull';
 import { metricTest } from '../harness/metric';
 import { genRegion } from '../harness/region';
+import { WATER_EXAMPLE_IDS, waterParts } from '../harness/water';
 import { THRESHOLDS } from '../thresholds';
 
 /**
@@ -36,7 +37,8 @@ import { THRESHOLDS } from '../thresholds';
  *   (`C7.default`: borderPlaneRatio, switchWall; C8; `C9.default`: entrancesMax, thinRoof), with the review poses;
  * - the presets group (the three preset regions): the pure parts and `islandCapAir` (`C7.construction`);
  * - both: `carverReference` (max 0 per region, so the sum over the jobs is the unsplit value), and the per-group parts
- *   of C7-C9 (`C7.tuning`: verticalStep, flatWallShare, waterWall; `C9`: nearestEntrance, holedSurface) and C7's
+ *   of C7-C9 (`C7.tuning`: verticalStep, flatWallShare, waterWall, SP7a's settled population on the regions' interiors;
+ *   `C9`: nearestEntrance, holedSurface) and C7's
  *   bottom parts (`C7.bottomPlane`, `C7.bedrockExposed`, `C7.bottom`; SP6b spec §12.3), each the worst of the groups the job measures
  *   (`c7c9Parts`, `caveBottomParts`; ruling P2), so the worst over the jobs is the unsplit value; these read the default
  *   and preset regions only;
@@ -58,7 +60,13 @@ import { THRESHOLDS } from '../thresholds';
  *   job's regions (`cave_heavy`'s on quick and full, and the biome region), read again from their cached dumps
  *   (`r3Region`, `test/harness/cull.ts`): `R3.wronglyCulled` over `r3Poses`' poses, `R3.popIn` over `r3Paths`' five
  *   paths on the biome region, `R3.culledUnderground` pooled over the underground poses (gated from D25's culling
- *   checkpoint, Task 40), with the per-pose record in `.out/R3.poses.json`.
+ *   checkpoint, Task 40), with the per-pose record in `.out/R3.poses.json`;
+ * - every group (SP7a spec §13.1-§13.2, D30; Task 22): each region read after the global settle reference over its T
+ *   (`caveRegionWorker.ts`' `settleRegion`), the A parts on its interior (`test/harness/water.ts`): A1, A3 and A4 per job
+ *   in `.out/A.<group>.json` (recorded until the tuning), `A3.aquiferLavaAbove10` gated from this commit (0 by
+ *   construction), `C7.waterWallAny` (SP6a's waterWall count) per job in `.out/C7.waterWallAny.<group>.json`, and
+ *   SP7a's review poses at seed '42' in `.out/sp7a.examples.<group>.json` (rulings P22: one record per job, Task 24 adds
+ *   its poses to it).
  *
  * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
  * - `carverReference`: over every region of the run's groups (the preset regions included), the voxels of the region
@@ -522,7 +530,8 @@ async function measureC7C9(): Promise<Record<C7C9Part, number>> {
   const perRegion = measured.map((m) => ({
     label: m.site.label, group: groupOf(m.site), ms: m.ms,
     ...c7c9Parts([{ group: 'default', full: m.site.size === 32, counts: m.c79 }]),
-    walls: m.c79.flat.faces, flatWalls: m.c79.flat.flat, waterWall: m.c79.waterWall, deepSky: m.c79.deepSky,
+    walls: m.c79.flat.faces, flatWalls: m.c79.flat.flat, waterWall: m.c79.waterWall, waterWallKm2: m.c79.waterWallKm2,
+    waterWallAny: m.c79.waterWallAny, deepSky: m.c79.deepSky,
     openings: m.c79.openings, land: m.c79.surface.land, holed: m.c79.surface.holed, thinRoof: m.c79.surface.thinRoof,
     entranceSamples: m.c79.distances.length, largestComponent: m.c79.largest,
   }));
@@ -777,6 +786,98 @@ if (RUN_GROUPS.some((g) => B3_ABYSS_ROCK_GATED[g])) {
     return { abyssRockStraight: Math.max(...values), ...rec };
   }, 900_000, { outName: 'B3.abyssRock' });
 }
+
+// ---------------------------------------------------------------- A1, A3, A4 after the settle reference (SP7a §13.1)
+
+/**
+ * A1, A3 and A4's record (SP7a spec §13.1, D30; Task 22; gated at their bounds at the tuning, Task 31), as built in
+ * `test/harness/water.ts` (`waterRegionCounts`, `waterParts`): per job over its regions' interiors after the global
+ * settle reference, A1's `dryShare` (with `dryShareT`, on T alone over the same population), A3's `lavaBelow54`,
+ * `aquiferLavaAbove10`, `lavaSupported`, `lavaSkyRegions`, A4's `aquiferBodies`, and recorded with them `skyOpenDeep`,
+ * the margin barriers and the pits below sea after settle and in T; with each region's values and its settle and A ms,
+ * in `.out/A.<group>.json`.
+ */
+test('A1, A3, A4 per job after the settle reference (recorded)', async () => {
+  const measured = await measuredRegions();
+  const jobs = [...new Set(measured.map((m) => jobOf(m.site)))];
+  mkdirSync(OUT_DIR, { recursive: true });
+  for (const job of jobs) {
+    const rs = measured.filter((m) => jobOf(m.site) === job && m.water !== null);
+    writeFileSync(join(OUT_DIR, `A.${job}.json`), json({
+      id: 'A', tier: process.env.METRICS_TIER ?? null, group: job, values: waterParts(rs.map((m) => m.water!)),
+      regions: rs.map((m) => ({ label: m.site.label, ms: { settle: m.ms.settle, water: m.ms.water }, ...waterParts([m.water!]), counts: m.water })),
+    }));
+    expect(rs.length, `A: the ${job} job's regions`).toBeGreaterThan(0);
+  }
+}, 900_000 * TIMEOUT_SCALE);
+
+// `A3.aquiferLavaAbove10` (SP7a spec §13.1; rulings P19): the tagged proto lava above y −10 over every region of the
+// run's groups, 0 by construction (springs are untagged, untagged air takes only water), gated from this commit.
+metricTest('A3', ['aquiferLavaAbove10'], async () => {
+  const rs = (await measuredRegions()).filter((m) => m.water !== null).map((m) => m.water!);
+  expect(rs.length).toBeGreaterThan(0);
+  return { aquiferLavaAbove10: waterParts(rs).aquiferLavaAbove10, regions: rs.length };
+}, 900_000);
+
+/**
+ * `C7.waterWallAny` (SP7a spec §13.2: SP6a's waterWall count, any fluid voxel of T beside dry tagged air, recorded beside
+ * the settled `C7.waterWall`): per job, each C7 group's value (`c7c9Groups`) with its settled `waterWall`, in
+ * `.out/C7.waterWallAny.<group>.json`.
+ */
+test('C7.waterWallAny per job (recorded)', async () => {
+  const measured = await measuredRegions();
+  const jobs = [...new Set(measured.map((m) => jobOf(m.site)))];
+  mkdirSync(OUT_DIR, { recursive: true });
+  for (const job of jobs) {
+    const rs = measured.filter((m) => jobOf(m.site) === job);
+    const groups = c7c9Groups(rs.map((m) => ({ group: groupOf(m.site), full: m.site.size === 32, counts: m.c79 })));
+    writeFileSync(join(OUT_DIR, `C7.waterWallAny.${job}.json`), json({
+      id: 'C7.waterWallAny', tier: process.env.METRICS_TIER ?? null, group: job,
+      groups: Object.fromEntries(Object.entries(groups).map(([g, v]) => [g, { waterWallAny: v.waterWallAny, waterWall: v.waterWall }])),
+      regions: rs.map((m) => ({ label: m.site.label, waterWallAny: m.c79.waterWallAny, areaKm2: m.c79.areaKm2, waterWall: m.c79.waterWall, waterWallKm2: m.c79.waterWallKm2 })),
+    }));
+  }
+  expect(jobs.length).toBeGreaterThan(0);
+}, 900_000 * TIMEOUT_SCALE);
+
+/**
+ * SP7a's review poses (spec §13.9, D16; `waterExamplesOf`) at seed '42', per job (rulings P22): per pose, of the poses the
+ * job's seed '42' regions found (each nearest its own profile's `findSpawn`), the one nearest its profile's spawn (ties
+ * to the earlier region), with its profile, region and distance, in `.out/sp7a.examples.<group>.json` (null where none
+ * was found; Task 24 adds A5's poses to the same record).
+ */
+test('SP7a\'s review poses per job (sp7a.examples.<group>.json)', async () => {
+  const measured = await measuredRegions();
+  const spawns = new Map<string, { x: number; z: number }>();
+  const spawnOf = (profile: Site['profile']): { x: number; z: number } => {
+    let s = spawns.get(profile);
+    if (s === undefined) {
+      const p = findSpawn(createGenContext(seedFromInput('42'), resolveProfile(profile)));
+      s = { x: p.x, z: p.z };
+      spawns.set(profile, s);
+    }
+    return s;
+  };
+  mkdirSync(OUT_DIR, { recursive: true });
+  for (const job of RUN_GROUPS) {
+    const rs = measured.filter((m) => jobOf(m.site) === job && m.waterExamples !== null);
+    const poses: Record<string, (CavePose & { profile: string; region: string; distance: number }) | null> = {};
+    for (const id of WATER_EXAMPLE_IDS) {
+      let best: (CavePose & { profile: string; region: string; distance: number }) | null = null;
+      for (const m of rs) {
+        const p = m.waterExamples![id];
+        if (p === null) continue;
+        const spawn = spawnOf(m.site.profile);
+        const distance = Math.hypot(p.voxel[0] + 0.5 - spawn.x, p.voxel[2] + 0.5 - spawn.z);
+        if (best === null || distance < best.distance) best = { ...p, profile: m.site.profile, region: m.site.label, distance };
+      }
+      poses[id] = best;
+    }
+    writeFileSync(join(OUT_DIR, `sp7a.examples.${job}.json`), json({
+      id: 'sp7a.examples', tier: process.env.METRICS_TIER ?? null, group: job, seed: '42', spawns: Object.fromEntries(spawns), poses,
+    }));
+  }
+}, 900_000 * TIMEOUT_SCALE);
 
 // The default-only parts, with the default group.
 if (DEFAULT_GROUP) {

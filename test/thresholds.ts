@@ -155,6 +155,10 @@ export const THRESHOLDS: ThresholdTable = {
     nearestEntrance: { max: 192, activeFrom: 'SP6a' }, entrancesMax: { max: 150, activeFrom: 'SP6a', tiers: ['quick', 'full'] },
     holedSurface: { max: 0.02, activeFrom: 'SP6a' }, thinRoof: { max: 0.05, activeFrom: 'SP6a' },
   },
+  // SP7a spec §13.1 (D30; Task 22): the tagged proto lava above y −10 over the caves regions' interiors (`caves.metric.ts`;
+  // its `metricTest` writes `.out/A3.json`), 0 by construction (springs are untagged; rulings P19), gated from its commit; A1-A4's other parts
+  // are recorded in `.out/A.<group>.json` until the tuning.
+  A3: { aquiferLavaAbove10: { max: 0, activeFrom: 'SP7a' } },
   // SP4a spec §9.1 (D26): `grassSky0`, the master's grass at sky 0, recorded from SP4a (`light.metric.ts`), gated by SP6a.
   S1: {
     buried: { max: 0, activeFrom: 'SP3c' }, grassNoSky: { max: 0, activeFrom: 'SP3c' }, ymod16: { min: 0.001, activeFrom: 'SP3c' },

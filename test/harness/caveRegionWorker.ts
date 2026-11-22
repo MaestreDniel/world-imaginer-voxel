@@ -11,13 +11,19 @@
  * the typed arrays' buffers transferred (`countsTransfer`). Anything that throws is answered `{type: 'error', message}`.
  *
  * `measureCaveRegion` is the metric's per-region pass, in one function so the worker and an in-process caller (the unit
- * test) run the same code: the grid, the pre-cave tops and the components once; C1-C6's counts (the default group
+ * test) run the same code: first (SP7a spec §13.1-§13.2, D30) the global settle reference over the region's T
+ * (`settleRegion`: `referenceSettle` per tile of at most 16 × 16 chunks, each over itself grown by one chunk, the settle's
+ * radius, so its working set stays near 0.5 GB per worker on a 32 × 32-chunk region and the overlay equals the whole
+ * region's), whose parts read the interior, 2 chunks in from the edge (`interiorOf`); then the grid, the pre-cave tops and
+ * the components once; C1-C6's counts (the default group
  * and `cave_heavy`'s regions), C7-C9's, C7's bottom counts (SP6b spec §12.3), B3's border counts (§12.2, with the cave
  * air per biome), `B3.abyssRockStraight`'s counts (§12.2, Task 28: the default group's regions and the biome region), the review
  * poses and SP6b's (`bottomCavern`; the default group's seed '42' default regions only), the biome region's poses and
  * T window (the biomes group's default-profile region, Task 27); then C7's construction counts, `regionCounts` against
  * `referenceCarve`, whose raw reference array never leaves the thread (ruling P6), except in the biomes group, whose
- * job registers no `carverReference`.
+ * job registers no `carverReference`; then the A parts' counts (`water.ts`' `waterRegionCounts`, with the margin
+ * barriers' probes) and, on the seed '42' regions, SP7a's review poses (`waterExamplesOf`, each region's profile's). C7.waterWall reads
+ * the settled bytes on the interior and the proto's rules reader for the spread sides (`caveC7C9Counts`' `water`).
  */
 import type { Params } from '../../src/core/params/schema';
 import { createDensityContext } from '../../src/gen/density/context';
@@ -25,13 +31,16 @@ import { attachStore, type StoreHandles } from '../../src/world/store/store';
 import {
   abyssRockCounts, barrierProbe, biomeTileMasks, CAP_AIR_Y, caveBiomeExamples, caveBorderCounts, caveBottomCounts, caveC7C9Counts, caveComponents, caveExamples, caveGridOf, caveRegionCounts, countsTransfer, flatWallDetail,
   landMask, localThickness, preCaveTops, ravinePathsOf, regionCounts, riverMaskOf, sp6bCaveExamples, wetMask,
-  type AbyssRockCounts, type BiomeExampleId, type CarverRegionCounts, type CaveBorderCounts, type CaveBottomCounts, type CaveC7C9Counts, type CavePose, type CaveRegionCounts, type ExampleId,
+  type AbyssRockCounts, type BiomeExampleId, type C7C9Options, type CarverRegionCounts, type CaveBorderCounts, type CaveBottomCounts, type CaveC7C9Counts, type CavePose, type CaveRegionCounts, type ExampleId,
   type Sp6bExampleId,
 } from './caveMetrics';
 import type { Site } from './caveSites';
-import { referenceCarve } from './refs';
+import { referenceCarve, referenceSettle, referenceSettleKey } from './refs';
 import { regionView, type RegionView } from './regionView';
 import { genContextWith } from './regionWorker';
+import {
+  loadWaterRegion, marginProbes, protoRuleReader, settledBytes, waterExamplesOf, waterRegionCounts, type WaterBox, type WaterExampleId, type WaterRegionCounts,
+} from './water';
 
 /** One region's measurements (ruling P6): every field structured-cloneable. */
 export interface CaveRegionResult {
@@ -70,15 +79,22 @@ export interface CaveRegionResult {
   readonly biomeTiles: number[] | null;
   /**
    * The ms of the shared grid and components, of C1-C6 (with the thickness), of C7-C9, of the bottom, of the border
-   * counts, of the abyss rock's counts, of the poses (every list, and the biome region's tile masks).
+   * counts, of the abyss rock's counts, of the poses (every list, and the biome region's tile masks); SP7a: of the settle
+   * reference and of the A counts with SP7a's poses.
    */
-  readonly ms: { shared: number; c16: number; c79: number; bottom: number; borders: number; abyssRock: number; examples: number };
+  readonly ms: {
+    shared: number; c16: number; c79: number; bottom: number; borders: number; abyssRock: number; examples: number; settle: number; water: number;
+  };
   /**
    * C7's construction counts: `regionCounts(view, referenceCarve(…), capY, barrierProbe(…))` (SP7a: the aquifer's
    * barriers excluded), capY on floating_islands only; null in the
    * biomes group (its job registers no C7 call).
    */
   readonly carver: CarverRegionCounts | null;
+  /** The A parts' counts on the interior (SP7a spec §13.1, `waterRegionCounts`); null for a region without an interior. */
+  readonly water: WaterRegionCounts | null;
+  /** SP7a's review poses (§13.9, `waterExamplesOf`, nearest its profile's spawn): the seed '42' regions only, else null. */
+  readonly waterExamples: Record<WaterExampleId, CavePose | null> | null;
 }
 
 export interface CaveRegionMsg {
@@ -94,8 +110,57 @@ export type CaveRegionReply =
   | { type: 'measured'; label: string; result: CaveRegionResult }
   | { type: 'error'; message: string };
 
+/** The chunks a region's interior lies in from each edge (SP7a spec §13.1: 2 chunks, beyond the settle's radius of 16). */
+export const INTERIOR_CHUNKS = 2;
+/** `settleRegion`'s tile, in chunks per axis. */
+export const SETTLE_TILE_CHUNKS = 16;
+
+/** The interior of the view's region (`INTERIOR_CHUNKS` in from each edge); null when the region is too small to hold one. */
+export function interiorOf(view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h'>): WaterBox | null {
+  if (view.w <= 2 * INTERIOR_CHUNKS || view.h <= 2 * INTERIOR_CHUNKS) return null;
+  return {
+    x0: 16 * (view.cx0 + INTERIOR_CHUNKS), z0: 16 * (view.cz0 + INTERIOR_CHUNKS),
+    x1: 16 * (view.cx0 + view.w - INTERIOR_CHUNKS), z1: 16 * (view.cz0 + view.h - INTERIOR_CHUNKS),
+  };
+}
+
+/**
+ * The global settle reference over the view's region (SP7a spec §13.4, D30), keyed `referenceSettleKey(view, …)`:
+ * `referenceSettle` over each tile of at most `tile` × `tile` chunks (from the region's corner) grown by one chunk on
+ * every side inside the region, its entries on the tile kept. A voxel's settled byte reads the proto within the settle's
+ * radius only (cap + search = 16 blocks, §4.1, the margin D's 3 × 3 holds and `DT1.settleReference` checks), so each
+ * tile's entries equal the whole region's while each tile's reference needs about (tile + 2)² / (w·h) of the whole one's
+ * memory (the unit test compares the two).
+ */
+export function settleRegion(view: RegionView, tile = SETTLE_TILE_CHUNKS): Map<number, number> {
+  const out = new Map<number, number>();
+  for (let tz = 0; tz < view.h; tz += tile) {
+    for (let tx = 0; tx < view.w; tx += tile) {
+      const ax0 = Math.max(0, tx - 1);
+      const az0 = Math.max(0, tz - 1);
+      const sub: RegionView = {
+        ...view, cx0: view.cx0 + ax0, cz0: view.cz0 + az0, w: Math.min(view.w, tx + tile + 1) - ax0, h: Math.min(view.h, tz + tile + 1) - az0,
+      };
+      const W = 16 * sub.w;
+      const D = 16 * sub.h;
+      const box = {
+        x0: 16 * (view.cx0 + tx), z0: 16 * (view.cz0 + tz),
+        x1: 16 * (view.cx0 + Math.min(view.w, tx + tile)), z1: 16 * (view.cz0 + Math.min(view.h, tz + tile)),
+      };
+      for (const [k, v] of referenceSettle(sub, box)) {
+        const x = 16 * sub.cx0 + (k % W);
+        const z = 16 * sub.cz0 + (Math.floor(k / W) % D);
+        out.set(referenceSettleKey(view, x, Math.floor(k / (W * D)) - 64, z), v);
+      }
+    }
+  }
+  return out;
+}
+
 /** The parts of `measureCaveRegion` that read the grid (its own function, so the grid is released before the carver pass). */
-function measureGrid(view: RegionView, site: Site, params: Params, stride: number): Omit<CaveRegionResult, 'carver'> {
+function measureGrid(
+  view: RegionView, site: Site, params: Params, stride: number, water: C7C9Options['water'],
+): Omit<CaveRegionResult, 'carver' | 'water' | 'waterExamples' | 'ms'> & { ms: Omit<CaveRegionResult['ms'], 'settle' | 'water'> } {
   // The default group (the default and large_biomes profiles; C7-C9's "default" group), `cave_heavy`'s regions (C1, C2
   // and C9 recorded on it, SP6b spec §12.3) and the biome region (the biomes group's default-profile region, §12.2).
   const isDefault = site.group === 'default';
@@ -115,7 +180,7 @@ function measureGrid(view: RegionView, site: Site, params: Params, stride: numbe
   const eligible = land.map((v, p) => (v === 1 && river[p] === 0 ? 1 : 0));
   const seaFloor = site.profile === 'archipelago' ? wetMask(grid) : null;
   const c79 = caveC7C9Counts(grid, tops, c, {
-    T: isDefault ? (x, y, z) => view.terrainT(x, y, z) : null, stride, eligible, seaFloor,
+    T: isDefault ? (x, y, z) => view.terrainT(x, y, z) : null, stride, eligible, seaFloor, ...(water === undefined ? {} : { water }),
   });
   const t3 = performance.now();
   // C7.bottomPlane's flat faces are every position's (C7.flatWallShare's are the sea floor's on archipelago).
@@ -145,11 +210,32 @@ function measureGrid(view: RegionView, site: Site, params: Params, stride: numbe
  * DensityContext of the region's seed and params). `params` are the site's profile's, `stride` C7.switchWall's.
  */
 export function measureCaveRegion(view: RegionView, site: Site, params: Params, stride: number): CaveRegionResult {
-  const measured = measureGrid(view, site, params, stride);
+  const t0 = performance.now();
+  const interior = interiorOf(view);
+  const settled = settleRegion(view);
+  const bytes = settledBytes(view, settled);
+  const t1 = performance.now();
+  const water = interior === null
+    ? undefined
+    : { settled: (x: number, y: number, z: number) => bytes.fl[referenceSettleKey(view, x, y, z)]!, box: interior, rules: protoRuleReader(view) };
+  const measured = measureGrid(view, site, params, stride, water);
   const carver = site.group === 'biomes'
     ? null
     : regionCounts(view, referenceCarve(view, site.seed, params), site.profile === 'floating_islands' ? CAP_AIR_Y : null, barrierProbe(site.seed, params));
-  return { ...measured, carver };
+  const t2 = performance.now();
+  let counts: WaterRegionCounts | null = null;
+  let waterExamples: CaveRegionResult['waterExamples'] = null;
+  if (interior !== null) {
+    // The A counts and the poses read one load of the region (its grid, the settled bytes above, A1's labelling).
+    const region = loadWaterRegion(view, settled, interior, bytes);
+    counts = waterRegionCounts(view, settled, interior, marginProbes(site.seed, params), region);
+    if (site.seed === '42') waterExamples = waterExamplesOf(view, settled, interior, site.seed, params, region);
+  }
+  const t3 = performance.now();
+  return {
+    ...measured, carver, water: counts, waterExamples,
+    ms: { ...measured.ms, settle: Math.round(t1 - t0), water: Math.round(t3 - t2) },
+  };
 }
 
 interface Reply {

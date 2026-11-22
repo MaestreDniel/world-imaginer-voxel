@@ -1,5 +1,5 @@
 {
-  "sha256": "413a18050d0655db7f3f87fb78585ce16694949d3ebe48213c06e9babec822c4",
+  "sha256": "bde39d28d90b591ccf42d8ec877a1b045593106238220f0a74878b0e07d37f7c",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -22,6 +22,12 @@
       "SP7a"
     ],
     "thresholds": {
+      "A3": {
+        "aquiferLavaAbove10": {
+          "activeFrom": "SP7a",
+          "max": 0
+        }
+      },
       "B1": {
         "largestLand": {
           "activeFrom": "SP2a",

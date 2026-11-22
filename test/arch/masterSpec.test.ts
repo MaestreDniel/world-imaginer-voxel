@@ -241,6 +241,11 @@
  * the terrain stage's params gain 'springs'. The island-edge springs (Task 20) move the U2 count to 211 (the island
  * witness's clause; no `springs.island.minFall`, Task 20's Spec correction). The lava springs (Task 21) move it to 213
  * (the abyss witness's clause).
+ * The metrics after the settle reference (Task 22) land item 16's A1, A3 and A4 rows in pre-tuning form (populations on
+ * the caves regions' interiors after settle, per group; A1's connectivity through tagged non-solid and fluid voxels at
+ * y ≤ 62; A3's second part from aquifer cells, `THRESHOLDS.A3.aquiferLavaAbove10` gated from SP7a), C7's `waterWall`
+ * read after settle over truncated fronts and abyss stops with a dry target, §6.5's A3 line and item 19's test entry
+ * ("A1-A5 in metrics/caves.metric.ts", an `SP7A_MODULES` row).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -3402,6 +3407,7 @@ describe('master spec amendments (SP7a §16)', () => {
     [/^\s+blocks\/kinds\.ts /, 'fluidRules.ts (SP7a; also the fluid surface', 'src/world/blocks/fluidRules.ts'],
     [/^\s+metrics\/\*\.ts\s/, 'SP7a: sp7aGoldens.ts', 'src/metrics/sp7aGoldens.ts'],
     [/^\s+test\/ unit\/ metrics\//, '(SP7a: the settle reference in harness/refs.ts', 'test/harness/refs.ts'],
+    [/^\s+test\/ unit\/ metrics\//, 'A1-A5 in metrics/caves.metric.ts)', 'test/metrics/caves.metric.ts'],
     [/^\s+fluids\//, 'fluids/aquifer.ts springs.ts', 'src/gen/fluids/aquifer.ts'],
     [/^\s+fluids\//, 'springs.ts settle.ts', 'src/gen/fluids/springs.ts'],
     [/^\s+fluids\//, 'settle.ts solidAt.ts', 'src/gen/fluids/settle.ts'],
@@ -3788,6 +3794,33 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(dt1).toContain('(`DT1.light`) (amended by SP4a). SP7a: `settleReference` counts the voxels of the interior 6 × 6 columns of three 10 × 10-chunk settle windows (a coast with its spills and a flooded cave border, a water/lava contact, a stream over a pool the settle made) whose final fluid, each column decorated from its own 3 × 3, ≠ the global settle reference over the window\'s T (`harness/refs.ts`\' `referenceSettle`: the same `fluidRules.ts`, no window); `settleIsolated` counts a column decorated alone whose final fluid ≠ the window\'s; `DT1.light` re-asserted on the first settle window (amended by SP7a) | exact |');
     expect(THRESHOLDS.DT1?.settleReference).toEqual({ max: 0, activeFrom: 'SP7a' });
     expect(THRESHOLDS.DT1?.settleIsolated).toEqual({ max: 0, activeFrom: 'SP7a' });
+  });
+
+  test('§6.4\'s A1, A3 and A4 rows after the settle reference, in pre-tuning form (SP7a spec §16 item 16)', () => {
+    const row = (id: string): string => {
+      const r = text.split('\n').find((l) => l.startsWith(`| ${id} |`));
+      expect(r, `no ${id} row in §6.4`).toBeDefined();
+      return r!;
+    };
+    expect(row('A1')).toBe('| A1 | dry share of cave air below y 63 not connected to sea or rivers. SP7a: `dryShare`, over the caves regions\' interiors (2 chunks in from the edge) read after the global settle reference over each region\'s T (`harness/refs.ts`\' `referenceSettle`), per group, the worst group\'s: among the tagged non-solid voxels at y ≤ 62 not connected (3D, through tagged non-solid voxels and fluid voxels, all at y ≤ 62: untagged air never links two caves) to sky-open water at positions whose `surfaceWaterLevel` is 63 (sea or river; read from the proto by D19\'s rule: untagged water at y 63 and none at y 64), the share with no fluid after settle; recorded on T alone and per region (amended by SP7a) | ≥ 40% |');
+    expect(row('A3')).toBe('| A3 | 32×32-column harness regions with lava below −54 / aquifer lava above −10 / lava with support / regions where lava touches sky-connected cave air. SP7a: over the caves regions\' interiors after the settle reference, per group: `lavaBelow54`, the regions holding lava at y ≤ −55 / `aquiferLavaAbove10`, lava from aquifer cells above y −10 (the proto\'s tagged lava; springs are untagged), 0 by construction, gated from SP7a / `lavaSupported`, the lava voxels with a solid or lava voxel below (falling lava counts as supported) / `lavaSkyRegions`, the regions where lava touches C2\'s sky-connected cave air (amended by SP7a) | ≥ 50% / 0 / ≥ 99% / ≥ 25% |');
+    expect(row('A4')).toBe('| A4 | aquifer water bodies per 32×32-column harness region. SP7a: `aquiferBodies`, the 3D components of water voxels after the settle reference with a voxel of the region\'s interior below its position\'s pre-cave top and no sky-open (untagged) proto water, per region, the fewest (amended by SP7a) | ≥ 1 |');
+    // Only the construction part is gated from its commit; the others are recorded until the tuning.
+    expect(THRESHOLDS.A3).toEqual({ aquiferLavaAbove10: { max: 0, activeFrom: 'SP7a' } });
+    expect(THRESHOLDS.A1).toBeUndefined();
+    expect(THRESHOLDS.A4).toBeUndefined();
+  });
+
+  test('§6.4\'s C7 row: `waterWall` read after settle over truncated fronts and abyss stops (SP7a spec §16 item 16)', () => {
+    const c7 = text.split('\n').find((l) => l.startsWith('| C7 |'));
+    expect(c7, 'no C7 row in §6.4').toBeDefined();
+    expect(c7).toContain('/ `waterWall`, water voxels horizontally adjacent to tagged air, per km² (default and archipelago), read after settle, over truncated fronts and abyss stops with a dry target (SP7a: the settle reference\'s fluid on the caves regions\' interiors, falls and spill rims excluded; SP6a\'s count recorded as `waterWallAny`);');
+    // The bound stays (spec §13.2: no lock change).
+    expect(THRESHOLDS.C7?.waterWall).toEqual({ max: 3.3, activeFrom: 'SP6a' });
+  });
+
+  test('§6.5\'s A3 line names its lava sources (SP7a spec §16 item 16)', () => {
+    expect(text.split('\n')).toContain('- Unreachable or 2D lava → lava aquifers, the bottom gullies and abyss lava springs (lava lakes SP8b) → A3.');
   });
 
   test('§4.16\'s Water setting (SP7a spec §16 item 14)', () => {

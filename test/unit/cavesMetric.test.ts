@@ -8,7 +8,7 @@ import { seedFromInput } from '../../src/core/seed';
 import { caveBiomeAtPoint, caveJitter, cavePickerOf } from '../../src/gen/biomes/cavePicker';
 import { newPointRecord, samplePoint } from '../../src/gen/column/columnPoint';
 import { createGenContext } from '../../src/gen/context';
-import { WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { FLUID_LAVA, FLUID_WATER, NO_FLUID, packFluid, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, BEDROCK, DEEPSLATE, REGISTRY, STONE } from '../../src/world/blocks/index';
 import type { CarverPath } from '../../src/gen/caves/carvers';
 import {
@@ -19,17 +19,17 @@ import {
   poolBorderCounts, SKIN_NAMES, SOLID_BIT, TAG_MASK,
   ABYSS_STATES, bedrockExposedCount, bottomCavernPose, bottomFloorSpreads, caveBottomCounts, caveBottomGroups, caveBottomParts, caveGridOf,
   BOTTOM_PITCH, CLS_ABYSS, CLS_BEDROCK, CLS_OTHER, EXAMPLE_IDS, SP6B_EXAMPLE_IDS, type CaveBottomCounts,
-  aperiodicCounts, aperiodicity, aperiodicLags, BAND_Y0, bandCounts, bandDetail, BANDS, bandsMin, borderPlaneRatio, c1c6Parts, C1_C6_PARTS, c7c9Parts,
+  aperiodicCounts, aperiodicity, aperiodicLags, BAND_Y0, bandCounts, bandDetail, BANDS, bandsMin, borderPlaneRatio, c1c6Parts, C1_C6_PARTS, c7c9Groups, c7c9Parts,
   C7_C9_PARTS, caveC7C9Counts, caveComponents, caveExamples, caveRegionCounts, COMP_Y_MIN, countsTransfer, emptyCaveGrid, flatWallCounts, flatWallDetail,
   emptyBandCounts, floorCounts, floorFaceLattice, floorFaceResidues, floorPeak, GRID_H, GRID_Y0, jensenShannon, kindCounts, landCounts,
   largestCounts, latticeBias, latticeBiasAsDefined, layerCounts, ROW_Y0, ROWS,
   localThickness, logSd, median, nearestEntranceDistances, openingMask, percentile, PILLAR_AREA_MAX, PILLAR_BACK, pillarTiles, PILLAR_VIEW, preCaveTops, ravineCounts, regionCounts, barrierProbe,
   setCell, skyCounts, surfaceCounts, switchWall, switchWallCounts, thinnestAxes, typeMixDivergences, verticalStep, verticalStepDetail,
   voidCounts,
-  wallResidues, waterWallCount, worstToBound, type BandCounts, type CaveGrid,
+  wallResidues, waterWallAnyCount, waterWallCount, gridRuleReader, spreadSides, worstToBound, type BandCounts, type CaveGrid,
 } from '../harness/caveMetrics';
 import { NIBBLE_REGION, nibbleRegion } from '../harness/caveNibbles';
-import { measureCaveRegion, type CaveRegionResult } from '../harness/caveRegionWorker';
+import { interiorOf, measureCaveRegion, settleRegion, type CaveRegionResult } from '../harness/caveRegionWorker';
 import {
   BIOME_REGION, BIOME_SCAN_MIN_POINTS, BIOME_SCAN_SKIPPED, BIOME_TILE_ALL, biomeClimateHolds, biomeRegionClimate, biomeTiles, caveGroupOf,
   caveSites, findBiomeRegion, firstBiomeTile, measureCaveRegions, tileBiomeMask,
@@ -651,17 +651,103 @@ describe('the caves instruments on fixtures (SP6a §10.1, C7-C9)', () => {
     expect(asked).toBeGreaterThan(0);
   });
 
-  test('C7.waterWall counts the water voxels horizontally next to tagged air', () => {
+  test('C7.waterWallAny (SP6a\'s C7.waterWall) counts the water voxels horizontally next to tagged air', () => {
     const g = rock(16, 16, 60);
     for (let y = 61; y <= 62; y++) for (let z = 0; z < 16; z++) for (let x = 0; x < 16; x++) setCell(g, x, y, z, 0, false, true);
-    expect(waterWallCount(g)).toBe(0);
+    expect(waterWallAnyCount(g)).toBe(0);
     // An entrance opening at y 61 … 62 beside water: its 4 horizontal neighbours on each of 2 layers.
     carve(g, K.entrance, 8, 8, 40, 62, 8, 8);
-    expect(waterWallCount(g)).toBe(8);
+    expect(waterWallAnyCount(g)).toBe(8);
     // Tagged water is not tagged air.
     setCell(g, 8, 61, 8, K.entrance, false, true);
     setCell(g, 8, 62, 8, K.entrance, false, true);
-    expect(waterWallCount(g)).toBe(0);
+    expect(waterWallAnyCount(g)).toBe(0);
+  });
+
+  test('C7.waterWall after settle (SP7a §13.2): a truncated front or an abyss stop beside dry tagged air; falls and spill rims excluded', () => {
+    // A cave of plain tagged air (x 2 … 13, y 40 … 45, z 2 … 13) on a rock floor and one voxel of abyss air at (11, 40, 12).
+    const g = rock(16, 16, 60);
+    carve(g, K.cheese, 2, 13, 40, 45, 2, 13);
+    setCell(g, 11, 40, 12, K.cheese | (CAVE_BIOME.abyss << 4), false);
+    /** A settled reader holding only `fluid` at (x, y, z). */
+    const one = (x: number, y: number, z: number, fluid: number) => (qx: number, qy: number, qz: number): number => (qx === x && qy === y && qz === z ? fluid : NO_FLUID);
+    // A truncated front (bit 6: at the cap with a passable target) on the floor beside dry tagged air.
+    expect(waterWallCount(g, one(5, 40, 5, packFluid(FLUID_WATER, 4, false, true)))).toBe(1);
+    // …counted only inside the box.
+    expect(waterWallCount(g, one(5, 40, 5, packFluid(FLUID_WATER, 4, false, true)), { x0: 6, z0: 0, x1: 16, z1: 16 })).toBe(0);
+    // A falling voxel beside dry air is flow, even flagged; so is a spill rim (water level 7, lava level 6).
+    expect(waterWallCount(g, one(8, 40, 8, packFluid(FLUID_WATER, 0, true, true)))).toBe(0);
+    expect(waterWallCount(g, one(8, 40, 8, packFluid(FLUID_WATER, 7, false, true)))).toBe(0);
+    expect(waterWallCount(g, one(8, 40, 8, packFluid(FLUID_LAVA, 6, false, true)))).toBe(0);
+    expect(waterWallCount(g, one(8, 40, 8, packFluid(FLUID_LAVA, 4, false, true)))).toBe(1);
+    // A flowing voxel over open air does not spread (§4.1: it falls), so its dry sides are no targets, even flagged.
+    expect(waterWallCount(g, one(8, 42, 8, packFluid(FLUID_LAVA, 4, false, true)))).toBe(0);
+    // A water voxel beside dry abyss air (the abyss stop), unflagged; the same voxel beside plain air only is not a wall,
+    // nor is lava beside abyss air (the abyss stops water only).
+    expect(waterWallCount(g, one(10, 40, 12, packFluid(FLUID_WATER, 2)))).toBe(1);
+    expect(waterWallCount(g, one(10, 40, 5, packFluid(FLUID_WATER, 2)))).toBe(0);
+    expect(waterWallCount(g, one(10, 40, 12, packFluid(FLUID_LAVA, 2)))).toBe(0);
+    // Its neighbour holding settled fluid is not dry air.
+    const both = (x: number, y: number, z: number): number => (y === 40 && z === 12 && (x === 10 || x === 11) ? packFluid(FLUID_WATER, 2) : NO_FLUID);
+    expect(waterWallCount(g, both)).toBe(0);
+    // waterWallAny keeps SP6a's count: T's fluid bit beside tagged air, whatever the settle says (a fluid voxel that is
+    // not a wall after settle, here an unflagged level-2 voxel in the cave, still counts).
+    expect(waterWallAnyCount(g)).toBe(0);
+    setCell(g, 10, 40, 5, K.cheese, false, true);
+    expect(waterWallAnyCount(g)).toBe(1);
+    expect(waterWallCount(g, one(10, 40, 5, packFluid(FLUID_WATER, 2)))).toBe(0);
+  });
+
+  test('C7.waterWall counts a dry neighbour only on a spread side (§4.1: toward the nearest drop, else every open side)', () => {
+    // The cave of the case above, with a hole in its floor at (8, 39, 5): from (5, 40, 5) the nearest drop, (8, 40, 5) at
+    // distance 3, lies east only (every other path to it is 5 long), so east is the front's one spread side.
+    const g = rock(16, 16, 60);
+    carve(g, K.cheese, 2, 13, 40, 45, 2, 13);
+    carve(g, K.cheese, 8, 8, 39, 39, 5, 5);
+    expect(spreadSides(gridRuleReader(g), packFluid(FLUID_WATER, 4, false, true), 5, 40, 5)).toBe(0b0010);
+    // The front cut at the cap with its east neighbour wet: its dry neighbours (north, south, west) lie off its nearest-
+    // drop side, so §4.1 would not flow into them and it is not a wall.
+    const front = packFluid(FLUID_WATER, 4, false, true);
+    const eastWet = (x: number, y: number, z: number): number =>
+      (y === 40 && z === 5 && x === 5 ? front : y === 40 && z === 5 && x === 6 ? packFluid(FLUID_WATER, 3) : NO_FLUID);
+    expect(waterWallCount(g, eastWet)).toBe(0);
+    // Its east neighbour dry: the dry target is a spread side, a wall.
+    const alone = (x: number, y: number, z: number): number => (y === 40 && z === 5 && x === 5 ? front : NO_FLUID);
+    expect(waterWallCount(g, alone)).toBe(1);
+    // A source spreads whatever lies below it; a voxel holding its own type's proto fluid below spreads too (a grid reads
+    // no proto fluid, so the rule reader here holds lava below (5, 42, 5) and water below (6, 42, 5)).
+    const base = gridRuleReader(g);
+    const r = {
+      ...base,
+      protoFluid: (x: number, y: number, z: number): number => (y === 41 && z === 5 && (x === 5 || x === 6) ? packFluid(x === 5 ? FLUID_LAVA : FLUID_WATER, 0) : NO_FLUID),
+    };
+    expect(spreadSides(r, packFluid(FLUID_WATER, 0), 7, 42, 9)).toBe(0b1111);
+    expect(spreadSides(r, packFluid(FLUID_WATER, 2), 7, 42, 9)).toBe(0);
+    expect(spreadSides(r, packFluid(FLUID_WATER, 2), 6, 42, 5)).not.toBe(0);
+    // Below (5, 42, 5) the other type's proto fluid is `block` for water's rules, so that voxel spreads too.
+    expect(spreadSides(r, packFluid(FLUID_WATER, 2), 5, 42, 5)).not.toBe(0);
+  });
+
+  test('C7.waterWall pools per km² of the boxes counted; C7.waterWallAny per km² of the regions; NaN without settled bytes', () => {
+    const g = rock(16, 16, 60);
+    carve(g, K.cheese, 2, 13, 40, 45, 2, 13);
+    setCell(g, 5, 40, 5, 0, false, true);
+    const tops = preCaveTops(g);
+    const c = caveComponents(g, tops);
+    const all = new Uint8Array(256).fill(1);
+    const o = { T: null, stride: 1, eligible: all, seaFloor: null, tile: 16 };
+    const bare = caveC7C9Counts(g, tops, c, o);
+    expect(bare.waterWall).toBeNaN();
+    expect(bare.waterWallAny).toBe(1);
+    const box = { x0: 0, z0: 0, x1: 8, z1: 16 };
+    const settled = (x: number, y: number, z: number): number => (x === 5 && y === 40 && z === 5 ? packFluid(FLUID_WATER, 4, false, true) : NO_FLUID);
+    const counts = caveC7C9Counts(g, tops, c, { ...o, water: { settled, box } });
+    expect(counts.waterWall).toBe(1);
+    expect(counts.waterWallKm2).toBeCloseTo(128 / 1e6, 15);
+    const groups = c7c9Groups([{ group: 'default', full: false, counts }, { group: 'default', full: false, counts }]);
+    expect(groups.default!.waterWall).toBeCloseTo(1 / (128 / 1e6), 6);
+    expect(groups.default!.waterWallAny).toBeCloseTo(1 / (256 / 1e6), 6);
+    expect(c7c9Parts([{ group: 'default', full: false, counts: bare }])['C7.waterWall']).toBeNaN();
   });
 
   test('C8.aperiodicity is < 0.9 on a 16-periodic fixture, about 1 on a random one, and computed only for L ≤ width − 16', () => {
@@ -1305,6 +1391,7 @@ describe('the caves metric by group (SP6b spec §13 L4: `METRICS_CAVE_GROUPS`)',
       'C7:bottomFlatRatio|bottomFloorSpread:C7.bottom',
       'B3:borderLattice|straightBorder|flatBorder:B3.borders',
       'B3:abyssRockStraight:B3.abyssRock',
+      'A3:aquiferLavaAbove10:A3',
       'C7:borderPlaneRatio|switchWall:C7.default',
       'C8:aperiodicity|typeMixVariation|sizeSpread:C8',
       'C9:entrancesMax|thinRoof:C9.default',
@@ -1325,15 +1412,22 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
   const inProcess: CaveRegionResult[] = [];
   let one: CaveRegionResult[] = [];
   let four: CaveRegionResult[] = [];
+  /** SP7a: the first region's settle overlay over the whole region and by tiles of 8 × 8 chunks (`settleRegion`). */
+  let whole = new Map<number, number>();
+  let tiled = new Map<number, number>();
 
   beforeAll(async () => {
-    for (const s of SITES) {
+    for (const [k, s] of SITES.entries()) {
       const params = resolveProfile(s.profile);
       const { view } = await genRegion({
         seed: s.seed, params, cx0: s.cx0, cz0: s.cz0, w: s.size, h: s.size, upTo: 'T', order: 'spiral', threads: 4,
         cache: true, workerDir: OPTS.regionWorkerDir, debugTags: true,
       });
       inProcess.push(measureCaveRegion(view, s, params, STRIDE));
+      if (k === 0) {
+        whole = settleRegion(view, s.size);
+        tiled = settleRegion(view, 8);
+      }
     }
     one = await measureCaveRegions(SITES, { ...OPTS, workers: 1 });
     four = await measureCaveRegions(SITES, { ...OPTS, workers: 4 });
@@ -1374,6 +1468,8 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
         expect(got.examples, `${s.label}, ${n} worker(s)`).toEqual(ref.examples);
         expect(got.sp6bExamples, `${s.label}, ${n} worker(s)`).toEqual(ref.sp6bExamples);
         expect(got.carver, `${s.label}, ${n} worker(s)`).toEqual(ref.carver);
+        expect(got.water, `${s.label}, ${n} worker(s)`).toEqual(ref.water);
+        expect(got.waterExamples, `${s.label}, ${n} worker(s)`).toEqual(ref.waterExamples);
         // The timings differ by run; their fields do not.
         expect(Object.keys(got.ms)).toEqual(Object.keys(ref.ms));
         for (const v of Object.values(got.ms)) expect(Number.isFinite(v) && v >= 0).toBe(true);
@@ -1391,6 +1487,26 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
     for (const p of C1_C6_PARTS) expect(Number.isFinite(ref.c16[p]), p).toBe(true);
     expect(pooled(one)).toEqual(ref);
     expect(pooled(four)).toEqual(ref);
+  });
+
+  test('SP7a: the settle overlay by tiles equals the whole region\'s; the A counts and C7.waterWall read the interior after it', () => {
+    // The settle changes the region (aquifer borders, spills), so the comparison is not vacuous.
+    expect(whole.size).toBeGreaterThan(0);
+    expect(tiled).toEqual(whole);
+    for (const [k, s] of SITES.entries()) {
+      const ref = inProcess[k]!;
+      const interior = interiorOf({ cx0: s.cx0, cz0: s.cz0, w: s.size, h: s.size })!;
+      expect(interior, s.label).toEqual({ x0: 16 * (s.cx0 + 2), z0: 16 * (s.cz0 + 2), x1: 16 * (s.cx0 + s.size - 2), z1: 16 * (s.cz0 + s.size - 2) });
+      expect(ref.water!.areaKm2, s.label).toBeCloseTo(((16 * (s.size - 4)) ** 2) / 1e6, 12);
+      expect(ref.c79.waterWallKm2, s.label).toBeCloseTo(ref.water!.areaKm2, 12);
+      // A default region holds cave air below sea level and lava in its gullies, and no aquifer lava above −10.
+      expect(ref.water!.a1Population, s.label).toBeGreaterThan(0);
+      expect(ref.water!.lava, s.label).toBeGreaterThan(0);
+      expect(ref.water!.aquiferLavaAbove10, s.label).toBe(0);
+      expect(Number.isFinite(ref.water!.marginBarriers), s.label).toBe(true);
+      // SP7a's poses are every seed '42' region's.
+      expect(ref.waterExamples, s.label).not.toBeNull();
+    }
   });
 
   test('measureCaveRegions takes an integer ≥ 1 of workers', async () => {
