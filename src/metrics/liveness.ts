@@ -63,6 +63,12 @@
  * witness search (`springWitness`): stream columns whose ColumnSample lattice reaches y `SPRING_LAND_Y` and holds a
  * relief of at least `SPRING_RELIEF`, examined by their springs step (`terrainSpringsDebug`), the first whose springs
  * step accepts a water spring at the base's params and whose T column a step changes.
+ * SP7a (its spec §3.3, §13.7, Task 20): the island springs' leaf (`springs.island.tries`; their least fall is the
+ * constant `ISLAND_SPRING_MIN_FALL`, Task 20's Spec correction) acts only with `islands.enabled`, so, dead on the
+ * default base's class columns, it is decided on the floating_islands base (the
+ * default params with its profile's overlay, as `caves.limits.capTop`) at a bounded island witness
+ * (`islandSpringWitness`): stream columns whose lattice holds an islandMask above 0, examined by their springs step on
+ * that base, the first whose springs step accepts an island spring and whose T column a step changes.
  */
 import { CAVE_BIOME, SEA_LEVEL, SPAGHETTI_BANDS } from '../core/constants';
 import { fnv1a32, hash4, hashF64, hex64 } from '../core/hash';
@@ -389,6 +395,23 @@ const SPRING_RELIEF = 8;
 /** Above sea level: the land a water spring's outlet stands on (the 64 the dropped `springs.water.minY` gave, Task 19). */
 const SPRING_LAND_Y = SEA + 1;
 const isSpringLeaf = (path: string): boolean => path.startsWith('springs.');
+/**
+ * SP7a spec §3.3, §13.7 (Task 20): the island springs' leaf acts only with `islands.enabled` (dead on the default
+ * base), so it is decided on the floating_islands base of the base (`floatingOf`) at a bounded island witness
+ * (`islandSpringWitness`): up to `ISLAND_SPRING_DRAWS` draws of `samplePoints('sp7a.liveness.islandSprings', …)`; a
+ * draw's column is examined (its springs step run on the floating_islands base) when its ColumnSample's 7 × 7
+ * islandMask lattice holds a value above 0; up to `ISLAND_SPRING_EXAMINED` columns examined and `ISLAND_SPRING_CHECKS`
+ * hashed; the witness is the first examined column whose springs step accepts an island spring at that base's params
+ * and whose T column a step changes.
+ */
+const ISLAND_SPRING_STREAM = 'sp7a.liveness.islandSprings';
+const ISLAND_SPRING_DRAWS = 65536;
+const ISLAND_SPRING_EXAMINED = 2048;
+const ISLAND_SPRING_CHECKS = 64;
+const isIslandSpringLeaf = (path: string): boolean => path.startsWith('springs.island.');
+/** A `SpringList` kind byte: water springs 0, island springs 1. */
+const WATER_KIND = 0;
+const ISLAND_KIND = 1;
 
 /** The cave class column's scan slots (SP6a spec §4): the caverns' families, then the tunnels'. */
 export type CaveSlot = 'caverns' | 'tunnels';
@@ -1561,22 +1584,23 @@ export function aquiferWitness(base: GenContext, path: string, skip: readonly Li
 
 // ---------------------------------------------------------------- the springs' leaves' witness (SP7a Task 19)
 
-/** The accepted springs of base T columns by chunk key, per base (shared by the leaves of one U2 run). */
-const SPRING_MEMO = new WeakMap<GenContext, Map<number, number>>();
+/** The accepted springs of base T columns per kind (water, island, lava) by chunk key, per base (shared by the leaves of one U2 run). */
+const SPRING_MEMO = new WeakMap<GenContext, Map<number, Uint8Array>>();
 const SPRING_LIST = NEW_SPRING_LIST();
 
-/** The number of water springs `base`'s springs step accepts in column (cx, cz) (`terrainSpringsDebug`, memoised per base). */
-function baseSprings(base: GenContext, cx: number, cz: number): number {
+/** The number of springs of kind byte `kind` `base`'s springs step accepts in column (cx, cz) (`terrainSpringsDebug`, memoised per base). */
+function baseSprings(base: GenContext, cx: number, cz: number, kind: number): number {
   let byBase = SPRING_MEMO.get(base);
   if (byBase === undefined) { byBase = new Map(); SPRING_MEMO.set(base, byBase); }
   const key = (cx + 32768) * 65536 + (cz + 32768);
   let n = byBase.get(key);
   if (n === undefined) {
     SPRINGS_OF(base, cx, cz, SPRING_LIST);
-    n = SPRING_LIST.n;
+    n = new Uint8Array(3);
+    for (let k = 0; k < SPRING_LIST.n; k++) n[SPRING_LIST.kind[k]!]!++;
     byBase.set(key, n);
   }
-  return n;
+  return n[kind]!;
 }
 
 /** The figures of a springs leaf's witness search: the deciding column, the draws taken, the columns examined and hashed. */
@@ -1599,7 +1623,7 @@ function springWitnessOf(base: GenContext, info: LeafInfo, variants: readonly Ge
     for (let k = 0; k < 49; k++) { const v = off[k]!; if (v > hi) hi = v; if (v < lo) lo = v; }
     if (hi < SPRING_LAND_Y || hi - lo < SPRING_RELIEF) continue;
     examined++;
-    if (baseSprings(base, cx, cz) === 0) continue;
+    if (baseSprings(base, cx, cz, WATER_KIND) === 0) continue;
     checks++;
     const h = baseHash(stage, cx, cz);
     if (variants.some((v) => stageOutputHash(v, stage, cx, cz) !== h)) return { via: `mountain witness column (${cx}, ${cz})`, draws: n + 1, examined, checks };
@@ -1616,6 +1640,43 @@ export function springWitness(base: GenContext, path: string, skip: readonly Liv
   const info = leafInfo(path);
   if (!isSpringLeaf(path)) throw new Error(`${path} is not a springs leaf`);
   return springWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
+}
+
+function islandSpringWitnessOf(fb: GenContext, info: LeafInfo, variants: readonly GenContext[], skip: readonly LivenessColumn[], baseHash: BaseHash): SpringWitnessScan {
+  const stage = stageOf(info);
+  const pts = POINTS(ISLAND_SPRING_STREAM, ISLAND_SPRING_DRAWS);
+  const seen = new Set<number>(skip.map((c) => (c.cx + 32768) * 65536 + (c.cz + 32768)));
+  let examined = 0, checks = 0, n = 0;
+  for (; n < ISLAND_SPRING_DRAWS && examined < ISLAND_SPRING_EXAMINED && checks < ISLAND_SPRING_CHECKS; n++) {
+    const cx = Math.floor(pts.x[n]! / 16);
+    const cz = Math.floor(pts.z[n]! / 16);
+    const key = (cx + 32768) * 65536 + (cz + 32768);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // The island prefilter: an islandMask above 0 on the lattice (no T generated otherwise).
+    const m = BUILD(fb, cx, cz, BIOME_SAMPLE).f.islandMask;
+    let island = false;
+    for (let k = 0; k < 49; k++) if (m[k]! > 0) { island = true; break; }
+    if (!island) continue;
+    examined++;
+    if (baseSprings(fb, cx, cz, ISLAND_KIND) === 0) continue;
+    checks++;
+    const h = baseHash(stage, cx, cz);
+    if (variants.some((v) => stageOutputHash(v, stage, cx, cz) !== h)) return { via: `island witness column (${cx}, ${cz})`, draws: n + 1, examined, checks };
+  }
+  return { via: null, draws: n, examined, checks };
+}
+
+/**
+ * An island springs leaf's bounded island witness search (SP7a Task 20) on the floating_islands base of `base`, over
+ * the columns not in `skip`: the deciding column (`island witness column (cx, cz)`) or null, with the draws taken and
+ * the columns examined and hashed (see `ISLAND_SPRING_STREAM`).
+ */
+export function islandSpringWitness(base: GenContext, path: string, skip: readonly LivenessColumn[] = []): SpringWitnessScan {
+  const info = leafInfo(path);
+  if (!isIslandSpringLeaf(path)) throw new Error(`${path} is not an island springs leaf`);
+  const { fb, hash } = floatingOf(base);
+  return islandSpringWitnessOf(fb, info, variantContexts(fb, info), skip, hash);
 }
 
 // ---------------------------------------------------------------- the depth-band leaves' witnesses (SP6a Task 8)
@@ -2034,10 +2095,17 @@ function decide(base: GenContext, info: LeafInfo, columns: readonly LivenessColu
           : isBiomeLeaf(info.path) ? biomeWitnessOf(base, info, variants, columns, baseHash).via
             : isCaveRuleNoise(info.path) ? caveRuleWitnessOf(base, info, variants, columns, baseHash).via
               : isAquiferLeaf(info.path) ? aquiferWitnessOf(base, info, variants, columns, baseHash).via
+                : isIslandSpringLeaf(info.path) ? islandSpringVia(base, info, columns)
                 : isSpringLeaf(info.path) ? springWitnessOf(base, info, variants, columns, baseHash).via
                 : info.path === CAP_TOP_PATH ? capTopWitness(base).via
                   : info.path === WATER_DEPTH_PATH ? lakeRoofWitnessOf(base, info, variants, columns, baseHash).via : null;
   return w !== null ? { path: info.path, live: true, via: w, cls: null } : { path: info.path, live: false, via: null, cls: intended };
+}
+
+/** An island springs leaf's witness: on the floating_islands base of `base` (`floatingOf`), past `columns`. */
+function islandSpringVia(base: GenContext, info: LeafInfo, columns: readonly LivenessColumn[]): string | null {
+  const { fb, hash } = floatingOf(base);
+  return islandSpringWitnessOf(fb, info, variantContexts(fb, info), columns, hash).via;
 }
 
 /** A depth-band leaf's witness: on `base`, then (cheese, spaghetti 3D, entrances maxY) on its amplified base (ruling P3). */
@@ -2054,7 +2122,8 @@ function bandVia(base: GenContext, info: LeafInfo, variants: readonly GenContext
  * `terrain` leaf, the witness search; a spaghetti scale leaf, a depth-band leaf, a carver leaf, a cave-biome leaf, a
  * rule-4 noise, an aquifer leaf, a springs leaf, `caves.limits.capTop` and `caves.limits.waterDepth` (`terrain` leaves)
  * have their own (ruling P5; Task 8's `bandWitness`; Task 27's `carverWitness`; SP6b Task 17's `biomeWitness`; SP6b
- * Task 22's `caveRuleWitness`; SP7a Task 13's `aquiferWitness`; SP7a Task 19's `springWitness`; Task 9's
+ * Task 22's `caveRuleWitness`; SP7a Task 13's `aquiferWitness`; SP7a Task 19's `springWitness`, Task 20's
+ * `islandSpringWitness` on the floating_islands base; Task 9's
  * `capTopWitness`; SP7a Task 15's `lakeRoofWitness`).
  * `caves.limits.waterDepth` is also tried on the basin class columns (ruling P13).
  */
@@ -2109,7 +2178,9 @@ export function islandColumn(base: GenContext, leaves: readonly LeafInfo[] = isl
  * the carver leaves on their carver witness (`carverWitness`, Task 27, ruling P18), the cave-biome leaves on their biome
  * witness (`biomeWitness`, SP6b Task 17), rule 4's noises on theirs (`caveRuleWitness`, SP6b Task 22), the aquifer
  * leaves on theirs (`aquiferWitness`, SP7a Task 13), the springs' leaves on their mountain witness (`springWitness`,
- * SP7a Task 19) and `caves.limits.capTop` on its floating_islands witness (`capTopWitness`, Task 9).
+ * SP7a Task 19), the island springs' leaf on its island witness on the floating_islands base
+ * (`islandSpringWitness`, SP7a Task 20) and `caves.limits.capTop` on its floating_islands witness (`capTopWitness`,
+ * Task 9).
  */
 export function u2(seedText = '42'): { readonly value: number; readonly results: readonly LivenessResult[] } {
   const base = CREATE(SEED(seedText), RESOLVE('default'));

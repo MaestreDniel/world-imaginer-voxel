@@ -26,9 +26,9 @@ describe('registry', () => {
     // SP7a spec §1.9: the 15 aquifer leaves (each noise one leaf), all first hashed by the terrain stage.
     const aquifer = SCHEMA.leaves.filter((l) => l.path.startsWith('aquifer.'));
     expect(aquifer.length).toBe(15);
-    // SP7a spec §3.5, D21 (Task 19): the water springs' 2 leaves are Terrain scope, first hashed by the terrain stage.
+    // SP7a spec §3.5, D21 (Tasks 19, 20): the water and island springs' 3 leaves are Terrain scope, first hashed by the terrain stage.
     const springs = SCHEMA.leaves.filter((l) => l.path.startsWith('springs.'));
-    expect(springs.map((l) => l.path)).toEqual(['springs.water.tries', 'springs.water.minFall']);
+    expect(springs.map((l) => l.path)).toEqual(['springs.water.tries', 'springs.water.minFall', 'springs.island.tries']);
     for (const { path, meta } of [...caves, ...aquifer, ...springs]) {
       const first = STAGES.find((s) => s.params.some((p) => prefixCovers(p, path)));
       expect([path, first?.id, meta.scope, SCOPE_OF_STAGE[first!.id]]).toEqual([path, 'terrain', 'terrain', 'terrain']);

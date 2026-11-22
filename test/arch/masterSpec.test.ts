@@ -238,7 +238,8 @@
  * The water springs (Task 19) land item 9's springs sentence (§3.12's cave decoration line: springs placed by T, lava
  * lakes D step 1's; the steps line and D's step 1 say so), item 19's `gen/fluids/` line (`aquifer.ts springs.ts
  * settle.ts solidAt.ts (SP7a)`, four `SP7A_MODULES` rows) and item 16's U2 count, 210 (the mountain witness's clause);
- * the terrain stage's params gain 'springs'.
+ * the terrain stage's params gain 'springs'. The island-edge springs (Task 20) move the U2 count to 211 (the island
+ * witness's clause; no `springs.island.minFall`, Task 20's Spec correction).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -3391,6 +3392,8 @@ describe('master spec amendments (SP6b §15)', () => {
 describe('master spec amendments (SP7a §16)', () => {
   /** §6.4's U2 clause for the springs' leaves (Task 19's mountain witness). */
   const U2_SPRINGS_CLAUSE = 'the springs.water.* leaves on a bounded mountain witness (stream columns whose springs step accepts a water spring, where a step changes the T column)';
+  /** §6.4's U2 clause for the island springs' leaves (Task 20's island witness on the floating_islands base). */
+  const U2_ISLAND_SPRINGS_CLAUSE = 'the springs.island.* leaf (`tries`; the least fall is a constant) on a bounded island witness on the floating_islands base (stream columns holding an island whose springs step accepts an island spring, where a step changes the T column)';
   /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 17, 19 and 22 append theirs. */
   const SP7A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+blocks\/kinds\.ts /, 'fluidRules.ts (SP7a; also the fluid surface', 'src/world/blocks/fluidRules.ts'],
@@ -3671,13 +3674,14 @@ describe('master spec amendments (SP7a §16)', () => {
 
   test('§6.4\'s U2 row (SP7a spec §16 item 16)', () => {
     // The schema's count, moved from the SP6b describe: 193 and the 15 aquifer leaves (Task 13), 208; the springs add 6
-    // (Tasks 19-21): 210 with springs.water.* (Task 19; no minY, its Spec correction).
+    // (Tasks 19-21): 210 with springs.water.* (Task 19; no minY, its Spec correction), 211 with springs.island.* (Task 20;
+    // no minFall, its Spec correction).
     const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
     expect(u2, 'no U2 row in §6.4').toBeDefined();
     const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
-    expect(n).toBe(210);
+    expect(n).toBe(211);
     expect(u2).toContain('; SP7a: the aquifer.* leaves are decided on the class columns, the cave columns first, else on a bounded aquifer witness (stream columns whose tagged air holds what the leaf acts on: cave air at or below y 63, under land or sea, below the lava levels for the lava leaves, the abyss for `aquifer.abyssMargin`, where a step changes the T column); U2 covers 208 leaves (amended by SP7a);');
-    expect(u2).toContain(`; U2 covers 208 leaves (amended by SP7a); ${U2_SPRINGS_CLAUSE}; U2 covers ${n} leaves (amended by SP7a) |`);
+    expect(u2).toContain(`; U2 covers 208 leaves (amended by SP7a); ${U2_SPRINGS_CLAUSE}; U2 covers 210 leaves (amended by SP7a); ${U2_ISLAND_SPRINGS_CLAUSE}; U2 covers ${n} leaves (amended by SP7a) |`);
   });
 
   test('the terrain stage 6 and GENERATOR_VERSION 10 (SP7a §15.3)', () => {

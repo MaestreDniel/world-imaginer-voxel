@@ -36,9 +36,10 @@ export const TUNNELS_VIA = 'cave column (-1986, -30779)';
  * `caves.noodles.threshold` (R31): 172; SP6b Task 17's 15 `caves.biomes.*` leaves (Spec correction 5): 187; SP6b Task
  * 19's rock floor (`caves.noises.floor`, `caves.floor.y`, `.amp`, `.span`): 191; SP6b Task 22's rule-4 noises
  * (`surface.noises.cavePatch`, `strataOffset`): 193; SP7a Task 13's 15 `aquifer.*` leaves (the plan's Spec correction
- * 5): 208; SP7a Task 19's 2 `springs.water.*` leaves (no `minY`, Task 19's Spec correction): 210.
+ * 5): 208; SP7a Task 19's 2 `springs.water.*` leaves (no `minY`, Task 19's Spec correction): 210; SP7a Task 20's
+ * `springs.island.tries` (no `minFall`, Task 20's Spec correction): 211.
  */
-export const U2_LEAVES = 210;
+export const U2_LEAVES = 211;
 /** The aquifer's leaves (SP7a spec §1.9, Task 13), in schema order; each noise counts as one leaf. */
 export const AQUIFER_LEAVES = [
   'aquifer.enabled', 'aquifer.surfaceBand',
@@ -48,6 +49,8 @@ export const AQUIFER_LEAVES = [
 ] as const;
 /** The water springs' leaves (SP7a spec §3.5, Task 19), in schema order. */
 export const SPRING_LEAVES = ['springs.water.tries', 'springs.water.minFall'] as const;
+/** The island springs' leaves (SP7a spec §3.3, §3.5, Task 20; their least fall is the constant `ISLAND_SPRING_MIN_FALL`). */
+export const ISLAND_SPRING_LEAVES = ['springs.island.tries'] as const;
 /** The cave-biome leaves (SP6b Task 17), decided on the class columns or on their bounded biome witness. */
 export const BIOME_LEAVES = [
   'caves.biomes.lush.hMin', 'caves.biomes.lush.depthMin', 'caves.biomes.lush.depthMax',

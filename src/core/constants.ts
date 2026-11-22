@@ -97,6 +97,13 @@ export const COL_FIELD_BOUNDS = Object.freeze({
 export const ISLAND_RUN_MIN_BOTTOM = 181;
 
 /**
+ * An island-edge spring's least fall (SP7a spec §3.3, D3; `gen/fluids/springs.ts`): its outlet and the 8 voxels below it
+ * must be open air (§3.1's `minFall`). A constant, not a leaf (the plan's Task 20, a Spec correction, ruling R18): an
+ * island edge drops 50-135 blocks, so U2's steps 7 and 9 changed no column in 12,000 island columns.
+ */
+export const ISLAND_SPRING_MIN_FALL = 8;
+
+/**
  * The largest density and rules column costs tier 2 accepts (SP3d spec §1.7, `gen/inspect/cost.ts`). Density: 64 × the
  * SP3d default tree's 14,907,917, kept as SP6a's cap (SP6a spec D24): about 35 × SP6a's default. Rules: 64 × the
  * SP6a default rules' 2,169,856 (163 nodes × 256 × (1 + 51), its largest depth bound being a floor `stoneDepth`

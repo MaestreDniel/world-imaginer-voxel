@@ -1,7 +1,7 @@
 /**
  * U2's liveness tests (`src/metrics/liveness.ts`) for SP7a's aquifer leaves (its spec §1.9, §13.7, Task 13) and its
- * springs' leaves (§3.5, Task 19; the plan's Spec correction 5: each leaf group lands with its reader and its
- * witnesses). In the `liveness` shard of CI's unit jobs (`.github/scripts/unitShards.mjs`); the pins and helpers it
+ * springs' leaves (§3.5: the water springs', Task 19; the island springs', §3.3, Task 20; the plan's Spec correction 5:
+ * each leaf group lands with its reader and its witnesses). In the `liveness` shard of CI's unit jobs (`.github/scripts/unitShards.mjs`); the pins and helpers it
  * shares with the other liveness files are in `fixtures/liveness.ts`.
  */
 import { describe, expect, test } from 'vitest';
@@ -10,7 +10,8 @@ import { getPath } from '../../src/core/params/kit';
 import { SCHEMA } from '../../src/core/params/schema';
 import { checkRegistry, prefixCovers, STAGES } from '../../src/core/stage/registry';
 import {
-  aquiferWitness, CAVE_SLOTS, caveColumn, caveSlotLeaves, intendedClass, leafLiveness, perturbations, springWitness, u2Leaves,
+  aquiferWitness, CAVE_SLOTS, caveColumn, caveSlotLeaves, intendedClass, islandSpringWitness, leafLiveness, perturbations, springWitness,
+  u2Leaves,
 } from '../../src/metrics/liveness';
 import { newSpringList } from '../../src/gen/fluids/springs';
 import { terrainSpringsDebug } from '../../src/gen/pipeline/terrainStage';
@@ -19,7 +20,10 @@ import { cavePickerOf, fillCaveColumnPass, newCaveColumnPass } from '../../src/g
 import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
 import { aquiferInputs, inAbyssMargin } from '../../src/gen/fluids/aquifer';
 import { createStore } from '../../src/world/store/store';
-import { AQUIFER_LEAVES, CTX, SPRING_LEAVES, U2_LEAVES, columns, leaf } from './fixtures/liveness';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { seedFromInput } from '../../src/core/seed';
+import { createGenContext } from '../../src/gen/context';
+import { AQUIFER_LEAVES, CTX, ISLAND_SPRING_LEAVES, SPRING_LEAVES, U2_LEAVES, columns, leaf } from './fixtures/liveness';
 
 /**
  * Each aquifer leaf's U2 verdict at seed 42 (the class columns, the cave columns among them and the intended cave class
@@ -72,7 +76,8 @@ describe('the aquifer\'s leaves in U2 (SP7a spec §1.9, §13.7; Task 13, Spec co
   test('the 15 aquifer leaves join SP6b\'s 193 (208; the springs\' follow), each a U2 leaf of the T stage meant for the cave class, in no cave slot\'s acceptance', () => {
     expect(SCHEMA.leaves.filter((l) => l.path.startsWith('aquifer.')).map((l) => l.path)).toEqual([...AQUIFER_LEAVES]);
     const covered = new Set(u2Leaves().map((l) => l.path));
-    expect([covered.size, U2_LEAVES, U2_LEAVES - SPRING_LEAVES.length, U2_LEAVES - SPRING_LEAVES.length - AQUIFER_LEAVES.length]).toEqual([210, 210, 208, 193]);
+    const springs = SPRING_LEAVES.length + ISLAND_SPRING_LEAVES.length;
+    expect([covered.size, U2_LEAVES, U2_LEAVES - springs, U2_LEAVES - springs - AQUIFER_LEAVES.length]).toEqual([211, 211, 208, 193]);
     const slotted = new Set(CAVE_SLOTS.flatMap((slot) => caveSlotLeaves(slot).map((l) => l.path)));
     for (const p of AQUIFER_LEAVES) {
       expect([p, covered.has(p), leaf(p).meta.scope, leaf(p).meta.stage, intendedClass(p), slotted.has(p)]).toEqual([p, true, 'terrain', 'terrain', 'cave', false]);
@@ -136,10 +141,9 @@ const SPRING_VERDICT: Readonly<Record<(typeof SPRING_LEAVES)[number], string>> =
 };
 
 describe('the water springs\' leaves in U2 (SP7a spec §3.5, §13.7; Task 19, Spec correction 5)', () => {
-  test('U2_LEAVES is 210: SP6b\'s 193, the 15 aquifer leaves and the 2 water springs leaves, each a U2 leaf of the T stage (Terrain scope, D21), in no cave slot\'s acceptance', () => {
-    expect(SCHEMA.leaves.filter((l) => l.path.startsWith('springs.')).map((l) => l.path)).toEqual([...SPRING_LEAVES]);
+  test('the 2 water springs leaves, each a U2 leaf of the T stage (Terrain scope, D21), in no cave slot\'s acceptance', () => {
+    expect(SCHEMA.leaves.filter((l) => l.path.startsWith('springs.water.')).map((l) => l.path)).toEqual([...SPRING_LEAVES]);
     const covered = new Set(u2Leaves().map((l) => l.path));
-    expect([covered.size, U2_LEAVES]).toEqual([210, 210]);
     const slotted = new Set(CAVE_SLOTS.flatMap((slot) => caveSlotLeaves(slot).map((l) => l.path)));
     for (const p of SPRING_LEAVES) {
       expect([p, covered.has(p), leaf(p).meta.scope, leaf(p).meta.stage, slotted.has(p)]).toEqual([p, true, 'terrain', 'terrain', false]);
@@ -169,5 +173,58 @@ describe('the water springs\' leaves in U2 (SP7a spec §3.5, §13.7; Task 19, Sp
     }
     console.log(`the water springs' leaves:\n${lines.join('\n')}`);
     expect(() => springWitness(CTX, 'aquifer.enabled')).toThrow('not a springs leaf');
+  }, 600_000);
+});
+
+/**
+ * The island springs leaf's U2 verdict at seed 42 (SP7a spec §3.3, §13.7; Task 20; the least fall is the constant
+ * `ISLAND_SPRING_MIN_FALL`, not a leaf: Task 20's Spec correction, ruling R18): dead on the default base's class
+ * columns (`islands.enabled` is off there, so no island try runs), live on its bounded island witness on the
+ * floating_islands base (`islandSpringWitness`: the first examined column of `sp7a.liveness.islandSprings` whose
+ * lattice holds an islandMask above 0, whose springs step on that base accepts an island spring and whose T column a
+ * step changes).
+ */
+const ISLAND_SPRING_VERDICT: Readonly<Record<(typeof ISLAND_SPRING_LEAVES)[number], string>> = {
+  'springs.island.tries': 'island witness column (11988, -20453)',
+};
+
+describe('the island springs\' leaves in U2 (SP7a spec §3.3, §3.5, §13.7; Task 20, Spec correction 5)', () => {
+  test('U2_LEAVES is 211: SP6b\'s 193, the 15 aquifer leaves, the 2 water springs leaves and the island springs leaf, each a U2 leaf of the T stage (Terrain scope, D21), in no cave slot\'s acceptance', () => {
+    expect(SCHEMA.leaves.filter((l) => l.path.startsWith('springs.')).map((l) => l.path)).toEqual([...SPRING_LEAVES, ...ISLAND_SPRING_LEAVES]);
+    const covered = new Set(u2Leaves().map((l) => l.path));
+    expect([covered.size, U2_LEAVES]).toEqual([211, 211]);
+    const slotted = new Set(CAVE_SLOTS.flatMap((slot) => caveSlotLeaves(slot).map((l) => l.path)));
+    for (const p of ISLAND_SPRING_LEAVES) {
+      expect([p, covered.has(p), leaf(p).meta.scope, leaf(p).meta.stage, slotted.has(p)]).toEqual([p, true, 'terrain', 'terrain', false]);
+      expect(STAGES.find((s) => s.params.some((q) => prefixCovers(q, p)))?.id).toBe('terrain');
+    }
+    expect(checkRegistry(SCHEMA, STAGES)).toEqual([]);
+  });
+
+  test('springs.island.tries is decided on the island witness: a floating_islands column whose springs step accepts an island spring at the defaults, where a step changes the T column', () => {
+    const all = [...columns(), ...CAVE_SLOTS.map((slot) => caveColumn(CTX, slot)!)];
+    const fi = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
+    const lines: string[] = [];
+    const list = newSpringList();
+    for (const p of ISLAND_SPRING_LEAVES) {
+      const r = leafLiveness(CTX, p, all);
+      lines.push(`${p}: ${r.live ? 'live' : 'DEAD'} via ${r.via}`);
+      const w = islandSpringWitness(CTX, p, all);
+      lines.push(`${p}: witness ${w.via} (draws ${w.draws}, examined ${w.examined}, checks ${w.checks})`);
+      expect([p, r.live, r.via]).toEqual([p, true, ISLAND_SPRING_VERDICT[p]]);
+      expect([p, w.via]).toEqual([p, ISLAND_SPRING_VERDICT[p]]);
+      expect(w.checks, p).toBeLessThanOrEqual(64);
+      expect(w.examined, p).toBeLessThanOrEqual(2048);
+      expect(w.draws, p).toBeLessThanOrEqual(65536);
+      // The witness column's springs step on the floating_islands base accepts an island spring (re-derived).
+      const [cx, cz] = w.via!.slice('island witness column ('.length, -1).split(', ').map(Number) as [number, number];
+      terrainSpringsDebug(fi, cx, cz, list);
+      expect(Array.from(list.kind.subarray(0, list.n)).filter((k) => k === 1).length, p).toBeGreaterThan(0);
+      // On the default base (islands off) the same column holds no island spring.
+      terrainSpringsDebug(CTX, cx, cz, list);
+      expect(Array.from(list.kind.subarray(0, list.n)).filter((k) => k === 1).length, p).toBe(0);
+    }
+    console.log(`the island springs' leaves:\n${lines.join('\n')}`);
+    expect(() => islandSpringWitness(CTX, 'springs.water.tries')).toThrow('not an island springs leaf');
   }, 600_000);
 });

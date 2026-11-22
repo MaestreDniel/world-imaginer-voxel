@@ -17,10 +17,15 @@
  *   island faces are left to their own kind); y = yLo + ⌊u·(yHi − yLo + 1)⌋, rejected when yHi < yLo (no
  *   y floor: Task 19's Spec correction, ruling R17); the valid set every `CARVABLE` terrain state but sand, red_sand
  *   and gravel.
+ * - Island edges (§3.3, D3), only with `islands.enabled`: the island runs of the try's position (its solid runs whose
+ *   bottom ≥ `ISLAND_RUN_MIN_BOTTOM`, 181, SP3e's runs, bottom to top, from T's arrays); the run k = ⌊u·runs⌋ and
+ *   y = bottom + 1 + ⌊u2·(top − bottom − 1)⌋ in it, rejected when the position holds no island run or the run is under
+ *   3 high; outlet and fall as the common rule with `ISLAND_SPRING_MIN_FALL` (8, a constant: Task 20's Spec correction,
+ *   ruling R18); the valid set water's.
  * The kinds run in a fixed order (water, island, lava; the list's kind byte 0, 1, 2); a voxel already accepted is not
  * accepted twice. Follows the gen determinism rules.
  */
-import { ISLAND_RUN_MIN_BOTTOM, MIN_Y } from '../../core/constants';
+import { ISLAND_RUN_MIN_BOTTOM, ISLAND_SPRING_MIN_FALL, MIN_Y } from '../../core/constants';
 import { deriveSeed, hash2, type Seed64 } from '../../core/hash';
 import { Xoshiro128 } from '../../core/rng';
 import { CARVABLE, GRAVEL, RED_SAND, SAND } from '../../world/blocks/index';
@@ -34,6 +39,7 @@ import { terrainSolidAt } from './solidAt';
 
 const Y0 = MIN_Y;
 const ISLAND_BOTTOM = ISLAND_RUN_MIN_BOTTOM;
+const ISLAND_MIN_FALL = ISLAND_SPRING_MIN_FALL;
 const CARVE_OK = CARVABLE;
 const SAND_ = SAND;
 const RED_SAND_ = RED_SAND;
@@ -149,6 +155,34 @@ function groundTop(solid: Uint8Array, p: number): number {
   return (i >> 8) + Y0;
 }
 
+/** The most island runs a position holds: one per two voxels of y 181 … 319. */
+const MAX_RUNS = 70;
+/** `islandRuns`' output: the runs' bottom and top y, bottom to top. */
+const RUN_BOTTOM = new Int16Array(MAX_RUNS);
+const RUN_TOP = new Int16Array(MAX_RUNS);
+
+/**
+ * The island runs of position p (SP3e's runs: maximal solid runs whose bottom voxel is at y ≥ `ISLAND_RUN_MIN_BOTTOM`)
+ * into `RUN_BOTTOM` and `RUN_TOP`, bottom to top; returns their number. A run through y 180 is not one.
+ */
+function islandRuns(solid: Uint8Array, p: number): number {
+  let i = 256 * (ISLAND_BOTTOM - 1 - Y0) + p;
+  let inRun = solid[i] !== 0;
+  let bottom = inRun ? Y0 : 0;
+  let n = 0;
+  for (let y = ISLAND_BOTTOM; y <= 319; y++) {
+    i += 256;
+    const s = solid[i] !== 0;
+    if (s && !inRun) { inRun = true; bottom = y; }
+    else if (!s && inRun) {
+      inRun = false;
+      if (bottom >= ISLAND_BOTTOM) { RUN_BOTTOM[n] = bottom; RUN_TOP[n++] = y - 1; }
+    }
+  }
+  if (inRun && bottom >= ISLAND_BOTTOM) { RUN_BOTTOM[n] = bottom; RUN_TOP[n++] = 319; }
+  return n;
+}
+
 /** The column `springsColumn` decides (its arrays, origin and probes), read by the helpers below; cleared after. */
 const COL = {
   solid: null as Uint8Array | null,
@@ -211,7 +245,7 @@ function accept(lx: number, y: number, lz: number, kind: number, d: number): voi
 }
 
 /**
- * The springs of s's column (§3.1-§3.2) into `out` (cleared first), from T's arrays before any spring: `solid` (1
+ * The springs of s's column (§3.1-§3.3) into `out` (cleared first), from T's arrays before any spring: `solid` (1
  * solid), `state` (the surface pass's states at solid voxels), `tags` (the cave bytes), `fluid` (the aquifer's fluid
  * bytes) and `top` (per position `lz·16 + lx`, the highest solid y), each indexed as T's (98,304 entries, `top` 256);
  * `pass` is the column's cave-biome pass (its Y0 bounds the lava kind's range, Task 21); `probes` reads the voxels
@@ -249,6 +283,22 @@ export function springsColumn(
         const y = yLo + Math.floor(u * (yHi - yLo + 1));
         if (!accepts(lx, y, lz, d, w.minFall, waterRock)) continue;
         accept(lx, y, lz, 0, d);
+      }
+    }
+    const isl = ctx.params.springs.island;
+    if (islands && isl.tries > 0) {
+      springTries(ctx.seed, 'island', cx, cz, isl.tries, TRIES);
+      for (let t = 0; t < isl.tries; t++) {
+        const o = PER_TRY * t;
+        const lx = TRIES[o]!, lz = TRIES[o + 1]!, d = TRIES[o + 2]!, u = TRIES[o + 3]!, u2 = TRIES[o + 4]!;
+        const runs = islandRuns(solid, lz * 16 + lx);
+        if (runs === 0) continue;
+        const k = Math.floor(u * runs);
+        const bottom = RUN_BOTTOM[k]!, runTop = RUN_TOP[k]!;
+        if (runTop - bottom < 2) continue;
+        const y = bottom + 1 + Math.floor(u2 * (runTop - bottom - 1));
+        if (!accepts(lx, y, lz, d, ISLAND_MIN_FALL, waterRock)) continue;
+        accept(lx, y, lz, 1, d);
       }
     }
   } finally {

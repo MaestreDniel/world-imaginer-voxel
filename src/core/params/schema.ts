@@ -415,6 +415,11 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
       tries: int(3, { ...TERRAIN, label: 'Tries', doc: 'Tries per chunk: each picks a position, a direction and a height, and becomes a spring where the rule holds (more tries → more waterfalls).', min: 0, max: 32 }),
       minFall: int(8, { ...TERRAIN, label: 'Least fall', doc: 'The outlet and this many voxels below it must be open air, and the spring sits at least this many blocks above the surface estimate at its outlet.', unit: 'blocks', min: 2, max: 64 }),
     }),
+    // SP7a spec §3.3, D3 (Task 20): read only with `islands.enabled`; `tries` 4 is the spec's estimate (D31 tunes it). The
+    // least fall is the constant ISLAND_SPRING_MIN_FALL (8), not a leaf (Task 20's Spec correction, ruling R18).
+    island: group('Island edges', 'Water springs in the sides of floating islands (SP7a spec §3.3; only with Islands enabled): a try picks one of its position\'s island runs and a height inside it, and its waterfall falls from the island\'s edge to the ground or the sea below.', {
+      tries: int(4, { ...TERRAIN, label: 'Tries', doc: 'Tries per chunk: each picks a position, a direction, one of the position\'s island runs and a height in it, and becomes a spring where the rule holds (more tries → more island waterfalls).', min: 0, max: 32 }),
+    }),
   }),
 });
 

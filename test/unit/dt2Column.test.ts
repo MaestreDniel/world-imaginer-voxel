@@ -527,6 +527,28 @@ describe('DT2 spring voxels (SP7a spec §3, D21; Task 19)', () => {
     expect(acc.problems).toEqual([]);
     expect([acc.probeBulk, acc.surfaceProbeBulk, acc.aquiferProbe, acc.tagProbe]).toEqual([0, 0, 0, 0]);
   }, 120_000);
+
+  it('a floating_islands column holding an island spring (SP7a §3.3, Task 20), the spring voxel checked, reads probeBulk and surfaceProbeBulk 0: Task 19\'s exclusion covers every kind', () => {
+    // (−14, 15): the island spring at (15, 220, 6) facing south (springs.test.ts' ISLAND_SPRINGS[0]).
+    const ISLAND = [-14, 15] as const;
+    const [x, y, z] = [16 * ISLAND[0] + 15, 220, 16 * ISLAND[1] + 6] as const;
+    const label = "profile floating_islands, seed '42'";
+    const ctx = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
+    const setup = dt2Setup(ctx, label);
+    expect([setup.solidAt(x, y, z), setup.fluidAt(x, y, z), surfaceProbe(setup.sc, x, y, z).state !== AIR]).toEqual([true, 0, true]);
+    const acc = newDt2Acc(label);
+    const seen: Dt2Voxel[] = [];
+    let block = -1;
+    dt2Column(ctx, ...ISLAND, new Xoshiro128(19), acc, {
+      extra: { count: 2048, yLo: y, yHi: y }, voxel: (v) => seen.push(v), column: (view) => { block = view.block(x & 15, y, z & 15) * 256 + view.fluid(x & 15, y, z & 15); },
+    });
+    expect(block, 'the stored island spring: air, WATER_SOURCE').toBe(AIR * 256 + WATER_SOURCE);
+    const hits = seen.filter((v) => v.x === x && v.y === y && v.z === z).length;
+    expect(hits, 'the spring voxel is checked').toBeGreaterThan(0);
+    expect(acc.springVoxels).toBe(hits);
+    expect(acc.problems).toEqual([]);
+    expect([acc.probeBulk, acc.surfaceProbeBulk, acc.aquiferProbe, acc.tagProbe]).toEqual([0, 0, 0, 0]);
+  }, 120_000);
 });
 
 describe('DT2 tagProbe reads the cave kind (SP6b spec §2.1, Spec correction 4; Task 8)', () => {

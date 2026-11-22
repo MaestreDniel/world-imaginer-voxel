@@ -4,13 +4,17 @@
  * columns of seed '42': border tries decided with the point probes against a full-knowledge oracle reading both columns'
  * T arrays, and T's writes (air plus `WATER_SOURCE`, cave byte 0, the seed section's bit). The rejection cases pass
  * `minFall` explicitly (rulings P30); the water range has no y floor (Task 19's Spec correction, ruling R17).
+ * Island-edge springs (§3.3, D3; Task 20): the island range on hand-built island runs, with `islands.enabled` off, and
+ * 8 island springs of seed '42' floating_islands written by T and falling into the sky's air.
  */
 import { describe, expect, test } from 'vitest';
 import type { Seed64 } from '../../src/core/hash';
 import type { ParamsPatch } from '../../src/core/params/schema';
 import { cavePickerOf, fillCaveColumnPass, newCaveColumnPass, type CaveColumnPass } from '../../src/gen/biomes/cavePicker';
 import { buildColumnSample, newColumnSample, readFieldHalo, type ColumnSample } from '../../src/gen/column/columnStage';
-import type { GenContext } from '../../src/gen/context';
+import { resolveProfile } from '../../src/core/params/profiles';
+import { seedFromInput } from '../../src/core/seed';
+import { createGenContext, type GenContext } from '../../src/gen/context';
 import { newSpringList, springProbesOf, springsColumn, springTries, type SpringList, type SpringProbes } from '../../src/gen/fluids/springs';
 import { terrainSpringsDebug } from '../../src/gen/pipeline/terrainStage';
 import { fillColumnT } from '../../src/metrics/region';
@@ -381,6 +385,126 @@ describe('real columns of seed \'42\' (SP7a §3.1, D21)', () => {
     }
     expect(other).toBe(0);
   }, 60_000);
+});
+
+// ---------------------------------------------------------------- island-edge springs (Task 20)
+
+/** A context with seed '42', islands on or off, no water tries and `island` as its island leaves. */
+const islandCtx = (island: { tries: number }, enabled = true): GenContext =>
+  ctxFor('42', { islands: { enabled }, springs: { water: { tries: 0 }, island } });
+
+/**
+ * Island runs over open air for the try (lx, lz, d) of column (cx, cz): stone up to `ground` everywhere, and each run
+ * of `runs` ([bottom, top], world y) solid everywhere but the outlet's position, which is open from `ground` + 1 up
+ * but at the outlet-column heights in `blocks` (solid there).
+ */
+function islandWorld(cx: number, cz: number, lx: number, lz: number, d: number, ground: number, runs: ReadonlyArray<readonly [number, number]>, blocks: readonly number[] = []): World {
+  const ox = 16 * cx + lx + DX[d]!, oz = 16 * cz + lz + DZ[d]!;
+  return {
+    solid: (x, y, z) => y <= ground || (x === ox && z === oz ? blocks.includes(y) : runs.some(([b, t]) => y >= b && y <= t)),
+    state: () => STONE,
+    cave: () => 0,
+    fluid: () => 0,
+  };
+}
+
+/** The first chunk (cx, 0), cx ≥ 0, whose first island try of seed '42' lies at lx, lz in 1 … 14, with its draws. */
+function innerIslandTry(): { cx: number; lx: number; lz: number; d: number; u: number; u2: number } {
+  const t = new Float64Array(5);
+  for (let cx = 0; ; cx++) {
+    springTries(ctxFor('42').seed, 'island', cx, 0, 1, t);
+    if (t[0]! >= 1 && t[0]! <= 14 && t[1]! >= 1 && t[1]! <= 14) return { cx, lx: t[0]!, lz: t[1]!, d: t[2]!, u: t[3]!, u2: t[4]! };
+  }
+}
+
+/** The open voxels below world voxel (x, y, z) of `w` down to the first solid or wet one (the fall's length). */
+function fallBelow(w: World, x: number, y: number, z: number): number {
+  let k = 0;
+  while (y - k - 1 > -64 && !w.solid(x, y - k - 1, z) && w.fluid(x, y - k - 1, z) === 0) k++;
+  return k;
+}
+
+describe('island-edge springs on hand-built columns (SP7a §3.3, D3)', () => {
+  const { cx, lx, lz, d, u, u2 } = innerIslandTry();
+  const x = 16 * cx + lx, z = lz;
+  const ox = x + DX[d]!, oz = z + DZ[d]!;
+  const ctx = islandCtx({ tries: 1 });
+  /** The run (bottom 190, top 205) over open air down to the ground at y 60. */
+  const RUN = [190, 205] as const;
+  const one = islandWorld(cx, 0, lx, lz, d, 60, [RUN]);
+  /** y = bottom + 1 + ⌊u2·(top − bottom − 1)⌋: 191 … 204. */
+  const Y = 191 + Math.floor(u2 * 14);
+
+  test('an island run (bottom 190, top 205) over open air accepts the island try at y = bottom + 1 + ⌊u2·(top − bottom − 1)⌋, its fall reaching far below (to the ground)', () => {
+    expect(decide(ctx, one, cx, 0, 55)).toEqual([[vi(lx, Y, lz), 1, d]]);
+    expect(Y).toBeGreaterThanOrEqual(191);
+    expect(Y).toBeLessThanOrEqual(204);
+    // The fall below the outlet reaches the ground at y 60: 130 blocks or more, far beyond ISLAND_SPRING_MIN_FALL.
+    expect(fallBelow(one, ox, Y, oz)).toBe(Y - 61);
+    expect(Y - 61).toBeGreaterThanOrEqual(130);
+    // The run is k = ⌊u·runs⌋ of the position's island runs, bottom to top: with a second run (230 … 245) the try takes it when u ≥ 0.5.
+    const two = islandWorld(cx, 0, lx, lz, d, 60, [RUN, [230, 245]]);
+    const y2 = (u < 0.5 ? 191 : 231) + Math.floor(u2 * 14);
+    expect(decide(ctx, two, cx, 0, 55)).toEqual([[vi(lx, y2, lz), 1, d]]);
+  });
+
+  test('with islands.enabled false no island try runs', () => {
+    expect(decide(islandCtx({ tries: 1 }, false), one, cx, 0, 55)).toEqual([]);
+    // Nor at 32 tries: every try of the chunk is skipped.
+    expect(decide(islandCtx({ tries: 32 }, false), one, cx, 0, 55)).toEqual([]);
+  });
+
+  test('a try whose column holds no island run is rejected: no run above the ground; a run reaching below 181 (bottom 175); a run under 3 high (190 … 191); and the fall under ISLAND_SPRING_MIN_FALL', () => {
+    expect(decide(ctx, islandWorld(cx, 0, lx, lz, d, 60, []), cx, 0, 55), 'no run').toEqual([]);
+    expect(decide(ctx, islandWorld(cx, 0, lx, lz, d, 60, [[175, 205]]), cx, 0, 55), 'bottom 175 < 181').toEqual([]);
+    expect(decide(ctx, islandWorld(cx, 0, lx, lz, d, 60, [[190, 191]]), cx, 0, 55), 'under 3 high').toEqual([]);
+    // A run whose bottom is 181 is an island run (SP3e's runs: bottom ≥ 181): 182 … 196.
+    expect(decide(ctx, islandWorld(cx, 0, lx, lz, d, 60, [[181, 196]]), cx, 0, 55), 'bottom 181').toEqual([[vi(lx, 182 + Math.floor(u2 * 14), lz), 1, d]]);
+    // A block in the outlet's column 8 below the spring leaves a fall of 7 under ISLAND_SPRING_MIN_FALL (8); 9 below, a fall of 8.
+    expect(decide(ctx, islandWorld(cx, 0, lx, lz, d, 60, [RUN], [Y - 8]), cx, 0, 55), 'fall of 7').toEqual([]);
+    expect(decide(ctx, islandWorld(cx, 0, lx, lz, d, 60, [RUN], [Y - 9]), cx, 0, 55), 'fall of 8').toEqual([[vi(lx, Y, lz), 1, d]]);
+  });
+});
+
+/**
+ * The first 8 island springs of seed '42' floating_islands at the defaults, [cx, cz, lx, y, lz, direction]: a ring scan
+ * from chunk (0, 0) outward (ring r, then cz, then cx) over the columns whose 7 × 7 lattice holds an islandMask above 0
+ * (1,584 such columns in rings 0-36 gave 12, about 1 per 130), each column's island-kind springs from
+ * `terrainSpringsDebug`. (−30, 0)'s outlet lies across its east border.
+ */
+const ISLAND_SPRINGS: ReadonlyArray<readonly [number, number, number, number, number, number]> = [
+  [-14, 15, 15, 220, 6, 2], [-20, 5, 5, 209, 5, 0], [-21, 0, 9, 238, 7, 2], [-23, -16, 1, 233, 14, 3],
+  [-26, -1, 4, 190, 6, 2], [-27, -3, 10, 199, 13, 0], [-30, 0, 15, 210, 15, 1], [-31, -4, 3, 230, 5, 3],
+];
+
+describe('island-edge springs at seed \'42\' floating_islands (SP7a §3.3, D3)', () => {
+  test('8 accepted island springs found by a scan: each written by T as air plus WATER_SOURCE (cave 0), each falling ≥ 8 from its outlet into the sky\'s air (untagged, dry air)', () => {
+    const fi = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
+    expect([fi.params.islands.enabled, fi.params.springs.island]).toEqual([true, { tries: 4 }]);
+    const s = createStore({ shared: false, maxBlockBytes: 64 * MiB, maxByteBytes: 64 * MiB });
+    const view = (cx: number, cz: number) => {
+      if (s.proto(cx, cz) === null) expect(fillColumnT(s, fi, cx, cz, () => false)).toBe(true);
+      return s.proto(cx, cz)!;
+    };
+    const out = newSpringList();
+    const falls: number[] = [];
+    for (const [cx, cz, lx, y, lz, d] of ISLAND_SPRINGS) {
+      terrainSpringsDebug(fi, cx, cz, out);
+      const islandList = listOf(out).filter(([, kind]) => kind === 1);
+      expect([cx, cz, islandList[0]]).toEqual([cx, cz, [vi(lx, y, lz), 1, d]]);
+      const v = view(cx, cz);
+      expect([cx, cz, v.block(lx, y, lz), v.fluid(lx, y, lz), v.cave(lx, y, lz)]).toEqual([cx, cz, AIR, WATER_SOURCE, 0]);
+      // The outlet's column, possibly the neighbour's: air, dry and untagged from the spring's y down by ≥ ISLAND_SPRING_MIN_FALL + 1.
+      const ox = 16 * cx + lx + DX[d]!, oz = 16 * cz + lz + DZ[d]!;
+      const ov = view(ox >> 4, oz >> 4);
+      let fall = 0;
+      while (ov.block(ox & 15, y - fall - 1, oz & 15) === AIR && ov.fluid(ox & 15, y - fall - 1, oz & 15) === 0 && ov.cave(ox & 15, y - fall - 1, oz & 15) === 0) fall++;
+      expect([cx, cz, ov.block(ox & 15, y, oz & 15), ov.fluid(ox & 15, y, oz & 15), ov.cave(ox & 15, y, oz & 15)]).toEqual([cx, cz, AIR, 0, 0]);
+      expect(fall, `(${cx}, ${cz}) fall`).toBeGreaterThanOrEqual(8);
+      falls.push(fall);
+    }
+    console.log(`island springs' falls below the outlet: ${falls.join(', ')}`);
+  }, 120_000);
 });
 
 /** `springTries(seed '42', 'water', 0, 0, 3)` (Task 19's pin). */
