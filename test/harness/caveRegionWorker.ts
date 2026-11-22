@@ -22,14 +22,17 @@
  * T window (the biomes group's default-profile region, Task 27); then C7's construction counts, `regionCounts` against
  * `referenceCarve`, whose raw reference array never leaves the thread (ruling P6), except in the biomes group, whose
  * job registers no `carverReference`; then the A parts' counts (`water.ts`' `waterRegionCounts`, with the margin
- * barriers' probes), A2's by origin (`a2RegionCounts`, Task 23) and, on the seed '42' regions, SP7a's review poses
- * (`waterExamplesOf`, each region's profile's). Before the settle, the region's springs are found from its proto
- * (`springsOfRegion`), and each settle tile also gives A2's origins and the water/lava contacts
+ * barriers' probes), A2's by origin (`a2RegionCounts`, Task 23), A5's (`springFacts`, `a5RegionCounts`, with the steep
+ * land of `steepMaskOf`, Task 24) and, on the seed '42' regions, SP7a's review poses (`waterExamples` and A5's
+ * `a5Examples`, by distance to the region's profile's spawn, found once). Before the settle, the region's springs are
+ * found from its proto (`springsOfRegion`), and each settle tile also gives A2's origins and the water/lava contacts
  * (`referenceSettleOrigins`, over the tile's own fixed points). C7.waterWall reads the settled bytes on the interior, the
  * proto's rules reader for the spread sides and the contacts (`caveC7C9Counts`' `water`).
  */
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
+import { findSpawn } from '../../src/gen/column/spawn';
+import { createGenContext } from '../../src/gen/context';
 import { createDensityContext } from '../../src/gen/density/context';
 import type { SpringList } from '../../src/gen/fluids/springs';
 import { attachStore, type StoreHandles } from '../../src/world/store/store';
@@ -44,8 +47,9 @@ import { referenceCarve, referenceSettle, referenceSettleKey, referenceSettleOri
 import { regionView, type RegionView } from './regionView';
 import { genContextWith } from './regionWorker';
 import {
-  a2RegionCounts, loadWaterRegion, marginProbes, protoRuleReader, regionSpringList, regionVoxelOf, settledBytes, springsOfRegion, waterExamplesOf,
-  waterRegionCounts, type A2RegionCounts, type WaterBox, type WaterExampleId, type WaterRegionCounts,
+  a2RegionCounts, a5Examples, a5RegionCounts, loadWaterRegion, marginProbes, protoRuleReader, regionSpringList, regionVoxelOf, settledBytes, springFacts,
+  springsOfRegion, steepMaskOf, waterExamples, waterRegionCounts, type A2RegionCounts, type A5Examples, type A5RegionCounts, type WaterBox,
+  type WaterExampleId, type WaterRegionCounts,
 } from './water';
 
 /** One region's measurements (ruling P6): every field structured-cloneable. */
@@ -86,7 +90,7 @@ export interface CaveRegionResult {
   /**
    * The ms of the shared grid and components, of C1-C6 (with the thickness), of C7-C9, of the bottom, of the border
    * counts, of the abyss rock's counts, of the poses (every list, and the biome region's tile masks); SP7a: of the settle
-   * reference (with the springs and A2's origins, Task 23) and of the A counts with SP7a's poses.
+   * reference (with the springs and A2's origins, Task 23) and of the A counts with SP7a's poses (A5's, Task 24, included).
    */
   readonly ms: {
     shared: number; c16: number; c79: number; bottom: number; borders: number; abyssRock: number; examples: number; settle: number; water: number;
@@ -101,8 +105,15 @@ export interface CaveRegionResult {
   readonly water: WaterRegionCounts | null;
   /** A2's counts on the interior by origin, with the contacts (SP7a spec §13.1, `a2RegionCounts`; Task 23); null as `water`. */
   readonly a2: A2RegionCounts | null;
-  /** SP7a's review poses (§13.9, `waterExamplesOf`, nearest its profile's spawn): the seed '42' regions only, else null. */
+  /** SP7a's review poses (§13.9, `waterExamples`, nearest its profile's spawn): the seed '42' regions only, else null. */
   readonly waterExamples: Record<WaterExampleId, CavePose | null> | null;
+  /**
+   * A5's counts on the interior (SP7a spec §13.1, `a5RegionCounts`; Task 24: the springs and their falls, the abyss's
+   * water); null as `water`.
+   */
+  readonly a5: A5RegionCounts | null;
+  /** A5's review poses (§13.9, `a5Examples`, by distance to its profile's spawn): the seed '42' regions only, else null. */
+  readonly a5Examples: A5Examples | null;
 }
 
 export interface CaveRegionMsg {
@@ -197,7 +208,7 @@ export function settleRegion(view: RegionView, tile = SETTLE_TILE_CHUNKS, withOr
 /** The parts of `measureCaveRegion` that read the grid (its own function, so the grid is released before the carver pass). */
 function measureGrid(
   view: RegionView, site: Site, params: Params, stride: number, water: C7C9Options['water'],
-): Omit<CaveRegionResult, 'carver' | 'water' | 'a2' | 'waterExamples' | 'ms'> & { ms: Omit<CaveRegionResult['ms'], 'settle' | 'water'> } {
+): Omit<CaveRegionResult, 'carver' | 'water' | 'a2' | 'waterExamples' | 'a5' | 'a5Examples' | 'ms'> & { ms: Omit<CaveRegionResult['ms'], 'settle' | 'water'> } {
   // The default group (the default and large_biomes profiles; C7-C9's "default" group), `cave_heavy`'s regions (C1, C2
   // and C9 recorded on it, SP6b spec §12.3) and the biome region (the biomes group's default-profile region, §12.2).
   const isDefault = site.group === 'default';
@@ -268,17 +279,32 @@ export function measureCaveRegion(view: RegionView, site: Site, params: Params, 
   const t2 = performance.now();
   let counts: WaterRegionCounts | null = null;
   let a2: A2RegionCounts | null = null;
-  let waterExamples: CaveRegionResult['waterExamples'] = null;
+  let waterEx: CaveRegionResult['waterExamples'] = null;
+  let a5: A5RegionCounts | null = null;
+  let a5Ex: A5Examples | null = null;
   if (interior !== null) {
     // The A counts and the poses read one load of the region (its grid, the settled bytes above, A1's labelling).
     const region = loadWaterRegion(view, settled, interior, bytes);
     counts = waterRegionCounts(view, settled, interior, marginProbes(site.seed, params), region);
     a2 = a2RegionCounts(view, settled, interior, withOrigins.origins, withOrigins.contacts, region);
-    if (site.seed === '42') waterExamples = waterExamplesOf(view, settled, interior, site.seed, params, region);
+    // A5 (Task 24): the falls in the default group's regions, the truncated springs there and in the presets group's
+    // amplified region ("the mountain regions", Spec correction 11), the lava falls in the biome region (and any region
+    // with enough abyss air), the island falls where the profile has islands.
+    const biomeRegion = site.group === 'biomes' && site.profile === 'default';
+    const facts = springFacts(view, region, springs, withOrigins.contacts);
+    a5 = a5RegionCounts(view, region, springs, facts, {
+      steep: steepMaskOf(region.g, site.seed, params), waterfallRegion: site.group === 'default',
+      truncatedRegion: site.group === 'default' || site.profile === 'amplified', biomeRegion, islandRegion: params.islands.enabled,
+    });
+    if (site.seed === '42') {
+      const spawn = findSpawn(createGenContext(seedFromInput(site.seed), params));
+      waterEx = waterExamples(view, settled, interior, spawn, (g) => riverMaskOf(g, site.seed, params), region);
+      a5Ex = a5Examples(region, facts, spawn, biomeRegion);
+    }
   }
   const t3 = performance.now();
   return {
-    ...measured, carver, water: counts, a2, waterExamples,
+    ...measured, carver, water: counts, a2, waterExamples: waterEx, a5, a5Examples: a5Ex,
     ms: { ...measured.ms, settle: Math.round(t1 - t0), water: Math.round(t3 - t2) },
   };
 }

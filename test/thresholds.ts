@@ -159,6 +159,11 @@ export const THRESHOLDS: ThresholdTable = {
   // its `metricTest` writes `.out/A3.json`), 0 by construction (springs are untagged; rulings P19), gated from its commit; A1-A4's other parts
   // are recorded in `.out/A.<group>.json` until the tuning.
   A3: { aquiferLavaAbove10: { max: 0, activeFrom: 'SP7a' } },
+  // SP7a spec §13.1 (Task 24): the water voxels of the abyss nibble after the settle reference over the caves regions'
+  // interiors, every group (`caves.metric.ts`, `.out/A5.json`), 0 by construction (§1.6's own-nibble test, §4.1's stop),
+  // gated from its commit; A5's other parts are recorded per group in `.out/A5.<group>.json` until the tuning (Spec
+  // correction 11).
+  A5: { abyssWater: { max: 0, activeFrom: 'SP7a' } },
   // SP4a spec §9.1 (D26): `grassSky0`, the master's grass at sky 0, recorded from SP4a (`light.metric.ts`), gated by SP6a.
   S1: {
     buried: { max: 0, activeFrom: 'SP3c' }, grassNoSky: { max: 0, activeFrom: 'SP3c' }, ymod16: { min: 0.001, activeFrom: 'SP3c' },
@@ -205,6 +210,21 @@ export const THRESHOLDS: ThresholdTable = {
     mismatches: { max: 0, activeFrom: 'SP5a' },
     pasteValueMismatches: { max: 0, activeFrom: 'SP5c' }, pasteLightMismatches: { max: 0, activeFrom: 'SP5c' }, pasteLimboOver: { max: 0, activeFrom: 'SP5c' },
     pasteDirtyMissing: { max: 0, activeFrom: 'SP5c' },
+  },
+  // SP7a spec §13.1 (Task 24): master §6.4's F1-F3 rows (the runtime sim's) with their bounds, recorded as inactive in SP7a
+  // and gated from SP7b, whose sim they measure: F1 the ticks for one source to converge to the radius-7 diamond and the
+  // tick logs of two runs that differ; F2's worst-case flood, its updates over the cap in a tick, the diff bytes per
+  // changed voxel, a section's remesh rate and the tick p95; F3 (D18) a loaded region with the sim running 2000 ticks and
+  // no edits, its ticks run, DiffStore entries and unsettled voxels changed, and the ticks an edit beside an unsettled
+  // front schedules outside that front's connected fluid.
+  F1: { convergeTicks: { max: 40, activeFrom: 'SP7b' }, tickLogDiffs: { max: 0, activeFrom: 'SP7b' } },
+  F2: {
+    updatesOverCap: { max: 0, activeFrom: 'SP7b' }, diffBytesPerVoxel: { max: 5, activeFrom: 'SP7b' }, remeshHz: { max: 10, activeFrom: 'SP7b' },
+    tickP95Ms: { max: 4, activeFrom: 'SP7b' },
+  },
+  F3: {
+    idleTicks: { max: 0, activeFrom: 'SP7b' }, idleDiffEntries: { max: 0, activeFrom: 'SP7b' }, idleUnsettledChanged: { max: 0, activeFrom: 'SP7b' },
+    ticksOutsideFront: { max: 0, activeFrom: 'SP7b' },
   },
   // SP5b spec §6.1 (D28): the codec, `.wiworld`, reload, aborted-flush, older-generator and backup, and per-world parts
   // (`persist.metric.ts`), every tier. SP5c spec §10.1 (D27): E3's paste part, pastes, a move and a cut undone and redone,

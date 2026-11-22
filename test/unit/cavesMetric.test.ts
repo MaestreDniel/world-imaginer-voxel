@@ -1412,6 +1412,7 @@ describe('the caves metric by group (SP6b spec §13 L4: `METRICS_CAVE_GROUPS`)',
       'C7:bottomFlatRatio|bottomFloorSpread:C7.bottom',
       'B3:borderLattice|straightBorder|flatBorder:B3.borders',
       'B3:abyssRockStraight:B3.abyssRock',
+      'A5:abyssWater:A5',
       'A3:aquiferLavaAbove10:A3',
       'C7:borderPlaneRatio|switchWall:C7.default',
       'C8:aperiodicity|typeMixVariation|sizeSpread:C8',
@@ -1501,6 +1502,8 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
         expect(got.water, `${s.label}, ${n} worker(s)`).toEqual(ref.water);
         expect(got.a2, `${s.label}, ${n} worker(s)`).toEqual(ref.a2);
         expect(got.waterExamples, `${s.label}, ${n} worker(s)`).toEqual(ref.waterExamples);
+        expect(got.a5, `${s.label}, ${n} worker(s)`).toEqual(ref.a5);
+        expect(got.a5Examples, `${s.label}, ${n} worker(s)`).toEqual(ref.a5Examples);
         // The timings differ by run; their fields do not.
         expect(Object.keys(got.ms)).toEqual(Object.keys(ref.ms));
         for (const v of Object.values(got.ms)) expect(Number.isFinite(v) && v >= 0).toBe(true);
@@ -1546,6 +1549,10 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
       // A2 (Task 23): every interior fluid voxel counted in one origin; the region holds aquifer water.
       expect(ref.a2!.areaKm2, s.label).toBeCloseTo(ref.water!.areaKm2, 12);
       expect(ref.a2!.fluid.aquifer, s.label).toBeGreaterThan(0);
+      // A5 (Task 24): read on the same interior, a default region's roles, the abyss's water 0 by construction, the poses.
+      expect(ref.a5!.areaKm2, s.label).toBeCloseTo(ref.water!.areaKm2, 12);
+      expect(ref.a5, s.label).toMatchObject({ waterfallRegion: true, truncatedRegion: true, abyssWater: 0 });
+      expect(ref.a5Examples, s.label).not.toBeNull();
     }
   });
 

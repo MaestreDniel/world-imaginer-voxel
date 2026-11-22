@@ -22,7 +22,7 @@ import { caveZoneGrid, caveZoneParts, ZONE_CELLS, ZONE_DEPTHS, ZONE_LAGS, ZONE_O
 import { r3PathCounts, r3Paths, r3PoseCounts, r3Poses, r3Region, R3_POSE_COUNTS, type CaveRegion, type R3PathCounts, type R3PoseCounts } from '../harness/cull';
 import { metricTest } from '../harness/metric';
 import { genRegion } from '../harness/region';
-import { a2Parts, WATER_EXAMPLE_IDS, waterParts } from '../harness/water';
+import { a2Parts, A5_EXAMPLE_IDS, a5Parts, WATER_EXAMPLE_IDS, waterParts, type A5Pose } from '../harness/water';
 import { THRESHOLDS } from '../thresholds';
 
 /**
@@ -67,7 +67,11 @@ import { THRESHOLDS } from '../thresholds';
  *   construction), `C7.waterWallAny` (SP6a's waterWall count) per job in `.out/C7.waterWallAny.<group>.json`, and
  *   SP7a's review poses at seed '42' in `.out/sp7a.examples.<group>.json` (rulings P22: one record per job, Task 24 adds
  *   its poses to it); A2 by origin (sky-open, aquifer, spring) with the water/lava contacts apart per job in
- *   `.out/A2.<group>.json` (Task 23, recorded until the tuning; the contacts also leave `C7.waterWall`'s population).
+ *   `.out/A2.<group>.json` (Task 23, recorded until the tuning; the contacts also leave `C7.waterWall`'s population);
+ *   A5, the springs and their falls (Task 24; SP7a Spec correction 11: each part per job over the job's own regions of
+ *   its role), per job in `.out/A5.<group>.json` (recorded until the tuning), `A5.abyssWater` gated from that commit (0
+ *   by construction), and A5's review poses added to the job's `.out/sp7a.examples.<group>.json` (the nearest
+ *   `islandFall`, `lavaFall`, `lavaPool` and `spillSlope`, and every `waterfall` and `truncated` candidate by distance).
  *
  * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
  * - `carverReference`: over every region of the run's groups (the preset regions included), the voxels of the region
@@ -835,6 +839,39 @@ test('A2 by origin per job after the settle reference (recorded)', async () => {
   }
 }, 900_000 * TIMEOUT_SCALE);
 
+/**
+ * A5's record (SP7a spec §13.1, D30; Task 24; gated at its bounds at the tuning, Task 31, but `abyssWater`), as built in
+ * `test/harness/water.ts` (`springFacts`, `a5RegionCounts`, `a5Parts`): per job over its regions' interiors after the
+ * global settle reference (Spec correction 11: a job reads only its own regions), `waterfalls` (the default group's
+ * regions), `lavaFalls` (the biome region and the regions with ≥ 50,000 abyss cave-air voxels), `islandFalls` (the
+ * regions whose profile has islands), `borderRatio` (every region), `abyssWater`, `springsTruncated` (the default group's regions
+ * and the presets group's amplified region), recorded with them the pooled Clark-Evans ratio of the visible falls,
+ * `waterIntoAbyss`, `abyssWaterFace`, `adjacentSprings`, the falls' heights and the sums behind the parts; with each
+ * region's values, in `.out/A5.<group>.json`.
+ */
+test('A5 per job after the settle reference (recorded)', async () => {
+  const measured = await measuredRegions();
+  const jobs = [...new Set(measured.map((m) => jobOf(m.site)))];
+  mkdirSync(OUT_DIR, { recursive: true });
+  for (const job of jobs) {
+    const rs = measured.filter((m) => jobOf(m.site) === job && m.a5 !== null);
+    writeFileSync(join(OUT_DIR, `A5.${job}.json`), json({
+      id: 'A5', tier: process.env.METRICS_TIER ?? null, group: job, values: a5Parts(rs.map((m) => m.a5!)),
+      regions: rs.map((m) => ({ label: m.site.label, ...a5Parts([m.a5!]), counts: m.a5 })),
+    }));
+    expect(rs.length, `A5: the ${job} job's regions`).toBeGreaterThan(0);
+  }
+}, 900_000 * TIMEOUT_SCALE);
+
+// `A5.abyssWater` (SP7a spec §13.1): the water voxels of the abyss nibble after the settle reference over every region of
+// the run's groups, 0 by construction (the aquifer tests the voxel's own nibble, §1.6; the settle never enters it,
+// §4.1), gated from this commit.
+metricTest('A5', ['abyssWater'], async () => {
+  const rs = (await measuredRegions()).filter((m) => m.a5 !== null).map((m) => m.a5!);
+  expect(rs.length).toBeGreaterThan(0);
+  return { abyssWater: a5Parts(rs).abyssWater, regions: rs.length };
+}, 900_000);
+
 // `A3.aquiferLavaAbove10` (SP7a spec §13.1; rulings P19): the tagged proto lava above y −10 over every region of the
 // run's groups, 0 by construction (springs are untagged, untagged air takes only water), gated from this commit.
 metricTest('A3', ['aquiferLavaAbove10'], async () => {
@@ -865,10 +902,13 @@ test('C7.waterWallAny per job (recorded)', async () => {
 }, 900_000 * TIMEOUT_SCALE);
 
 /**
- * SP7a's review poses (spec §13.9, D16; `waterExamplesOf`) at seed '42', per job (rulings P22): per pose, of the poses the
+ * SP7a's review poses (spec §13.9, D16; `waterExamples`) at seed '42', per job (rulings P22): per pose, of the poses the
  * job's seed '42' regions found (each nearest its own profile's `findSpawn`), the one nearest its profile's spawn (ties
  * to the earlier region), with its profile, region and distance, in `.out/sp7a.examples.<group>.json` (null where none
- * was found; Task 24 adds A5's poses to the same record).
+ * was found). Task 24 adds A5's poses to the same record (`a5Examples`): the nearest `islandFall`, `lavaFall`, `lavaPool`
+ * and `spillSlope` among the job's regions' as above, and `candidates`, every visible fall (`waterfall`, with its
+ * height) and every truncated water spring (`truncated`, with its front) of the job's seed '42' regions, nearest its
+ * profile's spawn first (ties in region order).
  */
 test('SP7a\'s review poses per job (sp7a.examples.<group>.json)', async () => {
   const measured = await measuredRegions();
@@ -897,8 +937,27 @@ test('SP7a\'s review poses per job (sp7a.examples.<group>.json)', async () => {
       }
       poses[id] = best;
     }
+    type Placed = A5Pose & { profile: string; region: string; distance: number };
+    const placed = (m: (typeof rs)[number], p: A5Pose): Placed => {
+      const spawn = spawnOf(m.site.profile);
+      return { ...p, profile: m.site.profile, region: m.site.label, distance: Math.hypot(p.voxel[0] + 0.5 - spawn.x, p.voxel[2] + 0.5 - spawn.z) };
+    };
+    const a5 = rs.filter((m) => m.a5Examples !== null);
+    for (const id of A5_EXAMPLE_IDS) {
+      let best: Placed | null = null;
+      for (const m of a5) {
+        const p = m.a5Examples![id];
+        if (p === null) continue;
+        const q = placed(m, p);
+        if (best === null || q.distance < best.distance) best = q;
+      }
+      poses[id] = best;
+    }
+    const listOf = (pick: (m: (typeof rs)[number]) => readonly A5Pose[]): Placed[] =>
+      a5.flatMap((m) => pick(m).map((p) => placed(m, p))).map((p, k) => [p, k] as const).sort((a, b) => a[0].distance - b[0].distance || a[1] - b[1]).map(([p]) => p);
+    const candidates = { waterfall: listOf((m) => m.a5Examples!.waterfall), truncated: listOf((m) => m.a5Examples!.truncated) };
     writeFileSync(join(OUT_DIR, `sp7a.examples.${job}.json`), json({
-      id: 'sp7a.examples', tier: process.env.METRICS_TIER ?? null, group: job, seed: '42', spawns: Object.fromEntries(spawns), poses,
+      id: 'sp7a.examples', tier: process.env.METRICS_TIER ?? null, group: job, seed: '42', spawns: Object.fromEntries(spawns), poses, candidates,
     }));
   }
 }, 900_000 * TIMEOUT_SCALE);

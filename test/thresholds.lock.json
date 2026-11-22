@@ -1,5 +1,5 @@
 {
-  "sha256": "bde39d28d90b591ccf42d8ec877a1b045593106238220f0a74878b0e07d37f7c",
+  "sha256": "1ac19532834343a2d8acf905f71dbbdf5125c05957fa20c06976e09eb4a90de2",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -24,6 +24,12 @@
     "thresholds": {
       "A3": {
         "aquiferLavaAbove10": {
+          "activeFrom": "SP7a",
+          "max": 0
+        }
+      },
+      "A5": {
+        "abyssWater": {
           "activeFrom": "SP7a",
           "max": 0
         }
@@ -610,6 +616,52 @@
         },
         "remapMismatches": {
           "activeFrom": "SP5b",
+          "max": 0
+        }
+      },
+      "F1": {
+        "convergeTicks": {
+          "activeFrom": "SP7b",
+          "max": 40
+        },
+        "tickLogDiffs": {
+          "activeFrom": "SP7b",
+          "max": 0
+        }
+      },
+      "F2": {
+        "diffBytesPerVoxel": {
+          "activeFrom": "SP7b",
+          "max": 5
+        },
+        "remeshHz": {
+          "activeFrom": "SP7b",
+          "max": 10
+        },
+        "tickP95Ms": {
+          "activeFrom": "SP7b",
+          "max": 4
+        },
+        "updatesOverCap": {
+          "activeFrom": "SP7b",
+          "max": 0
+        }
+      },
+      "F3": {
+        "idleDiffEntries": {
+          "activeFrom": "SP7b",
+          "max": 0
+        },
+        "idleTicks": {
+          "activeFrom": "SP7b",
+          "max": 0
+        },
+        "idleUnsettledChanged": {
+          "activeFrom": "SP7b",
+          "max": 0
+        },
+        "ticksOutsideFront": {
+          "activeFrom": "SP7b",
           "max": 0
         }
       },

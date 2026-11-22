@@ -63,29 +63,59 @@
  *   voxels matched by a replay of `springTries` per chunk and kind (its doc states the match), each a spring when its
  *   faces other than the outlet are solid or another matched voxel; a unit test pins them equal to T's springs
  *   (`springsColumn`) on real columns of seed '42'.
+ * - **A5** (Task 24; `springFacts`, `a5RegionCounts`, `a5Parts`): over the springs whose voxel lies in the interior. Each
+ *   spring's lone front (`springFront`) decides only which voxels belong to it (the front's voxels and the spring) and
+ *   its straight fall (the front's consecutive falling voxels below the outlet); the settled world decides the rest
+ *   (§4.1: a voxel's distance is the least over all its feeders). `waterfalls` the water springs (kind 0, §3.2) whose
+ *   outlet has no non-air block above it up to y 319 and a fall ≥ 8, per km² of steep land (interior positions with a
+ *   ground top ≥ 63 whose column sample reads `steep` ≥ 1.2 and `offset` ≥ 80, `steepMaskOf`), over the default group's
+ *   regions; `lavaFalls` the lava springs with a fall ≥ 4 per 100,000 abyss cave-air voxels (cave voxels of the abyss
+ *   nibble with no fluid after settle), over the biome region and every region with ≥ 50,000 of them; `islandFalls`
+ *   the island springs with a fall ≥ `ISLAND_SPRING_MIN_FALL` per km² of island area (interior positions holding a
+ *   solid run whose bottom lies at or above y 181), over the regions whose profile has islands (floating_islands);
+ *   `borderRatio` the springs of every kind on a chunk-border voxel
+ *   (local x or z 0 or 15) over the springs, divided by 60/256; `abyssWater` the water voxels of the abyss nibble after
+ *   settle; `springsTruncated` (Spec corrections 11, 19) the water springs one of whose voxels carries bit 6 in the
+ *   region's settle outside the water/lava contacts (a contact is SP7b's reaction, counted in A2's `contacts`), over
+ *   the water springs, over the default group's regions and the presets group's amplified region; each part per
+ *   group over the group's own such regions (a CI job reads only its own). Recorded: `clarkEvans` of the visible
+ *   falls' outlets per region over its interior, pooled from the regions' mean nearest-neighbour distances
+ *   (`pooledClarkEvans`) over `waterfalls`' regions, with the falls' heights; `waterIntoAbyss` the water voxels stopped at abyss air (C7.waterWall's abyss stops: neither
+ *   falling nor at the last level, a dry tagged abyss neighbour on a spread side); `abyssWaterFace` the water voxels
+ *   with an abyss voxel holding air (non-solid, no fluid) among their 6 neighbours; `adjacentSprings` the springs with
+ *   another spring among their 6 neighbours.
+ * - A5's review poses (§13.9; `a5Examples`, the plan's choices): per region, by horizontal distance to the spawn, every
+ *   visible fall (`waterfall`: the eye 24 blocks out along the spring's direction at the fall's mid-height, facing it)
+ *   and every truncated water spring with its front (`truncated`: the front, the voxel nearest the outlet of those
+ *   `springsTruncated` reads, and the eye 16 out along the spring's direction and 4 above it, facing it); and the
+ *   nearest `islandFall` (as a waterfall), `lavaFall` (16 out) and `lavaPool` (a settled lava voxel of the abyss nibble,
+ *   not falling, over a solid voxel and under dry abyss air; the eye in the air above it, looking along its longest
+ *   run 30° down), both in the biome region only, and `spillSlope` (a water spring whose landed spill, its lone front's
+ *   voxels below the landing, the bottom of its fall, reaches 4 blocks or more from it horizontally; the eye 12 out
+ *   along the spring's direction and 6 above the spill's midpoint, facing it).
  */
 import { CAVE_BIOME, caveBiomeOf, ISLAND_SPRING_MIN_FALL } from '../../src/core/constants';
 import type { Seed64 } from '../../src/core/hash';
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
 import { cavePickerOf, caveBiomeAt, fillCaveColumnPass, newCaveColumnPass, type CaveColumnPass } from '../../src/gen/biomes/cavePicker';
-import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
-import { findSpawn } from '../../src/gen/column/spawn';
+import { buildColumnSample, newColumnSample, readField } from '../../src/gen/column/columnStage';
 import { createGenContext } from '../../src/gen/context';
 import { createDensityContext } from '../../src/gen/density/context';
 import { aquiferOf, barrierAt, inAbyssMargin } from '../../src/gen/fluids/aquifer';
-import { settleWindow, type SettleScratch, type SettleSink, type SettleSource } from '../../src/gen/fluids/settle';
+import { createSettleScratch, settleWindow, type SettleScratch, type SettleSink, type SettleSource } from '../../src/gen/fluids/settle';
 import { springTries, type SpringKind, type SpringList } from '../../src/gen/fluids/springs';
 import {
   FLUID_LAVA, FLUID_WATER, fluidFalling, fluidLevel, fluidType, fluidUnsettled, hasFluid, LAVA_SOURCE, NO_FLUID, WATER_SOURCE,
 } from '../../src/world/blocks/fluid';
-import { capOf, FLUID_VALUE_FALLING, FLUID_VALUE_SOURCE, isPassable, ruleOffers, type FluidRuleReader } from '../../src/world/blocks/fluidRules';
+import { capOf, FLUID_VALUE_FALLING, FLUID_VALUE_SOURCE, isPassable, lastLevelOf, ruleOffers, type FluidRuleReader } from '../../src/world/blocks/fluidRules';
 import { AIR, STONE } from '../../src/world/blocks/index';
 import type { ColumnView } from '../../src/world/store/store';
 import {
-  BIOME_SHIFT, caveComponents, caveGridOf, deepSkyLabels, FLUID_BIT, GRID_H, GRID_Y0, longestRunYaw, preCaveTops, riverMaskOf, SOLID_BIT, TAG_MASK,
+  BIOME_SHIFT, caveComponents, caveGridOf, deepSkyLabels, FLUID_BIT, GRID_H, GRID_Y0, longestRunYaw, preCaveTops, SOLID_BIT, spreadSides, TAG_MASK,
   type CaveGrid, type CavePose,
 } from './caveMetrics';
+import { clarkEvans } from './caveZones';
 import { components3d } from './flood';
 import type { RegionView } from './regionView';
 
@@ -855,7 +885,7 @@ const SIDES: ReadonlyArray<readonly [number, number, number]> = [[0, -1, 0], [1,
 /**
  * The review poses of one region (see the header): at most one per id, from the view's proto and the overlay, on
  * `interior`; `spawn` is `findSpawn`'s (x, z) and `river` `riverMaskOf`'s over the region (per position (z − z0)·W +
- * (x − x0)). `waterExamplesOf` computes both from the seed and the params. `region` as `waterRegionCounts`'.
+ * (x − x0)); the region worker finds both from the region's seed and params. `region` as `waterRegionCounts`'.
  */
 export function waterExamples(
   view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 'store'>, settled: ReadonlyMap<number, number>, interior: WaterBox,
@@ -922,15 +952,6 @@ export function waterExamples(
   return out;
 }
 
-/** `waterExamples` with `findSpawn` and `riverMaskOf` of (seed, params). */
-export function waterExamplesOf(
-  view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 'store'>, settled: ReadonlyMap<number, number>, interior: WaterBox, seed: string, params: Params,
-  region: WaterRegion = loadWaterRegion(view, settled, interior),
-): Record<WaterExampleId, CavePose | null> {
-  const spawn = findSpawn(createGenContext(seedFromInput(seed), params));
-  return waterExamples(view, settled, interior, spawn, (g) => riverMaskOf(g, seed, params), region);
-}
-
 /** The A parts of a group (SP7a spec §13.1), from its regions' counts: the parts, and the values recorded beside them. */
 export interface WaterParts {
   /** A1's share after settle, pooled over the regions, and on T alone over the same population. */
@@ -970,4 +991,496 @@ export function waterParts(regions: readonly WaterRegionCounts[]): WaterParts {
     dryPitsBelowSea: share(sum((r) => r.dryPits), sum((r) => r.lowTops)),
     dryPitsBelowSeaT: share(sum((r) => r.dryPitsT), sum((r) => r.lowTops)),
   };
+}
+
+// ---------------------------------------------------------------- A5: the springs and their falls (SP7a spec §13.1; Task 24)
+
+/** The springs' kind bytes (`springs.ts`' list: water, island, lava). */
+const KIND_WATER = 0;
+const KIND_ISLAND = 1;
+const KIND_LAVA = 2;
+/** A visible water fall's least straight fall (§3.2's `minFall` at its default) and a lava fall's (§13.1). */
+export const A5_WATER_FALL = 8;
+export const A5_LAVA_FALL = 4;
+/** Steep land (§13.1): a land position whose column sample reads `steep` ≥ 1.2 and `offset` ≥ 80. */
+export const STEEP_MIN = 1.2;
+export const STEEP_OFFSET_MIN = 80;
+/** `lavaFalls`' regions: the biome region and every region with at least this many abyss cave-air voxels. */
+export const LAVA_REGION_AIR = 50_000;
+/** `borderRatio`'s even share: a chunk's 60 border positions (local x or z 0 or 15) of its 256. */
+export const BORDER_SHARE = 60 / 256;
+/** `spillSlope`'s least reach of a landed spill down a slope, in blocks (§13.9, the plan's choice). */
+export const SPILL_SLOPE_MIN = 4;
+/** The review poses' eye distances out from what they face (§13.9; `lavaFall` and `spillSlope` the plan's choices). */
+const EYE_FALL = 24;
+const EYE_LAVA_FALL = 16;
+const EYE_TRUNCATED = 16;
+const EYE_SPILL = 12;
+
+/**
+ * Per position of the grid ((z − z0)·w + (x − x0)), 1 where the column sample of (seed, params) reads (`readField`)
+ * `steep` ≥ `STEEP_MIN` and `offset` ≥ `STEEP_OFFSET_MIN`: A5's steep land, with a ground top ≥ 63 (`a5RegionCounts`).
+ */
+export function steepMaskOf(g: CaveGrid, seed: string, params: Params): Uint8Array {
+  const { x0, z0, w, d } = g;
+  const ctx = createGenContext(seedFromInput(seed), params);
+  const sample = newColumnSample();
+  const out = new Uint8Array(w * d);
+  for (let cz = Math.floor(z0 / 16); 16 * cz < z0 + d; cz++) {
+    for (let cx = Math.floor(x0 / 16); 16 * cx < x0 + w; cx++) {
+      buildColumnSample(ctx, cx, cz, sample);
+      for (let z = Math.max(z0, 16 * cz); z < Math.min(z0 + d, 16 * cz + 16); z++) {
+        for (let x = Math.max(x0, 16 * cx); x < Math.min(x0 + w, 16 * cx + 16); x++) {
+          if (readField(sample, 'steep', x, z) >= STEEP_MIN && readField(sample, 'offset', x, z) >= STEEP_OFFSET_MIN) out[(z - z0) * w + (x - x0)] = 1;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** One spring of the interior as A5 reads it (`springFacts`). */
+export interface SpringFact {
+  /** Its index in the region's spring list, its kind byte (water 0, island 1, lava 2) and direction (`springs.ts`'). */
+  readonly i: number;
+  readonly kind: number;
+  readonly dir: number;
+  readonly voxel: readonly [number, number, number];
+  /** The straight fall: the consecutive falling voxels of the spring's lone front below its outlet. */
+  readonly fall: number;
+  /** Whether no non-air block lies above the outlet up to y 319 (the outlet open to the sky). */
+  readonly open: boolean;
+  /**
+   * The truncated front: of the spring's voxels (its lone front's and its own) carrying bit 6 in the region's settle
+   * outside the water/lava contacts, the one nearest the outlet (3D; ties to the front's first); null when none.
+   */
+  readonly front: readonly [number, number, number] | null;
+  /**
+   * The landed spill: of the lone front's voxels not falling below the landing (the outlet's voxel `fall` blocks
+   * down), the farthest from it horizontally (Manhattan; ties to the front's first), and that reach; null and 0 when none.
+   */
+  readonly spillTo: readonly [number, number, number] | null;
+  readonly spill: number;
+}
+
+/**
+ * The facts A5 reads of each spring whose voxel lies in `L`'s interior (see the header), in the list's order: its lone
+ * front (`springFront`) gives its voxels, its fall and its spill; the region's settled bytes (`L.fl`) and the contacts
+ * (`referenceSettleOrigins`', keyed `referenceSettleKey`) its truncated front.
+ */
+export function springFacts(view: RegionView, L: WaterRegion, springs: SpringList, contacts: ReadonlySet<number>): SpringFact[] {
+  const { x0, z0, w, d, cells } = L.g;
+  const plane = w * d;
+  const s = createSettleScratch();
+  /** The current spring's lone front: key → byte, in the settle's order. */
+  const lone = new Map<number, number>();
+  const sink: SettleSink = {
+    set: (x, y, z, b) => {
+      if (x >= x0 && x < x0 + w && z >= z0 && z < z0 + d) lone.set(keyAt(view, x, y, z), b);
+    },
+  };
+  const out: SpringFact[] = [];
+  for (let i = 0; i < springs.n; i++) {
+    const k = springs.pos[i]!;
+    const [x, y, z] = regionVoxelOf(view, k);
+    if (x - x0 < L.lx0 || x - x0 >= L.lx1 || z - z0 < L.lz0 || z - z0 >= L.lz1) continue;
+    const dir = springs.dir[i]!;
+    const ox = x + DIR_DX[dir]!;
+    const oz = z + DIR_DZ[dir]!;
+    lone.clear();
+    springFront(view, springs, i, s, sink);
+    let fall = 0;
+    for (let f = 1; y - f >= GRID_Y0; f++) {
+      const b = lone.get(keyAt(view, ox, y - f, oz));
+      if (b === undefined || !fluidFalling(b)) break;
+      fall++;
+    }
+    let open = ox >= x0 && ox < x0 + w && oz >= z0 && oz < z0 + d;
+    for (let q = y + 1; q < GRID_Y0 + GRID_H && open; q++) open = (cells[(q - GRID_Y0) * plane + (oz - z0) * w + (ox - x0)]! & SOLID_BIT) === 0;
+    let front: [number, number, number] | null = null;
+    let best = Infinity;
+    for (const key of [k, ...lone.keys()]) {
+      if (contacts.has(key) || !fluidUnsettled(L.fl[key]!)) continue;
+      const v = regionVoxelOf(view, key);
+      const d2 = (v[0] - ox) * (v[0] - ox) + (v[1] - y) * (v[1] - y) + (v[2] - oz) * (v[2] - oz);
+      if (d2 < best) {
+        best = d2;
+        front = v;
+      }
+    }
+    let spill = 0;
+    let spillTo: [number, number, number] | null = null;
+    for (const [key, b] of lone) {
+      const v = regionVoxelOf(view, key);
+      if (v[1] >= y - fall || fluidFalling(b)) continue;
+      const r = Math.abs(v[0] - ox) + Math.abs(v[2] - oz);
+      if (r > spill) {
+        spill = r;
+        spillTo = v;
+      }
+    }
+    out.push({ i, kind: springs.kind[i]!, dir, voxel: [x, y, z], fall, open, front, spillTo, spill });
+  }
+  return out;
+}
+
+/** A region's roles in A5's group parts (`a5RegionCounts`). */
+export interface A5RegionOptions {
+  /** Per grid position, 1 where the column sample is steep (`steepMaskOf`); null: no steep land. */
+  readonly steep: Uint8Array | null;
+  /** Whether the region counts in `waterfalls` (the default group's regions). */
+  readonly waterfallRegion: boolean;
+  /** Whether it counts in `springsTruncated` (the default group's regions and the presets group's amplified region). */
+  readonly truncatedRegion: boolean;
+  /** Whether it is the biome region (it counts in `lavaFalls` whatever its abyss air). */
+  readonly biomeRegion: boolean;
+  /**
+   * Whether it counts in `islandFalls` (its profile's `islands.enabled`: the floating_islands region; a default region's
+   * overhangs above y 181 are no island area).
+   */
+  readonly islandRegion: boolean;
+}
+
+/** One region's A5 counts on its interior (`a5RegionCounts`): numbers, booleans and arrays of numbers only. */
+export interface A5RegionCounts {
+  /** The interior's area, its steep land's and its island area, km²; its abyss cave-air voxels. */
+  readonly areaKm2: number;
+  readonly steepKm2: number;
+  readonly islandKm2: number;
+  readonly abyssAir: number;
+  /** The springs of every kind, those on a chunk-border voxel, those with another spring among their 6 neighbours. */
+  readonly springs: number;
+  readonly borderSprings: number;
+  readonly adjacentSprings: number;
+  /** The water springs, their visible falls with the falls' heights ([height, count], ascending), the truncated ones. */
+  readonly waterSprings: number;
+  readonly visibleFalls: number;
+  readonly fallHeights: ReadonlyArray<readonly [number, number]>;
+  readonly truncated: number;
+  /** The visible falls' outlets' Clark-Evans ratio over the interior (`clarkEvans`; NaN below 2 falls). */
+  readonly clarkEvans: number;
+  /** The lava springs and those with a fall ≥ `A5_LAVA_FALL`; the island springs and those with a fall ≥ `ISLAND_SPRING_MIN_FALL`. */
+  readonly lavaSprings: number;
+  readonly lavaFalls: number;
+  readonly islandSprings: number;
+  readonly islandFalls: number;
+  /** The water voxels of the abyss nibble, those stopped at abyss air, those beside abyss air (see the header). */
+  readonly abyssWater: number;
+  readonly waterIntoAbyss: number;
+  readonly abyssWaterFace: number;
+  /** The region's roles (`A5RegionOptions`; `lavaRegion` the biome region or ≥ `LAVA_REGION_AIR` abyss cave-air voxels). */
+  readonly waterfallRegion: boolean;
+  readonly truncatedRegion: boolean;
+  readonly lavaRegion: boolean;
+  readonly islandRegion: boolean;
+}
+
+/**
+ * A5's counts of one region (SP7a spec §13.1; see the header) on `L`'s interior, from its springs (`springs`, the
+ * region's list) and their facts (`springFacts` over the same list), its settled bytes and the proto's rules
+ * (`protoRuleReader`, for the abyss stops' spread sides).
+ */
+export function a5RegionCounts(
+  view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 'store'>, L: WaterRegion, springs: SpringList, facts: readonly SpringFact[], opts: A5RegionOptions,
+): A5RegionCounts {
+  const { x0, z0, w, d, cells } = L.g;
+  const { fl, groundTop } = L;
+  const plane = w * d;
+  const inside = (x: number, z: number): boolean => x >= L.lx0 && x < L.lx1 && z >= L.lz0 && z < L.lz1;
+  // The positions: steep land, and island area (a run's bottom at or above y 181: a solid voxel over a non-solid one,
+  // read plane by plane).
+  let steep = 0;
+  const islandAt = new Uint8Array(plane);
+  for (let z = L.lz0; z < L.lz1; z++) {
+    for (let x = L.lx0; x < L.lx1; x++) {
+      const p = z * w + x;
+      if (opts.steep !== null && opts.steep[p] === 1 && groundTop[p]! >= SEA_Y) steep++;
+    }
+  }
+  for (let y = GROUND_RUN_BOTTOM; y < GRID_Y0 + GRID_H; y++) {
+    const at = (y - GRID_Y0) * plane;
+    for (let z = L.lz0; z < L.lz1; z++) {
+      for (let p = z * w + L.lx0, e = z * w + L.lx1; p < e; p++) {
+        if ((cells[at + p]! & SOLID_BIT) !== 0 && (cells[at - plane + p]! & SOLID_BIT) === 0) islandAt[p] = 1;
+      }
+    }
+  }
+  let island = 0;
+  for (let p = 0; p < plane; p++) island += islandAt[p]!;
+  // The voxels: abyss cave air and the water by the abyss, read from the abyss's voxels alone (the interior grown by a
+  // block, so a dry abyss voxel just outside it is seen beside the interior's water).
+  const rules = protoRuleReader(view);
+  let abyssAir = 0;
+  let abyssWater = 0;
+  /** The interior's water voxels beside dry abyss voxels; per such voxel, the sides whose neighbour is dry tagged abyss air. */
+  const face = new Set<number>();
+  const stopped = new Map<number, number>();
+  const water = (j: number, jx: number, jz: number): boolean => inside(jx, jz) && fluidType(fl[j]!) === FLUID_WATER;
+  const gx0 = Math.max(0, L.lx0 - 1), gz0 = Math.max(0, L.lz0 - 1), gx1 = Math.min(w, L.lx1 + 1), gz1 = Math.min(d, L.lz1 + 1);
+  // Four cells per word where the grid allows it (most of the region holds no abyss voxel): a word with no byte whose
+  // biome bits are both set (the abyss, 3) is skipped whole.
+  const words = cells.byteOffset % 4 === 0 && cells.length % 4 === 0 && w % 4 === 0 ? new Uint32Array(cells.buffer, cells.byteOffset, cells.length / 4) : null;
+  const wx0 = gx0 & ~3;
+  for (let y = GRID_Y0; y < GRID_Y0 + GRID_H; y++) {
+    for (let z = gz0; z < gz1; z++) {
+      const row = (y - GRID_Y0) * plane + z * w;
+      for (let x = words === null ? gx0 : wx0; x < gx1; x++) {
+        if (words !== null && (x & 3) === 0) {
+          const v = words[(row + x) >> 2]!;
+          if ((v & (v >>> 1) & 0x40404040) === 0) {
+            x += 3;
+            continue;
+          }
+        }
+        if (x < gx0) continue;
+        const i = row + x;
+        const c = cells[i]!;
+        // Abyss voxels only, and of them the non-solid ones (the abyss's rock is most of them).
+        if (c >> BIOME_SHIFT !== ABYSS || (c & SOLID_BIT) !== 0) continue;
+        const b = fl[i]!;
+        if (inside(x, z)) {
+          if (fluidType(b) === FLUID_WATER) abyssWater++;
+          else if (caveCell(c) && !hasFluid(b)) abyssAir++;
+        }
+        if (hasFluid(b)) continue;
+        if (y > GRID_Y0 && water(i - plane, x, z)) face.add(i - plane);
+        if (y < GRID_Y0 + GRID_H - 1 && water(i + plane, x, z)) face.add(i + plane);
+        for (let f = 0; f < 4; f++) {
+          // The neighbour j from which side f leads to this voxel.
+          const jx = x - DIR_DX[f]!;
+          const jz = z - DIR_DZ[f]!;
+          if (jx < 0 || jx >= w || jz < 0 || jz >= d) continue;
+          const j = i - DIR_DZ[f]! * w - DIR_DX[f]!;
+          if (!water(j, jx, jz)) continue;
+          face.add(j);
+          if ((c & TAG_MASK) !== 0) stopped.set(j, (stopped.get(j) ?? 0) | (1 << f));
+        }
+      }
+    }
+  }
+  let waterIntoAbyss = 0;
+  for (const [j, sides] of stopped) {
+    const b = fl[j]!;
+    if (fluidFalling(b) || fluidLevel(b) === lastLevelOf(FLUID_WATER)) continue;
+    const jx = j % w;
+    if ((sides & spreadSides(rules, b, x0 + jx, Math.floor(j / plane) + GRID_Y0, z0 + (((j - jx) / w) % d))) !== 0) waterIntoAbyss++;
+  }
+  const abyssWaterFace = face.size;
+  // The springs.
+  const keys = new Set<number>();
+  for (let i = 0; i < springs.n; i++) keys.add(springs.pos[i]!);
+  let springN = 0;
+  let borderSprings = 0;
+  let adjacentSprings = 0;
+  for (let i = 0; i < springs.n; i++) {
+    const [x, y, z] = regionVoxelOf(view, springs.pos[i]!);
+    if (!inside(x - x0, z - z0)) continue;
+    springN++;
+    const lx = x & 15;
+    const lz = z & 15;
+    if (lx === 0 || lx === 15 || lz === 0 || lz === 15) borderSprings++;
+    let adjacent = keys.has(keyAt(view, x, y + 1, z)) || keys.has(keyAt(view, x, y - 1, z));
+    for (let f = 0; f < 4 && !adjacent; f++) adjacent = keys.has(keyAt(view, x + DIR_DX[f]!, y, z + DIR_DZ[f]!));
+    if (adjacent) adjacentSprings++;
+  }
+  let waterSprings = 0;
+  let truncated = 0;
+  let lavaSprings = 0;
+  let lavaFalls = 0;
+  let islandSprings = 0;
+  let islandFalls = 0;
+  const heights = new Map<number, number>();
+  const xs: number[] = [];
+  const zs: number[] = [];
+  for (const f of facts) {
+    if (f.kind === KIND_WATER) {
+      waterSprings++;
+      if (f.front !== null) truncated++;
+      if (f.open && f.fall >= A5_WATER_FALL) {
+        heights.set(f.fall, (heights.get(f.fall) ?? 0) + 1);
+        xs.push(f.voxel[0] + DIR_DX[f.dir]! + 0.5);
+        zs.push(f.voxel[2] + DIR_DZ[f.dir]! + 0.5);
+      }
+    } else if (f.kind === KIND_LAVA) {
+      lavaSprings++;
+      if (f.fall >= A5_LAVA_FALL) lavaFalls++;
+    } else if (f.kind === KIND_ISLAND) {
+      islandSprings++;
+      if (f.fall >= ISLAND_SPRING_MIN_FALL) islandFalls++;
+    }
+  }
+  const area = (L.lx1 - L.lx0) * (L.lz1 - L.lz0);
+  return {
+    areaKm2: area / 1e6, steepKm2: steep / 1e6, islandKm2: island / 1e6, abyssAir,
+    springs: springN, borderSprings, adjacentSprings,
+    waterSprings, visibleFalls: xs.length, fallHeights: [...heights].sort((a, b) => a[0] - b[0]), truncated, clarkEvans: clarkEvans(xs, zs, area),
+    lavaSprings, lavaFalls, islandSprings, islandFalls, abyssWater, waterIntoAbyss, abyssWaterFace,
+    waterfallRegion: opts.waterfallRegion, truncatedRegion: opts.truncatedRegion, lavaRegion: opts.biomeRegion || abyssAir >= LAVA_REGION_AIR,
+    islandRegion: opts.islandRegion,
+  };
+}
+
+/**
+ * The visible falls' Clark-Evans ratio pooled over regions: each region's mean nearest-neighbour distance (its ratio
+ * times 0.5/√ρ, ρ = its falls over its interior) weighted by its falls, over 0.5/√ρ of the pooled falls over the pooled
+ * area, the regions with 2 falls or more (a nearest neighbour never lies in another region); NaN with none.
+ */
+export function pooledClarkEvans(regions: readonly Pick<A5RegionCounts, 'clarkEvans' | 'visibleFalls' | 'areaKm2'>[]): number {
+  let sum = 0;
+  let n = 0;
+  let area = 0;
+  for (const r of regions) {
+    if (r.visibleFalls < 2 || !Number.isFinite(r.clarkEvans)) continue;
+    const a = r.areaKm2 * 1e6;
+    sum += r.visibleFalls * r.clarkEvans * 0.5 * Math.sqrt(a / r.visibleFalls);
+    n += r.visibleFalls;
+    area += a;
+  }
+  return n === 0 ? Number.NaN : sum / n / (0.5 * Math.sqrt(area / n));
+}
+
+/** A5's parts of a group (SP7a spec §13.1) and the values recorded beside them (`a5Parts`). */
+export interface A5Parts {
+  /** The parts (see the header), each over the group's regions of its role; NaN over an empty population. */
+  readonly waterfalls: number;
+  readonly lavaFalls: number;
+  readonly islandFalls: number;
+  readonly borderRatio: number;
+  readonly abyssWater: number;
+  readonly springsTruncated: number;
+  /**
+   * Recorded: the pooled Clark-Evans ratio and the falls' heights over `waterfalls`' regions; the sums of the abyss
+   * counts and the adjacent springs over every region.
+   */
+  readonly clarkEvans: number;
+  readonly waterIntoAbyss: number;
+  readonly abyssWaterFace: number;
+  readonly adjacentSprings: number;
+  readonly fallHeights: Readonly<Record<string, number>>;
+  /** Recorded: the sums behind the parts. */
+  readonly counts: {
+    readonly regions: number; readonly springs: number; readonly borderSprings: number; readonly waterSprings: number; readonly visibleFalls: number;
+    readonly steepKm2: number; readonly truncatedSprings: number; readonly truncated: number; readonly lavaFalls: number; readonly abyssAir: number;
+    readonly islandFalls: number; readonly islandKm2: number;
+  };
+}
+
+/** A group's A5 (`A5Parts`) over its regions' counts. */
+export function a5Parts(regions: readonly A5RegionCounts[]): A5Parts {
+  const sum = (rs: readonly A5RegionCounts[], f: (r: A5RegionCounts) => number): number => rs.reduce((a, r) => a + f(r), 0);
+  const falls = regions.filter((r) => r.waterfallRegion);
+  const lava = regions.filter((r) => r.lavaRegion);
+  const islands = regions.filter((r) => r.islandRegion);
+  const trunc = regions.filter((r) => r.truncatedRegion);
+  const heights: Record<string, number> = {};
+  for (const r of falls) for (const [h, c] of r.fallHeights) heights[h] = (heights[h] ?? 0) + c;
+  const counts = {
+    regions: regions.length, springs: sum(regions, (r) => r.springs), borderSprings: sum(regions, (r) => r.borderSprings),
+    waterSprings: sum(regions, (r) => r.waterSprings), visibleFalls: sum(falls, (r) => r.visibleFalls), steepKm2: sum(falls, (r) => r.steepKm2),
+    truncatedSprings: sum(trunc, (r) => r.waterSprings), truncated: sum(trunc, (r) => r.truncated),
+    lavaFalls: sum(lava, (r) => r.lavaFalls), abyssAir: sum(lava, (r) => r.abyssAir), islandFalls: sum(islands, (r) => r.islandFalls), islandKm2: sum(islands, (r) => r.islandKm2),
+  };
+  return {
+    waterfalls: share(counts.visibleFalls, counts.steepKm2),
+    lavaFalls: share(1e5 * counts.lavaFalls, counts.abyssAir),
+    islandFalls: share(counts.islandFalls, counts.islandKm2),
+    borderRatio: share(counts.borderSprings, counts.springs) / BORDER_SHARE,
+    abyssWater: regions.length === 0 ? Number.NaN : sum(regions, (r) => r.abyssWater),
+    springsTruncated: share(counts.truncated, counts.truncatedSprings),
+    clarkEvans: pooledClarkEvans(falls),
+    waterIntoAbyss: regions.length === 0 ? Number.NaN : sum(regions, (r) => r.waterIntoAbyss),
+    abyssWaterFace: regions.length === 0 ? Number.NaN : sum(regions, (r) => r.abyssWaterFace),
+    adjacentSprings: regions.length === 0 ? Number.NaN : sum(regions, (r) => r.adjacentSprings),
+    fallHeights: heights, counts,
+  };
+}
+
+/** A5's review pose (§13.9): a `CavePose` with the spring's fall and its horizontal distance to the spawn. */
+export interface A5Pose extends CavePose {
+  readonly fall: number;
+  readonly distance: number;
+}
+
+/** A truncated water spring's pose, with its truncated front. */
+export interface A5TruncatedPose extends A5Pose {
+  readonly front: readonly [number, number, number];
+}
+
+/** A5's review poses of one region (`a5Examples`; see the header). */
+export interface A5Examples {
+  /** Every visible fall and every truncated water spring, nearest the spawn first. */
+  readonly waterfall: readonly A5Pose[];
+  readonly truncated: readonly A5TruncatedPose[];
+  /** The nearest the spawn of each, or null. */
+  readonly islandFall: A5Pose | null;
+  readonly lavaFall: A5Pose | null;
+  readonly lavaPool: A5Pose | null;
+  readonly spillSlope: A5Pose | null;
+}
+
+/** A5's single poses (`A5Examples`' nearest ones), for the metric's record. */
+export const A5_EXAMPLE_IDS = ['islandFall', 'lavaFall', 'lavaPool', 'spillSlope'] as const;
+
+/** An eye at (ex, ey, ez) looking at (tx, ty, tz): yaw (0° facing −z, 90° +x) and pitch (up positive), in tenths of a degree. */
+function lookAt(ex: number, ey: number, ez: number, tx: number, ty: number, tz: number): Pick<CavePose, 'x' | 'y' | 'z' | 'yaw' | 'pitch'> {
+  const vx = tx - ex;
+  const vz = tz - ez;
+  const deg = 180 / Math.PI;
+  const tenth = (v: number): number => Math.round(v * 10) / 10 + 0;
+  return { x: ex, y: ey, z: ez, yaw: tenth((Math.atan2(vx, -vz) * deg + 360) % 360), pitch: tenth(Math.atan2(ty - ey, Math.hypot(vx, vz)) * deg) };
+}
+
+/**
+ * A5's review poses of one region (SP7a spec §13.9; see the header) from its springs' facts (`springFacts`), by
+ * horizontal distance to `spawn` (`findSpawn`'s (x, z)) from the spring's (or the pool's) voxel centre; `lavaFall`
+ * and `lavaPool` only when `biomeRegion`.
+ */
+export function a5Examples(L: WaterRegion, facts: readonly SpringFact[], spawn: { readonly x: number; readonly z: number }, biomeRegion: boolean): A5Examples {
+  const distOf = (x: number, z: number): number => Math.hypot(x + 0.5 - spawn.x, z + 0.5 - spawn.z);
+  const out = (f: SpringFact, eye: Pick<CavePose, 'x' | 'y' | 'z' | 'yaw' | 'pitch'>): A5Pose => ({ ...eye, voxel: f.voxel, component: 0, fall: f.fall, distance: distOf(f.voxel[0], f.voxel[2]) });
+  /** The fall's pose: `n` blocks out along the spring's direction at the fall's mid-height, facing it. */
+  const fallPose = (f: SpringFact, n: number): A5Pose => {
+    const tx = f.voxel[0] + DIR_DX[f.dir]! + 0.5;
+    const ty = f.voxel[1] + 0.5 - f.fall / 2;
+    const tz = f.voxel[2] + DIR_DZ[f.dir]! + 0.5;
+    return out(f, lookAt(tx + n * DIR_DX[f.dir]!, ty, tz + n * DIR_DZ[f.dir]!, tx, ty, tz));
+  };
+  const nearest = <T extends A5Pose>(ps: readonly T[]): T | null => ps.reduce<T | null>((a, p) => (a === null || p.distance < a.distance ? p : a), null);
+  const byDistance = <T extends A5Pose>(ps: T[]): T[] => ps.map((p, k) => [p, k] as const).sort((a, b) => a[0].distance - b[0].distance || a[1] - b[1]).map(([p]) => p);
+  const water = facts.filter((f) => f.kind === KIND_WATER);
+  const waterfall = byDistance(water.filter((f) => f.open && f.fall >= A5_WATER_FALL).map((f) => fallPose(f, EYE_FALL)));
+  const truncated = byDistance(water.filter((f) => f.front !== null).map((f): A5TruncatedPose => {
+    const [fx, fy, fz] = f.front!;
+    const tx = fx + 0.5, ty = fy + 0.5, tz = fz + 0.5;
+    return { ...out(f, lookAt(tx + EYE_TRUNCATED * DIR_DX[f.dir]!, ty + 4, tz + EYE_TRUNCATED * DIR_DZ[f.dir]!, tx, ty, tz)), front: f.front! };
+  }));
+  const spillSlope = nearest(water.filter((f) => f.spill >= SPILL_SLOPE_MIN).map((f) => {
+    const [sx, sy, sz] = f.spillTo!;
+    const tx = (f.voxel[0] + DIR_DX[f.dir]! + sx) / 2 + 0.5;
+    const ty = (f.voxel[1] - f.fall + sy) / 2 + 0.5;
+    const tz = (f.voxel[2] + DIR_DZ[f.dir]! + sz) / 2 + 0.5;
+    return out(f, lookAt(tx + EYE_SPILL * DIR_DX[f.dir]!, ty + 6, tz + EYE_SPILL * DIR_DZ[f.dir]!, tx, ty, tz));
+  }));
+  const islandFall = nearest(facts.filter((f) => f.kind === KIND_ISLAND && f.fall >= ISLAND_SPRING_MIN_FALL).map((f) => fallPose(f, EYE_FALL)));
+  const lavaFall = biomeRegion ? nearest(facts.filter((f) => f.kind === KIND_LAVA && f.fall >= A5_LAVA_FALL).map((f) => fallPose(f, EYE_LAVA_FALL))) : null;
+  let lavaPool: A5Pose | null = null;
+  if (biomeRegion) {
+    const { x0, z0, w, d, cells } = L.g;
+    const plane = w * d;
+    for (let y = GRID_Y0 + 1; y < GRID_Y0 + GRID_H - 1; y++) {
+      for (let z = L.lz0; z < L.lz1; z++) {
+        for (let x = L.lx0; x < L.lx1; x++) {
+          const i = (y - GRID_Y0) * plane + z * w + x;
+          const b = L.fl[i]!;
+          if (fluidType(b) !== FLUID_LAVA || fluidFalling(b) || cells[i]! >> BIOME_SHIFT !== ABYSS || (cells[i - plane]! & SOLID_BIT) === 0) continue;
+          const up = cells[i + plane]!;
+          if ((up & SOLID_BIT) !== 0 || up >> BIOME_SHIFT !== ABYSS || hasFluid(L.fl[i + plane]!)) continue;
+          const distance = distOf(x0 + x, z0 + z);
+          if (lavaPool !== null && lavaPool.distance <= distance) continue;
+          lavaPool = { x: x0 + x + 0.5, y: y + 1.5, z: z0 + z + 0.5, yaw: longestRunYaw(L.g, x, y + 1, z), pitch: -30, voxel: [x0 + x, y, z0 + z], component: 0, fall: 0, distance };
+        }
+      }
+    }
+  }
+  return { waterfall, truncated, islandFall, lavaFall, lavaPool, spillSlope };
 }

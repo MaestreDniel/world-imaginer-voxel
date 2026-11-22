@@ -28,13 +28,13 @@ export const SUB_PROJECTS: readonly SubProjectId[] = [
  */
 export const CURRENT_SP: SubProjectId = 'SP7a';
 
-/** Every metric id of master spec §6.4 (E1-E7 expanded; C7-C9 are SP6a's, its spec §10.1, §13 item 18). */
+/** Every metric id of master spec §6.4 (E1-E7 expanded; C7-C9 are SP6a's, its spec §10.1, §13 item 18; A5 SP7a's, its spec §13.1). */
 export type MetricId =
   | 'N1' | 'N2' | 'N3' | 'N4' | 'N5' | 'N6'
   | 'T1' | 'T1lowland' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'T8'
   | 'B1' | 'B2' | 'B3' | 'B4' | 'B5'
   | 'C1' | 'C2' | 'C3' | 'C4' | 'C5' | 'C6' | 'C7' | 'C8' | 'C9'
-  | 'A1' | 'A2' | 'A3' | 'A4'
+  | 'A1' | 'A2' | 'A3' | 'A4' | 'A5'
   | 'S1' | 'S2' | 'S3'
   | 'O1' | 'O2'
   | 'V1' | 'V2' | 'V3' | 'V4' | 'V5' | 'V6'

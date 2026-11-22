@@ -4,10 +4,12 @@
  * (`referenceSettle`), as the caves metric's region worker reads its regions: A1's population and dry share, A3's four
  * counts, A4's bodies, the pooled parts, and SP7a's review poses; A2 by origin with the water/lava contacts
  * (`referenceSettleOrigins`, `a2RegionCounts`), and the springs found from a region's proto (`springsOfRegion`, on
- * real columns of seed '42' and on hand-built side-by-side springs) with a spring's own front (`springFront`).
+ * real columns of seed '42' and on hand-built side-by-side springs) with a spring's own front (`springFront`); A5's
+ * springs and falls (`springFacts`, `a5RegionCounts`, `a5Parts`) and their review poses (`a5Examples`).
  */
 import { describe, expect, test } from 'vitest';
 import { CAVE_BIOME, CAVE_KIND, MIN_Y } from '../../src/core/constants';
+import type { Seed64 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
@@ -23,8 +25,9 @@ import { spreadSides } from '../harness/caveMetrics';
 import { referenceSettle, referenceSettleKey, referenceSettleOrigins } from '../harness/refs';
 import { genRegion, regionView, type RegionView } from '../harness/region';
 import {
-  a2Parts, a2RegionCounts, ORIGIN_AQUIFER, ORIGIN_SKY_OPEN, ORIGIN_SPRING, protoRuleReader, regionSpringList, regionVoxelOf, springFront, springsOfRegion,
-  waterExamples, waterParts, waterRegionCounts, type A2RegionCounts, type WaterBox, type WaterRegionCounts,
+  a2Parts, a2RegionCounts, a5Examples, a5Parts, a5RegionCounts, loadWaterRegion, ORIGIN_AQUIFER, ORIGIN_SKY_OPEN, ORIGIN_SPRING, pooledClarkEvans, protoRuleReader,
+  regionSpringList, regionVoxelOf, SPILL_SLOPE_MIN, springFacts, springFront, springsOfRegion, waterExamples, waterParts, waterRegionCounts,
+  type A2RegionCounts, type A5RegionOptions, type WaterBox, type WaterRegionCounts,
 } from '../harness/water';
 
 const MiB = 1 << 20;
@@ -398,6 +401,52 @@ describe('A2: the fluid voxels one application of §4.1\'s rules would change, t
   });
 });
 
+/**
+ * Two side-by-side water springs on a hand-built view (Task 23): water tries only (8 per chunk, no lava); the first chunk
+ * of the view holding two tries at horizontally adjacent positions whose outlets (two, inside the view) open on neither
+ * spring's other faces; `build` puts rock to y 100 and the two springs at y 80 with their outlets' shafts (y 72 … 80).
+ */
+function sideBySide(): { params: Params; seed: Seed64; a: number[]; b: number[]; build: () => Hand } {
+  const base = resolveProfile('default');
+  const params: Params = { ...base, springs: { ...base.springs, water: { ...base.springs.water, tries: 8 }, lava: { ...base.springs.lava, tries: 0 } } };
+  const seed = seedFromInput('42');
+  const draws = new Float64Array(40);
+  let pair: { a: number[]; b: number[] } | null = null;
+  const near = (p: readonly number[], q: readonly number[]): boolean => Math.abs(p[0]! - q[0]!) + Math.abs(p[1]! - q[1]!) === 1;
+  const same = (p: readonly number[], q: readonly number[]): boolean => p[0] === q[0] && p[1] === q[1];
+  const DX = [0, 1, 0, -1];
+  const DZ = [-1, 0, 1, 0];
+  for (let cz = CX0; cz < CX0 + SIDE && pair === null; cz++) {
+    for (let cx = CX0; cx < CX0 + SIDE && pair === null; cx++) {
+      springTries(seed, 'water', cx, cz, 8, draws);
+      const tries = Array.from({ length: 8 }, (_, t) => {
+        const x = 16 * cx + draws[5 * t]!, z = 16 * cz + draws[5 * t + 1]!, d = draws[5 * t + 2]!;
+        return [x, z, d, x + DX[d]!, z + DZ[d]!];
+      });
+      for (const a of tries) {
+        for (const b of tries) {
+          const oa = a.slice(3), ob = b.slice(3);
+          if (pair !== null || !near(a, b) || same(oa, ob) || same(oa, b) || same(ob, a) || near(ob, a) || near(oa, b)) continue;
+          if ([oa, ob].some(([x, z]) => x! < X0 || x! >= X1 || z! < X0 || z! >= X1)) continue;
+          pair = { a, b };
+        }
+      }
+    }
+  }
+  expect(pair).not.toBeNull();
+  const { a, b } = pair!;
+  /** Rock to y 100; the two springs at y 80 with their outlets' shafts (y 72 … 80). */
+  const build = (): Hand => {
+    const h: Hand = { block: (_x, y) => (y <= 100 ? STONE : AIR), cells: new Map() };
+    for (const s of [a, b]) {
+      h.cells.set(key(s[0]!, 80, s[1]!), { cave: 0, fluid: WATER_SOURCE });
+      fill(h, 0, NO_FLUID, s[3]!, s[3]!, 72, 80, s[4]!, s[4]!);
+    }
+    return h;
+  };
+  return { params, seed, a, b, build };
+}
+
 describe('the springs of a region from its proto (SP7a §3.1, `springsOfRegion`)', () => {
   test('the replay finds exactly T\'s springs on 16 real columns of seed \'42\' (8 with water springs, 8 with lava springs)', async () => {
     const params = resolveProfile('default');
@@ -428,45 +477,7 @@ describe('the springs of a region from its proto (SP7a §3.1, `springsOfRegion`)
   }, 120_000);
 
   test('two side-by-side springs on a hand-built view are both found; one whose neighbour is a source at no spring is not', () => {
-    // Water tries only (8 per chunk, no lava); the first chunk of the view holding two tries at horizontally adjacent
-    // positions whose outlets (two, inside the view) open on neither spring's other faces.
-    const base = resolveProfile('default');
-    const params: Params = { ...base, springs: { ...base.springs, water: { ...base.springs.water, tries: 8 }, lava: { ...base.springs.lava, tries: 0 } } };
-    const seed = seedFromInput('42');
-    const draws = new Float64Array(40);
-    let pair: { a: number[]; b: number[] } | null = null;
-    const near = (p: readonly number[], q: readonly number[]): boolean => Math.abs(p[0]! - q[0]!) + Math.abs(p[1]! - q[1]!) === 1;
-    const same = (p: readonly number[], q: readonly number[]): boolean => p[0] === q[0] && p[1] === q[1];
-    const DX = [0, 1, 0, -1];
-    const DZ = [-1, 0, 1, 0];
-    for (let cz = CX0; cz < CX0 + SIDE && pair === null; cz++) {
-      for (let cx = CX0; cx < CX0 + SIDE && pair === null; cx++) {
-        springTries(seed, 'water', cx, cz, 8, draws);
-        const tries = Array.from({ length: 8 }, (_, t) => {
-          const x = 16 * cx + draws[5 * t]!, z = 16 * cz + draws[5 * t + 1]!, d = draws[5 * t + 2]!;
-          return [x, z, d, x + DX[d]!, z + DZ[d]!];
-        });
-        for (const a of tries) {
-          for (const b of tries) {
-            const oa = a.slice(3), ob = b.slice(3);
-            if (pair !== null || !near(a, b) || same(oa, ob) || same(oa, b) || same(ob, a) || near(ob, a) || near(oa, b)) continue;
-            if ([oa, ob].some(([x, z]) => x! < X0 || x! >= X1 || z! < X0 || z! >= X1)) continue;
-            pair = { a, b };
-          }
-        }
-      }
-    }
-    expect(pair).not.toBeNull();
-    const { a, b } = pair!;
-    /** Rock to y 100; the two springs at y 80 with their outlets' shafts (y 72 … 80). */
-    const build = (): Hand => {
-      const h: Hand = { block: (_x, y) => (y <= 100 ? STONE : AIR), cells: new Map() };
-      for (const s of [a, b]) {
-        h.cells.set(key(s[0]!, 80, s[1]!), { cave: 0, fluid: WATER_SOURCE });
-        fill(h, 0, NO_FLUID, s[3]!, s[3]!, 72, 80, s[4]!, s[4]!);
-      }
-      return h;
-    };
+    const { params, seed, a, b, build } = sideBySide();
     const springsOf = (h: Hand): number[][] => {
       const view = viewOf(h);
       const list = regionSpringList(view, params);
@@ -479,5 +490,193 @@ describe('the springs of a region from its proto (SP7a §3.1, `springsOfRegion`)
     const h = build();
     for (let y = 72; y <= 80; y++) h.cells.delete(key(b[3]!, y, b[4]!));
     expect(springsOf(h)).toEqual([]);
+  });
+});
+
+/** A spring list of hand-placed springs, each [x, y, z, direction, kind] (kind 0 water when left out). */
+function springListOf(view: RegionView, springs: ReadonlyArray<readonly number[]>): SpringList {
+  const n = springs.length;
+  const list: SpringList = { n, pos: new Int32Array(n), kind: new Uint8Array(n), dir: new Uint8Array(n) };
+  springs.forEach(([x, y, z, d, k], i) => {
+    list.pos[i] = referenceSettleKey(view, x!, y!, z!);
+    list.dir[i] = d!;
+    list.kind[i] = k ?? 0;
+  });
+  return list;
+}
+
+/**
+ * A5 on a hand-built view, as the region worker reads it: the settle reference over the whole view with its contacts
+ * (`referenceSettleOrigins`), the springs' facts and A5's counts on the whole view as the interior.
+ */
+function a5Of(h: Hand, springs: ReadonlyArray<readonly number[]> | ((view: RegionView) => SpringList), opts: Partial<A5RegionOptions> = {}) {
+  const view = viewOf(h);
+  const list = typeof springs === 'function' ? springs(view) : springListOf(view, springs);
+  const settled = referenceSettle(view, ALL);
+  const contacts = new Set<number>();
+  referenceSettleOrigins(view, ALL, list, new Map(), contacts);
+  const region = loadWaterRegion(view, settled, ALL);
+  const facts = springFacts(view, region, list, contacts);
+  const counts = a5RegionCounts(view, region, list, facts, { steep: null, waterfallRegion: true, truncatedRegion: true, biomeRegion: false, islandRegion: false, ...opts });
+  return { view, list, settled, contacts, region, facts, counts };
+}
+
+/**
+ * Rock to y 100; a water spring at (0, 80, 0) facing east, its outlet shaft (x 1, z 0) from y `floor` + 1 up to the
+ * outlet, and on to the sky when `open`, over a chamber 15 × 15 wide and 3 high on the rock at `floor`.
+ */
+function fallWorld(floor: number, open: boolean): Hand {
+  const h: Hand = { block: (_x, y) => (y <= 100 ? STONE : AIR), cells: new Map() };
+  h.cells.set(key(0, 80, 0), { cave: 0, fluid: WATER_SOURCE });
+  fill(h, 0, NO_FLUID, 1, 1, floor + 1, open ? 100 : 80, 0, 0);
+  fill(h, 0, NO_FLUID, -6, 8, floor + 1, floor + 3, -7, 7);
+  return h;
+}
+
+/** Stone to y 70 with a 1-wide tagged corridor down a stair (each step 3 long and 1 deep from x 0) and a water spring at (−1, 41, 0) facing east into it. */
+function stairWorld(): Hand {
+  const h: Hand = { block: (_x, y) => (y <= 70 ? STONE : AIR), cells: new Map() };
+  for (let x = 0; x <= 30; x++) fill(h, CHEESE, NO_FLUID, x, x, 41 - Math.floor(x / 3), 45, 0, 0);
+  h.cells.set(key(-1, 41, 0), { cave: 0, fluid: WATER_SOURCE });
+  return h;
+}
+const STAIR_SPRING = [[-1, 41, 0, 1]] as const;
+
+describe('A5: the springs and their falls (SP7a §13.1)', () => {
+  test('a 12-block fall open to the sky is visible (histogram bin 12); under an overhang it is not; a 7-block fall is not', () => {
+    const open = a5Of(fallWorld(67, true), [[0, 80, 0, 1]]);
+    expect(open.facts).toHaveLength(1);
+    expect(open.facts[0]).toMatchObject({ kind: 0, fall: 12, open: true, front: null });
+    expect(open.counts).toMatchObject({ springs: 1, waterSprings: 1, visibleFalls: 1, truncated: 0 });
+    expect(open.counts.fallHeights).toEqual([[12, 1]]);
+    // The review pose: 24 blocks out along the spring's direction (east) at the fall's mid-height, facing west at it.
+    const ex = a5Examples(open.region, open.facts, { x: 0.5, z: 0.5 }, false);
+    expect(ex.waterfall).toHaveLength(1);
+    expect(ex.waterfall[0]).toMatchObject({ voxel: [0, 80, 0], fall: 12, x: 25.5, y: 74.5, z: 0.5, yaw: 270, pitch: 0, distance: 0 });
+    const roof = a5Of(fallWorld(67, false), [[0, 80, 0, 1]]);
+    expect(roof.facts[0]).toMatchObject({ fall: 12, open: false });
+    expect(roof.counts.visibleFalls).toBe(0);
+    expect(roof.counts.fallHeights).toEqual([]);
+    const short = a5Of(fallWorld(72, true), [[0, 80, 0, 1]]);
+    expect(short.facts[0]).toMatchObject({ fall: 7, open: true });
+    expect(short.counts.visibleFalls).toBe(0);
+  });
+
+  test('a spring whose front is cut at the cap in the region\'s settle is truncated; one whose spill ends on a ledge is not', () => {
+    const cut = a5Of(stairWorld(), STAIR_SPRING);
+    const f = cut.facts[0]!;
+    expect(f.front).not.toBeNull();
+    expect(cut.counts).toMatchObject({ waterSprings: 1, truncated: 1 });
+    // The front is a bit-6 voxel of the spring's lone front, the nearest the outlet (0, 41, 0) of them.
+    const lone = new Map<number, number>();
+    springFront(cut.view, cut.list, 0, createSettleScratch(), { set: (x, y, z, b) => { lone.set(referenceSettleKey(cut.view, x, y, z), b); } });
+    const cuts = [...lone.keys()].filter((k) => fluidUnsettled(cut.region.fl[k]!)).map((k) => regionVoxelOf(cut.view, k));
+    expect(cuts.length).toBeGreaterThan(0);
+    const d2 = (p: readonly number[]): number => p[0]! ** 2 + (p[1]! - 41) ** 2 + p[2]! ** 2;
+    expect(d2(f.front!)).toBe(Math.min(...cuts.map(d2)));
+    // Its spill runs down the stair from the outlet (no fall), so it is a spillSlope candidate.
+    expect(f.fall).toBe(0);
+    expect(f.spill).toBeGreaterThanOrEqual(SPILL_SLOPE_MIN);
+    const ex = a5Examples(cut.region, cut.facts, { x: 0.5, z: 0.5 }, false);
+    expect(ex.truncated).toHaveLength(1);
+    expect(ex.truncated[0]!.front).toEqual(f.front);
+    expect(ex.spillSlope?.voxel).toEqual([-1, 41, 0]);
+    // The 12-block fall onto the chamber's floor spreads to level 7 and stops: not truncated.
+    const ledge = a5Of(fallWorld(67, true), [[0, 80, 0, 1]]);
+    expect(ledge.facts[0]!.front).toBeNull();
+    expect([...ledge.settled.values()].some((b) => fluidUnsettled(b))).toBe(false);
+  });
+
+  test('a spring whose lone front reaches the cap where a nearer aquifer source also feeds (no bit 6 there in the region\'s settle) is not truncated', () => {
+    const base = a5Of(stairWorld(), STAIR_SPRING);
+    // The spring's cut voxels; beside each (z 1, the same y) an aquifer source in a niche.
+    const cuts = [...base.settled].filter(([, b]) => fluidUnsettled(b)).map(([k]) => regionVoxelOf(base.view, k));
+    expect(cuts.length).toBeGreaterThan(0);
+    const h = stairWorld();
+    for (const [x, y] of cuts) h.cells.set(key(x, y, 1), { cave: CHEESE, fluid: WATER_SOURCE });
+    const fed = a5Of(h, STAIR_SPRING);
+    // The spring's lone front still reaches the cap there (the niches' sources spread nothing in it) …
+    const lone: number[] = [];
+    springFront(fed.view, fed.list, 0, createSettleScratch(), { set: (x, y, z, b) => { if (fluidUnsettled(b)) lone.push(referenceSettleKey(fed.view, x, y, z)); } });
+    expect(lone.length).toBeGreaterThan(0);
+    // … but the region's settle sets no bit 6 on its voxels, which the nearer sources feed.
+    for (const [x, y, z] of cuts) expect(fluidUnsettled(fed.region.fl[referenceSettleKey(fed.view, x, y, z)]!), `${x},${y},${z}`).toBe(false);
+    expect(fed.facts[0]!.front).toBeNull();
+    expect(fed.counts.truncated).toBe(0);
+  });
+
+  test('a spring whose water meets lava (bit 6 on the contacts only) is not truncated', () => {
+    // A 1-wide corridor on the floor (z 0, x 0 … 12), the spring at (−1, 41, 0) facing east into it and a lava source at
+    // x 6: water spreads to x 0 … 5 (levels 1 … 6), lava to x 3 … 5 and 7 … 9, so x 3 … 5 are contacts (lava, bit 6).
+    const h: Hand = { block: (_x, y) => (y <= 70 ? STONE : AIR), cells: new Map() };
+    fill(h, CHEESE, NO_FLUID, 0, 12, 41, 41, 0, 0);
+    h.cells.set(key(-1, 41, 0), { cave: 0, fluid: WATER_SOURCE });
+    h.cells.set(key(6, 41, 0), { cave: CHEESE, fluid: LAVA_SOURCE });
+    const r = a5Of(h, [[-1, 41, 0, 1]]);
+    expect([...r.contacts].map((k) => regionVoxelOf(r.view, k)).sort((p, q) => p[0] - q[0])).toEqual([[3, 41, 0], [4, 41, 0], [5, 41, 0]]);
+    expect(r.facts[0]!.front).toBeNull();
+    expect(r.counts.truncated).toBe(0);
+    // Without the contact set the same bit-6 voxels would cut it.
+    expect(springFacts(r.view, r.region, r.list, new Set())[0]!.front).not.toBeNull();
+  });
+
+  test('adjacentSprings on Task 23\'s two side-by-side springs reads 2', () => {
+    const { params, seed, build } = sideBySide();
+    const r = a5Of(build(), (view) => {
+      const list = regionSpringList(view, params);
+      springsOfRegion(view, seed, params, list);
+      return list;
+    });
+    expect(r.counts.springs).toBe(2);
+    expect(r.counts.adjacentSprings).toBe(2);
+    expect(a5Parts([r.counts]).adjacentSprings).toBe(2);
+  });
+
+  test('borderRatio: a spring at each of a chunk\'s 256 positions, 60 of them on its border, reads 1', () => {
+    const springs: number[][] = [];
+    for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) springs.push([lx, 50, lz, 0]);
+    const r = a5Of({ block: (_x, y) => (y <= 100 ? STONE : AIR), cells: new Map() }, springs);
+    expect(r.counts.springs).toBe(256);
+    expect(r.counts.borderSprings).toBe(60);
+    expect(a5Parts([r.counts]).borderRatio).toBeCloseTo(1, 12);
+  });
+
+  test('a water voxel in nibble-3 air counts in abyssWater; water beside abyss air in abyssWaterFace and, on a spread side, waterIntoAbyss', () => {
+    const ABYSS_AIR = CHEESE | (CAVE_BIOME.abyss << 4);
+    const h: Hand = { block: (_x, y) => (y <= 70 ? STONE : AIR), cells: new Map() };
+    // A water voxel in abyss air (boxed in by rock), and a water source in plain cave air beside a dry abyss voxel.
+    h.cells.set(key(5, 20, 0), { cave: ABYSS_AIR, fluid: WATER_SOURCE });
+    h.cells.set(key(10, 20, 0), { cave: CHEESE, fluid: WATER_SOURCE });
+    h.cells.set(key(11, 20, 0), { cave: ABYSS_AIR, fluid: NO_FLUID });
+    const r = a5Of(h, []);
+    expect(r.counts).toMatchObject({ abyssWater: 1, abyssWaterFace: 1, waterIntoAbyss: 1, abyssAir: 1 });
+    const p = a5Parts([r.counts]);
+    expect(p.abyssWater).toBe(1);
+    // No spring: the spring parts have no population.
+    expect(p.borderRatio).toBeNaN();
+    expect(p.springsTruncated).toBeNaN();
+  });
+
+  test('Clark-Evans of a square lattice of visible falls ≈ 2.0 (SP6b Spec correction 18\'s check); waterfalls per km² of steep land', () => {
+    // 16 visible 12-block falls whose outlets lie on a lattice of step 16 over the view's 64 × 64 blocks.
+    const h: Hand = { block: (_x, y) => (y <= 100 ? STONE : AIR), cells: new Map() };
+    const springs: number[][] = [];
+    for (const z of [-24, -8, 8, 24]) {
+      for (const x of [-28, -12, 4, 20]) {
+        h.cells.set(key(x, 80, z), { cave: 0, fluid: WATER_SOURCE });
+        fill(h, 0, NO_FLUID, x + 1, x + 1, 68, 100, z, z);
+        springs.push([x, 80, z, 1]);
+      }
+    }
+    const r = a5Of(h, springs, { steep: new Uint8Array(64 * 64).fill(1) });
+    expect(r.counts.visibleFalls).toBe(16);
+    expect(r.counts.fallHeights).toEqual([[12, 16]]);
+    expect(Math.abs(r.counts.clarkEvans - 2)).toBeLessThanOrEqual(0.1);
+    const p = a5Parts([r.counts, r.counts]);
+    expect(Math.abs(p.clarkEvans - 2)).toBeLessThanOrEqual(0.1);
+    expect(pooledClarkEvans([r.counts])).toBeCloseTo(r.counts.clarkEvans, 12);
+    // Every position is steep land (ground tops at 67 or 100, ≥ 63): 16 falls over 64 × 64 blocks.
+    expect(r.counts.steepKm2).toBeCloseTo(4096 / 1e6, 12);
+    expect(p.waterfalls).toBeCloseTo(16 / (4096 / 1e6), 6);
   });
 });
