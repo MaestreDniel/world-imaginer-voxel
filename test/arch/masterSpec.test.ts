@@ -232,6 +232,9 @@
  * item 10 (§3.14's radius argument, the caps 12 and 14, the seeds, `FLUID_MODE`, the two fixed points merged with lava
  * winning, the abyss, the least fixed point, the budget as a target; §3.16's and §9's settle rows), and the Region
  * cache paragraph's format 5 (rulings P1).
+ * The settle reference (Task 17) lands item 16's DT1 part (§6.4's DT1 row: `settleReference` over the three settle
+ * windows, `settleIsolated`, `DT1.light` on the first settle window) and item 19's test entry ("(SP7a: the settle
+ * reference in harness/refs.ts", an `SP7A_MODULES` row; Task 22 adds the caves metric to the same parenthesis).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -3386,6 +3389,7 @@ describe('master spec amendments (SP7a §16)', () => {
   const SP7A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+blocks\/kinds\.ts /, 'fluidRules.ts (SP7a; also the fluid surface', 'src/world/blocks/fluidRules.ts'],
     [/^\s+metrics\/\*\.ts\s/, 'SP7a: sp7aGoldens.ts', 'src/metrics/sp7aGoldens.ts'],
+    [/^\s+test\/ unit\/ metrics\//, '(SP7a: the settle reference in harness/refs.ts', 'test/harness/refs.ts'],
   ];
 
   test('§1 names each SP7a module in its entry, which exists (SP7a spec §16 item 19)', () => {
@@ -3740,6 +3744,14 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(dt2, 'no DT2 row in §6.4').toBeDefined();
     expect(dt2).toContain('(amended by SP6b). SP7a: `probeBulk` compares the stored solidity with `terrainSolidAt` (the density probe\'s solidity, or a tagged voxel the aquifer makes a barrier) and `tagProbe` reads 0 where `barrierAt` holds (barriers clear the tag); `aquiferProbe` counts the checked voxels T left non-solid, tagged and untagged, whose stored proto fluid byte ≠ `fluidAt` (both of T\'s fluid rules are point functions; spring voxels excluded) (amended by SP7a) |');
     expect(THRESHOLDS.DT2?.aquiferProbe).toEqual({ max: 0, activeFrom: 'SP7a' });
+  });
+
+  test('§6.4\'s DT1 row: settleReference and settleIsolated (SP7a spec §16 item 16)', () => {
+    const dt1 = text.split('\n').find((l) => l.startsWith('| DT1 |'));
+    expect(dt1, 'no DT1 row in §6.4').toBeDefined();
+    expect(dt1).toContain('(`DT1.light`) (amended by SP4a). SP7a: `settleReference` counts the voxels of the interior 6 × 6 columns of three 10 × 10-chunk settle windows (a coast with its spills and a flooded cave border, a water/lava contact, a stream over a pool the settle made) whose final fluid, each column decorated from its own 3 × 3, ≠ the global settle reference over the window\'s T (`harness/refs.ts`\' `referenceSettle`: the same `fluidRules.ts`, no window); `settleIsolated` counts a column decorated alone whose final fluid ≠ the window\'s; `DT1.light` re-asserted on the first settle window (amended by SP7a) | exact |');
+    expect(THRESHOLDS.DT1?.settleReference).toEqual({ max: 0, activeFrom: 'SP7a' });
+    expect(THRESHOLDS.DT1?.settleIsolated).toEqual({ max: 0, activeFrom: 'SP7a' });
   });
 
   test('§4.16\'s Water setting (SP7a spec §16 item 14)', () => {

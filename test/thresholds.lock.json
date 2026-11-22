@@ -1,5 +1,5 @@
 {
-  "sha256": "92a782809bd02c0c2f59fa4dfaa4ff083152b9c911b3bb56b44606a435c452bd",
+  "sha256": "413a18050d0655db7f3f87fb78585ce16694949d3ebe48213c06e9babec822c4",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -412,6 +412,14 @@
         },
         "mismatches": {
           "activeFrom": "SP3a",
+          "max": 0
+        },
+        "settleIsolated": {
+          "activeFrom": "SP7a",
+          "max": 0
+        },
+        "settleReference": {
+          "activeFrom": "SP7a",
           "max": 0
         }
       },

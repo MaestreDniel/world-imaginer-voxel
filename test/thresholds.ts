@@ -67,9 +67,12 @@ export const THRESHOLDS: ThresholdTable = {
   // SP4a spec §9.1 (D25): the light part, the upTo 'L' region hash over threads and orders (`light.metric.ts`).
   // SP6a spec §10.3: the carver path cache's parts, the region hash at an LRU of 1, of 1,024 and warm from another
   // region, and a column generated alone (`isolatedColumn`), each against the cold region (`region.metric.ts`).
+  // SP7a spec §13.4 (D30; Task 17): D's settled fluid against the global settle reference over the settle windows, and
+  // a column decorated alone against the window (`region.metric.ts`, `.out/DT1.settle.json`).
   DT1: {
     mismatches: { max: 0, activeFrom: 'SP3a' }, lightMismatches: { max: 0, activeFrom: 'SP4a' },
     carverCache: { max: 0, activeFrom: 'SP6a' }, isolated: { max: 0, activeFrom: 'SP6a' },
+    settleReference: { max: 0, activeFrom: 'SP7a' }, settleIsolated: { max: 0, activeFrom: 'SP7a' },
   },
   T1: {
     band: { max: 0.25, activeFrom: 'SP3b' }, span: { min: 60, activeFrom: 'SP3b' },

@@ -12,7 +12,8 @@ import { DEFAULT_LIGHT_TABLES, effOpacity } from '../../src/world/blocks/light';
 import { metricTest } from '../harness/metric';
 import { referenceLight } from '../harness/refs';
 import { genRegion, type GenRegionOptions, type RegionView } from '../harness/region';
-import { grassUnderIslands, islandWindowAt, MIN_DEEP_GRASS } from '../harness/windowScans';
+import { SETTLE_WINDOWS } from '../harness/settleWindows';
+import { grassUnderIslands, islandWindowAt, MIN_DEEP_GRASS, settleWindowAt } from '../harness/windowScans';
 
 /**
  * The light's metrics L1, L2, DT1's light part and S1's grass at sky 0 (SP4a spec §9.1, D25, D26; ruling P33), over
@@ -59,7 +60,10 @@ import { grassUnderIslands, islandWindowAt, MIN_DEEP_GRASS } from '../harness/wi
  *   abyss air (these spawn and preset sites need not reach depth ≥ 1.0 above the rock floor) reads `abyssAir` 0, "not
  *   sampled", rather than a lit count of 0 over nothing.
  * - DT1's light part (gated, `.out/DT1.light.json`): `lightMismatches`, the runs of a region whose `litHash` (blocks,
- *   fluid, light, aux A and B of R) differs from the first run's.
+ *   fluid, light, aux A and B of R) differs from the first run's. SP7a (spec §13.4, Task 17): on every tier the sites
+ *   also hold the first settle window (`SETTLE_WINDOWS[0]`, `settleWindowAt`: a coast with its spills and a flooded
+ *   cave border, seed '42', profile default; with springs once Task 19 re-scans it), so threads and orders are compared
+ *   with D's settle; it is a DT1 site only (its four runs' `litHash`), measured by none of L1, L2 and S1.
  * - S1's `grassSky0` (recorded, activeFrom SP6a, `.out/S1.light.json`): the share of grass_block tops (a grass_block
  *   voxel whose voxel above has effective opacity < 15) with sky 0 in the voxel above (above y 319: sky 15), over the
  *   interior columns, pooled over every region but the large island over grass (ruling R19); 0 when no region has a
@@ -84,6 +88,8 @@ interface Site {
   readonly cx0: number;
   readonly cz0: number;
   readonly size: number;
+  /** DT1's light part only (the settle window): its runs' `litHash`, no L1, L2 or S1 reading. */
+  readonly dt1Only?: boolean;
 }
 
 /** `render.metric.ts`' regions (SP4a spec §9.1). */
@@ -109,6 +115,8 @@ function sites(): Site[] {
     const [a, b] = ISLAND_GRASS_WINDOW;
     out.push({ label: `floating_islands island over grass W(${a}, ${b})`, seed: '42', profile: 'floating_islands', ...islandWindowAt(a, b) });
   }
+  const settle = SETTLE_WINDOWS[0]!;
+  out.push({ label: `settle window 0 (${settle.feature}) S(${settle.a}, ${settle.b})`, seed: '42', profile: 'default', ...settleWindowAt(settle.a, settle.b), dt1Only: true });
   return out;
 }
 
@@ -277,6 +285,7 @@ async function measure(): Promise<Measurement> {
         continue;
       }
       ref = hash;
+      if (s.dt1Only === true) continue;
       // The first run: L1, L2 and S1 over the interior columns.
       const view = r.view;
       const box = loadBox(view);
@@ -368,11 +377,12 @@ async function measure(): Promise<Measurement> {
     }
   }
   const seconds = Math.round(performance.now() - t0) / 1000;
-  const common = { regions: list.length, columns, seconds };
+  // The regions L1, L2 and S1 measure (the settle window is DT1's only).
+  const common = { regions: list.filter((s) => s.dt1Only !== true).length, columns, seconds };
   return {
     L1: { mismatches, skyMismatches, blockMismatches, voxels, ...perSiteL1, ...common },
     L2: { enclosedLit, enclosedAir: enclosed, abyssLit, abyssAir, ...perSiteL2, ...common },
-    DT1: { lightMismatches, runs, genSeconds: Math.round(genMs) / 1000, ...common },
+    DT1: { lightMismatches, runs, genSeconds: Math.round(genMs) / 1000, ...common, regions: list.length },
     S1: {
       grassSky0: grassTops === 0 ? 0 : grassSky0 / grassTops, grassTopsSky0: grassSky0, grassTops,
       islandWindowGrassSky0: islandWindow.tops === 0 ? 0 : islandWindow.sky0 / islandWindow.tops, islandWindowGrassTops: islandWindow.tops,

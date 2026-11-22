@@ -9,9 +9,12 @@
  * `referenceCarve`, the global carver reference of `C7.carverReference`: every path whose box meets a region, carved
  * into the region's box from `carverPath` directly, with no path cache and no per-column window. SP6b (spec §12.4,
  * D22): `raycastVisible`, R3's raycast visibility reference: 3D DDA rays in cube-map directions from the eye, the
- * sections they enter; it shares no code with `render/culling/caveCulling.ts`.
+ * sections they enter; it shares no code with `render/culling/caveCulling.ts`. SP7a (spec §4.1, §13.4, D30):
+ * `referenceSettle`, the global settle reference of `DT1.settleReference`: §4.1's rules through `fluidRules.ts`'
+ * `ruleOffers` over a whole region's proto in plain sweeps, sharing no code with `gen/fluids/settle.ts` (no window,
+ * seeds, worklist or table).
  */
-import { CARVER_WINDOW_R, CAVE_FILM_KIND, CAVE_KIND, CORNER_DRY, CORNER_FULL, CORNER_SOLID, caveKindOf } from '../../src/core/constants';
+import { CARVER_WINDOW_R, CAVE_FILM_KIND, CAVE_KIND, CORNER_DRY, CORNER_FULL, CORNER_SOLID, caveBiomeOf, caveKindOf } from '../../src/core/constants';
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
 import { carveTest, densityTopOf, floorYAt, wetAt } from '../../src/gen/caves/carve';
@@ -21,8 +24,11 @@ import { createGenContext, noiseFor } from '../../src/gen/context';
 import { DEFAULT_MESH_TABLES, type MeshTables } from '../../src/mesh/greedy';
 import { PACK_LAYOUT } from '../../src/mesh/packing';
 import { MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, type ColumnMeshPayload } from '../../src/mesh/column';
-import { FLUID_LAVA, FLUID_NONE, FLUID_WATER, fluidFalling, fluidType, hasFluid } from '../../src/world/blocks/fluid';
-import { cornerDrop, cornerHeight, isPassable, surfaceHeight } from '../../src/world/blocks/fluidRules';
+import { FLUID_LAVA, FLUID_NONE, FLUID_WATER, NO_FLUID, fluidFalling, fluidType, hasFluid, packFluid } from '../../src/world/blocks/fluid';
+import {
+  FLUID_VALUE_DRY, FLUID_VALUE_FALLING, FLUID_VALUE_SOURCE, cornerDrop, cornerHeight, isPassable, ruleOffers, surfaceHeight,
+  type FluidRuleReader,
+} from '../../src/world/blocks/fluidRules';
 import { AIR, BEDROCK } from '../../src/world/blocks/index';
 import { ALL_FACES, FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST, PASS_CUTOUT, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import { DEFAULT_LIGHT_TABLES, effEmit, effOpacity, fallBlocked, type LightTables } from '../../src/world/blocks/light';
@@ -548,4 +554,162 @@ export function raycastVisible(
       }
     }
   }
+}
+
+/** The value codes below dry (source, falling, flowing 1 … 7): one least distance per code per voxel (rulings R9). */
+const SETTLE_CODES = FLUID_VALUE_DRY;
+/** The distance of a code no derivation gives. */
+const SETTLE_NO_DIST = 255;
+
+/**
+ * `referenceSettle`'s key of world voxel (x, y, z) of `view`'s box: `((y + 64)·D + (z − z0))·W + (x − x0)` with
+ * W = 16·w, D = 16·h, x0 = 16·cx0, z0 = 16·cz0 (`referenceCarve`'s index).
+ */
+export function referenceSettleKey(view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h'>, x: number, y: number, z: number): number {
+  return ((y + 64) * 16 * view.h + (z - 16 * view.cz0)) * 16 * view.w + (x - 16 * view.cx0);
+}
+
+/**
+ * The global settle reference (SP7a spec §4.1, §13.4, D30; `DT1.settleReference`): the settled byte of every voxel of
+ * `box` (x0 ≤ x < x1, z0 ≤ z < z1, every y) whose byte differs from its proto byte, keyed `referenceSettleKey`. Slow
+ * and plain, SP6a's `referenceCarve` pattern:
+ * - **Reads.** The proto of every column of `view` (the store's proto set: blocks, fluid and cave bytes; D's final set
+ *   may already hold the settle), loaded whole into arrays; `isPassable` over the block state, the proto fluid byte
+ *   and the cave nibble (`caveBiomeOf`) as a `FluidRuleReader`, which reads `block` (passable false, fluid NO_FLUID,
+ *   nibble 0) outside the region and wherever the voxel is not passable (rulings R7). No other window.
+ * - **The rules** are `ruleOffers`, the one copy the settle calls (rulings P2: 45 ints of offers).
+ * - **The fixed point.** Water, then lava, each alone (§4.1's two fixed points): per voxel one least horizontal
+ *   distance per value code (rulings R9: d[k], the least over the derivations that give the voxel the value k, so its
+ *   level and its distance come from one derivation); every voxel holding the type's proto fluid starts as (source,
+ *   0) (§4.2), every other with no code. Then repeated sweeps over every voxel of the region, y from the top (a fall
+ *   runs down in one sweep), z, then x: at a voxel, `ruleOffers` once per code whose distance is below every lower
+ *   code's, and an offer (v, d) lowers the target's d[v] when d is below the target's least distance over the codes
+ *   ≤ v. A sweep that lowers nothing ends it. The rules read only the proto and the voxel's own distances, so a voxel
+ *   whose distances did not change since its last application would offer exactly what it offered then: a sweep
+ *   applies the rules only at the voxels whose distances changed since (all of the type's proto fluid at the first
+ *   sweep). No seed list and no cap but the distance caps 12 / 14 (`ruleOffers`' own).
+ * - **The bytes.** A voxel's value is its least code with a distance; its type's `unsettled` is the cap bit of one
+ *   more application at that value and distance. A voxel both types reached takes lava's byte with `unsettled` set (a
+ *   contact); else its type's `packFluid` (falling for the falling code, level 0 for a source, k for flowing 1 + k).
+ */
+export function referenceSettle(view: RegionView, box: { x0: number; z0: number; x1: number; z1: number }): Map<number, number> {
+  const W = 16 * view.w;
+  const D = 16 * view.h;
+  const x0 = 16 * view.cx0;
+  const z0 = 16 * view.cz0;
+  const layer = W * D;
+  const n = layer * 384;
+  const blocks = new Uint16Array(n);
+  const fluid = new Uint8Array(n);
+  const cave = new Uint8Array(n);
+  for (let cz = view.cz0; cz < view.cz0 + view.h; cz++) {
+    for (let cx = view.cx0; cx < view.cx0 + view.w; cx++) {
+      const v = view.store.proto(cx, cz);
+      if (v === null) throw new Error(`referenceSettle: column (${cx}, ${cz}) has no proto set`);
+      const bx = 16 * (cx - view.cx0);
+      const bz = 16 * (cz - view.cz0);
+      for (let sy = 0; sy < 24; sy++) {
+        const channels = [[v.sectionBlocks(sy), blocks], [v.sectionFluid(sy), fluid], [v.sectionCave(sy), cave]] as const;
+        for (const [src, dst] of channels) {
+          for (let ly = 0; ly < 16; ly++) {
+            for (let lz = 0; lz < 16; lz++) {
+              const at = ((16 * sy + ly) * D + bz + lz) * W + bx;
+              if (typeof src === 'number') dst.fill(src, at, at + 16);
+              else dst.set(src.subarray(ly * 256 + lz * 16, ly * 256 + lz * 16 + 16), at);
+            }
+          }
+        }
+      }
+    }
+  }
+  const index = (x: number, y: number, z: number): number => ((y + 64) * D + (z - z0)) * W + (x - x0);
+  const inside = (x: number, y: number, z: number): boolean => x >= x0 && x < x0 + W && z >= z0 && z < z0 + D && y >= -64 && y < 320;
+  const reader: FluidRuleReader = {
+    passable: (x, y, z) => inside(x, y, z) && isPassable(blocks[index(x, y, z)]!),
+    protoFluid: (x, y, z) => (reader.passable(x, y, z) ? fluid[index(x, y, z)]! : NO_FLUID),
+    nibble: (x, y, z) => (reader.passable(x, y, z) ? caveBiomeOf(cave[index(x, y, z)]!) : 0),
+  };
+  const out = new Int32Array(45);
+  const dist = new Uint8Array(n * SETTLE_CODES);
+  const changed = new Uint8Array(n);
+  /** Per type: each voxel's value (its least code with a distance, else dry) and its `unsettled`. */
+  const settled = (type: number): { value: Uint8Array; unsettled: Uint8Array } => {
+    dist.fill(SETTLE_NO_DIST);
+    changed.fill(0);
+    for (let i = 0; i < n; i++) {
+      const x = x0 + (i % W);
+      const z = z0 + (Math.floor(i / W) % D);
+      const y = Math.floor(i / layer) - 64;
+      if (fluidType(reader.protoFluid(x, y, z)) !== type) continue;
+      dist[i * SETTLE_CODES + FLUID_VALUE_SOURCE] = 0;
+      changed[i] = 1;
+    }
+    for (let again = true; again;) {
+      again = false;
+      for (let l = 383; l >= 0; l--) {
+        for (let i = l * layer; i < (l + 1) * layer; i++) {
+          if (changed[i] === 0) continue;
+          changed[i] = 0;
+          const x = x0 + (i % W);
+          const z = z0 + (Math.floor(i / W) % D);
+          const y = l - 64;
+          let best = SETTLE_NO_DIST;
+          for (let k = 0; k < SETTLE_CODES; k++) {
+            const dk = dist[i * SETTLE_CODES + k]!;
+            if (dk >= best) continue;
+            best = dk;
+            const count = ruleOffers(type, reader, x, y, z, k, dk, out) & 15;
+            for (let o = 0; o < 5 * count; o += 5) {
+              const tx = x + out[o]!;
+              const ty = y + out[o + 1]!;
+              const tz = z + out[o + 2]!;
+              if (!inside(tx, ty, tz)) throw new Error(`referenceSettle: an offer outside the region at (${tx}, ${ty}, ${tz})`);
+              const t = index(tx, ty, tz);
+              const v = out[o + 3]!;
+              const d = out[o + 4]!;
+              let least = SETTLE_NO_DIST;
+              for (let j = 0; j <= v; j++) least = Math.min(least, dist[t * SETTLE_CODES + j]!);
+              if (d >= least) continue;
+              dist[t * SETTLE_CODES + v] = d;
+              changed[t] = 1;
+              again = true;
+            }
+          }
+        }
+      }
+    }
+    const value = new Uint8Array(n).fill(FLUID_VALUE_DRY);
+    const unsettled = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      let k = 0;
+      while (k < SETTLE_CODES && dist[i * SETTLE_CODES + k] === SETTLE_NO_DIST) k++;
+      if (k === SETTLE_CODES) continue;
+      value[i] = k;
+      const x = x0 + (i % W);
+      const z = z0 + (Math.floor(i / W) % D);
+      const y = Math.floor(i / layer) - 64;
+      if ((ruleOffers(type, reader, x, y, z, k, dist[i * SETTLE_CODES + k]!, out) & 16) !== 0) unsettled[i] = 1;
+    }
+    return { value, unsettled };
+  };
+  const water = settled(FLUID_WATER);
+  const lava = settled(FLUID_LAVA);
+  const byteOf = (type: number, value: number, flag: boolean): number =>
+    (value === FLUID_VALUE_FALLING ? packFluid(type, 0, true, flag) : packFluid(type, value === FLUID_VALUE_SOURCE ? 0 : value - 1, false, flag));
+  const result = new Map<number, number>();
+  for (let y = -64; y < 320; y++) {
+    for (let z = Math.max(box.z0, z0); z < Math.min(box.z1, z0 + D); z++) {
+      for (let x = Math.max(box.x0, x0); x < Math.min(box.x1, x0 + W); x++) {
+        const i = index(x, y, z);
+        const vw = water.value[i]!;
+        const vl = lava.value[i]!;
+        let byte: number;
+        if (vl < FLUID_VALUE_DRY) byte = byteOf(FLUID_LAVA, vl, vw < FLUID_VALUE_DRY || lava.unsettled[i] === 1);
+        else if (vw < FLUID_VALUE_DRY) byte = byteOf(FLUID_WATER, vw, water.unsettled[i] === 1);
+        else continue;
+        if (byte !== fluid[i]) result.set(i, byte);
+      }
+    }
+  }
+  return result;
 }

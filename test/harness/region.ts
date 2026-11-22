@@ -18,7 +18,7 @@
 import { performance } from 'node:perf_hooks';
 import { Worker } from 'node:worker_threads';
 import { colKey } from '../../src/core/coords';
-import type { Hash64 } from '../../src/core/hash';
+import { createFnv64, type Hash64 } from '../../src/core/hash';
 import { MEDIUM } from '../../src/core/params/graphicsPresets';
 import type { Params } from '../../src/core/params/schema';
 import { Xoshiro128 } from '../../src/core/rng';
@@ -413,15 +413,43 @@ export async function genRegion(o: GenRegionOptions): Promise<RegionResult> {
 }
 
 /**
+ * The hash of column (cx, cz)'s final fluid (SP7a spec §13.4, `DT1.settleIsolated`): FNV-1a 64 over its 24 sections'
+ * 4096 fluid bytes in section order, voxel order within each, uniform sections expanded (as `regionHash` hashes the
+ * proto's). Throws when the column has no final set.
+ */
+export function finalFluidHash(store: VoxelStore, cx: number, cz: number): Hash64 {
+  const v = store.final(cx, cz);
+  if (v === null) throw new Error(`finalFluidHash: column (${cx}, ${cz}) has no final set in the store`);
+  const fnv = createFnv64();
+  for (let sy = 0; sy < 24; sy++) {
+    const f = v.sectionFluid(sy);
+    if (typeof f === 'number') fnv.updateRepeatU8(f, 4096);
+    else fnv.update(f);
+  }
+  return fnv.digest();
+}
+
+/**
  * Column (cx, cz) generated alone (SP6a spec §10.3, `DT1.isolated`): T on a fresh plain store with a fresh GenContext
  * (its carver path cache empty, at `carverCacheCapacity`, default `CARVER_CACHE_PATHS`), nothing else generated; its
- * `regionHash` (the 1 × 1 window). Equal to the column's window of any region that holds it.
+ * `regionHash` (the 1 × 1 window). Equal to the column's window of any region that holds it. SP7a (spec §13.4,
+ * `DT1.settleIsolated`): `upTo` 'D' fills the column's 3 × 3 to T on that store (row by row), then D on the column
+ * alone, and returns `finalFluidHash` of the column, equal to its final fluid in any region that decorated it.
  */
 export async function isolatedColumn(o: {
-  seed: string; params: Params; cx: number; cz: number; carverCacheCapacity?: number;
+  seed: string; params: Params; cx: number; cz: number; carverCacheCapacity?: number; upTo?: 'T' | 'D';
 }): Promise<Hash64> {
   const ctx = genContextWith(o.seed, o.params, o.carverCacheCapacity);
   const store = createStore({ shared: false });
+  if ((o.upTo ?? 'T') === 'D') {
+    for (let cz = o.cz - 1; cz <= o.cz + 1; cz++) {
+      for (let cx = o.cx - 1; cx <= o.cx + 1; cx++) {
+        if (!fillColumnT(store, ctx, cx, cz, NEVER)) throw new Error(`isolatedColumn: T of (${cx}, ${cz}) stopped`);
+      }
+    }
+    if (!fillColumnD(store, ctx, o.cx, o.cz, NEVER, null)) throw new Error(`isolatedColumn: D of (${o.cx}, ${o.cz}) stopped`);
+    return finalFluidHash(store, o.cx, o.cz);
+  }
   if (!fillColumnT(store, ctx, o.cx, o.cz, NEVER)) throw new Error(`isolatedColumn: T of (${o.cx}, ${o.cz}) stopped`);
   return regionHash(store, o.cx, o.cz, 1, 1);
 }
