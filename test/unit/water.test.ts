@@ -5,7 +5,8 @@
  * counts, A4's bodies, the pooled parts, and SP7a's review poses; A2 by origin with the water/lava contacts
  * (`referenceSettleOrigins`, `a2RegionCounts`), and the springs found from a region's proto (`springsOfRegion`, on
  * real columns of seed '42' and on hand-built side-by-side springs) with a spring's own front (`springFront`); A5's
- * springs and falls (`springFacts`, `a5RegionCounts`, `a5Parts`) and their review poses (`a5Examples`).
+ * springs and falls (`springFacts`, `a5RegionCounts`, `a5Parts`) and their review poses (`a5Examples`); B5's lake rim on T
+ * and its settled spill (`lakeAirAdjacentCount`, `lakeSpillCount`, SP7a §13.2).
  */
 import { describe, expect, test } from 'vitest';
 import { CAVE_BIOME, CAVE_KIND, MIN_Y } from '../../src/core/constants';
@@ -25,8 +26,9 @@ import { spreadSides } from '../harness/caveMetrics';
 import { referenceSettle, referenceSettleKey, referenceSettleOrigins } from '../harness/refs';
 import { genRegion, regionView, type RegionView } from '../harness/region';
 import {
-  a2Parts, a2RegionCounts, a5Examples, a5Parts, a5RegionCounts, loadWaterRegion, ORIGIN_AQUIFER, ORIGIN_SKY_OPEN, ORIGIN_SPRING, pooledClarkEvans, protoRuleReader,
-  regionSpringList, regionVoxelOf, SPILL_SLOPE_MIN, springFacts, springFront, springsOfRegion, waterExamples, waterParts, waterRegionCounts,
+  a2Parts, a2RegionCounts, a5Examples, a5Parts, a5RegionCounts, lakeAirAdjacentCount, lakeSpillCount, loadWaterRegion, ORIGIN_AQUIFER, ORIGIN_SKY_OPEN,
+  ORIGIN_SPRING, pooledClarkEvans, protoRuleReader, regionSpringList, regionVoxelOf, SPILL_SLOPE_MIN, springFacts, springFront, springsOfRegion, waterExamples,
+  waterParts, waterRegionCounts,
   type A2RegionCounts, type A5RegionOptions, type WaterBox, type WaterRegionCounts,
 } from '../harness/water';
 
@@ -678,5 +680,96 @@ describe('A5: the springs and their falls (SP7a §13.1)', () => {
     // Every position is steep land (ground tops at 67 or 100, ≥ 63): 16 falls over 64 × 64 blocks.
     expect(r.counts.steepKm2).toBeCloseTo(4096 / 1e6, 12);
     expect(p.waterfalls).toBeCloseTo(16 / (4096 / 1e6), 6);
+  });
+});
+
+describe('B5: lake water with air horizontally adjacent on T, and its settled spill (SP7a §13.2)', () => {
+  /** The lake's positions: x −12 … −3, z −6 … 5, its water level Lw 70. */
+  const LAKE = { x0: -12, x1: -3, z0: -6, z1: 5, floor: 64, lw: 70 } as const;
+  /** The rim's rock outside the lake: up to y 73, above Lw. */
+  const RIM_TOP = 73;
+  /** The lake mask over the view's positions ((z − z0)·64 + (x − x0)): 1 on the lake's positions. */
+  const lakeMask = (): Uint8Array => {
+    const m = new Uint8Array(64 * 64);
+    for (let z = LAKE.z0; z <= LAKE.z1; z++) for (let x = LAKE.x0; x <= LAKE.x1; x++) m[(z - X0) * 64 + (x - X0)] = 1;
+    return m;
+  };
+  const inLake = (x: number, z: number): boolean => x >= LAKE.x0 && x <= LAKE.x1 && z >= LAKE.z0 && z <= LAKE.z1;
+
+  /**
+   * The lake: stone to y 64 under its positions (to y 69 on `shelf`'s, so its water there is 1 deep), its sky-open water
+   * above that up to y 70 (Lw), stone to y 73 elsewhere; `ground(x, z)` lowers the rock of a position outside the lake
+   * (a breach). Beside it, a tagged cave in the rim's rock at y 40 (x 5 … 10, z 0) holds one aquifer source at x 5,
+   * which the settle spreads over the cave: water outside the mask that no lake source feeds.
+   */
+  function lake(ground: (x: number, z: number) => number = () => RIM_TOP, shelf: (x: number) => boolean = () => false): Hand {
+    const floor = (x: number): number => (shelf(x) ? LAKE.lw - 1 : LAKE.floor);
+    const h: Hand = { block: (x, y, z) => (y <= (inLake(x, z) ? floor(x) : ground(x, z)) ? STONE : AIR), cells: new Map() };
+    for (let x = LAKE.x0; x <= LAKE.x1; x++) fill(h, 0, WATER_SOURCE, x, x, floor(x) + 1, LAKE.lw, LAKE.z0, LAKE.z1);
+    fill(h, CHEESE, NO_FLUID, 5, 10, 40, 40, 0, 0);
+    h.cells.set(key(5, 40, 0), { cave: CHEESE, fluid: WATER_SOURCE });
+    return h;
+  }
+
+  /** B5's two counts on the view of `h`, the spill after the global settle reference over the whole view. */
+  function b5Of(h: Hand): { airAdjacent: number; spill: number; settled: Map<number, number>; view: RegionView } {
+    const view = viewOf(h);
+    const settled = referenceSettle(view, ALL);
+    return { airAdjacent: lakeAirAdjacentCount(view, lakeMask()), spill: lakeSpillCount(view, settled, lakeMask()), settled, view };
+  }
+
+  test('a lake whose rim lies above Lw reads 0, and spills nothing (the cave\'s spread outside the mask is not the lake\'s)', () => {
+    const r = b5Of(lake());
+    expect(r.airAdjacent).toBe(0);
+    expect(r.spill).toBe(0);
+    // The settle did spread the cave's source over its 5 other voxels: non-source water outside the mask.
+    for (let x = 6; x <= 10; x++) expect(fluidLevel(r.settled.get(referenceSettleKey(r.view, x, 40, 0))!)).toBe(x - 5);
+  });
+
+  test('a breach (positions outside the mask whose rock stops below Lw, beside lake water, O87) reads its breach voxels; over rock the settle leaves it dry', () => {
+    // A notch two positions wide (z 0, 1) from the lake's +x side to x 1, its rock to y 69, ending at the rim (x 2).
+    const r = b5Of(lake((x, z) => (x >= -2 && x <= 1 && (z === 0 || z === 1) ? 69 : RIM_TOP)));
+    // The two lake voxels at Lw beside the notch: (−3, 70, 0) and (−3, 70, 1).
+    expect(r.airAdjacent).toBe(2);
+    // §4.1's rules: a source spreads toward its nearest drop, and the lake's own voxels at Lw over its water are drops at
+    // distance 1, while the notch over rock holds none; one proto source beside each notch voxel makes no new source. So
+    // the notch stays dry after settle: the breach stands as a wall, which B5 on T counts.
+    for (let x = -2; x <= 1; x++) for (const z of [0, 1]) expect(r.settled.has(referenceSettleKey(r.view, x, 70, z))).toBe(false);
+    expect(r.spill).toBe(0);
+  });
+
+  test('lakeSpill counts the non-source water outside the mask the lake\'s sources feed, down a fall and along the floor below', () => {
+    // The lake's water 1 deep on a shelf 4 positions wide along its +x shore (x −6 … −3), so the shore's nearest drop
+    // in the lake lies 4 away; the notch's rock to y 69 at x −2, −1 and to y 66 at x 0, 1 (a pit 3 away): the shore
+    // spills toward the pit.
+    const r = b5Of(lake((x, z) => (z === 0 || z === 1 ? (x === -2 || x === -1 ? 69 : x === 0 || x === 1 ? 66 : RIM_TOP) : RIM_TOP), (x) => x >= -6));
+    expect(r.airAdjacent).toBe(2);
+    // Per row: y 70 at x −2 … 0 (levels 1 … 3), the fall at x 0 (y 69 … 67), the landed fall's spread to x 1 at y 67
+    // (level 1): 7 voxels, 14 in all, none a source.
+    for (const z of [0, 1]) {
+      for (let x = -2; x <= 0; x++) expect(fluidLevel(r.settled.get(referenceSettleKey(r.view, x, 70, z))!)).toBe(x + 3);
+      for (let y = 67; y <= 69; y++) expect(r.settled.has(referenceSettleKey(r.view, 0, y, z))).toBe(true);
+      expect(fluidLevel(r.settled.get(referenceSettleKey(r.view, 1, 67, z))!)).toBe(1);
+    }
+    expect(r.spill).toBe(14);
+  });
+
+  test('a lake that falls straight into a pit beside its shore spills only the fall: the landed water\'s nearest drop is the lake', () => {
+    // The notch's rock to y 66 from the shore (x −2 … 1): the shore's voxels at Lw tie the pit with the lake's own drops
+    // and spill into it, but the landed fall at y 67 finds the lake's voxels over water at distance 1 and spreads no further.
+    const r = b5Of(lake((x, z) => (x >= -2 && x <= 1 && (z === 0 || z === 1) ? 66 : RIM_TOP)));
+    expect(r.airAdjacent).toBe(2);
+    for (const z of [0, 1]) {
+      expect(fluidLevel(r.settled.get(referenceSettleKey(r.view, -2, 70, z))!)).toBe(1);
+      for (let y = 67; y <= 69; y++) expect(r.settled.has(referenceSettleKey(r.view, -2, y, z))).toBe(true);
+      expect(r.settled.has(referenceSettleKey(r.view, -1, 67, z))).toBe(false);
+    }
+    expect(r.spill).toBe(8);
+  });
+
+  test('the lake mask must cover the view\'s positions', () => {
+    const view = viewOf(lake());
+    expect(() => lakeAirAdjacentCount(view, new Uint8Array(16))).toThrow(RangeError);
+    expect(() => lakeSpillCount(view, new Map(), new Uint8Array(16))).toThrow(RangeError);
   });
 });

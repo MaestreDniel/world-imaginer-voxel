@@ -93,6 +93,19 @@
  *   run 30° down), both in the biome region only, and `spillSlope` (a water spring whose landed spill, its lone front's
  *   voxels below the landing, the bottom of its fall, reaches 4 blocks or more from it horizontally; the eye 12 out
  *   along the spring's direction and 6 above the spill's midpoint, facing it).
+ * - **B5** (Task 25, §13.2; `lakeAirAdjacentCount`, `lakeSpillCount`; `region.metric.ts` reads them over T windows around
+ *   lake cells, as a unit test cannot import a `.metric.ts` file), over a lake mask the caller builds (1 on a position
+ *   of the view's region, `(z − 16·cz0)·16w + (x − 16·cx0)`, inside a lake; the metric's positions whose nearest quart
+ *   corner holds a finite `lakeLevel`, where D19 puts Lw). A lake source is a voxel of a masked position holding
+ *   untagged proto `WATER_SOURCE` in a passable block (sky-open water) under a passable voxel with no fluid: the top of
+ *   the lake's water, so at Lw (D19 fills every untagged non-solid voxel of the position up to Lw), and never a spring,
+ *   whose faces but its outlet are solid. `lakeAirAdjacent` (on T) the lake sources with a horizontal neighbour in the
+ *   region that is passable and holds no proto fluid (a breach, O87: a position whose own level is −∞ beside lake water;
+ *   a neighbour outside the region is not read); `lakeSpill` (after settle) the voxels outside the mask whose settled
+ *   byte is non-source water, reached from the lake's water (every sky-open water voxel of a masked position) by
+ *   horizontal and downward steps through voxels the overlay changed to water (the steps water takes, so the spill a
+ *   lake source feeds; where it merges with another body's spill both count, and a new source on the way passes the
+ *   flood on but is not counted).
  */
 import { CAVE_BIOME, caveBiomeOf, ISLAND_SPRING_MIN_FALL } from '../../src/core/constants';
 import type { Seed64 } from '../../src/core/hash';
@@ -1483,4 +1496,98 @@ export function a5Examples(L: WaterRegion, facts: readonly SpringFact[], spawn: 
     }
   }
   return { waterfall, truncated, islandFall, lavaFall, lavaPool, spillSlope };
+}
+
+// ---------------------------------------------------------------- B5: the lake rim on T and its settled spill (Task 25)
+
+/** The lake mask's index of world (x, z) of the view's region, after checking the mask covers the region. */
+function lakeMaskIndex(view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h'>, lakeMask: Uint8Array, who: string): (x: number, z: number) => number {
+  const W = 16 * view.w;
+  if (lakeMask.length !== W * 16 * view.h) throw new RangeError(`${who}: the lake mask holds ${lakeMask.length} positions, the region ${W * 16 * view.h}`);
+  return (x, z) => (z - 16 * view.cz0) * W + (x - 16 * view.cx0);
+}
+
+/**
+ * Calls `visit(x, y, z)` at every voxel of a masked position holding sky-open water (untagged proto `WATER_SOURCE` in
+ * a passable block), with whether it is a lake source (see the header: the voxel above passable with no fluid).
+ */
+function forEachLakeWater(
+  view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 'store'>, lakeMask: Uint8Array, who: string,
+  visit: (x: number, y: number, z: number, source: boolean) => void,
+): void {
+  const at = lakeMaskIndex(view, lakeMask, who);
+  const column = protoColumns(view, who);
+  const water = (col: ColumnView, x: number, y: number, z: number): boolean =>
+    col.fluid(x & 15, y, z & 15) === WATER_SOURCE && isPassable(col.block(x & 15, y, z & 15)) && (col.cave(x & 15, y, z & 15) & TAG_MASK) === 0;
+  for (let z = 16 * view.cz0; z < 16 * (view.cz0 + view.h); z++) {
+    for (let x = 16 * view.cx0; x < 16 * (view.cx0 + view.w); x++) {
+      if (lakeMask[at(x, z)] === 0) continue;
+      const col = column(x, GRID_Y0, z)!;
+      for (let sy = 0; sy < 24; sy++) {
+        const sf = col.sectionFluid(sy);
+        if (typeof sf === 'number' && sf !== WATER_SOURCE) continue;
+        for (let y = GRID_Y0 + 16 * sy; y < GRID_Y0 + 16 * sy + 16; y++) {
+          if (!water(col, x, y, z)) continue;
+          const up = y + 1 < GRID_Y0 + GRID_H && isPassable(col.block(x & 15, y + 1, z & 15)) && !hasFluid(col.fluid(x & 15, y + 1, z & 15));
+          visit(x, y, z, up);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * B5's `lakeAirAdjacent` on T (SP7a spec §13.2; see the header): the lake sources of `view`'s proto with a horizontal
+ * neighbour in the region that is passable and holds no fluid.
+ */
+export function lakeAirAdjacentCount(view: RegionView, lakeMask: Uint8Array): number {
+  const column = protoColumns(view, 'lakeAirAdjacentCount');
+  const dry = (x: number, y: number, z: number): boolean => {
+    const col = column(x, y, z);
+    return col !== null && isPassable(col.block(x & 15, y, z & 15)) && !hasFluid(col.fluid(x & 15, y, z & 15));
+  };
+  let n = 0;
+  forEachLakeWater(view, lakeMask, 'lakeAirAdjacentCount', (x, y, z, source) => {
+    if (!source) return;
+    let open = false;
+    for (let d = 0; d < 4 && !open; d++) open = dry(x + DIR_DX[d]!, y, z + DIR_DZ[d]!);
+    if (open) n++;
+  });
+  return n;
+}
+
+/**
+ * B5's `lakeSpill` after settle (SP7a spec §13.2; see the header): the voxels outside the mask holding non-source water
+ * in `settled` (the global settle reference's overlay over `view`'s proto, keyed `referenceSettleKey`) that the lake's
+ * water reaches by horizontal and downward steps through overlay water.
+ */
+export function lakeSpillCount(view: RegionView, settled: Map<number, number>, lakeMask: Uint8Array): number {
+  const at = lakeMaskIndex(view, lakeMask, 'lakeSpillCount');
+  const x0 = 16 * view.cx0;
+  const z0 = 16 * view.cz0;
+  const x1 = x0 + 16 * view.w;
+  const z1 = z0 + 16 * view.h;
+  const seen = new Set<number>();
+  const queue: number[] = [];
+  let n = 0;
+  /** Takes voxel (x, y, z) into the flood when the overlay holds water there; counts it when outside the mask and not a source. */
+  const reach = (x: number, y: number, z: number): void => {
+    if (x < x0 || x >= x1 || z < z0 || z >= z1 || y < GRID_Y0) return;
+    const k = keyAt(view, x, y, z);
+    const b = settled.get(k);
+    if (b === undefined || fluidType(b) !== FLUID_WATER || seen.has(k)) return;
+    seen.add(k);
+    queue.push(k);
+    if (lakeMask[at(x, z)] === 0 && (fluidFalling(b) || fluidLevel(b) !== 0)) n++;
+  };
+  const step = (x: number, y: number, z: number): void => {
+    for (let d = 0; d < 4; d++) reach(x + DIR_DX[d]!, y, z + DIR_DZ[d]!);
+    reach(x, y - 1, z);
+  };
+  forEachLakeWater(view, lakeMask, 'lakeSpillCount', step);
+  while (queue.length > 0) {
+    const [x, y, z] = regionVoxelOf(view, queue.pop()!);
+    step(x, y, z);
+  }
+  return n;
 }

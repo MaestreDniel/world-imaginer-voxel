@@ -725,6 +725,50 @@ Fast (`npm test`): the default job's two regions hold no spring (every spring pa
 
 The review poses at seed '42' (§13.9; `.out/sp7a.examples.<group>.json`, added to Task 22's record; distances to the profile's spawn): presets: `waterfall` candidates 1 (amplified (−653, 106, −114), fall 42, 662 blocks), `truncated` 3 (amplified (−425, 176, −89), front (−428, 75, −80), 434; (−492, 148, −30), front (−496, 116, −38), 492; (−731, 148, −296), front (−727, 128, −304), 788), `islandFall` floating_islands (−315, 209, 85), fall 88, 326, `spillSlope` amplified (−425, 176, −89), 434; biomes: `lavaFall` (−1408, −43, 1435), fall 5, 2,010, `lavaPool` (−1409, −51, 1432), 2,009, the biome region's water spring (−1463, 106, 1523) a `waterfall` (fall 11), `truncated` (front (−1470, 78, 1528)) and `spillSlope` candidate, 2,112; default: none of A5's.
 
+### The re-asserted parts (Task 25)
+
+B5's lake rim on T and its settled spill, and §13.2's re-asserted parts, measured 2026-11-22 on Task 25's tree over becc5f4 (quick one metric file at a time, `METRICS_PROFILES=default` for `surface.metric.ts` and `terrain.metric.ts`, each caves group alone; fast in `npm test`).
+
+**B5** (recorded in `.out/B5.lake.json`, gated at the tuning, Task 31; `test/harness/water.ts`' `lakeAirAdjacentCount` and `lakeSpillCount`, read by `region.metric.ts`). The windows are 6 × 6 chunks around the chunk of each enabled lake cell's centre, the cells taken in the square spiral from cell (0, 0) (`liveness.ts`' order) at seed '42', profile default; the lake mask is the positions whose nearest quart corner holds a finite `lakeLevel`. The centre lies in warped lake space and the default lake spans about 90-450 blocks, so a window holds its lake whole, a part with its shore, or none of it. Every lake source the definition finds lies at its cell's Lw (a scratch check over fast's four windows: 19,200 sources, none off Lw).
+
+| B5 | fast (4 windows) | quick (16 windows) |
+|---|---|---|
+| `lakeAirAdjacent` on T (lake sources at Lw beside a passable dry voxel) | 76 | 247 |
+| `B5.lakeSpill` after settle (non-source water outside the mask fed by the lake) | 643 | 2,035 |
+| windows with a shore / lake positions / shore positions | 4 / 20,088 / 378 | 12 / 39,746 / 1,338 |
+| per window, `lakeAirAdjacent` (`lakeSpill`) | 5 (89), 23 (436), 34 (112), 14 (6) | fast's four, then 11 (38), 0, 16 (26), 0, 27 (9), 26 (18), 0, 0, 0 (0; 1,539 lake positions), 91 (1,301), 0, 0 |
+| seconds (T, reference) | 3.8 (1.5, 1.8) | 13.6 (6.2, 6.5) |
+
+So `lakeAirAdjacent` is not 0 on T (master's bound, §13.2): lake water stands beside dry air at the rims of 9 of the 12 quick windows that hold a shore. Task 27's B5 lever (the lake rim's leaves, then the user) reads it. The reading after settle is not vacuous either, contrary to §13.2's remark. A source spreads only toward its nearest drop, and the lake's own voxels at Lw over its water are drops at distance 1. So a shore source spills into a breach only when the breach offers a drop at the same distance, or the lake is 1 deep for 4 blocks along the shore. Water that lands below a breach beside the lake finds the lake's voxels as its nearest drop and spreads no further. `test/unit/water.test.ts` pins three cases: a notch over rock stays dry after settle; a pit beside the shore takes only the fall; a 1-deep shelf spills along the notch, down the fall and over the floor below. Part of each breach is therefore a wall after settle as well: the visible case of `lakeAirAdjacent`.
+
+**The re-asserted parts** (quick unless named; every gated part passes on every tier it gates but R13/R19's known-red parts):
+
+| part | reading |
+|---|---|
+| B2 `riverChannelWater` ≥ 85 % | 0.9210 (27,430 positions) |
+| `dryPitsBelowSea` on T (`surface.metric.ts`, land-family positions, pre-settle; Task 22's water parts record a settled count over another population) | 0.0227 |
+| S1 `buried` / `grassNoSky` / `ymod16` | 0 / 0 / 0.161 |
+| B4 `snowInDesert` / `coastBandBeachVoxel` / `landTopsBelowSea` | 0 / 0.868 / 0.00108 |
+| T4 `floorSd` / `exposedBedrock` / `deepFloor`; `terrainScatter`'s `waterWallShare` (recorded) | 7.56 / 0 / 0; 1.02e-5 |
+| B3 `lushMin` / `dripstoneMin` / `abyssMin` (≥ 0.005) / `windowAir` | 0.0986 / 0.0828 / 0.0125 / 528,993 |
+| L1 `mismatches` (with lava emitters) | 0 |
+| L2 `enclosedLit`; `abyssLit` (recorded, positive by design: the abyss's lava) | 0; 6,135 of 55,648 abyss air voxels |
+| R1 `hiddenEmitted` / `visibleMissing` / `xray` / `xrayBiome` | 0 / 0 / 0 / 0 |
+| R3 `wronglyCulled` / `popIn` (fluid open in `connectivity15`); `culledUnderground` | 0 / 0; 0.735 (the biomes job) |
+| DT1 `mismatches` / `carverCache` / `isolated` / `settleReference` / `settleIsolated` | 0 / 0 / 0 / 0 / 0 |
+| DT2 `probeBulk`, `compiledReference`, `surfaceProbeBulk`, `surfaceReference`, `editedDensityReference`, `editedSurfaceReference`, `tagProbe`, `caveBiomeProbe`, `aquiferProbe` | all 0 |
+| U2 `value`; U4 `registryIssues` / `migrationFailures` / `shapeLockViolations` / `readmeStale` (U1 and U3 are `npm test`'s unit and arch tests, green) | 1; 0 / 0 / 0 / 0 |
+| C1 `voidShareMin` / `voidShareMax`; C2 `skyComponents` / `skyShare` | 0.0723 / 0.0747; 146.9 / 0.573 |
+| C3 shares cheese / spaghetti / noodle / carver / entrance, `pillars`, `ravines`, `ravinesSky`, `maxShare` | 0.670 / 0.125 / 0.026 / 0.140 / 0.039, 1, 64.8, 24.8, 0.670 |
+| C4 `bands` / `floorPeak`; C5 `largest` / `landCarved` / `thinnest` / `thinnestByKind` (fast 1.444, R13's known red) | 0.0255 / 0.0136; 0.301 / 0.632 / 4 / 1.75 |
+| C6 `latticeBias` / `floorFaceLattice`; C8 `aperiodicity` / `typeMixVariation` / `sizeSpread` / `largeShare` | 1.112 / 1.284; 0.766 / 0.037 / 1.595 / 1 |
+| C7 default `verticalStep` / `flatWallShare` / `carverReference`; archipelago `verticalStep` / `flatWallShare` | 2.58 / 0.0211 / 0; 7.01 / 0.0151 |
+| C7 `waterWall` per km² (R19's known red, at its readings) | 446.8 default, 353.8 archipelago (fast 529.0) |
+| C7's bottom parts: default `bottomFlatRatio` / `bottomFloorSpread` / `bottomFloorPeak`, `bottomPlane`, `bedrockExposed`; presets job | 0.977 / 14 / 0.0697, 0, 0; 1.202 / 15 / 0.0855, 0, 0 |
+| C9 `nearestEntrance` / `holedSurface` (default; archipelago) | 72.1 / 0.0142; 64 / 0.0138 |
+
+Local walls (one at a time on the laptop): `region.metric.ts` 131 s (B5's windows 13.6 s of it; §14 allows +40-70 s for DT1's settle parts, `sp7a.region.D.water` and B5's windows together), `surface.metric.ts` (default) 40 s, `terrain.metric.ts` (default) 42 s, `light.metric.ts` 63 s, `render.metric.ts` 28 s, `params.metric.ts` 115 s, caves default 85 s, presets 55 s, biomes 65 s.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)

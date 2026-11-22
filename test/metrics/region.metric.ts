@@ -1,3 +1,6 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
 import { fnv1a32, hex64 } from '../../src/core/hash';
 import { canonicalJSON } from '../../src/core/params/canonical';
@@ -6,6 +9,8 @@ import { resolveProfile } from '../../src/core/params/profiles';
 import { SCHEMA, type Params } from '../../src/core/params/schema';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
+import { buildColumnSample, newColumnSample, readLevel } from '../../src/gen/column/columnStage';
+import { lakeCell, type LakeCell } from '../../src/gen/column/lakes';
 import { createGenContext, type GenContext } from '../../src/gen/context';
 import { cornerValueIndex } from '../../src/gen/density/compile';
 import { createDensityContext } from '../../src/gen/density/context';
@@ -29,6 +34,7 @@ import { DT2_VOXELS_PER_COLUMN, dt2Column, dt2Setup, newDt2Acc } from '../harnes
 import { referenceSettle, referenceSettleKey } from '../harness/refs';
 import { dt1WorkerDir, finalFluidHash, genRegion, isolatedColumn, type GenRegionOptions, type RegionResult } from '../harness/region';
 import { SETTLE_WINDOWS } from '../harness/settleWindows';
+import { lakeAirAdjacentCount, lakeSpillCount } from '../harness/water';
 import { settleBoxOf, settleFeatures, settleWindowAt, settleWindowHolds, type SettleFeatures } from '../harness/windowScans';
 import { mutateTree } from '../harness/treeMutator';
 
@@ -331,6 +337,122 @@ test('each SETTLE_WINDOWS entry still holds its feature (SP7a spec §13.4; re-sc
   for (const [i, w] of SETTLE_WINDOWS.entries()) {
     expect.soft(settleWindowHolds(w.feature, m.features[i]!), `settle window ${i} S(${w.a}, ${w.b}) no longer holds '${w.feature}': ${JSON.stringify(m.features[i])}`).toBe(true);
   }
+}, 600_000);
+
+/**
+ * B5's lake rim on T and its settled spill (SP7a spec §13.2, master §6.4's B5 third part; Task 25), recorded (gated at
+ * the tuning, Task 31), at seed '42', profile default: the first `LAKE_WINDOWS` (fast 4, quick 16, full 32) enabled lake
+ * cells (`lakeCell`, `src/gen/column/lakes.ts`) in the square spiral of cells from (0, 0) (`liveness.ts`' order: ring r
+ * from (−r, −r) along j = −r, then i = r, j = r, i = −r), each read on a T window of 6 × 6 chunks around the chunk of its
+ * centre (cx0 = ⌊cx / 16⌋ − 3, likewise z; spiral, 4 threads, no cache):
+ * - the lake mask of the window's positions: 1 where the nearest quart corner's `lakeLevel` is finite (`readLevel` over
+ *   `buildColumnSample`), the positions where D19 fills to Lw;
+ * - `lakeAirAdjacent` on T and, after `referenceSettle` over the whole window, `lakeSpill` (`test/harness/water.ts`'
+ *   `lakeAirAdjacentCount` and `lakeSpillCount`, whose header states both definitions), summed over the windows.
+ * The cell's centre lies in warped lake space, so a window may hold its lake whole, a part with its shore, or none of
+ * it: each window's lake positions and shore positions (its positions outside the mask beside one inside, 4-connected)
+ * are recorded with its counts and its cell (`.<i>`). Written to `.out/B5.lake.json` (`metricTest`'s record layout).
+ */
+const LAKE_WINDOWS = pick(4, 16, 32);
+/** A lake window's side, chunks. */
+const LAKE_WINDOW_SIDE = 6;
+/** The most cells the spiral visits looking for `LAKE_WINDOWS` enabled ones. */
+const LAKE_CELLS_MAX = 4096;
+const METRICS_OUT = fileURLToPath(new URL('./.out/', import.meta.url));
+
+/** The first `n` enabled lake cells of `ctx` in the square spiral of cells from (0, 0) (see above). */
+function lakeCellsInSpiral(ctx: GenContext, n: number): LakeCell[] {
+  const out: LakeCell[] = [];
+  const visit = (i: number, j: number): boolean => {
+    const c = lakeCell(ctx, i, j);
+    if (c.enabled) out.push(c);
+    return out.length === n;
+  };
+  let seen = 1;
+  if (!visit(0, 0)) {
+    spiral: for (let r = 1; seen < LAKE_CELLS_MAX; r++) {
+      for (let i = -r; i <= r; i++, seen++) if (visit(i, -r)) break spiral;
+      for (let j = 1 - r; j <= r; j++, seen++) if (visit(r, j)) break spiral;
+      for (let i = r - 1; i >= -r; i--, seen++) if (visit(i, r)) break spiral;
+      for (let j = r - 1; j > -r; j--, seen++) if (visit(-r, j)) break spiral;
+    }
+  }
+  if (out.length < n) throw new Error(`B5: ${out.length} enabled lake cells in the first ${seen} of the spiral, not ${n}`);
+  return out;
+}
+
+/** The lake mask of the window (cx0, cz0, side × side chunks): see above. */
+function lakeMaskOf(ctx: GenContext, cx0: number, cz0: number, side: number): Uint8Array {
+  const W = 16 * side;
+  const mask = new Uint8Array(W * W);
+  const sample = newColumnSample();
+  for (let cz = cz0; cz < cz0 + side; cz++) {
+    for (let cx = cx0; cx < cx0 + side; cx++) {
+      buildColumnSample(ctx, cx, cz, sample);
+      for (let z = 16 * cz; z < 16 * cz + 16; z++) {
+        for (let x = 16 * cx; x < 16 * cx + 16; x++) {
+          if (Number.isFinite(readLevel(sample, 'lakeLevel', x, z))) mask[(z - 16 * cz0) * W + (x - 16 * cx0)] = 1;
+        }
+      }
+    }
+  }
+  return mask;
+}
+
+test('B5 lakeAirAdjacent on T and B5.lakeSpill after settle over the lake windows (recorded; SP7a §13.2, gated at the tuning)', async () => {
+  const t0 = performance.now();
+  const params = resolveProfile('default');
+  const ctx = createGenContext(seedFromInput('42'), params);
+  const values: Record<string, number> = {};
+  let lakeAirAdjacent = 0;
+  let lakeSpill = 0;
+  let lakePositions = 0;
+  let shorePositions = 0;
+  let windowsWithShore = 0;
+  let genMs = 0;
+  let referenceMs = 0;
+  const W = 16 * LAKE_WINDOW_SIDE;
+  for (const [i, cell] of lakeCellsInSpiral(ctx, LAKE_WINDOWS).entries()) {
+    const cx0 = Math.floor(cell.cx / 16) - LAKE_WINDOW_SIDE / 2;
+    const cz0 = Math.floor(cell.cz / 16) - LAKE_WINDOW_SIDE / 2;
+    const g = await genRegion({
+      seed: '42', params, cx0, cz0, w: LAKE_WINDOW_SIDE, h: LAKE_WINDOW_SIDE, upTo: 'T', order: 'spiral', threads: 4, workerDir: dt1WorkerDir(TIER),
+    });
+    genMs += g.timings.totalMs;
+    const mask = lakeMaskOf(ctx, cx0, cz0, LAKE_WINDOW_SIDE);
+    let lake = 0;
+    let shore = 0;
+    for (let z = 0; z < W; z++) {
+      for (let x = 0; x < W; x++) {
+        if (mask[z * W + x] === 1) { lake++; continue; }
+        const beside = (x > 0 && mask[z * W + x - 1] === 1) || (x + 1 < W && mask[z * W + x + 1] === 1)
+          || (z > 0 && mask[(z - 1) * W + x] === 1) || (z + 1 < W && mask[(z + 1) * W + x] === 1);
+        if (beside) shore++;
+      }
+    }
+    const air = lakeAirAdjacentCount(g.view, mask);
+    const r0 = performance.now();
+    const settled = referenceSettle(g.view, { x0: 16 * cx0, z0: 16 * cz0, x1: 16 * cx0 + W, z1: 16 * cz0 + W });
+    referenceMs += performance.now() - r0;
+    const spill = lakeSpillCount(g.view, settled, mask);
+    lakeAirAdjacent += air;
+    lakeSpill += spill;
+    lakePositions += lake;
+    shorePositions += shore;
+    if (shore > 0) windowsWithShore++;
+    Object.assign(values, {
+      [`cellI.${i}`]: cell.i, [`cellJ.${i}`]: cell.j, [`lw.${i}`]: cell.Lw, [`cx0.${i}`]: cx0, [`cz0.${i}`]: cz0,
+      [`lakePositions.${i}`]: lake, [`shorePositions.${i}`]: shore, [`lakeAirAdjacent.${i}`]: air, [`lakeSpill.${i}`]: spill,
+      [`referenceChanged.${i}`]: settled.size,
+    });
+  }
+  const record = {
+    lakeAirAdjacent, lakeSpill, windows: LAKE_WINDOWS, windowsWithShore, lakePositions, shorePositions, ...values,
+    genSeconds: Math.round(genMs) / 1000, referenceSeconds: Math.round(referenceMs) / 1000, seconds: Math.round(performance.now() - t0) / 1000,
+  };
+  mkdirSync(METRICS_OUT, { recursive: true });
+  writeFileSync(join(METRICS_OUT, 'B5.lake.json'), `${JSON.stringify({ id: 'B5', tier: process.env.METRICS_TIER ?? null, values: record }, null, 2)}\n`);
+  expect(windowsWithShore, 'B5: lake windows holding a shore').toBeGreaterThan(0);
 }, 600_000);
 
 /**

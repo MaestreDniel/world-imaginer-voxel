@@ -74,7 +74,10 @@ import { branchHoldsAtTop, columnStates, positionColumn, solidRuns } from '../ha
  *   positions' tops, as diagnostics).
  * Diagnostics (ungated): `landTopYmod16` (raw and against the neighbour-average expectation, with its χ²; SP3c :357,
  * re-measured with SP6a's caves and recorded, SP6a spec §10.4: it stays SP12's),
- * `dryPitsBelowSea`, `lakeRimIslets` (land tops with an ocean-family biome at a corner with 0 < lakeMask < 1, as a
+ * `dryPitsBelowSea` (the share of `landTopsBelowSea`'s population whose floor lies below 63 with no water above, read
+ * on T: the pre-settle reading, as today, SP7a spec §13.2; the caves metric's water parts record a pits count
+ * after settle over every low position of their regions, `test/harness/water.ts`, not compared with this one),
+ * `lakeRimIslets` (land tops with an ocean-family biome at a corner with 0 < lakeMask < 1, as a
  * share of all positions), `oceanBiomeLandTops` (every land top with an ocean-family biome, as a share of all positions:
  * mostly sea-class density islands, the rim islets are a small part of it), `shorelineFringe` (near-shore positions, Chebyshev distance ≤ 2 inside the column from a
  * position of the other wet/dry state, without the islets: the share with an ocean-family biome on a land top or a
@@ -243,6 +246,7 @@ metricTest('B4', ['snowInDesert', 'coastBandBeachVoxel', 'landTopsBelowSea'], as
   population(rec, 'landTopsBelowSea', byProfile((p) => sc[p].landBiome));
   for (const p of PROFILES) {
     const a = sc[p];
+    // On T, before settle (SP7a §13.2; header).
     rec[`dryPitsBelowSea.${p}`] = share(a.landBiomeDryBelow, a.landBiome);
     rec[`landTopsBelowSeaCount.${p}`] = a.landBiomeWetBelow;
     rec[`lakeRimIslets.${p}`] = share(a.islets, a.positions);
