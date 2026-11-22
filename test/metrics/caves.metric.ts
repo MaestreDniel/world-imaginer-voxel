@@ -22,7 +22,7 @@ import { caveZoneGrid, caveZoneParts, ZONE_CELLS, ZONE_DEPTHS, ZONE_LAGS, ZONE_O
 import { r3PathCounts, r3Paths, r3PoseCounts, r3Poses, r3Region, R3_POSE_COUNTS, type CaveRegion, type R3PathCounts, type R3PoseCounts } from '../harness/cull';
 import { metricTest } from '../harness/metric';
 import { genRegion } from '../harness/region';
-import { WATER_EXAMPLE_IDS, waterParts } from '../harness/water';
+import { a2Parts, WATER_EXAMPLE_IDS, waterParts } from '../harness/water';
 import { THRESHOLDS } from '../thresholds';
 
 /**
@@ -66,7 +66,8 @@ import { THRESHOLDS } from '../thresholds';
  *   in `.out/A.<group>.json` (recorded until the tuning), `A3.aquiferLavaAbove10` gated from this commit (0 by
  *   construction), `C7.waterWallAny` (SP6a's waterWall count) per job in `.out/C7.waterWallAny.<group>.json`, and
  *   SP7a's review poses at seed '42' in `.out/sp7a.examples.<group>.json` (rulings P22: one record per job, Task 24 adds
- *   its poses to it).
+ *   its poses to it); A2 by origin (sky-open, aquifer, spring) with the water/lava contacts apart per job in
+ *   `.out/A2.<group>.json` (Task 23, recorded until the tuning; the contacts also leave `C7.waterWall`'s population).
  *
  * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
  * - `carverReference`: over every region of the run's groups (the preset regions included), the voxels of the region
@@ -808,6 +809,29 @@ test('A1, A3, A4 per job after the settle reference (recorded)', async () => {
       regions: rs.map((m) => ({ label: m.site.label, ms: { settle: m.ms.settle, water: m.ms.water }, ...waterParts([m.water!]), counts: m.water })),
     }));
     expect(rs.length, `A: the ${job} job's regions`).toBeGreaterThan(0);
+  }
+}, 900_000 * TIMEOUT_SCALE);
+
+/**
+ * A2's record (SP7a spec §13.1, D30; Task 23; gated at its bounds at the tuning, Task 31), as built in
+ * `test/harness/water.ts` (`a2RegionCounts`, `a2Parts`): per job over its regions' interiors after the global settle
+ * reference, `unsupported` (the fluid voxels one application of §4.1's rules would change, counting the unsettled) and
+ * `unsettled` (bit 6 outside the water/lava contacts), each over all fluid voxels, with the counts, shares and rates
+ * per km² pooled and by origin (sky-open, aquifer, spring: `refs.ts`' `referenceSettleOrigins`) and `A2.contacts` apart;
+ * with each region's values, in `.out/A2.<group>.json`.
+ */
+test('A2 by origin per job after the settle reference (recorded)', async () => {
+  const measured = await measuredRegions();
+  const jobs = [...new Set(measured.map((m) => jobOf(m.site)))];
+  mkdirSync(OUT_DIR, { recursive: true });
+  for (const job of jobs) {
+    const rs = measured.filter((m) => jobOf(m.site) === job && m.a2 !== null);
+    writeFileSync(join(OUT_DIR, `A2.${job}.json`), json({
+      id: 'A2', tier: process.env.METRICS_TIER ?? null, group: job, values: a2Parts(rs.map((m) => m.a2!)),
+      regions: rs.map((m) => ({ label: m.site.label, ...a2Parts([m.a2!]), counts: m.a2 })),
+    }));
+    expect(rs.length, `A2: the ${job} job's regions`).toBeGreaterThan(0);
+    expect(rs.every((m) => m.a2!.fluid.skyOpen + m.a2!.fluid.aquifer + m.a2!.fluid.spring > 0), `A2: the ${job} job's regions hold fluid`).toBe(true);
   }
 }, 900_000 * TIMEOUT_SCALE);
 

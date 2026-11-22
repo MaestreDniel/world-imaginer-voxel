@@ -245,7 +245,9 @@
  * the caves regions' interiors after settle, per group; A1's connectivity through tagged non-solid and fluid voxels at
  * y ≤ 62; A3's second part from aquifer cells, `THRESHOLDS.A3.aquiferLavaAbove10` gated from SP7a), C7's `waterWall`
  * read after settle over truncated fronts and abyss stops with a dry target, §6.5's A3 line and item 19's test entry
- * ("A1-A5 in metrics/caves.metric.ts", an `SP7A_MODULES` row).
+ * ("A1-A5 in metrics/caves.metric.ts", an `SP7A_MODULES` row). A2 by origin (Task 23) lands item 16's A2 row in
+ * pre-tuning form (the fluid voxels the settle's rules would change in one application, counting the unsettled, over
+ * all fluid voxels / the unsettled share outside the water/lava contacts; by origin and per km², the contacts apart).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -3809,6 +3811,14 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(THRESHOLDS.A3).toEqual({ aquiferLavaAbove10: { max: 0, activeFrom: 'SP7a' } });
     expect(THRESHOLDS.A1).toBeUndefined();
     expect(THRESHOLDS.A4).toBeUndefined();
+  });
+
+  test('§6.4\'s A2 row after the settle reference, in pre-tuning form (SP7a spec §16 item 16)', () => {
+    const a2 = text.split('\n').find((l) => l.startsWith('| A2 |'));
+    expect(a2, 'no A2 row in §6.4').toBeDefined();
+    expect(a2).toBe('| A2 | fluid voxels unsupported below or sideways after settle, **counting unsettled** / unsettled share. SP7a: over the caves regions\' interiors after the global settle reference, per group: `unsupported`, the fluid voxels the settle\'s rules (`fluidRules.ts`\' `ruleOffers`) would change in one application (a level a feeder would lower, a missing fall, a spread into a passable voxel), counting unsettled ones, over all fluid voxels / `unsettled`, the unsettled share (bit 6 outside the water/lava contacts); recorded by origin (sky-open, aquifer, spring: `harness/refs.ts`\' `referenceSettleOrigins`) and per km², the contacts apart (`A2.contacts`, SP7b\'s reactions) (amended by SP7a) | ≤ 0.1% / ≤ 0.1% of fluid voxels |');
+    // Recorded until the tuning (Task 31): no row yet.
+    expect(THRESHOLDS.A2).toBeUndefined();
   });
 
   test('§6.4\'s C7 row: `waterWall` read after settle over truncated fronts and abyss stops (SP7a spec §16 item 16)', () => {

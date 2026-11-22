@@ -66,7 +66,8 @@
  *   neither solid nor fluid after settle) into which §4.1's rules would flow but for the cap (the voxel's bit 6) or the
  *   abyss stop (a water voxel beside air of nibble 3): the neighbour lies on one of the voxel's spread sides
  *   (`spreadSides`: `nearestDropDirs` over the proto, every open side when no drop is in reach; none when the voxel
- *   falls instead), so a front cut at the cap whose dry neighbour lies off its nearest-drop sides is not one. SP6a's count,
+ *   falls instead), so a front cut at the cap whose dry neighbour lies off its nearest-drop sides is not one; a water/lava
+ *   contact's bit 6 (§4.1's merge, SP7b's reaction, counted in `A2.contacts`) is not a cut front (Task 23). SP6a's count,
  *   a fluid voxel of T with a horizontal neighbour that is tagged air (tagged, neither solid nor fluid), is recorded as
  *   `C7.waterWallAny` (`waterWallAnyCount`, over the whole region, per km² of it).
  * - C7's bottom parts (SP6b spec §12.3, D6): `bottomPlane` the flat floor faces (C7.flatWallShare's 6 × 6 patches, over
@@ -1593,6 +1594,9 @@ export function gridRuleReader(g: CaveGrid): FluidRuleReader {
   };
 }
 
+/** No water/lava contacts (`waterWallCount`'s default). */
+const NO_CONTACTS: ReadonlySet<number> = new Set();
+
 /**
  * C7.waterWall's count after settle (SP7a spec §13.2; see the header): over the voxels of `box` (world x0 ≤ x < x1,
  * z0 ≤ z < z1, every y; default the grid), `settled` reading each voxel's settled fluid byte, the fluid voxels neither
@@ -1600,12 +1604,15 @@ export function gridRuleReader(g: CaveGrid): FluidRuleReader {
  * dry tagged air (tagged, not solid, no settled fluid) into which §4.1's rules would flow but for a stop: the neighbour
  * lies on one of the voxel's spread sides (`spreadSides` over `rules`, the proto's reader; default `gridRuleReader`) and
  * either the voxel's bit 6 is set (a truncated front with a dry target) or, for water, the neighbour's nibble is the
- * abyss (an abyss stop).
+ * abyss (an abyss stop). A voxel of `contacts` (the water/lava contacts, `refs.ts`' `referenceSettleOrigins`, keyed by
+ * the grid's index, `cellAt`) carries bit 6 as §4.1's merge sets it on a contact, not as a truncated front (SP7a Task
+ * 23), so only its abyss stop could make it a wall.
  */
 export function waterWallCount(
   g: CaveGrid, settled: (x: number, y: number, z: number) => number,
   box: { readonly x0: number; readonly z0: number; readonly x1: number; readonly z1: number } = { x0: g.x0, z0: g.z0, x1: g.x0 + g.w, z1: g.z0 + g.d },
   rules: FluidRuleReader = gridRuleReader(g),
+  contacts: ReadonlySet<number> = NO_CONTACTS,
 ): number {
   const { x0, z0, w, d, cells } = g;
   const plane = w * d;
@@ -1621,8 +1628,8 @@ export function waterWallCount(
         if (!hasFluid(b) || fluidFalling(b)) continue;
         const type = fluidType(b);
         if (fluidLevel(b) === lastLevelOf(type)) continue;
-        const cap = fluidUnsettled(b);
         const i = (y - GRID_Y0) * plane + z * w + x;
+        const cap = fluidUnsettled(b) && !contacts.has(i);
         // The sides whose neighbour is dry tagged air with a stop (the cap, or the abyss for water); then, only for such
         // a voxel, whether one of them is a spread side.
         let stopped = 0;
@@ -2789,6 +2796,8 @@ export interface C7C9Options {
     readonly box: { readonly x0: number; readonly z0: number; readonly x1: number; readonly z1: number };
     /** The proto as §4.1's rules read it (the spread sides); default `gridRuleReader(g)`. */
     readonly rules?: FluidRuleReader;
+    /** The water/lava contacts, keyed by the grid's index (`waterWallCount`'s); default none. */
+    readonly contacts?: ReadonlySet<number>;
   };
 }
 
@@ -2809,7 +2818,7 @@ export function caveC7C9Counts(g: CaveGrid, tops: Int16Array, c: CaveComponents,
     layers: layerCounts(g, tops),
     flat: flatWallDetail(g, o.seaFloor),
     switchWall: o.T === null ? null : switchWallCounts(g, o.T, o.stride),
-    waterWall: o.water === undefined ? Number.NaN : waterWallCount(g, o.water.settled, o.water.box, o.water.rules),
+    waterWall: o.water === undefined ? Number.NaN : waterWallCount(g, o.water.settled, o.water.box, o.water.rules, o.water.contacts),
     waterWallKm2: o.water === undefined ? 0 : ((o.water.box.x1 - o.water.box.x0) * (o.water.box.z1 - o.water.box.z0)) / 1e6,
     waterWallAny: waterWallAnyCount(g),
     lags: aperiodicCounts(g),

@@ -29,7 +29,7 @@ import {
   wallResidues, waterWallAnyCount, waterWallCount, gridRuleReader, spreadSides, worstToBound, type BandCounts, type CaveGrid,
 } from '../harness/caveMetrics';
 import { NIBBLE_REGION, nibbleRegion } from '../harness/caveNibbles';
-import { interiorOf, measureCaveRegion, settleRegion, type CaveRegionResult } from '../harness/caveRegionWorker';
+import { interiorOf, measureCaveRegion, settleRegion, type CaveRegionResult, type SettleOrigins } from '../harness/caveRegionWorker';
 import {
   BIOME_REGION, BIOME_SCAN_MIN_POINTS, BIOME_SCAN_SKIPPED, BIOME_TILE_ALL, biomeClimateHolds, biomeRegionClimate, biomeTiles, caveGroupOf,
   caveSites, findBiomeRegion, firstBiomeTile, measureCaveRegions, tileBiomeMask,
@@ -42,6 +42,7 @@ import { components3d } from '../harness/flood';
 import { coverageErrors, evaluateMetric, findMetricCalls } from '../harness/metric';
 import { genRegion } from '../harness/region';
 import { referenceCarve } from '../harness/refs';
+import { ORIGIN_AQUIFER, regionSpringList, springsOfRegion } from '../harness/water';
 import type { ThresholdTable } from '../thresholds';
 
 const K = CAVE_KIND;
@@ -728,6 +729,26 @@ describe('the caves instruments on fixtures (SP6a §10.1, C7-C9)', () => {
     expect(spreadSides(r, packFluid(FLUID_WATER, 2), 5, 42, 5)).not.toBe(0);
   });
 
+  test('C7.waterWall: a water/lava contact beside dry tagged air is no wall (§4.1\'s merge sets its bit 6; SP7a Task 23)', () => {
+    // The cave of the cases above: a flagged lava voxel on the floor beside dry tagged air is a cut front, a wall; the
+    // same voxel in the contact set (keyed by the grid's index) carries bit 6 as a contact, and reads 0.
+    const g = rock(16, 16, 60);
+    carve(g, K.cheese, 2, 13, 40, 45, 2, 13);
+    const one = (x: number, y: number, z: number, fluid: number) => (qx: number, qy: number, qz: number): number => (qx === x && qy === y && qz === z ? fluid : NO_FLUID);
+    const lava = one(8, 40, 8, packFluid(FLUID_LAVA, 4, false, true));
+    expect(waterWallCount(g, lava)).toBe(1);
+    expect(waterWallCount(g, lava, undefined, undefined, new Set([cellAt(g, 8, 40, 8)]))).toBe(0);
+    // Another voxel's contact leaves it a wall.
+    expect(waterWallCount(g, lava, undefined, undefined, new Set([cellAt(g, 8, 40, 9)]))).toBe(1);
+    // Through caveC7C9Counts' water option.
+    const tops = preCaveTops(g);
+    const all = new Uint8Array(256).fill(1);
+    const o = { T: null, stride: 1, eligible: all, seaFloor: null, tile: 16 };
+    const box = { x0: 0, z0: 0, x1: 16, z1: 16 };
+    expect(caveC7C9Counts(g, tops, caveComponents(g, tops), { ...o, water: { settled: lava, box } }).waterWall).toBe(1);
+    expect(caveC7C9Counts(g, tops, caveComponents(g, tops), { ...o, water: { settled: lava, box, contacts: new Set([cellAt(g, 8, 40, 8)]) } }).waterWall).toBe(0);
+  });
+
   test('C7.waterWall pools per km² of the boxes counted; C7.waterWallAny per km² of the regions; NaN without settled bytes', () => {
     const g = rock(16, 16, 60);
     carve(g, K.cheese, 2, 13, 40, 45, 2, 13);
@@ -1412,9 +1433,14 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
   const inProcess: CaveRegionResult[] = [];
   let one: CaveRegionResult[] = [];
   let four: CaveRegionResult[] = [];
-  /** SP7a: the first region's settle overlay over the whole region and by tiles of 8 × 8 chunks (`settleRegion`). */
+  /**
+   * SP7a: the first region's settle overlay over the whole region and by tiles of 8 × 8 chunks (`settleRegion`), each
+   * with A2's origins and contacts (Task 23).
+   */
   let whole = new Map<number, number>();
   let tiled = new Map<number, number>();
+  let wholeO: SettleOrigins | null = null;
+  let tiledO: SettleOrigins | null = null;
 
   beforeAll(async () => {
     for (const [k, s] of SITES.entries()) {
@@ -1425,8 +1451,12 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
       });
       inProcess.push(measureCaveRegion(view, s, params, STRIDE));
       if (k === 0) {
-        whole = settleRegion(view, s.size);
-        tiled = settleRegion(view, 8);
+        const springs = regionSpringList(view, params);
+        springsOfRegion(view, seedFromInput(s.seed), params, springs);
+        wholeO = { springs, origins: new Map(), contacts: new Set() };
+        tiledO = { springs, origins: new Map(), contacts: new Set() };
+        whole = settleRegion(view, s.size, wholeO);
+        tiled = settleRegion(view, 8, tiledO);
       }
     }
     one = await measureCaveRegions(SITES, { ...OPTS, workers: 1 });
@@ -1469,6 +1499,7 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
         expect(got.sp6bExamples, `${s.label}, ${n} worker(s)`).toEqual(ref.sp6bExamples);
         expect(got.carver, `${s.label}, ${n} worker(s)`).toEqual(ref.carver);
         expect(got.water, `${s.label}, ${n} worker(s)`).toEqual(ref.water);
+        expect(got.a2, `${s.label}, ${n} worker(s)`).toEqual(ref.a2);
         expect(got.waterExamples, `${s.label}, ${n} worker(s)`).toEqual(ref.waterExamples);
         // The timings differ by run; their fields do not.
         expect(Object.keys(got.ms)).toEqual(Object.keys(ref.ms));
@@ -1493,6 +1524,12 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
     // The settle changes the region (aquifer borders, spills), so the comparison is not vacuous.
     expect(whole.size).toBeGreaterThan(0);
     expect(tiled).toEqual(whole);
+    // Task 23: A2's origins and contacts by tiles equal the whole region's; every settled voxel the proto held dry has an
+    // origin, and the region's sources are sky-open water and aquifer cells.
+    expect(tiledO!.origins).toEqual(wholeO!.origins);
+    expect(tiledO!.contacts).toEqual(wholeO!.contacts);
+    expect(wholeO!.origins.size).toBeGreaterThan(0);
+    expect(new Set(wholeO!.origins.values()).has(ORIGIN_AQUIFER)).toBe(true);
     for (const [k, s] of SITES.entries()) {
       const ref = inProcess[k]!;
       const interior = interiorOf({ cx0: s.cx0, cz0: s.cz0, w: s.size, h: s.size })!;
@@ -1506,6 +1543,9 @@ describe("the caves metric's regions in worker threads (SP6b spec §13 L6, rulin
       expect(Number.isFinite(ref.water!.marginBarriers), s.label).toBe(true);
       // SP7a's poses are every seed '42' region's.
       expect(ref.waterExamples, s.label).not.toBeNull();
+      // A2 (Task 23): every interior fluid voxel counted in one origin; the region holds aquifer water.
+      expect(ref.a2!.areaKm2, s.label).toBeCloseTo(ref.water!.areaKm2, 12);
+      expect(ref.a2!.fluid.aquifer, s.label).toBeGreaterThan(0);
     }
   });
 

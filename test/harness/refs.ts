@@ -12,7 +12,9 @@
  * sections they enter; it shares no code with `render/culling/caveCulling.ts`. SP7a (spec §4.1, §13.4, D30):
  * `referenceSettle`, the global settle reference of `DT1.settleReference`: §4.1's rules through `fluidRules.ts`'
  * `ruleOffers` over a whole region's proto in plain sweeps, sharing no code with `gen/fluids/settle.ts` (no window,
- * seeds, worklist or table).
+ * seeds, worklist or table); SP7a (spec §13.1, Task 23): `referenceSettleOrigins`, A2's origin of each voxel the
+ * settle filled and the water/lava contacts, over the same fixed points (a spring's own voxels are its front by the
+ * settle's kernel, `water.ts`' `springFront`).
  */
 import { CARVER_WINDOW_R, CAVE_FILM_KIND, CAVE_KIND, CORNER_DRY, CORNER_FULL, CORNER_SOLID, caveBiomeOf, caveKindOf } from '../../src/core/constants';
 import type { Params } from '../../src/core/params/schema';
@@ -21,6 +23,8 @@ import { carveTest, densityTopOf, floorYAt, wetAt } from '../../src/gen/caves/ca
 import { carverParamsOf, carverPath, type CarverKind } from '../../src/gen/caves/carvers';
 import { buildColumnSample, newColumnSample } from '../../src/gen/column/columnStage';
 import { createGenContext, noiseFor } from '../../src/gen/context';
+import { createSettleScratch } from '../../src/gen/fluids/settle';
+import type { SpringList } from '../../src/gen/fluids/springs';
 import { DEFAULT_MESH_TABLES, type MeshTables } from '../../src/mesh/greedy';
 import { PACK_LAYOUT } from '../../src/mesh/packing';
 import { MESH_PASS_TRANSLUCENT, MESH_PASS_XRAY, type ColumnMeshPayload } from '../../src/mesh/column';
@@ -33,6 +37,7 @@ import { AIR, BEDROCK } from '../../src/world/blocks/index';
 import { ALL_FACES, FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST, PASS_CUTOUT, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import { DEFAULT_LIGHT_TABLES, effEmit, effOpacity, fallBlocked, type LightTables } from '../../src/world/blocks/light';
 import type { RegionView } from './region';
+import { ORIGIN_AQUIFER, ORIGIN_SKY_OPEN, ORIGIN_SPRING, springFront } from './water';
 
 /** The six faces as [face, dx, dy, dz, the opposite face]. */
 const FACES: ReadonlyArray<readonly [number, number, number, number, number]> = [
@@ -569,30 +574,8 @@ export function referenceSettleKey(view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 
   return ((y + 64) * 16 * view.h + (z - 16 * view.cz0)) * 16 * view.w + (x - 16 * view.cx0);
 }
 
-/**
- * The global settle reference (SP7a spec §4.1, §13.4, D30; `DT1.settleReference`): the settled byte of every voxel of
- * `box` (x0 ≤ x < x1, z0 ≤ z < z1, every y) whose byte differs from its proto byte, keyed `referenceSettleKey`. Slow
- * and plain, SP6a's `referenceCarve` pattern:
- * - **Reads.** The proto of every column of `view` (the store's proto set: blocks, fluid and cave bytes; D's final set
- *   may already hold the settle), loaded whole into arrays; `isPassable` over the block state, the proto fluid byte
- *   and the cave nibble (`caveBiomeOf`) as a `FluidRuleReader`, which reads `block` (passable false, fluid NO_FLUID,
- *   nibble 0) outside the region and wherever the voxel is not passable (rulings R7). No other window.
- * - **The rules** are `ruleOffers`, the one copy the settle calls (rulings P2: 45 ints of offers).
- * - **The fixed point.** Water, then lava, each alone (§4.1's two fixed points): per voxel one least horizontal
- *   distance per value code (rulings R9: d[k], the least over the derivations that give the voxel the value k, so its
- *   level and its distance come from one derivation); every voxel holding the type's proto fluid starts as (source,
- *   0) (§4.2), every other with no code. Then repeated sweeps over every voxel of the region, y from the top (a fall
- *   runs down in one sweep), z, then x: at a voxel, `ruleOffers` once per code whose distance is below every lower
- *   code's, and an offer (v, d) lowers the target's d[v] when d is below the target's least distance over the codes
- *   ≤ v. A sweep that lowers nothing ends it. The rules read only the proto and the voxel's own distances, so a voxel
- *   whose distances did not change since its last application would offer exactly what it offered then: a sweep
- *   applies the rules only at the voxels whose distances changed since (all of the type's proto fluid at the first
- *   sweep). No seed list and no cap but the distance caps 12 / 14 (`ruleOffers`' own).
- * - **The bytes.** A voxel's value is its least code with a distance; its type's `unsettled` is the cap bit of one
- *   more application at that value and distance. A voxel both types reached takes lava's byte with `unsettled` set (a
- *   contact); else its type's `packFluid` (falling for the falling code, level 0 for a source, k for flowing 1 + k).
- */
-export function referenceSettle(view: RegionView, box: { x0: number; z0: number; x1: number; z1: number }): Map<number, number> {
+/** `referenceSettle`'s reads and its two fixed points over the view's region (`referenceSettle`'s doc states them). */
+function referenceFixedPoints(view: RegionView): ReferenceFixedPoints {
   const W = 16 * view.w;
   const D = 16 * view.h;
   const x0 = 16 * view.cx0;
@@ -694,13 +677,70 @@ export function referenceSettle(view: RegionView, box: { x0: number; z0: number;
   };
   const water = settled(FLUID_WATER);
   const lava = settled(FLUID_LAVA);
+  return { view, W, D, x0, z0, fluid, cave, water, lava };
+}
+
+/** A type's settled `value` (its least code with a distance, else dry) and `unsettled` per voxel of the region. */
+interface ReferenceTypeResult {
+  readonly value: Uint8Array;
+  readonly unsettled: Uint8Array;
+}
+
+/** `referenceSettle`'s fixed points over a view: the region's proto fluid and cave bytes, and each type's result. */
+interface ReferenceFixedPoints {
+  readonly view: RegionView;
+  readonly W: number;
+  readonly D: number;
+  readonly x0: number;
+  readonly z0: number;
+  readonly fluid: Uint8Array;
+  readonly cave: Uint8Array;
+  readonly water: ReferenceTypeResult;
+  readonly lava: ReferenceTypeResult;
+}
+
+/**
+ * The fixed points of the last `referenceSettle` call, kept for `referenceSettleOrigins` on the same view object (which
+ * takes them and clears the slot), so a region worker that asks both settles each region once; the view's store must
+ * not change between the two calls.
+ */
+let lastFixedPoints: ReferenceFixedPoints | null = null;
+
+/**
+ * The global settle reference (SP7a spec §4.1, §13.4, D30; `DT1.settleReference`): the settled byte of every voxel of
+ * `box` (x0 ≤ x < x1, z0 ≤ z < z1, every y) whose byte differs from its proto byte, keyed `referenceSettleKey`. Slow
+ * and plain, SP6a's `referenceCarve` pattern:
+ * - **Reads.** The proto of every column of `view` (the store's proto set: blocks, fluid and cave bytes; D's final set
+ *   may already hold the settle), loaded whole into arrays; `isPassable` over the block state, the proto fluid byte
+ *   and the cave nibble (`caveBiomeOf`) as a `FluidRuleReader`, which reads `block` (passable false, fluid NO_FLUID,
+ *   nibble 0) outside the region and wherever the voxel is not passable (rulings R7). No other window.
+ * - **The rules** are `ruleOffers`, the one copy the settle calls (rulings P2: 45 ints of offers).
+ * - **The fixed point.** Water, then lava, each alone (§4.1's two fixed points): per voxel one least horizontal
+ *   distance per value code (rulings R9: d[k], the least over the derivations that give the voxel the value k, so its
+ *   level and its distance come from one derivation); every voxel holding the type's proto fluid starts as (source,
+ *   0) (§4.2), every other with no code. Then repeated sweeps over every voxel of the region, y from the top (a fall
+ *   runs down in one sweep), z, then x: at a voxel, `ruleOffers` once per code whose distance is below every lower
+ *   code's, and an offer (v, d) lowers the target's d[v] when d is below the target's least distance over the codes
+ *   ≤ v. A sweep that lowers nothing ends it. The rules read only the proto and the voxel's own distances, so a voxel
+ *   whose distances did not change since its last application would offer exactly what it offered then: a sweep
+ *   applies the rules only at the voxels whose distances changed since (all of the type's proto fluid at the first
+ *   sweep). No seed list and no cap but the distance caps 12 / 14 (`ruleOffers`' own).
+ * - **The bytes.** A voxel's value is its least code with a distance; its type's `unsettled` is the cap bit of one
+ *   more application at that value and distance. A voxel both types reached takes lava's byte with `unsettled` set (a
+ *   contact); else its type's `packFluid` (falling for the falling code, level 0 for a source, k for flowing 1 + k).
+ * The fixed points are kept for a following `referenceSettleOrigins` on the same view (`lastFixedPoints`).
+ */
+export function referenceSettle(view: RegionView, box: { x0: number; z0: number; x1: number; z1: number }): Map<number, number> {
+  const f = referenceFixedPoints(view);
+  lastFixedPoints = f;
+  const { W, D, x0, z0, fluid, water, lava } = f;
   const byteOf = (type: number, value: number, flag: boolean): number =>
     (value === FLUID_VALUE_FALLING ? packFluid(type, 0, true, flag) : packFluid(type, value === FLUID_VALUE_SOURCE ? 0 : value - 1, false, flag));
   const result = new Map<number, number>();
   for (let y = -64; y < 320; y++) {
     for (let z = Math.max(box.z0, z0); z < Math.min(box.z1, z0 + D); z++) {
       for (let x = Math.max(box.x0, x0); x < Math.min(box.x1, x0 + W); x++) {
-        const i = index(x, y, z);
+        const i = ((y + 64) * D + (z - z0)) * W + (x - x0);
         const vw = water.value[i]!;
         const vl = lava.value[i]!;
         let byte: number;
@@ -712,4 +752,113 @@ export function referenceSettle(view: RegionView, box: { x0: number; z0: number;
     }
   }
   return result;
+}
+
+/**
+ * The settle reference's origins and contacts (SP7a spec §13.1, §4.1's merge; A2 by origin), over the same fixed points
+ * as `referenceSettle` (the last call's on this view object, else computed again), keyed `referenceSettleKey`, for the
+ * voxels of `box`:
+ * - `contacts` gains every voxel both fixed points reached (a contact: lava's byte with bit 6, §4.1's merge);
+ * - `origins` gains each spring's voxel of `springs` (its `pos` keyed on this view, `water.ts`' `springsOfRegion`), and
+ *   each voxel a fixed point reached whose proto holds no fluid (the voxels the settle filled), with its label
+ *   (`water.ts`' `ORIGIN_*`): the spring's when a spring's own front (`springFront`, the spring's voxel alone as the
+ *   settle's seed) reaches it; else that of its nearest proto source of its settled type (lava's at a contact): the
+ *   least horizontal distance along the voxels that type's fixed point reached, a block sideways counting 1 and a
+ *   block down 0 (a derivation's steps: falls, spreads and new sources never rise), sky-open water (an untagged
+ *   source) before an aquifer's (a tagged one) at equal distance, the springs left out (their fronts decide). Every
+ *   such voxel is reached so from a source or lies in a spring's front, or it throws. A proto fluid voxel the map
+ *   leaves out is its own nearest source (`water.ts`' `protoOrigin`).
+ * The fixed points share no code with `gen/fluids/settle.ts`; the springs' fronts are its kernel's (`springFront`), as
+ * the spring's own voxels are defined by it (§13.1).
+ */
+export function referenceSettleOrigins(
+  view: RegionView, box: { x0: number; z0: number; x1: number; z1: number }, springs: SpringList, origins: Map<number, number>, contacts: Set<number>,
+): void {
+  const f = lastFixedPoints !== null && lastFixedPoints.view === view ? lastFixedPoints : referenceFixedPoints(view);
+  lastFixedPoints = null;
+  const { W, D, x0, z0, fluid, cave, water, lava } = f;
+  const layer = W * D;
+  const n = layer * 384;
+  const bx0 = Math.max(box.x0, x0) - x0, bx1 = Math.min(box.x1, x0 + W) - x0;
+  const bz0 = Math.max(box.z0, z0) - z0, bz1 = Math.min(box.z1, z0 + D) - z0;
+  const inBox = (i: number): boolean => {
+    const x = i % W;
+    const z = Math.floor(i / W) % D;
+    return x >= bx0 && x < bx1 && z >= bz0 && z < bz1;
+  };
+  // The springs' voxels and the voxels of their own fronts.
+  const springAt = new Set<number>();
+  const fed = new Set<number>();
+  const scratch = createSettleScratch();
+  const sink = {
+    set: (x: number, y: number, z: number): void => { fed.add(((y + 64) * D + (z - z0)) * W + (x - x0)); },
+  };
+  for (let s = 0; s < springs.n; s++) {
+    const k = springs.pos[s]!;
+    if (k < 0 || k >= n) throw new RangeError(`referenceSettleOrigins: spring ${s}'s key ${k} lies outside the view`);
+    springAt.add(k);
+    springFront(view, springs, s, scratch, sink);
+  }
+  // Per type, each reached voxel's nearest source label + 1 (0 unreached), by rings of distance; 4 marks a voxel expanded.
+  const label = new Uint8Array(n);
+  const labelType = (type: number, reached: Uint8Array): void => {
+    label.fill(0);
+    const reach = (i: number): boolean => reached[i]! < FLUID_VALUE_DRY;
+    let ring: number[][] = [[], []];
+    for (let i = 0; i < n; i++) {
+      if (fluidType(fluid[i]!) !== type || springAt.has(i)) continue;
+      label[i] = 1 + ((cave[i]! & 15) === 0 ? ORIGIN_SKY_OPEN : ORIGIN_AQUIFER);
+    }
+    for (let i = 0; i < n; i++) {
+      if (label[i] === 0) continue;
+      const x = i % W;
+      const z = Math.floor(i / W) % D;
+      const fresh = (j: number): boolean => reach(j) && label[j] === 0;
+      if ((i >= layer && fresh(i - layer)) || (x > 0 && fresh(i - 1)) || (x < W - 1 && fresh(i + 1)) || (z > 0 && fresh(i - W)) || (z < D - 1 && fresh(i + W))) {
+        ring[label[i]! - 1]!.push(i);
+      }
+    }
+    while (ring[0]!.length + ring[1]!.length > 0) {
+      const next: number[][] = [[], []];
+      for (let l = 0; l < 2; l++) {
+        const q = ring[l]!;
+        for (let h = 0; h < q.length; h++) {
+          const v = q[h]!;
+          if (label[v] === 0) label[v] = 1 + l;
+          if ((label[v]! & 3) !== 1 + l || (label[v]! & 4) !== 0) continue;
+          label[v] = label[v]! | 4;
+          const x = v % W;
+          const z = Math.floor(v / W) % D;
+          if (v >= layer && reach(v - layer) && label[v - layer] === 0) q.push(v - layer);
+          for (const j of [x > 0 ? v - 1 : -1, x < W - 1 ? v + 1 : -1, z > 0 ? v - W : -1, z < D - 1 ? v + W : -1]) {
+            if (j >= 0 && reach(j) && label[j] === 0) next[l]!.push(j);
+          }
+        }
+      }
+      ring = next;
+    }
+  };
+  const record = (type: number): void => {
+    for (let y = 0; y < 384; y++) {
+      for (let z = bz0; z < bz1; z++) {
+        for (let x = bx0; x < bx1; x++) {
+          const i = (y * D + z) * W + x;
+          const vl = lava.value[i]!;
+          const vw = water.value[i]!;
+          // The voxel's settled type: lava's where lava reached it (a contact too), else water's where water did.
+          if ((vl < FLUID_VALUE_DRY ? FLUID_LAVA : vw < FLUID_VALUE_DRY ? FLUID_WATER : FLUID_NONE) !== type) continue;
+          if (type === FLUID_LAVA && vw < FLUID_VALUE_DRY) contacts.add(i);
+          if (springAt.has(i) || hasFluid(fluid[i]!)) continue;
+          if (fed.has(i)) origins.set(i, ORIGIN_SPRING);
+          else if (label[i] !== 0) origins.set(i, (label[i]! & 3) - 1);
+          else throw new Error(`referenceSettleOrigins: the settled voxel (${x0 + x}, ${y - 64}, ${z0 + z}) has no source of its type and no spring's front`);
+        }
+      }
+    }
+  };
+  labelType(FLUID_WATER, water.value);
+  record(FLUID_WATER);
+  labelType(FLUID_LAVA, lava.value);
+  record(FLUID_LAVA);
+  for (const k of springAt) if (inBox(k)) origins.set(k, ORIGIN_SPRING);
 }
