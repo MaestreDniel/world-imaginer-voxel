@@ -18,6 +18,8 @@
  * candidate and the first whose interior's springs step accepts a spring: 1,285 sea and 7,033 land positions, 589
  * settled voxels, 27 spills, 482 settle-made voxels in caves, 38 falls over a settle-made stream, 1 water spring.
  * `contact` and `streamOverPool` keep their windows (each still holds its feature).
+ * Task 21 (the lava springs; rulings P42): `contact` must also hold flowing lava (`SettleFeatures.flowingLava`); S(1, 0)
+ * holds 4 flowing lava voxels beside its 6 contacts, so no window moves.
  */
 import type { SettleFeature } from './windowScans';
 

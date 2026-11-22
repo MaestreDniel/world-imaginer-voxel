@@ -1,6 +1,7 @@
 /**
  * U2's liveness tests (`src/metrics/liveness.ts`) for SP7a's aquifer leaves (its spec §1.9, §13.7, Task 13) and its
- * springs' leaves (§3.5: the water springs', Task 19; the island springs', §3.3, Task 20; the plan's Spec correction 5:
+ * springs' leaves (§3.5: the water springs', Task 19; the island springs', §3.3, Task 20; the lava springs', §3.4,
+ * Task 21; the plan's Spec correction 5:
  * each leaf group lands with its reader and its witnesses). In the `liveness` shard of CI's unit jobs (`.github/scripts/unitShards.mjs`); the pins and helpers it
  * shares with the other liveness files are in `fixtures/liveness.ts`.
  */
@@ -10,8 +11,8 @@ import { getPath } from '../../src/core/params/kit';
 import { SCHEMA } from '../../src/core/params/schema';
 import { checkRegistry, prefixCovers, STAGES } from '../../src/core/stage/registry';
 import {
-  aquiferWitness, CAVE_SLOTS, caveColumn, caveSlotLeaves, intendedClass, islandSpringWitness, leafLiveness, perturbations, springWitness,
-  u2Leaves,
+  aquiferWitness, CAVE_SLOTS, caveColumn, caveSlotLeaves, intendedClass, islandSpringWitness, lavaSpringWitness, leafLiveness, perturbations,
+  springWitness, u2Leaves,
 } from '../../src/metrics/liveness';
 import { newSpringList } from '../../src/gen/fluids/springs';
 import { terrainSpringsDebug } from '../../src/gen/pipeline/terrainStage';
@@ -23,7 +24,7 @@ import { createStore } from '../../src/world/store/store';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { createGenContext } from '../../src/gen/context';
-import { AQUIFER_LEAVES, CTX, ISLAND_SPRING_LEAVES, SPRING_LEAVES, U2_LEAVES, columns, leaf } from './fixtures/liveness';
+import { AQUIFER_LEAVES, CTX, ISLAND_SPRING_LEAVES, LAVA_SPRING_LEAVES, SPRING_LEAVES, U2_LEAVES, columns, leaf } from './fixtures/liveness';
 
 /**
  * Each aquifer leaf's U2 verdict at seed 42 (the class columns, the cave columns among them and the intended cave class
@@ -76,8 +77,8 @@ describe('the aquifer\'s leaves in U2 (SP7a spec §1.9, §13.7; Task 13, Spec co
   test('the 15 aquifer leaves join SP6b\'s 193 (208; the springs\' follow), each a U2 leaf of the T stage meant for the cave class, in no cave slot\'s acceptance', () => {
     expect(SCHEMA.leaves.filter((l) => l.path.startsWith('aquifer.')).map((l) => l.path)).toEqual([...AQUIFER_LEAVES]);
     const covered = new Set(u2Leaves().map((l) => l.path));
-    const springs = SPRING_LEAVES.length + ISLAND_SPRING_LEAVES.length;
-    expect([covered.size, U2_LEAVES, U2_LEAVES - springs, U2_LEAVES - springs - AQUIFER_LEAVES.length]).toEqual([211, 211, 208, 193]);
+    const springs = SPRING_LEAVES.length + ISLAND_SPRING_LEAVES.length + LAVA_SPRING_LEAVES.length;
+    expect([covered.size, U2_LEAVES, U2_LEAVES - springs, U2_LEAVES - springs - AQUIFER_LEAVES.length]).toEqual([213, 213, 208, 193]);
     const slotted = new Set(CAVE_SLOTS.flatMap((slot) => caveSlotLeaves(slot).map((l) => l.path)));
     for (const p of AQUIFER_LEAVES) {
       expect([p, covered.has(p), leaf(p).meta.scope, leaf(p).meta.stage, intendedClass(p), slotted.has(p)]).toEqual([p, true, 'terrain', 'terrain', 'cave', false]);
@@ -189,10 +190,9 @@ const ISLAND_SPRING_VERDICT: Readonly<Record<(typeof ISLAND_SPRING_LEAVES)[numbe
 };
 
 describe('the island springs\' leaves in U2 (SP7a spec §3.3, §3.5, §13.7; Task 20, Spec correction 5)', () => {
-  test('U2_LEAVES is 211: SP6b\'s 193, the 15 aquifer leaves, the 2 water springs leaves and the island springs leaf, each a U2 leaf of the T stage (Terrain scope, D21), in no cave slot\'s acceptance', () => {
-    expect(SCHEMA.leaves.filter((l) => l.path.startsWith('springs.')).map((l) => l.path)).toEqual([...SPRING_LEAVES, ...ISLAND_SPRING_LEAVES]);
+  test('the island springs leaf, a U2 leaf of the T stage (Terrain scope, D21), in no cave slot\'s acceptance', () => {
+    expect(SCHEMA.leaves.filter((l) => l.path.startsWith('springs.island.')).map((l) => l.path)).toEqual([...ISLAND_SPRING_LEAVES]);
     const covered = new Set(u2Leaves().map((l) => l.path));
-    expect([covered.size, U2_LEAVES]).toEqual([211, 211]);
     const slotted = new Set(CAVE_SLOTS.flatMap((slot) => caveSlotLeaves(slot).map((l) => l.path)));
     for (const p of ISLAND_SPRING_LEAVES) {
       expect([p, covered.has(p), leaf(p).meta.scope, leaf(p).meta.stage, slotted.has(p)]).toEqual([p, true, 'terrain', 'terrain', false]);
@@ -226,5 +226,54 @@ describe('the island springs\' leaves in U2 (SP7a spec §3.3, §3.5, §13.7; Tas
     }
     console.log(`the island springs' leaves:\n${lines.join('\n')}`);
     expect(() => islandSpringWitness(CTX, 'springs.water.tries')).toThrow('not an island springs leaf');
+  }, 600_000);
+});
+
+/**
+ * The lava springs leaves' U2 verdicts at seed 42 (SP7a spec §3.4, §13.7; Task 21): dead on the class columns (no class
+ * column reaches the abyss's walls with an accepted lava try), live on their bounded abyss witness
+ * (`lavaSpringWitness`: the first examined column of `sp7a.liveness.lavaSprings` whose cave-biome pass gives the abyss on
+ * its grid, whose springs step accepts a lava spring at the defaults and whose T column a step changes). `minFall` is
+ * live by its range's floor (yLo = −55 + minFall moves every try's height), so it stays a leaf (ruling R18's test).
+ */
+const LAVA_SPRING_VERDICT: Readonly<Record<(typeof LAVA_SPRING_LEAVES)[number], string>> = {
+  'springs.lava.tries': 'abyss witness column (-6733, -6066)',
+  'springs.lava.minFall': 'abyss witness column (-20648, -1215)',
+};
+
+describe('the lava springs\' leaves in U2 (SP7a spec §3.4, §3.5, §13.7; Task 21, Spec correction 5)', () => {
+  test('U2_LEAVES is 213: SP6b\'s 193, the 15 aquifer leaves, the 2 water, 1 island and 2 lava springs leaves, each lava leaf a U2 leaf of the T stage (Terrain scope, D21) meant for the cave class, in no cave slot\'s acceptance', () => {
+    expect(SCHEMA.leaves.filter((l) => l.path.startsWith('springs.')).map((l) => l.path)).toEqual([...SPRING_LEAVES, ...ISLAND_SPRING_LEAVES, ...LAVA_SPRING_LEAVES]);
+    const covered = new Set(u2Leaves().map((l) => l.path));
+    expect([covered.size, U2_LEAVES]).toEqual([213, 213]);
+    const slotted = new Set(CAVE_SLOTS.flatMap((slot) => caveSlotLeaves(slot).map((l) => l.path)));
+    for (const p of LAVA_SPRING_LEAVES) {
+      expect([p, covered.has(p), leaf(p).meta.scope, leaf(p).meta.stage, intendedClass(p), slotted.has(p)]).toEqual([p, true, 'terrain', 'terrain', 'cave', false]);
+      expect(STAGES.find((s) => s.params.some((q) => prefixCovers(q, p)))?.id).toBe('terrain');
+    }
+    expect(checkRegistry(SCHEMA, STAGES)).toEqual([]);
+  });
+
+  test('each of the 2 is decided on the abyss witness: a column whose springs step accepts a lava spring at the defaults, where a step changes the T column', () => {
+    const all = [...columns(), ...CAVE_SLOTS.map((slot) => caveColumn(CTX, slot)!)];
+    const lines: string[] = [];
+    const list = newSpringList();
+    for (const p of LAVA_SPRING_LEAVES) {
+      const r = leafLiveness(CTX, p, all);
+      lines.push(`${p}: ${r.live ? 'live' : 'DEAD'} via ${r.via}`);
+      const w = lavaSpringWitness(CTX, p, all);
+      lines.push(`${p}: witness ${w.via} (draws ${w.draws}, examined ${w.examined}, checks ${w.checks})`);
+      expect([p, r.live, r.via]).toEqual([p, true, LAVA_SPRING_VERDICT[p]]);
+      expect([p, w.via]).toEqual([p, LAVA_SPRING_VERDICT[p]]);
+      expect(w.checks, p).toBeLessThanOrEqual(64);
+      expect(w.examined, p).toBeLessThanOrEqual(1024);
+      expect(w.draws, p).toBeLessThanOrEqual(32768);
+      // The witness column's springs step accepts a lava spring at the defaults (re-derived).
+      const [cx, cz] = w.via!.slice('abyss witness column ('.length, -1).split(', ').map(Number) as [number, number];
+      terrainSpringsDebug(CTX, cx, cz, list);
+      expect(Array.from(list.kind.subarray(0, list.n)).filter((k) => k === 2).length, p).toBeGreaterThan(0);
+    }
+    console.log(`the lava springs' leaves:\n${lines.join('\n')}`);
+    expect(() => lavaSpringWitness(CTX, 'springs.water.tries')).toThrow('not a lava springs leaf');
   }, 600_000);
 });

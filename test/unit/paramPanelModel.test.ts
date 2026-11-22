@@ -533,8 +533,9 @@ describe('panel controls (Task 17): kinds, slider positions, typed values, issue
     // + SP6b's 13 cave-biome number and int leaves (Task 17: the 9 box bounds and the four border leaves), + the floor's
     // y and amp (Task 19; its span 1 … 32 is log), + SP7a's 9 aquifer number and int leaves (Task 13: surfaceBand, the
     // four thresholds, lavaMaxLevel, lavaThreshold, lavaLevel, abyssMargin; the barrier band 1 … 64 is log), + its
-    // water springs' tries 0 … 32 (Task 19; minFall 2 … 64 is log), + the island springs' tries 0 … 32 (Task 20).
-    expect(linear.length).toBe(130);
+    // water springs' tries 0 … 32 (Task 19; minFall 2 … 64 is log), + the island springs' tries 0 … 32 (Task 20), + the
+    // lava springs' tries 0 … 64 and minFall 2 … 32 (Task 21; ratio 16, linear).
+    expect(linear.length).toBe(132);
     for (const c of linear) {
       const n = sliderPositions(c);
       expect(n).toBe(Math.round((c.max! - c.min!) / c.step!));

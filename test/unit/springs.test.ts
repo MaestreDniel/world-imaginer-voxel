@@ -6,6 +6,9 @@
  * `minFall` explicitly (rulings P30); the water range has no y floor (Task 19's Spec correction, ruling R17).
  * Island-edge springs (§3.3, D3; Task 20): the island range on hand-built island runs, with `islands.enabled` off, and
  * 8 island springs of seed '42' floating_islands written by T and falling into the sky's air.
+ * Lava springs in the abyss (§3.4, D4; Task 21): the lava range (yLo = −55 + minFall, yHi clamped at the abyss's top
+ * from the cave-biome pass's Y0), the abyss-nibble outlet and the lava valid set on hand-built columns, then a lava
+ * spring of seed '42' beside SP6b's abyss column written by T as air plus `LAVA_SOURCE`.
  */
 import { describe, expect, test } from 'vitest';
 import type { Seed64 } from '../../src/core/hash';
@@ -18,8 +21,8 @@ import { createGenContext, type GenContext } from '../../src/gen/context';
 import { newSpringList, springProbesOf, springsColumn, springTries, type SpringList, type SpringProbes } from '../../src/gen/fluids/springs';
 import { terrainSpringsDebug } from '../../src/gen/pipeline/terrainStage';
 import { fillColumnT } from '../../src/metrics/region';
-import { WATER_SOURCE } from '../../src/world/blocks/fluid';
-import { AIR, CARVABLE, DIRT, GRAVEL, RED_SAND, SAND, STONE } from '../../src/world/blocks/index';
+import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { AIR, CARVABLE, DEEPSLATE, DIRT, GRAVEL, RED_SAND, REGISTRY, SAND, STONE } from '../../src/world/blocks/index';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
 
@@ -30,8 +33,11 @@ const DZ = [-1, 0, 1, 0] as const;
 /** T's column index of column voxel (lx, y, lz). */
 const vi = (lx: number, y: number, lz: number): number => (((y + 64) << 4) | lz) << 4 | lx;
 const listOf = (l: SpringList): Array<[number, number, number]> => Array.from({ length: l.n }, (_, k) => [l.pos[k]!, l.kind[k]!, l.dir[k]!]);
-/** A context with seed '42' and `water` as its water leaves (every rejection case names minFall, P30). */
-const waterCtx = (water: { tries: number; minFall: number }, patch: ParamsPatch = {}): GenContext => ctxFor('42', { ...patch, springs: { water } });
+/**
+ * A context with seed '42', `water` as its water leaves (every rejection case names minFall, P30) and no lava tries (the
+ * water cases' lists hold water springs only; a substituted try seed would also move the lava tries, Task 21).
+ */
+const waterCtx = (water: { tries: number; minFall: number }, patch: ParamsPatch = {}): GenContext => ctxFor('42', { ...patch, springs: { water, lava: { tries: 0 } } });
 /** `ctx` with its seed replaced: `springsColumn` reads the seed for its tries only, so the terrain arrays stay seed '42''s. */
 const withTrySeed = (ctx: GenContext, seed: Seed64): GenContext => ({ ...ctx, seed });
 
@@ -107,11 +113,11 @@ function face(cx: number, cz: number, lx: number, lz: number, d: number, topY: n
   };
 }
 
-/** `springsColumn` on a hand-built world for column (cx, cz) with a flat offset `off`. */
-function decide(ctx: GenContext, w: World, cx: number, cz: number, off: number): Array<[number, number, number]> {
+/** `springsColumn` on a hand-built world for column (cx, cz) with a flat offset `off` (and a cave-biome pass, zeros by default). */
+function decide(ctx: GenContext, w: World, cx: number, cz: number, off: number, pass: CaveColumnPass = newCaveColumnPass()): Array<[number, number, number]> {
   const a = arraysOf(w, cx, cz);
   const out = newSpringList();
-  springsColumn(ctx, flatSample(cx, cz, off), newCaveColumnPass(), a.solid, a.state, a.tags, a.fluid, a.top, probesOf(w), out);
+  springsColumn(ctx, flatSample(cx, cz, off), pass, a.solid, a.state, a.tags, a.fluid, a.top, probesOf(w), out);
   return listOf(out);
 }
 
@@ -197,6 +203,29 @@ describe('the common rule and the water range on hand-built columns (SP7a §3.1-
     expect(decide(ctx, island, cx, 0, OFF)).toEqual([]);
   });
 
+  test('a try at the world window\'s edge whose outlet lies outside the window is rejected without probing there (Task 21)', () => {
+    // Chunk (32767, 0), the window's last column in x: a try seed whose first try is at lx 15 facing east, its outlet at
+    // x = 524288, outside the window.
+    const t = new Float64Array(5);
+    let seed: Seed64 = [0, 0];
+    for (let k = 1; ; k++) {
+      seed = [k, 32767];
+      springTries(seed, 'water', 32767, 0, 1, t);
+      if (t[0] === 15 && t[1]! >= 1 && t[1]! <= 14 && t[2] === 1) break;
+    }
+    const w = face(32767, 0, 15, t[1]!, 1, TOP, Y - 11, []);
+    const probes: SpringProbes = {
+      solid: (px, py, pz) => { if (px >= 524288) throw new RangeError(`probe at x ${px}`); return w.solid(px, py, pz); },
+      fluid: (px, py, pz) => { if (px >= 524288) throw new RangeError(`probe at x ${px}`); return w.fluid(px, py, pz); },
+      tag: () => 0,
+      nibble: () => 0,
+    };
+    const a = arraysOf(w, 32767, 0);
+    const out = newSpringList();
+    springsColumn(withTrySeed(waterCtx({ tries: 1, minFall: 8 }), seed), flatSample(32767, 0, OFF), newCaveColumnPass(), a.solid, a.state, a.tags, a.fluid, a.top, probes, out);
+    expect(listOf(out)).toEqual([]);
+  });
+
   test('two tries on one voxel accept it once', () => {
     // A try seed whose first two tries share (x, z, direction) inside the column.
     const t = new Float64Array(10);
@@ -218,7 +247,7 @@ describe('the common rule and the water range on hand-built columns (SP7a §3.1-
 /** T's arrays of a real column before any spring, read back from its proto under `springs.water.tries` 0. */
 interface TArrays { solid: Uint8Array; state: Uint16Array; tags: Uint8Array; fluid: Uint8Array; top: Int32Array; s: ColumnSample; pass: CaveColumnPass }
 
-const NO_SPRINGS = ctxFor('42', { springs: { water: { tries: 0 } } });
+const NO_SPRINGS = ctxFor('42', { springs: { water: { tries: 0 }, lava: { tries: 0 } } });
 let store: VoxelStore | null = null;
 const ARRAYS = new Map<string, TArrays>();
 
@@ -505,6 +534,122 @@ describe('island-edge springs at seed \'42\' floating_islands (SP7a §3.3, D3)',
     }
     console.log(`island springs' falls below the outlet: ${falls.join(', ')}`);
   }, 120_000);
+});
+
+// ---------------------------------------------------------------- lava springs in the abyss (Task 21)
+
+/** A context with seed '42', no water tries and `lava` as its lava leaves (every case names minFall, as P30's). */
+const lavaCtx = (lava: { tries: number; minFall: number }): GenContext => ctxFor('42', { springs: { water: { tries: 0 }, lava } });
+/** The abyss's cave-biome nibble (3) on a tagged cave byte (kind 1). */
+const ABYSS_AIR = 1 | (3 << 4);
+/** The lava valid set (§3.4): deepslate and the five abyss rocks. */
+const LAVA_ROCKS = [DEEPSLATE, ...['abyss_stone', 'abyss_shale', 'cracked_abyss_stone', 'abyss_stone_veined', 'abyss_ash'].map((k) => REGISTRY.parseStateKey(k))];
+/** A cave-biome pass whose Y0 is `y0` at every position (the lava range's yHi reads ⌊Y0 − depthScale·abyss.depthMin⌋). */
+function passAt(y0: number): CaveColumnPass {
+  const pass = newCaveColumnPass();
+  pass.y0.fill(y0);
+  return pass;
+}
+
+/** The first chunk (cx, 0), cx ≥ 0, whose first lava try of seed '42' lies at lx, lz in 1 … 14 (every neighbour inside). */
+function innerLavaTry(): { cx: number; lx: number; lz: number; d: number } {
+  const t = new Float64Array(5);
+  for (let cx = 0; ; cx++) {
+    springTries(ctxFor('42').seed, 'lava', cx, 0, 1, t);
+    if (t[0]! >= 1 && t[0]! <= 14 && t[1]! >= 1 && t[1]! <= 14) return { cx, lx: t[0]!, lz: t[1]!, d: t[2]! };
+  }
+}
+
+describe('lava springs on hand-built columns (SP7a §3.4, D4)', () => {
+  const { cx, lx, lz, d } = innerLavaTry();
+  const x = 16 * cx + lx, z = lz;
+  const ox = x + DX[d]!, oz = z + DZ[d]!;
+  const ctx = lavaCtx({ tries: 1, minFall: 4 });
+  const b = ctx.params.caves.biomes;
+  /**
+   * minFall 4 gives yLo −51; Y0 = 77 gives the abyss's top ⌊77 − 128·1⌋ = −51 (depthScale 128, abyss.depthMin 1), below
+   * the face's top − 2 (78): the try's y is −51 whatever its u.
+   */
+  const Y = -51;
+  const ABYSS_TOP_Y0 = Y + b.depthScale * b.abyss.depthMin;
+  const ACCEPTED: Array<[number, number, number]> = [[vi(lx, Y, lz), 2, d]];
+  /** A deepslate-or-`rock` wall at (x, Y, z) whose outlet is abyss air (cave byte `outlet`), open below down to y −57: a fall of 5. */
+  const wall = (rock: number = DEEPSLATE, outlet: number = ABYSS_AIR, floor = Y - 6): World =>
+    face(cx, 0, lx, lz, d, 80, floor, [[x, Y, z, 'state', rock], [ox, Y, oz, 'tag', outlet]]);
+
+  test('a deepslate or abyss-rock wall with an abyss-nibble outlet and a fall ≥ 4 accepts the lava try: one lava spring at (lx, −51, lz) facing its direction', () => {
+    expect([b.depthScale, b.abyss.depthMin]).toEqual([128, 1]);
+    expect(decide(ctx, wall(), cx, 0, 70, passAt(ABYSS_TOP_Y0))).toEqual(ACCEPTED);
+    for (const rock of LAVA_ROCKS) expect(decide(ctx, wall(rock), cx, 0, 70, passAt(ABYSS_TOP_Y0)), `state ${rock}`).toEqual(ACCEPTED);
+    // A fall of exactly 4 (open down to y −55) accepts; a fall of 3 does not.
+    expect(decide(ctx, wall(DEEPSLATE, ABYSS_AIR, Y - 5), cx, 0, 70, passAt(ABYSS_TOP_Y0)), 'fall of 4').toEqual(ACCEPTED);
+    expect(decide(ctx, wall(DEEPSLATE, ABYSS_AIR, Y - 4), cx, 0, 70, passAt(ABYSS_TOP_Y0)), 'fall of 3').toEqual([]);
+  });
+
+  test('an outlet whose nibble is plain (or an untagged outlet) is rejected', () => {
+    expect(decide(ctx, wall(DEEPSLATE, 1), cx, 0, 70, passAt(ABYSS_TOP_Y0)), 'plain nibble').toEqual([]);
+    expect(decide(ctx, wall(DEEPSLATE, 1 | (1 << 4)), cx, 0, 70, passAt(ABYSS_TOP_Y0)), 'lush nibble').toEqual([]);
+    expect(decide(ctx, wall(DEEPSLATE, 0), cx, 0, 70, passAt(ABYSS_TOP_Y0)), 'untagged').toEqual([]);
+    // The outlet holding lava (or water) is rejected as the common rule's.
+    expect(decide(ctx, face(cx, 0, lx, lz, d, 80, Y - 6, [[x, Y, z, 'state', DEEPSLATE], [ox, Y, oz, 'tag', ABYSS_AIR], [ox, Y, oz, 'fluid', LAVA_SOURCE]]), cx, 0, 70, passAt(ABYSS_TOP_Y0)), 'outlet holds lava').toEqual([]);
+  });
+
+  test('a spring voxel of stone, or of any other state outside the lava set, is rejected', () => {
+    expect(decide(ctx, wall(STONE), cx, 0, 70, passAt(ABYSS_TOP_Y0)), 'stone').toEqual([]);
+    for (const st of [DIRT, GRAVEL, REGISTRY.parseStateKey('dripstone_block')]) expect(decide(ctx, wall(st), cx, 0, 70, passAt(ABYSS_TOP_Y0)), `state ${st}`).toEqual([]);
+  });
+
+  test('yHi clamps at the abyss\'s top: ⌊Y0 − depthScale·abyss.depthMin⌋ one below yLo rejects although top − 2 is 78; top − 2 clamps it too', () => {
+    // Y0 76.5: the abyss's top ⌊−51.5⌋ = −52 < yLo −51.
+    expect(decide(ctx, wall(), cx, 0, 70, passAt(ABYSS_TOP_Y0 - 0.5)), 'abyss top −52').toEqual([]);
+    // Y0 far above: the range runs from −51 to the face's top − 2 = 78, so the try's y lands elsewhere (u is not 0).
+    const t = new Float64Array(5);
+    springTries(ctx.seed, 'lava', cx, 0, 1, t);
+    expect(Y + Math.floor(t[3]! * (78 - Y + 1))).not.toBe(Y);
+    expect(decide(ctx, wall(), cx, 0, 70, passAt(ABYSS_TOP_Y0 + 200)), 'abyss top above the face').toEqual([]);
+    // top − 2 clamps it: a face whose top is −49 gives yHi −51 under a high abyss top.
+    expect(decide(ctx, face(cx, 0, lx, lz, d, -49, Y - 6, [[x, Y, z, 'state', DEEPSLATE], [ox, Y, oz, 'tag', ABYSS_AIR]]), cx, 0, 70, passAt(ABYSS_TOP_Y0 + 200)), 'top −49').toEqual(ACCEPTED);
+    // minFall moves the range's floor: minFall 5 gives yLo −50 > −51 (rejected), minFall 3 yLo −52 (y −52 + ⌊u·2⌋).
+    expect(decide(lavaCtx({ tries: 1, minFall: 5 }), wall(), cx, 0, 70, passAt(ABYSS_TOP_Y0)), 'minFall 5').toEqual([]);
+  });
+});
+
+/**
+ * SP6b's abyss column (−3000, −1182) of seed '42' holds no lava spring at the defaults; the first lava spring in its
+ * 5 × 5 neighbourhood (a scan, cz then cx) is in (−3002, −1181) at (13, 21, 13) facing west, its outlet inside the column.
+ */
+const LAVA_COLUMN = [-3002, -1181] as const;
+const LAVA_AT = [13, 21, 13] as const;
+const LAVA_DIR = 3;
+
+describe('lava springs at seed \'42\' beside SP6b\'s abyss column (SP7a §3.4, D4)', () => {
+  test('a lava try accepts a deepslate or abyss-rock wall whose outlet is abyss air (tagged, nibble 3, dry) over a fall ≥ 4; T writes air plus LAVA_SOURCE with cave byte 0', () => {
+    const [cx, cz] = LAVA_COLUMN;
+    const [lx, y, lz] = LAVA_AT;
+    const ctx = ctxFor('42');
+    expect(ctx.params.springs.lava).toEqual({ tries: 16, minFall: 4 });
+    const out = newSpringList();
+    terrainSpringsDebug(ctx, cx, cz, out);
+    expect(listOf(out).filter(([, kind]) => kind === 2)).toEqual([[vi(lx, y, lz), 2, LAVA_DIR]]);
+    // The proto before any spring (T's arrays): the spring voxel in the lava set, its outlet abyss air, dry, over a fall ≥ 4.
+    const a = tArrays(cx, cz);
+    expect([a.solid[vi(lx, y, lz)], LAVA_ROCKS.includes(a.state[vi(lx, y, lz)]!), a.tags[vi(lx, y, lz)]]).toEqual([1, true, 0]);
+    const olx = lx + DX[LAVA_DIR]!, olz = lz + DZ[LAVA_DIR]!;
+    const outlet = a.tags[vi(olx, y, olz)]!;
+    expect([a.solid[vi(olx, y, olz)], outlet & 15 ? 'tagged' : 'untagged', outlet >> 4, a.fluid[vi(olx, y, olz)]]).toEqual([0, 'tagged', 3, 0]);
+    let fall = 0;
+    while (a.solid[vi(olx, y - fall - 1, olz)] === 0 && a.fluid[vi(olx, y - fall - 1, olz)] === 0) fall++;
+    expect(fall).toBeGreaterThanOrEqual(4);
+    // The range: y lies in [−55 + 4, min(top − 2, the abyss's top)].
+    const top = Math.floor(a.pass.y0[(lz + 4) * 24 + lx + 4]! - 128 * ctx.params.caves.biomes.abyss.depthMin);
+    expect(y >= -51 && y <= Math.min(a.top[lz * 16 + lx]! - 2, top), `y ${y} in −51 … min(${a.top[lz * 16 + lx]! - 2}, ${top})`).toBe(true);
+    const s = createStore({ shared: false, maxBlockBytes: 4 * MiB, maxByteBytes: 4 * MiB });
+    expect(fillColumnT(s, ctx, cx, cz, () => false)).toBe(true);
+    const v = s.proto(cx, cz)!;
+    expect([v.block(lx, y, lz), v.fluid(lx, y, lz), v.cave(lx, y, lz)]).toEqual([AIR, LAVA_SOURCE, 0]);
+    expect((v.auxB()!.seedSections[0]! >>> ((y + 64) >> 4)) & 1).toBe(1);
+    console.log(`lava spring (${cx}, ${cz}) (${lx}, ${y}, ${lz}): fall ${fall}, abyss top ${top}`);
+  }, 60_000);
 });
 
 /** `springTries(seed '42', 'water', 0, 0, 3)` (Task 19's pin). */

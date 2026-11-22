@@ -69,6 +69,10 @@
  * default params with its profile's overlay, as `caves.limits.capTop`) at a bounded island witness
  * (`islandSpringWitness`): stream columns whose lattice holds an islandMask above 0, examined by their springs step on
  * that base, the first whose springs step accepts an island spring and whose T column a step changes.
+ * SP7a (its spec §3.4, §13.7, Task 21): the lava springs' 2 leaves (`springs.lava.*`) act only where a lava try is
+ * accepted in the abyss's walls, so, dead on the class columns, they are decided on a bounded abyss witness
+ * (`lavaSpringWitness`, the biome witness's pattern): stream columns whose cave-biome pass gives the abyss on its grid,
+ * examined by their springs step, the first whose springs step accepts a lava spring and whose T column a step changes.
  */
 import { CAVE_BIOME, SEA_LEVEL, SPAGHETTI_BANDS } from '../core/constants';
 import { fnv1a32, hash4, hashF64, hex64 } from '../core/hash';
@@ -409,9 +413,23 @@ const ISLAND_SPRING_DRAWS = 65536;
 const ISLAND_SPRING_EXAMINED = 2048;
 const ISLAND_SPRING_CHECKS = 64;
 const isIslandSpringLeaf = (path: string): boolean => path.startsWith('springs.island.');
-/** A `SpringList` kind byte: water springs 0, island springs 1. */
+/**
+ * SP7a spec §3.4, §13.7 (Task 21): the lava springs' leaves, decided on the class columns, else on their bounded abyss
+ * witness (`lavaSpringWitness`): up to `LAVA_SPRING_DRAWS` draws of `samplePoints('sp7a.liveness.lavaSprings', …)`; a
+ * draw's column is examined (its springs step run on the base) when its cave-biome pass gives the abyss on its grid
+ * (`gridHolds`, as the rule-4 noises' witness); up to `LAVA_SPRING_EXAMINED` columns examined and `LAVA_SPRING_CHECKS`
+ * hashed; the witness is the first examined column whose springs step accepts a lava spring at the base's params and
+ * whose T column a step changes.
+ */
+const LAVA_SPRING_STREAM = 'sp7a.liveness.lavaSprings';
+const LAVA_SPRING_DRAWS = 32768;
+const LAVA_SPRING_EXAMINED = 1024;
+const LAVA_SPRING_CHECKS = 64;
+const isLavaSpringLeaf = (path: string): boolean => path.startsWith('springs.lava.');
+/** A `SpringList` kind byte: water springs 0, island springs 1, lava springs 2. */
 const WATER_KIND = 0;
 const ISLAND_KIND = 1;
+const LAVA_KIND = 2;
 
 /** The cave class column's scan slots (SP6a spec §4): the caverns' families, then the tunnels'. */
 export type CaveSlot = 'caverns' | 'tunnels';
@@ -424,7 +442,7 @@ export function intendedClass(path: string): LivenessClass {
   const c = LEAF_CLASS.get(path);
   if (c !== undefined) return c;
   if (isIslandLeaf(path)) return 'island';
-  if (isCaveLeaf(path) || isAquiferLeaf(path)) return 'cave';
+  if (isCaveLeaf(path) || isAquiferLeaf(path) || isLavaSpringLeaf(path)) return 'cave';
   if (path.startsWith('lakes.')) return 'basin';
   if (path.startsWith('rivers.')) return 'channel';
   return 'land';
@@ -1679,6 +1697,41 @@ export function islandSpringWitness(base: GenContext, path: string, skip: readon
   return islandSpringWitnessOf(fb, info, variantContexts(fb, info), skip, hash);
 }
 
+function lavaSpringWitnessOf(base: GenContext, info: LeafInfo, variants: readonly GenContext[], skip: readonly LivenessColumn[], baseHash: BaseHash): SpringWitnessScan {
+  const stage = stageOf(info);
+  const inp = PICKER_OF(base);
+  const pts = POINTS(LAVA_SPRING_STREAM, LAVA_SPRING_DRAWS);
+  const seen = new Set<number>(skip.map((c) => (c.cx + 32768) * 65536 + (c.cz + 32768)));
+  let examined = 0, checks = 0, n = 0;
+  for (; n < LAVA_SPRING_DRAWS && examined < LAVA_SPRING_EXAMINED && checks < LAVA_SPRING_CHECKS; n++) {
+    const cx = Math.floor(pts.x[n]! / 16);
+    const cz = Math.floor(pts.z[n]! / 16);
+    const key = (cx + 32768) * 65536 + (cz + 32768);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // The abyss prefilter: the base picker gives the abyss on the column's grid (no T generated otherwise).
+    FILL_PASS(inp, BUILD(base, cx, cz, BIOME_SAMPLE), BASE_PASS);
+    if (!gridHolds(inp, 1 << CB.abyss, cx, cz)) continue;
+    examined++;
+    if (baseSprings(base, cx, cz, LAVA_KIND) === 0) continue;
+    checks++;
+    const h = baseHash(stage, cx, cz);
+    if (variants.some((v) => stageOutputHash(v, stage, cx, cz) !== h)) return { via: `abyss witness column (${cx}, ${cz})`, draws: n + 1, examined, checks };
+  }
+  return { via: null, draws: n, examined, checks };
+}
+
+/**
+ * A lava springs leaf's bounded abyss witness search (SP7a Task 21) over the columns not in `skip`: the deciding column
+ * (`abyss witness column (cx, cz)`) or null, with the draws taken and the columns examined and hashed (see
+ * `LAVA_SPRING_STREAM`).
+ */
+export function lavaSpringWitness(base: GenContext, path: string, skip: readonly LivenessColumn[] = []): SpringWitnessScan {
+  const info = leafInfo(path);
+  if (!isLavaSpringLeaf(path)) throw new Error(`${path} is not a lava springs leaf`);
+  return lavaSpringWitnessOf(base, info, variantContexts(base, info), skip, baseHasher(base));
+}
+
 // ---------------------------------------------------------------- the depth-band leaves' witnesses (SP6a Task 8)
 
 /** A depth-band leaf's family, end and stream, or null for any other path. */
@@ -2096,6 +2149,7 @@ function decide(base: GenContext, info: LeafInfo, columns: readonly LivenessColu
             : isCaveRuleNoise(info.path) ? caveRuleWitnessOf(base, info, variants, columns, baseHash).via
               : isAquiferLeaf(info.path) ? aquiferWitnessOf(base, info, variants, columns, baseHash).via
                 : isIslandSpringLeaf(info.path) ? islandSpringVia(base, info, columns)
+                : isLavaSpringLeaf(info.path) ? lavaSpringWitnessOf(base, info, variants, columns, baseHash).via
                 : isSpringLeaf(info.path) ? springWitnessOf(base, info, variants, columns, baseHash).via
                 : info.path === CAP_TOP_PATH ? capTopWitness(base).via
                   : info.path === WATER_DEPTH_PATH ? lakeRoofWitnessOf(base, info, variants, columns, baseHash).via : null;
@@ -2123,7 +2177,7 @@ function bandVia(base: GenContext, info: LeafInfo, variants: readonly GenContext
  * rule-4 noise, an aquifer leaf, a springs leaf, `caves.limits.capTop` and `caves.limits.waterDepth` (`terrain` leaves)
  * have their own (ruling P5; Task 8's `bandWitness`; Task 27's `carverWitness`; SP6b Task 17's `biomeWitness`; SP6b
  * Task 22's `caveRuleWitness`; SP7a Task 13's `aquiferWitness`; SP7a Task 19's `springWitness`, Task 20's
- * `islandSpringWitness` on the floating_islands base; Task 9's
+ * `islandSpringWitness` on the floating_islands base, Task 21's `lavaSpringWitness`; Task 9's
  * `capTopWitness`; SP7a Task 15's `lakeRoofWitness`).
  * `caves.limits.waterDepth` is also tried on the basin class columns (ruling P13).
  */
@@ -2179,7 +2233,8 @@ export function islandColumn(base: GenContext, leaves: readonly LeafInfo[] = isl
  * witness (`biomeWitness`, SP6b Task 17), rule 4's noises on theirs (`caveRuleWitness`, SP6b Task 22), the aquifer
  * leaves on theirs (`aquiferWitness`, SP7a Task 13), the springs' leaves on their mountain witness (`springWitness`,
  * SP7a Task 19), the island springs' leaf on its island witness on the floating_islands base
- * (`islandSpringWitness`, SP7a Task 20) and `caves.limits.capTop` on its floating_islands witness (`capTopWitness`,
+ * (`islandSpringWitness`, SP7a Task 20), the lava springs' leaves on their abyss witness (`lavaSpringWitness`, SP7a
+ * Task 21) and `caves.limits.capTop` on its floating_islands witness (`capTopWitness`,
  * Task 9).
  */
 export function u2(seedText = '42'): { readonly value: number; readonly results: readonly LivenessResult[] } {

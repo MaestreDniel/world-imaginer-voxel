@@ -197,6 +197,8 @@
     "shape.offset": "spline",
     "shape.sigma": "spline",
     "springs.island.tries": "int",
+    "springs.lava.minFall": "int",
+    "springs.lava.tries": "int",
     "springs.water.minFall": "int",
     "springs.water.tries": "int",
     "surface.cliffMinY": "int",

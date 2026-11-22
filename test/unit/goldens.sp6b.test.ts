@@ -50,13 +50,13 @@ const SP6B_REGISTRY_BYTES = new Uint8Array(SP6B.flatMap(([name, sound], i) => [
   ...ascii(name), 0, ...u16(50 + i), 15, 1, 1, 63, 0, 1, 0, 1, 0, 0, sound, ...Array<number>(12).fill(0),
 ]));
 
-test('3 SP6b keys, chained into allGoldenKeys after SP6a\'s (SP7a\'s 1 follows): 66 goldens', () => {
+test('3 SP6b keys, chained into allGoldenKeys after SP6a\'s (SP7a\'s 2 follow): 67 goldens', () => {
   const keys = ['sp6b.registry', 'sp6b.caveBiome.points', 'sp6b.region.T.biomes'];
   expect(sp6bGoldenKeys()).toEqual(keys);
-  expect(allGoldenKeys().slice(-4, -1)).toEqual(keys);
-  expect(allGoldenKeys().slice(-7, -4)).toEqual(['sp6a.density.ops', 'sp6a.carver.paths', 'sp6a.region.T.caves']);
-  expect(allGoldenKeys()).toHaveLength(66);
-  expect(new Set(allGoldenKeys()).size).toBe(66);
+  expect(allGoldenKeys().slice(-5, -2)).toEqual(keys);
+  expect(allGoldenKeys().slice(-8, -5)).toEqual(['sp6a.density.ops', 'sp6a.carver.paths', 'sp6a.region.T.caves']);
+  expect(allGoldenKeys()).toHaveLength(67);
+  expect(new Set(allGoldenKeys()).size).toBe(67);
   for (const bad of [
     'sp6b.registry.x', 'sp6b.region.T', 'sp6b.region.T.biomes.x', 'sp6b.region.T.default', 'sp6b.caveBiome.points.x', 'sp6b.nope',
   ]) {

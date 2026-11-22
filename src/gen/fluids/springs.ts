@@ -11,7 +11,8 @@
  *   fluid. Every read inside the column is from T's arrays as they stand before any spring is written; every read
  *   outside it from the point probes (`SpringProbes`: `terrainSolidAt`, `fluidAt`, `caveTagAt`, `caveBiomeAt` on a
  *   DensityContext of this module's own, never T's), equal to bulk (DT2) and blind to springs too, so a try is decided
- *   the same whichever column reads it and no border ring is excluded (D21).
+ *   the same whichever column reads it and no border ring is excluded (D21). A voxel outside the world window (at its
+ *   last column's edge) is neither solid nor open, so a try that reads one is rejected and never probes there.
  * - Water (§3.2, D1): yLo = ⌈`offset` at the outlet⌉ + `minFall` (`readFieldHalo`), yHi = `top` − 2 (with
  *   `islands.enabled`, `groundTop` − 2: the top of the highest solid run whose bottom lies below 181, SP3e's rule, so
  *   island faces are left to their own kind); y = yLo + ⌊u·(yHi − yLo + 1)⌋, rejected when yHi < yLo (no
@@ -22,13 +23,19 @@
  *   y = bottom + 1 + ⌊u2·(top − bottom − 1)⌋ in it, rejected when the position holds no island run or the run is under
  *   3 high; outlet and fall as the common rule with `ISLAND_SPRING_MIN_FALL` (8, a constant: Task 20's Spec correction,
  *   ruling R18); the valid set water's.
+ * - Lava in the abyss (§3.4, D4): yLo = −55 + `minFall` (the floor's gullies, SP6b), yHi = min(`top` − 2,
+ *   ⌊Y0(x, z) − `caves.biomes.depthScale`·`caves.biomes.abyss.depthMin`⌋), the abyss's top at the try's position from
+ *   the column's cave-biome pass (its Y0, the picker's own input); y = yLo + ⌊u·(yHi − yLo + 1)⌋, rejected when
+ *   yHi < yLo; the outlet must also be tagged cave air whose nibble is the abyss (3); the valid set deepslate and the
+ *   five abyss rocks (abyss_stone, abyss_shale, cracked_abyss_stone, abyss_stone_veined, abyss_ash).
  * The kinds run in a fixed order (water, island, lava; the list's kind byte 0, 1, 2); a voxel already accepted is not
  * accepted twice. Follows the gen determinism rules.
  */
-import { ISLAND_RUN_MIN_BOTTOM, ISLAND_SPRING_MIN_FALL, MIN_Y } from '../../core/constants';
+import { CAVE_BIOME, ISLAND_RUN_MIN_BOTTOM, ISLAND_SPRING_MIN_FALL, MIN_Y } from '../../core/constants';
+import { inWindow } from '../../core/coords';
 import { deriveSeed, hash2, type Seed64 } from '../../core/hash';
 import { Xoshiro128 } from '../../core/rng';
-import { CARVABLE, GRAVEL, RED_SAND, SAND } from '../../world/blocks/index';
+import { CARVABLE, DEEPSLATE, GRAVEL, RED_SAND, REGISTRY, SAND } from '../../world/blocks/index';
 import { caveBiomeAt, type CaveColumnPass } from '../biomes/cavePicker';
 import { caveTagAt } from '../caves/tags';
 import { readFieldHalo, type ColumnSample } from '../column/columnStage';
@@ -44,6 +51,16 @@ const CARVE_OK = CARVABLE;
 const SAND_ = SAND;
 const RED_SAND_ = RED_SAND;
 const GRAVEL_ = GRAVEL;
+const DEEPSLATE_ = DEEPSLATE;
+const REG = REGISTRY;
+const CB = CAVE_BIOME;
+const ABYSS = CB.abyss;
+/** The lava springs' valid set (§3.4): deepslate and the five abyss rocks, by state id. */
+const LAVA_ROCK = new Uint8Array(REG.STATE_TYPE.length);
+for (const s of [DEEPSLATE_, ...['abyss_stone', 'abyss_shale', 'cracked_abyss_stone', 'abyss_stone_veined', 'abyss_ash'].map((k) => REG.parseStateKey(k))]) LAVA_ROCK[s] = 1;
+/** The lava range's floor before `minFall` (§3.4): y −55, the lowest voxel of the rock floor's gullies (SP6b). */
+const LAVA_FLOOR = -55;
+const IN_WINDOW = inWindow;
 const DERIVE = deriveSeed;
 const HASH2 = hash2;
 const Rng = Xoshiro128;
@@ -142,6 +159,8 @@ const TRIES = new Float64Array(PER_TRY * MAX_TRIES);
 
 /** Whether `state` lies in the water springs' valid set (§3.2): `CARVABLE`, but not sand, red_sand or gravel. */
 const waterRock = (state: number): boolean => CARVE_OK[state] !== 0 && state !== SAND_ && state !== RED_SAND_ && state !== GRAVEL_;
+/** Whether `state` lies in the lava springs' valid set (§3.4): deepslate and the five abyss rocks. */
+const lavaRock = (state: number): boolean => LAVA_ROCK[state] === 1;
 
 /**
  * The top of position p's highest solid run whose bottom lies below `ISLAND_RUN_MIN_BOTTOM` (Y0 when none; SP3e's
@@ -195,13 +214,20 @@ const COL = {
   z0: 0,
 };
 
-/** Whether column-relative voxel (lx, y, lz) is solid: T's arrays inside the column (y −64 is bedrock), the probe outside. */
+/**
+ * Whether column-relative voxel (lx, y, lz) is solid: T's arrays inside the column (y −64 is bedrock), the probe outside;
+ * false outside the world window (no voxel there, so a try reading one is rejected; Task 21).
+ */
 function solidAt(lx: number, y: number, lz: number): boolean {
   if (lx >= 0 && lx < 16 && lz >= 0 && lz < 16) return y === Y0 || COL.solid![(((y - Y0) << 4) | lz) << 4 | lx] !== 0;
-  return COL.probes!.solid(COL.x0 + lx, y, COL.z0 + lz);
+  const x = COL.x0 + lx, z = COL.z0 + lz;
+  return IN_WINDOW(x, z) && COL.probes!.solid(x, y, z);
 }
 
-/** Whether column-relative voxel (lx, y, lz) is non-solid with no fluid: T's arrays inside the column, the probes outside. */
+/**
+ * Whether column-relative voxel (lx, y, lz) is non-solid with no fluid: T's arrays inside the column, the probes outside;
+ * false outside the world window.
+ */
 function openAt(lx: number, y: number, lz: number): boolean {
   if (y <= Y0) return false;
   if (lx >= 0 && lx < 16 && lz >= 0 && lz < 16) {
@@ -209,7 +235,7 @@ function openAt(lx: number, y: number, lz: number): boolean {
     return COL.solid![j] === 0 && COL.fluid![j] === 0;
   }
   const x = COL.x0 + lx, z = COL.z0 + lz;
-  return !COL.probes!.solid(x, y, z) && COL.probes!.fluid(x, y, z) === 0;
+  return IN_WINDOW(x, z) && !COL.probes!.solid(x, y, z) && COL.probes!.fluid(x, y, z) === 0;
 }
 
 /**
@@ -235,6 +261,19 @@ function accepts(lx: number, y: number, lz: number, d: number, fall: number, val
   return true;
 }
 
+/**
+ * Whether column-relative voxel (lx, y, lz) is tagged cave air whose cave-biome nibble is the abyss (§3.4's outlet):
+ * T's cave bytes inside the column (a barrier holds byte 0), the probes outside.
+ */
+function abyssAir(lx: number, y: number, lz: number): boolean {
+  if (lx >= 0 && lx < 16 && lz >= 0 && lz < 16) {
+    const t = COL.tags![(((y - Y0) << 4) | lz) << 4 | lx]!;
+    return (t & 15) !== 0 && t >> 4 === ABYSS;
+  }
+  const x = COL.x0 + lx, z = COL.z0 + lz;
+  return IN_WINDOW(x, z) && COL.probes!.tag(x, y, z) !== 0 && COL.probes!.nibble(x, y, z) === ABYSS;
+}
+
 /** Appends an accepted spring to `COL.out`. */
 function accept(lx: number, y: number, lz: number, kind: number, d: number): void {
   const out = COL.out!;
@@ -245,10 +284,10 @@ function accept(lx: number, y: number, lz: number, kind: number, d: number): voi
 }
 
 /**
- * The springs of s's column (§3.1-§3.3) into `out` (cleared first), from T's arrays before any spring: `solid` (1
+ * The springs of s's column (§3.1-§3.4) into `out` (cleared first), from T's arrays before any spring: `solid` (1
  * solid), `state` (the surface pass's states at solid voxels), `tags` (the cave bytes), `fluid` (the aquifer's fluid
  * bytes) and `top` (per position `lz·16 + lx`, the highest solid y), each indexed as T's (98,304 entries, `top` 256);
- * `pass` is the column's cave-biome pass (its Y0 bounds the lava kind's range, Task 21); `probes` reads the voxels
+ * `pass` is the column's cave-biome pass (its Y0 bounds the lava kind's range); `probes` reads the voxels
  * outside the column (`springProbesOf(ctx)` in T; the call is not reentrant, so a probe must not run T). The kinds'
  * tries run in the fixed order (water, island, lava), each decided by the common rule; a voxel already accepted is not
  * accepted twice. Writes nothing into the arrays: T writes the accepted springs after the call.
@@ -299,6 +338,22 @@ export function springsColumn(
         const y = bottom + 1 + Math.floor(u2 * (runTop - bottom - 1));
         if (!accepts(lx, y, lz, d, ISLAND_MIN_FALL, waterRock)) continue;
         accept(lx, y, lz, 1, d);
+      }
+    }
+    const lava = ctx.params.springs.lava;
+    if (lava.tries > 0) {
+      const b = ctx.params.caves.biomes;
+      const depth = b.depthScale * b.abyss.depthMin;
+      const yLo = LAVA_FLOOR + lava.minFall;
+      springTries(ctx.seed, 'lava', cx, cz, lava.tries, TRIES);
+      for (let t = 0; t < lava.tries; t++) {
+        const o = PER_TRY * t;
+        const lx = TRIES[o]!, lz = TRIES[o + 1]!, d = TRIES[o + 2]!, u = TRIES[o + 3]!;
+        const yHi = Math.min(top[lz * 16 + lx]! - 2, Math.floor(pass.y0[(lz + 4) * 24 + lx + 4]! - depth));
+        if (yHi < yLo) continue;
+        const y = yLo + Math.floor(u * (yHi - yLo + 1));
+        if (!accepts(lx, y, lz, d, lava.minFall, lavaRock) || !abyssAir(lx + DX[d]!, y, lz + DZ[d]!)) continue;
+        accept(lx, y, lz, 2, d);
       }
     }
   } finally {

@@ -271,6 +271,8 @@ Generated from `src/core/params/schema.ts` by `npm run docs:params`; a test fail
 | `springs.water.tries` | int | 3 | 0 … 32 |  | terrain | Tries: Tries per chunk: each picks a position, a direction and a height, and becomes a spring where the rule holds (more tries → more waterfalls). |
 | `springs.water.minFall` | int | 8 | 2 … 64 | blocks | terrain | Least fall: The outlet and this many voxels below it must be open air, and the spring sits at least this many blocks above the surface estimate at its outlet. |
 | `springs.island.tries` | int | 4 | 0 … 32 |  | terrain | Tries: Tries per chunk: each picks a position, a direction, one of the position's island runs and a height in it, and becomes a spring where the rule holds (more tries → more island waterfalls). |
+| `springs.lava.tries` | int | 16 | 0 … 64 |  | terrain | Tries: Tries per chunk: each picks a position, a direction and a height, and becomes a lava spring where the rule holds (more tries → more lava falls in the abyss). |
+| `springs.lava.minFall` | int | 4 | 2 … 32 | blocks | terrain | Least fall: The outlet and this many voxels below it must be open abyss air, and the spring sits at least this many blocks above y −55. |
 <!-- params:end -->
 
 ## Requirements

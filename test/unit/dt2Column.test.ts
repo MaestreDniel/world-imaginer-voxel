@@ -18,7 +18,7 @@ import { createSurfaceContext, surfaceContextOf } from '../../src/gen/surface/co
 import { surfaceProbe } from '../../src/gen/surface/probe';
 import { newSurfaceScan, runAt } from '../../src/gen/surface/scan';
 import { fillColumnT } from '../../src/metrics/region';
-import { WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR } from '../../src/world/blocks/index';
 import type { ColumnWriter } from '../../src/world/store/api';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
@@ -543,6 +543,27 @@ describe('DT2 spring voxels (SP7a spec §3, D21; Task 19)', () => {
       extra: { count: 2048, yLo: y, yHi: y }, voxel: (v) => seen.push(v), column: (view) => { block = view.block(x & 15, y, z & 15) * 256 + view.fluid(x & 15, y, z & 15); },
     });
     expect(block, 'the stored island spring: air, WATER_SOURCE').toBe(AIR * 256 + WATER_SOURCE);
+    const hits = seen.filter((v) => v.x === x && v.y === y && v.z === z).length;
+    expect(hits, 'the spring voxel is checked').toBeGreaterThan(0);
+    expect(acc.springVoxels).toBe(hits);
+    expect(acc.problems).toEqual([]);
+    expect([acc.probeBulk, acc.surfaceProbeBulk, acc.aquiferProbe, acc.tagProbe]).toEqual([0, 0, 0, 0]);
+  }, 120_000);
+
+  it('a column holding a lava spring in the abyss (SP7a §3.4, Task 21), the spring voxel checked, reads probeBulk and surfaceProbeBulk 0: T stores air plus LAVA_SOURCE where terrainSolidAt says solid', () => {
+    // (−3002, −1181): the lava spring at (13, 21, 13) facing west (springs.test.ts' LAVA_COLUMN, beside SP6b's abyss column).
+    const LAVA = [-3002, -1181] as const;
+    const [x, y, z] = [16 * LAVA[0] + 13, 21, 16 * LAVA[1] + 13] as const;
+    const ctx = ctxOf();
+    const setup = dt2Setup(ctx, LABEL);
+    expect([setup.solidAt(x, y, z), setup.fluidAt(x, y, z), surfaceProbe(setup.sc, x, y, z).state !== AIR]).toEqual([true, 0, true]);
+    const acc = newDt2Acc(LABEL);
+    const seen: Dt2Voxel[] = [];
+    let block = -1;
+    dt2Column(ctx, ...LAVA, new Xoshiro128(19), acc, {
+      extra: { count: 2048, yLo: y, yHi: y }, voxel: (v) => seen.push(v), column: (view) => { block = view.block(x & 15, y, z & 15) * 256 + view.fluid(x & 15, y, z & 15); },
+    });
+    expect(block, 'the stored lava spring: air, LAVA_SOURCE').toBe(AIR * 256 + LAVA_SOURCE);
     const hits = seen.filter((v) => v.x === x && v.y === y && v.z === z).length;
     expect(hits, 'the spring voxel is checked').toBeGreaterThan(0);
     expect(acc.springVoxels).toBe(hits);

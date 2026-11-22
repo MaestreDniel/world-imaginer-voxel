@@ -6,7 +6,7 @@ import { createGenContext } from '../../src/gen/context';
 import { newSpringList } from '../../src/gen/fluids/springs';
 import { terrainSpringsDebug } from '../../src/gen/pipeline/terrainStage';
 import { ringCandidates } from '../../src/metrics/sp3eGoldens';
-import { FLUID_LAVA, FLUID_WATER, NO_FLUID, WATER_SOURCE, fluidFalling, fluidType } from '../../src/world/blocks/fluid';
+import { FLUID_LAVA, FLUID_WATER, NO_FLUID, WATER_SOURCE, fluidFalling, fluidLevel, fluidType } from '../../src/world/blocks/fluid';
 import { AIR, GRASS_BLOCK } from '../../src/world/blocks/index';
 import { genRegion, type RegionView } from './region';
 
@@ -36,7 +36,9 @@ import { genRegion, type RegionView } from './region';
  *   SEA_LEVEL): seed '42' has no coast within ring 9. Since the springs (SP7a Task 19) the coast window also holds a
  *   water spring (`SettleFeatures.springs`), so DT1's first window settles a spring's stream as well as a coast's
  *   spills; the coast's scan then also skips a candidate whose interior's springs step accepts no water spring
- *   (`interiorSprings`, no region generated).
+ *   (`interiorSprings`, no region generated). Since the lava springs (SP7a Task 21, rulings P42) the contact window also
+ *   holds flowing lava (`SettleFeatures.flowingLava`: lava steps or falls), the lava half of R1's and `mesh.section`'s
+ *   flowing-fluid sites.
  */
 
 /** A window's region: its chunk origin and its side in chunks; the interior is the region minus its border ring. */
@@ -271,6 +273,11 @@ export interface SettleFeatures {
   /** Final lava voxels with a face neighbour holding final water (a water/lava contact). */
   readonly contacts: number;
   /**
+   * Flowing final lava voxels (level > 0 or falling): lava steps and falls, which the contact window must hold from
+   * Task 21 on (rulings P42: R1's sites and `mesh.section`'s sample take its interior sections for lava steps).
+   */
+  readonly flowingLava: number;
+  /**
    * Settle-made falling water voxels under a settle-made flowing (not falling) one and beside another (§4.1: a stream
    * reaching a pool the settle made falls into it).
    */
@@ -295,7 +302,7 @@ export function settleFeatures(box: SettleBox): SettleFeatures {
   const made = (i: number): boolean => proto[i] === NO_FLUID && final[i] !== NO_FLUID;
   const madeWater = (i: number): boolean => made(i) && fluidType(final[i]!) === FLUID_WATER;
   const madeFlowing = (i: number): boolean => madeWater(i) && !fluidFalling(final[i]!);
-  let settled = 0, sea = 0, land = 0, spills = 0, caveBorder = 0, contacts = 0, streamOverPool = 0, springs = 0;
+  let settled = 0, sea = 0, land = 0, spills = 0, caveBorder = 0, contacts = 0, flowingLava = 0, streamOverPool = 0, springs = 0;
   const sides = [1, -1, side, -side];
   /** Whether voxel i (y > −64, y < 319) is a water spring (`SettleFeatures.springs`). */
   const spring = (i: number): boolean => {
@@ -319,6 +326,7 @@ export function settleFeatures(box: SettleBox): SettleFeatures {
         if (final[i] !== proto[i]) settled++;
         if (y > SEA_LEVEL && y < 319 && spring(i)) springs++;
         if (fluidType(final[i]!) === FLUID_LAVA) {
+          if (fluidLevel(final[i]!) > 0 || fluidFalling(final[i]!)) flowingLava++;
           const below = y > -64 && fluidType(final[i - layer]!) === FLUID_WATER;
           const above = y < 319 && fluidType(final[i + layer]!) === FLUID_WATER;
           if (below || above || sides.some((d) => fluidType(final[i + d]!) === FLUID_WATER)) contacts++;
@@ -330,7 +338,7 @@ export function settleFeatures(box: SettleBox): SettleFeatures {
       }
     }
   }
-  return { settled, sea, land, spills, caveBorder, contacts, streamOverPool, springs };
+  return { settled, sea, land, spills, caveBorder, contacts, flowingLava, streamOverPool, springs };
 }
 
 /** The coast's prefilter counts at S(a, b) of the default profile at `seed` (header). */
@@ -368,7 +376,7 @@ export function interiorSprings(seed: string, a: number, b: number): number {
 /** Whether a settle window's interior holds `feature` (`SETTLE_FEATURES`). */
 export function settleWindowHolds(feature: SettleFeature, f: SettleFeatures): boolean {
   if (feature === 'coast') return f.sea >= MIN_COAST_POSITIONS && f.land >= MIN_COAST_POSITIONS && f.spills >= 1 && f.caveBorder >= 1 && f.springs >= 1;
-  if (feature === 'contact') return f.contacts >= 1;
+  if (feature === 'contact') return f.contacts >= 1 && f.flowingLava >= 1;
   return f.streamOverPool >= 1;
 }
 

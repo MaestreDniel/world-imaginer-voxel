@@ -420,6 +420,12 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     island: group('Island edges', 'Water springs in the sides of floating islands (SP7a spec §3.3; only with Islands enabled): a try picks one of its position\'s island runs and a height inside it, and its waterfall falls from the island\'s edge to the ground or the sea below.', {
       tries: int(4, { ...TERRAIN, label: 'Tries', doc: 'Tries per chunk: each picks a position, a direction, one of the position\'s island runs and a height in it, and becomes a spring where the rule holds (more tries → more island waterfalls).', min: 0, max: 32 }),
     }),
+    // SP7a spec §3.4, D4 (Task 21): lava springs in the walls of the abyss; `tries` 16 is the spec's estimate (abyss air
+    // is a small share of a column's height, so many tries miss); `minFall` also sets the range's floor (−55 + minFall).
+    lava: group('Lava', 'Lava springs in the walls of the abyss (SP7a spec §3.4): a try\'s height lies between minFall above the floor\'s gullies (y −55) and the abyss\'s top at its position; its outlet must be abyss air, and its lava falls to the abyss\'s floor.', {
+      tries: int(16, { ...TERRAIN, label: 'Tries', doc: 'Tries per chunk: each picks a position, a direction and a height, and becomes a lava spring where the rule holds (more tries → more lava falls in the abyss).', min: 0, max: 64 }),
+      minFall: int(4, { ...TERRAIN, label: 'Least fall', doc: 'The outlet and this many voxels below it must be open abyss air, and the spring sits at least this many blocks above y −55.', unit: 'blocks', min: 2, max: 32 }),
+    }),
   }),
 });
 
