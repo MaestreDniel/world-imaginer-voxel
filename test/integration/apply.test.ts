@@ -24,9 +24,11 @@
  * succeeds); Review Focus 2's aquifer half (SP7a): an aquifer Apply (`aquifer.barrierBand`, the default + 5) issued after
  * 5 D jobs of the fill a terrain Apply starts, compared on the final params, with every D of the applied generation
  * reading nine protos committed under it (the jobs' wrapper records each T's generation and each D's 3 × 3 at its
- * issue); Review Focus 2's spring half (SP7a, Task 19): a spring Apply (`springs.water.tries`, the default + 2) undone
- * after ⌈69 / 4⌉ = 18 swaps, compared on the params before it, with the same epoch check on the undo's generation; and
- * after unloading everything and draining the limbo, every pool slot is free.
+ * issue); Review Focus 2's spring half (SP7a, Task 19): the params reset to the profile's and the camera teleported to
+ * the 7 × 7 window centred on `SPRING_AT` (the spawn's window holds no water spring at any `tries`), where the spring
+ * Apply (`springs.water.tries`, the default + 2) adds a spring, asserted on `genRegion`; the Apply undone after
+ * ⌈69 / 4⌉ = 18 swaps, with `SPRING_AT`'s column swapped to it, compared on the params before it, with the same epoch
+ * check on the undo's generation; and after unloading everything and draining the limbo, every pool slot is free.
  */
 import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
@@ -143,6 +145,29 @@ const D_BEFORE_APPLY = 5;
 /** Review Focus 2's spring half (SP7a, Task 19): the leaf and value of the spring Apply, derived from the default (P30). */
 const SPRING_TRIES = 'springs.water.tries';
 const SPRING_TRIES_APPLIED = Math.min(DEFAULTS.springs.water.tries + 2, 32);
+/**
+ * The spring half's window centre (Task 19's review): the spawn's window holds no water spring at `tries` 3, 5, 16 or
+ * 32, so the spring half teleports to the column (11342, 3586), beside U2's mountain witness (11344, 3591): at seed '42'
+ * its springs step accepts no spring at `tries` 3 and one water spring at 5 (from its tries 4-5; a scratch
+ * `terrainSpringsDebug` probe over the 17 × 17 columns around the witness found no other change between 3 and 5). The
+ * case asserts that the applied value changes the window and that the column was swapped to it before the undo.
+ */
+const SPRING_AT = [11342, 3586] as const;
+
+/** Where the world is looked at: the camera, the compared 7 × 7 window and the MESH set around the camera's column. */
+interface View {
+  readonly cam: StreamCamera;
+  readonly win: { readonly cx0: number; readonly cz0: number; readonly w: number; readonly h: number };
+  readonly meshSet: ReadonlySet<number>;
+}
+/** The view centred on column (cx, cz), the camera over the column's centre. */
+const viewAt = (cx: number, cz: number): View => ({
+  cam: { x: cx * 16 + 8, z: cz * 16 + 8, yawDeg: CAM.yawDeg },
+  win: { cx0: cx - 3, cz0: cz - 3, w: WIN.w, h: WIN.h },
+  meshSet: new Set(stageOffsets(RD).MESH.map(([dx, dz]) => colKey(cx + dx, cz + dz))),
+});
+/** The spawn's view until Review Focus 2's spring half teleports. */
+let view: View = { cam: CAM, win: WIN, meshSet: MESH_SET };
 
 /** One world job the coordinator issued, in issue order, and how it settled. */
 interface Issued {
@@ -207,7 +232,7 @@ const fatal = (): string | null => {
 async function frame(): Promise<void> {
   const w = W();
   w.control?.tick();
-  w.coordinator.update(CAM);
+  w.coordinator.update(view.cam);
   w.coordinator.counts(counts);
   if (w.control !== null) updateAuxPolicy(w.pool, w.control.generation, false, counts, w.coordinator.regenerating);
   w.store.drain();
@@ -245,19 +270,21 @@ function windowHash(): string {
   const { store } = W();
   store.enterRead();
   try {
-    return litRegionHash(store, WIN.cx0, WIN.cz0, WIN.w, WIN.h);
+    const { win } = view;
+    return litRegionHash(store, win.cx0, win.cz0, win.w, win.h);
   } finally {
     store.exitRead();
   }
 }
 
-/** `genRegion`'s lit hash of the window on `params`, by the params' JSON. */
+/** `genRegion`'s lit hash of the view's window on `params`, by the window's and the params' JSON. */
 const expectedByParams = new Map<string, string>();
 async function expected(params: Params): Promise<string> {
-  const key = JSON.stringify(params);
+  const { win } = view;
+  const key = JSON.stringify(win) + JSON.stringify(params);
   const hit = expectedByParams.get(key);
   if (hit !== undefined) return hit;
-  const ref = await genRegion({ seed: '42', params, ...WIN, upTo: 'L', order: 'spiral', threads: 1 });
+  const ref = await genRegion({ seed: '42', params, ...win, upTo: 'L', order: 'spiral', threads: 1 });
   const h = ref.view.litHash();
   expectedByParams.set(key, h);
   return h;
@@ -265,7 +292,7 @@ async function expected(params: Params): Promise<string> {
 
 /** Every MESH-set column was meshed again since the last Apply (every column was stale: the world was rebuilt). */
 function regenerated(what: string): void {
-  const missing = [...MESH_SET].filter((k) => !stagedSinceApply.has(k)).map((k) => [colKeyCx(k), colKeyCz(k)]);
+  const missing = [...view.meshSet].filter((k) => !stagedSinceApply.has(k)).map((k) => [colKeyCx(k), colKeyCz(k)]);
   expect(missing, `${what}: MESH-set columns not meshed again`).toEqual([]);
 }
 
@@ -559,22 +586,46 @@ describe('Apply v1 on the real store (SP4c spec §8.5)', () => {
     clean('the aquifer Apply');
   });
 
-  test('Review Focus 2 (SP7a): a spring Apply (springs.water.tries) undone after ⌈69 / 4⌉ = 18 swaps: settled, the inner region equals genRegion on the params before it, and no D of the undo\'s epoch read a source column committed under an older epoch', async () => {
+  test('Review Focus 2 (SP7a): a spring Apply (springs.water.tries) undone after ⌈69 / 4⌉ = 18 swaps, at a window it changes: settled, the inner region equals genRegion on the params before it, and no D of the undo\'s epoch read a source column committed under an older epoch', async () => {
     const w = W();
     expect(SPRING_TRIES_APPLIED, 'the applied value differs from the default').not.toBe(DEFAULTS.springs.water.tries);
+    // The default profile's params, where SPRING_AT was found (the earlier cases leave climate.C, density.detailAmpHi
+    // and aquifer.barrierBand edited): one reset, applied at the spawn.
+    await applyEdit(() => { expect(w.session.reset('').ok).toBe(true); }, 'the reset to the profile');
+    expect(w.session.modifiedCount(''), 'leaves edited after the reset').toBe(0);
     expect(w.session.state.params.springs.water.tries).toBe(DEFAULTS.springs.water.tries);
-    const before = JSON.stringify(w.session.state.params);
+    // The teleport (the spawn's window holds no spring at any tries): the world fills around SPRING_AT at its epoch.
+    w.coordinator.counts(counts);
+    const atEpoch = counts.epoch;
+    view = viewAt(SPRING_AT[0], SPRING_AT[1]);
+    await until(() => settledAt(atEpoch), 2 * SETTLE_MS, 'the fill at the spring window');
+    const params = w.session.state.params;
+    const before = JSON.stringify(params);
+    const beforeHash = await expected(params);
+    expect(windowHash(), 'the fill at the spring window').toBe(beforeHash);
+    // Not vacuous: the applied value changes the compared window (a spring of tries 4-5 in SPRING_AT's column).
+    const appliedParams: Params = { ...params, springs: { ...params.springs, water: { ...params.springs.water, tries: SPRING_TRIES_APPLIED } } };
+    expect(await expected(appliedParams), 'the spring Apply changes the window').not.toBe(beforeHash);
+    clean('the fill at the spring window');
+
     const n = applies.length;
     expect(w.session.set(SPRING_TRIES, SPRING_TRIES_APPLIED).ok).toBe(true);
+    expect(JSON.stringify(w.session.state.params)).toBe(JSON.stringify(appliedParams));
     await until(() => applies.length === n + 1 && swapsSinceApply >= UNDO_AFTER_SWAPS, SETTLE_MS, 'the spring Apply\'s first swaps');
     // A springs leaf is Terrain scope (D21): its Apply regenerates from T.
     expect(applies[n]!.from).toBe('T');
     expect(swapsSinceApply, 'columns swapped to the spring Apply before the undo').toBeGreaterThanOrEqual(UNDO_AFTER_SWAPS);
+    // At the undo's Apply: SPRING_AT's column shows the applied spring (its stream must not survive the undo).
+    const springKey = colKey(SPRING_AT[0], SPRING_AT[1]);
+    let springSwapped = false;
+    onApply = () => { springSwapped = live.get(springKey) === applies[n]!.epoch; };
     const epoch = await applyEdit(() => { expect(w.session.undo()).toBe(true); }, 'the spring Apply\'s undo');
+    onApply = null;
+    expect(springSwapped, `(${SPRING_AT[0]}, ${SPRING_AT[1]}) swapped to the spring Apply before the undo`).toBe(true);
     const undone = applies[n + 1]!;
     expect([epoch, undone.from]).toEqual([undone.epoch, 'T']);
     expect(JSON.stringify(w.session.state.params)).toBe(before);
-    expect(windowHash()).toBe(await expected(w.session.state.params));
+    expect(windowHash()).toBe(beforeHash);
     // The epoch check: every D issued under the undo's generation read nine protos committed under it.
     const stale = dReads.filter((d) => d.generation >= undone.generation && d.sources.some((g) => g < undone.generation));
     expect(stale.map((d) => `D (${d.cx}, ${d.cz}) at ${d.generation}: ${d.sources.join(' ')}`)).toEqual([]);
