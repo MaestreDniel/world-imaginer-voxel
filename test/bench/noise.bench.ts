@@ -24,7 +24,10 @@ import { newSurfaceScan } from '../../src/gen/surface/scan';
 import { surfaceProbeColumn } from '../../src/gen/surface/probe';
 import { columnPoint } from '../../src/gen/column/columnPoint';
 import { buildColumnSample, newColumnSample, type ColumnSample } from '../../src/gen/column/columnStage';
-import { columnCaveBiomes } from '../../src/gen/pipeline/terrainStage';
+import { columnCaveBiomes, newAquiferStepInputs, terrainAquiferDebug, type AquiferStepInputs } from '../../src/gen/pipeline/terrainStage';
+import { decorateStage, decorateStatsInto } from '../../src/gen/pipeline/decorateStage';
+import { aquiferColumn, aquiferOf, createAquiferScratch } from '../../src/gen/fluids/aquifer';
+import type { CavePickerInputs } from '../../src/gen/biomes/cavePicker';
 import { paintTile } from '../../src/gen/map/tile';
 import { fillColumnT } from '../../src/metrics/region';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
@@ -61,6 +64,8 @@ import { pasteLitBlock, pasteMaxBlock, type PasteBlock } from '../../src/ui/worl
 import { capDensityTree, capSurfaceRules } from '../harness/capTrees';
 import { persistFlushFixture } from '../harness/persistFixture';
 import { genRegion } from '../harness/region';
+import { SETTLE_WINDOWS } from '../harness/settleWindows';
+import { settleWindowAt } from '../harness/windowScans';
 import { PART_WORST_LEAVES, partWorstParams } from '../harness/sliceTrees';
 import {
   absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, CARVER_PATH_SOURCES, D31_LIT_P50_MAX_MS, D31_MAX_P99_MAX_MS, gateFailures,
@@ -80,6 +85,8 @@ const GENKEY = genKey;
 const CARVER_PATH = carverPath;
 const MESH_XRAY = meshXray;
 const CAVE_BIOMES = columnCaveBiomes;
+const AQUIFER = aquiferColumn;
+const DECORATE = decorateStage;
 const START_WALK = startWalk;
 const STEP_WALK = stepWalk;
 const BASELINE_PATH = fileURLToPath(new URL('../baselines.json', import.meta.url));
@@ -147,7 +154,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
    * one warm-up iteration) or explicit options; `rerun`: resets the row's state before it runs again.
    */
   const measure = async (
-    name: string, evals: number, fn: () => unknown, run?: number | typeof ISLANDS_RUN | typeof LIGHT_RUN | typeof MESH_RUN | typeof PASTE_RUN | typeof PASTE_LIT_RUN | typeof TERRAIN_WARM_RUN,
+    name: string, evals: number, fn: () => unknown, run?: number | Readonly<{ iterations: number; time: number; warmupIterations: number; warmupTime: number }>,
     rerun?: () => void,
   ) => {
     const options = run === undefined ? undefined : typeof run === 'number' ? { iterations: run, time: 0, warmupIterations: 1 } : { ...run };
@@ -260,6 +267,61 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
     sink += fillColumnT(store, gen, tcx, tcz, never) ? 1 : 0;
     store.freeColumn(tcx, tcz);
   });
+  // SP7a §13.5 (D32): aquifer.column — T's aquifer step alone (`aquiferColumn` on `aquiferOf`, the function and inputs
+  // the T stage uses), per column. On terrain.real's first AQUIFER_COLUMNS candidate columns, T's phases before the step
+  // (the density fill, the carve, the tag and the cave-biome step) run beforehand through `terrainAquiferDebug` on a
+  // GenContext of their own, which keeps each column's sample, cave-biome pass, carved solidity and cave bytes. Each call
+  // copies the next column's solidity and cave bytes into the step's arrays untimed (the step writes its barriers into
+  // both) and times the step alone (`overriddenDuration`), its status cache reset for the column as T's is; one probe,
+  // one warm-up and AQUIFER_COLUMNS timed calls, cyclic, so each column is timed once.
+  const AQUIFER_COLUMNS = 256;
+  const aqGen = createGenContext(seedFromInput('42'), DEFAULTS);
+  const aqInputs = aquiferOf(aqGen);
+  const aqCols: { readonly cx: number; readonly cz: number; readonly step: AquiferStepInputs; readonly pick: CavePickerInputs; readonly tagged: number }[] = [];
+  for (let t = 1; t <= AQUIFER_COLUMNS; t++) {
+    const acx = (t * 7919) % 60000 - 30000;
+    const acz = (t * 104729) % 60000 - 30000;
+    const step = newAquiferStepInputs();
+    const pick = terrainAquiferDebug(aqGen, acx, acz, step);
+    let tagged = 0;
+    for (let i = 0; i < 98304; i++) if ((step.tags[i]! & 15) !== 0) tagged++;
+    aqCols.push({ cx: acx, cz: acz, step, pick, tagged });
+  }
+  const aqSolid = new Uint8Array(98304);
+  const aqTags = new Uint8Array(98304);
+  const aqWater = new Uint8Array(98304);
+  const aqFluid = new Uint8Array(98304);
+  const aqTopFluid = new Int32Array(256);
+  const aqScratch = createAquiferScratch();
+  {
+    // The hook hands T's own inputs: the step on the first column's gives T's proto fluid at every voxel the step leaves
+    // non-solid (a spring, placed later, only turns a solid voxel into a source).
+    const c = aqCols[0]!;
+    aqSolid.set(c.step.solid);
+    aqTags.set(c.step.tags);
+    AQUIFER(aqInputs, c.step.sample, c.pick, c.step.pass, aqSolid, aqTags, aqWater, aqFluid, aqTopFluid, aqScratch);
+    if (!fillColumnT(store, gen, c.cx, c.cz, never)) throw new Error('aquifer.column: a column stopped');
+    const view = store.proto(c.cx, c.cz)!;
+    let differs = 0;
+    for (let j = 256; j < 98304; j++) if (aqSolid[j] === 0 && view.fluid(j & 15, (j >> 8) - 64, (j >> 4) & 15) !== aqFluid[j]) differs++;
+    store.freeColumn(c.cx, c.cz);
+    expect(differs, 'aquifer.column: the step on the hook\'s inputs gives T\'s fluid').toBe(0);
+  }
+  const aqMs = new Float64Array(AQUIFER_COLUMNS);
+  let ac = 0;
+  const aquiferRun = await measure('aquifer.column', 1, () => {
+    const k = ac++ % AQUIFER_COLUMNS;
+    const c = aqCols[k]!;
+    aqSolid.set(c.step.solid);
+    aqTags.set(c.step.tags);
+    const t0 = performance.now();
+    AQUIFER(aqInputs, c.step.sample, c.pick, c.step.pass, aqSolid, aqTags, aqWater, aqFluid, aqTopFluid, aqScratch);
+    const ms = performance.now() - t0;
+    aqMs[k] = ms;
+    sink += aqFluid[98303]! + aqTopFluid[255]!;
+    return { overriddenDuration: ms };
+  }, { ...LIGHT_RUN, iterations: AQUIFER_COLUMNS }, () => { ac = 0; });
+  expect(ac, 'aquifer.column: one probe, one warm-up and one timed call per column').toBe(1 + LIGHT_RUN.warmupIterations + AQUIFER_COLUMNS);
   // SP6b §12.5 (D25): caveBiome.column — T's cave-biome step alone (`columnCaveBiomes`, the function the T stage calls:
   // `fillCaveColumnPass` over the column's (16 + 2J)² positions, then `caveBiomeOfPass` at every tagged voxel), per
   // column. On terrain.real's first CAVE_BIOME_COLUMNS candidate columns, each generated beforehand by fillColumnT on a
@@ -417,6 +479,52 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
     sink += lightOut[24 * 4096 - 1]!;
   }, LIGHT_RUN, () => { lc = 0; });
   expect(lc, 'light.column: one probe, one warm-up and 256 timed calls, each column timed once').toBe(1 + LIGHT_RUN.warmupIterations + LIGHT_RUN.iterations);
+  // SP7a §13.5 (D32): decorate.column — D with its settle, as `fillColumnD` runs it (`reopenColumn` at Proto, then
+  // `decorateStage` over the 3 × 3's proto views) but never committed, so a column can be decorated again: D's
+  // `clearGeneratedFluid` releases the layer a run left and its shares replace the final entries. On the 256 interior
+  // columns of light.column's region and the 36 interior columns of the first settle window (`SETTLE_WINDOWS[0]`,
+  // `settleWindowAt`), their 3 × 3s generated to T on a store of their own. Each call times the reopen and the stage;
+  // the store's limbo is drained untimed after it. Each column's visits (`decorateStatsInto`: the settle's pops, the same
+  // on every run of it) are logged at p50 / p99 against master's 20k; one probe, one warm-up and one timed call per
+  // column, cyclic. Recorded against master's D ≤ 3 / 8 ms (gated in SP8b), only the ratio gated.
+  const decGen = createGenContext(seedFromInput('42'), DEFAULTS);
+  const decStore = createStore({ shared: true });
+  const settle0 = SETTLE_WINDOWS[0]!;
+  const settleRegion = settleWindowAt(settle0.a, settle0.b);
+  const decCols: (readonly [number, number])[] = [...litCols];
+  for (let z = settleRegion.cz0 + 2; z < settleRegion.cz0 + settleRegion.size - 2; z++) {
+    for (let x = settleRegion.cx0 + 2; x < settleRegion.cx0 + settleRegion.size - 2; x++) decCols.push([x, z]);
+  }
+  const decT = new Set<string>();
+  for (const [x, z] of decCols) {
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const key = `${x + dx},${z + dz}`;
+        if (decT.has(key)) continue;
+        decT.add(key);
+        if (!fillColumnT(decStore, decGen, x + dx, z + dz, never)) throw new Error(`decorate.column: T of (${x + dx}, ${z + dz}) stopped`);
+      }
+    }
+  }
+  const decStats = new Int32Array(3);
+  const decVisits = new Int32Array(decCols.length);
+  const decChanged = new Int32Array(decCols.length);
+  let dc2 = 0;
+  const decorateRun = await measure('decorate.column', 1, () => {
+    const k = dc2++ % decCols.length;
+    const [x, z] = decCols[k]!;
+    const t0 = performance.now();
+    const ok = DECORATE(decGen, decStore.neighborhood(x, z), decStore.reopenColumn(x, z, 1), never);
+    const ms = performance.now() - t0;
+    if (!ok) throw new Error(`decorate.column: D of (${x}, ${z}) stopped`);
+    decorateStatsInto(decStats);
+    decVisits[k] = decStats[0]!;
+    decChanged[k] = decStats[2]!;
+    decStore.drain();
+    sink += decStats[0]!;
+    return { overriddenDuration: ms };
+  }, { ...LIGHT_RUN, iterations: decCols.length }, () => { dc2 = 0; });
+  expect(dc2, 'decorate.column: one probe, one warm-up and one timed call per column').toBe(1 + LIGHT_RUN.warmupIterations + decCols.length);
   // The 256 columns lit to L for real (fillColumnL commits them Published), then the non-trivial sections (`isTrivial`)
   // of the 14 × 14 columns whose 3 × 3 is Published, in (cz, cx, sy) order; 1024 of them evenly spread over the list.
   for (const [x, z] of litCols) if (fillColumnL(worldStore, x, z, lightScratch, never) === null) throw new Error(`L of (${x}, ${z}) stopped`);
@@ -1001,6 +1109,16 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   console.log(`column.sample p50 ${columnRun.latency.p50.toFixed(3)} ms, p99 (≥ p95) ${columnP95.toFixed(3)} ms`);
   console.log(`terrain.real p50 ${terrainRun.latency.p50.toFixed(3)} ms, p99 ${terrainRun.latency.p99.toFixed(3)} ms (${terrainRun.latency.samplesCount} columns)`);
   {
+    // SP7a §13.5 (D32): T's aquifer step alone, its cost against the tagged voxels it reads; the slowest columns for D31.
+    const tg = sortedOf(aqCols.map((c) => c.tagged));
+    const slow = Array.from(aqMs.keys()).sort((a, b) => aqMs[b]! - aqMs[a]!).slice(0, 5)
+      .map((k) => `(${aqCols[k]!.cx}, ${aqCols[k]!.cz}) ${aqMs[k]!.toFixed(3)} ms, ${aqCols[k]!.tagged} tagged`);
+    console.log(
+      `aquifer.column p50 ${aquiferRun.latency.p50.toFixed(3)} ms, p99 ${aquiferRun.latency.p99.toFixed(3)} ms (${AQUIFER_COLUMNS} columns of terrain.real's sequence, ${ac} calls; `
+      + `tagged voxels per column median ${q(tg, 0.5)}, p90 ${q(tg, 0.9)}, max ${q(tg, 1)}; slowest: ${slow.join('; ')})`,
+    );
+  }
+  {
     const f3 = (v: number): string => v.toFixed(3);
     const cs = sortedOf(d25.corners), vs = sortedOf(d25.voxels), ts = sortedOf(d25.tMs), xs = sortedOf(d25.voxelMs), ds = sortedOf(d25.denseCave);
     const sum = (a: readonly number[]): number => a.reduce((x, y) => x + y, 0);
@@ -1061,6 +1179,16 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   console.log(`terrain.islands ${ms(islandsRun)} (${islandCols.length} cluster columns accepted of ${islandTried} candidates: ${((100 * islandCols.length) / islandTried).toFixed(1)} %; ${ic} columns used)`);
   console.log(`session.commitMaxTree ${ms(commitRun)} (${commits} commits; trees of ${canonicalJSON(cappedDefs).length} and ${canonicalJSON(session.state.params.surface.rules).length} characters)`);
   console.log(`light.column ${ms(lightRun)} (mayEmit false (scan gate closed); ${litCols.length} interior columns of the 18 × 18 region at (${rx0}, ${rz0}); ${lc} calls)`);
+  {
+    // SP7a §13.5 (D32): D with its settle, against master's 3 / 8 ms and 20k visits.
+    const vs = sortedOf(Array.from(decVisits)), lit = sortedOf(Array.from(decVisits.subarray(0, litCols.length))), win = sortedOf(Array.from(decVisits.subarray(litCols.length)));
+    const changedCols = decChanged.reduce((n, v) => n + (v > 0 ? 1 : 0), 0);
+    console.log(
+      `decorate.column ${ms(decorateRun)} (${decCols.length} columns: light.column's ${litCols.length} and the ${decCols.length - litCols.length} interior columns of settle window 0 `
+      + `(${settle0.feature}) S(${settle0.a}, ${settle0.b}); ${dc2} calls; recorded against 3 / 8 ms); visits per column p50 ${q(vs, 0.5)}, p99 ${q(vs, 0.99)}, max ${q(vs, 1)} `
+      + `(light region p50 ${q(lit, 0.5)}, p99 ${q(lit, 0.99)}; settle window p50 ${q(win, 0.5)}, p99 ${q(win, 0.99)}; target 20k); ${changedCols} columns with a settled section`,
+    );
+  }
   console.log(`mesh.section ${ms(meshRun)} (${meshSections.length} of the ${nonTrivial.length} non-trivial sections of its 14 × 14 inner columns; ${mc} calls, ${quads} quads)`);
   console.log(`relight.edit ${ms(relightRun)} (torch at (${tx}, ${ty}, ${tz}), stone at (${sx}, ${sy}, ${sz}), shaft cap at (${hx}, ${hy}, ${hz}) over a room topped at y ${roomTop}; ${rc} calls)`);
   console.log(`persist.flush ${ms(persistRun)} (64 columns, ${persistDenseAt.length} dense, ${persistEntries} entries, ${persistBytes} bytes encoded; ${pc} calls)`);
@@ -1127,6 +1255,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   // Before the record: bench:record refuses to write when an absolute gate fails.
   expect(absoluteGateFailures({
     columnP50: columnRun.latency.p50, columnP95, terrainP50: terrainRun.latency.p50, terrainP99: terrainRun.latency.p99,
+    aquiferP50: aquiferRun.latency.p50, aquiferP99: aquiferRun.latency.p99,
     sliceV128P50: vRun.latency.p50, slicePartP50: wRun.latency.p50, sessionCommitP50: commitRun.latency.p50,
     islandsP50: islandsRun.latency.p50, islandsP99: islandsRun.latency.p99,
     lightP50: lightRun.latency.p50, lightP99: lightRun.latency.p99, meshP50: meshRun.latency.p50, meshP99: meshRun.latency.p99,

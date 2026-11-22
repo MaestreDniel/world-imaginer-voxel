@@ -252,6 +252,9 @@
  * group's own regions, Spec correction 11; `springsTruncated` over bit 6 outside the water/lava contacts, Spec
  * correction 19; `THRESHOLDS.A5.abyssWater` gated from SP7a) and its F1-F3 "SP7b" (their `THRESHOLDS` rows inactive
  * until SP7b starts, with the rows' bounds).
+ * D31's checkpoint (Task 26) lands item 17's T gate line in §7 and SP7a's exit per Point 4 (`terrain.real` ≤ 13 / 20 ms,
+ * `terrain.islands` ≤ 14.5 / 26.5 ms; `aquifer.column` ≤ 1.0 / 2.5 ms, `AQUIFER_P50_MAX_MS` and `AQUIFER_P99_MAX_MS`,
+ * which the bench measures in `BENCH_ROWS`); the SP6a describe's T gate pin keeps its own prefix of the row.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -276,7 +279,7 @@ import { COLUMN_TABLE_BYTES, REC_GEN_FLUID, REC_GEN_FLUID_MASK, RECORD_INTS } fr
 import { PACK_LAYOUT } from '../../src/mesh/packing';
 import { RULE_KINDS } from '../../src/gen/surface/rules';
 import {
-  BENCH_ROWS, ISLANDS_P50_MAX_MS, ISLANDS_P99_MAX_MS, LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P99_MAX_MS,
+  AQUIFER_P50_MAX_MS, AQUIFER_P99_MAX_MS, BENCH_ROWS, ISLANDS_P50_MAX_MS, ISLANDS_P99_MAX_MS, LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, MESH_P50_MAX_MS, MESH_P99_MAX_MS,
   SLICE_BIOME3D_P50_MAX_MS, SLICE_CAVES_P50_MAX_MS, TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS,
 } from '../bench/gates';
 import { THRESHOLDS } from '../thresholds';
@@ -2557,7 +2560,8 @@ describe('master spec amendments (SP6a §13)', () => {
     const gate = `now gated as p50 ≤ ${TERRAIN_P50_MAX_MS}, p99 ≤ ${TERRAIN_P99_MAX_MS} for \`terrain.real\` by \`TERRAIN_P50_MAX_MS\` and \`TERRAIN_P99_MAX_MS\`, and p50 ≤ ${ISLANDS_P50_MAX_MS}, p99 ≤ ${ISLANDS_P99_MAX_MS} for \`terrain.islands\` by \`ISLANDS_P50_MAX_MS\` and \`ISLANDS_P99_MAX_MS\` (ruling R14, the SP6a spec's Threshold log; amended by SP6a)`;
     const tGate = lines.find((l) => l.startsWith('| **T gate** |'));
     expect(tGate, 'no T gate row in §7').toBeDefined();
-    expect(tGate).toContain(`**≤ 10 / 20** (09: 150-270 ms per column; SP6a: ${gate}) |`);
+    // SP7a §16 item 17 appends its clause to the row (pinned whole in the SP7a describe); SP6a's part is the prefix.
+    expect(tGate).toContain(`**≤ 10 / 20** (09: 150-270 ms per column; SP6a: ${gate}`);
     const t30 = lines.find((l) => l.startsWith('| T (terrain) |'));
     expect(t30, 'no T row in §3.0').toBeDefined();
     expect(t30!.endsWith(`| none | ≤ 10 / 20 ms (SP6a: ${gate}) |`)).toBe(true);
@@ -3449,7 +3453,8 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(sp7a[3], 'SP7a\'s "Received from SP6a" line').toBe('- Received from SP6a (its spec §14; amended by SP6a): aquifers (§3.9) replace the wet roof for oceans and rivers: SP7 decides whether caves may open under water then, and `caves.limits.waterDepth` with it; `aquifer.fluidAt` per carved voxel (the SP6a spec §2.4); A1-A4 use SP6a\'s 3D components and the tag; the cave channel marks water-filled caves as hollow, so the X-ray shows flooded caves; the map\'s cave slice "plus aquifer fluid" (§5.6): the `caves` slice field shows aquifer fluid in carved voxels; the `wetCover` scan and `C7.waterWall` re-read with aquifers; the level-field −∞ rule only if aquifers need `col` level fields (the SP6a spec D19); `surfaceEst3` caching with its first consumer (§3.7); `dryPitsBelowSea` (SP3c); the bench\'s flood scenario after L13.');
     expect(sp7a[4], 'SP7a\'s "Received from SP6b" line').toBe('- Received from SP6b (its spec §16; amended by SP6b): lava may appear in the abyss and light it a little (the user: "y la propia lava que también emite luz"; no water there, guess, confirmed); the abyss box (the SP6b spec §1.3) widened by 0.1 depth disables aquifers there (§3.9\'s **Abyss.**); rule 4\'s under-water branches, clay under cave water in lush and gravel under cave water elsewhere (the SP6b spec D21); under SP6b\'s rock floor §3.9\'s "Everything below y −54 is lava" rarely fires, so SP7 places the abyss\'s lava from aquifer cells or lowers the floor locally (`caves.floor.y` by a lava mask), and re-checks `C7.bedrockExposed`; the cave channel\'s nibble marks flooded caves\' biome too; SP7\'s exit "P1: T still ≤ 10 ms" predates ruling R14\'s 13 ms p50 gate (the SP6a spec\'s Threshold log), which SP6b keeps (the SP6b spec D27): SP7\'s spec reconciles the two.');
     expect(sp7a[5], 'SP7a\'s "Received from SP8b (moved by SP7a)" line').toBe('- Received from SP8b (moved by SP7a): springs and island-edge springs feeding settle (island-edge springs on SP3e\'s islands term, `islandMask` and island runs; SP3e spec §12), placed by T and reaching settle as proto sources (the SP7a spec §3, D21); lava lakes stay SP8b\'s.');
-    expect(sp7a[6], 'the pre-exit Exit').toBe('- **Exit:** as the SP7a spec §19 (A1-A5; A2 after settle; B2 voxel; B5 with its third part; R5; DT1 with settle; P1 with the gates in force and the aquifer row; the Chrome legs with the water segment; CI ≤ 6 min on cold runs; the user\'s check).');
+    // Item 17 (Task 26) names the gates of P1's clause (pinned in its own test).
+    expect(sp7a[6], 'the pre-exit Exit').toBe('- **Exit:** as the SP7a spec §19 (A1-A5; A2 after settle; B2 voxel; B5 with its third part; R5; DT1 with settle; P1 with the gates in force and the aquifer row (`terrain.real` ≤ 13 / 20 ms, `terrain.islands` ≤ 14.5 / 26.5 ms; `aquifer.column` ≤ 1.0 / 2.5 ms (SP7a)); the Chrome legs with the water segment; CI ≤ 6 min on cold runs; the user\'s check).');
     expect(sp7a[7], 'the pre-exit Cut line, §18\'s items in order').toBe('- **Cut line:** vertex waves (→ SP11); then, in this order, the X-ray\'s fluid tint (and its legend rows, `R1.xrayFluid`) (→ SP10); the slice field\'s aquifer fluid and hover lines (→ SP10); the walk\'s fluid-height rule (→ SP7b); the bench\'s water segment (Fancy\'s 1.2 ms measured) (→ SP11). Each is cut whole.');
     expect(sp7a.slice(8).join('\n').trim(), 'nothing after the Cut line').toBe('');
     // The SP7b entry.
@@ -3871,5 +3876,21 @@ describe('master spec amendments (SP7a §16)', () => {
     const overridable = s416.find((l) => l.startsWith('- Every setting can be overridden individually'));
     expect(overridable).toBe('- Every setting can be overridden individually (SP5b: the Settings screen, G: Graphics with RD, FPS cap, FOV and brightness, the water tier (Fast / Fancy, live from SP7a), the rest greyed until SP11; Controls with mouse sensitivity and hold to repeat): RD, LOD, FOV, brightness, night vision (SP6a), fog start, resolution scale, FPS cap, anisotropy, biome blend, water tier (live from SP7a), shadows, clouds, AO.');
     expect(s416, 'Medium\'s water is Fancy').toContain('| water | Fast | Fancy | Fancy | Fabulous |');
+  });
+
+  test('§7\'s T gate line and SP7a\'s exit: the gates in force and the aquifer row, which the bench measures (SP7a spec §16 item 17)', () => {
+    // Point 4 (D32): the gates in force, not SP7's "T still ≤ 10 ms", plus T's aquifer step alone.
+    const gates = `\`terrain.real\` ≤ ${TERRAIN_P50_MAX_MS} / ${TERRAIN_P99_MAX_MS} ms, \`terrain.islands\` ≤ ${ISLANDS_P50_MAX_MS} / ${ISLANDS_P99_MAX_MS} ms; \`aquifer.column\` ≤ ${AQUIFER_P50_MAX_MS.toFixed(1)} / ${AQUIFER_P99_MAX_MS} ms (SP7a)`;
+    expect(gates).toBe('`terrain.real` ≤ 13 / 20 ms, `terrain.islands` ≤ 14.5 / 26.5 ms; `aquifer.column` ≤ 1.0 / 2.5 ms (SP7a)');
+    const lines = text.split('\n');
+    const tGate = lines.find((l) => l.startsWith('| **T gate** |'));
+    expect(tGate, 'no T gate row in §7').toBeDefined();
+    expect(tGate!.endsWith(`(ruling R14, the SP6a spec's Threshold log; amended by SP6a); SP7a: the gates in force, ${gates}, the aquifer's by \`AQUIFER_P50_MAX_MS\` and \`AQUIFER_P99_MAX_MS\` (the SP7a spec's Point 4, D32; amended by SP7a)) |`), 'the T gate row ends with SP7a\'s clause').toBe(true);
+    // §7's table row for the step keeps master's 1.0 / 2.5.
+    expect(lines).toContain('| T: aquifer | non-solid voxels, fast path | 1.0 / 2.5 |');
+    const exit = spEntry('SP7a', 'SP7b').split('\n').find((l) => l.startsWith('- **Exit:**'));
+    expect(exit).toContain(`P1 with the gates in force and the aquifer row (${gates});`);
+    const rows: readonly string[] = BENCH_ROWS;
+    for (const row of ['terrain.real', 'terrain.islands', 'aquifer.column', 'decorate.column']) expect(rows, `BENCH_ROWS does not measure ${row}`).toContain(row);
   });
 });

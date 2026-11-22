@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { Bench } from 'tinybench';
 import { expect, test } from 'vitest';
 import {
-  absoluteGateFailures, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, CALIBRATION_SPREAD_MAX, calibrationSpread, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS,
+  absoluteGateFailures, AQUIFER_P50_MAX_MS, AQUIFER_P99_MAX_MS, BENCH_ROWS, benchKernels, CALIBRATION_BESIDE_RUN, CALIBRATION_SPREAD_MAX, calibrationSpread, COLUMN_P50_MAX_MS, COLUMN_P95_MAX_MS,
   D31_LIT_P50_MAX_MS, D31_MAX_P99_MAX_MS, gateFailures, ISLANDS_COLUMNS, ISLANDS_P50_MAX_MS, ISLANDS_P99_MAX_MS, ISLANDS_RUN, KILL_RATIO_MAX,
   LIGHT_P50_MAX_MS, LIGHT_P99_MAX_MS, LIGHT_RUN, MESH_P50_MAX_MS, MESH_P99_MAX_MS, MESH_RUN, measureBracketed, P1_MAX_REGRESSION, parseBenchExempt,
   PASTE_LIT_P99_MAX_MS, PASTE_LIT_RUN, PASTE_MAX_P99_MAX_MS, PASTE_RUN, PERSIST_FLUSH_P99_MAX_MS, PERSIST_RUN, ratioOf, RELIGHT_P95_MAX_MS, RELIGHT_RUN, ROW_ATTEMPTS_MAX, SESSION_COMMIT_P50_MAX_MS, SLICE_BIOME3D_P50_MAX_MS, SLICE_CAVES_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SLICE_V128_P50_MAX_MS, TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS,
@@ -19,6 +19,8 @@ test('constants', () => {
   // × 1.15, rounded up to 0.5 ms: terrain.real p50 13 ms, terrain.islands p50 14.5 ms and p99 26.5 ms.
   expect([TERRAIN_P50_MAX_MS, TERRAIN_P99_MAX_MS]).toEqual([13, 20]);
   expect([ISLANDS_P50_MAX_MS, ISLANDS_P99_MAX_MS]).toEqual([14.5, 26.5]);
+  // SP7a §13.5 (D32, Point 4; master :1665's T: aquifer row): T's aquifer step alone, p50 ≤ 1.0 ms and p99 ≤ 2.5 ms.
+  expect([AQUIFER_P50_MAX_MS, AQUIFER_P99_MAX_MS]).toEqual([1.0, 2.5]);
   // SP3d §9 (master §7): the vertical 128² slice, a slice part at PART_BUDGET, a slider commit with two capped trees.
   expect([SLICE_V128_P50_MAX_MS, SLICE_PART_P50_MAX_MS, SESSION_COMMIT_P50_MAX_MS]).toEqual([300, 250, 4]);
   // SP6a §7.4, §10.5 (D13): the horizontal 128² caves slice, 256 blocks across, p50 ≤ 300 ms.
@@ -39,7 +41,7 @@ test('constants', () => {
 
 /** Latencies within every absolute gate, at their bounds. */
 const AT_GATES = {
-  columnP50: 0.7, columnP95: 1.2, terrainP50: 13, terrainP99: 20, sliceV128P50: 300, slicePartP50: 250, sessionCommitP50: 4, islandsP50: 14.5, islandsP99: 26.5,
+  columnP50: 0.7, columnP95: 1.2, terrainP50: 13, terrainP99: 20, aquiferP50: 1.0, aquiferP99: 2.5, sliceV128P50: 300, slicePartP50: 250, sessionCommitP50: 4, islandsP50: 14.5, islandsP99: 26.5,
   lightP50: 4, lightP99: 8, meshP50: 1.0, meshP99: 2.5, relightP95: 3, persistFlushP99: 2, pasteMaxP99: 800, pasteLitP99: 1600, sliceCaves128P50: 300,
   sliceBiome3d128P50: 300,
 };
@@ -69,6 +71,22 @@ test('absolute gates (SP6a §10.5, D24): terrain.real p50 ≤ 13 ms and p99 ≤ 
     'terrain.real p99 20.100 ms > 20 ms',
     'terrain.islands p50 14.600 ms > 14.5 ms',
     'terrain.islands p99 26.600 ms > 26.5 ms',
+  ]);
+});
+
+test('absolute gates (SP7a §13.5, D32): aquifer.column p50 ≤ 1.0 ms and p99 ≤ 2.5 ms (AQUIFER_P50_MAX_MS, AQUIFER_P99_MAX_MS), inclusive, each on its own line, right after terrain.real\'s', () => {
+  expect(absoluteGateFailures({ ...AT_GATES, aquiferP50: 0.6, aquiferP99: 1.4 })).toEqual([]);
+  expect(absoluteGateFailures({ ...AT_GATES, aquiferP50: 1.01 })).toEqual(['aquifer.column p50 1.010 ms > 1 ms']);
+  expect(absoluteGateFailures({ ...AT_GATES, aquiferP99: 2.51 })).toEqual(['aquifer.column p99 2.510 ms > 2.5 ms']);
+  // A p99 over its gate fails with the p50 under its own, and terrain.real's gates do not cover the row.
+  expect(absoluteGateFailures({ ...AT_GATES, terrainP50: 9, terrainP99: 15, aquiferP50: 0.8, aquiferP99: 3 })).toEqual(['aquifer.column p99 3.000 ms > 2.5 ms']);
+  // terrain.real's lines, then the aquifer's, then the later rows'.
+  expect(absoluteGateFailures({ ...AT_GATES, terrainP50: 13.1, terrainP99: 20.1, aquiferP50: 1.1, aquiferP99: 2.6, sliceV128P50: 301 })).toEqual([
+    'terrain.real p50 13.100 ms > 13 ms',
+    'terrain.real p99 20.100 ms > 20 ms',
+    'aquifer.column p50 1.100 ms > 1 ms',
+    'aquifer.column p99 2.600 ms > 2.5 ms',
+    'slice.vertical128 p50 301.000 ms > 300 ms',
   ]);
 });
 
@@ -295,21 +313,22 @@ test('parseBenchExempt: a comma-separated list of BENCH_ROWS names, empty when u
   expect(parseBenchExempt([...BENCH_ROWS].reverse().join(','))).toEqual([...BENCH_ROWS].reverse());
 });
 
-test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, SP5b\'s persist.flush, SP5c\'s paste.max and paste.maxLit, then SP6a\'s terrain.caves.warm, carver.paths, mesh.xray and slice.caves128, then SP6b\'s slice.biome3d128, cull.walk.rd12 and cull.walk.rd16, with SP6a\'s density.cornerInlined right after density.corner and SP6b\'s caveBiome.column right after terrain.real', () => {
+test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, SP5b\'s persist.flush, SP5c\'s paste.max and paste.maxLit, then SP6a\'s terrain.caves.warm, carver.paths, mesh.xray and slice.caves128, then SP6b\'s slice.biome3d128, cull.walk.rd12 and cull.walk.rd16, with SP6a\'s density.cornerInlined right after density.corner, SP7a\'s aquifer.column right after terrain.real, then SP6b\'s caveBiome.column, and SP7a\'s decorate.column right after light.column', () => {
   expect(BENCH_ROWS).toEqual([
     'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
     'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
     'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
-    'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'caveBiome.column', 'surface.column',
+    'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'aquifer.column', 'caveBiome.column', 'surface.column',
     'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
-    'light.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
+    'light.column', 'decorate.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
     'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128', 'slice.biome3d128', 'cull.walk.rd12', 'cull.walk.rd16',
   ]);
-  expect(BENCH_ROWS.slice(-13, -9)).toEqual(['light.column', 'mesh.section', 'relight.edit', 'persist.flush']);
+  // SP7a §13.5 (D32): D with its settle (decorate.column), measured right after light.column on the same region.
+  expect(BENCH_ROWS.slice(-14, -9)).toEqual(['light.column', 'decorate.column', 'mesh.section', 'relight.edit', 'persist.flush']);
   expect(BENCH_ROWS.slice(BENCH_ROWS.indexOf('density.corner'), BENCH_ROWS.indexOf('density.corner') + 3)).toEqual(['density.corner', 'density.cornerInlined', 'terrain.real']);
-  // SP6b §12.5 (D25): the cave-biome step of T alone (the column pass and the picks at T's tagged voxels), measured
-  // right after terrain.real.
-  expect(BENCH_ROWS.slice(BENCH_ROWS.indexOf('terrain.real'), BENCH_ROWS.indexOf('terrain.real') + 3)).toEqual(['terrain.real', 'caveBiome.column', 'surface.column']);
+  // SP7a §13.5 (D32): T's aquifer step alone, measured right after terrain.real; then SP6b §12.5's (D25) cave-biome step
+  // of T alone (the column pass and the picks at T's tagged voxels).
+  expect(BENCH_ROWS.slice(BENCH_ROWS.indexOf('terrain.real'), BENCH_ROWS.indexOf('terrain.real') + 4)).toEqual(['terrain.real', 'aquifer.column', 'caveBiome.column', 'surface.column']);
   expect(BENCH_ROWS).not.toContain('terrain.provisional');
   expect(new Set(BENCH_ROWS).size).toBe(BENCH_ROWS.length);
 });

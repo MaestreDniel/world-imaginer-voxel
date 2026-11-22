@@ -56,6 +56,8 @@
  * carve, the tag, the cave-biome step and the aquifer step included), which scans into the caller's scan context.
  * `terrainSpringsDebug` is a third (SP7a §3, the springs' tests and U2's mountain witness): the same phases up to the
  * springs step, the column's accepted springs into the caller's list.
+ * `terrainAquiferDebug` is a fourth (SP7a §13.5, the bench's `aquifer.column`): the same phases before the aquifer step,
+ * handing the step's inputs (the sample, the cave-biome pass, the carved solidity and the cave bytes) to the caller.
  */
 import { MIN_Y } from '../../core/constants';
 import { LAVA_SOURCE, WATER_SOURCE } from '../../world/blocks/fluid';
@@ -142,6 +144,26 @@ const FLUID = new Uint8Array(4096);
 const CAVE = new Uint8Array(4096);
 
 const NEVER = (): boolean => false;
+
+/**
+ * `terrainAquiferDebug`'s output (SP7a §13.5): a column's inputs to T's aquifer step as T hands them over, each array in
+ * T's voxel index `((y + 64)·16 + lz)·16 + lx` (98,304 entries).
+ */
+export interface AquiferStepInputs {
+  /** The column's ColumnSample. */
+  readonly sample: ColumnSample;
+  /** The cave-biome pass the cave-biome step filled. */
+  readonly pass: CaveColumnPass;
+  /** The carved solidity before the step (its barriers are not in it yet). */
+  readonly solid: Uint8Array;
+  /** The cave bytes, `kind | biome << 4` at tagged voxels and 0 elsewhere. */
+  readonly tags: Uint8Array;
+}
+
+/** A fresh `AquiferStepInputs` for `terrainAquiferDebug`. */
+export function newAquiferStepInputs(): AquiferStepInputs {
+  return { sample: NEW_SAMPLE(), pass: NEW_PASS(), solid: new Uint8Array(98304), tags: new Uint8Array(98304) };
+}
 
 /**
  * The highest solid y per position of a column's solidity `solid` (98,304 entries, index `256·(y + 64) + p`, p = lz·16
@@ -358,4 +380,27 @@ export function terrainSpringsDebug(ctx: GenContext, cx: number, cz: number, out
   SURFACE_BIOMES(s, ctx, BIOMES);
   SURFACE_PASS(sc, s, SOLID, WATER_V, BIOMES, STATE, undefined, TAG, { inputs, pass: DEBUG_PASS });
   SPRINGS_COLUMN(ctx, s, DEBUG_PASS, SOLID, STATE, TAG, FLUID_V, TOP, SPRING_PROBES(ctx), out);
+}
+
+/**
+ * Test and bench hook (SP7a §13.5, `aquifer.column`): runs column (cx, cz) exactly as `terrainStage` does up to the
+ * aquifer step, not including it (its ColumnSample into `out.sample`, the density fill, the carve, the tag and the
+ * cave-biome step into `out.pass`, never stopped), copies the carved solidity and the cave bytes into `out.solid` and
+ * `out.tags`, and writes no store. Returns `ctx`'s cave picker inputs, so `aquiferColumn(aquiferOf(ctx), out.sample,
+ * <returned>, out.pass, out.solid, out.tags, …)` is T's own step on the column.
+ */
+export function terrainAquiferDebug(ctx: GenContext, cx: number, cz: number, out: AquiferStepInputs): CavePickerInputs {
+  if (out.solid.length !== SOLID.length || out.tags.length !== TAG.length) {
+    throw new RangeError(`terrainAquiferDebug: solid has ${out.solid.length} and tags ${out.tags.length} entries, expected ${SOLID.length}`);
+  }
+  const sc = SURFACE_CONTEXT(ctx);
+  const s = BUILD(ctx, cx, cz, out.sample);
+  const bounds = sc.density.bounds;
+  FILL(bounds, s, SOLID, null, null, NEVER, CELLS);
+  DENSITY_TOPS(SOLID, ctx.params.islands.enabled, DENSITY_TOP);
+  carve(ctx, s, cx, cz);
+  const inputs = tagAndPick(ctx, s, bounds, out.pass);
+  out.solid.set(SOLID);
+  out.tags.set(TAG);
+  return inputs;
 }

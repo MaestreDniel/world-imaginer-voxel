@@ -17,6 +17,12 @@ export const TERRAIN_P99_MAX_MS = 20;
 export const ISLANDS_P50_MAX_MS = 14.5;
 export const ISLANDS_P99_MAX_MS = 26.5;
 /**
+ * SP7a §13.5 (D32, Point 4; master §7's T: aquifer row): T's aquifer step alone (`aquifer.column`: `aquiferColumn` over
+ * `terrain.real`'s candidate columns, the phases before it untimed), p50 and p99 in ms. The T gates above stay.
+ */
+export const AQUIFER_P50_MAX_MS = 1.0;
+export const AQUIFER_P99_MAX_MS = 2.5;
+/**
  * SP3d (its spec §9, master §7): the vertical 128² density slice on one thread (`slice.vertical128`), one slice part at
  * PART_BUDGET of the heaviest noise tree (`slice.partWorst`, which pins the work unit of spec §5.2) and one slider commit
  * of a session whose two trees are at the 128 KiB cap (`session.commitMaxTree`), p50 in ms.
@@ -155,14 +161,18 @@ export function spiralCells(n: number): Array<readonly [number, number]> {
  * `slice.caves128` in the `biome3d` field) right after `slice.caves128`, where it is measured, and appends `cull.walk.rd12` and
  * `cull.walk.rd16` (D25's culling checkpoint: one full walk of cave culling, §8.2, from a cave pose over the RD 12 and
  * RD 16 discs' `connectivity15` as meshed in Node), measured last, after the region they walk is generated and meshed.
+ * SP7a §13.5 (D32) inserts `aquifer.column` (T's aquifer step alone, gated at AQUIFER_P50_MAX_MS / AQUIFER_P99_MAX_MS)
+ * right after `terrain.real` and `decorate.column` (D with its settle on the interior columns of `light.column`'s region
+ * and of the first settle window, recorded against master's 3 / 8 ms, gated only by the ratio) right after
+ * `light.column`, where each is measured.
  */
 export const BENCH_ROWS = [
   'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
   'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
   'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
-  'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'caveBiome.column', 'surface.column',
+  'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'aquifer.column', 'caveBiome.column', 'surface.column',
   'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
-  'light.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
+  'light.column', 'decorate.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
   'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128', 'slice.biome3d128', 'cull.walk.rd12', 'cull.walk.rd16',
 ] as const;
 
@@ -312,6 +322,9 @@ export interface AbsoluteLatencies {
   readonly terrainP50: number;
   /** SP6a §10.5 (D24): `terrain.real` p99, gated at TERRAIN_P99_MAX_MS. */
   readonly terrainP99: number;
+  /** SP7a §13.5 (D32): `aquifer.column` p50 and p99, gated at AQUIFER_P50_MAX_MS and AQUIFER_P99_MAX_MS. */
+  readonly aquiferP50: number;
+  readonly aquiferP99: number;
   /** SP3d §9: `slice.vertical128`, `slice.partWorst` and `session.commitMaxTree` p50. */
   readonly sliceV128P50: number;
   readonly slicePartP50: number;
@@ -341,7 +354,7 @@ export interface AbsoluteLatencies {
 /**
  * The absolute gates (P1 column budget, SP2a; the real T budget, SP3b, its p50 and p99 with caves, SP6a; the slice and
  * session commit budgets, SP3d; the light and mesh budgets, SP4a; the relight budget, SP5a; the flush's synchronous part,
- * SP5b; the maximum pastes, SP5c; the caves slice, SP6a; the cave-biome slice, SP6b): checked by
+ * SP5b; the maximum pastes, SP5c; the caves slice, SP6a; the cave-biome slice, SP6b; T's aquifer step, SP7a): checked by
  * `npm run bench` and before `npm run bench:record` writes, so a record refuses to write when one fails.
  */
 export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
@@ -350,6 +363,8 @@ export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
   if (l.columnP95 > COLUMN_P95_MAX_MS) out.push(`P1 column p95 ${l.columnP95.toFixed(3)} ms > ${COLUMN_P95_MAX_MS} ms`);
   if (l.terrainP50 > TERRAIN_P50_MAX_MS) out.push(`terrain.real p50 ${l.terrainP50.toFixed(3)} ms > ${TERRAIN_P50_MAX_MS} ms`);
   if (l.terrainP99 > TERRAIN_P99_MAX_MS) out.push(`terrain.real p99 ${l.terrainP99.toFixed(3)} ms > ${TERRAIN_P99_MAX_MS} ms`);
+  if (l.aquiferP50 > AQUIFER_P50_MAX_MS) out.push(`aquifer.column p50 ${l.aquiferP50.toFixed(3)} ms > ${AQUIFER_P50_MAX_MS} ms`);
+  if (l.aquiferP99 > AQUIFER_P99_MAX_MS) out.push(`aquifer.column p99 ${l.aquiferP99.toFixed(3)} ms > ${AQUIFER_P99_MAX_MS} ms`);
   if (l.sliceV128P50 > SLICE_V128_P50_MAX_MS) out.push(`slice.vertical128 p50 ${l.sliceV128P50.toFixed(3)} ms > ${SLICE_V128_P50_MAX_MS} ms`);
   if (l.slicePartP50 > SLICE_PART_P50_MAX_MS) out.push(`slice.partWorst p50 ${l.slicePartP50.toFixed(3)} ms > ${SLICE_PART_P50_MAX_MS} ms`);
   if (l.islandsP50 > ISLANDS_P50_MAX_MS) out.push(`terrain.islands p50 ${l.islandsP50.toFixed(3)} ms > ${ISLANDS_P50_MAX_MS} ms`);
