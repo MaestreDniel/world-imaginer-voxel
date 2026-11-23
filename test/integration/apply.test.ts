@@ -147,10 +147,11 @@ const SPRING_TRIES = 'springs.water.tries';
 const SPRING_TRIES_APPLIED = Math.min(DEFAULTS.springs.water.tries + 2, 32);
 /**
  * The spring half's window centre (Task 19's review): the spawn's window holds no water spring at `tries` 3, 5, 16 or
- * 32, so the spring half teleports to the column (11342, 3586), beside U2's mountain witness (11344, 3591): at seed '42'
- * its springs step accepts no spring at `tries` 3 and one water spring at 5 (from its tries 4-5; a scratch
- * `terrainSpringsDebug` probe over the 17 × 17 columns around the witness found no other change between 3 and 5). The
- * case asserts that the applied value changes the window and that the column was swapped to it before the undo.
+ * 32, so the spring half teleports to the column (11342, 3586), beside U2's first mountain witness (11344, 3591): at
+ * seed '42' its springs step accepts no spring at `tries` 3 and one water spring at 5 (from its tries 4-5; still so at
+ * `minFall` 7, Task 28a; a scratch `terrainSpringsDebug` probe over the 17 × 17 columns around the witness found no
+ * other change between 3 and 5). The case asserts that the applied value changes the window and that the column was
+ * swapped to it before the undo.
  */
 const SPRING_AT = [11342, 3586] as const;
 

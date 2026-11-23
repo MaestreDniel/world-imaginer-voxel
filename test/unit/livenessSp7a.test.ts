@@ -137,8 +137,8 @@ describe('the aquifer\'s leaves in U2 (SP7a spec §1.9, §13.7; Task 13, Spec co
  * `sp7a.liveness.springs` whose springs step accepts a water spring at the defaults and whose T column a step changes).
  */
 const SPRING_VERDICT: Readonly<Record<(typeof SPRING_LEAVES)[number], string>> = {
-  'springs.water.tries': 'mountain witness column (8652, -18898)',
-  'springs.water.minFall': 'mountain witness column (11344, 3591)',
+  'springs.water.tries': 'mountain witness column (-3035, 11917)',
+  'springs.water.minFall': 'mountain witness column (1250, -30453)',
 };
 
 describe('the water springs\' leaves in U2 (SP7a spec §3.5, §13.7; Task 19, Spec correction 5)', () => {

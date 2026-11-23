@@ -658,7 +658,10 @@ const TRIES_42: number[] = [
   4, 12, 3, 0.2096758137922734, 0.5976148415356874,
   13, 8, 0, 0.14460644801147282, 0.2377501269802451,
 ];
-/** A column of seed '42' holding one water spring at the defaults whose outlet lies inside it (the relief scan's n916). */
-const SPRING_COLUMN = [11344, 3591] as const;
-const SPRING_AT = [7, 121, 3] as const;
-const SPRING_DIR = 1;
+/**
+ * A column of seed '42' holding one water spring at the defaults whose outlet lies inside it (first the relief scan's
+ * n916, (11344, 3591); re-found at `minFall` 7 among `MOUNTAINS`, Task 28a).
+ */
+const SPRING_COLUMN = [-3035, 11917] as const;
+const SPRING_AT = [12, 135, 1] as const;
+const SPRING_DIR = 0;

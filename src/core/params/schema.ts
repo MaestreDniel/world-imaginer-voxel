@@ -413,7 +413,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
   springs: group('Springs', 'Springs placed by T in rock faces (SP7a spec §3): a source voxel with rock above, below and on three sides, its one open side over a drop, so a permanent waterfall falls from it. Each kind draws its tries per chunk.', {
     water: group('Water', 'Water springs in mountain faces (SP7a spec §3.2): a try\'s height lies between minFall above the surface estimate at its outlet and 2 below the top of its position; natural rock only, never sand or gravel.', {
       tries: int(3, { ...TERRAIN, label: 'Tries', doc: 'Tries per chunk: each picks a position, a direction and a height, and becomes a spring where the rule holds (more tries → more waterfalls).', min: 0, max: 32 }),
-      minFall: int(8, { ...TERRAIN, label: 'Least fall', doc: 'The outlet and this many voxels below it must be open air, and the spring sits at least this many blocks above the surface estimate at its outlet.', unit: 'blocks', min: 2, max: 64 }),
+      minFall: int(7, { ...TERRAIN, label: 'Least fall', doc: 'The outlet and this many voxels below it must be open air, and the spring sits at least this many blocks above the surface estimate at its outlet.', unit: 'blocks', min: 2, max: 64 }),
     }),
     // SP7a spec §3.3, D3 (Task 20): read only with `islands.enabled`; `tries` 4 is the spec's estimate (D31 tunes it). The
     // least fall is the constant ISLAND_SPRING_MIN_FALL (8), not a leaf (Task 20's Spec correction, ruling R18).
