@@ -897,6 +897,73 @@ The truncated springs' shots, re-taken on this generator (RD 12, headless Chrome
 
 Within 2 km of spawn, four truncated springs remain (1-4); each becomes a `truncatedN` link (Task 51) for the user's check (Task 58). The PNGs are in `.superpowers/sdd/2026-11-17-sp7a-water/task-28-shots/` (not committed).
 
+### Task 27m: evidence for the user
+
+Rulings R21 items 4-6, gathered 2026-11-23 on 3df31a1. That is the generator as Tasks 27k, 27l and 28 left it, 9f1d6c3; nothing in src has changed since. Every reading is scratch: the positions come from a scratch hook in `test/harness/water.ts`, and the parameter values from a scratch default in `src/core/params/schema.ts`. Both were reverted, and nothing in src or test is committed.
+
+The shots use Task 26's `shots.mjs` in aimed mode: RD 12, headless Chrome on SwiftShader, 1400 × 900, seed '42'. For the lava levels, the shots pass the level as the map hash's parameter patch, so the links open that level without a build. Each link is `/?at=…&y=…&yaw=…&pitch=…&rd=12#H`. H is the map hash of seed '42' on the profile named in the row; the four hashes are:
+
+| profile and patch | H |
+|---|---|
+| default, empty patch | `#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19` |
+| floating_islands, empty patch | `#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJmbG9hdGluZ19pc2xhbmRzIiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19` |
+| default, `{ aquifer: { lavaLevel: −52 } }` | `#eyJwYXRjaCI6eyJhcXVpZmVyIjp7ImxhdmFMZXZlbCI6LTUyfX0sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19` |
+| default, `{ aquifer: { lavaLevel: −50 } }` | `#eyJwYXRjaCI6eyJhcXVpZmVyIjp7ImxhdmFMZXZlbCI6LTUwfX0sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19` |
+
+Distances are to the profile's spawn, (0, 0). The PNGs and the readings are in `.superpowers/sdd/2026-11-17-sp7a-water/task-27m/` (not committed).
+
+**Abyss fronts (R21 item 4).** These are the water voxels where the settle stopped at abyss air (`waterIntoAbyss`), read on quick after the settle reference:
+- presets: 1,317 (amplified region 1,315, floating_islands 2, archipelago 0);
+- biomes: 3, all in the default biome region;
+- default group: 0.
+
+On the default-like profiles there are five such voxels, in four fronts. Each was shot from 6-12 blocks with night vision.
+
+| front | profile, distance | link | how abrupt it looks |
+|---|---|---|---|
+| (−479, 15, 7) and (−480, 15, 8), level 4 (the amplified region holds the same two voxels) | floating_islands, 479 | `?at=-484,1&y=20.5&yaw=139.8&pitch=-30.4` | Mild. A cave pool's sloped edge thins to a one-voxel tongue against the abyss's dark rock. It reads as the pool's rim, not a cut. |
+| (−1358, 6, 1343), level 2 | default (biome region), 1,910 | `?at=-1352,1350&y=9.5&yaw=319.8&pitch=-19.4` | Abrupt. A stream runs down a stepped gully toward the abyss's dark blocks and ends part-way down in a thin sloped lip, with the gully dry below it. The stream visibly stops in mid-course. |
+| (−1357, 5, 1345), level 1, 2 blocks from the previous front | default (biome region), 1,911 | `?at=-1352,1353&y=10.5&yaw=329&pitch=-29.8` | Abrupt. The same stream seen from lower down: its last thin voxel stands over the gully's dry abyss floor. |
+| (−1349, 30, 1469), level 1 | default (biome region), 1,994 | `?at=-1348,1461&y=35.5&yaw=183.4&pitch=-30.4` | Clearly abrupt. A flowing ribbon on a ledge above a wide abyss chamber stops in a straight cut at the chamber's edge, where the water would be expected to pour over. Falls from above stand in the chamber behind it. |
+
+An extra shot of the nearest amplified front, (−500, −28, −220) at 546 blocks, found no clear eye line and shows only rock, so it is not used. The alternative to name to the user is still letting water fall into abyss air (R21 item 4).
+
+**Lake rims at `lakes.rimRise` 4 (R21 item 5).** B5 is read on T (`lakeAirAdjacent`) and after the settle reference (`lakeSpill`), on §13.2's windows (16 on quick, 4 on fast). Values 3 and 4 are scratch: the schema default was changed and then reverted. Value 2 is the default, re-read on this tree.
+
+| `lakes.rimRise` | quick: on T (spill) | fast: on T (spill) |
+|---|---|---|
+| 2 (default) | 247 (2,082) | 76 (654) |
+| 3 | 220 (2,006) | 66 (657) |
+| 4 | **199** (1,810) | **59** (515) |
+
+- **Against Task 27f.** The T readings at 3 equal Task 27f's. Task 27f's spills (1,845 / 528) were read before Task 27k's rule, so they do not compare.
+- **By window (quick, at 4).** The breaches move only at the rims of windows 0, 2, 3, 8 and 9; window 0 goes from 5 to 2, and its spill from 91 to 0. Windows 1 (23 breaches, spill 437) and 13 (91 → 89, spill 1,303 → 1,211) barely move: a higher rim does not close their breaches.
+- **Overall.** Each block of rim removes about 10 % of the breaches; raising the rim does not reach 0.
+
+The breach nearest spawn at the default (rimRise 2) is at (−409 … −412, 120, 142 … 146), in window 0 (lake level 120), 433 blocks from spawn. Three shots, all on the default hash:
+- from the lake, `?at=-409,133&y=123.5&yaw=182.5&pitch=-14.6`, and wider, `?at=-409,121&y=126.5&yaw=181.2&pitch=-14.3`: the lake meets a gap in its stone rim;
+- from the dry side, `?at=-411,156&y=124.5&yaw=0&pitch=-20`: the settled lake runs out through the notch and down a stepped gully as a stream. It reads as a natural outflow, with no wall of water.
+
+**Bottom lava (R21 item 6).** Scratch readings at `aquifer.lavaLevel` −52 and −50, on quick over all groups; each cell reads default / presets / biomes. A3's first part is as Task 27l defined it: the share of the tagged voxels at y ≤ the level that hold lava, with that population.
+
+| `aquifer.lavaLevel` | A3 `lavaBelow54` | its population | `lavaSupported` | `C7.bedrockExposed` |
+|---|---|---|---|---|
+| −54 (default) | NaN / NaN / NaN (vacuous) | 0 / 0 / 0 | 0.99972 / 0.99967 / 0.99951 | 0 |
+| −52 | 0.052 / 0.138 / 0.017 | 1,880 / 890 / 1,270 | 0.99972 / 0.99967 / 0.99951 (unchanged) | 0 |
+| −50 | 0.313 / 0.384 / 0.386 | 27,717 / 12,579 / 17,589 | 0.99973 / 0.99969 / 0.99954 | 0 |
+
+- **At −52 nothing changes in the world.** The deepest tagged air in every region lies at y −52, and the rule puts lava only at y < the level, so it fills nothing. The part now counts the y −52 voxels, and the lava among them is the aquifer cells' own, already there at −54.
+- **At −50 the rule fills y −51 and −52.** That is 3,541 voxels in seed '42''s default regions, in 122 floor pools. The part still reads 31-39 %, below its 50 %, because its population includes the y −50 voxels, which the rule does not fill.
+- **Other readings at −50.** The bottom band's cave air (y −64 … −49) falls by about 20 % (default 50,692 → 40,768). `C7.waterWall` per km² (R19's known red): default 435.1 unchanged, archipelago 423.5 → 463.4, amplified 6,811.0 → 6,816.0, floating_islands 433.5 → 428.5. `waterIntoAbyss` and `abyssWaterFace` are unchanged.
+
+Shots, two per level, of the deepest cave floor with lava nearest spawn on the default profile:
+- **−52**, at (627, −52, −15), 628 blocks; close `?at=628,-23&y=-47.5&yaw=183.4&pitch=-25.2`, wider `?at=630,-30&y=-46.5&yaw=189.2&pitch=-17.7`; the −52 hash. An aquifer cell's lava runs down a stepped slope beside a waterfall and meets the water pool on the floor. The −54 world looks the same here.
+- **−50**, at (−47, −51, −75), 85 blocks, a floor pool of 29 columns; close `?at=-38,-74&y=-45.5&yaw=273.4&pitch=-30.4`, wider `?at=-33,-72&y=-43.5&yaw=280.5&pitch=-27`; the −50 hash. The gully at the bottom of a deep cave holds a flat lava sheet one to two blocks deep, filling the floor between the rock steps. This is what bottom lava looks like: a small lava pool.
+- **Extra pools at −50**, all on the −50 hash: (124, −52, 23) at 123 blocks, `?at=130,26&y=-48.5&yaw=294.4&pitch=-26.4`, a wider lava floor spreading between rock ledges; (94, −51, −94), `?at=96,-102&y=-47.5&yaw=190&pitch=-19.2`; (6, −51, −194), `?at=7,-202&y=-47.5&yaw=183.4&pitch=-19.4`.
+- **Not used:** the first −50 target, (85, −52, −24) at 89 blocks, lies in a gully with no clear eye line.
+
+**Task 26's truncated-spring shots.** Task 28 re-took them on 9f1d6c3, the generator as Tasks 27k, 27l and 28 left it (the table above; `task-28-shots/`), so they are not re-taken here.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
