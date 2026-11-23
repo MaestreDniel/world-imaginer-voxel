@@ -149,7 +149,19 @@ const bfsDist = new Int8Array(BFS_SIDE * BFS_SIDE).fill(-1);
 const bfsMask = new Uint8Array(BFS_SIDE * BFS_SIDE);
 const bfsQueue = new Int32Array(BFS_SIDE * BFS_SIDE);
 
-/** `nearestDropDirs` over `openFor(r, other, …)`. */
+/**
+ * Whether the nearest-drop search may enter a voxel (SP7a spec §4.1; rulings R21): open for the type, and (with `other`
+ * a fluid type, so `r` reads the proto) not holding a proto source of `type`, which the search neither walks through nor
+ * takes as a first side (Minecraft's slope search, **MC (memory)**). Flowing and falling proto bytes are walked through.
+ */
+function searchable(r: PassableReader, type: number, other: number, x: number, y: number, z: number): boolean {
+  if (!r.passable(x, y, z)) return false;
+  if (other === NONE) return true;
+  const byte = (r as FluidRuleReader).protoFluid(x, y, z);
+  return typeOf(byte) !== other && !isSourceOf(byte, type);
+}
+
+/** `nearestDropDirs` over the voxels `searchable(r, type, other, …)`, the drop test `openFor(r, other, …)` below each. */
 function dropDirs(type: number, r: PassableReader, other: number, x: number, y: number, z: number): number {
   const reach = searchOf(type);
   const center = BFS_R * BFS_SIDE + BFS_R;
@@ -160,7 +172,7 @@ function dropDirs(type: number, r: PassableReader, other: number, x: number, y: 
   for (let f = 0; f < 4; f++) {
     const dx = SIDE_DX[f]!;
     const dz = SIDE_DZ[f]!;
-    if (!openFor(r, other, x + dx, y, z + dz)) continue;
+    if (!searchable(r, type, other, x + dx, y, z + dz)) continue;
     const c = center + dz * BFS_SIDE + dx;
     bfsDist[c] = 1;
     bfsMask[c] = 1 << f;
@@ -170,7 +182,8 @@ function dropDirs(type: number, r: PassableReader, other: number, x: number, y: 
   let head = 1;
   for (let d = 1; head < tail; d++) {
     const layerEnd = tail;
-    // A drop on layer d: a passable voxel with a passable voxel below; its mask holds the sides it is reached from at d.
+    // A drop on layer d: a searched voxel whose voxel below is open for the type (the type's own proto fluid there
+    // included); its mask holds the sides it is reached from at d.
     for (let i = head; i < layerEnd; i++) {
       const c = bfsQueue[i]!;
       const cx = x + (c % BFS_SIDE) - BFS_R;
@@ -188,7 +201,7 @@ function dropDirs(type: number, r: PassableReader, other: number, x: number, y: 
         const n = c + dz * BFS_SIDE + dx;
         const nd = bfsDist[n]!;
         if (nd === -1) {
-          if (!openFor(r, other, cx + dx, y, cz + dz)) continue;
+          if (!searchable(r, type, other, cx + dx, y, cz + dz)) continue;
           bfsDist[n] = d + 1;
           bfsMask[n] = bfsMask[c]!;
           bfsQueue[tail++] = n;
@@ -204,13 +217,25 @@ function dropDirs(type: number, r: PassableReader, other: number, x: number, y: 
 }
 
 /**
- * The open sides toward the nearest drop (SP7a spec §4.1): the 4-bit mask (N, E, S, W in `FACES` order) of the
- * passable sides at minimal breadth-first distance, over passable voxels at y (never through the voxel itself), to a
- * drop (a passable voxel with a passable voxel below), within `searchOf(type)` (a side is at distance 1); 0 when none
- * is in reach (the caller then takes every open side).
+ * The open sides toward the nearest drop over blocks alone (SP7a spec §4.1): the 4-bit mask (N, E, S, W in `FACES`
+ * order) of the passable sides at minimal breadth-first distance, over passable voxels at y (never through the voxel
+ * itself), to a drop (a passable voxel with a passable voxel below), within `searchOf(type)` (a side is at distance 1);
+ * 0 when none is in reach (the caller then takes every open side). A `PassableReader` holds no proto fluid, so there is
+ * no source to skip; a caller that must agree with the settle reads the proto through `nearestDropDirsFor`.
  */
 export function nearestDropDirs(type: number, r: PassableReader, x: number, y: number, z: number): number {
   return dropDirs(type, r, NONE, x, y, z);
+}
+
+/**
+ * The sides `ruleOffers`' spread takes toward the nearest drop, over the proto (SP7a spec §4.1, D22; rulings R21): as
+ * `nearestDropDirs`, but a voxel holding the other type's proto fluid is `block`, and a voxel holding a proto source of
+ * `type` is neither a first side nor walked through; a drop is a searched voxel whose voxel below is open for the type
+ * (its own proto fluid there counts). 0 when none is in reach. The settle, the reference, A2, C7.waterWall's
+ * `spreadSides` and SP7b's sim all read this search, never a copy of it.
+ */
+export function nearestDropDirsFor(type: number, r: FluidRuleReader, x: number, y: number, z: number): number {
+  return dropDirs(type, r, type === WATER ? LAVA : WATER, x, y, z);
 }
 
 /** Writes one offer tuple at tuple index n. */
@@ -232,7 +257,8 @@ function put(out: Int32Array, n: number, dx: number, dy: number, dz: number, val
  * - **Fall:** the voxel below, when passable and not a proto source of `type`: (falling, dist).
  * - **Spread:** when u is a source, or its voxel below is not passable or holds `type` in the proto: level k (0 for a
  *   source or falling u, its level otherwise) spreads `nextLevel(type, k)` at dist + 1 to the sides in
- *   `nearestDropDirs` (every open side when 0); at the cap nothing spreads, and u is flagged when a target exists.
+ *   `nearestDropDirsFor` (its search skips the type's own proto sources; every open side when 0); at the cap nothing
+ *   spreads, and u is flagged when a target exists.
  * - **New sources** (water, when u is a proto water source): each passable proto-dry side with ≥ 2 horizontal proto
  *   water sources beside it (u among them) and a solid voxel or a proto water source below: (source, dist + 1).
  * The settle, its reference and A2 call this, never a copy of the rules; SP7b's sim applies it to a scheduled voxel.

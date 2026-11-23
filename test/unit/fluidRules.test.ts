@@ -6,7 +6,7 @@ import {
 import { FLUID_LAVA, FLUID_WATER, LAVA_SOURCE, NO_FLUID, packFluid, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import {
   capOf, cornerDrop, cornerHeight, FLUID_VALUE_DRY, FLUID_VALUE_FALLING, FLUID_VALUE_SOURCE, isPassable, lastLevelOf, nearestDropDirs,
-  nextLevel, ruleOffers, searchOf, splitV0V2, stepOf, surfaceHeight, type FluidRuleReader, type PassableReader,
+  nearestDropDirsFor, nextLevel, ruleOffers, searchOf, splitV0V2, stepOf, surfaceHeight, type FluidRuleReader, type PassableReader,
 } from '../../src/world/blocks/fluidRules';
 import { AIR, STONE } from '../../src/world/blocks/index';
 import { FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_WEST } from '../../src/world/blocks/kinds';
@@ -185,6 +185,72 @@ describe('fluidRules: nearestDropDirs (SP7a spec §4.1)', () => {
   test('no drop in reach on an open plane → 0', () => {
     const r: PassableReader = { passable: (_x, y) => y >= 0 };
     expect(nearestDropDirs(FLUID_WATER, r, 0, 0, 0)).toBe(0);
+  });
+});
+
+describe('fluidRules: the nearest-drop search skips the fluid\'s own proto sources (SP7a spec §4.1, D22; rulings R21)', () => {
+  /**
+   * A pool of proto water sources 2 deep (y 0 and −1) over the stone plane, x −5 … −1, z −2 … 2; on its dry +x side
+   * the plane at y 0 for 2 blocks, then a 1-block step down at x 2 (z −2 … 2): (2, 0, z) is a drop 3 blocks from the
+   * shore source (−1, 0, 0). Every pool voxel at y 0 lies over water, which counted as a drop at distance 1 before R21.
+   */
+  const pool = (): Grid => {
+    const g = new Grid();
+    for (let x = -5; x <= -1; x++) {
+      for (let z = -2; z <= 2; z++) g.setFluid(x, 0, z, WATER_SOURCE).setOpen(x, -1, z).setFluid(x, -1, z, WATER_SOURCE);
+    }
+    for (let z = -2; z <= 2; z++) g.setOpen(2, -1, z);
+    return g;
+  };
+
+  test('a shore source of a pool finds the step on its dry side, 3 away, not the pool\'s own voxels over water', () => {
+    const g = pool();
+    expect(nearestDropDirsFor(FLUID_WATER, g, -1, 0, 0)).toBe(E);
+    // ruleOffers' spread takes the same sides: one level-1 offer toward the step, none into the pool.
+    expect(offers(FLUID_WATER, g, -1, 0, 0, FLUID_VALUE_SOURCE, 0).list).toEqual([`1,0,0,${flowing(1)},1`]);
+  });
+
+  test('a source inside the pool has no searchable side: no drop (0), so it offers to every open side (its own sources)', () => {
+    const g = pool();
+    expect(nearestDropDirsFor(FLUID_WATER, g, -3, 0, 0)).toBe(0);
+    expect(offers(FLUID_WATER, g, -3, 0, 0, FLUID_VALUE_SOURCE, 0).count).toBe(4);
+  });
+
+  test('a pool enclosed by solid still spreads nothing outward: every offer targets one of its own sources', () => {
+    const g = new Grid().setOpen(4, -1, 0);
+    for (let x = -1; x <= 1; x++) for (let z = -1; z <= 1; z++) g.setFluid(x, 0, z, WATER_SOURCE);
+    for (let x = -2; x <= 2; x++) for (let z = -2; z <= 2; z++) if (Math.abs(x) === 2 || Math.abs(z) === 2) g.setSolid(x, 0, z);
+    expect(nearestDropDirsFor(FLUID_WATER, g, 1, 0, 0)).toBe(0);
+    const o = offers(FLUID_WATER, g, 1, 0, 0, FLUID_VALUE_SOURCE, 0);
+    expect(o.count).toBeGreaterThan(0);
+    for (const t of o.list) {
+      const [dx, , dz] = t.split(',').map(Number);
+      expect(g.protoFluid(1 + dx!, 0, dz!)).toBe(WATER_SOURCE);
+    }
+  });
+
+  test('a flowing or falling proto water voxel is still walked through; a proto source in its place is not', () => {
+    // The drop at (2, 0, 0); the path east crosses (1, 0, 0).
+    for (const byte of [packFluid(FLUID_WATER, 3), packFluid(FLUID_WATER, 0, true)]) {
+      const g = new Grid().setOpen(2, -1, 0).setFluid(1, 0, 0, byte);
+      expect(nearestDropDirsFor(FLUID_WATER, g, 0, 0, 0)).toBe(E);
+    }
+    // A source at (1, 0, 0) closes the east side: the shortest paths go round it, N or S, 4 steps.
+    const g = new Grid().setOpen(2, -1, 0).setFluid(1, 0, 0, WATER_SOURCE);
+    expect(nearestDropDirsFor(FLUID_WATER, g, 0, 0, 0)).toBe(N | S);
+  });
+
+  test('lava skips its own proto sources: a lava shore source finds a drop 2 away on its dry side', () => {
+    const g = new Grid().setOpen(1, -1, 0);
+    for (const x of [-2, -1]) g.setFluid(x, 0, 0, LAVA_SOURCE).setOpen(x, -1, 0).setFluid(x, -1, 0, LAVA_SOURCE);
+    expect(nearestDropDirsFor(FLUID_LAVA, g, -1, 0, 0)).toBe(E);
+    expect(offers(FLUID_LAVA, g, -1, 0, 0, FLUID_VALUE_SOURCE, 0).list).toEqual([`1,0,0,${flowing(2)},1`]);
+  });
+
+  test('the drop test is unchanged: the fluid\'s own proto source under a searched voxel makes it a drop', () => {
+    // A flowing voxel at (0, 0, 0) over stone; a proto source at (2, −1, 0) under open air at (2, 0, 0).
+    const g = new Grid().setOpen(2, -1, 0).setFluid(2, -1, 0, WATER_SOURCE);
+    expect(nearestDropDirsFor(FLUID_WATER, g, 0, 0, 0)).toBe(E);
   });
 });
 

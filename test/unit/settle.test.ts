@@ -327,6 +327,33 @@ describe('settleWindow: the two fixed points, the proto reads and the abyss (SP7
     expect(settle(w).at(3, 1, 0)).toBe(water(5));
   });
 
+  test('a pool\'s shore spreads down a step 3 blocks away on its dry side: the search skips the pool\'s own sources (rulings R21)', () => {
+    // A pool of proto sources 2 deep (y 0 and 1) at x −5 … −1, z −2 … 2; the plane at y 0 for x 0, 1, then a 1-block
+    // step down: a pocket of air at y 0 over x 2 … 8, z −2 … 2.
+    const w = plane();
+    for (let x = -5; x <= -1; x++) for (let z = -2; z <= 2; z++) w.setFluid(x, 0, z, WATER_SOURCE).setFluid(x, 1, z, WATER_SOURCE);
+    for (let x = 2; x <= 8; x++) for (let z = -2; z <= 2; z++) w.setBlock(x, 0, z, AIR);
+    const r = settle(w);
+    for (let z = -2; z <= 2; z++) {
+      expect(r.at(0, 1, z)).toBe(water(1));
+      expect(r.at(1, 1, z)).toBe(water(2));
+      expect(r.at(2, 1, z)).toBe(water(3));
+      // The water falls down the step and spreads over the pocket's floor as a landed fall.
+      expect(r.at(2, 0, z)).toBe(water(0, true));
+      expect(r.at(3, 0, z)).toBe(water(1));
+    }
+    // The pool's voxels stay its sources.
+    for (let x = -5; x <= -1; x++) for (let z = -2; z <= 2; z++) expect(r.set.has(`${x},1,${z}`) || r.set.has(`${x},0,${z}`)).toBe(false);
+  });
+
+  test('a pool enclosed by solid spreads nothing, with a drop just beyond its rim (rulings R21)', () => {
+    const w = plane();
+    for (let x = -2; x <= 2; x++) for (let z = -2; z <= 2; z++) w.setFluid(x, 1, z, WATER_SOURCE);
+    for (let x = -3; x <= 3; x++) for (let z = -3; z <= 3; z++) if (Math.abs(x) === 3 || Math.abs(z) === 3) w.setBlock(x, 1, z, STONE);
+    w.setBlock(5, 0, 0, AIR);
+    expect(settle(w).set.size).toBe(0);
+  });
+
   test('the abyss: water never enters a voxel whose cave nibble is 3, and its front there carries no bit 6', () => {
     const p = settle(plane().setFluid(0, 1, 0, WATER_SOURCE).setCave(1, 1, 0, ABYSS_CAVE));
     expect(p.at(1, 1, 0)).toBe(NO_FLUID);

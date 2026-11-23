@@ -726,22 +726,24 @@ describe('B5: lake water with air horizontally adjacent on T, and its settled sp
     for (let x = 6; x <= 10; x++) expect(fluidLevel(r.settled.get(referenceSettleKey(r.view, x, 40, 0))!)).toBe(x - 5);
   });
 
-  test('a breach (positions outside the mask whose rock stops below Lw, beside lake water, O87) reads its breach voxels; over rock the settle leaves it dry', () => {
+  test('a breach (positions outside the mask whose rock stops below Lw, beside lake water, O87) reads its breach voxels; over rock the settle spills into it (rulings R21)', () => {
     // A notch two positions wide (z 0, 1) from the lake's +x side to x 1, its rock to y 69, ending at the rim (x 2).
     const r = b5Of(lake((x, z) => (x >= -2 && x <= 1 && (z === 0 || z === 1) ? 69 : RIM_TOP)));
     // The two lake voxels at Lw beside the notch: (−3, 70, 0) and (−3, 70, 1).
     expect(r.airAdjacent).toBe(2);
-    // §4.1's rules: a source spreads toward its nearest drop, and the lake's own voxels at Lw over its water are drops at
-    // distance 1, while the notch over rock holds none; one proto source beside each notch voxel makes no new source. So
-    // the notch stays dry after settle: the breach stands as a wall, which B5 on T counts.
-    for (let x = -2; x <= 1; x++) for (const z of [0, 1]) expect(r.settled.has(referenceSettleKey(r.view, x, 70, z))).toBe(false);
-    expect(r.spill).toBe(0);
+    // §4.1's rules (rulings R21, Task 27k): the nearest-drop search skips the lake's own sources, and the notch over rock
+    // holds no drop, so the shore source spreads to every open side, the notch included; one proto source beside each
+    // notch voxel makes no new source. The notch fills with levels 1 … 4 at Lw: the breach is a spill after settle, not a
+    // wall (before R21 the lake's voxels over water were drops at distance 1 and the notch stayed dry). This test and the
+    // two below pin the rule on a lake.
+    for (let x = -2; x <= 1; x++) for (const z of [0, 1]) expect(fluidLevel(r.settled.get(referenceSettleKey(r.view, x, 70, z))!)).toBe(x + 3);
+    expect(r.spill).toBe(8);
   });
 
   test('lakeSpill counts the non-source water outside the mask the lake\'s sources feed, down a fall and along the floor below', () => {
-    // The lake's water 1 deep on a shelf 4 positions wide along its +x shore (x −6 … −3), so the shore's nearest drop
-    // in the lake lies 4 away; the notch's rock to y 69 at x −2, −1 and to y 66 at x 0, 1 (a pit 3 away): the shore
-    // spills toward the pit.
+    // The lake's water 1 deep on a shelf 4 positions wide along its +x shore (x −6 … −3); the notch's rock to y 69 at
+    // x −2, −1 and to y 66 at x 0, 1 (a pit 3 away): the shore spills toward the pit, its nearest drop (the search never
+    // enters the lake's own sources, rulings R21).
     const r = b5Of(lake((x, z) => (z === 0 || z === 1 ? (x === -2 || x === -1 ? 69 : x === 0 || x === 1 ? 66 : RIM_TOP) : RIM_TOP), (x) => x >= -6));
     expect(r.airAdjacent).toBe(2);
     // Per row: y 70 at x −2 … 0 (levels 1 … 3), the fall at x 0 (y 69 … 67), the landed fall's spread to x 1 at y 67
@@ -754,17 +756,19 @@ describe('B5: lake water with air horizontally adjacent on T, and its settled sp
     expect(r.spill).toBe(14);
   });
 
-  test('a lake that falls straight into a pit beside its shore spills only the fall: the landed water\'s nearest drop is the lake', () => {
-    // The notch's rock to y 66 from the shore (x −2 … 1): the shore's voxels at Lw tie the pit with the lake's own drops
-    // and spill into it, but the landed fall at y 67 finds the lake's voxels over water at distance 1 and spreads no further.
+  test('a lake that falls straight into a pit beside its shore spills the fall and spreads over the pit\'s floor (rulings R21)', () => {
+    // The notch's rock to y 66 from the shore (x −2 … 1): the shore's voxels at Lw spill into the pit, its drop at
+    // distance 1, and the landed fall at y 67, whose search skips the lake's sources beside it and finds no drop, spreads
+    // to every open side: x −1 … 1 at levels 1 … 3 (before R21 it found the lake's voxels over water at distance 1 and
+    // spread no further).
     const r = b5Of(lake((x, z) => (x >= -2 && x <= 1 && (z === 0 || z === 1) ? 66 : RIM_TOP)));
     expect(r.airAdjacent).toBe(2);
     for (const z of [0, 1]) {
       expect(fluidLevel(r.settled.get(referenceSettleKey(r.view, -2, 70, z))!)).toBe(1);
       for (let y = 67; y <= 69; y++) expect(r.settled.has(referenceSettleKey(r.view, -2, y, z))).toBe(true);
-      expect(r.settled.has(referenceSettleKey(r.view, -1, 67, z))).toBe(false);
+      for (let x = -1; x <= 1; x++) expect(fluidLevel(r.settled.get(referenceSettleKey(r.view, x, 67, z))!)).toBe(x + 2);
     }
-    expect(r.spill).toBe(8);
+    expect(r.spill).toBe(14);
   });
 
   test('the lake mask must cover the view\'s positions', () => {

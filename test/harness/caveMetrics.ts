@@ -65,7 +65,7 @@
  *   spill rim (water level 7, lava level 6: flow, not walls) with a horizontal neighbour that is dry tagged air (tagged,
  *   neither solid nor fluid after settle) into which §4.1's rules would flow but for the cap (the voxel's bit 6) or the
  *   abyss stop (a water voxel beside air of nibble 3): the neighbour lies on one of the voxel's spread sides
- *   (`spreadSides`: `nearestDropDirs` over the proto, every open side when no drop is in reach; none when the voxel
+ *   (`spreadSides`: `nearestDropDirsFor` over the proto, every open side when no drop is in reach; none when the voxel
  *   falls instead), so a front cut at the cap whose dry neighbour lies off its nearest-drop sides is not one; a water/lava
  *   contact's bit 6 (§4.1's merge, SP7b's reaction, counted in `A2.contacts`) is not a cut front (Task 23). SP6a's count,
  *   a fluid voxel of T with a horizontal neighbour that is tagged air (tagged, neither solid nor fluid), is recorded as
@@ -141,7 +141,7 @@ import { createGenContext, noiseFor } from '../../src/gen/context';
 import { createDensityContext } from '../../src/gen/density/context';
 import { aquiferOf, barrierAt } from '../../src/gen/fluids/aquifer';
 import { FLUID_LAVA, FLUID_WATER, fluidFalling, fluidLevel, fluidType, fluidUnsettled, hasFluid, NO_FLUID } from '../../src/world/blocks/fluid';
-import { lastLevelOf, nearestDropDirs, type FluidRuleReader } from '../../src/world/blocks/fluidRules';
+import { lastLevelOf, nearestDropDirsFor, type FluidRuleReader } from '../../src/world/blocks/fluidRules';
 import { AIR, BEDROCK, REGISTRY } from '../../src/world/blocks/index';
 import { components3d, type Components3d } from './flood';
 import type { RegionView } from './region';
@@ -1555,10 +1555,11 @@ const SIDE_DZ = [-1, 0, 1, 0] as const;
 
 /**
  * The sides §4.1's spread offers to from a fluid voxel holding `byte` at world (x, y, z) (SP7a spec §4.1: `ruleOffers`'
- * spread branch, through `nearestDropDirs`, over `r`'s proto), as a 4-bit mask in `fluidRules.ts`' side order: 0 when the
- * voxel does not spread (it is not a source, and its voxel below is open for its type and holds no proto fluid of its
+ * spread branch, through `nearestDropDirsFor`, over `r`'s proto), as a 4-bit mask in `fluidRules.ts`' side order: 0 when
+ * the voxel does not spread (it is not a source, and its voxel below is open for its type and holds no proto fluid of its
  * type: it falls instead); else the sides toward the nearest drop over the voxels open for its type (passable, not
- * holding the other type's proto fluid, which is `block` for its rules), or every open side when no drop is in reach.
+ * holding the other type's proto fluid, which is `block` for its rules) that hold no proto source of its type (rulings
+ * R21: the search skips them, as the settle's does), or every open side when no drop is in reach.
  * Unlike `ruleOffers`' targets it keeps the abyss sides (where a water front stops, the abyss stop) and reads no cap
  * (the byte's bit 6 says whether the front is cut there). A falling byte reads as not a source.
  */
@@ -1568,7 +1569,7 @@ export function spreadSides(r: FluidRuleReader, byte: number, x: number, y: numb
   const open = (qx: number, qy: number, qz: number): boolean => r.passable(qx, qy, qz) && fluidType(r.protoFluid(qx, qy, qz)) !== other;
   const source = fluidLevel(byte) === 0 && !fluidFalling(byte);
   if (!source && open(x, y - 1, z) && fluidType(r.protoFluid(x, y - 1, z)) !== type) return 0;
-  const dirs = nearestDropDirs(type, { passable: open }, x, y, z);
+  const dirs = nearestDropDirsFor(type, r, x, y, z);
   if (dirs !== 0) return dirs;
   let sides = 0;
   for (let f = 0; f < 4; f++) if (open(x + SIDE_DX[f]!, y, z + SIDE_DZ[f]!)) sides |= 1 << f;

@@ -727,6 +727,15 @@ describe('the caves instruments on fixtures (SP6a §10.1, C7-C9)', () => {
     expect(spreadSides(r, packFluid(FLUID_WATER, 2), 6, 42, 5)).not.toBe(0);
     // Below (5, 42, 5) the other type's proto fluid is `block` for water's rules, so that voxel spreads too.
     expect(spreadSides(r, packFluid(FLUID_WATER, 2), 5, 42, 5)).not.toBe(0);
+    // The search skips the fluid's own proto sources, as the settle's does (rulings R21): with a proto source west of
+    // (5, 40, 5) over proto water (a drop at distance 1 if it were searched), the spread side is still east, toward the hole.
+    const src = packFluid(FLUID_WATER, 0);
+    const pool = {
+      ...base,
+      passable: (x: number, y: number, z: number): boolean => (x === 4 && y === 39 && z === 5) || base.passable(x, y, z),
+      protoFluid: (x: number, y: number, z: number): number => (x === 4 && z === 5 && (y === 39 || y === 40) ? src : NO_FLUID),
+    };
+    expect(spreadSides(pool, src, 5, 40, 5)).toBe(0b0010);
   });
 
   test('C7.waterWall: a water/lava contact beside dry tagged air is no wall (§4.1\'s merge sets its bit 6; SP7a Task 23)', () => {
