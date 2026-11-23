@@ -285,7 +285,7 @@ export function measureCaveRegion(view: RegionView, site: Site, params: Params, 
   if (interior !== null) {
     // The A counts and the poses read one load of the region (its grid, the settled bytes above, A1's labelling).
     const region = loadWaterRegion(view, settled, interior, bytes);
-    counts = waterRegionCounts(view, settled, interior, marginProbes(site.seed, params), region);
+    counts = waterRegionCounts(view, settled, interior, params.aquifer.lavaLevel, marginProbes(site.seed, params), region);
     a2 = a2RegionCounts(view, settled, interior, withOrigins.origins, withOrigins.contacts, region);
     // A5 (Task 24): the falls in the default group's regions, the truncated springs there and in the presets group's
     // amplified region ("the mountain regions", Spec correction 11), the lava falls in the biome region (and any region

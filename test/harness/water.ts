@@ -19,8 +19,10 @@
  *   linked to the sea or a river. The population is the interior's cave voxels at y ≤ 62 in no linked component; the
  *   part their share with no fluid after settle (`a1Dry` over `a1Population`), recorded with no fluid in T (`a1DryT`)
  *   over the same population.
- * - **A3** (after settle; lava voxels of the interior): `lavaBelow54` the lava voxels at y ≤ −55 (the region holds lava
- *   there when > 0); `aquiferLavaAbove10` (rulings P19) the proto lava voxels above y −10 whose cave tag is not 0
+ * - **A3** (after settle; lava voxels of the interior): `lavaBelow54` (rulings R21 item 6, the key kept) the interior's
+ *   tagged non-solid voxels at y ≤ `aquifer.lavaLevel` (the profile's level, passed in; −54 by default) holding lava,
+ *   over that population, `lavaBelow54Population` (pooled over the regions' voxels; NaN over an empty population,
+ *   recorded as vacuous with its size 0, not a miss); `aquiferLavaAbove10` (rulings P19) the proto lava voxels above y −10 whose cave tag is not 0
  *   (springs are written untagged and untagged air takes only water, so a spring is never one; 0 by construction);
  *   `lavaSupported` the lava voxels that fall or have a solid voxel (a non-air block) or a lava voxel below; `lavaSky` the
  *   lava voxels face-adjacent to cave air (a cave voxel with no fluid after settle) of a C2 component (`deepSkyLabels`
@@ -170,8 +172,9 @@ export interface WaterRegionCounts {
   readonly a1Population: number;
   readonly a1Dry: number;
   readonly a1DryT: number;
-  /** A3: the lava voxels at y ≤ −55, the tagged proto lava voxels above −10, the lava voxels, those supported, those touching C2's cave air. */
+  /** A3: the tagged voxels at y ≤ `aquifer.lavaLevel` holding lava and all of them, the tagged proto lava voxels above −10, the lava voxels, those supported, those touching C2's cave air. */
   readonly lavaBelow54: number;
+  readonly lavaBelow54Population: number;
   readonly aquiferLavaAbove10: number;
   readonly lava: number;
   readonly lavaSupported: number;
@@ -192,8 +195,6 @@ export type WaterExampleId = (typeof WATER_EXAMPLE_IDS)[number];
 
 /** The highest y whose voxels A1 links (below the sea surface at 63). */
 export const A1_Y_MAX = 62;
-/** A3's deep lava: y ≤ −55 (below `aquifer.lavaLevel` −54). */
-export const LAVA_DEEP_Y = -55;
 /** A3's aquifer lava: above y −10 (`aquifer.lavaMaxLevel`). */
 export const AQUIFER_LAVA_Y = -10;
 /** D19's deep sky-open water: more than this many blocks below the ground's top. */
@@ -613,11 +614,12 @@ function marginBarrierCount(L: WaterRegion, probes: MarginProbes): number {
 
 /**
  * One region's A counts (see the header) over the view's proto and the settle reference's overlay `settled` (keyed
- * `referenceSettleKey`, as `referenceSettle` returns it), on `interior` (world blocks); with `probes`, the margin
- * barriers too (else NaN).
+ * `referenceSettleKey`, as `referenceSettle` returns it), on `interior` (world blocks), A3's first part at y ≤
+ * `lavaLevel` (the profile's `aquifer.lavaLevel`); with `probes`, the margin barriers too (else NaN).
  */
 export function waterRegionCounts(
-  view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 'store'>, settled: ReadonlyMap<number, number>, interior: WaterBox, probes: MarginProbes | null = null,
+  view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 'store'>, settled: ReadonlyMap<number, number>, interior: WaterBox, lavaLevel: number,
+  probes: MarginProbes | null = null,
   region: WaterRegion = loadWaterRegion(view, settled, interior),
 ): WaterRegionCounts {
   const L = region;
@@ -644,6 +646,7 @@ export function waterRegionCounts(
   }
   // A3, and the recorded skyOpenDeep.
   let lavaBelow54 = 0;
+  let lavaBelow54Population = 0;
   let aquiferLavaAbove10 = 0;
   let lava = 0;
   let lavaSupported = 0;
@@ -659,9 +662,12 @@ export function waterRegionCounts(
         const c = cells[i]!;
         if (y > AQUIFER_LAVA_Y && (c & TAG_MASK) !== 0 && (c & FLUID_BIT) !== 0 && fluidType(protoOf(L, i)) === FLUID_LAVA) aquiferLavaAbove10++;
         if (skyOpen(L, i) && groundTop[z * w + x]! - y > SKY_OPEN_DEEP) skyOpenDeep++;
+        if (y <= lavaLevel && caveCell(c)) {
+          lavaBelow54Population++;
+          if (fluidType(b) === FLUID_LAVA) lavaBelow54++;
+        }
         if (fluidType(b) !== FLUID_LAVA) continue;
         lava++;
-        if (y <= LAVA_DEEP_Y) lavaBelow54++;
         if (fluidFalling(b) || (y > GRID_Y0 && ((cells[i - plane]! & SOLID_BIT) !== 0 || fluidType(fl[i - plane]!) === FLUID_LAVA))) lavaSupported++;
       }
     }
@@ -720,7 +726,7 @@ export function waterRegionCounts(
   }
   return {
     areaKm2: ((L.lx1 - L.lx0) * (L.lz1 - L.lz0)) / 1e6,
-    a1Population, a1Dry, a1DryT, lavaBelow54, aquiferLavaAbove10, lava, lavaSupported, lavaSky, aquiferBodies, skyOpenDeep,
+    a1Population, a1Dry, a1DryT, lavaBelow54, lavaBelow54Population, aquiferLavaAbove10, lava, lavaSupported, lavaSky, aquiferBodies, skyOpenDeep,
     marginBarriers: probes === null ? Number.NaN : marginBarrierCount(L, probes), lowTops, dryPits, dryPitsT,
   };
 }
@@ -970,8 +976,9 @@ export interface WaterParts {
   /** A1's share after settle, pooled over the regions, and on T alone over the same population. */
   readonly dryShare: number;
   readonly dryShareT: number;
-  /** A3: the regions holding lava at y ≤ −55 over the regions; the tagged proto lava above −10; the supported share; the regions where lava touches C2's cave air over the regions. */
+  /** A3: the share of the tagged voxels at y ≤ `aquifer.lavaLevel` holding lava (NaN over none: vacuous) and their number; the tagged proto lava above −10; the supported share; the regions where lava touches C2's cave air over the regions. */
   readonly lavaBelow54: number;
+  readonly lavaBelow54Population: number;
   readonly aquiferLavaAbove10: number;
   readonly lavaSupported: number;
   readonly lavaSkyRegions: number;
@@ -994,7 +1001,8 @@ export function waterParts(regions: readonly WaterRegionCounts[]): WaterParts {
   return {
     dryShare: share(sum((r) => r.a1Dry), sum((r) => r.a1Population)),
     dryShareT: share(sum((r) => r.a1DryT), sum((r) => r.a1Population)),
-    lavaBelow54: regionsWith((r) => r.lavaBelow54),
+    lavaBelow54: share(sum((r) => r.lavaBelow54), sum((r) => r.lavaBelow54Population)),
+    lavaBelow54Population: regions.length === 0 ? Number.NaN : sum((r) => r.lavaBelow54Population),
     aquiferLavaAbove10: regions.length === 0 ? Number.NaN : sum((r) => r.aquiferLavaAbove10),
     lavaSupported: share(sum((r) => r.lavaSupported), sum((r) => r.lava)),
     lavaSkyRegions: regionsWith((r) => r.lavaSky),

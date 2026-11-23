@@ -797,7 +797,8 @@ if (RUN_GROUPS.some((g) => B3_ABYSS_ROCK_GATED[g])) {
 /**
  * A1, A3 and A4's record (SP7a spec §13.1, D30; Task 22; gated at their bounds at the tuning, Task 31), as built in
  * `test/harness/water.ts` (`waterRegionCounts`, `waterParts`): per job over its regions' interiors after the global
- * settle reference, A1's `dryShare` (with `dryShareT`, on T alone over the same population), A3's `lavaBelow54`,
+ * settle reference, A1's `dryShare` (with `dryShareT`, on T alone over the same population), A3's `lavaBelow54` (the
+ * share of tagged voxels at y ≤ the profile's `aquifer.lavaLevel` holding lava, with `lavaBelow54Population`; rulings R21),
  * `aquiferLavaAbove10`, `lavaSupported`, `lavaSkyRegions`, A4's `aquiferBodies`, and recorded with them `skyOpenDeep`,
  * the margin barriers and the pits below sea after settle and in T; with each region's values and its settle and A ms,
  * in `.out/A.<group>.json`.

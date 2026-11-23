@@ -10,6 +10,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import { CAVE_BIOME, CAVE_KIND, MIN_Y } from '../../src/core/constants';
+import { DEFAULTS } from '../../src/core/params/defaults';
 import type { Seed64 } from '../../src/core/hash';
 import { resolveProfile } from '../../src/core/params/profiles';
 import type { Params } from '../../src/core/params/schema';
@@ -97,10 +98,10 @@ function floodedUnderSea(h: Hand): void {
   fill(h, CHEESE, WATER_SOURCE, -15, -15, 36, 40, 0, 0);
 }
 
-/** One region's counts after the reference over the whole view. */
-function counts(h: Hand, interior: WaterBox = ALL): WaterRegionCounts {
+/** One region's counts after the reference over the whole view, A3's first part at `lavaLevel` (the default −54). */
+function counts(h: Hand, interior: WaterBox = ALL, lavaLevel = DEFAULTS.aquifer.lavaLevel): WaterRegionCounts {
   const view = viewOf(h);
-  return waterRegionCounts(view, referenceSettle(view, ALL), interior);
+  return waterRegionCounts(view, referenceSettle(view, ALL), interior, lavaLevel);
 }
 
 describe('A1: the dry share of cave air below y 63 not linked to the sea (SP7a §13.1)', () => {
@@ -162,17 +163,41 @@ describe('A3: deep lava, aquifer lava above −10, supported lava, lava beside s
 
   test('the gully marks the region, the spring is not aquifer lava, falling lava is supported, lava over water is not', () => {
     const c = counts(lavaWorld());
-    expect(c.lavaBelow54).toBe(5);
+    // The gully's five lava voxels are the only tagged voxels at y ≤ −54.
+    expect([c.lavaBelow54, c.lavaBelow54Population]).toEqual([5, 5]);
     expect(c.aquiferLavaAbove10).toBe(1);
     // 5 + 1 + 1 + the source and its 10 falling voxels + 1 over water.
     expect(c.lava).toBe(19);
     expect(c.lavaSupported).toBe(18);
     expect(c.lavaSky).toBe(0);
     const p = waterParts([c]);
-    expect(p.lavaBelow54).toBe(1);
+    expect([p.lavaBelow54, p.lavaBelow54Population]).toEqual([1, 5]);
     expect(p.aquiferLavaAbove10).toBe(1);
     expect(p.lavaSupported).toBeCloseTo(18 / 19, 12);
     expect(p.lavaSkyRegions).toBe(0);
+  });
+
+  test('A3\'s first part (rulings R21 item 6): the share of the tagged voxels at y ≤ aquifer.lavaLevel holding lava, read at the profile\'s level, pooled over voxels; an empty population reads NaN (vacuous)', () => {
+    const h = lavaWorld();
+    // Dry tagged cave air at y −54 over the gully (lava does not climb), and at −53 above it.
+    fill(h, CHEESE, NO_FLUID, -5, -1, -54, -53, 0, 0);
+    const at54 = counts(h);
+    expect([at54.lavaBelow54, at54.lavaBelow54Population]).toEqual([5, 10]);
+    expect(waterParts([at54]).lavaBelow54).toBe(0.5);
+    // The level is read, not the literal: at −53 the population gains y −53; at −55 it is the gully alone.
+    const at53 = counts(h, ALL, -53);
+    expect([at53.lavaBelow54, at53.lavaBelow54Population]).toEqual([5, 15]);
+    const at55 = counts(h, ALL, -55);
+    expect([at55.lavaBelow54, at55.lavaBelow54Population]).toEqual([5, 5]);
+    // Below the gully no tagged voxel: the part is NaN over an empty population, recorded with its size 0.
+    const at56 = counts(h, ALL, -56);
+    expect([at56.lavaBelow54, at56.lavaBelow54Population]).toEqual([0, 0]);
+    const empty = waterParts([at56]);
+    expect(empty.lavaBelow54).toBeNaN();
+    expect(empty.lavaBelow54Population).toBe(0);
+    // Pooled over the regions' voxels (not the share of regions): 5 of 10 and 5 of 5 give 10 of 15.
+    expect(waterParts([at54, at55]).lavaBelow54).toBeCloseTo(10 / 15, 12);
+    expect(waterParts([at54, at56]).lavaBelow54).toBe(0.5);
   });
 
   test('a lava voxel beside the cave air of a sky-connected component reaching 8 below its top counts', () => {
