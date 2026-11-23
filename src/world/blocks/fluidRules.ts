@@ -7,10 +7,10 @@
  * The settle orders a voxel's candidate values source < falling < flowing 1 … last < dry and keeps the least; its value
  * encoding is `FLUID_VALUE_SOURCE` 0, `FLUID_VALUE_FALLING` 1, flowing level k as 1 + k, and `FLUID_VALUE_DRY` 9 above
  * every fluid value. A voxel holding the other type's proto fluid is `block` for a type's rules (the two fixed points
- * never mix), and a water front never enters a voxel whose cave nibble is the abyss (D4).
+ * never mix); a water front enters abyss air as any other (D4 as amended, rulings R23: no abyss stop).
  */
 import {
-  CAVE_BIOME, CORNER_DRY, CORNER_FULL, CORNER_SOLID, FLUID_CAP_LAVA, FLUID_CAP_WATER, FLUID_LAST_LEVEL_LAVA, FLUID_LAST_LEVEL_WATER,
+  CORNER_DRY, CORNER_FULL, CORNER_SOLID, FLUID_CAP_LAVA, FLUID_CAP_WATER, FLUID_LAST_LEVEL_LAVA, FLUID_LAST_LEVEL_WATER,
   FLUID_SEARCH_LAVA, FLUID_SEARCH_WATER, FLUID_STEP_LAVA, FLUID_STEP_WATER,
 } from '../../core/constants';
 import { FLUID_LAVA, FLUID_NONE, FLUID_WATER, fluidFalling, fluidLevel, fluidType } from './fluid';
@@ -18,7 +18,6 @@ import { AIR, FLUID_MODE } from './index';
 import { FLUID_MODE_BLOCK } from './kinds';
 
 // Imported values are read through top-level aliases (hot modules: vitest turns an import binding into a getter).
-const BIOMES = CAVE_BIOME;
 const DRY = CORNER_DRY;
 const FULL = CORNER_FULL;
 const SOLID = CORNER_SOLID;
@@ -39,7 +38,6 @@ const typeOf = fluidType;
 const AIR_STATE = AIR;
 const MODES = FLUID_MODE;
 const MODE_BLOCK = FLUID_MODE_BLOCK;
-const ABYSS = BIOMES.abyss;
 
 /** The settle's value of a source (the least). */
 export const FLUID_VALUE_SOURCE = 0;
@@ -118,8 +116,9 @@ export function splitV0V2(h0: number, h1: number, h2: number, h3: number): boole
 export interface PassableReader { passable(x: number, y: number, z: number): boolean }
 
 /**
- * The proto reads every rule decides on: blocks (`passable`), the proto fluid byte and the cave biome nibble (bits 4-7
- * of the `cave` byte, `caveBiomeOf`) at world voxels.
+ * The proto reads every rule decides on, blocks (`passable`) and the proto fluid byte, plus the cave biome nibble (bits
+ * 4-7 of the `cave` byte, `caveBiomeOf`) at world voxels, which no rule reads since the abyss stop was withdrawn (rulings
+ * R23).
  */
 export interface FluidRuleReader extends PassableReader {
   protoFluid(x: number, y: number, z: number): number;
@@ -253,7 +252,7 @@ function put(out: Int32Array, n: number, dx: number, dy: number, dz: number, val
  * offers into `out` as 5-int tuples (dx, dy, dz, value, dist), at most 9 (the fall, four spreads, four new sources;
  * rulings P2: `out` holds 45 ints), and returns their count, plus 16 when u sits at the cap with a passable spread
  * target (u's `unsettled`). Every fluid read is the proto's (`r.protoFluid`); a voxel holding the other type's proto
- * fluid is `block`; water offers nothing into a voxel whose nibble is the abyss (3).
+ * fluid is `block`; abyss air is no exception (rulings R23).
  * - **Fall:** the voxel below, when passable and not a proto source of `type`: (falling, dist).
  * - **Spread:** when u is a source, or its voxel below is not passable or holds `type` in the proto: level k (0 for a
  *   source or falling u, its level otherwise) spreads `nextLevel(type, k)` at dist + 1 to the sides in
@@ -271,7 +270,7 @@ export function ruleOffers(type: number, r: FluidRuleReader, x: number, y: numbe
   const belowOpen = openFor(r, other, x, y - 1, z);
   const belowProto = r.protoFluid(x, y - 1, z);
   const belowHolds = typeOf(belowProto) === type;
-  if (belowOpen && !(belowHolds && isSourceOf(belowProto, type)) && !(water && r.nibble(x, y - 1, z) === ABYSS)) {
+  if (belowOpen && !(belowHolds && isSourceOf(belowProto, type))) {
     put(out, n++, 0, -1, 0, FLUID_VALUE_FALLING, dist);
   }
   if (value === FLUID_VALUE_SOURCE || !belowOpen || belowHolds) {
@@ -283,7 +282,6 @@ export function ruleOffers(type: number, r: FluidRuleReader, x: number, y: numbe
         const sx = x + SIDE_DX[f]!;
         const sz = z + SIDE_DZ[f]!;
         if (dirs === 0 ? !openFor(r, other, sx, y, sz) : (dirs & (1 << f)) === 0) continue;
-        if (water && r.nibble(sx, y, sz) === ABYSS) continue;
         targets |= 1 << f;
       }
       if (targets !== 0) {
@@ -296,7 +294,7 @@ export function ruleOffers(type: number, r: FluidRuleReader, x: number, y: numbe
     for (let f = 0; f < 4; f++) {
       const tx = x + SIDE_DX[f]!;
       const tz = z + SIDE_DZ[f]!;
-      if (!openFor(r, other, tx, y, tz) || typeOf(r.protoFluid(tx, y, tz)) !== NONE || r.nibble(tx, y, tz) === ABYSS) continue;
+      if (!openFor(r, other, tx, y, tz) || typeOf(r.protoFluid(tx, y, tz)) !== NONE) continue;
       if (openFor(r, other, tx, y - 1, tz) && !isSourceOf(r.protoFluid(tx, y - 1, tz), WATER)) continue;
       let sources = 0;
       for (let g = 0; g < 4; g++) if (isSourceOf(r.protoFluid(tx + SIDE_DX[g]!, y, tz + SIDE_DZ[g]!), WATER)) sources++;

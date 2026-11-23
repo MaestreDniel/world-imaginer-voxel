@@ -665,7 +665,7 @@ describe('the caves instruments on fixtures (SP6a §10.1, C7-C9)', () => {
     expect(waterWallAnyCount(g)).toBe(0);
   });
 
-  test('C7.waterWall after settle (SP7a §13.2): a truncated front or an abyss stop beside dry tagged air; falls and spill rims excluded', () => {
+  test('C7.waterWall after settle (SP7a §13.2): a truncated front beside dry tagged air (no abyss stop, rulings R23); falls and spill rims excluded', () => {
     // A cave of plain tagged air (x 2 … 13, y 40 … 45, z 2 … 13) on a rock floor and one voxel of abyss air at (11, 40, 12).
     const g = rock(16, 16, 60);
     carve(g, K.cheese, 2, 13, 40, 45, 2, 13);
@@ -683,14 +683,12 @@ describe('the caves instruments on fixtures (SP6a §10.1, C7-C9)', () => {
     expect(waterWallCount(g, one(8, 40, 8, packFluid(FLUID_LAVA, 4, false, true)))).toBe(1);
     // A flowing voxel over open air does not spread (§4.1: it falls), so its dry sides are no targets, even flagged.
     expect(waterWallCount(g, one(8, 42, 8, packFluid(FLUID_LAVA, 4, false, true)))).toBe(0);
-    // A water voxel beside dry abyss air (the abyss stop), unflagged; the same voxel beside plain air only is not a wall,
-    // nor is lava beside abyss air (the abyss stops water only).
-    expect(waterWallCount(g, one(10, 40, 12, packFluid(FLUID_WATER, 2)))).toBe(1);
+    // An unflagged water voxel beside dry abyss air is no wall (the settle flows into abyss air as into any, rulings R23),
+    // as beside plain air; flagged there, it is a truncated front like any other.
+    expect(waterWallCount(g, one(10, 40, 12, packFluid(FLUID_WATER, 2)))).toBe(0);
     expect(waterWallCount(g, one(10, 40, 5, packFluid(FLUID_WATER, 2)))).toBe(0);
     expect(waterWallCount(g, one(10, 40, 12, packFluid(FLUID_LAVA, 2)))).toBe(0);
-    // Its neighbour holding settled fluid is not dry air.
-    const both = (x: number, y: number, z: number): number => (y === 40 && z === 12 && (x === 10 || x === 11) ? packFluid(FLUID_WATER, 2) : NO_FLUID);
-    expect(waterWallCount(g, both)).toBe(0);
+    expect(waterWallCount(g, one(10, 40, 12, packFluid(FLUID_WATER, 2, false, true)))).toBe(1);
     // waterWallAny keeps SP6a's count: T's fluid bit beside tagged air, whatever the settle says (a fluid voxel that is
     // not a wall after settle, here an unflagged level-2 voxel in the cave, still counts).
     expect(waterWallAnyCount(g)).toBe(0);

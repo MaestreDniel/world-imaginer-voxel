@@ -354,25 +354,50 @@ describe('settleWindow: the two fixed points, the proto reads and the abyss (SP7
     expect(settle(w).set.size).toBe(0);
   });
 
-  test('the abyss: water never enters a voxel whose cave nibble is 3, and its front there carries no bit 6', () => {
-    const p = settle(plane().setFluid(0, 1, 0, WATER_SOURCE).setCave(1, 1, 0, ABYSS_CAVE));
-    expect(p.at(1, 1, 0)).toBe(NO_FLUID);
-    expect(p.at(2, 1, 0)).toBe(water(4));
-    for (const byte of p.set.values()) expect(byte & 64).toBe(0);
+  /**
+   * A stream into the abyss (rulings R23): in rock, a corridor at y 10 (x 0 … 2, z 0) with a source at (0, 10, 0), a
+   * shaft of abyss air at x 3 (y 2 … 10) and an abyss chamber 2 high on the floor (x 3 … 8, y 2 … 3, z 0).
+   */
+  function intoAbyss(): World {
+    const w = rock();
+    for (let x = 0; x <= 2; x++) w.setBlock(x, 10, 0, AIR);
+    for (let y = 2; y <= 10; y++) w.setBlock(3, y, 0, AIR).setCave(3, y, 0, ABYSS_CAVE);
+    for (let x = 4; x <= 8; x++) for (let y = 2; y <= 3; y++) w.setBlock(x, y, 0, AIR).setCave(x, y, 0, ABYSS_CAVE);
+    return w.setFluid(0, 10, 0, WATER_SOURCE);
+  }
 
-    // A source whose only open neighbours, beside and below, are abyss air: nothing moves.
-    const w = rock().setBlock(1, 1, 0, AIR).setCave(1, 1, 0, ABYSS_CAVE).setBlock(0, 0, 0, AIR).setCave(0, 0, 0, ABYSS_CAVE).setFluid(0, 1, 0, WATER_SOURCE);
-    const e = settle(w);
-    expect(e.set.size).toBe(0);
-    expect(e.visits).toBe(1);
+  test('the abyss is no stop (rulings R23): a stream reaching abyss air falls into it and spreads on its floor', () => {
+    const r = settle(intoAbyss());
+    expect(r.at(2, 10, 0)).toBe(water(2));
+    // The stream's last voxel over the shaft flows on into it (before R23 the front stopped at (2, 10, 0)).
+    expect(r.at(3, 10, 0)).toBe(water(3));
+    for (let y = 2; y <= 9; y++) expect(r.at(3, y, 0), `y ${y}`).toBe(water(0, true));
+    // The landed fall spreads over the chamber's floor as a source would: levels 1 … 5 at x 4 … 8.
+    for (let x = 4; x <= 8; x++) expect(r.at(x, 2, 0), `x ${x}`).toBe(water(x - 3));
+    for (let x = 4; x <= 8; x++) expect(r.at(x, 3, 0)).toBe(NO_FLUID);
+    for (const byte of r.set.values()) expect(byte & 64).toBe(0);
+  });
 
-    // At the cap, an abyss target is no target: no bit 6.
-    const c = settle(staircase(WATER_SOURCE).setCave(13, 6, 0, ABYSS_CAVE));
-    expect(c.at(12, 6, 0)).toBe(water(0, true));
-    expect(c.at(13, 6, 0)).toBe(NO_FLUID);
-    // Lava ignores the nibble.
-    const l = settle(plane().setFluid(0, 1, 0, LAVA_SOURCE).setCave(1, 1, 0, ABYSS_CAVE));
-    expect(l.at(1, 1, 0)).toBe(lava(2));
+  test('a stream falling into the abyss onto its lava (rulings R23): it lands on the lava, and the voxels both reach are lava with bit 6', () => {
+    // A proto lava source on the chamber's floor under the shaft, (3, 2, 0).
+    const r = settle(intoAbyss().setFluid(3, 2, 0, LAVA_SOURCE));
+    // The fall ends on the lava (`block` for water): (3, 3, 0) has landed and spreads east, where (4, 3, 0) has a drop.
+    expect(r.at(3, 4, 0)).toBe(water(0, true));
+    expect(r.at(3, 3, 0)).toBe(water(0, true));
+    expect(r.at(4, 3, 0)).toBe(water(1));
+    expect(r.at(3, 2, 0)).toBe(LAVA_SOURCE);
+    expect(r.set.has('3,2,0')).toBe(false);
+    // Lava spreads levels 2, 4, 6 at x 4 … 6 on the floor; water falls to (4, 2, 0) and spreads over the floor: x 4 … 6
+    // are contacts (§4.1's merge: lava wins, bit 6), x 7 and 8 water alone.
+    expect(r.at(4, 2, 0)).toBe(lava(2, false, true));
+    expect(r.at(5, 2, 0)).toBe(lava(4, false, true));
+    expect(r.at(6, 2, 0)).toBe(lava(6, false, true));
+    expect(r.at(7, 2, 0)).toBe(water(3));
+    expect(r.at(8, 2, 0)).toBe(water(4));
+    // Without the stream, the lava alone: no bit 6.
+    const l = settle(intoAbyss().setFluid(0, 10, 0, NO_FLUID).setFluid(3, 2, 0, LAVA_SOURCE));
+    expect(l.at(4, 2, 0)).toBe(lava(2));
+    expect(l.at(7, 2, 0)).toBe(NO_FLUID);
   });
 
   test('seeds farther than the type\'s cap from the box (Manhattan) are skipped', () => {

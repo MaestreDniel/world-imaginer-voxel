@@ -864,9 +864,9 @@ test('A5 per job after the settle reference (recorded)', async () => {
   }
 }, 900_000 * TIMEOUT_SCALE);
 
-// `A5.abyssWater` (SP7a spec §13.1): the water voxels of the abyss nibble after the settle reference over every region of
-// the run's groups, 0 by construction (the aquifer tests the voxel's own nibble, §1.6; the settle never enters it,
-// §4.1), gated from this commit.
+// `A5.abyssWater` (SP7a spec §13.1): the aquifer's water voxels of the abyss nibble (those whose proto byte holds water;
+// the settle's there, rulings R23, are `waterIntoAbyss`) over every region of the run's groups, 0 by construction (the
+// aquifer tests the voxel's own nibble, §1.6), gated from this commit.
 metricTest('A5', ['abyssWater'], async () => {
   const rs = (await measuredRegions()).filter((m) => m.a5 !== null).map((m) => m.a5!);
   expect(rs.length).toBeGreaterThan(0);

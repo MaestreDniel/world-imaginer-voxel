@@ -298,7 +298,7 @@ describe('C7.waterWall\'s rules reader over a view\'s proto (SP7a §13.2, `proto
     expect(r.passable(0, MIN_Y - 1, 0)).toBe(false);
     // Water at (6, 20, 0): the lava proto east of it is `block` for water's rules, so west is its one open side.
     expect(spreadSides(r, packFluid(FLUID_WATER, 2), 6, 20, 0)).toBe(0b1000);
-    // At (8, 20, 0): the abyss side east stays a spread side (the abyss stop), the lava west does not.
+    // At (8, 20, 0): the abyss side east is a spread side like any other (rulings R23), the lava west is not.
     expect(spreadSides(r, packFluid(FLUID_WATER, 2), 8, 20, 0)).toBe(0b0010);
   });
 });
@@ -668,17 +668,21 @@ describe('A5: the springs and their falls (SP7a §13.1)', () => {
     expect(a5Parts([r.counts]).borderRatio).toBeCloseTo(1, 12);
   });
 
-  test('a water voxel in nibble-3 air counts in abyssWater; water beside abyss air in abyssWaterFace and, on a spread side, waterIntoAbyss', () => {
+  test('abyssWater counts the proto (aquifer) water of nibble-3 air, waterIntoAbyss the water the settle brings into it (rulings R23); abyssWaterFace the water beside dry abyss air', () => {
     const ABYSS_AIR = CHEESE | (CAVE_BIOME.abyss << 4);
     const h: Hand = { block: (_x, y) => (y <= 70 ? STONE : AIR), cells: new Map() };
-    // A water voxel in abyss air (boxed in by rock), and a water source in plain cave air beside a dry abyss voxel.
+    // A proto water voxel in abyss air (boxed in by rock), and a water source in plain cave air beside an abyss voxel
+    // (11, 20, 0) with dry abyss air above it (11, 21, 0): the settle spreads the source into (11, 20, 0).
     h.cells.set(key(5, 20, 0), { cave: ABYSS_AIR, fluid: WATER_SOURCE });
     h.cells.set(key(10, 20, 0), { cave: CHEESE, fluid: WATER_SOURCE });
     h.cells.set(key(11, 20, 0), { cave: ABYSS_AIR, fluid: NO_FLUID });
+    h.cells.set(key(11, 21, 0), { cave: ABYSS_AIR, fluid: NO_FLUID });
     const r = a5Of(h, []);
-    expect(r.counts).toMatchObject({ abyssWater: 1, abyssWaterFace: 1, waterIntoAbyss: 1, abyssAir: 1 });
+    expect(r.settled.get(referenceSettleKey(r.view, 11, 20, 0))).toBe(packFluid(FLUID_WATER, 1));
+    expect(r.counts).toMatchObject({ abyssWater: 1, waterIntoAbyss: 1, abyssWaterFace: 1, abyssAir: 1 });
     const p = a5Parts([r.counts]);
     expect(p.abyssWater).toBe(1);
+    expect(p.waterIntoAbyss).toBe(1);
     // No spring: the spring parts have no population.
     expect(p.borderRatio).toBeNaN();
     expect(p.springsTruncated).toBeNaN();

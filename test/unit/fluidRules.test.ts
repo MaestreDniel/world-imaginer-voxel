@@ -345,15 +345,18 @@ describe('fluidRules: ruleOffers, one step of §4.1\'s rules (D22)', () => {
     ].sort());
   });
 
-  test('the abyss stop: water offers nothing into nibble-3 air (no fall, no spread, no +16 at the cap); lava does', () => {
+  test('no abyss stop (rulings R23): water offers into nibble-3 air as into any other (the fall, the spread, +16 at the cap)', () => {
     const g = new Grid().setFluid(0, 0, 0, WATER_SOURCE).setNibble(1, 0, 0, ABYSS);
     const o = offers(FLUID_WATER, g, 0, 0, 0, FLUID_VALUE_SOURCE, 0);
-    expect(o.count).toBe(3);
-    expect(o.list.some((t) => t.startsWith('1,0,0'))).toBe(false);
+    expect(o.count).toBe(4);
+    expect(o.list).toContain(`1,0,0,${flowing(1)},1`);
     const fall = new Grid(false).setNibble(0, 4, 0, ABYSS);
-    expect(offers(FLUID_WATER, fall, 0, 5, 0, FLUID_VALUE_FALLING, 2)).toEqual({ list: [], count: 0, unsettled: false });
+    expect(offers(FLUID_WATER, fall, 0, 5, 0, FLUID_VALUE_FALLING, 2)).toEqual({ list: [`0,-1,0,${FLUID_VALUE_FALLING},2`], count: 1, unsettled: false });
     const capped = new Grid().setSolid(-1, 0, 0).setSolid(0, 0, 1).setSolid(0, 0, -1).setNibble(1, 0, 0, ABYSS);
-    expect(offers(FLUID_WATER, capped, 0, 0, 0, flowing(2), FLUID_CAP_WATER)).toEqual({ list: [], count: 0, unsettled: false });
+    expect(offers(FLUID_WATER, capped, 0, 0, 0, flowing(2), FLUID_CAP_WATER)).toEqual({ list: [], count: 0, unsettled: true });
+    // A new source between two proto sources in abyss air, as anywhere.
+    const pair = new Grid().setFluid(-1, 0, 0, WATER_SOURCE).setFluid(1, 0, 0, WATER_SOURCE).setNibble(0, 0, 0, ABYSS);
+    expect(offers(FLUID_WATER, pair, -1, 0, 0, FLUID_VALUE_SOURCE, 0).list).toContain(`1,0,0,${FLUID_VALUE_SOURCE},1`);
     const lava = new Grid().setFluid(0, 0, 0, LAVA_SOURCE).setNibble(1, 0, 0, ABYSS);
     expect(offers(FLUID_LAVA, lava, 0, 0, 0, FLUID_VALUE_SOURCE, 0).list).toContain(`1,0,0,${flowing(2)},1`);
   });

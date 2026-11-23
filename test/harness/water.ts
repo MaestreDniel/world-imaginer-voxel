@@ -76,14 +76,17 @@
  *   the island springs with a fall ≥ `ISLAND_SPRING_MIN_FALL` per km² of island area (interior positions holding a
  *   solid run whose bottom lies at or above y 181), over the regions whose profile has islands (floating_islands);
  *   `borderRatio` the springs of every kind on a chunk-border voxel
- *   (local x or z 0 or 15) over the springs, divided by 60/256; `abyssWater` the water voxels of the abyss nibble after
- *   settle; `springsTruncated` (Spec corrections 11, 19) the water springs one of whose voxels carries bit 6 in the
+ *   (local x or z 0 or 15) over the springs, divided by 60/256; `abyssWater` the aquifer's water voxels of the abyss
+ *   nibble (rulings R23: the abyss generates no water, but the settle may carry water into it): the voxels whose proto
+ *   byte (T's, `orig` where the settle changed it) holds water, since T writes water at a tagged voxel only from the
+ *   aquifer (springs and sky-open water are untagged, nibble 0); `springsTruncated` (Spec corrections 11, 19) the water springs one of whose voxels carries bit 6 in the
  *   region's settle outside the water/lava contacts (a contact is SP7b's reaction, counted in A2's `contacts`), over
  *   the water springs, over the default group's regions and the presets group's amplified region; each part per
  *   group over the group's own such regions (a CI job reads only its own). Recorded: `clarkEvans` of the visible
  *   falls' outlets per region over its interior, pooled from the regions' mean nearest-neighbour distances
- *   (`pooledClarkEvans`) over `waterfalls`' regions, with the falls' heights; `waterIntoAbyss` the water voxels stopped at abyss air (C7.waterWall's abyss stops: neither
- *   falling nor at the last level, a dry tagged abyss neighbour on a spread side); `abyssWaterFace` the water voxels
+ *   (`pooledClarkEvans`) over `waterfalls`' regions, with the falls' heights; `waterIntoAbyss` the water the settle brought into
+ *   the abyss (rulings R23): voxels of the abyss nibble holding settled water whose proto byte holds none (a spring's
+ *   stream or a lake's spill that reached abyss air); `abyssWaterFace` the water voxels
  *   with an abyss voxel holding air (non-solid, no fluid) among their 6 neighbours; `adjacentSprings` the springs with
  *   another spring among their 6 neighbours.
  * - A5's review poses (§13.9; `a5Examples`, the plan's choices): per region, by horizontal distance to the spawn, every
@@ -123,11 +126,11 @@ import { springTries, type SpringKind, type SpringList } from '../../src/gen/flu
 import {
   FLUID_LAVA, FLUID_WATER, fluidFalling, fluidLevel, fluidType, fluidUnsettled, hasFluid, LAVA_SOURCE, NO_FLUID, WATER_SOURCE,
 } from '../../src/world/blocks/fluid';
-import { capOf, FLUID_VALUE_FALLING, FLUID_VALUE_SOURCE, isPassable, lastLevelOf, ruleOffers, type FluidRuleReader } from '../../src/world/blocks/fluidRules';
+import { capOf, FLUID_VALUE_FALLING, FLUID_VALUE_SOURCE, isPassable, ruleOffers, type FluidRuleReader } from '../../src/world/blocks/fluidRules';
 import { AIR, STONE } from '../../src/world/blocks/index';
 import type { ColumnView } from '../../src/world/store/store';
 import {
-  BIOME_SHIFT, caveComponents, caveGridOf, deepSkyLabels, FLUID_BIT, GRID_H, GRID_Y0, longestRunYaw, preCaveTops, SOLID_BIT, spreadSides, TAG_MASK,
+  BIOME_SHIFT, caveComponents, caveGridOf, deepSkyLabels, FLUID_BIT, GRID_H, GRID_Y0, longestRunYaw, preCaveTops, SOLID_BIT, TAG_MASK,
   type CaveGrid, type CavePose,
 } from './caveMetrics';
 import { clarkEvans } from './caveZones';
@@ -1020,7 +1023,7 @@ export function waterParts(regions: readonly WaterRegionCounts[]): WaterParts {
 const KIND_WATER = 0;
 const KIND_ISLAND = 1;
 const KIND_LAVA = 2;
-/** A visible water fall's least straight fall (§3.2's `minFall` at its default) and a lava fall's (§13.1). */
+/** A visible water fall's least straight fall (§13.1's visible fall, 8; §3.2's `minFall` default is 7 since Task 28a) and a lava fall's (§13.1). */
 export const A5_WATER_FALL = 8;
 export const A5_LAVA_FALL = 4;
 /** Steep land (§13.1): a land position whose column sample reads `steep` ≥ 1.2 and `offset` ≥ 80. */
@@ -1185,7 +1188,7 @@ export interface A5RegionCounts {
   readonly lavaFalls: number;
   readonly islandSprings: number;
   readonly islandFalls: number;
-  /** The water voxels of the abyss nibble, those stopped at abyss air, those beside abyss air (see the header). */
+  /** The aquifer's water voxels of the abyss nibble, the settle's there (rulings R23), the water voxels beside abyss air (see the header). */
   readonly abyssWater: number;
   readonly waterIntoAbyss: number;
   readonly abyssWaterFace: number;
@@ -1198,8 +1201,7 @@ export interface A5RegionCounts {
 
 /**
  * A5's counts of one region (SP7a spec §13.1; see the header) on `L`'s interior, from its springs (`springs`, the
- * region's list) and their facts (`springFacts` over the same list), its settled bytes and the proto's rules
- * (`protoRuleReader`, for the abyss stops' spread sides).
+ * region's list) and their facts (`springFacts` over the same list) and its settled and proto bytes.
  */
 export function a5RegionCounts(
   view: Pick<RegionView, 'cx0' | 'cz0' | 'w' | 'h' | 'store'>, L: WaterRegion, springs: SpringList, facts: readonly SpringFact[], opts: A5RegionOptions,
@@ -1228,14 +1230,13 @@ export function a5RegionCounts(
   }
   let island = 0;
   for (let p = 0; p < plane; p++) island += islandAt[p]!;
-  // The voxels: abyss cave air and the water by the abyss, read from the abyss's voxels alone (the interior grown by a
-  // block, so a dry abyss voxel just outside it is seen beside the interior's water).
-  const rules = protoRuleReader(view);
+  // The voxels: abyss cave air and the water in and by the abyss, read from the abyss's voxels alone (the interior grown
+  // by a block, so a dry abyss voxel just outside it is seen beside the interior's water).
   let abyssAir = 0;
   let abyssWater = 0;
-  /** The interior's water voxels beside dry abyss voxels; per such voxel, the sides whose neighbour is dry tagged abyss air. */
+  let waterIntoAbyss = 0;
+  /** The interior's water voxels beside dry abyss voxels. */
   const face = new Set<number>();
-  const stopped = new Map<number, number>();
   const water = (j: number, jx: number, jz: number): boolean => inside(jx, jz) && fluidType(fl[j]!) === FLUID_WATER;
   const gx0 = Math.max(0, L.lx0 - 1), gz0 = Math.max(0, L.lz0 - 1), gx1 = Math.min(w, L.lx1 + 1), gz1 = Math.min(d, L.lz1 + 1);
   // Four cells per word where the grid allows it (most of the region holds no abyss voxel): a word with no byte whose
@@ -1260,31 +1261,25 @@ export function a5RegionCounts(
         if (c >> BIOME_SHIFT !== ABYSS || (c & SOLID_BIT) !== 0) continue;
         const b = fl[i]!;
         if (inside(x, z)) {
-          if (fluidType(b) === FLUID_WATER) abyssWater++;
-          else if (caveCell(c) && !hasFluid(b)) abyssAir++;
+          // The aquifer's water is the proto's; the settle's holds none there (`orig`, the proto byte of a changed voxel).
+          if (fluidType(b) === FLUID_WATER) {
+            if (fluidType(L.orig.get(i) ?? b) === FLUID_WATER) abyssWater++;
+            else waterIntoAbyss++;
+          } else if (caveCell(c) && !hasFluid(b)) abyssAir++;
         }
         if (hasFluid(b)) continue;
         if (y > GRID_Y0 && water(i - plane, x, z)) face.add(i - plane);
         if (y < GRID_Y0 + GRID_H - 1 && water(i + plane, x, z)) face.add(i + plane);
         for (let f = 0; f < 4; f++) {
-          // The neighbour j from which side f leads to this voxel.
-          const jx = x - DIR_DX[f]!;
-          const jz = z - DIR_DZ[f]!;
+          // The neighbour j on side f.
+          const jx = x + DIR_DX[f]!;
+          const jz = z + DIR_DZ[f]!;
           if (jx < 0 || jx >= w || jz < 0 || jz >= d) continue;
-          const j = i - DIR_DZ[f]! * w - DIR_DX[f]!;
-          if (!water(j, jx, jz)) continue;
-          face.add(j);
-          if ((c & TAG_MASK) !== 0) stopped.set(j, (stopped.get(j) ?? 0) | (1 << f));
+          const j = i + DIR_DZ[f]! * w + DIR_DX[f]!;
+          if (water(j, jx, jz)) face.add(j);
         }
       }
     }
-  }
-  let waterIntoAbyss = 0;
-  for (const [j, sides] of stopped) {
-    const b = fl[j]!;
-    if (fluidFalling(b) || fluidLevel(b) === lastLevelOf(FLUID_WATER)) continue;
-    const jx = j % w;
-    if ((sides & spreadSides(rules, b, x0 + jx, Math.floor(j / plane) + GRID_Y0, z0 + (((j - jx) / w) % d))) !== 0) waterIntoAbyss++;
   }
   const abyssWaterFace = face.size;
   // The springs.

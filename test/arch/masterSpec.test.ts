@@ -244,7 +244,7 @@
  * The metrics after the settle reference (Task 22) land item 16's A1, A3 and A4 rows in pre-tuning form (populations on
  * the caves regions' interiors after settle, per group; A1's connectivity through tagged non-solid and fluid voxels at
  * y ≤ 62; A3's second part from aquifer cells, `THRESHOLDS.A3.aquiferLavaAbove10` gated from SP7a), C7's `waterWall`
- * read after settle over truncated fronts and abyss stops with a dry target, §6.5's A3 line and item 19's test entry
+ * read after settle over truncated fronts with a dry target (abyss stops until Task 27n withdrew them, rulings R23), §6.5's A3 line and item 19's test entry
  * ("A1-A5 in metrics/caves.metric.ts", an `SP7A_MODULES` row). A2 by origin (Task 23) lands item 16's A2 row in
  * pre-tuning form (the fluid voxels the settle's rules would change in one application, counting the unsettled, over
  * all fluid voxels / the unsettled share outside the water/lava contacts; by origin and per km², the contacts apart).
@@ -3682,6 +3682,8 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(abyss).toContain(`E′ ≤ eMax + \`aquifer.abyssMargin\` ${q.abyssMargin}, C′ > cMin − ${q.abyssMargin} and depth > depthMin − 0.1`);
     expect(abyss).not.toContain('lava may appear there (SP7)');
     expect(abyss).not.toContain('Aquifers are disabled where');
+    // Water may fall into the abyss; the abyss generates none (rulings R23, Task 27n).
+    expect(abyss).toContain('so aquifer water never touches abyss air; the Abyss generates no water (a spring\'s stream or a lake\'s spill that reaches its air falls into it under the settle\'s ordinary rules, the SP7a spec\'s rulings R23) and is lit by lava alone (amended by SP6b and SP7a).');
     // The fast path.
     expect(block).toContain('A tagged voxel more than 4 blocks above that level (beyond the pressure\'s reach), with no lava cell among them and not below `aquifer.lavaLevel`, is air without a distance computation (amended by SP7a).');
     // The Borders paragraph is pinned by its own test (item 7's Borders part, the settle in D).
@@ -3776,7 +3778,8 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(block).toContain('the settled world is their least fixed point from the proto, whatever the processing order');
     expect(block).toContain('Every non-AIR state\'s `FLUID_MODE` is read from the table');
     expect(block).toContain('merged per voxel with lava winning (a contact, kept `unsettled` for SP7b\'s reactions)');
-    expect(block).toContain('A water front never enters a voxel whose cave nibble is the abyss.');
+    expect(block).toContain('A water front enters abyss air as any other (no abyss stop; the SP7a spec\'s rulings R23).');
+    expect(block).not.toContain('A water front never enters a voxel whose cave nibble is the abyss.');
     expect(block).not.toContain('**stops at 16**');
     // The seeds and the budget as a target.
     expect(block).toContain('**Seeds** (SP7a): T records the sections holding in-column seeds in aux B (`seedSections`;');
@@ -3836,7 +3839,7 @@ describe('master spec amendments (SP7a §16)', () => {
       expect(r, `no ${id} row in §6.4`).toBeDefined();
       return r!;
     };
-    expect(row('A5')).toBe('| A5 | springs and falls: visible waterfalls per km² of steep land / lava falls per 100,000 abyss cave-air voxels / island falls per km² of island area / springs on chunk borders over springs ÷ 60/256 / water voxels of the abyss nibble / water springs with a truncated front over water springs. SP7a: over the caves regions\' interiors after the global settle reference, per group over the group\'s own regions of each part: `waterfalls` on a fixed default-profile sample of seed \'42\' holding steep land, not the regions (the lattice chunks (4a, 4b), a, b in −240 … 239, whose column sample holds steep land; the SP7a spec\'s rulings R20 correction; a visible fall a water spring\'s outlet with no block above it and a straight fall ≥ 8; steep land a position whose column sample reads `steep` ≥ 1.2 and `offset` ≥ 80) / `lavaFalls` the biome region\'s and every region\'s with ≥ 50,000 abyss cave-air voxels (a fall ≥ 4) / `islandFalls` floating_islands\' (island area the positions holding a solid run whose bottom ≥ 181) / `borderRatio` every region\'s / `abyssWater` 0 by construction, gated from SP7a / `springsTruncated` the default group\'s and the presets group\'s amplified region (a spring\'s voxels by its lone front, truncated when one carries bit 6 outside the water/lava contact set, as A2\'s unsettled); the others recorded until the tuning; recorded beside them `clarkEvans` of the visible falls, `waterIntoAbyss`, `abyssWaterFace`, `adjacentSprings` (added by SP7a) | 25-100 (the user\'s 50) / ≥ 1 / ≥ 2 / 0.8-1.25 / 0 / set at D31 (SP7a) |');
+    expect(row('A5')).toBe('| A5 | springs and falls: visible waterfalls per km² of steep land / lava falls per 100,000 abyss cave-air voxels / island falls per km² of island area / springs on chunk borders over springs ÷ 60/256 / aquifer water voxels of the abyss nibble / water springs with a truncated front over water springs. SP7a: over the caves regions\' interiors after the global settle reference, per group over the group\'s own regions of each part: `waterfalls` on a fixed default-profile sample of seed \'42\' holding steep land, not the regions (the lattice chunks (4a, 4b), a, b in −240 … 239, whose column sample holds steep land; the SP7a spec\'s rulings R20 correction; a visible fall a water spring\'s outlet with no block above it and a straight fall ≥ 8; steep land a position whose column sample reads `steep` ≥ 1.2 and `offset` ≥ 80) / `lavaFalls` the biome region\'s and every region\'s with ≥ 50,000 abyss cave-air voxels (a fall ≥ 4) / `islandFalls` floating_islands\' (island area the positions holding a solid run whose bottom ≥ 181) / `borderRatio` every region\'s / `abyssWater` 0 by construction (the proto\'s water there; the settle\'s, which may fall into the abyss since the SP7a spec\'s rulings R23, recorded as `waterIntoAbyss`), gated from SP7a / `springsTruncated` the default group\'s and the presets group\'s amplified region (a spring\'s voxels by its lone front, truncated when one carries bit 6 outside the water/lava contact set, as A2\'s unsettled); the others recorded until the tuning; recorded beside them `clarkEvans` of the visible falls, `waterIntoAbyss`, `abyssWaterFace`, `adjacentSprings` (added by SP7a) | 25-100 (the user\'s 50) / ≥ 1 / ≥ 2 / 0.8-1.25 / 0 / set at D31 (SP7a) |');
     // The A5 row sits after A4's.
     const lines = text.split('\n');
     expect(lines.findIndex((l) => l.startsWith('| A5 |'))).toBe(lines.findIndex((l) => l.startsWith('| A4 |')) + 1);
@@ -3856,10 +3859,10 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(max('F3')).toEqual({ idleTicks: 0, idleDiffEntries: 0, idleUnsettledChanged: 0, ticksOutsideFront: 0 });
   });
 
-  test('§6.4\'s C7 row: `waterWall` read after settle over truncated fronts and abyss stops (SP7a spec §16 item 16)', () => {
+  test('§6.4\'s C7 row: `waterWall` read after settle over truncated fronts, no abyss stop (SP7a spec §16 item 16; rulings R23)', () => {
     const c7 = text.split('\n').find((l) => l.startsWith('| C7 |'));
     expect(c7, 'no C7 row in §6.4').toBeDefined();
-    expect(c7).toContain('/ `waterWall`, water voxels horizontally adjacent to tagged air, per km² (default and archipelago), read after settle, over truncated fronts and abyss stops with a dry target (SP7a: the settle reference\'s fluid on the caves regions\' interiors, falls and spill rims excluded; SP6a\'s count recorded as `waterWallAny`);');
+    expect(c7).toContain('/ `waterWall`, water voxels horizontally adjacent to tagged air, per km² (default and archipelago), read after settle, over truncated fronts with a dry target (no abyss stop, the SP7a spec\'s rulings R23) (SP7a: the settle reference\'s fluid on the caves regions\' interiors, falls and spill rims excluded; SP6a\'s count recorded as `waterWallAny`);');
     // The bound stays (spec §13.2: no lock change).
     expect(THRESHOLDS.C7?.waterWall).toEqual({ max: 3.3, activeFrom: 'SP6a' });
   });

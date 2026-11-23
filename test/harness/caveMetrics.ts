@@ -63,8 +63,8 @@
  * - C7.waterWall (SP7a spec §13.2): read after the settle reference (`waterWallCount` over the settled bytes, on the
  *   region's interior, per km² of that interior), the true walls: a settled fluid voxel that is neither falling nor a
  *   spill rim (water level 7, lava level 6: flow, not walls) with a horizontal neighbour that is dry tagged air (tagged,
- *   neither solid nor fluid after settle) into which §4.1's rules would flow but for the cap (the voxel's bit 6) or the
- *   abyss stop (a water voxel beside air of nibble 3): the neighbour lies on one of the voxel's spread sides
+ *   neither solid nor fluid after settle) into which §4.1's rules would flow but for the cap (the voxel's bit 6; since
+ *   rulings R23 no abyss stop, water enters abyss air as any other): the neighbour lies on one of the voxel's spread sides
  *   (`spreadSides`: `nearestDropDirsFor` over the proto, every open side when no drop is in reach; none when the voxel
  *   falls instead), so a front cut at the cap whose dry neighbour lies off its nearest-drop sides is not one; a water/lava
  *   contact's bit 6 (§4.1's merge, SP7b's reaction, counted in `A2.contacts`) is not a cut front (Task 23). SP6a's count,
@@ -129,7 +129,7 @@
  * plain objects of numbers, strings, number arrays and typed arrays that each own their whole buffer, so a structured
  * clone carries them and `countsTransfer` lists the buffers to move.
  */
-import { CARVER_WINDOW_R, CAVE_BIOME, CAVE_BIOME_NAMES, CAVE_KIND, caveBiomeOf, caveKindOf } from '../../src/core/constants';
+import { CARVER_WINDOW_R, CAVE_BIOME_NAMES, CAVE_KIND, caveBiomeOf, caveKindOf } from '../../src/core/constants';
 import { fnv1a32 } from '../../src/core/hash';
 import type { Params } from '../../src/core/params/schema';
 import { Xoshiro128 } from '../../src/core/rng';
@@ -1560,8 +1560,8 @@ const SIDE_DZ = [-1, 0, 1, 0] as const;
  * type: it falls instead); else the sides toward the nearest drop over the voxels open for its type (passable, not
  * holding the other type's proto fluid, which is `block` for its rules) that hold no proto source of its type (rulings
  * R21: the search skips them, as the settle's does), or every open side when no drop is in reach.
- * Unlike `ruleOffers`' targets it keeps the abyss sides (where a water front stops, the abyss stop) and reads no cap
- * (the byte's bit 6 says whether the front is cut there). A falling byte reads as not a source.
+ * Unlike `ruleOffers`' targets it reads no cap (the byte's bit 6 says whether the front is cut there). A falling byte
+ * reads as not a source.
  */
 export function spreadSides(r: FluidRuleReader, byte: number, x: number, y: number, z: number): number {
   const type = fluidType(byte);
@@ -1602,12 +1602,11 @@ const NO_CONTACTS: ReadonlySet<number> = new Set();
  * C7.waterWall's count after settle (SP7a spec §13.2; see the header): over the voxels of `box` (world x0 ≤ x < x1,
  * z0 ≤ z < z1, every y; default the grid), `settled` reading each voxel's settled fluid byte, the fluid voxels neither
  * falling nor at their type's last level (`lastLevelOf`: the spill rims) with a horizontal neighbour in the grid that is
- * dry tagged air (tagged, not solid, no settled fluid) into which §4.1's rules would flow but for a stop: the neighbour
+ * dry tagged air (tagged, not solid, no settled fluid) into which §4.1's rules would flow but for the cap: the neighbour
  * lies on one of the voxel's spread sides (`spreadSides` over `rules`, the proto's reader; default `gridRuleReader`) and
- * either the voxel's bit 6 is set (a truncated front with a dry target) or, for water, the neighbour's nibble is the
- * abyss (an abyss stop). A voxel of `contacts` (the water/lava contacts, `refs.ts`' `referenceSettleOrigins`, keyed by
- * the grid's index, `cellAt`) carries bit 6 as §4.1's merge sets it on a contact, not as a truncated front (SP7a Task
- * 23), so only its abyss stop could make it a wall.
+ * the voxel's bit 6 is set (a truncated front with a dry target; no abyss stop since rulings R23). A voxel of `contacts`
+ * (the water/lava contacts, `refs.ts`' `referenceSettleOrigins`, keyed by the grid's index, `cellAt`) carries bit 6 as
+ * §4.1's merge sets it on a contact, not as a truncated front (SP7a Task 23), so it is no wall.
  */
 export function waterWallCount(
   g: CaveGrid, settled: (x: number, y: number, z: number) => number,
@@ -1630,19 +1629,18 @@ export function waterWallCount(
         const type = fluidType(b);
         if (fluidLevel(b) === lastLevelOf(type)) continue;
         const i = (y - GRID_Y0) * plane + z * w + x;
-        const cap = fluidUnsettled(b) && !contacts.has(i);
-        // The sides whose neighbour is dry tagged air with a stop (the cap, or the abyss for water); then, only for such
-        // a voxel, whether one of them is a spread side.
-        let stopped = 0;
+        if (!fluidUnsettled(b) || contacts.has(i)) continue;
+        // The sides whose neighbour is dry tagged air; then, only for such a voxel, whether one of them is a spread side.
+        let dry = 0;
         for (let f = 0; f < 4; f++) {
           const nx = x + SIDE_DX[f]!;
           const nz = z + SIDE_DZ[f]!;
           if (nx < 0 || nx >= w || nz < 0 || nz >= d) continue;
           const c = cells[i + SIDE_DZ[f]! * w + SIDE_DX[f]!]!;
           if ((c & TAG_MASK) === 0 || (c & SOLID_BIT) !== 0 || hasFluid(settled(x0 + nx, y, z0 + nz))) continue;
-          if (cap || (type === FLUID_WATER && c >> BIOME_SHIFT === CAVE_BIOME.abyss)) stopped |= 1 << f;
+          dry |= 1 << f;
         }
-        if (stopped !== 0 && (stopped & spreadSides(rules, b, x0 + x, y, z0 + z)) !== 0) count++;
+        if (dry !== 0 && (dry & spreadSides(rules, b, x0 + x, y, z0 + z)) !== 0) count++;
       }
     }
   }

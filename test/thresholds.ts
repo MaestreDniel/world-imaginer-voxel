@@ -159,9 +159,9 @@ export const THRESHOLDS: ThresholdTable = {
   // its `metricTest` writes `.out/A3.json`), 0 by construction (springs are untagged; rulings P19), gated from its commit; A1-A4's other parts
   // are recorded in `.out/A.<group>.json` until the tuning.
   A3: { aquiferLavaAbove10: { max: 0, activeFrom: 'SP7a' } },
-  // SP7a spec §13.1 (Task 24): the water voxels of the abyss nibble after the settle reference over the caves regions'
-  // interiors, every group (`caves.metric.ts`, `.out/A5.json`), 0 by construction (§1.6's own-nibble test, §4.1's stop),
-  // gated from its commit; A5's other parts are recorded per group in `.out/A5.<group>.json` until the tuning (Spec
+  // SP7a spec §13.1 (Task 24): the aquifer's water voxels of the abyss nibble (proto water there; since rulings R23 the
+  // settle may carry water into the abyss, recorded as `waterIntoAbyss`) over the caves regions' interiors, every group
+  // (`caves.metric.ts`, `.out/A5.json`), 0 by construction (§1.6's own-nibble test), gated from its commit; A5's other parts are recorded per group in `.out/A5.<group>.json` until the tuning (Spec
   // correction 11).
   A5: { abyssWater: { max: 0, activeFrom: 'SP7a' } },
   // SP4a spec §9.1 (D26): `grassSky0`, the master's grass at sky 0, recorded from SP4a (`light.metric.ts`), gated by SP6a.
