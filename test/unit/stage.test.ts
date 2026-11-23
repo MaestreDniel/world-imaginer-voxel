@@ -35,7 +35,7 @@ describe('registry', () => {
     }
     // A cave edit dirties the terrain stage and what reads it, never the 2D stages (no map tile is redrawn); so do an
     // aquifer edit and a springs edit.
-    for (const patch of [{ caves: { cheese: { offset: 0.2 } } }, { aquifer: { barrierBand: 30 } }, { springs: { water: { tries: 5 } } }] as const) {
+    for (const patch of [{ caves: { cheese: { offset: 0.2 } } }, { aquifer: { barrierBand: 35 } }, { springs: { water: { tries: 5 } } }] as const) {
       const moved = applyPatch(SCHEMA, DEFAULTS, patch);
       if (!moved.ok) throw new Error('bad patch');
       expect(dirtyStages(stageHashes(DEFAULTS), stageHashes(moved.value))).toEqual(['terrain', 'decorate', 'light', 'mesh']);

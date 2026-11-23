@@ -199,13 +199,15 @@ describe('the aquifer voxel rule (SP7a spec §1.4-§1.6, D20, Spec correction 7)
     expect(pressure(-20, pk(FLUID_WATER, -23), lm23)).toBe(0); // equal levels, neither fluid at −20
   });
 
-  test('equal statuses, or d2 − d1 = 25, never place a barrier: s1 fills at y ≤ level, air above (Spec correction 7)', () => {
+  test('equal statuses, or d2 − d1 = barrierBand (30), never place a barrier: s1 fills at y ≤ level, air above (Spec correction 7)', () => {
+    const band = ST.barrierBand;
+    expect(band).toBe(30); // 25 until Task 27l's lever (SP7a §1.5, §13.8; rulings R21)
     expect(voxelRule(ST, 40, 3, W63, 4, W63, 3, false, false)).toBe(WATER_SOURCE);
     expect(voxelRule(ST, 63, 3, W63, 4, W63, 3, false, false)).toBe(WATER_SOURCE);
     expect(voxelRule(ST, 64, 3, W63, 4, W63, 3, false, false)).toBe(0);
-    expect(voxelRule(ST, 40, 10, W63, 35, EMPTY, 3, false, false)).toBe(WATER_SOURCE);
-    expect(voxelRule(ST, 40, 10, EMPTY, 35, W63, 3, false, false)).toBe(0);
-    expect(voxelRule(ST, 40, 10, W63, 34, EMPTY, 0, false, false)).toBe(BARRIER); // d2 − d1 = 24: inside the band
+    expect(voxelRule(ST, 40, 10, W63, 10 + band, EMPTY, 3, false, false)).toBe(WATER_SOURCE);
+    expect(voxelRule(ST, 40, 10, EMPTY, 10 + band, W63, 3, false, false)).toBe(0);
+    expect(voxelRule(ST, 40, 10, W63, 9 + band, EMPTY, 0, false, false)).toBe(BARRIER); // d2 − d1 = band − 1: inside the band
   });
 
   test('water 63 against empty at d2 − d1 = 5 with nb 0: a barrier at y 40, none at y 90', () => {
@@ -229,9 +231,9 @@ describe('the aquifer voxel rule (SP7a spec §1.4-§1.6, D20, Spec correction 7)
   test('water against lava, both fluid at y: a barrier whatever nb (pressure 2)', () => {
     const wm20 = pk(FLUID_WATER, -20);
     const lm23 = pk(FLUID_LAVA, -23);
-    expect(voxelRule(ST, -30, 10, wm20, 34, lm23, -3, false, false)).toBe(BARRIER);
+    expect(voxelRule(ST, -30, 10, wm20, 9 + ST.barrierBand, lm23, -3, false, false)).toBe(BARRIER);
     expect(voxelRule(ST, -30, 10, lm23, 11, wm20, -3, false, false)).toBe(BARRIER);
-    expect(voxelRule(ST, -30, 10, wm20, 35, lm23, -3, false, false)).toBe(WATER_SOURCE); // outside the band
+    expect(voxelRule(ST, -30, 10, wm20, 10 + ST.barrierBand, lm23, -3, false, false)).toBe(WATER_SOURCE); // outside the band
   });
 
   test('the abyss: a water status reads as empty inside it (air); in the margin water is barrier rock at y ≤ level, air above; lava unaffected', () => {

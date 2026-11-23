@@ -56,7 +56,7 @@ const VERDICT: Readonly<Record<(typeof AQUIFER_LEAVES)[number], string>> = {
 };
 /** Each leaf's own witness, searched past the class columns (`aquiferWitness(CTX, path, all)`). */
 const WITNESS: Readonly<Record<(typeof AQUIFER_LEAVES)[number], string>> = {
-  'aquifer.enabled': 'aquifer witness column (-24882, 19024)',
+  'aquifer.enabled': 'aquifer witness column (-23718, 24314)',
   'aquifer.surfaceBand': 'aquifer witness column (-24882, 19024)',
   'aquifer.thresholds.fullInland': 'aquifer witness column (-29063, 7580)',
   'aquifer.thresholds.fullOcean': 'aquifer witness column (-24882, 19024)',
@@ -65,7 +65,7 @@ const WITNESS: Readonly<Record<(typeof AQUIFER_LEAVES)[number], string>> = {
   'aquifer.lavaMaxLevel': 'aquifer witness column (-24882, 19024)',
   'aquifer.lavaThreshold': 'aquifer witness column (-7222, 14133)',
   'aquifer.lavaLevel': 'aquifer witness column (-23718, 24314)',
-  'aquifer.barrierBand': 'aquifer witness column (-24882, 19024)',
+  'aquifer.barrierBand': 'aquifer witness column (-23718, 24314)',
   'aquifer.abyssMargin': 'aquifer witness column (23901, 1718)',
   'aquifer.noises.floodedness': 'aquifer witness column (-23718, 24314)',
   'aquifer.noises.spread': 'aquifer witness column (-24882, 19024)',

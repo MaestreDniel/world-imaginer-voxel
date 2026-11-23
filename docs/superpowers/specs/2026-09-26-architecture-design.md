@@ -764,7 +764,7 @@ SP2a uses the 2D estimate `surfaceEst = offset` (after rivers and lakes). SP3b a
 
 **Voxels** (SP7a, its spec §1.7, D17, D19): every tagged (cave) non-solid voxel asks the aquifer in T, after the cave-biome step and before the surface pass (which then sees cave water and barrier rock); it takes its nearest centre's fluid at y ≤ that level (a level is the highest fluid y), air above, keeping its tag and nibble. Untagged air (the sky, overhangs, the gap under a floating island) takes water iff y ≤ ⌊`surfaceWaterLevel`⌋ at the position. Neither rule reads the column's `top`, so `fluidAt`, `barrierAt` and `terrainSolidAt` are point functions equal to T, and `WORLD_SURFACE_WG` comes from the highest fluid voxel the step tracks per position. `aquifer.enabled` false leaves cave air dry.
 
-**Barriers.** When the two nearest centres have different statuses and `d2 − d1 <` `aquifer.barrierBand` 25, MC's pressure formula plus the barrier noise (`aquifer.noises.barrier`) decides; a positive result places a barrier: the voxel becomes solid, its tag and nibble cleared, its state the surface pass's (stone, deepslate, rule 4's skin or the abyss's strata) (amended by SP7a).
+**Barriers.** When the two nearest centres have different statuses and `d2 − d1 <` `aquifer.barrierBand` 30, MC's pressure formula plus the barrier noise (`aquifer.noises.barrier`) decides; a positive result places a barrier: the voxel becomes solid, its tag and nibble cleared, its state the surface pass's (stone, deepslate, rule 4's skin or the abyss's strata) (amended by SP7a).
 
 **Abyss.** In the abyss box of §3.10 as SP6b builds it (E′ ≤ `caves.biomes.abyss.eMax` −0.5, C′ > `caves.biomes.abyss.cMin` −0.1 and depth ≥ `caves.biomes.abyss.depthMin` 1.0, on the perturbed fields), aquifer water is disabled in the abyss and becomes barrier rock in a margin around it on every side (the depth margin 0.1 and a lateral margin); lava is not affected. A voxel whose own cave nibble is the abyss takes air for a water status; one in the margin (E′ ≤ eMax + `aquifer.abyssMargin` 0.06, C′ > cMin − 0.06 and depth > depthMin − 0.1, on the unjittered fields) takes barrier rock where a water status would fill it, so water never touches abyss air; the Abyss holds no water and is lit by lava alone (amended by SP6b and SP7a).
 
@@ -772,7 +772,7 @@ SP2a uses the 2D estimate `surfaceEst = offset` (after rivers and lakes). SP3b a
 
 **Borders.** T records the sections holding in-column seeds in aux B; D adds the cross-column seeds (3.14; amended by SP7a, the SP7a spec §1.7, §4.2). No voxel is flagged: the proto carries no bit 6.
 
-**Parameters** (the `aquifer` group, Terrain scope; SP7a): `aquifer.enabled` true; `surfaceBand` 12; `thresholds.{fullInland 0.8, fullOcean −0.3, partialInland 0.4, partialOcean −0.8}`; `lavaMaxLevel` −10; `lavaThreshold` 0.3; `lavaLevel` −54; `barrierBand` 25; `abyssMargin` 0.06; `noises.{floodedness λ 128, spread λ 32, lava λ 2, barrier λ 8}`, 3D, one octave each.
+**Parameters** (the `aquifer` group, Terrain scope; SP7a): `aquifer.enabled` true; `surfaceBand` 12; `thresholds.{fullInland 0.8, fullOcean −0.3, partialInland 0.4, partialOcean −0.8}`; `lavaMaxLevel` −10; `lavaThreshold` 0.3; `lavaLevel` −54; `barrierBand` 30; `abyssMargin` 0.06; `noises.{floodedness λ 128, spread λ 32, lava λ 2, barrier λ 8}`, 3D, one octave each.
 
 ### 3.10 Biomes
 

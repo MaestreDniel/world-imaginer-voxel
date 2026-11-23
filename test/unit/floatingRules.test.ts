@@ -480,8 +480,9 @@ describe('islands.enabled on trees that do not match it (amplified\'s window, se
   // 22): a run the flag takes off the sky-open palette whose top lies under tagged cave air takes rule 4's cave floor
   // instead (default 6,546 voxels and 1,638 positions before it, amplified 13,651). SP7a's aquifer (Task 13): its
   // barriers turn some of those runs' cave air to rock (default 6,570 voxels and 1,640 positions before it, amplified
-  // 13,678, 3,623 and 2,964 snow → stone).
-  test.each([['default', 6546, 1636, 36, 0, 0], ['amplified', 13647, 3621, 42, 2962, 15]] as const)('%s with the flag on: the same solidity and water (but carved voxels at wet positions under a run above y 180, SP6a §2.4); states change only where a run lies above y 180, stage == reference == compiled.state there', (id, wantVoxels, wantPositions, wantColumns, wantSnowToStone, wantCarved) => {
+  // 13,678, 3,623 and 2,964 snow → stone). Task 27l's `aquifer.barrierBand` 30 (rulings R21) moves two voxels in each (default 6,546
+  // and amplified 13,647 before it).
+  test.each([['default', 6548, 1636, 36, 0, 0], ['amplified', 13649, 3621, 42, 2962, 15]] as const)('%s with the flag on: the same solidity and water (but carved voxels at wet positions under a run above y 180, SP6a §2.4); states change only where a run lies above y 180, stage == reference == compiled.state there', (id, wantVoxels, wantPositions, wantColumns, wantSnowToStone, wantCarved) => {
     const params = resolveProfile(id);
     const on = withFlag(params, true), off = withFlag(params, false);
     const probeSc = createSurfaceContext(on);
