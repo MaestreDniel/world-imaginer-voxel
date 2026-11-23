@@ -69,7 +69,7 @@
  *   (§4.1: a voxel's distance is the least over all its feeders). `waterfalls` the water springs (kind 0, §3.2) whose
  *   outlet has no non-air block above it up to y 319 and a fall ≥ 8, per km² of steep land (interior positions with a
  *   ground top ≥ 63 whose column sample reads `steep` ≥ 1.2 and `offset` ≥ 80, `steepMaskOf`), over the default group's
- *   regions; `lavaFalls` the lava springs with a fall ≥ 4 per 100,000 abyss cave-air voxels (cave voxels of the abyss
+ *   regions (recorded: the spec's part reads a steep-land sample instead, `waterfallSample.ts`, rulings R20); `lavaFalls` the lava springs with a fall ≥ 4 per 100,000 abyss cave-air voxels (cave voxels of the abyss
  *   nibble with no fluid after settle), over the biome region and every region with ≥ 50,000 of them; `islandFalls`
  *   the island springs with a fall ≥ `ISLAND_SPRING_MIN_FALL` per km² of island area (interior positions holding a
  *   solid run whose bottom lies at or above y 181), over the regions whose profile has islands (floating_islands);
