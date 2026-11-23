@@ -24,7 +24,10 @@
  * - **The column step** (`aquiferColumn`, §1.7-§1.8, D19): untagged air takes water at y ≤ ⌊`surfaceWaterLevel`⌋ at the
  *   nearest quart corner; tagged air the voxel rule, over a per-job status cache of 3 × 35 × 3 cells (Spec correction 14).
  *   Its fast path skips a voxel more than 4 blocks above every level of its 12 candidates (beyond the pressure's reach,
- *   so no barrier and no fluid) when none of them is lava and the voxel is not below `lavaLevel`.
+ *   so no barrier and no fluid) when none of them is lava and the voxel is not below `lavaLevel`; where its 12 candidates
+ *   share one status (all empty and non-lava among them, §1.8's second lever) it reads no distance, since the two
+ *   nearest then hold that status whatever their distances (no barrier: s1 = s2); elsewhere the two nearest come from
+ *   the neighbourhood's 12 cache entries, listed once per neighbourhood.
  * - **The inputs** (`aquiferOf(ctx)`, Task 13): `ctx.params.aquifer` (the schema's `aquifer` group, §1.9) and its four
  *   noises, the schema instances `aquifer.noises.<name>` (`noiseFor`), memoised per GenContext; `aquiferInputs` builds the
  *   same from explicit settings and noise definitions (the tests' oracle; rulings P4).
@@ -378,7 +381,8 @@ const HOODS = 2 * HOOD_ROWS * 2;
  * The status cache of one T job (§1.8, Spec correction 14): the 3 × 35 × 3 cells i cx − 1 … cx + 1, j −7 … 27,
  * k cz − 1 … cz + 1 that a column's candidates reach (entry ((i − cx + 1)·35 + j + 7)·3 + k − cz + 1), each status and
  * centre filled on first use; and each neighbourhood's (the 12 candidates of a base cell i0 cx − 1 … cx, j0 −6 … 26,
- * k0 cz − 1 … cz; entry ((i0 − cx + 1)·33 + j0 + 6)·2 + k0 − cz + 1) highest level and whether one of its cells is lava;
+ * k0 cz − 1 … cz; entry ((i0 − cx + 1)·33 + j0 + 6)·2 + k0 − cz + 1) highest level, whether one of its cells is lava,
+ * whether its 12 cells share one status (and that status) and its 12 cache entries in `cellCandidates`' order;
  * and the 9 grid columns' (16i, 16k) `offset` and `surfaceWaterLevel` (entry (i − cx + 1)·3 + k − cz + 1, D18's 9
  * `samplePoint` calls per T column). `aquiferColumn` resets it for its column.
  */
@@ -391,6 +395,9 @@ export interface AquiferScratch {
   readonly hoodFilled: Uint8Array;
   readonly hoodMax: Int32Array;
   readonly hoodLava: Uint8Array;
+  readonly hoodUniform: Uint8Array;
+  readonly hoodStatus: Int32Array;
+  readonly hoodEntries: Int32Array;
   readonly pointFilled: Uint8Array;
   readonly pointOffset: Float64Array;
   readonly pointLevel: Float64Array;
@@ -401,6 +408,7 @@ export function createAquiferScratch(): AquiferScratch {
     cx: 0, cz: 0,
     filled: new Uint8Array(CACHE_CELLS), status: new Int32Array(CACHE_CELLS), centre: new Int32Array(3 * CACHE_CELLS),
     hoodFilled: new Uint8Array(HOODS), hoodMax: new Int32Array(HOODS), hoodLava: new Uint8Array(HOODS),
+    hoodUniform: new Uint8Array(HOODS), hoodStatus: new Int32Array(HOODS), hoodEntries: new Int32Array(12 * HOODS),
     pointFilled: new Uint8Array(9), pointOffset: new Float64Array(9), pointLevel: new Float64Array(9),
   };
 }
@@ -428,27 +436,35 @@ function cachedCell(inp: AquiferInputs, sc: AquiferScratch, i: number, j: number
   return e;
 }
 
-/** The neighbourhood entry of base cell (i0, j0, k0), its highest level and lava flag filled on first use. */
-function cachedHood(inp: AquiferInputs, sc: AquiferScratch, i0: number, j0: number, k0: number): number {
-  const h = ((i0 - sc.cx + 1) * HOOD_ROWS + j0 - HOOD_J_MIN) * 2 + k0 - sc.cz + 1;
-  if (sc.hoodFilled[h] === 0) {
-    let max = EMPTY_LEVEL;
-    let lava = 0;
-    for (let di = 0; di <= 1; di++) {
-      for (let dj = -1; dj <= 1; dj++) {
-        for (let dk = 0; dk <= 1; dk++) {
-          const s = sc.status[cachedCell(inp, sc, i0 + di, j0 + dj, k0 + dk)]!;
-          const l = levelOfStatus(s);
-          if (l > max) max = l;
-          if (typeOfStatus(s) === LAVA) lava = 1;
-        }
+/**
+ * Fills neighbourhood entry h = ((i0 − cx + 1)·33 + j0 + 6)·2 + k0 − cz + 1 of base cell (i0, j0, k0), on first use: its 12 cells' cache entries in `cellCandidates`' order, their
+ * highest level, whether one is lava, and whether all 12 share one status (that status in `hoodStatus`).
+ */
+function fillHood(inp: AquiferInputs, sc: AquiferScratch, h: number, i0: number, j0: number, k0: number): void {
+  let max = EMPTY_LEVEL;
+  let lava = 0;
+  let uniform = 1;
+  let first = 0;
+  let n = 12 * h;
+  for (let di = 0; di <= 1; di++) {
+    for (let dj = -1; dj <= 1; dj++) {
+      for (let dk = 0; dk <= 1; dk++) {
+        const e = cachedCell(inp, sc, i0 + di, j0 + dj, k0 + dk);
+        const s = sc.status[e]!;
+        if (n === 12 * h) first = s;
+        else if (s !== first) uniform = 0;
+        sc.hoodEntries[n++] = e;
+        const l = levelOfStatus(s);
+        if (l > max) max = l;
+        if (typeOfStatus(s) === LAVA) lava = 1;
       }
     }
-    sc.hoodMax[h] = max;
-    sc.hoodLava[h] = lava;
-    sc.hoodFilled[h] = 1;
   }
-  return h;
+  sc.hoodMax[h] = max;
+  sc.hoodLava[h] = lava;
+  sc.hoodUniform[h] = uniform;
+  sc.hoodStatus[h] = first;
+  sc.hoodFilled[h] = 1;
 }
 
 /** `sc` emptied for column (cx, cz). */
@@ -504,11 +520,48 @@ function nearestTwo(inp: AquiferInputs, sc: AquiferScratch, x: number, y: number
   N_S2 = s2;
 }
 
+/**
+ * `nearestTwo` over neighbourhood entry h's 12 listed cache entries (filled), the column step's fast form: the same
+ * order, so the same ties.
+ */
+function nearestTwoOfHood(sc: AquiferScratch, x: number, y: number, z: number, h: number): void {
+  const centre = sc.centre;
+  const status = sc.status;
+  const entries = sc.hoodEntries;
+  let d1 = Infinity;
+  let d2 = Infinity;
+  let s1 = EMPTY;
+  let s2 = EMPTY;
+  for (let n = 12 * h, end = n + 12; n < end; n++) {
+    const e = entries[n]!;
+    const dx = x - centre[3 * e]!;
+    const dy = y - centre[3 * e + 1]!;
+    const dz = z - centre[3 * e + 2]!;
+    const d = dx * dx + dy * dy + dz * dz;
+    if (d < d1) {
+      d2 = d1;
+      s2 = s1;
+      d1 = d;
+      s1 = status[e]!;
+    } else if (d < d2) {
+      d2 = d;
+      s2 = status[e]!;
+    }
+  }
+  N_D1 = d1;
+  N_D2 = d2;
+  N_S1 = s1;
+  N_S2 = s2;
+}
+
 /** Whether the abyss margin can decide at height y: outside the abyss, where s1's water would fill (y ≤ its level). */
 const marginDecides = (y: number, s1: number, abyss: boolean): boolean => !abyss && typeOfStatus(s1) === WATER && y <= levelOfStatus(s1);
 
 /** Each position's ⌊`surfaceWaterLevel`⌋ at its nearest quart corner (−∞ on land), per column index `lz·16 + lx`. */
 const SKY_LEVEL = new Float64Array(256);
+/** The fast path's neighbourhood entry parts per lx (the i0 part) and per lz (the k0 part) of the column (§1.8). */
+const HOOD_X = new Int32Array(16);
+const HOOD_Z = new Int32Array(16);
 
 /** `aquiferColumn`'s body; `fast` turns on §1.8's fast path. */
 function columnStep(
@@ -531,6 +584,10 @@ function columnStep(
   }
   waterV.fill(0, 0, 256);
   fluid.fill(0, 0, 256);
+  for (let l = 0; l < 16; l++) {
+    HOOD_X[l] = (FLOOR((x0 + l - OFFSET_XZ) / CELL_XZ) - s.cx + 1) * HOOD_ROWS * 2;
+    HOOD_Z[l] = FLOOR((z0 + l - OFFSET_XZ) / CELL_XZ) - s.cz + 1;
+  }
   for (let v = 256; v < 98304; v++) {
     let f = 0;
     if (solid[v] === 0) {
@@ -542,16 +599,29 @@ function columnStep(
       } else if (enabled) {
         const x = x0 + (p & 15);
         const z = z0 + (p >> 4);
-        const i0 = FLOOR((x - OFFSET_XZ) / CELL_XZ);
         const j0 = FLOOR((y + OFFSET_Y) / CELL_Y);
-        const k0 = FLOOR((z - OFFSET_XZ) / CELL_XZ);
         let skip = false;
-        if (fast && y >= lavaLevel) {
-          const h = cachedHood(inp, sc, i0, j0, k0);
-          skip = sc.hoodLava[h] === 0 && y > sc.hoodMax[h]! + FAST_REACH;
+        if (fast) {
+          const h = HOOD_X[p & 15]! + (j0 - HOOD_J_MIN) * 2 + HOOD_Z[p >> 4]!;
+          if (sc.hoodFilled[h] === 0) {
+            fillHood(inp, sc, h, FLOOR((x - OFFSET_XZ) / CELL_XZ), j0, FLOOR((z - OFFSET_XZ) / CELL_XZ));
+          }
+          if (y >= lavaLevel && sc.hoodLava[h] === 0 && y > sc.hoodMax[h]! + FAST_REACH) {
+            skip = true;
+          } else if (sc.hoodUniform[h] !== 0) {
+            // One status among the 12 candidates: the two nearest hold it whatever their distances.
+            const u = sc.hoodStatus[h]!;
+            N_D1 = 0;
+            N_D2 = 0;
+            N_S1 = u;
+            N_S2 = u;
+          } else {
+            nearestTwoOfHood(sc, x, y, z, h);
+          }
+        } else {
+          nearestTwo(inp, sc, x, y, z, FLOOR((x - OFFSET_XZ) / CELL_XZ), j0, FLOOR((z - OFFSET_XZ) / CELL_XZ));
         }
         if (!skip) {
-          nearestTwo(inp, sc, x, y, z, i0, j0, k0);
           const abyss = tag >> 4 === ABYSS;
           const margin = marginDecides(y, N_S1, abyss) && inAbyssMargin(inp, pick, pass, x, y, z);
           const r = ruleOf(st, y, N_D1, N_S1, N_D2, N_S2, 0, abyss, margin, noise, x, z);
