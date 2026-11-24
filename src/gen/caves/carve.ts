@@ -222,7 +222,8 @@ const LISTS = new WeakMap<CarverCache, ColumnPaths>();
 /**
  * The entries of column (cx, cz) through `cache`, rebuilt when the column changes. An ellipsoid's range holds every
  * voxel of the column whose centre lies within (centre ± rh) horizontally and (centre ± rv) vertically, widened by a
- * block (the test decides: a voxel outside the open box has d ≥ 1), clipped to the column and to y −63 … 319.
+ * block (the test decides: a voxel outside the open box has d ≥ 1), clipped to the column and to y −63 … 319. A source
+ * `carverMayReach` rules out (Task 31p) would add no entry, so its path is not built (`pathNear`).
  */
 function columnPaths(cache: CarverCache, cx: number, cz: number): ColumnPaths {
   let L = LISTS.get(cache);
@@ -238,7 +239,8 @@ function columnPaths(cache: CarverCache, cx: number, cz: number): ColumnPaths {
   for (let sz = cz - R; sz <= cz + R; sz++) {
     for (let sx = cx - R; sx <= cx + R; sx++) {
       for (let k = 0; k < 3; k++) {
-        const path = cache.path(KINDS[k]!, sx, sz);
+        // A source whose path cannot reach the column adds no entry: its path is not built (Task 31p).
+        const path = cache.pathNear(KINDS[k]!, sx, sz, x0, x1, z0, z1);
         if (path === null) continue;
         const b = path.box;
         if (b[3]! < x0 - 1 || b[0]! > x1 + 1 || b[5]! < z0 - 1 || b[2]! > z1 + 1 || b[4]! < Y0 || b[1]! > TOP_Y + 1) continue;

@@ -16,7 +16,7 @@ import { Xoshiro128 } from '../../src/core/rng';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { applyPatch, patchAt } from '../../src/core/params/kit';
 import { SCHEMA, type Params } from '../../src/core/params/schema';
-import { carverParamsOf, carverPath, carverSourceSeed, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
+import { carverMayReach, carverParamsOf, carverPath, carverSourceSeed, type CarverKind, type CarverParams, type CarverPath } from '../../src/gen/caves/carvers';
 import { CARVER_DEFAULTS, CARVER_MAXIMA } from '../harness/carverParams';
 import { chiSquareP } from '../harness/stats';
 
@@ -771,4 +771,51 @@ describe('reachOverflow, the unit form (SP6a §2.1, §10.1): the window R = CARV
       }
     });
   }
+});
+
+describe('carverMayReach: the carve\'s reach prefilter (Task 31p)', () => {
+  /** Whether ellipsoid e of `path` gives column (cx, cz) an entry horizontally, as the carve's `columnPaths` ranges it. */
+  const meets = (path: CarverPath, e: number, cx: number, cz: number): boolean => {
+    const o = 6 * e, ex = path.ell[o]!, ez = path.ell[o + 2]!, rh = path.ell[o + 3]!;
+    const x0 = 16 * cx, z0 = 16 * cz;
+    return Math.max(x0, Math.floor(ex - rh) - 1) <= Math.min(x0 + 15, Math.ceil(ex + rh) + 1)
+      && Math.max(z0, Math.floor(ez - rh) - 1) <= Math.min(z0 + 15, Math.ceil(ez + rh) + 1);
+  };
+
+  test('a source it rules out has no path or no ellipsoid meeting the column, at the defaults (every roll passed) and at the leaves\' maxima', () => {
+    const columns = [[0, 0], [5, -3], [-1000, 777], [29000, -29999]] as const;
+    let ruledOut = 0, kept = 0;
+    for (const p of [ALWAYS, CARVER_MAXIMA]) {
+      for (const [cx, cz] of columns) {
+        for (let sz = cz - CARVER_WINDOW_R; sz <= cz + CARVER_WINDOW_R; sz++) {
+          for (let sx = cx - CARVER_WINDOW_R; sx <= cx + CARVER_WINDOW_R; sx++) {
+            for (const kind of ALL_KINDS) {
+              const may = carverMayReach(SEED, kind, sx, sz, p, 16 * cx, 16 * cx + 15, 16 * cz, 16 * cz + 15);
+              const path = carverPath(SEED, kind, sx, sz, p);
+              const any = path !== null && Array.from({ length: path.count }, (_, e) => meets(path, e, cx, cz)).some(Boolean);
+              if (any) expect(may, `${kind} (${sx}, ${sz}) for column (${cx}, ${cz})`).toBe(true);
+              if (may) kept++;
+              else ruledOut++;
+            }
+          }
+        }
+      }
+    }
+    // Not vacuous: most of the window is out of reach, and the sources that meet the column are kept.
+    expect(ruledOut).toBeGreaterThan(0.3 * (ruledOut + kept));
+    expect(kept).toBeGreaterThan(0);
+  });
+
+  test('a failed roll is ruled out, as carverPath gives null', () => {
+    const p = CARVER_DEFAULTS;
+    let failed = 0;
+    for (const [sx, sz] of firstSources(2000)) {
+      for (const kind of ALL_KINDS) {
+        if (carverPath(SEED, kind, sx, sz, p) !== null) continue;
+        failed++;
+        expect(carverMayReach(SEED, kind, sx, sz, p, 16 * sx, 16 * sx + 15, 16 * sz, 16 * sz + 15)).toBe(false);
+      }
+    }
+    expect(failed).toBeGreaterThan(1000);
+  });
 });

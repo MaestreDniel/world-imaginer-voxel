@@ -119,7 +119,10 @@ function firstDiff(a: Uint8Array, b: Uint8Array): number {
 function fakeCache(paths: readonly CarverPath[]): CarverCache {
   const m = new Map(paths.map((q) => [`${q.kind} ${q.sx} ${q.sz}`, q] as const));
   return {
-    path: (kind, sx, sz) => m.get(`${kind} ${sx} ${sz}`) ?? null, size: m.size, params: CARVER_DEFAULTS, capacity: Math.max(1, m.size),
+    path: (kind, sx, sz) => m.get(`${kind} ${sx} ${sz}`) ?? null,
+    // The synthetic paths do not start where their sources' draws would: no prefilter.
+    pathNear: (kind, sx, sz) => m.get(`${kind} ${sx} ${sz}`) ?? null,
+    size: m.size, params: CARVER_DEFAULTS, capacity: Math.max(1, m.size),
     floorNoise: FLOOR_NOISE,
   };
 }

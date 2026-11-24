@@ -359,6 +359,40 @@ export function carverPath(seed: GenContext['seed'], kind: CarverKind, sx: numbe
 }
 
 /**
+ * Whether the path of source (kind, sx, sz) of the world `seed` can have an ellipsoid whose voxel range, its centre ±
+ * (rh + 2) per axis (the carve's `columnPaths`), meets the rectangle [xa, xb] × [za, zb] (Task 31p, output-keeping):
+ * false when its roll fails, or when its start (x, z), drawn as `carverPath` draws it, lies farther from the rectangle
+ * than the path can reach. Each step moves its centre by at most 1 horizontally (|cos p|·|(cos yaw, sin yaw)|), a path
+ * makes at most `length` (worms; `max(lengthMin, lengthMax)` ravines) − 1 moves from its start, the trunk's fork
+ * included, and every rh is at most `max(1.5 + 3, 7)·max(radiusMin, radiusMax)` (a step's taper, a room; ravines 1.5 +
+ * thicknessMax); a centre farther than √2·(rh + 2) from the rectangle is outside it by more than rh + 2 on one axis.
+ * The bound is widened by 2 blocks for rounding. Draws only the roll and the start (no path is built).
+ */
+export function carverMayReach(
+  seed: GenContext['seed'], kind: CarverKind, sx: number, sz: number, p: CarverParams, xa: number, xb: number, za: number, zb: number,
+): boolean {
+  const rng = new RNG(HASH2(carverSourceSeed(seed, kind), sx, sz));
+  const chance = kind === 'ravine' ? p.ravines.chance : kind === 'undergroundWorm' ? p.undergroundWorms.chance : p.worms.chance;
+  if (!(rng.nextFloat() < chance)) return false;
+  const x0 = CHUNK * sx + CHUNK * rng.nextFloat();
+  const z0 = CHUNK * sz + CHUNK * rng.nextFloat();
+  let moves: number, rh: number;
+  if (kind === 'ravine') {
+    const r = p.ravines;
+    moves = Math.max(1, r.lengthMin, r.lengthMax);
+    rh = CAP + Math.abs(r.thicknessMax);
+  } else {
+    const w = p.worms;
+    moves = Math.max(1, w.length);
+    rh = Math.max(CAP + 3, 7) * Math.max(Math.abs(w.radiusMin), Math.abs(w.radiusMax));
+  }
+  const reach = moves + Math.SQRT2 * (rh + 2) + 2;
+  const dx = x0 < xa ? xa - x0 : x0 > xb ? x0 - xb : 0;
+  const dz = z0 < za ? za - z0 : z0 > zb ? z0 - zb : 0;
+  return dx * dx + dz * dz <= reach * reach;
+}
+
+/**
  * The carver leaves of `p` as the carvers read them (spec §4): `caves.worms.*` with `caves.worms.shape.*`,
  * `caves.undergroundWorms.*`, `caves.ravines.*`, the `caves.limits.*` leaves of the carve's shrinks (§2.4) and the
  * `caves.floor.*` leaves of its σ_b (SP6b spec §5.2). A fresh object of plain numbers, so its fields read no `Params`

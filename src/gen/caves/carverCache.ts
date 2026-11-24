@@ -19,9 +19,10 @@
 import { CARVER_CACHE_PATHS } from '../../core/constants';
 import type { Noise2 } from '../biomes/cavePicker';
 import { noiseFor, type GenContext } from '../context';
-import { carverParamsOf, carverPath, type CarverKind, type CarverParams, type CarverPath } from './carvers';
+import { carverMayReach, carverParamsOf, carverPath, type CarverKind, type CarverParams, type CarverPath } from './carvers';
 
 const CARVER_PATH = carverPath;
+const MAY_REACH = carverMayReach;
 const PARAMS_OF = carverParamsOf;
 const CAPACITY = CARVER_CACHE_PATHS;
 const IS_INT = Number.isInteger;
@@ -37,6 +38,11 @@ const SPAN = 2097152;
 export interface CarverCache {
   /** Source (kind, sx, sz)'s path, `carverPath`'s (the same object while it stays cached); null when its roll fails. */
   path(kind: CarverKind, sx: number, sz: number): CarverPath | null;
+  /**
+   * `path(kind, sx, sz)` where `carverMayReach` says the path can meet the rectangle [xa, xb] × [za, zb], else null
+   * without building it (Task 31p: the carve's prefilter; a path it rules out gives that rectangle no entry).
+   */
+  pathNear(kind: CarverKind, sx: number, sz: number, xa: number, xb: number, za: number, zb: number): CarverPath | null;
   /** The paths held (≤ the capacity). */
   readonly size: number;
   /** The carver leaves its paths are built from. */
@@ -68,6 +74,9 @@ export function createCarverCache(ctx: GenContext, p: CarverParams, capacity: nu
       if (map.size >= capacity) map.delete(map.keys().next().value!);
       map.set(key, path);
       return path;
+    },
+    pathNear(kind, sx, sz, xa, xb, za, zb) {
+      return MAY_REACH(seed, kind, sx, sz, p, xa, xb, za, zb) ? this.path(kind, sx, sz) : null;
     },
     get size() { return map.size; },
     params: p,
