@@ -393,7 +393,11 @@ const AQUIFER_LAVA: ReadonlySet<string> = new Set(['aquifer.lavaMaxLevel', 'aqui
  */
 const SPRING_STREAM = 'sp7a.liveness.springs';
 const SPRING_DRAWS = 65536;
-const SPRING_EXAMINED = 1024;
+/**
+ * 1,024 until Task 31r: with Task 28d's rejection at `springs.water.tries` 18 (rulings R25) water springs are rarer per
+ * examined column, and the tries witness is the 2,871st examined; 6,144 is the bound rulings R22 named for such a search.
+ */
+const SPRING_EXAMINED = 6144;
 const SPRING_CHECKS = 64;
 const SPRING_RELIEF = 8;
 /** Above sea level: the land a water spring's outlet stands on (the 64 the dropped `springs.water.minY` gave, Task 19). */

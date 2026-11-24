@@ -408,11 +408,12 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
   }),
   // SP7a spec §3.5 (Task 19): the springs' leaves, appended after `aquifer`, so randomParams and randomPatch draw every
   // earlier leaf as before. Read by `springsColumn` (`gen/fluids/springs.ts`) in T's springs step; Terrain scope (a change
-  // re-runs T, D21). `water.tries` defaults to 3 (Point 2's 50 per km², the plan's Spec correction 6); the ranges are the
-  // plan's; no `water.minY` (Task 19's Spec correction: yLo already keeps a land spring above y 64; it never bound).
+  // re-runs T, D21). `water.tries` defaults to 18 (3, the plan's Spec correction 6, until Task 31r: with Task 28d's rejection
+  // of a predicted truncation, rulings R25, for Point 2's 50 per km²); the ranges are the plan's; no `water.minY` (Task
+  // 19's Spec correction: yLo already keeps a land spring above y 64; it never bound).
   springs: group('Springs', 'Springs placed by T in rock faces (SP7a spec §3): a source voxel with rock above, below and on three sides, its one open side over a drop, so a permanent waterfall falls from it. Each kind draws its tries per chunk.', {
     water: group('Water', 'Water springs in mountain faces (SP7a spec §3.2): a try\'s height lies between minFall above the surface estimate at its outlet and 2 below the top of its position; natural rock only, never sand or gravel.', {
-      tries: int(3, { ...TERRAIN, label: 'Tries', doc: 'Tries per chunk: each picks a position, a direction and a height, and becomes a spring where the rule holds (more tries → more waterfalls).', min: 0, max: 32 }),
+      tries: int(18, { ...TERRAIN, label: 'Tries', doc: 'Tries per chunk: each picks a position, a direction and a height, and becomes a spring where the rule holds (more tries → more waterfalls).', min: 0, max: 32 }),
       minFall: int(7, { ...TERRAIN, label: 'Least fall', doc: 'The outlet and this many voxels below it must be open air, and the spring sits at least this many blocks above the surface estimate at its outlet.', unit: 'blocks', min: 2, max: 64 }),
     }),
     // SP7a spec §3.3, D3 (Task 20): read only with `islands.enabled`; `tries` 4 is the spec's estimate (D31 tunes it). The

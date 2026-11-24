@@ -57,7 +57,7 @@
     "sp3c.surface.ops": "4fd33e8c70ea9313",
     "sp3e.column.point.archipelago": "576dcc24bc474a96",
     "sp3e.column.point.floating_islands": "38ad6e018c200781",
-    "sp3e.region.T.amplified": "bb4086a42eb25ee9",
+    "sp3e.region.T.amplified": "2598070320cee310",
     "sp3e.region.T.archipelago": "845de7b042a9210a",
     "sp3e.region.T.floating_islands": "2358f41371349563",
     "sp6a.carver.paths": "f01d27e99576808f",
@@ -67,6 +67,6 @@
     "sp6b.region.T.biomes": "78c7767474fb7080",
     "sp6b.registry": "338b3c5eb9dd4a78",
     "sp7a.aquifer.points": "07aada42dd881b45",
-    "sp7a.springs": "60f8583148498a6d"
+    "sp7a.springs": "79a224a14f54cdf9"
   }
 }

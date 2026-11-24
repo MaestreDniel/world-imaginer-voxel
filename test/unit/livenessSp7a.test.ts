@@ -162,8 +162,8 @@ describe('the aquifer\'s leaves in U2 (SP7a spec §1.9, §13.7; Task 13, Spec co
  * `sp7a.liveness.springs` whose springs step accepts a water spring at the defaults and whose T column a step changes).
  */
 const SPRING_VERDICT: Readonly<Record<(typeof SPRING_LEAVES)[number], string>> = {
-  'springs.water.tries': 'mountain witness column (-3035, 11917)',
-  'springs.water.minFall': 'mountain witness column (1250, -30453)',
+  'springs.water.tries': 'mountain witness column (4339, -29505)',
+  'springs.water.minFall': 'mountain witness column (32527, 2146)',
 };
 
 describe('the water springs\' leaves in U2 (SP7a spec §3.5, §13.7; Task 19, Spec correction 5)', () => {
@@ -189,7 +189,7 @@ describe('the water springs\' leaves in U2 (SP7a spec §3.5, §13.7; Task 19, Sp
       expect([p, r.live, r.via]).toEqual([p, true, SPRING_VERDICT[p]]);
       expect([p, w.via]).toEqual([p, SPRING_VERDICT[p]]);
       expect(w.checks, p).toBeLessThanOrEqual(64);
-      expect(w.examined, p).toBeLessThanOrEqual(1024);
+      expect(w.examined, p).toBeLessThanOrEqual(6144);
       expect(w.draws, p).toBeLessThanOrEqual(65536);
       // The witness column's springs step accepts a water spring at the defaults (re-derived).
       const [cx, cz] = w.via!.slice('mountain witness column ('.length, -1).split(', ').map(Number) as [number, number];

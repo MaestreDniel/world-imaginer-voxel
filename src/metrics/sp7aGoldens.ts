@@ -12,9 +12,9 @@
  *   fixed chunk columns per kind, world seed '42': `WATER_CHUNKS` on the default profile (water springs), `ISLAND_CHUNKS`
  *   on floating_islands (island springs) and `LAVA_CHUNKS` on the default profile (lava springs in the abyss), in that
  *   order, each list in its order. Each list is a literal found by a scan at seed '42' at Task 21 (water re-scanned when
- *   a springs lever moves its springs, Task 28), each chunk holding at least one spring of its kind (the first 16 in
- *   ring order, ring r then cz then cx): water from chunk (0, 0) over the columns whose 7 × 7 offset lattice reaches
- *   y 64 with a relief of at least 8 (the mountain witness's prefilter);
+ *   a springs lever moves its springs, Tasks 28 and 31r), each chunk holding at least one spring of its kind (the first
+ *   16 in ring order, ring r then cz then cx): water from chunk (0, 0) over the columns whose 7 × 7 offset lattice
+ *   reaches y 64 with a relief of at least 8 (the mountain witness's prefilter);
  *   island from (0, 0) over the columns whose lattice holds an islandMask above 0; lava from SP6b's abyss column
  *   (−3000, −1182). The digest is the FNV-1a 64 of, per chunk, its spring count (one byte), then per spring in decision
  *   order its world x, y and z (int32 little-endian each), its kind byte (0 water, 1 island, 2 lava) and its outlet's
@@ -79,12 +79,13 @@ export function aquiferPointsDigest(): string {
 }
 
 /**
- * `sp7a.springs`' water chunks: default profile, seed '42' (the module comment's scan, re-run at `springs.water.minFall`
- * 7 by Task 28a: 9,144 columns examined; at 8, Task 21's list, 11,108).
+ * `sp7a.springs`' water chunks: default profile, seed '42' (the module comment's scan, re-run by Task 31r at
+ * `springs.water.tries` 18 with Task 28d's rejection of a predicted truncation: 3,125 columns examined; at tries 3,
+ * Task 28a's list at `minFall` 7, 9,144; at `minFall` 8, Task 21's list, 11,108).
  */
 export const WATER_CHUNKS: ReadonlyArray<readonly [number, number]> = Object.freeze([
-  [-30, -18], [-31, 24], [-33, -15], [-43, -16], [-30, 44], [-45, -7], [-48, -15], [-49, 10],
-  [-50, -4], [-52, -10], [-53, -27], [12, -56], [-56, 19], [-60, -17], [-65, 11], [-66, -4],
+  [-23, 18], [-24, -2], [-25, 23], [-27, 25], [-26, 28], [-31, -8], [-31, -7], [-32, -15],
+  [-32, -7], [-32, 2], [-33, -15], [-33, -6], [-35, -16], [-37, -3], [-39, 1], [-40, 16],
 ] as const);
 /** `sp7a.springs`' island chunks: floating_islands, seed '42' (1,921 columns examined; the first 8 are `springs.test.ts`' ISLAND_SPRINGS). */
 export const ISLAND_CHUNKS: ReadonlyArray<readonly [number, number]> = Object.freeze([

@@ -44,6 +44,7 @@ import { ruleNodeCount, rulesColumnCost } from '../../src/gen/inspect/cost';
 import { validateParamTrees } from '../../src/gen/trees';
 import { fillColumnT } from '../../src/metrics/region';
 import { treeLints } from '../../src/ui/inspector/form';
+import { WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, GRASS_BLOCK, REGISTRY, STONE } from '../../src/world/blocks/index';
 import { createStore } from '../../src/world/store/store';
 import { paramsWith } from '../harness/gen';
@@ -485,12 +486,14 @@ describe('islands.enabled on trees that do not match it (amplified\'s window, se
   // instead (default 6,546 voxels and 1,638 positions before it, amplified 13,651). SP7a's aquifer (Task 13): its
   // barriers turn some of those runs' cave air to rock (default 6,570 voxels and 1,640 positions before it, amplified
   // 13,678, 3,623 and 2,964 snow → stone). Task 27l's `aquifer.barrierBand` 30 (rulings R21) moves two voxels in each (default 6,546
-  // and amplified 13,647 before it).
-  test.each([['default', 6548, 1636, 36, 0, 0], ['amplified', 13649, 3621, 42, 2962, 15]] as const)('%s with the flag on: the same solidity and water (but carved voxels at wet positions under a run above y 180, SP6a §2.4); states change only where a run lies above y 180, stage == reference == compiled.state there', (id, wantVoxels, wantPositions, wantColumns, wantSnowToStone, wantCarved) => {
+  // and amplified 13,647 before it). SP7a's water springs (§3.2): with the flag on a try's yHi is `groundTop` − 2, so a
+  // face above y 180 is left to the island kind; Task 31r's `springs.water.tries` 18 puts one water spring there in the
+  // default window (column (−39, 1), (0, 195, 15), flag off only), counted apart (`springMoved`) and kept out of the rest.
+  test.each([['default', 6548, 1636, 36, 0, 0, 1], ['amplified', 13649, 3621, 42, 2962, 15, 0]] as const)('%s with the flag on: the same solidity and water (but carved voxels at wet positions under a run above y 180, SP6a §2.4, and water springs in faces above y 180, SP7a §3.2); states change only where a run lies above y 180, stage == reference == compiled.state there', (id, wantVoxels, wantPositions, wantColumns, wantSnowToStone, wantCarved, wantSpringMoved) => {
     const params = resolveProfile(id);
     const on = withFlag(params, true), off = withFlag(params, false);
     const probeSc = createSurfaceContext(on);
-    let solidity = 0, fluid = 0, voxels = 0, positions = 0, columns = 0, noIslandRun = 0, checked = 0, snowToStone = 0, carvedSolidity = 0;
+    let solidity = 0, fluid = 0, voxels = 0, positions = 0, columns = 0, noIslandRun = 0, checked = 0, snowToStone = 0, carvedSolidity = 0, springMoved = 0;
     const SNOW = REGISTRY.parseStateKey('snow_block');
     for (const [cx, cz] of WINDOW) {
       const a = generate(on, cx, cz), b = generate(off, cx, cz);
@@ -501,6 +504,10 @@ describe('islands.enabled on trees that do not match it (amplified\'s window, se
         let at_p = 0;
         for (let y = -63; y <= 319; y++) {
           const i = at(p, y);
+          // SP7a §3.2: a water spring (air plus WATER_SOURCE) in one and rock in the other, above y 180 under the flag's
+          // `groundTop` rule: the flag leaves that face to the island kind.
+          const springA = a.blocks[i] === AIR && a.fluid[i] === WATER_SOURCE, springB = b.blocks[i] === AIR && b.fluid[i] === WATER_SOURCE;
+          if (springA !== springB && y >= ISLAND_RUN_MIN_BOTTOM && (springA ? b.blocks[i] : a.blocks[i]) !== AIR) { springMoved++; continue; }
           if ((a.blocks[i] === AIR) !== (b.blocks[i] === AIR)) {
             // SP6a §2.4: the carvers' wet shrink reads the density top, which the flag's island rule takes under a run lying
             // above y 180; so a carved voxel at a wet position under such a run may differ, and nothing else.
@@ -538,6 +545,6 @@ describe('islands.enabled on trees that do not match it (amplified\'s window, se
     expect({ solidity, fluid, noIslandRun }).toEqual({ solidity: 0, fluid: 0, noIslandRun: 0 });
     expect(checked).toBeGreaterThan(positions * 100);
     // A detached peak above y 180 is no longer the sky-open run: its top loses the sky-open palette (snow → stone).
-    expect({ id, voxels, positions, columns, snowToStone, carvedSolidity }).toEqual({ id, voxels: wantVoxels, positions: wantPositions, columns: wantColumns, snowToStone: wantSnowToStone, carvedSolidity: wantCarved });
+    expect({ id, voxels, positions, columns, snowToStone, carvedSolidity, springMoved }).toEqual({ id, voxels: wantVoxels, positions: wantPositions, columns: wantColumns, snowToStone: wantSnowToStone, carvedSolidity: wantCarved, springMoved: wantSpringMoved });
   }, 120_000);
 });

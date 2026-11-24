@@ -17,7 +17,9 @@
  *   `islands.enabled`, `groundTop` − 2: the top of the highest solid run whose bottom lies below 181, SP3e's rule, so
  *   island faces are left to their own kind); y = yLo + ⌊u·(yHi − yLo + 1)⌋, rejected when yHi < yLo (no
  *   y floor: Task 19's Spec correction, ruling R17); the valid set every `CARVABLE` terrain state but sand, red_sand
- *   and gravel.
+ *   and gravel. A try the common rule accepts is still rejected when its fall is predicted to end truncated (Task 28d,
+ *   §11's last lever, taken by Task 31r with `springs.water.tries` 18, rulings R25: `predictTruncated`, the settle's
+ *   kernel over the point probes, seeded with the would-be source alone).
  * - Island edges (§3.3, D3), only with `islands.enabled`: the island runs of the try's position (its solid runs whose
  *   bottom ≥ `ISLAND_RUN_MIN_BOTTOM`, 181, SP3e's runs, bottom to top, from T's arrays); the run k = ⌊u·runs⌋ and
  *   y = bottom + 1 + ⌊u2·(top − bottom − 1)⌋ in it, rejected when the position holds no island run or the run is under
@@ -35,13 +37,15 @@ import { CAVE_BIOME, ISLAND_RUN_MIN_BOTTOM, ISLAND_SPRING_MIN_FALL, MIN_Y } from
 import { inWindow } from '../../core/coords';
 import { deriveSeed, hash2, type Seed64 } from '../../core/hash';
 import { Xoshiro128 } from '../../core/rng';
-import { CARVABLE, DEEPSLATE, GRAVEL, RED_SAND, REGISTRY, SAND } from '../../world/blocks/index';
+import { fluidUnsettled, WATER_SOURCE } from '../../world/blocks/fluid';
+import { AIR, CARVABLE, DEEPSLATE, GRAVEL, RED_SAND, REGISTRY, SAND, STONE } from '../../world/blocks/index';
 import { caveBiomeAt, type CaveColumnPass } from '../biomes/cavePicker';
 import { caveTagAt } from '../caves/tags';
 import { readFieldHalo, type ColumnSample } from '../column/columnStage';
 import type { GenContext } from '../context';
 import { createDensityContext } from '../density/context';
 import { aquiferOf, barrierAt, fluidAt } from './aquifer';
+import { createSettleScratch, settleWindow, type SettleScratch, type SettleSink, type SettleSource } from './settle';
 import { terrainSolidAt } from './solidAt';
 
 const Y0 = MIN_Y;
@@ -72,6 +76,12 @@ const FLUID_AT = fluidAt;
 const BARRIER_AT = barrierAt;
 const AQUIFER_OF = aquiferOf;
 const CREATE_DC = createDensityContext;
+const SETTLE = settleWindow;
+const CREATE_SCRATCH = createSettleScratch;
+const UNSETTLED = fluidUnsettled;
+const AIR_ = AIR;
+const STONE_ = STONE;
+const SOURCE = WATER_SOURCE;
 
 /** A spring kind; its byte in a `SpringList` is its index in the fixed order water, island, lava. */
 export type SpringKind = 'water' | 'island' | 'lava';
@@ -239,6 +249,87 @@ function openAt(lx: number, y: number, lz: number): boolean {
 }
 
 /**
+ * Task 28d's prediction window: the voxels within this many blocks (horizontally) of the would-be source, the water cap
+ * 12 plus its search 4 plus one, so every voxel within cap + search (16) of the outlet (the harness's lone front's).
+ */
+const PREDICT_R = 17;
+const PREDICT_W = 2 * PREDICT_R + 1;
+/** The prediction's state: the probes, the would-be source, the verdict and the window's reads (memoised per call). */
+const PRED = { probes: null as SpringProbes | null, sx: 0, sy: 0, sz: 0, truncated: false, reads: new Map<number, number>() };
+let PRED_SCRATCH: SettleScratch | null = null;
+const PRED_SEEDS = new Int32Array(1);
+const PRED_BOX = new Int32Array(4);
+const NEVER = (): boolean => false;
+
+/** The prediction's settle window (its bounds set per call) over `predictRead`. */
+const PRED_SRC: { x0: number; z0: number; x1: number; z1: number } & Omit<SettleSource, 'x0' | 'z0' | 'x1' | 'z1'> = {
+  x0: 0, z0: 0, x1: 0, z1: 0,
+  block: (x, y, z) => ((predictRead(x, y, z) & 1) !== 0 ? STONE_ : AIR_),
+  fluid: (x, y, z) => (predictRead(x, y, z) >> 1) & 255,
+  cave: (x, y, z) => predictRead(x, y, z) >> 9,
+};
+
+/**
+ * Window voxel (x, y, z) as the prediction reads it, packed: bit 0 solid, bits 1-8 the proto fluid byte, bits 9-16 the
+ * cave byte (kind | nibble << 4); the would-be source air holding `WATER_SOURCE`, a voxel outside the world window (or
+ * the bedrock row) solid, every other voxel from the point probes (blind to springs, so the decision is the same from
+ * any column, D21).
+ */
+function predictRead(x: number, y: number, z: number): number {
+  const k = ((y - Y0) * PREDICT_W + (z - PRED_SRC.z0)) * PREDICT_W + (x - PRED_SRC.x0);
+  let v = PRED.reads.get(k);
+  if (v === undefined) {
+    const p = PRED.probes!;
+    if (x === PRED.sx && y === PRED.sy && z === PRED.sz) v = SOURCE << 1;
+    else if (y <= Y0 || !IN_WINDOW(x, z) || p.solid(x, y, z)) v = 1;
+    else {
+      const t = p.tag(x, y, z);
+      v = (p.fluid(x, y, z) << 1) | ((t !== 0 ? t | (p.nibble(x, y, z) << 4) : 0) << 9);
+    }
+    PRED.reads.set(k, v);
+  }
+  return v;
+}
+
+/** The prediction's sink: a settled voxel carrying the cap flag (bit 6) makes the verdict. */
+const PRED_SINK: SettleSink = { set: (_x, _y, _z, b) => { if (UNSETTLED(b)) PRED.truncated = true; } };
+
+/**
+ * Whether a water spring whose outlet is world voxel (ox, oy, oz), its source one step back against direction `d`, is
+ * predicted to end truncated (Task 28d, the plan's; §11's last lever): the settle's kernel (`settleWindow`, §4.1) over a
+ * window of the point probes `probes` within `PREDICT_R` of the would-be source (`predictRead`), seeded with that source
+ * alone; true when a voxel of its lone front reaches the cap with a passable target (its byte's bit 6, the reading
+ * `A5.springsTruncated` counts). The lone run over-estimates the settled reading (§4.1: a nearer source may feed a front
+ * it truncates), so it rejects only fronts it truncates.
+ */
+export function predictTruncated(probes: SpringProbes, ox: number, oy: number, oz: number, d: number): boolean {
+  const sx = ox - DX[d]!, sz = oz - DZ[d]!;
+  PRED.probes = probes;
+  PRED.sx = sx;
+  PRED.sy = oy;
+  PRED.sz = sz;
+  PRED.truncated = false;
+  PRED.reads.clear();
+  PRED_SRC.x0 = sx - PREDICT_R;
+  PRED_SRC.z0 = sz - PREDICT_R;
+  PRED_SRC.x1 = sx + PREDICT_R + 1;
+  PRED_SRC.z1 = sz + PREDICT_R + 1;
+  PRED_SEEDS[0] = ((oy - Y0) * PREDICT_W + PREDICT_R) * PREDICT_W + PREDICT_R;
+  PRED_BOX[0] = PRED_SRC.x0;
+  PRED_BOX[1] = PRED_SRC.z0;
+  PRED_BOX[2] = PRED_SRC.x1;
+  PRED_BOX[3] = PRED_SRC.z1;
+  PRED_SCRATCH ??= CREATE_SCRATCH(1 << 12);
+  try {
+    SETTLE(PRED_SRC, PRED_SEEDS, 1, PRED_BOX, PRED_SINK, PRED_SCRATCH, NEVER);
+  } finally {
+    PRED.probes = null;
+    PRED.reads.clear();
+  }
+  return PRED.truncated;
+}
+
+/**
  * §3.1's common rule for a spring at column voxel (lx, y, lz) (inside the column) facing `d`, with `fall` open voxels
  * below the outlet and the valid set `valid`: the in-column reads first, then the outlet, its fall and the three other
  * neighbours (the only ones that may lie outside the column).
@@ -321,6 +412,7 @@ export function springsColumn(
         if (yHi < yLo) continue;
         const y = yLo + Math.floor(u * (yHi - yLo + 1));
         if (!accepts(lx, y, lz, d, w.minFall, waterRock)) continue;
+        if (predictTruncated(probes, x0 + lx + DX[d]!, y, z0 + lz + DZ[d]!, d)) continue;
         accept(lx, y, lz, 0, d);
       }
     }

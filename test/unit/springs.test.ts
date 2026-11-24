@@ -11,6 +11,7 @@
  * spring of seed '42' beside SP6b's abyss column written by T as air plus `LAVA_SOURCE`.
  */
 import { describe, expect, test } from 'vitest';
+import { CAVE_BIOME } from '../../src/core/constants';
 import type { Seed64 } from '../../src/core/hash';
 import type { ParamsPatch } from '../../src/core/params/schema';
 import { cavePickerOf, fillCaveColumnPass, newCaveColumnPass, type CaveColumnPass } from '../../src/gen/biomes/cavePicker';
@@ -18,13 +19,15 @@ import { buildColumnSample, newColumnSample, readFieldHalo, type ColumnSample } 
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { createGenContext, type GenContext } from '../../src/gen/context';
-import { newSpringList, springProbesOf, springsColumn, springTries, type SpringList, type SpringProbes } from '../../src/gen/fluids/springs';
+import { newSpringList, predictTruncated, springProbesOf, springsColumn, springTries, type SpringList, type SpringProbes } from '../../src/gen/fluids/springs';
 import { terrainSpringsDebug } from '../../src/gen/pipeline/terrainStage';
 import { fillColumnT } from '../../src/metrics/region';
-import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { fluidFalling, fluidUnsettled, LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, CARVABLE, DEEPSLATE, DIRT, GRAVEL, RED_SAND, REGISTRY, SAND, STONE } from '../../src/world/blocks/index';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { ctxFor } from '../harness/gen';
+import { regionView } from '../harness/region';
+import { referenceSettle, referenceSettleKey } from '../harness/refs';
 
 const MiB = 1 << 20;
 /** The directions in face order (N −z, E +x, S +z, W −x). */
@@ -242,6 +245,103 @@ describe('the common rule and the water range on hand-built columns (SP7a §3.1-
   });
 });
 
+// ---------------------------------------------------------------- Task 28d: a fall predicted to end truncated
+
+/**
+ * A world in front of the try (lx, lz, d) of column (cx, 0) for Task 28d: rock up to `top` at and behind the spring's
+ * row (t ≤ −1, t the steps along d from the outlet's row t = 0), and in front of it rock up to `ground(t, s)` (s the
+ * steps sideways from the outlet), open air above; no fluid; no cave, or with `abyssBelow` every open voxel in front at
+ * y ≤ `abyssBelow` tagged cave air of the abyss nibble (`ABYSS_AIR`, the lava cases').
+ */
+function frontWorld(cx: number, lx: number, lz: number, d: number, top: number, ground: (t: number, s: number) => number, abyssBelow: number | null = null): World {
+  const ox = 16 * cx + lx + DX[d]!, oz = lz + DZ[d]!;
+  const solid = (x: number, y: number, z: number): boolean => {
+    const t = (x - ox) * DX[d]! + (z - oz) * DZ[d]!;
+    const sd = (x - ox) * DZ[d]! - (z - oz) * DX[d]!;
+    return t <= -1 ? y <= top : y <= ground(t, sd);
+  };
+  return {
+    solid,
+    state: () => STONE,
+    cave: (x, y, z) => (abyssBelow !== null && y <= abyssBelow && (x - ox) * DX[d]! + (z - oz) * DZ[d]! >= 0 && !solid(x, y, z) ? ABYSS_AIR : 0),
+    fluid: () => 0,
+  };
+}
+
+/**
+ * `w` with a water spring at world voxel (sx, sy, sz) (air plus `WATER_SOURCE`, cave byte 0, as T writes one) settled by
+ * the global settle reference (`referenceSettle`: the harness's own fixed points over `ruleOffers`, sharing no code with
+ * `settle.ts`) over the 3 × 3 columns around chunk (cx, 0), on a plain store's proto: `truncated` when a settled voxel
+ * carries bit 6 (the reading `A5.springsTruncated` counts; the spring is the only fluid, so every settled voxel is its
+ * front), and `at`, the settled byte of a voxel (the proto's where the reference changed nothing).
+ */
+function referenceTruncated(w: World, cx: number, sx: number, sy: number, sz: number): { truncated: boolean; at: (x: number, y: number, z: number) => number } {
+  const s = createStore({ shared: false, maxBlockBytes: 16 * MiB, maxByteBytes: 16 * MiB });
+  const blocks = new Uint16Array(4096), fluids = new Uint8Array(4096), caves = new Uint8Array(4096);
+  for (let cz = -1; cz <= 1; cz++) {
+    for (let kx = cx - 1; kx <= cx + 1; kx++) {
+      const col = s.claimColumn(kx, cz, 0);
+      for (let sec = 0; sec < 24; sec++) {
+        for (let i = 0; i < 4096; i++) {
+          const x = 16 * kx + (i & 15), y = -64 + 16 * sec + (i >> 8), z = 16 * cz + ((i >> 4) & 15);
+          const spring = x === sx && y === sy && z === sz;
+          const solid = !spring && (y === -64 || w.solid(x, y, z));
+          blocks[i] = solid ? w.state(x, y, z) : AIR;
+          fluids[i] = spring ? WATER_SOURCE : solid ? 0 : w.fluid(x, y, z);
+          caves[i] = solid || spring ? 0 : w.cave(x, y, z);
+        }
+        col.setProto(sec, blocks, fluids, caves);
+      }
+      col.commit(1);
+    }
+  }
+  const view = regionView(s, cx - 1, -1, 3, 3);
+  const ref = referenceSettle(view, { x0: 16 * (cx - 1), z0: -16, x1: 16 * (cx + 2), z1: 32 });
+  return {
+    truncated: Array.from(ref.values()).some((b) => fluidUnsettled(b)),
+    at: (x, y, z) => ref.get(referenceSettleKey(view, x, y, z)) ?? view.fluid(x, y, z),
+  };
+}
+
+describe('Task 28d: a try whose fall is predicted to end truncated is rejected (SP7a §11)', () => {
+  const { cx, lx, lz, d } = innerTry();
+  const x = 16 * cx + lx, z = lz;
+  const ox = x + DX[d]!, oz = z + DZ[d]!;
+  /** offset 70 and minFall 8 give yLo 78, the top 80 yHi 78: the try's y is 78; the outlet's ground at 66, a fall of 11. */
+  const OFF = 70, TOP = 80, Y = 78, G = 66;
+  const ctx = waterCtx({ tries: 1, minFall: 8 });
+
+  test('a try above an endless slope (the ground one lower per step away from the face) is rejected: its lone front runs past the cap', () => {
+    const slope = frontWorld(cx, lx, lz, d, TOP, (t) => G - t);
+    expect(predictTruncated(probesOf(slope), ox, Y, oz, d)).toBe(true);
+    expect(decide(ctx, slope, cx, 0, OFF)).toEqual([]);
+  });
+
+  test('a try above a basin (the fall lands in a one-voxel pit walled 4 high) is accepted: its lone front settles', () => {
+    const basin = frontWorld(cx, lx, lz, d, TOP, (t, sd) => (t === 0 && sd === 0 ? G : G + 4));
+    expect(predictTruncated(probesOf(basin), ox, Y, oz, d)).toBe(false);
+    expect(decide(ctx, basin, cx, 0, OFF)).toEqual([[vi(lx, Y, lz), 0, d]]);
+  });
+
+  test('the prediction equals the global settle reference\'s truncation under the settle\'s current rules (water enters abyss air, rulings R23): the slope truncates and the basin settles, each with and without abyss air below y 72', () => {
+    /** The open voxels in front at y ≤ 72 are abyss air: the fall (77 … 67 at the outlet) runs into it at y 72. */
+    const ABYSS_BELOW = 72;
+    const cases = [
+      ['slope', frontWorld(cx, lx, lz, d, TOP, (t) => G - t), true],
+      ['slope into abyss air', frontWorld(cx, lx, lz, d, TOP, (t) => G - t, ABYSS_BELOW), true],
+      ['basin', frontWorld(cx, lx, lz, d, TOP, (t, sd) => (t === 0 && sd === 0 ? G : G + 4)), false],
+      ['basin in abyss air', frontWorld(cx, lx, lz, d, TOP, (t, sd) => (t === 0 && sd === 0 ? G : G + 4), ABYSS_BELOW), false],
+    ] as const;
+    for (const [name, w, truncated] of cases) {
+      const ref = referenceTruncated(w, cx, x, Y, z);
+      // The stream falls past y 72 at the outlet: abyss air there in the abyss cases, holding falling water in the reference.
+      const p = probesOf(w);
+      expect([name, p.tag(ox, 70, oz) !== 0 && p.nibble(ox, 70, oz) === CAVE_BIOME.abyss, fluidFalling(ref.at(ox, 70, oz))]).toEqual([name, name.includes('abyss'), true]);
+      expect([name, predictTruncated(p, ox, Y, oz, d), ref.truncated]).toEqual([name, truncated, truncated]);
+    }
+  });
+});
+
 // ---------------------------------------------------------------- real columns of seed '42'
 
 /** T's arrays of a real column before any spring, read back from its proto under `springs.water.tries` 0. */
@@ -301,18 +401,22 @@ function oracleAccepts(w: World, x: number, y: number, z: number, d: number, min
 }
 
 /**
- * `springsColumn` on the real column (cx, cz)'s arrays under `ctx`, with `probes`. The 3 × 3's arrays are read first, so
- * the oracle's probes never generate a column inside the call (`springsColumn` is not reentrant).
+ * `springsColumn` on the real column (cx, cz)'s arrays under `ctx`, with `probes`. The 5 × 5's arrays are read first (Task
+ * 28d's prediction reads up to 18 blocks from the column), so the oracle's probes never generate a column inside the call
+ * (`springsColumn` is not reentrant).
  */
 function realDecide(ctx: GenContext, cx: number, cz: number, probes: SpringProbes): Array<[number, number, number]> {
-  for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) tArrays(cx + dx, cz + dz);
+  for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) tArrays(cx + dx, cz + dz);
   const a = tArrays(cx, cz);
   const out = newSpringList();
   springsColumn(ctx, a.s, a.pass, a.solid, a.state, a.tags, a.fluid, a.top, probes, out);
   return listOf(out);
 }
 
-/** Mountain columns of seed '42' (springs at the defaults, found by a scan of the sp7a.liveness.springs stream). */
+/**
+ * Mountain columns of seed '42' (each held a spring at the defaults of Tasks 19-28, found by a scan of the
+ * sp7a.liveness.springs stream; at Task 31r's, `tries` 18 with Task 28d's rejection, the fifth does, `SPRING_COLUMN`).
+ */
 const MOUNTAINS: ReadonlyArray<readonly [number, number]> = [[-3035, 11917], [17044, 25519], [13110, -22585], [8652, -18898], [1250, -30453]];
 
 describe('real columns of seed \'42\' (SP7a §3.1, D21)', () => {
@@ -323,11 +427,12 @@ describe('real columns of seed \'42\' (SP7a §3.1, D21)', () => {
     // Border sites: x = 15 of a mountain column, z in 1 … 14 (the laterals inside it), its outlet in the east neighbour,
     // y in the water range; each found by the oracle over both columns' arrays. Each is then given to springsColumn as
     // its column's one try, through a try seed whose first try lands there (the terrain, the arrays and the probes stay
-    // seed '42''s): springsColumn reads the east column through the point probes only.
+    // seed '42''s): springsColumn reads the east column through the point probes only. The scan reaches ±6 chunks around
+    // each mountain (±3 until Task 31r: with Task 28d's rejection, ±3 holds 9 sites; ±6 reaches 32 at the fourth).
     const sites: Array<{ cx: number; cz: number; lz: number; y: number; yLo: number; yHi: number }> = [];
     for (const [mx, mz] of MOUNTAINS) {
-      for (let dz = -3; dz <= 3 && sites.length < 32; dz++) {
-        for (let dx = -3; dx <= 3 && sites.length < 32; dx++) {
+      for (let dz = -6; dz <= 6 && sites.length < 32; dz++) {
+        for (let dx = -6; dx <= 6 && sites.length < 32; dx++) {
           const cx = mx + dx, cz = mz + dz;
           const a = tArrays(cx, cz);
           let taken = 0;
@@ -337,6 +442,8 @@ describe('real columns of seed \'42\' (SP7a §3.1, D21)', () => {
             const yHi = a.top[lz * 16 + 15]! - 2;
             for (let y = yLo; y <= yHi; y++) {
               if (!oracleAccepts(oracleWorld, x, y, z, 1, 8)) continue;
+              // Task 28d: a site whose fall the oracle's own reads predict to end truncated is rejected; not a site.
+              if (predictTruncated(probesOf(oracleWorld), x + 1, y, z, 1)) continue;
               sites.push({ cx, cz, lz, y, yLo, yHi });
               taken++;
               break;
@@ -660,8 +767,9 @@ const TRIES_42: number[] = [
 ];
 /**
  * A column of seed '42' holding one water spring at the defaults whose outlet lies inside it (first the relief scan's
- * n916, (11344, 3591); re-found at `minFall` 7 among `MOUNTAINS`, Task 28a).
+ * n916, (11344, 3591); re-found at `minFall` 7 among `MOUNTAINS`, Task 28a, (−3035, 11917); re-found among `MOUNTAINS`
+ * at `tries` 18 with Task 28d's rejection, Task 31r).
  */
-const SPRING_COLUMN = [-3035, 11917] as const;
-const SPRING_AT = [12, 135, 1] as const;
-const SPRING_DIR = 0;
+const SPRING_COLUMN = [1250, -30453] as const;
+const SPRING_AT = [4, 127, 3] as const;
+const SPRING_DIR = 2;

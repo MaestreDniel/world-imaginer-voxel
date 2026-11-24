@@ -147,13 +147,14 @@ const SPRING_TRIES = 'springs.water.tries';
 const SPRING_TRIES_APPLIED = Math.min(DEFAULTS.springs.water.tries + 2, 32);
 /**
  * The spring half's window centre (Task 19's review): the spawn's window holds no water spring at `tries` 3, 5, 16 or
- * 32, so the spring half teleports to the column (11342, 3586), beside U2's first mountain witness (11344, 3591): at
- * seed '42' its springs step accepts no spring at `tries` 3 and one water spring at 5 (from its tries 4-5; still so at
- * `minFall` 7, Task 28a; a scratch `terrainSpringsDebug` probe over the 17 × 17 columns around the witness found no
- * other change between 3 and 5). The case asserts that the applied value changes the window and that the column was
- * swapped to it before the undo.
+ * 32, so the spring half teleports to a column whose springs step the applied value changes. Re-found by Task 31r
+ * (`tries` 18 with Task 28d's rejection, applied 20; the column (11342, 3586) Tasks 19-28 used, beside U2's first
+ * mountain witness, accepts the same springs at 18 and 20, and so does its 7 × 7 window): the column (−27, −10), the
+ * first in ring order from (0, 0) over the mountain witness's prefilter (`sp7a.springs`' water scan) whose springs step
+ * accepts a different list at 18 and at 20: no spring at 18, one water spring at 20 (from its tries 19-20). The case
+ * asserts that the applied value changes the window and that the column was swapped to it before the undo.
  */
-const SPRING_AT = [11342, 3586] as const;
+const SPRING_AT = [-27, -10] as const;
 
 /** Where the world is looked at: the camera, the compared 7 × 7 window and the MESH set around the camera's column. */
 interface View {
@@ -604,7 +605,7 @@ describe('Apply v1 on the real store (SP4c spec §8.5)', () => {
     const before = JSON.stringify(params);
     const beforeHash = await expected(params);
     expect(windowHash(), 'the fill at the spring window').toBe(beforeHash);
-    // Not vacuous: the applied value changes the compared window (a spring of tries 4-5 in SPRING_AT's column).
+    // Not vacuous: the applied value changes the compared window (a spring of tries 19-20 in SPRING_AT's column).
     const appliedParams: Params = { ...params, springs: { ...params.springs, water: { ...params.springs.water, tries: SPRING_TRIES_APPLIED } } };
     expect(await expected(appliedParams), 'the spring Apply changes the window').not.toBe(beforeHash);
     clean('the fill at the spring window');

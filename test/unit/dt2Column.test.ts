@@ -504,9 +504,9 @@ describe('DT2 aquiferProbe (SP7a spec §13.4, D19; Task 14)', () => {
 });
 
 describe('DT2 spring voxels (SP7a spec §3, D21; Task 19)', () => {
-  /** (−3035, 11917): a column holding one water spring at the defaults, at (12, 135, 1) facing north (springs.test.ts). */
-  const SPRING = [-3035, 11917] as const;
-  const AT = [16 * SPRING[0] + 12, 135, 16 * SPRING[1] + 1] as const;
+  /** (1250, −30453): a column holding one water spring at the defaults, at (4, 127, 3) facing south (springs.test.ts). */
+  const SPRING = [1250, -30453] as const;
+  const AT = [16 * SPRING[0] + 4, 127, 16 * SPRING[1] + 3] as const;
 
   it('a column holding a water spring, the spring voxel checked, reads probeBulk, surfaceProbeBulk and aquiferProbe 0: T stores air plus WATER_SOURCE where terrainSolidAt says solid, fluidAt dry and surfaceProbe a rock state', () => {
     const ctx = ctxOf();
