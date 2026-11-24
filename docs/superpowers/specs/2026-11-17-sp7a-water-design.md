@@ -1128,6 +1128,24 @@ Commands, one at a time under the heavy-command lock and the 6 GB cap: `npm run 
 
 **The known-red list (R13, R19) is empty**: every gated part passes on fast, quick and the full-tier files run here; Task 32's push condition on it holds.
 
+### Task 31p: terrain.real p99 (rulings R24 item 2)
+
+A perf task before Task 32, output-keeping (no parameter, no gate and no voxel moved). Base 2259e5a (Task 31c's head).
+
+**Profile** (scratch, `fillColumnT` over `terrain.real`'s candidate sequence t = 1 … 120, each column timed 3 times, the minimum kept; the phases timed apart by a scratch copy of T's sequence). p50 10.9 / p99 18.6 ms; the p99 is one or two columns. The worst five, chunk (x, z), total and split (ms): t 8 (−26648, 27832) 21.6: density fill 9.97, carve 1.38, tag 5.35, cave biome 0.74, aquifer 0.78, surface 0.98, springs 1.39, seed sections 0.28; t 102 (−2262, −27642) 21.3: 11.25 / 1.49 / 5.16 / 0.78 / 0.44 / 1.21 / 0.42 / 0.08; t 99 (−26019, 18171) 20.3: 10.02 / 2.16 / 5.30 / 0.89 / 0.58 / 0.76 / 0.02 / 0.07; t 35 (7165, −24485) 20.1: 11.55 / 1.53 / 3.04 / 0.37 / 0.40 / 2.03 / 0.35 / 0.08; t 18 (−7458, −4878) 19.7: 8.85 / 1.44 / 4.70 / 0.82 / 1.54 / 1.66 / 0.03 / 0.29. The mean over the 120: density 6.49, carve 1.52, tag 1.50, surface 1.34, aquifer 0.41, cave biome 0.39, springs 0.22, seed sections 0.16. A CPU profile of the worst ten (`node --cpu-prof`): the fill 49 % (the interval program 21 %, `voxelFn` 16 %, corners 12 %), the tag 21 % (`tagVoxel` 17 %), the carve 7 % (path building 6 %), the surface pass 7 %. So SP6's fill, tag and carve set the worst columns; SP7a's own steps are about 2 ms of 21. Two facts made the tag and the carve cheaper without moving a voxel: 35-50 % of the worst columns' `tagVoxel` calls (4,200-4,800 of 9,000-13,000) were at voxels the fill had just evaluated, whose taps `voxelFn` had memoised, and each tagged cell's corner interval was computed twice (fill and tag); and in these far-apart columns about 1.8 ms per column went to building carver paths that miss the column (118 of the window's 121 built paths per column).
+
+**Commits** (each `npm run typecheck && npm test` green; each proved by tests of its own and an unchanged 305-column region hash of T's output, scratch):
+- 23b371a `perf(caves)`: the tag pass's cell kinds and voxel kinds recorded during the density fill (`FillHooks` on `fillDensityColumn`, `PreTags` in caves/tags.ts; test: with and without them, the fill and every tag of the 64 bit-exact columns and of the muted trees are equal).
+- 0e73461 `perf(caves)`: partial cell tags (`cellKnown`: in a cell its intervals leave undecided, the taps they already decide at every voxel are not read; covered by the cell-tags on/off and muted-tree tests).
+- a86d221 `perf(caves)`: the carve builds no path that cannot reach its column (`carverMayReach`, the cache's `pathNear`; test: a ruled-out source has no ellipsoid meeting the column, over 4 windows at the defaults with every roll passed and at the leaves' maxima).
+Not taken (measured, slower): splitting an undecided cell into boxes for the tag (`boxInterval` per box cost more than it saved at every split size, 16 to 64 voxels).
+
+**Output**: the goldens re-recorded on HEAD (rulings R8's split form; caves.metric SIGKILLed at 6 workers and re-run at 3 into the same obs dir, then merged): `git diff --exit-code HEAD -- test/goldens.json` empty, and no commit of the task touches the file (`git diff 2259e5a -- test/goldens.json` empty); every metric of the quick tier passed in that run.
+
+**Measured** (scratch, both trees in one process, columns interleaved A/B so clock changes hit both alike; per column the median of 6, over t = 1 … 100): base → HEAD p50 10.71 → 9.57 ms, p99 20.54 → 18.33 ms, the sum ×0.887; a second round 13.47 → 12.16 / 27.10 → 23.09 (×0.888; the clocks capped, below). The worst columns lose 2.0-4.4 ms.
+
+**The bench protocol (R22)**: not run. The EC check before it read the CPU capped three times (22:26-22:30, AC online): 6 own busy threads 2.9-3.2 GHz falling to 1.6-1.8 GHz at 56-58 °C, 20 threads 1.34-1.50 GHz at 53-55 °C; rulings R6: no gated measurement until the user resets the EC. `npm run bench` (3 consecutive gated passes within 6 runs) and `npm run bench:record` (R21 item 1's re-record) remain to be run on HEAD after the reset.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
