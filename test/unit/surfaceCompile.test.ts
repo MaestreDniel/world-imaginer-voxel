@@ -18,6 +18,7 @@ import {
 } from '../harness/surfaceFuzz';
 import { testRng } from '../harness/stats';
 import { legacyDefaultSurfaceRules } from '../harness/legacyTrees';
+import { gv9SurfaceTrees } from '../harness/gv9Trees';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { resolveRules } from '../../src/gen/surface/source';
 import { canonicalJSON } from '../../src/core/params/canonical';
@@ -174,6 +175,14 @@ const RULE4: Rule = SEQ(
   IFS([ceil(0, false), CB('ceiling', 'lush'), PATCH(-0.52, 8)], B('moss_block')),
   IFS([ceil(1, false), CB('ceiling', 'dripstone'), NOT(PATCH(-8, -0.97))], B('dripstone_block')),
 );
+/**
+ * SP7a's under-water branches (its spec §5, D12), at rule 4's [1] and [2] in the default tree: under cave water
+ * (`not(water{offset 0, runTop true})`) lush floors clay two deep, plain and dripstone floors gravel one deep.
+ */
+const UNDER_WATER: readonly Rule[] = [
+  IFS([CB('floor', 'lush'), NOT({ kind: 'water', offset: 0, runTop: true }), floor(1, false)], B('clay')),
+  IFS([CB('floor', 'plain', 'dripstone'), NOT({ kind: 'water', offset: 0, runTop: true }), floor(0, false)], B('gravel')),
+];
 
 /** The default's shape with `inserted` at root.rules[2] (rule 4's place). */
 function withRule(inserted: Rule): Rule {
@@ -330,8 +339,10 @@ describe('surface rule compiler (SP3c spec §3.4)', () => {
   test("the default tree (SP6b §3.5, rulings P12): the shape's bounds (15, −1, −1), the real tree's with rule 4 (15, 1, 1); both evaluate exactly SP3c's voxels on 64 columns without cave tags", () => {
     const real = legacyDefaultSurfaceRules(DEFAULTS.surface);
     const shape = compileSurfaceRules(SEED, DEFAULT_SHAPE, NOISES, set).fastPath!;
-    // The resolved default holds rule 4 at root.rules[2] (Task 22), this file's RULE4.
-    expect(canonicalJSON((real as Extract<Rule, { kind: 'sequence' }>).rules[2])).toBe(canonicalJSON(RULE4));
+    // The resolved default holds rule 4 at root.rules[2] (Task 22), this file's RULE4 with SP7a's two under-water
+    // branches at its [1] and [2] (Task 29).
+    const rule4 = RULE4 as Extract<Rule, { kind: 'sequence' }>;
+    expect(canonicalJSON((real as Extract<Rule, { kind: 'sequence' }>).rules[2])).toBe(canonicalJSON(SEQ(rule4.rules[0]!, ...UNDER_WATER, ...rule4.rules.slice(1))));
     for (const tree of [DEFAULT_SHAPE, real]) {
       const c = compileSurfaceRules(SEED, tree, NOISES, set);
       const fp = c.fastPath!;
@@ -976,36 +987,28 @@ describe("rule 4's under-water branches on the fast path: the water-gated class 
   const WATER = (offset: number, runTop: boolean): Condition => ({ kind: 'water', offset, runTop });
   /** Holds only when water lies directly above the run's top and reaches above it (§5's `not(water{offset 0, runTop true})`). */
   const UNDER = NOT(WATER(0, true));
-  /** Task 29's two branches (§5, D12): under cave water lush floors clay two deep, plain and dripstone floors gravel one deep. */
-  const UNDER_WATER: readonly Rule[] = [
-    IF(CB('floor', 'lush'), IF(UNDER, IF(floor(1, false), B('clay')))),
-    IF(CB('floor', 'plain', 'dripstone'), IF(UNDER, IF(floor(0, false), B('gravel')))),
-  ];
-  /** `tree` (rule 4's sequence at root.rules[2]) with the two branches inserted at root.rules[2].rules[1] and [2]. */
-  function withUnderWater(tree: Rule): Rule {
-    const root = tree as Extract<Rule, { kind: 'sequence' }>;
-    const rule4 = root.rules[2] as Extract<Rule, { kind: 'sequence' }>;
-    return SEQ(root.rules[0]!, root.rules[1]!, SEQ(rule4.rules[0]!, ...UNDER_WATER, ...rule4.rules.slice(1)), ...root.rules.slice(3));
-  }
-  /** The default tree as it is today (no under-water branch), resolved at the defaults. */
-  const TODAY = resolveRules(DEFAULTS.surface.rules, DEFAULTS);
-  const BRANCHED = withUnderWater(TODAY);
+  /** The GV9 default tree (before the branches; `test/fixtures/gv9-surface-trees.json`), resolved at the defaults. */
+  const GV9 = resolveRules(gv9SurfaceTrees().default, DEFAULTS);
+  /** The default tree, with the branches at root.rules[2].rules[1] and [2] (rule 4, after its abyss branch). */
+  const DEFAULT = resolveRules(DEFAULTS.surface.rules, DEFAULTS);
   const classes = (f: SurfaceFastPath) => [
     f.skyFloorBound, f.floorBound, f.topFloorBound, f.waterFloorBound, f.ceilBound, f.floorBiomes, f.waterFloorBiomes, f.ceilBiomes, f.here,
     f.maxSurfaceDepth, f.skyGated,
   ];
 
-  test("today's default tree has no water-gated leaf: the same classes as before; with the two branches, a water-gated class (bound 1: plain, lush, dripstone)", () => {
+  test("the GV9 default tree has no water-gated leaf; the default's two branches form a water-gated class (bound 1: plain, lush, dripstone)", () => {
     // The sky-open run's sand, gravel and clay under not(water{…}) stay in the sky class; rule 4 as SP6b left it.
-    const today = surfaceFastPath(TODAY, set.sdMax)!;
-    expect(classes(today)).toEqual([15, 1, -1, -1, 1, 0b1110, -1, 0b0110, true, 15, false]);
-    expect(canonicalJSON(TODAY)).toBe(canonicalJSON(legacyDefaultSurfaceRules(DEFAULTS.surface)));
+    const gv9 = surfaceFastPath(GV9, set.sdMax)!;
+    expect(classes(gv9)).toEqual([15, 1, -1, -1, 1, 0b1110, -1, 0b0110, true, 15, false]);
+    expect(canonicalJSON(DEFAULT)).toBe(canonicalJSON(legacyDefaultSurfaceRules(DEFAULTS.surface)));
+    const rule4 = (DEFAULT as Extract<Rule, { kind: 'sequence' }>).rules[2] as Extract<Rule, { kind: 'sequence' }>;
+    expect(canonicalJSON(rule4.rules.slice(1, 3))).toBe(canonicalJSON(UNDER_WATER));
     // The branches' leaves hold not(water) on a floor-bounded path without skyOpen or yAbove{runTop}: their own class,
     // bound max(1, 0), biome set lush | plain | dripstone; the other floor class keeps its bound and its set. Their
     // depth gates cut no band.
-    const branched = surfaceFastPath(BRANCHED, set.sdMax)!;
+    const branched = surfaceFastPath(DEFAULT, set.sdMax)!;
     expect(classes(branched)).toEqual([15, 1, -1, 1, 1, 0b1110, 0b0111, 0b0110, true, 15, false]);
-    expect(branched.bands).toEqual(today.bands);
+    expect(branched.bands).toEqual(gv9.bands);
   });
 
   test('a water gate is water-gated only under a not, on a floor-bounded path of the other floor class', () => {
@@ -1033,7 +1036,7 @@ describe("rule 4's under-water branches on the fast path: the water-gated class 
     expect(surfaceFastPath(SEQ(IF(UNDER, A), IF(grad(0, 8), B('bedrock'))), 11)).toBeNull();
   });
 
-  test('with the two branches a plain cave run without water above evaluates 0 voxels and one with water above 2; the output equals the reference', () => {
+  test("on the default tree a plain dry cave run evaluates 0 voxels and a plain flooded run at most 2 (the water-gated class's bound; SP6b's skip kept, D25); the output equals the reference", () => {
     // Ground −63 … 100 with a cave at y 20 … 24 at every position, tagged plain (positions p % 4 = 0, 1) or lush (2, 3);
     // water from the cave's floor up to y 22 at odd positions, so the run below (top 19) has water above it.
     const col = handColumn(() => 100);
@@ -1052,7 +1055,7 @@ describe("rule 4's under-water branches on the fast path: the water-gated class 
       expect([scan.runTop[r], scan.runWaterAbove[r], scan.runWaterTop[r], scan.runFloorBiome[r]]).toEqual(
         [19, p & 1, (p & 1) === 1 ? 22 : scan.runWaterTop[r], (p & 2) !== 0 ? 1 : 0]);
     }
-    const c = compileSurfaceRules(SEED, BRANCHED, NOISES, set);
+    const c = compileSurfaceRules(SEED, DEFAULT, NOISES, set);
     const slow = fill(c, scan, false), fast = fill(c, scan, true);
     expect(Buffer.from(fast.out).equals(Buffer.from(slow.out))).toBe(true);
     // Per position: the sky-open run's top 16 (y 85 … 100) and the dither intervals (y −63 … −60, 1 … 7), 27 voxels;
@@ -1060,9 +1063,9 @@ describe("rule 4's under-water branches on the fast path: the water-gated class 
     // dry or wet); over a plain cave the cave run's top 2 only with water above (the water-gated class's bound 1, the
     // clay branch's stoneDepth offset 1), none without.
     expect(fast.evaluated).toBe(256 * 27 + 64 * 2 + 128 * (2 + 2));
-    // Today's tree evaluates the same voxels but the wet plain runs' 2: a dry plain run is skipped as before.
-    expect(fill(compileSurfaceRules(SEED, TODAY, NOISES, set), scan, true).evaluated).toBe(fast.evaluated - 64 * 2);
-    const ref = createSurfaceReference(SEED, BRANCHED, NOISES);
+    // The GV9 tree evaluates the same voxels but the wet plain runs' 2: a dry plain run is skipped as before.
+    expect(fill(compileSurfaceRules(SEED, GV9, NOISES, set), scan, true).evaluated).toBe(fast.evaluated - 64 * 2);
+    const ref = createSurfaceReference(SEED, DEFAULT, NOISES);
     const key = (s: number) => REGISTRY.stateKey(s);
     for (let p = 0; p < 256; p++) {
       for (let y = 10; y <= 30; y++) {

@@ -43,6 +43,7 @@ import { ctxFor, paramsWith } from '../harness/gen';
 import { isolatedColumn } from '../harness/region';
 import { cavesMuted } from '../harness/sp5cTrees';
 import { topDownHeightmaps } from '../harness/heightmaps';
+import { gv9SurfaceTrees } from '../harness/gv9Trees';
 
 const MiB = 1 << 20;
 const NEVER = () => false;
@@ -60,8 +61,8 @@ const RIVER = [-742, -2000] as const;
 const COAST = [-1667, -2000] as const;
 const OVERHANG = [-1238, -2000] as const;
 const WALL = [-1689, -2000] as const;
-/** SP6b's rule 4's states (its spec §3.4). */
-const RULE4_STATES: ReadonlySet<number> = new Set(['moss_block', 'clay', 'dripstone_block', 'abyss_ash', 'abyss_stone', 'abyss_shale', 'cracked_abyss_stone', 'abyss_stone_veined'].map((k) => REGISTRY.parseStateKey(k)));
+/** SP6b's rule 4's states (its spec §3.4), and gravel from SP7a's under-water branches (its spec §5; clay is SP6b's too). */
+const RULE4_STATES: ReadonlySet<number> = new Set(['moss_block', 'clay', 'dripstone_block', 'abyss_ash', 'abyss_stone', 'abyss_shale', 'cracked_abyss_stone', 'abyss_stone_veined', 'gravel'].map((k) => REGISTRY.parseStateKey(k)));
 const FIXTURES = [['land', LAND], ['sea', SEA], ['lake', LAKE], ['river', RIVER], ['coast', COAST], ['overhang', OVERHANG], ['wall', WALL]] as const;
 
 /** A shape spline that is `y` everywhere. */
@@ -696,6 +697,85 @@ describe('the cave biome (SP6b spec §2.1-§2.2, D17)', () => {
     expect(near).toBeGreaterThan(0);
     // The border at x = 512 crosses a biome change: more than one biome is written within 8 blocks of it.
     expect(seen.size).toBeGreaterThan(1);
+  }, 120_000);
+});
+
+describe("rule 4's under-water branches (SP7a §5)", () => {
+  /**
+   * Columns of seed 42 found by a scan of the cave biome's chunks (200 + 41r, 400 + 67i − 13r) for cave runs (not the
+   * sky-open run) at least 7 voxels tall whose floor biome (`runFloorBiome`) is lush, plain or dripstone, with and
+   * without the aquifer's water directly above their top (`runWaterAbove`): LUSH holds flooded and dry lush floors and
+   * flooded plain ones, DRIP flooded dripstone and plain floors; ABYSS is the cave biome's abyss column.
+   */
+  const LUSH = [200, 467] as const;
+  const DRIP = [241, 588] as const;
+  const ABYSS = [-3000, -1182] as const;
+  /** The default world on the GV9 default tree (before the branches; `test/fixtures/gv9-surface-trees.json`). */
+  const ctxGv9 = ctxFor('42', { surface: { rules: gv9SurfaceTrees().default as JsonValue } });
+  const key = (b: number): string => REGISTRY.stateKey(b);
+  const ABYSS_STATES = ['abyss_ash', 'abyss_stone', 'abyss_shale', 'cracked_abyss_stone', 'abyss_stone_veined'];
+
+  test('flooded lush floors clay two deep over rule 5\'s rock, flooded plain and dripstone floors gravel one deep over what they had; dry lush floors and abyss floors unchanged; every other voxel as on the GV9 tree', () => {
+    const n = { lushWet: 0, plainWet: 0, dripWet: 0, lushDry: 0, abyss: 0 };
+    const scan = newSurfaceScan();
+    for (const [cx, cz] of [LUSH, DRIP, ABYSS]) {
+      const now = generate(ctx, cx, cz).view;
+      const gv9 = generate(ctxGv9, cx, cz).view;
+      terrainSurfaceDebug(ctx, cx, cz, scan);
+      // The voxels the branches may change: the top two of a flooded lush floor, the top one of a flooded plain or
+      // dripstone floor.
+      const changed = new Set<number>();
+      for (let p = 0; p < 256; p++) {
+        const lx = p & 15, lz = p >> 4;
+        for (let r = scan.runFirst[p]!; r < scan.runFirst[p + 1]!; r++) {
+          if (r === scan.skyRun[p]) continue;
+          const top = scan.runTop[r]!, bottom = scan.runBottom[r]!, fb = scan.runFloorBiome[r]!, wet = scan.runWaterAbove[r] === 1;
+          const at = `(${cx}, ${cz}) (${lx}, ${top}, ${lz})`;
+          const was = key(gv9.block(lx, top, lz));
+          if (wet && fb === CAVE_BIOME.lush) {
+            changed.add(vi(lx, top, lz)).add(vi(lx, top - 1, lz));
+            // Where SP6b's lush floor held (moss or its clay patch; not where the abyss branch's here gate took it).
+            if (was !== 'moss_block' && was !== 'clay') continue;
+            // Two deep (one in a run one voxel tall).
+            expect(key(now.block(lx, top, lz)), at).toBe('clay');
+            if (top - 1 >= bottom) expect(key(now.block(lx, top - 1, lz)), at).toBe('clay');
+            if (top - 2 - bottom >= 2 && top - 2 > -59) {
+              // Rule 5's: stone, or deepslate by the 0 … 8 gradient (the lush branch covers floor depths 0-1 only).
+              const third = key(now.block(lx, top - 2, lz));
+              expect(top - 2 >= 8 ? ['stone'] : top - 2 <= 0 ? ['deepslate'] : ['stone', 'deepslate'], at).toContain(third);
+              expect(third, at).toBe(key(gv9.block(lx, top - 2, lz)));
+            }
+            n.lushWet++;
+          } else if (wet && (fb === CAVE_BIOME.plain || fb === CAVE_BIOME.dripstone)) {
+            changed.add(vi(lx, top, lz));
+            if (ABYSS_STATES.includes(was)) continue;
+            expect(key(now.block(lx, top, lz)), at).toBe('gravel');
+            if (top - 1 >= bottom) expect(key(now.block(lx, top - 1, lz)), at).toBe(key(gv9.block(lx, top - 1, lz)));
+            if (fb === CAVE_BIOME.plain) n.plainWet++;
+            else n.dripWet++;
+          } else if (!wet && fb === CAVE_BIOME.lush && (was === 'moss_block' || was === 'clay')) {
+            expect(key(now.block(lx, top, lz)), at).toBe(was);
+            n.lushDry++;
+          } else if (fb === CAVE_BIOME.abyss && ABYSS_STATES.includes(was)) {
+            for (let y = top; y >= bottom; y--) expect(now.block(lx, y, lz), `${at} y ${y}`).toBe(gv9.block(lx, y, lz));
+            n.abyss++;
+          }
+        }
+      }
+      // Only states move (no solidity, fluid or tag), and only at those voxels.
+      const moved: string[] = [];
+      for (let lz = 0; lz < 16; lz++) {
+        for (let lx = 0; lx < 16; lx++) {
+          for (let y = -64; y <= 319; y++) {
+            const a = now.block(lx, y, lz), b = gv9.block(lx, y, lz);
+            const other = now.fluid(lx, y, lz) !== gv9.fluid(lx, y, lz) || now.cave(lx, y, lz) !== gv9.cave(lx, y, lz) || (a === AIR) !== (b === AIR);
+            if (other || (a !== b && !changed.has(vi(lx, y, lz)))) moved.push(`(${cx}, ${cz}) (${lx}, ${y}, ${lz}): ${key(b)} → ${key(a)}`);
+          }
+        }
+      }
+      expect(moved.slice(0, 10)).toEqual([]);
+    }
+    for (const [k, v] of Object.entries(n)) expect(v, k).toBeGreaterThan(0);
   }, 120_000);
 });
 

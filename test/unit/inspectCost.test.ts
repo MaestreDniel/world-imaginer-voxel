@@ -14,6 +14,7 @@ import type { Condition, Rule } from '../../src/gen/surface/rules';
 import { randomDensityExpr, SCHEMA_DENSITY_NOISES } from '../harness/densityFuzz';
 import { legacyDefaultDensityExpr, legacyDefaultSurfaceRules } from '../harness/legacyTrees';
 import { gv8SurfaceTrees } from '../harness/gv8Trees';
+import { gv9SurfaceTrees } from '../harness/gv9Trees';
 import { paramsWith } from '../harness/gen';
 import { sp5cTrees } from '../harness/sp5cTrees';
 import { testRng } from '../harness/stats';
@@ -248,11 +249,14 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
   /** The SP3d default tree's column cost, which `DENSITY_COLUMN_COST_MAX` stays pinned to (SP6a D24). */
   const SP3D_DENSITY_DEFAULT = 14_907_917;
   /**
-   * The default rules since SP6b's rule 4 (its spec §3.4-§3.5, rulings P20): 207 nodes, the 9 in the `then` of its
-   * caveBiome{here} at a whole column each, every other at 256 × (1 + 51) (the largest bound still a floor `stoneDepth`
-   * offset 4 plus SD_MAX's static 47; rule 4's floor and ceiling leaves are bounded at 1).
+   * The default rules since SP7a's under-water branches (its spec §5, D25): 223 nodes (SP6b's rule 4, its spec §3.4-§3.5,
+   * rulings P20, gave 207; the branches 16), the 9 in the `then` of rule 4's caveBiome{here} at a whole column each,
+   * every other at 256 × (1 + 51) (the largest bound still a floor `stoneDepth` offset 4 plus SD_MAX's static 47; rule
+   * 4's floor and ceiling leaves, and the branches' water-gated ones, are bounded at 1).
    */
-  const RULES_DEFAULT = (207 - 9) * 256 * (1 + 4 + SD_MAX_STATIC) + 9 * VOXELS;
+  const RULES_DEFAULT = (223 - 9) * 256 * (1 + 4 + SD_MAX_STATIC) + 9 * VOXELS;
+  /** The GV9 default rules (SP6b's, before the branches): 207 nodes, the same 9 at a whole column. */
+  const GV9_RULES_DEFAULT = (207 - 9) * 256 * (1 + 4 + SD_MAX_STATIC) + 9 * VOXELS;
   /** SP6a's default rules (the GV8 tree, before rule 4): 163 nodes × 256 × (1 + 51); `RULES_COLUMN_COST_MAX` is 64 × it. */
   const SP6A_RULES_DEFAULT = 2_169_856;
 
@@ -268,16 +272,21 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
     expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBe(oracle(src.root, src.defs as Rec, 'column'));
   });
 
-  test('the default rules column cost: 207 nodes, rule 4\'s 9 under caveBiome{here} × 98,304, the other 198 × 256 × (1 + 51); SP6a\'s 163 × 256 × 52 still', () => {
-    expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(207);
+  test('the default rules column cost: 223 nodes, rule 4\'s 9 under caveBiome{here} × 98,304, the other 214 × 256 × (1 + 51); the GV9 tree\'s 207 and SP6a\'s 163 × 256 × 52 still', () => {
+    expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(223);
     expect(rulesColumnCost(DEFAULT_SURFACE_RULES)).toBe(RULES_DEFAULT);
-    expect(RULES_DEFAULT).toBe(3_520_512);
+    expect(RULES_DEFAULT).toBe(3_733_504);
     // The compiler's fast path agrees on the resolved default with SD_MAX at its static maximum: bounded, rule 4's floor
     // and ceiling leaves at their bound 1 (not 98,304 per node), its abyss branch here-gated.
     const resolved = legacyDefaultSurfaceRules(DEFAULTS.surface);
     const fp = surfaceFastPath(resolved, SD_MAX_STATIC)!;
     expect([fp.maxSurfaceDepth, fp.floorBound, fp.ceilBound, fp.here]).toEqual([4 + SD_MAX_STATIC, 1, 1, true]);
     expect(rulesColumnCost(resolved)).toBe(RULES_DEFAULT);
+    // The GV9 default (SP6b's rule 4, before the branches) keeps its 3,520,512.
+    const gv9 = gv9SurfaceTrees().default as JsonValue;
+    expect(countTreeNodes(gv9, 'surfaceRules')).toBe(207);
+    expect(rulesColumnCost(gv9)).toBe(GV9_RULES_DEFAULT);
+    expect(GV9_RULES_DEFAULT).toBe(3_520_512);
     // SP6a's default (the GV8 tree, before rule 4) keeps its 2,169,856.
     const sp6a = gv8SurfaceTrees().default as JsonValue;
     expect(countTreeNodes(sp6a, 'surfaceRules')).toBe(163);
@@ -285,26 +294,20 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
     expect(163 * 256 * (1 + 4 + SD_MAX_STATIC)).toBe(SP6A_RULES_DEFAULT);
   });
 
-  test("the default with Task 29's two under-water branches (SP7a §5, D25): 223 nodes, the water-gated leaves at their floor bound 1, 3,733,504, within the maximum", () => {
-    // Inserted at root.rules[2].rules[1] and [2] (rule 4, after its abyss branch): caveBiome{floor} → not(water{0,
-    // runTop}) → stoneDepth{floor, 1 | 0} → clay | gravel, 8 nodes each, none under the caveBiome{here}.
-    const branch = (biomes: string[], offset: number, state: string) => ({
-      kind: 'condition', if: { kind: 'caveBiome', side: 'floor', biomes },
-      then: { kind: 'condition', if: { kind: 'not', if: { kind: 'water', offset: 0, runTop: true } },
-        then: { kind: 'condition', if: { kind: 'stoneDepth', side: 'floor', offset, addSurfaceDepth: false }, then: { kind: 'block', state } } },
-    });
-    const tree = copy(DEFAULT_SURFACE_RULES);
-    (at(tree, 'rules[2]')['rules'] as unknown[]).splice(1, 0, branch(['lush'], 1, 'clay'), branch(['plain', 'dripstone'], 0, 'gravel'));
-    expect(countTreeNodes(tree, 'surfaceRules')).toBe(223);
+  test("the default's two under-water branches (SP7a §5, D25): 16 nodes, the water-gated leaves at their floor bound 1, 3,733,504, within the maximum", () => {
+    // At root.rules[2].rules[1] and [2] (rule 4, after its abyss branch): caveBiome{floor} → not(water{0, runTop}) →
+    // stoneDepth{floor, 1 | 0} → clay | gravel, 8 nodes each, none under the caveBiome{here}.
+    const rule4 = at(DEFAULT_SURFACE_RULES, 'rules[2]')['rules'] as JsonValue[];
+    expect(rule4.slice(1, 3).map((b) => countTreeNodes(b, 'surfaceRules'))).toEqual([8, 8]);
     // Every node but rule 4's 9 under caveBiome{here} at 256 × (1 + 51): the water-gated bound 1 is below the largest.
-    const cost = rulesColumnCost(tree);
+    const cost = rulesColumnCost(DEFAULT_SURFACE_RULES);
     expect(Number.isFinite(cost)).toBe(true);
-    expect(cost).toBe((223 - 9) * 256 * (1 + 4 + SD_MAX_STATIC) + 9 * VOXELS);
+    expect(cost - GV9_RULES_DEFAULT).toBe(16 * 256 * (1 + 4 + SD_MAX_STATIC));
     expect(cost).toBe(3_733_504);
     expect(cost).toBeLessThanOrEqual(RULES_COLUMN_COST_MAX);
     expect(RULES_COLUMN_COST_MAX).toBe(138_870_784);
     // The compiler agrees: the branches form the water-gated class at bound 1, the largest bound unchanged.
-    const resolved = resolveRules(tree, DEFAULTS);
+    const resolved = resolveRules(DEFAULT_SURFACE_RULES, DEFAULTS);
     const fp = surfaceFastPath(resolved, SD_MAX_STATIC)!;
     expect([fp.maxSurfaceDepth, fp.floorBound, fp.waterFloorBound, fp.waterFloorBiomes, fp.ceilBound, fp.here]).toEqual([4 + SD_MAX_STATIC, 1, 1, 0b0111, 1, true]);
     expect(rulesColumnCost(resolved)).toBe(cost);
@@ -328,9 +331,10 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
     expect(densityColumnCost(DEFAULT_DENSITY_TREE)).toBeLessThanOrEqual(DENSITY_COLUMN_COST_MAX);
     expect(RULES_COLUMN_COST_MAX).toBe(64 * SP6A_RULES_DEFAULT);
     expect(RULES_COLUMN_COST_MAX).toBe(64 * 2_169_856);
-    // The default with rule 4 is 39.4 × below it.
+    // The default with rule 4 and its under-water branches is 37.2 × below it (39.4 × before the branches).
     expect(rulesColumnCost(DEFAULT_SURFACE_RULES)).toBeLessThanOrEqual(RULES_COLUMN_COST_MAX);
-    expect(Math.round((10 * RULES_COLUMN_COST_MAX) / RULES_DEFAULT) / 10).toBe(39.4);
+    expect(Math.round((10 * RULES_COLUMN_COST_MAX) / RULES_DEFAULT) / 10).toBe(37.2);
+    expect(Math.round((10 * RULES_COLUMN_COST_MAX) / GV9_RULES_DEFAULT) / 10).toBe(39.4);
     expect(DENSITY_COLUMN_COST_MAX).toBeLessThan(2 ** 31);
     expect(RULES_COLUMN_COST_MAX).toBeLessThan(2 ** 31);
   });
@@ -360,7 +364,7 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
     expect(rulesColumnCost(gradient)).toBeLessThanOrEqual(RULES_COLUMN_COST_MAX);
   });
 
-  test('a default-sized rule tree without a fast path costs 207 × 98,304 ≈ 5.8 × the default, within the maximum', () => {
+  test('a default-sized rule tree without a fast path costs 223 × 98,304 ≈ 5.9 × the default, within the maximum', () => {
     // Every stoneDepth replaced by a skyOpen (one node for one): no leaf is depth-bounded, ceiling-bounded (SP6b §3.5)
     // or Y-only, so no class bounds the tree (rule 4's caveBiome{floor | ceiling} leaves lose their depth gates too).
     const noFast = copy(DEFAULT_SURFACE_RULES);
@@ -376,11 +380,11 @@ describe('column costs and their maxima (SP3d spec §1.7 "The two column-cost ma
         stack.push(...Object.values(x));
       }
     }
-    expect(countTreeNodes(noFast, 'surfaceRules')).toBe(207);
+    expect(countTreeNodes(noFast, 'surfaceRules')).toBe(223);
     expect(surfaceFastPath(withRegisteredBlocks(noFast) as Rule, SD_MAX_STATIC)).toBeNull();
-    expect(rulesColumnCost(noFast)).toBe(207 * VOXELS);
-    expect(rulesColumnCost(noFast) / RULES_DEFAULT).toBeCloseTo((207 * 384) / (198 * 52 + 9 * 384), 12);
-    expect(Math.round((10 * rulesColumnCost(noFast)) / RULES_DEFAULT) / 10).toBe(5.8);
+    expect(rulesColumnCost(noFast)).toBe(223 * VOXELS);
+    expect(rulesColumnCost(noFast) / RULES_DEFAULT).toBeCloseTo((223 * 384) / (214 * 52 + 9 * 384), 12);
+    expect(Math.round((10 * rulesColumnCost(noFast)) / RULES_DEFAULT) / 10).toBe(5.9);
     expect(rulesColumnCost(noFast)).toBeLessThanOrEqual(RULES_COLUMN_COST_MAX);
   });
 

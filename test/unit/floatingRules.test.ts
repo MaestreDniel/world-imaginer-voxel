@@ -5,7 +5,8 @@
  * of a position is the highest run whose bottom voxel is below `ISLAND_RUN_MIN_BOTTOM` (off: the first run):
  * - the tree: identity across `resolveProfile`, exactly the wrapper (the derivation's `was` check of `root.rules[1]`
  *   holds with SP6b's rule 4 at `root.rules[2]`, inherited from the default; U2's pinned `root.rules[3]` is the
- *   deepslate gradient), 225 nodes, tier 2 [], rules column cost 3,760,128, a fast path that is not sky-gated with
+ *   deepslate gradient; SP7a's under-water branches in it), 241 nodes, tier 2 [], rules column cost 3,973,120, a fast
+ *   path that is not sky-gated with
  *   `maxSurfaceDepth` = 4 + SD_MAX and the default's bands; SP6b §3.5's classes: both floor bounds 4 + SD_MAX, rule 4's
  *   ceiling class 1 (the branch's `stoneDepth{ceiling}` leaves sit under floor gates, Spec correction 6), and the
  *   constructed column's evaluated count is SP3c's (every run's top 16 voxels outside the dither intervals: no tags,
@@ -112,16 +113,17 @@ describe('FLOATING_SURFACE_RULES (SP3e spec §4.2, §4.3, §4.5, D6, D7, D21 (b)
     expect(minY).toBe(181);
   });
 
-  test('225 nodes (the default 207 + the branch 17 + the wrapping sequence); tier 2 []; rules column cost 3,760,128; no lint', () => {
-    expect(countTreeNodes(FLOATING_SURFACE_RULES, 'surfaceRules')).toBe(225);
-    expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(207);
+  test('241 nodes (the default 223 + the branch 17 + the wrapping sequence); tier 2 []; rules column cost 3,973,120; no lint', () => {
+    expect(countTreeNodes(FLOATING_SURFACE_RULES, 'surfaceRules')).toBe(241);
+    expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(223);
     expect(countTreeNodes(BRANCH, 'surfaceRules')).toBe(17);
-    expect(ruleNodeCount(FLOATING_SURFACE_RULES)).toBe(225);
+    expect(ruleNodeCount(FLOATING_SURFACE_RULES)).toBe(241);
     expect(validateRulesSource(FLOATING_SURFACE_RULES)).toEqual([]);
     expect(validateParamTrees(FLOATING)).toEqual([]);
-    // 181 nodes and 2,409,472 before SP6b's rule 4; its 9 nodes under caveBiome{here} cost 98,304 each (rulings P20).
-    expect(rulesColumnCost(FLOATING_SURFACE_RULES)).toBe(3_760_128);
-    expect(rulesColumnCost(FLOATING_SURFACE_RULES)).toBe((225 - 9) * 256 * 52 + 9 * 98_304);
+    // 181 nodes and 2,409,472 before SP6b's rule 4 (225 and 3,760,128 before SP7a's under-water branches, its spec §5);
+    // its 9 nodes under caveBiome{here} cost 98,304 each (rulings P20).
+    expect(rulesColumnCost(FLOATING_SURFACE_RULES)).toBe(3_973_120);
+    expect(rulesColumnCost(FLOATING_SURFACE_RULES)).toBe((241 - 9) * 256 * 52 + 9 * 98_304);
     expect(treeLints(FLOATING)).toEqual([]);
   });
 
@@ -136,8 +138,10 @@ describe('FLOATING_SURFACE_RULES (SP3e spec §4.2, §4.3, §4.5, D6, D7, D21 (b)
     // at 4 + SD_MAX in runs whose top is ≥ 181 only; the other non-sky floor class is rule 4's (1), with its skip.
     expect([fp!.skyFloorBound, fp!.floorBound, fp!.ceilBound]).toEqual([4 + sc.settings.sdMax, 1, 1]);
     expect([fp!.topFloorBound, fp!.topFloorMinY]).toEqual([4 + sc.settings.sdMax, ISLAND_RUN_MIN_BOTTOM]);
-    // Rule 4's floor leaves all hold a caveBiome{floor} gate, so the floor class has its biome-gated skip again (§3.5).
+    // Rule 4's floor leaves all hold a caveBiome{floor} gate, so the floor class has its biome-gated skip again (§3.5);
+    // its under-water branches (SP7a §5, D25) are the water-gated class, bound 1 over plain, lush and dripstone floors.
     expect([fp!.floorBiomes, fp!.ceilBiomes, fp!.here]).toEqual([0b1110, 0b0110, true]);
+    expect([fp!.waterFloorBound, fp!.waterFloorBiomes]).toEqual([1, 0b0111]);
     // The default is not sky-gated either since rule 4 (its floor and ceiling leaves have no skyOpen gate).
     expect(scDefault.compiled.fastPath!.skyGated).toBe(false);
     expect(fp!.bands).toEqual(scDefault.compiled.fastPath!.bands);

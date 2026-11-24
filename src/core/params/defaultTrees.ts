@@ -381,7 +381,10 @@ export const DEFAULT_DENSITY_TREE: JsonValue = registeredTree(
  * SP6b inserted rule 4 at `root.rules[2]` (its spec §3.4, D21): the cave floors and ceilings of lush and dripstone caves
  * and the abyss's rock (abyss_ash floors over the `strata` of §3.3's abyss layers), every number a literal (the
  * `surface.noises.cavePatch` thresholds, 8 and −8 for "no bound"; `addSurfaceDepth: false` on every `stoneDepth`, the
- * plan's Spec correction 10); the deepslate gradient is `root.rules[3]`. 207 nodes (163 before rule 4's 44).
+ * plan's Spec correction 10); the deepslate gradient is `root.rules[3]`. SP7a inserted rule 4's under-water branches at
+ * `root.rules[2].rules[1]` and `[2]` (its spec §5, D12, D25), after the abyss branch and before the lush floor branch:
+ * under cave water (`not(water{offset 0, runTop true})`) lush floors clay two deep, plain and dripstone floors gravel one
+ * deep, as nested `condition`s (the abyss holds no aquifer water, so no branch). 223 nodes (163 before rule 4's 60).
  */
 export const DEFAULT_SURFACE_RULES: JsonValue = registeredTree(
   { kind: 'sequence',
@@ -696,6 +699,26 @@ export const DEFAULT_SURFACE_RULES: JsonValue = registeredTree(
                   amp: 6,
                 },
               ],
+            },
+          },
+          { kind: 'condition',
+            if: { kind: 'caveBiome', side: 'floor', biomes: ['lush'] },
+            then: { kind: 'condition',
+              if: { kind: 'not', if: { kind: 'water', offset: 0, runTop: true } },
+              then: { kind: 'condition',
+                if: { kind: 'stoneDepth', side: 'floor', offset: 1, addSurfaceDepth: false },
+                then: { kind: 'block', state: 'clay' },
+              },
+            },
+          },
+          { kind: 'condition',
+            if: { kind: 'caveBiome', side: 'floor', biomes: ['plain', 'dripstone'] },
+            then: { kind: 'condition',
+              if: { kind: 'not', if: { kind: 'water', offset: 0, runTop: true } },
+              then: { kind: 'condition',
+                if: { kind: 'stoneDepth', side: 'floor', offset: 0, addSurfaceDepth: false },
+                then: { kind: 'block', state: 'gravel' },
+              },
             },
           },
           { kind: 'condition',

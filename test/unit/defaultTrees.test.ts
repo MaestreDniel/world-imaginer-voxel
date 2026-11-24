@@ -7,6 +7,7 @@ import { checkJson, countTreeNodes, type JsonFormat, type JsonValue } from '../.
 import type { Issue } from '../../src/core/params/kit';
 import type { DensityParams, SurfaceParams } from '../../src/core/params/schema';
 import { ctxFor } from '../harness/gen';
+import { gv9SurfaceTrees } from '../harness/gv9Trees';
 import { legacyDefaultDensityExpr, legacyDefaultSurfaceRules } from '../harness/legacyTrees';
 import { cavesMuted, cavesMutedDiff, SP5C_COLUMNS, sp5cPair, sp5cTrees } from '../harness/sp5cTrees';
 
@@ -290,8 +291,27 @@ describe('the default trees as data (SP3d spec §2)', () => {
     expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(countTreeNodes(fixture() as JsonValue, 'surfaceRules'));
     // SP3c's 163 and SP6b's rule 4 (its spec §3.4): the sequence, the abyss branch's 11 (its condition and here gate,
     // the sequence, the ash leaf's three gates and block, the strata), lush floors' 9, dripstone floors' 8, lush
-    // ceilings' 7 and dripstone ceilings' 8.
-    expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(163 + 1 + 11 + 9 + 8 + 7 + 8);
-    expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(207);
+    // ceilings' 7 and dripstone ceilings' 8; SP7a's under-water branches (its spec §5), 8 each: three conditions,
+    // caveBiome, not, water, stoneDepth and the block.
+    expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(163 + 1 + 11 + 9 + 8 + 7 + 8 + 2 * 8);
+    expect(countTreeNodes(DEFAULT_SURFACE_RULES, 'surfaceRules')).toBe(223);
+  });
+
+  test("rule 4's under-water branches at root.rules[2].rules[1] and [2] (SP7a spec §5, D12): after the abyss branch, before the lush floor branch", () => {
+    const rule4 = (DEFAULT_SURFACE_RULES as { rules: JsonValue[] }).rules[2] as { rules: JsonValue[] };
+    const branch = (biomes: string[], offset: number, state: string): JsonValue => ({
+      kind: 'condition', if: { kind: 'caveBiome', side: 'floor', biomes },
+      then: { kind: 'condition', if: { kind: 'not', if: { kind: 'water', offset: 0, runTop: true } },
+        then: { kind: 'condition', if: { kind: 'stoneDepth', side: 'floor', offset, addSurfaceDepth: false }, then: { kind: 'block', state } } },
+    });
+    expect(canonicalJSON(rule4.rules[1])).toBe(canonicalJSON(branch(['lush'], 1, 'clay')));
+    expect(canonicalJSON(rule4.rules[2])).toBe(canonicalJSON(branch(['plain', 'dripstone'], 0, 'gravel')));
+    expect(rule4.rules[0]).toMatchObject({ if: { kind: 'caveBiome', side: 'here', biomes: ['abyss'] } });
+    expect(rule4.rules[3]).toMatchObject({ then: { if: { kind: 'caveBiome', side: 'floor', biomes: ['lush'] } } });
+    expect(rule4.rules).toHaveLength(7);
+    // Every other node of the tree is the GV9 default's (the branches are the only change, SP7a D34).
+    const without = { ...(DEFAULT_SURFACE_RULES as Record<string, JsonValue>), rules: [...(DEFAULT_SURFACE_RULES as { rules: JsonValue[] }).rules] };
+    without.rules[2] = { ...(rule4 as Record<string, JsonValue>), rules: [rule4.rules[0]!, ...rule4.rules.slice(3)] };
+    expect(canonicalJSON(without)).toBe(canonicalJSON(gv9SurfaceTrees().default));
   });
 });

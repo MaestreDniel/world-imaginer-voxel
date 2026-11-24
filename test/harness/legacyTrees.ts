@@ -3,7 +3,8 @@
  * (`src/gen/density/defaults.ts`) and `defaultSurfaceRules` (`src/gen/surface/defaults.ts`) copied unchanged as at
  * 9fababa, renamed `legacyDefaultDensityExpr` and `legacyDefaultSurfaceRules`. The data defaults of
  * `src/core/params/defaultTrees.ts` resolve to exactly these trees (§2.1, §2.2). SP6b (Task 22) added rule 4 at
- * `root.rules[2]` of `legacyDefaultSurfaceRules` (its spec §3.4), as `DEFAULT_SURFACE_RULES` gained it.
+ * `root.rules[2]` of `legacyDefaultSurfaceRules` (its spec §3.4), as `DEFAULT_SURFACE_RULES` gained it, and SP7a (Task
+ * 29) rule 4's under-water branches at its [1] and [2] (its spec §5).
  */
 import type { DensityParams, SurfaceParams } from '../../src/core/params/schema';
 import type { SurfaceBiome } from '../../src/gen/biomes/registry';
@@ -64,15 +65,18 @@ const gradient = (trueAtAndBelow: number, falseAtAndAbove: number): Condition =>
 const CAVE_PATCH = 'surface.noises.cavePatch';
 const cavePatch = (min: number, max: number): Condition => ({ kind: 'noiseThreshold', noise: CAVE_PATCH, min, max });
 const ceiling = (offset: number): Condition => ({ kind: 'stoneDepth', side: 'ceiling', offset, addSurfaceDepth: false });
-const caveBiome = (side: 'floor' | 'ceiling' | 'here', ...biomes: ('lush' | 'dripstone' | 'abyss')[]): Condition => ({ kind: 'caveBiome', side, biomes });
+const caveBiome = (side: 'floor' | 'ceiling' | 'here', ...biomes: ('plain' | 'lush' | 'dripstone' | 'abyss')[]): Condition => ({ kind: 'caveBiome', side, biomes });
 
 /**
  * Rule 4 (SP6b spec §3.4, D21): ash on abyss floors over the abyss's strata (§3.3's default layers), moss two deep with
  * clay patches on lush floors, dripstone two deep with bare stone patches on dripstone floors and ceilings, moss on lush
- * ceilings; every `stoneDepth` without the surface depth (the plan's Spec correction 10).
+ * ceilings; every `stoneDepth` without the surface depth (the plan's Spec correction 10). SP7a's under-water branches
+ * (its spec §5, D12) after the abyss's: under cave water lush floors clay two deep, plain and dripstone floors gravel one
+ * deep.
  */
 function rule4(): Rule {
   const floor1 = floor(1, false);
+  const underWater = not(water(0, true));
   const bare = not(cavePatch(-PATCH_LIMIT, -0.97));
   const strata: Rule = {
     kind: 'strata',
@@ -84,6 +88,8 @@ function rule4(): Rule {
   };
   return seq(
     when([caveBiome('here', 'abyss')], seq(when([floor1, caveBiome('floor', 'abyss'), cavePatch(-0.84, PATCH_LIMIT)], block('abyss_ash')), strata)),
+    when([caveBiome('floor', 'lush'), underWater, floor1], block('clay')),
+    when([caveBiome('floor', 'plain', 'dripstone'), underWater, floor(0, false)], block('gravel')),
     when([floor1, caveBiome('floor', 'lush')], seq(when([cavePatch(0.84, PATCH_LIMIT)], block('clay')), block('moss_block'))),
     when([floor1, caveBiome('floor', 'dripstone'), bare], block('dripstone_block')),
     when([ceiling(0), caveBiome('ceiling', 'lush'), cavePatch(-0.52, PATCH_LIMIT)], block('moss_block')),

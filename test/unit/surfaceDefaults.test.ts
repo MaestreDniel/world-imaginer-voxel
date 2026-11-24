@@ -91,11 +91,13 @@ describe('the default rule tree (spec §4; SP3d: the resolved data default)', ()
       `${G}.rules[4].then.then mud`, `${G}.rules[5].then.then gravel`, `${G}.rules[6].then.then stone`, `${G}.rules[7] grass_block`,
       `${PAL}.rules[7] dirt`,
       `${S}.rules[4].then.rules[0].then sandstone`, `${S}.rules[4].then.rules[1].then red_sandstone`,
-      // SP6b's rule 4 (its spec §3.4): the abyss's ash floors and strata, lush floors, dripstone floors, lush and
+      // SP6b's rule 4 (its spec §3.4): the abyss's ash floors and strata, SP7a's under-water branches (its spec §5:
+      // clay under cave water on lush floors, gravel on plain and dripstone ones), lush floors, dripstone floors, lush and
       // dripstone ceilings; the deepslate gradient follows it at root.rules[3].
       `${R4}.rules[0].then.rules[0].then.then.then abyss_ash`, `${R4}.rules[0].then.rules[1] strata`,
-      `${R4}.rules[1].then.then.rules[0].then clay`, `${R4}.rules[1].then.then.rules[1] moss_block`,
-      `${R4}.rules[2].then.then.then dripstone_block`, `${R4}.rules[3].then.then.then moss_block`, `${R4}.rules[4].then.then.then dripstone_block`,
+      `${R4}.rules[1].then.then.then clay`, `${R4}.rules[2].then.then.then gravel`,
+      `${R4}.rules[3].then.then.rules[0].then clay`, `${R4}.rules[3].then.then.rules[1] moss_block`,
+      `${R4}.rules[4].then.then.then dripstone_block`, `${R4}.rules[5].then.then.then moss_block`, `${R4}.rules[6].then.then.then dripstone_block`,
       'root.rules[3].then deepslate',
     ]);
     // §6's readout example for a grass_block top.
@@ -136,8 +138,8 @@ describe('the default rule tree (spec §4; SP3d: the resolved data default)', ()
       // Every block key is registered: the stand-in copy is exact.
       expect(canonicalJSON(withRegisteredBlocks(tree))).toBe(canonicalJSON(tree));
     }
-    // Far inside §3.1's limits (depth 32, 4096 nodes): 207 since SP6b's rule 4.
-    expect(nodeCount(fixture())).toBe(207);
+    // Far inside §3.1's limits (depth 32, 4096 nodes): 207 since SP6b's rule 4, 223 since SP7a's under-water branches.
+    expect(nodeCount(fixture())).toBe(223);
     // Without the band leaf (§9's cut) the default tree's bandlands leaf is refused, and only it.
     expect(validateRules(defaultRulesAt(DEFAULTS), (n) => (n === 'surface.noises.bandOffset' ? undefined : NOISES(n))).map((i) => `${i.path} ${i.code}`))
       .toEqual(['root.rules[1].then.rules[3].then.rules[1].then.rules[1] NO_BAND_NOISE']);
@@ -154,9 +156,11 @@ describe('the default rule tree (spec §4; SP3d: the resolved data default)', ()
       // gate, so the tree is no longer sky-gated: the sky floor class keeps SD_MAX + 4, the other floor class and the
       // ceiling class are 1; every floor leaf of the non-sky class is gated by caveBiome{floor} (lush, dripstone,
       // abyss: bits 1-3) and every ceiling leaf by caveBiome{ceiling} (lush, dripstone), so the biome-gated skip
-      // applies (§3.5 item 3); the abyss branch is here-gated (item 4).
+      // applies (§3.5 item 3); the abyss branch is here-gated (item 4). SP7a's under-water branches (its spec §5, D25)
+      // are the water-gated class, bound 1 over plain, lush and dripstone floors (bits 0-2).
       expect([fp.skyGated, fp.skyFloorBound, fp.floorBound, fp.ceilBound]).toEqual([false, sdMax + 4, 1, 1]);
       expect([fp.floorBiomes, fp.ceilBiomes, fp.here]).toEqual([0b1110, 0b0110, true]);
+      expect([fp.waterFloorBound, fp.waterFloorBiomes]).toEqual([1, 0b0111]);
       // The four bands stay; each non-dither band's state depends on the cave biome (the strata under
       // caveBiome{here}), so it is −1 (Task 15's band rule): the classification decides its voxels.
       expect(fp.bands).toEqual([

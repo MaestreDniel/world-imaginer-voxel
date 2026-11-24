@@ -112,13 +112,16 @@ describe('rows and summaries', () => {
       '1 root.rules[1] | rules[1] | if skyOpen [-]',
       '2 root.rules[1].if | if | skyOpen',
       '2 root.rules[1].then | then | sequence 5 [+]',
-      // SP6b's rule 4 (its spec §3.4), then the deepslate gradient at root.rules[3].
-      '1 root.rules[2] | rules[2] | sequence 5 [-]',
+      // SP6b's rule 4 (its spec §3.4) with SP7a's under-water branches at [1] and [2] (its spec §5), then the deepslate
+      // gradient at root.rules[3].
+      '1 root.rules[2] | rules[2] | sequence 7 [-]',
       '2 root.rules[2].rules[0] | rules[0] | if caveBiome here [abyss] [+]',
-      '2 root.rules[2].rules[1] | rules[1] | if stoneDepth floor 1 [+]',
-      '2 root.rules[2].rules[2] | rules[2] | if stoneDepth floor 1 [+]',
-      '2 root.rules[2].rules[3] | rules[3] | if stoneDepth ceiling 0 [+]',
-      '2 root.rules[2].rules[4] | rules[4] | if stoneDepth ceiling 1 [+]',
+      '2 root.rules[2].rules[1] | rules[1] | if caveBiome floor [lush] [+]',
+      '2 root.rules[2].rules[2] | rules[2] | if caveBiome floor [plain, dripstone] [+]',
+      '2 root.rules[2].rules[3] | rules[3] | if stoneDepth floor 1 [+]',
+      '2 root.rules[2].rules[4] | rules[4] | if stoneDepth floor 1 [+]',
+      '2 root.rules[2].rules[5] | rules[5] | if stoneDepth ceiling 0 [+]',
+      '2 root.rules[2].rules[6] | rules[6] | if stoneDepth ceiling 1 [+]',
       '1 root.rules[3] | rules[3] | if verticalGradient 0 … 8 → deepslate [-]',
       '2 root.rules[3].if | if | verticalGradient 0 … 8',
       '2 root.rules[3].then | then | block deepslate',
@@ -301,8 +304,8 @@ describe('expansion, expand to selection and the indentation cap', () => {
     expect(rootRows(e)).toEqual(['root']);
     // SP6b Task 19: `defs.steep` (S_w + S_b) shows 7 rows where `defs.wetSteep` showed 5, and `defs.floorGentle` 4.
     expect(rowsOf(inspectorTree(DEFAULTS, e, null), 'density.defs').filter((r) => r.path.startsWith('defs.'))).toHaveLength(20);
-    // SP6b's rule 4 (Task 22) adds its row and its five branches' rows.
-    expect(rowsOf(inspectorTree(DEFAULTS, e, null), 'surface.rules')).toHaveLength(16);
+    // SP6b's rule 4 (Task 22) adds its row and its five branches' rows; SP7a's under-water branches (its spec §5) two more.
+    expect(rowsOf(inspectorTree(DEFAULTS, e, null), 'surface.rules')).toHaveLength(18);
     e = toggleExpansion(e, 'density.defs', 'root.a.a', 2);
     expect(rootRows(e)).toEqual(['root']);
     e = toggleExpansion(e, 'density.defs', 'root', 0);

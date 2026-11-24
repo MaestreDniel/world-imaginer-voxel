@@ -92,15 +92,16 @@ function belowSkin(y: number): readonly number[] {
 
 const [MOSS, DRIP, ASH] = ['moss_block', 'dripstone_block', 'abyss_ash'].map((k) => REGISTRY.parseStateKey(k)) as [number, number, number];
 const STRATA: readonly number[] = ['abyss_stone', 'abyss_shale', 'cracked_abyss_stone', 'abyss_stone_veined'].map((k) => REGISTRY.parseStateKey(k));
-/** Every state rule 4 places. */
-const RULE4: ReadonlySet<number> = new Set([MOSS, DRIP, ASH, CLAY, ...STRATA]);
+/** Every state rule 4 places (gravel since SP7a's under-water branches). */
+const RULE4: ReadonlySet<number> = new Set([MOSS, DRIP, ASH, CLAY, GRAVEL, ...STRATA]);
 
 /**
  * SP6b's rule 4 (its spec §3.4) at voxel y of position p's run r, written from the spec with the scan's cave biomes and
  * picker: the states the voxel may take below the sky-open skin, or null where no branch of rule 4 can take it. In the
  * abyss (the picker's pick at the voxel) the strata, abyss_ash two deep on an abyss floor; else moss or clay two deep on
  * a lush floor, dripstone two deep on a dripstone floor and ceiling (or bare), moss on a lush ceiling's bottom voxel
- * (or bare); rule 1's bedrock below y −59 first.
+ * (or bare); rule 1's bedrock below y −59 first. SP7a's under-water branches (its spec §5) come after the abyss's: in a
+ * run with water directly above its top, clay two deep on a lush floor and gravel one deep on a plain or dripstone floor.
  */
 function rule4States(scan: SurfaceScan, p: number, y: number, r: number): readonly number[] | null {
   const fd = scan.runTop[r]! - y, cd = y - scan.runBottom[r]!;
@@ -110,6 +111,8 @@ function rule4States(scan: SurfaceScan, p: number, y: number, r: number): readon
   if (scan.cavePicker !== null && caveBiomeOfPass(scan.cavePicker, scan.cavePass!, x, y, z) === 3) {
     return [...bedrock, ...(fd <= 1 && f === 3 ? [ASH] : []), ...STRATA];
   }
+  if (scan.runWaterAbove[r] === 1 && fd <= 1 && f === 1) return [...bedrock, CLAY];
+  if (scan.runWaterAbove[r] === 1 && fd === 0 && (f === 0 || f === 2)) return [...bedrock, GRAVEL];
   if (fd <= 1 && f === 1) return [...bedrock, MOSS, CLAY];
   if ((fd <= 1 && f === 2) || (cd <= 1 && c === 2)) return [DRIP, ...belowSkin(y)];
   if (cd === 0 && c === 1) return [MOSS, ...belowSkin(y)];

@@ -49,7 +49,7 @@ describe('the two leaves (SP3d spec §1.2)', () => {
   test('the README rows: `<format> tree, <n> nodes`, no range; scope terrain', () => {
     const rows = renderReference(SCHEMA).split('\n');
     expect(rows.find((r) => r.startsWith('| `density.defs` |'))).toMatch(/^\| `density\.defs` \| json \| density tree, 1136 nodes \|  \|  \| terrain \| Density expression: /);
-    expect(rows.find((r) => r.startsWith('| `surface.rules` |'))).toMatch(/^\| `surface\.rules` \| json \| surfaceRules tree, 207 nodes \|  \|  \| terrain \| Surface rules: /);
+    expect(rows.find((r) => r.startsWith('| `surface.rules` |'))).toMatch(/^\| `surface\.rules` \| json \| surfaceRules tree, 223 nodes \|  \|  \| terrain \| Surface rules: /);
   });
 
   test('an edited tree is tier 1\'s frozen clone: a patch with the same registered value keeps it', () => {

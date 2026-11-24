@@ -38,8 +38,8 @@ describe('ruleNodeAt and SurfaceReference.nodeAt (SP3d spec §4.1)', () => {
 
   test('every rule and condition of the default tree is found by its id, as the tree\'s own object', () => {
     const nodes = nodesOf(tree);
-    // 163, and SP6b's rule 4 (Task 22): 207.
-    expect(nodes.length).toBe(207);
+    // 163, SP6b's rule 4 (Task 22): 207, and SP7a's under-water branches (its spec §5): 223.
+    expect(nodes.length).toBe(223);
     for (const { id, kind, node } of nodes) {
       const got = sc.reference.nodeAt(id);
       expect(got?.kind, id).toBe(kind);

@@ -109,8 +109,9 @@ describe('the fieldSlice job (SP3d spec §5.1)', () => {
     // 106,240 before them), so a part holds at most 28 of them (30 before the floor, 3 without the memo-aware bound, 78
     // before SP6a).
     bad(vMsg(MOUNTAIN, 'density', '', 0, 128, 128), `too heavy: 128 × 289864 work units exceed the part budget ${PART_BUDGET}`);
-    // The T column's cost: the density tree's plus the rules' (3,520,512 since SP6b's rule 4, 2,169,856 before it).
-    bad(vMsg(MOUNTAIN, 'blocks', '', 0, 2), 'too heavy: 2 sample columns of cost 35033901, at most 1 per part');
+    // The T column's cost: the density tree's plus the rules' (3,733,504 since SP7a's under-water branches, 3,520,512
+    // since SP6b's rule 4, 2,169,856 before it).
+    bad(vMsg(MOUNTAIN, 'blocks', '', 0, 2), 'too heavy: 2 sample columns of cost 35246893, at most 1 per part');
     expect(h.handle(vMsg(MOUNTAIN, 'density', '', 0, 28, 128)).msg.type).toBe('fieldSliceResult');
     bad(vMsg(MOUNTAIN, 'density', '', 0, 29, 128), `too heavy: 29 × 289864 work units exceed the part budget ${PART_BUDGET}`);
   });

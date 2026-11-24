@@ -255,6 +255,10 @@
  * D31's checkpoint (Task 26) lands item 17's T gate line in §7 and SP7a's exit per Point 4 (`terrain.real` ≤ 13 / 20 ms,
  * `terrain.islands` ≤ 14.5 / 26.5 ms; `aquifer.column` ≤ 1.0 / 2.5 ms, `AQUIFER_P50_MAX_MS` and `AQUIFER_P99_MAX_MS`,
  * which the bench measures in `BENCH_ROWS`); the SP6a describe's T gate pin keeps its own prefix of the row.
+ * Rule 4's under-water branches (Task 29) land item 8: §3.11's rule 4 line as built (the two branches at
+ * `root.rules[2].rules[1]` and `[2]`; the SP6b describe's "SP7, with aquifers" pin moved here, the plan's Spec
+ * correction 2) and the "As built by SP7a" paragraph (the terrain stage 6, `GENERATOR_VERSION` 10, the water-gated
+ * fast-path class, the GV9 trees' migration), pinned beside the code-only test of the stage and the version.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2676,15 +2680,15 @@ describe('master spec amendments (SP6b §15)', () => {
     const tree = DEFAULT_SURFACE_RULES as unknown as { rules: Array<{ kind: string; if?: { kind: string } }> };
     expect(tree.rules[2]!.kind).toBe('sequence');
     expect(tree.rules[3]!.if?.kind).toBe('verticalGradient');
-    // Rule 4's text as built: its blocks, the strata, and the under-water branches handed to SP7.
+    // Rule 4's text as built: its blocks and the strata. The under-water branches it handed to SP7 ("SP7, with
+    // aquifers") moved to 'master spec amendments (SP7a §16)' (SP7a §16 item 8 words them as built, Task 29).
     const rule4 = lines.find((l) => l.startsWith('4. Lower runs use cave-biome floor and ceiling rules'));
     expect(rule4, 'no rule 4 line in §3.11').toBeDefined();
     for (const w of ['moss_block', 'clay', 'dripstone_block', '`strata`', 'abyss_ash', 'abyss_stone', 'abyss_shale', 'cracked_abyss_stone', 'abyss_stone_veined']) expect(rule4, w).toContain(w);
-    expect(rule4).toContain('(clay under cave water in lush, gravel under cave water elsewhere: SP7, with aquifers; amended by SP6b)');
     expect(rule4).toContain('**Grass never appears below the open-sky run.**');
-    // The As built paragraph: the terrain stage's version and GENERATOR_VERSION as the code holds them.
+    // The As built paragraph (up to SP7a's own, SP7a §16 item 8).
     const from = lines.findIndex((l) => l.startsWith('**As built by SP6b** (amended by SP6b'));
-    const to = lines.findIndex((l, i) => i > from && l.startsWith('### 3.12 '));
+    const to = lines.findIndex((l, i) => i > from && (l.startsWith('**As built by SP7a**') || l.startsWith('### 3.12 ')));
     expect(from, 'no **As built by SP6b** paragraph').toBeGreaterThan(lines.findIndex((l) => l.startsWith('### 3.11 ')));
     const asBuilt = lines.slice(from, to).join('\n');
     // SP6b's record: the code checks moved to 'master spec amendments (SP7a §16)' (the terrain stage 6 and
@@ -3708,10 +3712,33 @@ describe('master spec amendments (SP7a §16)', () => {
 
   test('the terrain stage 6 and GENERATOR_VERSION 10 (SP7a §15.3)', () => {
     // A code-only test (rulings P25): the checks of the SP6b describe's rule 4 "As built" paragraph moved here; Task 29
-    // (§16 item 8) adds the "As built by SP7a" paragraph and pins its text beside it.
+    // (§16 item 8) adds the "As built by SP7a" paragraph and pins its text beside it (the next test).
     expect(STAGES.find((st) => st.id === 'terrain')!.version).toBe(6);
     expect(STAGES.find((st) => st.id === 'terrain')!.params).toEqual(['density', 'surface', 'caves', 'aquifer', 'springs']);
     expect(GENERATOR_VERSION).toBe(10);
+  });
+
+  test('§3.11 rule 4 as built (SP7a spec §16 item 8)', () => {
+    const lines = text.split('\n');
+    // Rule 4's line: the under-water branches as built (moved from the SP6b describe, which pinned "SP7, with aquifers").
+    const rule4 = lines.find((l) => l.startsWith('4. Lower runs use cave-biome floor and ceiling rules'));
+    expect(rule4, 'no rule 4 line in §3.11').toBeDefined();
+    expect(rule4).not.toContain('SP7, with aquifers');
+    expect(rule4).toContain('otherwise stone or deepslate (rule 2) (amended by SP6b); under cave water (`not(water{offset 0, runTop true})`: the aquifer\'s water directly above the run\'s top) lush floors clay two deep and plain and dripstone floors gravel one deep, two branches after the abyss\'s and before the lush floor\'s (`root.rules[2].rules[1]` and `[2]`), the abyss holding no aquifer water and no such branch; a floor under the settle\'s water (D) keeps its dry skin, since the rules run in T (amended by SP7a, its spec §5, D12).');
+    // The code holds the branches where the line says.
+    const rule4Tree = (DEFAULT_SURFACE_RULES as unknown as { rules: Array<{ rules: Array<{ if: { kind: string; biomes?: string[] }; then: { if: { kind: string } } }> }> }).rules[2]!;
+    expect(rule4Tree.rules.slice(1, 3).map((b) => [b.if.kind, b.if.biomes, b.then.if.kind])).toEqual([['caveBiome', ['lush'], 'not'], ['caveBiome', ['plain', 'dripstone'], 'not']]);
+    // The "As built by SP7a" paragraph, after SP6b's and before §3.12.
+    const from = lines.findIndex((l) => l.startsWith('**As built by SP7a** (amended by SP7a'));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('### 3.12 '));
+    expect(from, 'no **As built by SP7a** paragraph').toBeGreaterThan(lines.findIndex((l) => l.startsWith('**As built by SP6b** (amended by SP6b')));
+    const asBuilt = lines.slice(from, to).join('\n');
+    expect(asBuilt).toContain(`The \`terrain\` stage is version ${STAGES.find((st) => st.id === 'terrain')!.version} with \`params: ['density', 'surface', 'caves', 'aquifer', 'springs']\`; \`GENERATOR_VERSION\` ${GENERATOR_VERSION}.`);
+    expect(asBuilt).toContain('The `terrain` stage is version 6 with `params: [\'density\', \'surface\', \'caves\', \'aquifer\', \'springs\']`; `GENERATOR_VERSION` 10.');
+    expect(asBuilt).toContain('- **Fast path.** A water-gated class: a floor-bounded leaf whose path holds a `water` under an odd number of `not`s');
+    expect(asBuilt).toContain('so a dry cave run takes its band state without evaluation as before (SP6b\'s biome-gated skip kept)');
+    expect(asBuilt).toContain('(the default tree 223 nodes, 3,733,504); `RULES_COLUMN_COST_MAX` unchanged.');
+    expect(asBuilt).toContain('- **Saved worlds.** Schema 6\'s migration maps the GV9 built-in surface trees to today\'s');
   });
 
   test('§1\'s metrics entry and "Banned APIs" name sp7aGoldens.ts (the sp7a.* goldens), which exists (SP7a spec §16 item 19)', () => {

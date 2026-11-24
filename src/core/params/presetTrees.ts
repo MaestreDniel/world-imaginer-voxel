@@ -210,8 +210,8 @@ const ISLANDS_BRANCH: JsonValue = cond({ kind: 'yAbove', minY: ISLAND_RUN_MIN_BO
  * scan makes the sky-open run with `islands.enabled` (the highest run reaching below y 181), keeps the default palette.
  * Every branch leaf keeps its floor `stoneDepth` gate, so the tree has a fast path with `maxSurfaceDepth` = 4 + SD_MAX,
  * but it is not sky-gated (the pass evaluates the top 4 + SD + 1 voxels of every run). `root.rules[0]` (bedrock),
- * `root.rules[2]` (rule 4, SP6b spec §3.4, inherited from the default) and `root.rules[3]` (the deepslate gradient U2
- * perturbs) keep their places. 225 nodes (181 before rule 4's 44).
+ * `root.rules[2]` (rule 4, SP6b spec §3.4, inherited from the default with SP7a's under-water branches, its spec §5) and
+ * `root.rules[3]` (the deepslate gradient U2 perturbs) keep their places. 241 nodes (181 before rule 4's 60).
  */
 export const FLOATING_SURFACE_RULES: JsonValue = deriveTree(DEFAULT_SURFACE_RULES, 'surface.rules', 'surfaceRules', [
   {

@@ -355,6 +355,32 @@
         },
         {
           "kind": "condition",
+          "if": { "kind": "caveBiome", "side": "floor", "biomes": ["lush"] },
+          "then": {
+            "kind": "condition",
+            "if": { "kind": "not", "if": { "kind": "water", "offset": 0, "runTop": true } },
+            "then": {
+              "kind": "condition",
+              "if": { "kind": "stoneDepth", "side": "floor", "offset": 1, "addSurfaceDepth": false },
+              "then": { "kind": "block", "state": "clay" }
+            }
+          }
+        },
+        {
+          "kind": "condition",
+          "if": { "kind": "caveBiome", "side": "floor", "biomes": ["plain", "dripstone"] },
+          "then": {
+            "kind": "condition",
+            "if": { "kind": "not", "if": { "kind": "water", "offset": 0, "runTop": true } },
+            "then": {
+              "kind": "condition",
+              "if": { "kind": "stoneDepth", "side": "floor", "offset": 0, "addSurfaceDepth": false },
+              "then": { "kind": "block", "state": "gravel" }
+            }
+          }
+        },
+        {
+          "kind": "condition",
           "if": { "kind": "stoneDepth", "side": "floor", "offset": 1, "addSurfaceDepth": false },
           "then": {
             "kind": "condition",
