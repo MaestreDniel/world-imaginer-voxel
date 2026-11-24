@@ -55,6 +55,21 @@ export function preCaveSolidity(view: ScatterColumn, out: Uint8Array): Uint8Arra
   return out;
 }
 
+/**
+ * T4's floor per position (SP7a, rulings R24 item 7): the pre-cave sea bed, the highest voxel whose block is not air or
+ * that carries a cave tag (C's `preCaveTops` rule), −64 at the lowest, into `out` at index (lz << 4) | lx; `solid` is
+ * `preCaveSolidity`'s scratch. A cave D24 opens through the sea bed is looked over, not read as the floor.
+ */
+export function preCaveFloors(view: ScatterColumn, solid: Uint8Array, out: Int16Array): Int16Array {
+  preCaveSolidity(view, solid);
+  for (let p = 0; p < 256; p++) {
+    let y = 319;
+    while (y > -64 && solid[((y + 64) << 8) | p] === 0) y--;
+    out[p] = y;
+  }
+  return out;
+}
+
 /** Solid→air transitions at y ∈ [y0, y1] (y0 ≥ −64) of position p (T2's and Z1's overhang count). */
 export function transitions(solid: Uint8Array, p: number, y0: number, y1: number): number {
   let n = 0;

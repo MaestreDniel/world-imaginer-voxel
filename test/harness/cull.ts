@@ -7,10 +7,12 @@
  *   (connectivity's predicate, PASS opaque with `fullFaces` 63), each section's `connectivity15` from its padded copy
  *   (the padding is not read), its fully-opaque flag, its non-empty flag (a non-air voxel with a non-opaque face
  *   neighbour, from the blocks without meshing; §12.4's `culledUnderground`), the pre-cave top per position, and
- *   sampled candidates in the central 8 × 8 chunks (tagged cave air, no fluid; opaque voxels ≥ 16 deep).
+ *   sampled candidates in the central 8 × 8 chunks (tagged cave air, no fluid; tagged air holding fluid apart, the
+ *   poses' fallback; opaque voxels ≥ 16 deep).
  * - `r3Poses` (plan): fast 8, quick 32, full 64 poses over the regions in turn, deterministic, all in the central
  *   8 × 8 chunks so RD 12's disc lies in the region: tagged cave air at several depths and kinds (eye ≥ 16 below the
- *   pre-cave top: underground; pitch +90 and −90 among them), surface poses, eyes within 0.5 block of a section face,
+ *   pre-cave top: underground; pitch +90 and −90 among them; SP7a, rulings R24 item 8: a region with no dry candidate
+ *   for a pose kind takes its eye in a fluid-filled cave voxel instead, `poseCandidates`), surface poses, eyes within 0.5 block of a section face,
  *   edge and corner, an eye inside an opaque voxel, an eye above y 319 and one below −64 (`drawAll`), a sealed room
  *   opened by an edited wall (where the region allows, the room's far section reachable only through it), a pose with
  *   one disc column not revealed (counted open, §8.2; the column outside the seed box whose closing would hide the most
@@ -90,6 +92,11 @@ export interface CaveRegion {
    * boundary (0 … 3).
    */
   readonly caveAir: Int32Array;
+  /**
+   * Tagged cave voxels holding fluid (air blocks with a fluid byte) in the central chunks, sampled and laid out as
+   * `caveAir`: the poses' fallback for a kind with no dry candidate (`poseCandidates`; SP7a floods caves under the sea).
+   */
+  readonly caveFluid: Int32Array;
   /** Opaque voxels at the central chunks' section centres (local 8, 8, 8) ≥ 16 below the pre-cave top: x, y, z. */
   readonly opaqueDeep: Int32Array;
 }
@@ -162,6 +169,7 @@ export function r3Region(view: RegionView, label: string, t: MeshTables = DEFAUL
   const nonEmpty = new Uint8Array(size * size * SECTIONS);
   const top = new Int16Array(W * W).fill(Y_MIN - 1);
   const caveAir: number[] = [];
+  const caveFluid: number[] = [];
   const opaqueDeep: number[] = [];
   const padded = createPaddedSection();
   const column = (cx: number, cz: number) => {
@@ -234,7 +242,8 @@ export function r3Region(view: RegionView, label: string, t: MeshTables = DEFAUL
           conn[s] = connectivity15(padded, t);
         }
         if (!central) continue;
-        // Candidates: sampled tagged cave air with no fluid, and the opaque section centres (depth checked below).
+        // Candidates: sampled tagged cave air with no fluid (with fluid apart), and the opaque section centres (depth
+        // checked below).
         const c = v.sectionCave(sy);
         const f = v.sectionFluid(sy);
         if (typeof b === 'number' ? opaqueOf[b] === 1 : opaqueOf[b[(8 << 8) | (8 << 4) | 8]!] === 1) {
@@ -252,8 +261,8 @@ export function r3Region(view: RegionView, label: string, t: MeshTables = DEFAUL
           const kind = caveKindOf(typeof c === 'number' ? c : c[j]!);
           if (kind === 0) continue;
           if ((typeof b === 'number' ? b : b[j]!) !== AIR) continue;
-          if (hasFluid(typeof f === 'number' ? f : f[j]!)) continue;
-          caveAir.push(16 * (cx0 + i) + x, 16 * sy + Y_MIN + y, 16 * (cz0 + k) + z, kind, (ex ? 1 : 0) + (ey ? 1 : 0) + (ez ? 1 : 0));
+          const into = hasFluid(typeof f === 'number' ? f : f[j]!) ? caveFluid : caveAir;
+          into.push(16 * (cx0 + i) + x, 16 * sy + Y_MIN + y, 16 * (cz0 + k) + z, kind, (ex ? 1 : 0) + (ey ? 1 : 0) + (ez ? 1 : 0));
         }
       }
     }
@@ -285,7 +294,8 @@ export function r3Region(view: RegionView, label: string, t: MeshTables = DEFAUL
     if (top[(z - 16 * cz0) * W + x - 16 * cx0]! - y >= UNDERGROUND) deep.push(x, y, z);
   }
   return {
-    label, cx0, cz0, size, opaque, conn, solid, nonEmpty, top, caveAir: Int32Array.from(caveAir), opaqueDeep: Int32Array.from(deep),
+    label, cx0, cz0, size, opaque, conn, solid, nonEmpty, top, caveAir: Int32Array.from(caveAir), caveFluid: Int32Array.from(caveFluid),
+    opaqueDeep: Int32Array.from(deep),
   };
 }
 
@@ -331,12 +341,11 @@ const topAt = (r: CaveRegion, x: number, z: number): number => r.top[(z - 16 * r
 const sectionOf = (r: CaveRegion, cx: number, sy: number, cz: number): number => ((cz - r.cz0) * r.size + (cx - r.cx0)) * SECTIONS + sy;
 
 /** A cave-air candidate: [x, y, z, kind, boundary count]. */
-type Candidate = readonly [number, number, number, number, number];
+export type Candidate = readonly [number, number, number, number, number];
 
-/** The region's underground cave-air candidates with `nb` boundary coordinates (any with nb null). */
-function underground(r: CaveRegion, nb: number | null): Candidate[] {
+/** The underground candidates of `a` (`caveAir`'s layout) in `r` with `nb` boundary coordinates (any with nb null). */
+function underground(r: CaveRegion, a: Int32Array, nb: number | null): Candidate[] {
   const out: Candidate[] = [];
-  const a = r.caveAir;
   for (let n = 0; n < a.length; n += 5) {
     const c: Candidate = [a[n]!, a[n + 1]!, a[n + 2]!, a[n + 3]!, a[n + 4]!];
     if (nb !== null && c[4] !== nb) continue;
@@ -346,10 +355,21 @@ function underground(r: CaveRegion, nb: number | null): Candidate[] {
   return out;
 }
 
+/**
+ * The pose candidates of `r` with `nb` boundary coordinates (any with nb null): its underground dry cave air (SP6b
+ * §12.4's "tagged cave air"), or, only when it holds none of them, its underground fluid-filled cave voxels (SP7a,
+ * rulings R24 item 8: the aquifer floods every cave of a region under the sea, so a kind would otherwise have no pose;
+ * culling treats fluid as open, K6). A region with a dry candidate for a kind never takes a wet one for it.
+ */
+export function poseCandidates(r: CaveRegion, nb: number | null): Candidate[] {
+  const dry = underground(r, r.caveAir, nb);
+  return dry.length > 0 ? dry : underground(r, r.caveFluid, nb);
+}
+
 /** The k-th cave pose of `r`: cycling the cave kinds present, at spread depths. */
 function cavePick(r: CaveRegion, k: number): Candidate {
-  const all = underground(r, null);
-  if (all.length === 0) throw new Error(`r3Poses: ${r.label} has no underground cave air`);
+  const all = poseCandidates(r, null);
+  if (all.length === 0) throw new Error(`r3Poses: ${r.label} has no underground cave voxel, dry or fluid-filled`);
   const kinds = [...new Set(all.map((c) => c[3]))].sort((a, b) => a - b);
   const kind = kinds[k % kinds.length]!;
   const ofKind = all.filter((c) => c[3] === kind)
@@ -489,8 +509,8 @@ export function r3Poses(tier: CaveTier, regions: readonly CaveRegion[]): R3Pose[
       }
       case 'face': case 'edge': case 'corner': {
         const nb = kind === 'face' ? 1 : kind === 'edge' ? 2 : 3;
-        const list = underground(r, nb).sort((a, b) => a[1] - b[1] || a[2] - b[2] || a[0] - b[0]);
-        if (list.length === 0) throw new Error(`r3Poses: ${r.label} has no underground cave air on a section ${kind}`);
+        const list = poseCandidates(r, nb).sort((a, b) => a[1] - b[1] || a[2] - b[2] || a[0] - b[0]);
+        if (list.length === 0) throw new Error(`r3Poses: ${r.label} has no underground cave voxel, dry or fluid-filled, on a section ${kind}`);
         const c = list[pickIndex(k, 0.4, list.length)]!;
         out.push(pose(eyeIn(c), { caveKind: c[3] }));
         break;

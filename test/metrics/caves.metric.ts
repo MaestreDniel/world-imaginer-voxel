@@ -540,7 +540,7 @@ async function measureC7C9(): Promise<Record<C7C9Part, number>> {
     label: m.site.label, group: groupOf(m.site), ms: m.ms,
     ...c7c9Parts([{ group: 'default', full: m.site.size === 32, counts: m.c79 }]),
     walls: m.c79.flat.faces, flatWalls: m.c79.flat.flat, waterWall: m.c79.waterWall, waterWallKm2: m.c79.waterWallKm2,
-    waterWallAny: m.c79.waterWallAny, deepSky: m.c79.deepSky,
+    waterWallAny: m.c79.waterWallAny, deepSky: m.c79.deepSky, entrances: m.c79.entrances,
     openings: m.c79.openings, land: m.c79.surface.land, holed: m.c79.surface.holed, thinRoof: m.c79.surface.thinRoof,
     entranceSamples: m.c79.distances.length, largestComponent: m.c79.largest,
   }));

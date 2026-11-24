@@ -16,7 +16,7 @@ import type { RegionAttachMsg, RegionColumnMsg, RegionScatterMsg, RegionWorkerRe
 import { B3_DEPTH_BIN0, B3_DEPTH_BINS, B3_FINE_BLOCKS, B3_FINE_HALF, B3_FINE_N, newScattered, type Scattered } from './terrainAnalysis';
 
 export {
-  analyseColumn, caveDepthOf, newGrid, newScatterScratch, newScattered, preCaveSolidity, preCaveTop, putColumn, solidity, transitions,
+  analyseColumn, caveDepthOf, newGrid, newScatterScratch, newScattered, preCaveFloors, preCaveSolidity, preCaveTop, putColumn, solidity, transitions,
   waterWalls, type Grid, type ScatterColumn, type ScatterScratch, type Scattered,
 } from './terrainAnalysis';
 

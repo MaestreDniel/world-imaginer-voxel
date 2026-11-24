@@ -8,7 +8,7 @@ import { columnSlice, readSlices, sliceOf, writeSlice } from '../harness/columnS
 import { metricTest, type MetricEnv } from '../harness/metric';
 import { genRegion } from '../harness/region';
 import {
-  b3Values, mergeScattered, metricsProfiles, newGrid, newScattered, putColumn, scatterColumns, scatterColumnsThreaded, sumScattered,
+  b3Values, mergeScattered, metricsProfiles, newGrid, newScattered, preCaveFloors, putColumn, scatterColumns, scatterColumnsThreaded, sumScattered,
   t1Values, t2Values, t3Values, t4Sites, t5Values, waterWalls, type B3Values, type Scattered, type ScatterProfile, type T4Site,
 } from '../harness/terrainScatter';
 
@@ -58,7 +58,9 @@ import {
  *   the fast and quick estimates noisy); fast and quick record it, and its 2,000-pair minimum holds on every tier.
  *   A pair whose biome has no inside pair is dropped and counted (`droppedPairs`).
  * - T4: `floorSd` the mean over regions of the sd of the floor under water; `exposedBedrock` floors at y −64 under
- *   water; `deepFloor` floors ≤ −50 under water.
+ *   water; `deepFloor` floors ≤ −50 under water. From SP7a (rulings R24 item 7, a Spec correction) T4's floor is the
+ *   pre-cave sea bed, the highest voxel solid or tagged (`preCaveFloors`, C's `preCaveTops` rule), not
+ *   `OCEAN_FLOOR_WG − 1`: D24 opens caves through the sea bed, whose bottoms are not the terrain's floor.
  * - T5 at the 16 positions lx, lz ∈ {2, 6, 10, 14} of each column: land positions with exactly one transition at
  *   y ≥ −56; |surfaceEst3 − pre-cave top|, `median`, `p90`, `p99` (nearest rank). The pre-cave top (SP6a spec §10.4)
  *   is the top of the `precave` tap's run over the true top (`preCaveTop`): `surfaceEst3` estimates the pre-cave
@@ -288,8 +290,18 @@ async function t4Region(params: Params, { seed, cx0, cz0 }: T4Site): Promise<T4R
     seed, params, cx0, cz0, w: 16, h: 16, upTo: 'T', order: 'spiral', threads: 4, cache: false, workerDir: WORKER_DIR,
   });
   const g = newGrid(256, 256);
+  // T4's floor (SP7a, rulings R24 item 7): the pre-cave sea bed per position, not `OCEAN_FLOOR_WG` − 1 (a cave D24
+  // opens through the sea bed would read its own bottom as the floor); the grid's floor stays the water walls'.
+  const floor = new Int16Array(256 * 256);
+  const solid = new Uint8Array(98304);
+  const colFloor = new Int16Array(256);
   for (let cz = cz0; cz < cz0 + 16; cz++) {
-    for (let cx = cx0; cx < cx0 + 16; cx++) putColumn(g, res.view.store.proto(cx, cz)!.aux()!, 16 * (cx - cx0), 16 * (cz - cz0));
+    for (let cx = cx0; cx < cx0 + 16; cx++) {
+      const col = res.view.store.proto(cx, cz)!;
+      putColumn(g, col.aux()!, 16 * (cx - cx0), 16 * (cz - cz0));
+      preCaveFloors(col, solid, colFloor);
+      for (let p = 0; p < 256; p++) floor[(16 * (cz - cz0) + (p >> 4)) * 256 + 16 * (cx - cx0) + (p & 15)] = colFloor[p]!;
+    }
   }
   const [walls, water] = waterWalls(g);
   let n0 = 0;
@@ -300,7 +312,7 @@ async function t4Region(params: Params, { seed, cx0, cz0 }: T4Site): Promise<T4R
   let minFloor = Infinity;
   for (let k = 0; k < g.n * g.m; k++) {
     if (g.land[k] === 1) continue;
-    const f = g.top[k]!;
+    const f = floor[k]!;
     n0++;
     s1 += f;
     s2 += f * f;

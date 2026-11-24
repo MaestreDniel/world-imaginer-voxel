@@ -151,6 +151,9 @@ export const THRESHOLDS: ThresholdTable = {
     aperiodicity: { min: 0.63, activeFrom: 'SP6a', tiers: ['quick', 'full'] }, typeMixVariation: { min: 0.021, activeFrom: 'SP6a' },
     sizeSpread: { min: 1.5, activeFrom: 'SP6a', tiers: ['quick', 'full'] },
   },
+  // C9's openings and `entrancesMax`'s components are those onto untagged air holding no fluid from SP7a (rulings R24
+  // item 7, a population Spec correction, the bounds unchanged): D24's caves opened through the sea bed are not
+  // entrances.
   C9: {
     nearestEntrance: { max: 192, activeFrom: 'SP6a' }, entrancesMax: { max: 150, activeFrom: 'SP6a', tiers: ['quick', 'full'] },
     holedSurface: { max: 0.02, activeFrom: 'SP6a' }, thinRoof: { max: 0.05, activeFrom: 'SP6a' },

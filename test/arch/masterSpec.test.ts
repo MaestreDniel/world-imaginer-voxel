@@ -3909,6 +3909,20 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(THRESHOLDS.C7?.waterWall).toEqual({ max: 3.3, activeFrom: 'SP6a' });
   });
 
+  test('§6.4\'s C9 and T4 rows: entrances onto untagged air, the pre-cave sea bed (SP7a spec §13.2; rulings R24 item 7)', () => {
+    const row = (id: string): string => {
+      const r = text.split('\n').find((l) => l.startsWith(`| ${id} |`));
+      expect(r, `no ${id} row in §6.4`).toBeDefined();
+      return r!;
+    };
+    // C9: entrances onto untagged air (the harness' `dryOpenings`), the bounds unchanged.
+    expect(row('C9')).toContain('/ `entrancesMax`, C2\'s count per km², gated on quick and full (fast\'s two 16 × 16-chunk regions quantise it) (SP7a: an opening is a C2 component\'s voxel face-adjacent to untagged air holding no fluid, and `entrancesMax` counts the C2 components holding one, so a cave opened through the sea or a river bed, sky-connected only through the water, is no entrance; C2 keeps it; the SP7a spec\'s rulings R24; amended by SP7a) /');
+    expect(THRESHOLDS.C9?.entrancesMax).toEqual({ max: 150, activeFrom: 'SP6a', tiers: ['quick', 'full'] });
+    // T4: the pre-cave sea bed (the harness' `preCaveFloors`), the bounds unchanged.
+    expect(row('T4')).toBe('| T4 | ocean floor sd per 256² / exposed bedrock under water / floor ≤ −50 (SP7a: the floor is the pre-cave sea bed, the highest voxel solid or tagged, so a cave opened through the bed is not read as the floor; the SP7a spec\'s rulings R24; amended by SP7a) | ≥ 3 / 0 / 0 |');
+    expect(THRESHOLDS.T4).toEqual({ floorSd: { min: 3, activeFrom: 'SP3b' }, exposedBedrock: { max: 0, activeFrom: 'SP3b' }, deepFloor: { max: 0, activeFrom: 'SP3b' } });
+  });
+
   test('§6.5\'s A3 line names its lava sources (SP7a spec §16 item 16)', () => {
     expect(text.split('\n')).toContain('- Unreachable or 2D lava → lava aquifers, the bottom gullies and abyss lava springs (lava lakes SP8b) → A3.');
   });

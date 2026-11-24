@@ -20,7 +20,7 @@ import {
   ABYSS_STATES, bedrockExposedCount, bottomCavernPose, bottomFloorSpreads, caveBottomCounts, caveBottomGroups, caveBottomParts, caveGridOf,
   BOTTOM_PITCH, CLS_ABYSS, CLS_BEDROCK, CLS_OTHER, EXAMPLE_IDS, SP6B_EXAMPLE_IDS, type CaveBottomCounts,
   aperiodicCounts, aperiodicity, aperiodicLags, BAND_Y0, bandCounts, bandDetail, BANDS, bandsMin, borderPlaneRatio, c1c6Parts, C1_C6_PARTS, c7c9Groups, c7c9Parts,
-  C7_C9_PARTS, caveC7C9Counts, caveComponents, caveExamples, caveRegionCounts, COMP_Y_MIN, countsTransfer, emptyCaveGrid, flatWallCounts, flatWallDetail,
+  C7_C9_PARTS, caveC7C9Counts, caveComponents, caveExamples, caveRegionCounts, COMP_Y_MIN, countsTransfer, deepSkyLabels, dryEntranceLabels, emptyCaveGrid, flatWallCounts, flatWallDetail,
   emptyBandCounts, floorCounts, floorFaceLattice, floorFaceResidues, floorPeak, GRID_H, GRID_Y0, jensenShannon, kindCounts, landCounts,
   largestCounts, latticeBias, latticeBiasAsDefined, layerCounts, ROW_Y0, ROWS,
   localThickness, logSd, median, nearestEntranceDistances, openingMask, percentile, PILLAR_AREA_MAX, PILLAR_BACK, pillarTiles, PILLAR_VIEW, preCaveTops, ravineCounts, regionCounts, barrierProbe,
@@ -865,6 +865,31 @@ describe('the caves instruments on fixtures (SP6a §10.1, C7-C9)', () => {
     const none = openingMask(shallow, st, caveComponents(shallow, st));
     expect(none.reduce((a, v) => a + v, 0)).toBe(0);
     expect(Array.from(nearestEntranceDistances(shallow, none, eligible).distances).every(Number.isNaN)).toBe(true);
+  });
+
+  test('C9\'s entrances and openings: a C2 component opening only onto untagged water is not counted, one onto untagged air is (SP7a, rulings R24 item 7)', () => {
+    const g = rock(16, 16, 60);
+    // A dry shaft at (5, 5) and a shaft at (10, 10) under one voxel of sea water: both C2 components.
+    carve(g, K.entrance, 5, 5, 20, 60, 5, 5);
+    carve(g, K.entrance, 10, 10, 20, 60, 10, 10);
+    setCell(g, 10, 61, 10, 0, false, true);
+    const tops = preCaveTops(g);
+    const c = caveComponents(g, tops);
+    const labelAt = (x: number, y: number, z: number): number => c.label[(y - c.yMin) * 256 + z * 16 + x]!;
+    expect(deepSkyLabels(g, tops, c)).toEqual(new Set([labelAt(5, 30, 5), labelAt(10, 30, 10)]));
+    // C9 counts the dry one alone, and its openings are the dry shaft's.
+    expect(dryEntranceLabels(g, tops, c)).toEqual(new Set([labelAt(5, 30, 5)]));
+    const open = openingMask(g, tops, c);
+    expect(open.reduce((a, v) => a + v, 0)).toBe(1);
+    expect(open[5 * 16 + 5]).toBe(1);
+    const all = new Uint8Array(256).fill(1);
+    const counts = caveC7C9Counts(g, tops, c, { T: null, stride: 1, eligible: all, seaFloor: null, tile: 16 });
+    expect(counts.deepSky).toBe(2);
+    expect(counts.entrances).toBe(1);
+    expect(c7c9Parts([{ group: 'default', full: false, counts }])['C9.entrancesMax']).toBeCloseTo(1 / (256 / 1e6), 6);
+    // Drained, the second shaft opens onto air and counts again.
+    setCell(g, 10, 61, 10, 0, false, false);
+    expect(dryEntranceLabels(g, tops, c).size).toBe(2);
   });
 
   test('C9.holedSurface and C9.thinRoof: land positions holed at the pre-cave top, or with cave air 1 … 3 under the top', () => {

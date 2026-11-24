@@ -21,7 +21,7 @@ import { readSlices, sliceOf, writeSlice } from '../harness/columnSlices';
 import { ctxFor } from '../harness/gen';
 import { cavesMuted } from '../harness/sp5cTrees';
 import {
-  analyseColumn, B3_WINDOW_AIR_MIN, b3Values, caveDepthOf, metricsProfiles, newScatterScratch, newScattered, preCaveSolidity, preCaveTop, presetRecord, SCATTER_PROFILES,
+  analyseColumn, B3_WINDOW_AIR_MIN, b3Values, caveDepthOf, metricsProfiles, newScatterScratch, newScattered, preCaveFloors, preCaveSolidity, preCaveTop, presetRecord, SCATTER_PROFILES,
   scatterColumns, scatterColumnsThreaded, solidity, sumScattered, t1Values, t2Values, t3Values, t4Sites, t5Values, transitions, type ScatterColumn,
   type Scattered,
 } from '../harness/terrainScatter';
@@ -173,6 +173,30 @@ describe('analyseColumn (T1-T5 per column)', () => {
     // Water 41-63 (23 voxels); neighbours' WS 72 (positions 1 and 16) → no dry air beside it at those y: walls 0.
     expect(s.water).toBe(23);
     expect(s.walls).toBe(0);
+  });
+});
+
+describe('T4\'s floor: the pre-cave sea bed (SP7a, rulings R24 item 7)', () => {
+  test('a cave D24 opens through the sea bed is not the floor: the highest voxel solid or tagged, not OCEAN_FLOOR_WG − 1', () => {
+    // Position 0: sea bed at 40 with a cave tagged from −51 up through it (rock left below −52), so OCEAN_FLOOR_WG is
+    // −51 and its old floor −52; position 1: a plain sea bed at 35; position 2: land to 70; position 3: an untagged air
+    // gap (no cave) under rock at 20 is not looked through either.
+    const bed = (p: number): number => (p === 0 ? 40 : p === 1 ? 35 : p === 3 ? 20 : 70);
+    const col = column(
+      (p, y) => y <= bed(p) && !(p === 0 && y >= -51) && !(p === 3 && y >= 10 && y <= 12),
+      (p) => (p <= 1 || p === 3 ? 64 : 71),
+      (p) => (p === 0 ? -51 : bed(p) + 1),
+      () => PLAINS,
+      (p, y) => (p === 0 && y >= -51 && y <= 40 ? CAVE_KIND.cheese : 0),
+    );
+    const floors = preCaveFloors(col, new Uint8Array(98304), new Int16Array(256));
+    expect(col.aux()!.oceanFloorWG[0]! - 1).toBe(-52);
+    expect(floors[0]).toBe(40);
+    expect(floors[1]).toBe(35);
+    expect(floors[2]).toBe(70);
+    expect(floors[3]).toBe(20);
+    // A column of air alone reads −64 (the lowest voxel).
+    expect(preCaveFloors(column(() => false, () => -64, () => -64, () => PLAINS), new Uint8Array(98304), new Int16Array(256))[5]).toBe(-64);
   });
 });
 

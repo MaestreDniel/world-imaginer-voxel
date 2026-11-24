@@ -89,10 +89,12 @@
  *   density air left out) per 128 × 128 tile of all y; the divergence in bits (0 … 1); pairs with an empty tile left out.
  * - C8.sizeSpread: the sample standard deviation of the natural log of the volumes; C8.largeShare its second value. The
  *   three C8 parts named read only 32 × 32-chunk regions (the spec's region size), so they are NaN on fast.
- * - C9: an opening is a voxel of a C2 component (C2.skyComponents' components) face-adjacent to untagged open air;
- *   C9.nearestEntrance draws its 256 positions among the land positions (C5's rule) that are not river (the column
- *   sample's nearest corner has no wet-river or gorge flag) and measures to the region's own openings (an opening beyond
- *   the region is not seen; a region with none gives NaN distances); C9.entrancesMax is C2.skyComponents' count per km²;
+ * - C9: an opening is a voxel of a C2 component (C2.skyComponents' components) face-adjacent to untagged air holding
+ *   no fluid (SP7a, rulings R24 item 7: a cave opened through the sea or a river bed, sky-connected only through the
+ *   water, has none); C9.nearestEntrance draws its 256 positions among the land positions (C5's rule) that are not
+ *   river (the column sample's nearest corner has no wet-river or gorge flag) and measures to the region's own openings
+ *   (an opening beyond the region is not seen; a region with none gives NaN distances); C9.entrancesMax is the count per
+ *   km² of the C2 components holding an opening (`dryOpenings`; C2.skyComponents keeps every one);
  *   C9.holedSurface's top is the pre-cave top, C9.thinRoof's the true top (land: solid without fluid).
  * - B3's border parts (SP6b spec §12.2, D26; Task 26, recorded; `caveBorderCounts`, `caveBorderParts`): the grid holds
  *   the cave biome in bits 6-7. Cave air is a tagged voxel neither solid nor fluid (§12.1's); a border face lies between
@@ -2595,31 +2597,47 @@ export function deepSkyLabels(g: CaveGrid, tops: Int16Array, c: CaveComponents):
 }
 
 /**
- * C9.nearestEntrance's openings per position (index (z − z0)·w + (x − x0)): 1 where a voxel of a C2 component is
- * face-adjacent to untagged open air (air or fluid with tag 0) in the grid, the opening through which it is
- * sky-connected (`components3d`'s sky rule).
+ * C9's entrances and openings (SP7a spec §13.2, rulings R24 item 7): an opening is a voxel of a C2 component
+ * face-adjacent to untagged air holding no fluid (an entrance a player walks into), and an entrance a C2 component
+ * holding one. A component sky-connected only through untagged fluid (a cave D24 opens through the sea or a river bed,
+ * flooded) has no opening and is no entrance; C2 still counts it (`deepSkyLabels`). `labels` the entrances, `mask` per
+ * position (index (z − z0)·w + (x − x0)) 1 where an opening lies.
  */
-export function openingMask(g: CaveGrid, tops: Int16Array, c: CaveComponents): Uint8Array {
+export function dryOpenings(g: CaveGrid, tops: Int16Array, c: CaveComponents): { labels: Set<number>; mask: Uint8Array } {
   const { w, d, cells } = g;
   const plane = w * d;
   const deep = deepSkyLabels(g, tops, c);
-  const out = new Uint8Array(plane);
-  if (deep.size === 0) return out;
-  const open = (i: number): boolean => (cells[i]! & (TAG_MASK | SOLID_BIT)) === 0;
+  const labels = new Set<number>();
+  const mask = new Uint8Array(plane);
+  if (deep.size === 0) return { labels, mask };
+  const dry = (i: number): boolean => (cells[i]! & (TAG_MASK | SOLID_BIT | FLUID_BIT)) === 0;
   for (let y = c.yMin; y <= c.yMax; y++) {
     const base = (y - c.yMin) * plane;
     const row = (y - GRID_Y0) * plane;
     for (let p = 0; p < plane; p++) {
       const l = c.label[base + p]!;
-      if (l === 0 || out[p] === 1 || !deep.has(l)) continue;
+      if (l === 0 || (mask[p] === 1 && labels.has(l)) || !deep.has(l)) continue;
       const x = p % w;
       const z = (p - x) / w;
       const i = row + p;
-      if ((x > 0 && open(i - 1)) || (x < w - 1 && open(i + 1)) || (z > 0 && open(i - w)) || (z < d - 1 && open(i + w))
-        || (y > GRID_Y0 && open(i - plane)) || (y < GRID_Y0 + GRID_H - 1 && open(i + plane))) out[p] = 1;
+      if ((x > 0 && dry(i - 1)) || (x < w - 1 && dry(i + 1)) || (z > 0 && dry(i - w)) || (z < d - 1 && dry(i + w))
+        || (y > GRID_Y0 && dry(i - plane)) || (y < GRID_Y0 + GRID_H - 1 && dry(i + plane))) {
+        mask[p] = 1;
+        labels.add(l);
+      }
     }
   }
-  return out;
+  return { labels, mask };
+}
+
+/** C9.entrancesMax's components (`dryOpenings`' entrances). */
+export function dryEntranceLabels(g: CaveGrid, tops: Int16Array, c: CaveComponents): Set<number> {
+  return dryOpenings(g, tops, c).labels;
+}
+
+/** C9.nearestEntrance's openings per position (`dryOpenings`' mask). */
+export function openingMask(g: CaveGrid, tops: Int16Array, c: CaveComponents): Uint8Array {
+  return dryOpenings(g, tops, c).mask;
 }
 
 /** The true top's y per position: the first voxel from y 319 down that is solid or holds fluid (−64 at the lowest). */
@@ -2765,9 +2783,11 @@ export interface CaveC7C9Counts {
   /** The volumes of the components ≥ 64 voxels, and the largest component's. */
   readonly volumes: number[];
   readonly largest: number;
-  /** C2's components (sky-connected, reaching 8 below the top). */
+  /** C2's components (sky-connected, reaching 8 below the top; recorded beside C9's entrances). */
   readonly deepSky: number;
-  /** The positions holding an opening. */
+  /** C9.entrancesMax's components: C2's with an opening onto untagged air holding no fluid (`dryOpenings`). */
+  readonly entrances: number;
+  /** The positions holding an opening (`dryOpenings`). */
   readonly openings: number;
   /** C9.nearestEntrance's distances (NaN without an opening in the region). */
   readonly distances: number[];
@@ -2808,7 +2828,7 @@ export function caveC7C9Counts(g: CaveGrid, tops: Int16Array, c: CaveComponents,
     if (s >= SPREAD_MIN_VOXELS) volumes.push(s);
     largest = Math.max(largest, s);
   }
-  const openings = openingMask(g, tops, c);
+  const { labels: entrances, mask: openings } = dryOpenings(g, tops, c);
   let open = 0;
   for (let p = 0; p < openings.length; p++) open += openings[p]!;
   return {
@@ -2825,6 +2845,7 @@ export function caveC7C9Counts(g: CaveGrid, tops: Int16Array, c: CaveComponents,
     volumes,
     largest,
     deepSky: deepSkyLabels(g, tops, c).size,
+    entrances: entrances.size,
     openings: open,
     distances: Array.from(nearestEntranceDistances(g, openings, o.eligible).distances),
     surface: surfaceCounts(g, tops),
@@ -2920,7 +2941,7 @@ export function c7c9Parts(regions: readonly C7C9Region[]): Record<C7C9Part, numb
     'C8.sizeSpread': full.length === 0 ? Number.NaN : logSd(full.flatMap((r) => r.volumes)),
     'C8.largeShare': full.length === 0 ? Number.NaN : full.filter((r) => r.largest >= LARGE_MIN_VOXELS).length / full.length,
     'C9.nearestEntrance': pick(null, (g) => g.nearestEntrance),
-    'C9.entrancesMax': ratio(sum(def, (r) => r.deepSky), sum(def, (r) => r.areaKm2)),
+    'C9.entrancesMax': ratio(sum(def, (r) => r.entrances), sum(def, (r) => r.areaKm2)),
     'C9.holedSurface': pick(null, (g) => g.holedSurface),
     'C9.thinRoof': ratio(sum(def, (r) => r.surface.thinRoof), sum(def, (r) => r.surface.land)),
   };
