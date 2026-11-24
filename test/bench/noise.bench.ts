@@ -1038,8 +1038,9 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   // SP6b §12.5 (D25's "count evaluated voxels per class"): the surface pass on the same D25_COLUMNS columns, each rebuilt
   // as T builds it (`surfaceProbeColumn` on a SurfaceContext of its own) and passed as the stage passes it, its evaluated
   // voxels split by why the fast path evaluated them, from the scan's runs and the tree's fast-path bounds as `fillColumn`
-  // applies them: within the sky-open run's floor bound ('sky floor'), within another run's floor bound ('cave floor',
-  // of it the runs whose floor cave biome is lush, dripstone or abyss: 'biome'), within a run's ceiling bound ('ceiling',
+  // applies them: within the sky-open run's floor bound ('sky floor'), within another run's floor bound, the water-gated
+  // class's included in a run with water above its top (SP7a D25; 'cave floor', of it the runs whose floor cave biome is
+  // lush, dripstone or abyss: 'biome'), within a run's ceiling bound ('ceiling',
   // likewise 'biome'), and the rest, a band whose result is not one state (a dither interval, a bandlands or strata
   // leaf, a `caveBiome{here}` the classification leaves unsure: 'band').
   const evSc = surfaceContextOf(createGenContext(seedFromInput('42'), DEFAULTS));
@@ -1054,11 +1055,14 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
     const total = surfacePass(evSc, evSc.density.columns.get(ecx, ecz), pc.solid, pc.water, pc.biomes, evStates, evScan, pc.tags, { inputs: evInputs, pass: pc.pass });
     let sky = 0, floor = 0, floorBiome = 0, ceil = 0, ceilBiome = 0;
     if (evFast !== null) {
-      const { runFirst, skyRun, runTop, runBottom, runFloorBiome, runCeilBiome } = evScan;
+      const { runFirst, skyRun, runTop, runBottom, runWaterAbove, runFloorBiome, runCeilBiome } = evScan;
       for (let p = 0; p < 256; p++) {
         for (let r = runFirst[p]!; r < runFirst[p + 1]!; r++) {
           const fb = runFloorBiome[r]!, cb = runCeilBiome[r]!;
-          const bBound = evFast.floorBiomes >= 0 && (fb < 0 || ((evFast.floorBiomes >> fb) & 1) === 0) ? -1 : evFast.floorBound;
+          const dryBound = evFast.floorBiomes >= 0 && (fb < 0 || ((evFast.floorBiomes >> fb) & 1) === 0) ? -1 : evFast.floorBound;
+          // The water-gated class only in a run with water above its top, under its own skip (SP7a D25; compile.ts' bounds).
+          const wetSkipped = evFast.waterFloorBiomes >= 0 && (fb < 0 || ((evFast.waterFloorBiomes >> fb) & 1) === 0);
+          const bBound = Math.max(dryBound, runWaterAbove[r] === 1 && !wetSkipped ? evFast.waterFloorBound : -1);
           // The run-top-gated class where the run's top reaches its gate (SP6b §3.5's islands lever; compile.ts' bounds).
           const fBound = runTop[r]! >= evFast.topFloorMinY ? Math.max(bBound, evFast.topFloorBound) : bBound;
           const cBound = evFast.ceilBiomes >= 0 && (cb < 0 || ((evFast.ceilBiomes >> cb) & 1) === 0) ? -1 : evFast.ceilBound;
@@ -1148,7 +1152,7 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
       console.log(
         `surface pass evaluated voxels per class (${D25_COLUMNS} columns of terrain.real's sequence, per column): total ${st(ev.total)}; sky floor ${st(ev.sky)}; `
         + `cave floor ${st(ev.floor)} (biome runs ${st(ev.floorBiome)}); ceiling ${st(ev.ceil)} (biome runs ${st(ev.ceilBiome)}); band ${st(ev.band)}; `
-        + `fast path ${evFast === null ? 'none' : `skyFloorBound ${evFast.skyFloorBound}, floorBound ${evFast.floorBound}, topFloorBound ${evFast.topFloorBound} (runs from ${evFast.topFloorMinY}), ceilBound ${evFast.ceilBound}, floorBiomes ${evFast.floorBiomes}, ceilBiomes ${evFast.ceilBiomes}, here ${evFast.here}`}`,
+        + `fast path ${evFast === null ? 'none' : `skyFloorBound ${evFast.skyFloorBound}, floorBound ${evFast.floorBound}, topFloorBound ${evFast.topFloorBound} (runs from ${evFast.topFloorMinY}), waterFloorBound ${evFast.waterFloorBound}, ceilBound ${evFast.ceilBound}, floorBiomes ${evFast.floorBiomes}, waterFloorBiomes ${evFast.waterFloorBiomes}, ceilBiomes ${evFast.ceilBiomes}, here ${evFast.here}`}`,
       );
     }
     {
