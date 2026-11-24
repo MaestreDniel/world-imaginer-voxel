@@ -155,15 +155,33 @@ export const THRESHOLDS: ThresholdTable = {
     nearestEntrance: { max: 192, activeFrom: 'SP6a' }, entrancesMax: { max: 150, activeFrom: 'SP6a', tiers: ['quick', 'full'] },
     holedSurface: { max: 0.02, activeFrom: 'SP6a' }, thinRoof: { max: 0.05, activeFrom: 'SP6a' },
   },
-  // SP7a spec §13.1 (D30; Task 22): the tagged proto lava above y −10 over the caves regions' interiors (`caves.metric.ts`;
-  // its `metricTest` writes `.out/A3.json`), 0 by construction (springs are untagged; rulings P19), gated from its commit; A1-A4's other parts
-  // are recorded in `.out/A.<group>.json` until the tuning.
-  A3: { aquiferLavaAbove10: { max: 0, activeFrom: 'SP7a' } },
+  // SP7a spec §13.1 (D30; Task 31, the tuning): A1-A4 at master :1528-1531's bounds over the caves regions' interiors
+  // after the global settle reference (`caves.metric.ts`), per group, the worst group's (Spec correction 11), every tier.
+  A1: { dryShare: { min: 0.4, activeFrom: 'SP7a' } },
+  A2: { unsupported: { max: 0.001, activeFrom: 'SP7a' }, unsettled: { max: 0.001, activeFrom: 'SP7a' } },
+  // A3: the tagged proto lava above y −10 (`.out/A3.json`), 0 by construction (springs are untagged; rulings P19), gated
+  // from Task 22; the other three from the tuning (`.out/A3.tuning.json`; `lavaBelow54` at y < `aquifer.lavaLevel`,
+  // rulings R23 item 5).
+  A3: {
+    aquiferLavaAbove10: { max: 0, activeFrom: 'SP7a' },
+    lavaBelow54: { min: 0.5, activeFrom: 'SP7a' }, lavaSupported: { min: 0.99, activeFrom: 'SP7a' }, lavaSkyRegions: { min: 0.25, activeFrom: 'SP7a' },
+  },
+  A4: { aquiferBodies: { min: 1, activeFrom: 'SP7a' } },
   // SP7a spec §13.1 (Task 24): the aquifer's water voxels of the abyss nibble (proto water there; since rulings R23 the
   // settle may carry water into the abyss, recorded as `waterIntoAbyss`) over the caves regions' interiors, every group
-  // (`caves.metric.ts`, `.out/A5.json`), 0 by construction (§1.6's own-nibble test), gated from its commit; A5's other parts are recorded per group in `.out/A5.<group>.json` until the tuning (Spec
-  // correction 11).
-  A5: { abyssWater: { max: 0, activeFrom: 'SP7a' } },
+  // (`caves.metric.ts`, `.out/A5.json`), 0 by construction (§1.6's own-nibble test), gated from its commit. From the
+  // tuning (Task 31), on quick and full: `waterfalls` on its steep-land sample (`waterfalls.metric.ts`, rulings R20;
+  // Point 2's 25-100; the sample is the same on every tier, read on quick and full only, spec §14), `islandFalls` (the
+  // presets group's floating_islands region) and `springsTruncated` (the presets group's amplified region; its bound
+  // the worst reading over the tiers it gates after Task 28's levers, a loosening of the proposed 5 % the user approved,
+  // rulings R23 item 1). `lavaFalls` and `borderRatio` stay recorded per group in `.out/A5.<group>.json` pending the
+  // user's bound (Task 31's STOP).
+  A5: {
+    abyssWater: { max: 0, activeFrom: 'SP7a' },
+    waterfalls: { min: 25, max: 100, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
+    islandFalls: { min: 2, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
+    springsTruncated: { max: 0.685, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
+  },
   // SP4a spec §9.1 (D26): `grassSky0`, the master's grass at sky 0, recorded from SP4a (`light.metric.ts`), gated by SP6a.
   S1: {
     buried: { max: 0, activeFrom: 'SP3c' }, grassNoSky: { max: 0, activeFrom: 'SP3c' }, ymod16: { min: 0.001, activeFrom: 'SP3c' },

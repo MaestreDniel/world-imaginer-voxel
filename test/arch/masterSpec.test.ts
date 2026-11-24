@@ -262,6 +262,9 @@
  * U2's full-tier audit (Task 30) words item 16's U2 row as built: one SP7a clause (the aquifer leaves on bounded aquifer
  * witnesses, the springs' on mountain, island and abyss witnesses; 213 leaves) in place of the four the leaf groups
  * appended (208, 210, 211, 213).
+ * The tuning (Task 31) lands item 16's A1-A5 and A2 rows at their bounds, each cross-checked against `THRESHOLDS` (A1-A4
+ * on every tier; A5's `waterfalls`, `islandFalls` and `springsTruncated` on quick and full, `lavaFalls` and `borderRatio`
+ * recorded until the user's bound), and §1's test entry naming `metrics/waterfalls.metric.ts` (an `SP7A_MODULES` row).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -3413,12 +3416,13 @@ describe('master spec amendments (SP6b §15)', () => {
 });
 
 describe('master spec amendments (SP7a §16)', () => {
-  /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 17, 19 and 22 append theirs. */
+  /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 17, 19, 22 and 31 append theirs. */
   const SP7A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+blocks\/kinds\.ts /, 'fluidRules.ts (SP7a; also the fluid surface', 'src/world/blocks/fluidRules.ts'],
     [/^\s+metrics\/\*\.ts\s/, 'SP7a: sp7aGoldens.ts', 'src/metrics/sp7aGoldens.ts'],
     [/^\s+test\/ unit\/ metrics\//, '(SP7a: the settle reference in harness/refs.ts', 'test/harness/refs.ts'],
-    [/^\s+test\/ unit\/ metrics\//, 'A1-A5 in metrics/caves.metric.ts)', 'test/metrics/caves.metric.ts'],
+    [/^\s+test\/ unit\/ metrics\//, 'A1-A5 in metrics/caves.metric.ts, ', 'test/metrics/caves.metric.ts'],
+    [/^\s+test\/ unit\/ metrics\//, 'metrics/waterfalls.metric.ts)', 'test/metrics/waterfalls.metric.ts'],
     [/^\s+fluids\//, 'fluids/aquifer.ts springs.ts', 'src/gen/fluids/aquifer.ts'],
     [/^\s+fluids\//, 'springs.ts settle.ts', 'src/gen/fluids/springs.ts'],
     [/^\s+fluids\//, 'settle.ts solidAt.ts', 'src/gen/fluids/settle.ts'],
@@ -3838,41 +3842,51 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(THRESHOLDS.DT1?.settleIsolated).toEqual({ max: 0, activeFrom: 'SP7a' });
   });
 
-  test('§6.4\'s A1, A3 and A4 rows after the settle reference, in pre-tuning form (SP7a spec §16 item 16)', () => {
+  test('§6.4\'s A1, A3 and A4 rows after the settle reference, at their bounds (SP7a spec §16 item 16)', () => {
     const row = (id: string): string => {
       const r = text.split('\n').find((l) => l.startsWith(`| ${id} |`));
       expect(r, `no ${id} row in §6.4`).toBeDefined();
       return r!;
     };
-    expect(row('A1')).toBe('| A1 | dry share of cave air below y 63 not connected to sea or rivers. SP7a: `dryShare`, over the caves regions\' interiors (2 chunks in from the edge) read after the global settle reference over each region\'s T (`harness/refs.ts`\' `referenceSettle`), per group, the worst group\'s: among the tagged non-solid voxels at y ≤ 62 not connected (3D, through tagged non-solid voxels and fluid voxels, all at y ≤ 62: untagged air never links two caves) to sky-open water at positions whose `surfaceWaterLevel` is 63 (sea or river; read from the proto by D19\'s rule: untagged water at y 63 and none at y 64), the share with no fluid after settle; recorded on T alone and per region (amended by SP7a) | ≥ 40% |');
-    expect(row('A3')).toBe('| A3 | 32×32-column harness regions with lava below −54 / aquifer lava above −10 / lava with support / regions where lava touches sky-connected cave air. SP7a: over the caves regions\' interiors after the settle reference, per group: `lavaBelow54`, the share of the tagged voxels at y < `aquifer.lavaLevel` (the layer the floor rule fills; the SP7a spec\'s rulings R23) holding lava, pooled, its population recorded beside it (an empty population reads NaN, recorded as vacuous, not a miss; D31) / `aquiferLavaAbove10`, lava from aquifer cells above y −10 (the proto\'s tagged lava; springs are untagged), 0 by construction, gated from SP7a / `lavaSupported`, the lava voxels with a solid or lava voxel below (falling lava counts as supported) / `lavaSkyRegions`, the regions where lava touches C2\'s sky-connected cave air (amended by SP7a) | ≥ 50% / 0 / ≥ 99% / ≥ 25% |');
-    expect(row('A4')).toBe('| A4 | aquifer water bodies per 32×32-column harness region. SP7a: `aquiferBodies`, the 3D components of water voxels after the settle reference with a voxel of the region\'s interior below its position\'s pre-cave top and no sky-open (untagged) proto water, per region, the fewest (amended by SP7a) | ≥ 1 |');
-    // Only the construction part is gated from its commit; the others are recorded until the tuning.
-    expect(THRESHOLDS.A3).toEqual({ aquiferLavaAbove10: { max: 0, activeFrom: 'SP7a' } });
-    expect(THRESHOLDS.A1).toBeUndefined();
-    expect(THRESHOLDS.A4).toBeUndefined();
+    expect(row('A1')).toBe('| A1 | dry share of cave air below y 63 not connected to sea or rivers. SP7a: `dryShare`, over the caves regions\' interiors (2 chunks in from the edge) read after the global settle reference over each region\'s T (`harness/refs.ts`\' `referenceSettle`), per group, the worst group\'s: among the tagged non-solid voxels at y ≤ 62 not connected (3D, through tagged non-solid voxels and fluid voxels, all at y ≤ 62: untagged air never links two caves) to sky-open water at positions whose `surfaceWaterLevel` is 63 (sea or river; read from the proto by D19\'s rule: untagged water at y 63 and none at y 64), the share with no fluid after settle; recorded on T alone and per region; gated from SP7a\'s tuning on every tier (amended by SP7a) | ≥ 40% |');
+    expect(row('A3')).toBe('| A3 | 32×32-column harness regions with lava below −54 / aquifer lava above −10 / lava with support / regions where lava touches sky-connected cave air. SP7a: over the caves regions\' interiors after the settle reference, per group: `lavaBelow54`, the share of the tagged voxels at y < `aquifer.lavaLevel` (the layer the floor rule fills; the SP7a spec\'s rulings R23) holding lava, pooled, its population recorded beside it (an empty population reads NaN, recorded as vacuous, not a miss; D31) / `aquiferLavaAbove10`, lava from aquifer cells above y −10 (the proto\'s tagged lava; springs are untagged), 0 by construction, gated from SP7a / `lavaSupported`, the lava voxels with a solid or lava voxel below (falling lava counts as supported) / `lavaSkyRegions`, the regions where lava touches C2\'s sky-connected cave air; the three gated from SP7a\'s tuning on every tier (amended by SP7a) | ≥ 50% / 0 / ≥ 99% / ≥ 25% |');
+    expect(row('A4')).toBe('| A4 | aquifer water bodies per 32×32-column harness region. SP7a: `aquiferBodies`, the 3D components of water voxels after the settle reference with a voxel of the region\'s interior below its position\'s pre-cave top and no sky-open (untagged) proto water, per region, the fewest; gated from SP7a\'s tuning on every tier (amended by SP7a) | ≥ 1 |');
+    // Cross-checked against THRESHOLDS: the bound columns, gated from SP7a on every tier (the construction part from
+    // Task 22, the others from the tuning, Task 31).
+    expect(THRESHOLDS.A1).toEqual({ dryShare: { min: 0.4, activeFrom: 'SP7a' } });
+    expect(THRESHOLDS.A3).toEqual({
+      aquiferLavaAbove10: { max: 0, activeFrom: 'SP7a' }, lavaBelow54: { min: 0.5, activeFrom: 'SP7a' },
+      lavaSupported: { min: 0.99, activeFrom: 'SP7a' }, lavaSkyRegions: { min: 0.25, activeFrom: 'SP7a' },
+    });
+    expect(THRESHOLDS.A4).toEqual({ aquiferBodies: { min: 1, activeFrom: 'SP7a' } });
   });
 
-  test('§6.4\'s A2 row after the settle reference, in pre-tuning form (SP7a spec §16 item 16)', () => {
+  test('§6.4\'s A2 row after the settle reference, at its bounds (SP7a spec §16 item 16)', () => {
     const a2 = text.split('\n').find((l) => l.startsWith('| A2 |'));
     expect(a2, 'no A2 row in §6.4').toBeDefined();
-    expect(a2).toBe('| A2 | fluid voxels unsupported below or sideways after settle, **counting unsettled** / unsettled share. SP7a: over the caves regions\' interiors after the global settle reference, per group: `unsupported`, the fluid voxels the settle\'s rules (`fluidRules.ts`\' `ruleOffers`) would change in one application (a level a feeder would lower, a missing fall, a spread into a passable voxel), counting unsettled ones, over all fluid voxels / `unsettled`, the unsettled share (bit 6 outside the water/lava contacts); recorded by origin (sky-open, aquifer, spring: `harness/refs.ts`\' `referenceSettleOrigins`) and per km², the contacts apart (`A2.contacts`, SP7b\'s reactions) (amended by SP7a) | ≤ 0.1% / ≤ 0.1% of fluid voxels |');
-    // Recorded until the tuning (Task 31): no row yet.
-    expect(THRESHOLDS.A2).toBeUndefined();
+    expect(a2).toBe('| A2 | fluid voxels unsupported below or sideways after settle, **counting unsettled** / unsettled share. SP7a: over the caves regions\' interiors after the global settle reference, per group: `unsupported`, the fluid voxels the settle\'s rules (`fluidRules.ts`\' `ruleOffers`) would change in one application (a level a feeder would lower, a missing fall, a spread into a passable voxel), counting unsettled ones, over all fluid voxels / `unsettled`, the unsettled share (bit 6 outside the water/lava contacts); recorded by origin (sky-open, aquifer, spring: `harness/refs.ts`\' `referenceSettleOrigins`) and per km², the contacts apart (`A2.contacts`, SP7b\'s reactions); both gated from SP7a\'s tuning on every tier (amended by SP7a) | ≤ 0.1% / ≤ 0.1% of fluid voxels |');
+    // Cross-checked against THRESHOLDS: gated from the tuning (Task 31) on every tier.
+    expect(THRESHOLDS.A2).toEqual({ unsupported: { max: 0.001, activeFrom: 'SP7a' }, unsettled: { max: 0.001, activeFrom: 'SP7a' } });
   });
 
-  test('§6.4\'s A5 row, in pre-tuning form, and its F1-F3 rows for SP7b (SP7a spec §16 item 16)', () => {
+  test('§6.4\'s A5 row at the tuning, and its F1-F3 rows for SP7b (SP7a spec §16 item 16)', () => {
     const row = (id: string): string => {
       const r = text.split('\n').find((l) => l.startsWith(`| ${id} |`));
       expect(r, `no ${id} row in §6.4`).toBeDefined();
       return r!;
     };
-    expect(row('A5')).toBe('| A5 | springs and falls: visible waterfalls per km² of steep land / lava falls per 100,000 abyss cave-air voxels / island falls per km² of island area / springs on chunk borders over springs ÷ 60/256 / aquifer water voxels of the abyss nibble / water springs with a truncated front over water springs. SP7a: over the caves regions\' interiors after the global settle reference, per group over the group\'s own regions of each part: `waterfalls` on a fixed default-profile sample of seed \'42\' holding steep land, not the regions (the lattice chunks (4a, 4b), a, b in −240 … 239, whose column sample holds steep land; the SP7a spec\'s rulings R20 correction; a visible fall a water spring\'s outlet with no block above it and a straight fall ≥ 8; steep land a position whose column sample reads `steep` ≥ 1.2 and `offset` ≥ 80) / `lavaFalls` the biome region\'s and every region\'s with ≥ 50,000 abyss cave-air voxels (a fall ≥ 4) / `islandFalls` floating_islands\' (island area the positions holding a solid run whose bottom ≥ 181) / `borderRatio` every region\'s / `abyssWater` 0 by construction (the proto\'s water there; the settle\'s, which may fall into the abyss since the SP7a spec\'s rulings R23, recorded as `waterIntoAbyss`), gated from SP7a / `springsTruncated` the default group\'s and the presets group\'s amplified region (a spring\'s voxels by its lone front, truncated when one carries bit 6 outside the water/lava contact set, as A2\'s unsettled); the others recorded until the tuning; recorded beside them `clarkEvans` of the visible falls, `waterIntoAbyss`, `abyssWaterFace`, `adjacentSprings` (added by SP7a) | 25-100 (the user\'s 50) / ≥ 1 / ≥ 2 / 0.8-1.25 / 0 / set at D31 (SP7a) |');
+    expect(row('A5')).toBe('| A5 | springs and falls: visible waterfalls per km² of steep land / lava falls per 100,000 abyss cave-air voxels / island falls per km² of island area / springs on chunk borders over springs ÷ 60/256 / aquifer water voxels of the abyss nibble / water springs with a truncated front over water springs. SP7a: over the caves regions\' interiors after the global settle reference, per group over the group\'s own regions of each part: `waterfalls` on a fixed default-profile sample of seed \'42\' holding steep land, not the regions (the lattice chunks (4a, 4b), a, b in −240 … 239, whose column sample holds steep land; the SP7a spec\'s rulings R20 correction; a visible fall a water spring\'s outlet with no block above it and a straight fall ≥ 8; steep land a position whose column sample reads `steep` ≥ 1.2 and `offset` ≥ 80) / `lavaFalls` the biome region\'s and every region\'s with ≥ 50,000 abyss cave-air voxels (a fall ≥ 4) / `islandFalls` floating_islands\' (island area the positions holding a solid run whose bottom ≥ 181) / `borderRatio` every region\'s / `abyssWater` 0 by construction (the proto\'s water there; the settle\'s, which may fall into the abyss since the SP7a spec\'s rulings R23, recorded as `waterIntoAbyss`), gated from SP7a / `springsTruncated` the default group\'s and the presets group\'s amplified region (a spring\'s voxels by its lone front, truncated when one carries bit 6 outside the water/lava contact set, as A2\'s unsettled); from SP7a\'s tuning `waterfalls`, `islandFalls` and `springsTruncated` (in the presets group, whose amplified region holds the water springs; the default group\'s regions hold none) gated on quick and full, `lavaFalls` and `borderRatio` recorded until the user\'s bound; recorded beside them `clarkEvans` of the visible falls, `waterIntoAbyss`, `abyssWaterFace`, `adjacentSprings` (added by SP7a) | 25-100 (the user\'s 50) / ≥ 1 / ≥ 2 / 0.8-1.25 / 0 / ≤ 68.5%, the user\'s (SP7a) |');
     // The A5 row sits after A4's.
     const lines = text.split('\n');
     expect(lines.findIndex((l) => l.startsWith('| A5 |'))).toBe(lines.findIndex((l) => l.startsWith('| A4 |')) + 1);
-    // Only the construction part is gated from its commit; the others are recorded until the tuning.
-    expect(THRESHOLDS.A5).toEqual({ abyssWater: { max: 0, activeFrom: 'SP7a' } });
+    // Cross-checked against THRESHOLDS: `abyssWater` gated from Task 24, three parts from the tuning (Task 31) on quick and
+    // full; `lavaFalls` and `borderRatio` recorded (no row) until the user's bound.
+    expect(THRESHOLDS.A5).toEqual({
+      abyssWater: { max: 0, activeFrom: 'SP7a' },
+      waterfalls: { min: 25, max: 100, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
+      islandFalls: { min: 2, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
+      springsTruncated: { max: 0.685, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
+    });
     // F1-F3: SP7b's, their rows recorded as inactive in SP7a with the master's bounds.
     const SP7B = ' (SP7b: `THRESHOLDS` rows from SP7a, inactive until SP7b starts; amended by SP7a) | ';
     expect(row('F1')).toBe(`| F1 | fluid rules: 1 source converges to a radius-7 diamond / tick log over 2 runs${SP7B}≤ 40 ticks / identical |`);

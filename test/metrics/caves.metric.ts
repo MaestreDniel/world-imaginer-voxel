@@ -71,7 +71,11 @@ import { THRESHOLDS } from '../thresholds';
  *   A5, the springs and their falls (Task 24; SP7a Spec correction 11: each part per job over the job's own regions of
  *   its role), per job in `.out/A5.<group>.json` (recorded until the tuning), `A5.abyssWater` gated from that commit (0
  *   by construction), and A5's review poses added to the job's `.out/sp7a.examples.<group>.json` (the nearest
- *   `islandFall`, `lavaFall`, `lavaPool` and `spillSlope`, and every `waterfall` and `truncated` candidate by distance).
+ *   `islandFall`, `lavaFall`, `lavaPool` and `spillSlope`, and every `waterfall` and `truncated` candidate by distance);
+ *   at the tuning (Task 31) A1's `dryShare`, A2's two parts, A3's `lavaBelow54`, `lavaSupported`, `lavaSkyRegions`
+ *   (`.out/A3.tuning.json`) and A4's `aquiferBodies` gated per job, the worst of its groups, and `A5.springsTruncated`
+ *   (`.out/A5.springs.json`) and `A5.islandFalls` in the groups their literals name (`A5.waterfalls` reads its own
+ *   steep-land sample, `test/metrics/waterfalls.metric.ts`).
  *
  * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
  * - `carverReference`: over every region of the run's groups (the preset regions included), the voxels of the region
@@ -841,7 +845,8 @@ test('A2 by origin per job after the settle reference (recorded)', async () => {
 }, 900_000 * TIMEOUT_SCALE);
 
 /**
- * A5's record (SP7a spec §13.1, D30; Task 24; gated at its bounds at the tuning, Task 31, but `abyssWater`), as built in
+ * A5's record (SP7a spec §13.1, D30; Task 24; `springsTruncated` and `islandFalls` gated below from the tuning, Task 31,
+ * `lavaFalls` and `borderRatio` recorded until the user's bound, `abyssWater` from Task 24), as built in
  * `test/harness/water.ts` (`springFacts`, `a5RegionCounts`, `a5Parts`): per job over its regions' interiors after the
  * global settle reference (Spec correction 11: a job reads only its own regions), `waterfalls` (the default group's
  * regions), `lavaFalls` (the biome region and the regions with ≥ 50,000 abyss cave-air voxels), `islandFalls` (the
@@ -880,6 +885,119 @@ metricTest('A3', ['aquiferLavaAbove10'], async () => {
   expect(rs.length).toBeGreaterThan(0);
   return { aquiferLavaAbove10: waterParts(rs).aquiferLavaAbove10, regions: rs.length };
 }, 900_000);
+
+// ---------------------------------------------------------------- A1-A5 at their bounds (SP7a §13.1; Task 31)
+
+/**
+ * The run's groups that measured a region, each with its regions' `pick` (the regions whose `pick` is null left out),
+ * in `RUN_GROUPS`' order (a group with no such region, the presets group on fast, is left out).
+ */
+async function regionsByGroup<T>(pick: (m: Measured) => T | null): Promise<Array<readonly [CaveGroup, T[]]>> {
+  const measured = await measuredRegions();
+  return RUN_GROUPS.map((g) => [g, measured.filter((m) => jobOf(m.site) === g).map(pick).filter((v): v is T => v !== null)] as const)
+    .filter(([, rs]) => rs.length > 0);
+}
+
+/**
+ * A per-group part (SP7a spec §13.1: per group, the worst; each job gates its own regions, Spec correction 11): each
+ * group's value, recorded in `rec` as `<part>.<group>`, and the worst of them, the least for a minimum bound, the
+ * largest for a maximum; NaN with no group or a NaN group (a gated NaN fails, `metric.ts`).
+ */
+function worstOfGroups(part: string, values: ReadonlyArray<readonly [CaveGroup, number]>, worst: 'min' | 'max', rec: Record<string, number>): number {
+  for (const [g, v] of values) rec[`${part}.${g}`] = v;
+  if (values.length === 0) return Number.NaN;
+  const vs = values.map(([, v]) => v);
+  return worst === 'min' ? Math.min(...vs) : Math.max(...vs);
+}
+
+/**
+ * The groups whose jobs gate `A5.springsTruncated` and `A5.islandFalls` (SP7a spec §13.1, Spec correction 11; Task 31):
+ * a literal per group, decided from Task 31 Step 1's dry run, never from a run's own counts (a short sample must not
+ * turn into a pass). `springsTruncated` (the default group's regions and the presets group's amplified region): the
+ * presets group only, whose amplified region holds water springs on quick (6) and full; the default group's regions
+ * hold no spring on any tier (0 over 2, 6 and 12 regions on fast, quick and full), and the biomes group's regions are not
+ * the part's. `islandFalls` (the floating_islands region): the presets group, its only group. Both rows are gated on
+ * quick and full (fast measures no preset region).
+ */
+const SPRINGS_TRUNCATED_GATED: Readonly<Record<CaveGroup, boolean>> = { default: false, presets: true, biomes: false };
+const ISLAND_FALLS_GATED: Readonly<Record<CaveGroup, boolean>> = { default: false, presets: true, biomes: false };
+
+// A1 (master :1528; SP7a spec §13.1): `dryShare` after settle per group, the worst (≥ 40 %), with each group's value and
+// on T alone (`dryShareT.<group>`, recorded).
+metricTest('A1', ['dryShare'], async () => {
+  const rec: Record<string, number> = {};
+  const gs = await regionsByGroup((m) => m.water);
+  const dryShare = worstOfGroups('dryShare', gs.map(([g, rs]) => [g, waterParts(rs).dryShare] as const), 'min', rec);
+  for (const [g, rs] of gs) rec[`dryShareT.${g}`] = waterParts(rs).dryShareT;
+  return { dryShare, ...rec };
+}, 900_000);
+
+// A2 (master :1529; SP7a spec §13.1): `unsupported` and `unsettled` after settle over all fluid voxels per group, the
+// worst (≤ 0.1 % each), with each group's value and fluid voxels; the record by origin stays `.out/A2.<group>.json`.
+metricTest('A2', ['unsupported', 'unsettled'], async () => {
+  const rec: Record<string, number> = {};
+  const gs = (await regionsByGroup((m) => m.a2)).map(([g, rs]) => [g, a2Parts(rs)] as const);
+  for (const [g, p] of gs) rec[`fluid.${g}`] = p.all.fluid;
+  return {
+    unsupported: worstOfGroups('unsupported', gs.map(([g, p]) => [g, p.unsupported] as const), 'max', rec),
+    unsettled: worstOfGroups('unsettled', gs.map(([g, p]) => [g, p.unsettled] as const), 'max', rec),
+    ...rec,
+  };
+}, 900_000);
+
+// A3 (master :1530; SP7a spec §13.1): `lavaBelow54` (the tagged voxels at y < `aquifer.lavaLevel` holding lava after
+// settle, pooled per group; ≥ 50 %; every group's population is non-empty on every tier, Task 31's dry run, so a group
+// that loses it reads NaN and fails rather than passing vacuously), `lavaSupported` (≥ 99 %) and `lavaSkyRegions`
+// (≥ 25 %) per group, the worst, with each group's value and `lavaBelow54Population.<group>`. `aquiferLavaAbove10`
+// keeps its own call above (`.out/A3.json`).
+metricTest('A3', ['lavaBelow54', 'lavaSupported', 'lavaSkyRegions'], async () => {
+  const rec: Record<string, number> = {};
+  const gs = (await regionsByGroup((m) => m.water)).map(([g, rs]) => [g, waterParts(rs)] as const);
+  for (const [g, p] of gs) rec[`lavaBelow54Population.${g}`] = p.lavaBelow54Population;
+  return {
+    lavaBelow54: worstOfGroups('lavaBelow54', gs.map(([g, p]) => [g, p.lavaBelow54] as const), 'min', rec),
+    lavaSupported: worstOfGroups('lavaSupported', gs.map(([g, p]) => [g, p.lavaSupported] as const), 'min', rec),
+    lavaSkyRegions: worstOfGroups('lavaSkyRegions', gs.map(([g, p]) => [g, p.lavaSkyRegions] as const), 'min', rec),
+    ...rec,
+  };
+}, 900_000, { outName: 'A3.tuning' });
+
+// A4 (master :1531; SP7a spec §13.1): `aquiferBodies`, the fewest aquifer bodies of a region, over every group's
+// regions (≥ 1), with each group's value.
+metricTest('A4', ['aquiferBodies'], async () => {
+  const rec: Record<string, number> = {};
+  const gs = await regionsByGroup((m) => m.water);
+  return { aquiferBodies: worstOfGroups('aquiferBodies', gs.map(([g, rs]) => [g, waterParts(rs).aquiferBodies] as const), 'min', rec), ...rec };
+}, 900_000);
+
+// `A5.springsTruncated` (SP7a spec §13.1; the user's addition): the truncated water springs over the water springs of
+// the part's regions, in the groups `SPRINGS_TRUNCATED_GATED` names, the worst; its bound the worst reading over the
+// tiers it gates after Task 28's levers (the user's, rulings R23 item 1); with each gated group's counts.
+if (RUN_GROUPS.some((g) => SPRINGS_TRUNCATED_GATED[g])) {
+  metricTest('A5', ['springsTruncated'], async () => {
+    const rec: Record<string, number> = {};
+    const gs = (await regionsByGroup((m) => m.a5)).filter(([g]) => SPRINGS_TRUNCATED_GATED[g]).map(([g, rs]) => [g, a5Parts(rs)] as const);
+    for (const [g, p] of gs) {
+      rec[`truncated.${g}`] = p.counts.truncated;
+      rec[`waterSprings.${g}`] = p.counts.truncatedSprings;
+    }
+    return { springsTruncated: worstOfGroups('springsTruncated', gs.map(([g, p]) => [g, p.springsTruncated] as const), 'max', rec), ...rec };
+  }, 900_000, { outName: 'A5.springs' });
+}
+
+// `A5.islandFalls` (SP7a spec §13.1): island-edge falls per km² of island area in the floating_islands region (≥ 2), in
+// the groups `ISLAND_FALLS_GATED` names, with its falls and island area.
+if (RUN_GROUPS.some((g) => ISLAND_FALLS_GATED[g])) {
+  metricTest('A5', ['islandFalls'], async () => {
+    const rec: Record<string, number> = {};
+    const gs = (await regionsByGroup((m) => m.a5)).filter(([g]) => ISLAND_FALLS_GATED[g]).map(([g, rs]) => [g, a5Parts(rs)] as const);
+    for (const [g, p] of gs) {
+      rec[`falls.${g}`] = p.counts.islandFalls;
+      rec[`islandKm2.${g}`] = p.counts.islandKm2;
+    }
+    return { islandFalls: worstOfGroups('islandFalls', gs.map(([g, p]) => [g, p.islandFalls] as const), 'min', rec), ...rec };
+  }, 900_000, { outName: 'A5.islandFalls' });
+}
 
 /**
  * `C7.waterWallAny` (SP7a spec §13.2: SP6a's waterWall count, any fluid voxel of T beside dry tagged air, recorded beside

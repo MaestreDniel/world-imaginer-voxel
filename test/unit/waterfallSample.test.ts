@@ -1,7 +1,8 @@
 /**
  * `A5.waterfalls`' sample (SP7a spec §13.1 as corrected by rulings R20, Task 27b; `test/harness/waterfallSample.ts`): the
  * chunk rule against a direct count of the column samples' steep land on a narrowed scan, the visible-fall rule on
- * hand-built probes, and one real visible fall of seed '42' (Task 26's default waterfall shot, fall 15).
+ * hand-built probes, one real visible fall of seed '42' (Task 26's default waterfall shot, fall 15), and the slices the
+ * gated metric reads in worker threads (Task 31) summing to the whole scan's reading.
  */
 import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
@@ -11,8 +12,8 @@ import { createGenContext } from '../../src/gen/context';
 import { newSpringList } from '../../src/gen/fluids/springs';
 import { terrainSpringsDebug } from '../../src/gen/pipeline/terrainStage';
 import {
-  probesOf, visibleFallOf, waterfallSampleChunks, WATERFALL_SAMPLE_HALF, WATERFALL_SAMPLE_MIN_AREA, WATERFALL_SAMPLE_MIN_STEEP,
-  WATERFALL_SAMPLE_STRIDE, type SampleProbes,
+  mergeSampleAccs, probesOf, visibleFallOf, waterfallSampleChunks, waterfallSampleCounts, waterfallSampleRows, WATERFALL_SAMPLE_HALF,
+  WATERFALL_SAMPLE_MIN_AREA, WATERFALL_SAMPLE_MIN_STEEP, WATERFALL_SAMPLE_STRIDE, type SampleProbes,
 } from '../harness/waterfallSample';
 
 describe('A5.waterfalls\' sample (rulings R20)', () => {
@@ -40,6 +41,15 @@ describe('A5.waterfalls\' sample (rulings R20)', () => {
       }
     }
     expect(chunks).toEqual(expected);
+  });
+
+  test('row slices (Task 31\'s worker threads) sum to the whole narrowed scan\'s reading', () => {
+    const whole = waterfallSampleCounts('42', DEFAULTS, waterfallSampleChunks('42', DEFAULTS, 12));
+    expect(whole.pooled.chunks, 'the narrowed scan holds steep land').toBeGreaterThan(0);
+    const slices = [[-12, -5], [-5, 3], [3, 12]].map(([b0, b1]) => waterfallSampleRows('42', DEFAULTS, b0!, b1!, 12));
+    expect(mergeSampleAccs(slices)).toEqual(whole);
+    // A slice reaching past the scan's rows is clipped to them.
+    expect(mergeSampleAccs([waterfallSampleRows('42', DEFAULTS, -40, 40, 12)])).toEqual(whole);
   });
 
   test('a visible fall: the outlet open to the sky and ≥ 8 non-solid voxels with no fluid below it', () => {

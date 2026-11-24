@@ -43,8 +43,10 @@ export const SHARDS = {
   // SP4a spec §10 (D28): the renderer's and the light's metric files (R1, R2, R4, R5; L1, L2, DT1.light, S1.light),
   // with their cold region caches, and G1's static cells (a JSON read; ruling P53). SP4b spec §8.1, §9: R7's streaming
   // flight (`stream.metric.ts`: planned 20-30 s; measured 38 s in CI's first sharded run, run 40077412950, and about
-  // 12 s alone on the laptop; final review GOV-1).
-  render: [`${DIR}/render.metric.ts`, `${DIR}/light.metric.ts`, `${DIR}/g1.metric.ts`, `${DIR}/stream.metric.ts`],
+  // 12 s alone on the laptop; final review GOV-1). SP7a Task 31 (spec §13.1, §14; rulings R20): `A5.waterfalls`' steep-land
+  // sample (`waterfalls.metric.ts`, quick and full only, about 3.6 CPU-min read in 4 worker threads) joins this shard,
+  // the one with the most slack (2:04 in run 45144707470), so the job count stays 20.
+  render: [`${DIR}/render.metric.ts`, `${DIR}/light.metric.ts`, `${DIR}/g1.metric.ts`, `${DIR}/stream.metric.ts`, `${DIR}/waterfalls.metric.ts`],
   // SP6a spec §10.1, §11 (D26): the caves' metrics (`caves.metric.ts`), in shards of their own (SP6a Task 30: 106 s
   // alone, cold region cache, before C1-C9). SP6b spec §13 L4: by group (`METRICS_CAVE_GROUPS`): the six default-group
   // regions (C1-C6, the default group's C7-C9 and their `carverReference`). 171 s.

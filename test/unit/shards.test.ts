@@ -70,7 +70,10 @@ describe('shardArgs (SP4b spec §1.1)', () => {
       'terrain-large-slice-1': { files: [T], env: large('1/2') },
       'surface-large-slice-0': { files: [S], env: large('0/2') },
       'surface-large-slice-1': { files: [S], env: large('1/2') },
-      render: ['test/metrics/render.metric.ts', 'test/metrics/light.metric.ts', 'test/metrics/g1.metric.ts', 'test/metrics/stream.metric.ts'],
+      render: [
+        'test/metrics/render.metric.ts', 'test/metrics/light.metric.ts', 'test/metrics/g1.metric.ts', 'test/metrics/stream.metric.ts',
+        'test/metrics/waterfalls.metric.ts',
+      ],
       caves: { files: [C], env: { METRICS_CAVE_GROUPS: 'default' } },
       'caves-presets-edit-clipboard': {
         files: [C, 'test/metrics/edit.metric.ts', 'test/metrics/clipboard.metric.ts'], env: { METRICS_CAVE_GROUPS: 'presets' },
@@ -107,7 +110,7 @@ describe('shardArgs (SP4b spec §1.1)', () => {
     const rest = shardArgs(METRIC_SHARDS, 'rest');
     expect(rest.filter((a) => a === T)).toHaveLength(1);
     expect(rest.filter((a) => a === C)).toHaveLength(1);
-    expect(rest).toHaveLength(2 * 12);
+    expect(rest).toHaveLength(2 * 13);
   });
 
   test('node .github/scripts/metricShards.mjs check passes (vitest list: every metrics-quick file in its shards exactly as the table says)', () => {

@@ -1421,6 +1421,12 @@ describe('the caves metric by group (SP6b spec §13 L4: `METRICS_CAVE_GROUPS`)',
       'B3:abyssRockStraight:B3.abyssRock',
       'A5:abyssWater:A5',
       'A3:aquiferLavaAbove10:A3',
+      'A1:dryShare:A1',
+      'A2:unsupported|unsettled:A2',
+      'A3:lavaBelow54|lavaSupported|lavaSkyRegions:A3.tuning',
+      'A4:aquiferBodies:A4',
+      'A5:springsTruncated:A5.springs',
+      'A5:islandFalls:A5.islandFalls',
       'C7:borderPlaneRatio|switchWall:C7.default',
       'C8:aperiodicity|typeMixVariation|sizeSpread:C8',
       'C9:entrancesMax|thinRoof:C9.default',
@@ -1428,6 +1434,9 @@ describe('the caves metric by group (SP6b spec §13 L4: `METRICS_CAVE_GROUPS`)',
       'B3:zonePeriodicDip:B3.zones',
       'R3:wronglyCulled|popIn|culledUnderground:R3',
     ]);
+    // `A5.waterfalls` reads its own steep-land sample in its own file (Task 31, spec §14).
+    expect(calls.filter((c) => c.file === 'test/metrics/waterfalls.metric.ts').map((c) => `${c.id}:${c.parts.join('|')}:${c.outName}`))
+      .toEqual(['A5:waterfalls:A5.waterfalls']);
     expect(coverageErrors(calls)).toEqual([]);
   });
 });

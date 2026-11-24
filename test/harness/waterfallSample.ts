@@ -15,6 +15,10 @@
  *   spring's water falls (§3.2: outlet open to the sky, straight fall ≥ 8).
  * - **The reading**: the visible falls over the steep land in km², pooled over the sample, recorded per quadrant of the
  *   lattice (the sample's "regions": a < 0 or ≥ 0, b < 0 or ≥ 0) with the falls' heights.
+ * - **In slices** (SP7a Task 31: the gated metric, `test/metrics/waterfalls.metric.ts`, reads it in worker threads,
+ *   `waterfallSampleWorker.ts`, to fit the CI budget, spec §14): `waterfallSampleRows` scans and counts the lattice rows
+ *   b0 … b1 − 1 alone, and `mergeSampleAccs` sums the slices' counts into the reading, equal to the whole scan's
+ *   whatever the slicing (each chunk lies in one row, and every count is a sum over chunks).
  */
 import { MIN_Y } from '../../src/core/constants';
 import type { Params } from '../../src/core/params/schema';
@@ -44,12 +48,15 @@ export interface SampleChunk {
   readonly quadrant: number;
 }
 
-/** The sample's chunks of (seed, params), in the scan's order (see the header); `half` narrows the scan (tests). */
-export function waterfallSampleChunks(seed: string, params: Params, half = WATERFALL_SAMPLE_HALF): SampleChunk[] {
+/**
+ * The sample's chunks of (seed, params), in the scan's order (see the header); `half` narrows the scan (tests), and
+ * `b0` … `b1` − 1 limit it to those lattice rows (a slice; default every row).
+ */
+export function waterfallSampleChunks(seed: string, params: Params, half = WATERFALL_SAMPLE_HALF, b0 = -half, b1 = half): SampleChunk[] {
   const ctx = createGenContext(seedFromInput(seed), params);
   const sample = newColumnSample();
   const out: SampleChunk[] = [];
-  for (let b = -half; b < half; b++) {
+  for (let b = Math.max(b0, -half); b < Math.min(b1, half); b++) {
     for (let a = -half; a < half; a++) {
       const cx = WATERFALL_SAMPLE_STRIDE * a;
       const cz = WATERFALL_SAMPLE_STRIDE * b;
@@ -114,12 +121,31 @@ export function probesOf(ctx: GenContext): SampleProbes {
   return { solid: (x, y, z) => terrainSolidAt(inp, dc, x, y, z), fluid: (x, y, z) => fluidAt(inp, dc, x, y, z) };
 }
 
+/** A part of the sample's raw counts: chunks, steep positions (m²), water springs, visible falls, fall height → falls. */
+export interface SampleAcc {
+  chunks: number;
+  steep: number;
+  waterSprings: number;
+  visibleFalls: number;
+  heights: Record<string, number>;
+}
+
 /** The sample's reading over `chunks` (`waterfallSampleChunks`') on (seed, params). */
 export function waterfallSampleCounts(seed: string, params: Params, chunks: readonly SampleChunk[]): WaterfallSample {
+  return mergeSampleAccs([sampleAccs(seed, params, chunks)]);
+}
+
+/** The raw counts of the lattice rows b0 … b1 − 1 (a slice of the scan; see the header): per quadrant 0 … 3, then pooled. */
+export function waterfallSampleRows(seed: string, params: Params, b0: number, b1: number, half = WATERFALL_SAMPLE_HALF): SampleAcc[] {
+  return sampleAccs(seed, params, waterfallSampleChunks(seed, params, half, b0, b1));
+}
+
+/** The raw counts of `chunks` on (seed, params): per quadrant 0 … 3, then pooled. */
+function sampleAccs(seed: string, params: Params, chunks: readonly SampleChunk[]): SampleAcc[] {
   const ctx = createGenContext(seedFromInput(seed), params);
   const probe = probesOf(ctx);
   const list = newSpringList();
-  const acc = [0, 1, 2, 3, 4].map(() => ({ chunks: 0, steep: 0, waterSprings: 0, visibleFalls: 0, heights: {} as Record<string, number> }));
+  const acc: SampleAcc[] = [0, 1, 2, 3, 4].map(() => ({ chunks: 0, steep: 0, waterSprings: 0, visibleFalls: 0, heights: {} }));
   for (const c of chunks) {
     terrainSpringsDebug(ctx, c.cx, c.cz, list);
     for (const a of [acc[c.quadrant]!, acc[4]!]) {
@@ -142,9 +168,30 @@ export function waterfallSampleCounts(seed: string, params: Params, chunks: read
       }
     }
   }
-  const counts = (a: (typeof acc)[number]): SampleCounts => ({
-    chunks: a.chunks, steepKm2: a.steep / 1e6, waterSprings: a.waterSprings, visibleFalls: a.visibleFalls,
-    waterfalls: a.steep === 0 ? Number.NaN : a.visibleFalls / (a.steep / 1e6), fallHeights: a.heights,
-  });
+  return acc;
+}
+
+/** The reading of slices' raw counts (each `waterfallSampleRows`' or `sampleAccs`' five), summed. */
+export function mergeSampleAccs(slices: readonly (readonly SampleAcc[])[]): WaterfallSample {
+  const acc: SampleAcc[] = [0, 1, 2, 3, 4].map(() => ({ chunks: 0, steep: 0, waterSprings: 0, visibleFalls: 0, heights: {} }));
+  for (const slice of slices) {
+    for (let q = 0; q < 5; q++) {
+      const a = acc[q]!;
+      const p = slice[q]!;
+      a.chunks += p.chunks;
+      a.steep += p.steep;
+      a.waterSprings += p.waterSprings;
+      a.visibleFalls += p.visibleFalls;
+      for (const [h, n] of Object.entries(p.heights)) a.heights[h] = (a.heights[h] ?? 0) + n;
+    }
+  }
+  const counts = (a: SampleAcc): SampleCounts => {
+    const heights: Record<string, number> = {};
+    for (const h of Object.keys(a.heights).map(Number).sort((x, y) => x - y)) heights[h] = a.heights[h]!;
+    return {
+      chunks: a.chunks, steepKm2: a.steep / 1e6, waterSprings: a.waterSprings, visibleFalls: a.visibleFalls,
+      waterfalls: a.steep === 0 ? Number.NaN : a.visibleFalls / (a.steep / 1e6), fallHeights: heights,
+    };
+  };
   return { pooled: counts(acc[4]!), quadrants: acc.slice(0, 4).map(counts) };
 }

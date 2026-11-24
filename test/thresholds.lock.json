@@ -1,5 +1,5 @@
 {
-  "sha256": "1ac19532834343a2d8acf905f71dbbdf5125c05957fa20c06976e09eb4a90de2",
+  "sha256": "edb672d8935432d04e931ceacec32af8385a46790356fd944be678acddb755ec",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -22,16 +22,75 @@
       "SP7a"
     ],
     "thresholds": {
+      "A1": {
+        "dryShare": {
+          "activeFrom": "SP7a",
+          "min": 0.4
+        }
+      },
+      "A2": {
+        "unsettled": {
+          "activeFrom": "SP7a",
+          "max": 0.001
+        },
+        "unsupported": {
+          "activeFrom": "SP7a",
+          "max": 0.001
+        }
+      },
       "A3": {
         "aquiferLavaAbove10": {
           "activeFrom": "SP7a",
           "max": 0
+        },
+        "lavaBelow54": {
+          "activeFrom": "SP7a",
+          "min": 0.5
+        },
+        "lavaSkyRegions": {
+          "activeFrom": "SP7a",
+          "min": 0.25
+        },
+        "lavaSupported": {
+          "activeFrom": "SP7a",
+          "min": 0.99
+        }
+      },
+      "A4": {
+        "aquiferBodies": {
+          "activeFrom": "SP7a",
+          "min": 1
         }
       },
       "A5": {
         "abyssWater": {
           "activeFrom": "SP7a",
           "max": 0
+        },
+        "islandFalls": {
+          "activeFrom": "SP7a",
+          "min": 2,
+          "tiers": [
+            "quick",
+            "full"
+          ]
+        },
+        "springsTruncated": {
+          "activeFrom": "SP7a",
+          "max": 0.685,
+          "tiers": [
+            "quick",
+            "full"
+          ]
+        },
+        "waterfalls": {
+          "activeFrom": "SP7a",
+          "max": 100,
+          "min": 25,
+          "tiers": [
+            "quick",
+            "full"
+          ]
         }
       },
       "B1": {
