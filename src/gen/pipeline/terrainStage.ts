@@ -9,7 +9,8 @@
  *   carves become air in the solidity scratch and take their carver kind in the tag scratch (§3.2 step 4).
  * - The cave tag (SP6a spec §3.1-§3.2): `tagColumn` right after the carve, from the fill's per-cell record of the cells
  *   whose corners (or voxels) it evaluated, through the compiled tap readers, into the tag scratch at the density air
- *   the carve did not tag (the noise kinds and 9; 0 for rock, sky and surface air).
+ *   the carve did not tag (the noise kinds and 9; 0 for rock, sky and surface air), with the kinds its fill already
+ *   found (`PreTags`, the fill's hooks, Task 31p: the same tags, fewer taps read).
  * - The cave biome (SP6b spec §1, §2.1, D16-D17): right after the tag, the column's picker pass (`fillCaveColumnPass` on
  *   `cavePickerOf(ctx)`, its (16 + 2J)² positions), then at every tagged voxel (kind ≠ 0) the byte becomes
  *   `kind | caveBiomeOfPass(…) << 4`; untagged voxels keep 0. The aquifer runs after it, so a tagged voxel that holds
@@ -68,7 +69,7 @@ import {
 } from '../biomes/cavePicker';
 import { carveColumn, densityTopColumn } from '../caves/carve';
 import { carverCacheOf } from '../caves/carverCache';
-import { caveReadersOf, tagColumn } from '../caves/tags';
+import { caveReadersOf, createPreTags, tagColumn } from '../caves/tags';
 import { buildColumnSample, latticeIndex, newColumnSample, type ColumnSample } from '../column/columnStage';
 import type { GenContext } from '../context';
 import { fillDensityColumn, type DensityBounds } from '../density/bounds';
@@ -104,6 +105,7 @@ const SEED_SECTIONS = seedSectionsOf;
 const NEW_AQUIFER_SCRATCH = createAquiferScratch;
 const SPRINGS_COLUMN = springsColumn;
 const NEW_SPRING_LIST = newSpringList;
+const NEW_PRE_TAGS = createPreTags;
 const SPRING_PROBES = springProbesOf;
 const WATER_SOURCE_ = WATER_SOURCE;
 const LAVA_SOURCE_ = LAVA_SOURCE;
@@ -142,6 +144,8 @@ const SPRINGS = NEW_SPRING_LIST();
 const BLOCKS = new Uint16Array(4096);
 const FLUID = new Uint8Array(4096);
 const CAVE = new Uint8Array(4096);
+/** The tag pass's work done during the fill (Task 31p): the fill's hooks, then `tagColumn`'s `pre`. */
+const PRE_TAGS = NEW_PRE_TAGS();
 
 const NEVER = (): boolean => false;
 
@@ -178,6 +182,15 @@ function columnTops(solid: Uint8Array, top: Int32Array): void {
     }
     top[p] = t;
   }
+}
+
+/**
+ * The density fill of s's column into `SOLID` and `CELLS` (`fillDensityColumn` on `bounds`) with `PRE_TAGS` as its hooks,
+ * for the tag pass; false when `stop()` fired.
+ */
+function fill(ctx: GenContext, bounds: DensityBounds, s: ColumnSample, stop: () => boolean): boolean {
+  PRE_TAGS.begin(bounds, ctx.params.caves.pillars.threshold);
+  return FILL(bounds, s, SOLID, null, null, stop, CELLS, PRE_TAGS);
 }
 
 /**
@@ -231,7 +244,7 @@ let caveScan: { readonly inputs: CavePickerInputs; readonly pass: CaveColumnPass
  */
 function tagAndPick(ctx: GenContext, s: ColumnSample, bounds: DensityBounds, pass: CaveColumnPass): CavePickerInputs {
   const c = bounds.compiled;
-  TAG_COLUMN(c, READERS(c), ctx.params.caves.pillars.threshold, SOLID, CELLS, TAG, bounds, true);
+  TAG_COLUMN(c, READERS(c), ctx.params.caves.pillars.threshold, SOLID, CELLS, TAG, bounds, true, PRE_TAGS);
   const inp = PICKER_OF(ctx);
   columnCaveBiomes(inp, s, TAG, pass);
   return inp;
@@ -270,7 +283,7 @@ export function terrainStage(ctx: GenContext, cx: number, cz: number, w: Terrain
   const sc = SURFACE_CONTEXT(ctx);
   const s = BUILD(ctx, cx, cz, SAMPLE);
   const bounds = sc.density.bounds;
-  if (!FILL(bounds, s, SOLID, null, null, stop, CELLS)) return false;
+  if (!fill(ctx, bounds, s, stop)) return false;
   const islands = ctx.params.islands.enabled;
   DENSITY_TOPS(SOLID, islands, DENSITY_TOP);
   if (stop()) return false;
@@ -352,7 +365,7 @@ export function terrainSurfaceDebug(ctx: GenContext, cx: number, cz: number, sca
   const sc = SURFACE_CONTEXT(ctx);
   const s = BUILD(ctx, cx, cz, SAMPLE);
   const bounds = sc.density.bounds;
-  FILL(bounds, s, SOLID, null, null, NEVER, CELLS);
+  fill(ctx, bounds, s, NEVER);
   DENSITY_TOPS(SOLID, ctx.params.islands.enabled, DENSITY_TOP);
   carve(ctx, s, cx, cz);
   const inputs = tagAndPick(ctx, s, bounds, DEBUG_PASS);
@@ -371,7 +384,7 @@ export function terrainSpringsDebug(ctx: GenContext, cx: number, cz: number, out
   const sc = SURFACE_CONTEXT(ctx);
   const s = BUILD(ctx, cx, cz, SAMPLE);
   const bounds = sc.density.bounds;
-  FILL(bounds, s, SOLID, null, null, NEVER, CELLS);
+  fill(ctx, bounds, s, NEVER);
   DENSITY_TOPS(SOLID, ctx.params.islands.enabled, DENSITY_TOP);
   carve(ctx, s, cx, cz);
   const inputs = tagAndPick(ctx, s, bounds, DEBUG_PASS);
@@ -396,7 +409,7 @@ export function terrainAquiferDebug(ctx: GenContext, cx: number, cz: number, out
   const sc = SURFACE_CONTEXT(ctx);
   const s = BUILD(ctx, cx, cz, out.sample);
   const bounds = sc.density.bounds;
-  FILL(bounds, s, SOLID, null, null, NEVER, CELLS);
+  fill(ctx, bounds, s, NEVER);
   DENSITY_TOPS(SOLID, ctx.params.islands.enabled, DENSITY_TOP);
   carve(ctx, s, cx, cz);
   const inputs = tagAndPick(ctx, s, bounds, out.pass);

@@ -199,6 +199,20 @@ export interface DensityBounds {
 }
 
 /**
+ * Callbacks of `fillDensityColumn` (Task 31p, output-keeping): they read the fill's state at two points, so that a later
+ * pass (the cave tag) need not compute it again; they must not change the compile's slot values, corners or skips.
+ */
+export interface FillHooks {
+  /** Right after the cell's corner interval (`cellIntervalCorners`), while `nodeIntervals` hold it; `cell` = (ck·4 + cj)·4 + ci. */
+  corners(cell: number): void;
+  /**
+   * Right after `voxelFn` at a voxel the density leaves air (not > 0), with its index `((y + 64)·16 + lz)·16 + lx`,
+   * while the compile's voxel registers are still that voxel's (its tap readers read what `voxelFn` memoised).
+   */
+  air(j: number): void;
+}
+
+/**
  * Creates the bounds of `c`; `noises` must be the source `c` was compiled with (for each noise's clampSigma). `minSkip`
  * false turns lever (4)'s min skips off (the same values, every operand evaluated); `airWitness` false turns the air
  * witness off (`cellDecide` is then cellInterval); `options` (`DensityBoundsOptions`, every switch on by default)
@@ -635,11 +649,12 @@ const NO_SOLID = new Uint8Array(0);
 let F_SOLID: Uint8Array = NO_SOLID;
 let F_VALUES: Float64Array | null = null;
 let F_MASK: Uint8Array | null = null;
+let F_HOOKS: FillHooks | null = null;
 let F_CI = 0, F_CK = 0, F_CJ = 0;
 
 /** The voxels of box x0 … x1, y0 … y1, z0 … z1 of the fill's cell: `fill` 0 or 1 written, −1 evaluated by voxelFn. */
 function boxVoxels(x0: number, x1: number, y0: number, y1: number, z0: number, z1: number, fill: number): void {
-  const c = F_C!, solid = F_SOLID, values = F_VALUES, mask = F_MASK;
+  const c = F_C!, solid = F_SOLID, values = F_VALUES, mask = F_MASK, hooks = F_HOOKS;
   const yb = CORNER_Y(F_CK), xb = 4 * F_CI, zb = 4 * F_CJ;
   for (let y = yb + y0; y <= yb + y1; y++) {
     for (let lz = zb + z0; lz <= zb + z1; lz++) {
@@ -650,6 +665,7 @@ function boxVoxels(x0: number, x1: number, y0: number, y1: number, z0: number, z
         solid[row + lx] = v > 0 ? 1 : 0;
         if (values !== null) values[row + lx] = v;
         if (mask !== null) mask[row + lx] = 1;
+        if (hooks !== null && !(v > 0)) hooks.air(row + lx);
       }
     }
   }
@@ -692,12 +708,13 @@ function decideBox(x0: number, x1: number, y0: number, y1: number, z0: number, z
  * each voxel `voxelFn` evaluated (with `b.subBlocks`, only the voxels of a straddling cell's undecided boxes); a non-null
  * `values` receives those voxels' values (its other entries are left as they were). A non-null `cells` (768 entries, cell `(ck·4 + cj)·4 + ci`) is cleared, then set to 1 at each cell the root's
  * interval did not decide before its corners: its corners were evaluated (a tree with `interpolated`) or, without
- * slots, its voxels were (SP6a spec §3.2: a cell left 0 was decided solid or air by its interval alone). Nothing is
- * allocated.
+ * slots, its voxels were (SP6a spec §3.2: a cell left 0 was decided solid or air by its interval alone). A non-null
+ * `hooks` (`FillHooks`) is called at each cell's corner interval and at each evaluated air voxel; the outputs are the
+ * same with or without it. Nothing is allocated.
  */
 export function fillDensityColumn(
   b: DensityBounds, s: ColumnSample, solid: Uint8Array, values: Float64Array | null, mask: Uint8Array | null,
-  stop: () => boolean, cells: Uint8Array | null = null,
+  stop: () => boolean, cells: Uint8Array | null = null, hooks: FillHooks | null = null,
 ): boolean {
   const c = b.compiled;
   c.columnFn(s);
@@ -707,30 +724,32 @@ export function fillDensityColumn(
   if (cells !== null) cells.fill(0);
   const corners = c.interpolatedSlotCount > 0;
   const boxes = corners && b.subBlocks;
-  const sB = F_B, sC = F_C, sSolid = F_SOLID, sValues = F_VALUES, sMask = F_MASK, sCi = F_CI, sCk = F_CK, sCj = F_CJ;
+  const sB = F_B, sC = F_C, sSolid = F_SOLID, sValues = F_VALUES, sMask = F_MASK, sHooks = F_HOOKS, sCi = F_CI, sCk = F_CK, sCj = F_CJ;
   F_B = b;
   F_C = c;
   F_SOLID = solid;
   F_VALUES = values;
   F_MASK = mask;
+  F_HOOKS = hooks;
   try {
-    return fillLayers(b, c, solid, values, mask, stop, cells, corners, boxes);
+    return fillLayers(b, c, solid, values, mask, stop, cells, corners, boxes, hooks);
   } finally {
     F_B = sB;
     F_C = sC;
     F_SOLID = sSolid;
     F_VALUES = sValues;
     F_MASK = sMask;
+    F_HOOKS = sHooks;
     F_CI = sCi;
     F_CK = sCk;
     F_CJ = sCj;
   }
 }
 
-/** fillDensityColumn's 48 layers, the fill's state set (F_B … F_MASK); false when `stop()` fired. */
+/** fillDensityColumn's 48 layers, the fill's state set (F_B … F_HOOKS); false when `stop()` fired. */
 function fillLayers(
   b: DensityBounds, c: CompiledDensity, solid: Uint8Array, values: Float64Array | null, mask: Uint8Array | null,
-  stop: () => boolean, cells: Uint8Array | null, corners: boolean, boxes: boolean,
+  stop: () => boolean, cells: Uint8Array | null, corners: boolean, boxes: boolean, hooks: FillHooks | null,
 ): boolean {
   for (let ck = 0; ck < 48; ck++) {
     if ((ck & 7) === 0 && stop()) return false;
@@ -743,6 +762,7 @@ function fillLayers(
         if (fill < 0 && corners) {
           c.cellCorners(ci, ck, cj);
           b.cellIntervalCorners(ci, ck, cj, IV, 0);
+          if (hooks !== null) hooks.corners((ck * 4 + cj) * 4 + ci);
           fill = IV[1]! < 0 ? 0 : IV[0]! > 0 ? 1 : -1;
         }
         if (fill < 0) b.cellMinSkips(ci, ck, cj);
@@ -762,6 +782,7 @@ function fillLayers(
               solid[row + lx] = v > 0 ? 1 : 0;
               if (values !== null) values[row + lx] = v;
               if (mask !== null) mask[row + lx] = 1;
+              if (hooks !== null && !(v > 0)) hooks.air(row + lx);
             }
           }
         }

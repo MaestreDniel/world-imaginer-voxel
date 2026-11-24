@@ -12,8 +12,8 @@ import type { DensityExpr, DensityNoise, DensityNoiseSource, Expr } from '../../
 import { trilerp } from '../../src/gen/density/nodes';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
-import { createGenContext } from '../../src/gen/context';
-import { caveReadersOf, tagColumn } from '../../src/gen/caves/tags';
+import { createGenContext, type GenContext } from '../../src/gen/context';
+import { caveReadersOf, createPreTags, tagColumn } from '../../src/gen/caves/tags';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import { bitExactSets, checkBitExact } from '../harness/densityBitExact';
 import { fuzzNoiseSource, randomDensityExpr } from '../harness/densityFuzz';
@@ -520,6 +520,72 @@ describe('the cell tags: a cell\'s cave kind from its tap intervals (SP6a R13)',
         });
         for (let i = 0; i < 98304; i++) if (tags[0]![i] !== tags[1]![i]) throw new Error(`${name} muted (${cx}, ${cz}) voxel ${i}: ${tags[0]![i]} against ${tags[1]![i]}`);
       }
+    }
+  }, 300_000);
+});
+
+describe('the pre-tags: the tag pass\'s work done during the fill (Task 31p)', () => {
+  /** Fills and tags each column of `columns` twice, without and with a `PreTags`; the first difference throws. */
+  const compare = (ctx: GenContext, columns: readonly (readonly [number, number])[], label: string) => {
+    const dc = createDensityContext(ctx);
+    const b = dc.bounds, c = b.compiled, r = caveReadersOf(c), th = ctx.params.caves.pillars.threshold;
+    const pre = createPreTags();
+    const s = newColumnSample();
+    const solid = [new Uint8Array(98304), new Uint8Array(98304)], values = [new Float64Array(98304), new Float64Array(98304)];
+    const mask = [new Uint8Array(98304), new Uint8Array(98304)], cells = [new Uint8Array(768), new Uint8Array(768)];
+    const tags = [new Uint8Array(98304), new Uint8Array(98304)];
+    const stats = { preVoxels: 0, preKinds: 0, tagged: 0 };
+    for (const [cx, cz] of columns) {
+      buildColumnSample(ctx, cx, cz, s);
+      expect(fillDensityColumn(b, s, solid[0]!, values[0]!, mask[0]!, NEVER, cells[0]!)).toBe(true);
+      tagColumn(c, r, th, solid[0]!, cells[0]!, tags[0]!, b);
+      pre.begin(b, th);
+      expect(fillDensityColumn(b, s, solid[1]!, values[1]!, mask[1]!, NEVER, cells[1]!, pre)).toBe(true);
+      tagColumn(c, r, th, solid[1]!, cells[1]!, tags[1]!, b, false, pre);
+      for (let i = 0; i < 98304; i++) {
+        const where = `${label} (${cx}, ${cz}) voxel ${i}`;
+        if (solid[0]![i] !== solid[1]![i]) throw new Error(`${where}: solid ${solid[0]![i]} without the hooks, ${solid[1]![i]} with`);
+        if (mask[0]![i] !== mask[1]![i]) throw new Error(`${where}: evaluated ${mask[0]![i]} without the hooks, ${mask[1]![i]} with`);
+        if (mask[0]![i] === 1 && !Object.is(values[0]![i], values[1]![i])) throw new Error(`${where}: ${values[0]![i]} without the hooks, ${values[1]![i]} with`);
+        if (tags[0]![i] !== tags[1]![i]) throw new Error(`${where}: tag ${tags[0]![i]} without the pre-tags, ${tags[1]![i]} with`);
+        if (pre.voxels[i] !== 255) stats.preVoxels++;
+        if (tags[0]![i] !== 0) stats.tagged++;
+      }
+      for (let cell = 0; cell < 768; cell++) {
+        expect(cells[1]![cell]).toBe(cells[0]![cell]);
+        // A kind is recorded exactly at the cells whose corner interval the fill computed.
+        if (pre.kinds[cell] !== -2) { expect(cells[0]![cell]).toBe(1); stats.preKinds++; }
+      }
+    }
+    return stats;
+  };
+
+  test('with and without the pre-tags, the fill (solidity, cells, evaluated voxels and values) and every tag of 64 columns are equal', () => {
+    let preVoxels = 0, preKinds = 0, tagged = 0;
+    for (const set of bitExactSets()) {
+      const st = compare(createGenContext(seedFromInput('42'), set.params), set.columns, set.name);
+      preVoxels += st.preVoxels;
+      preKinds += st.preKinds;
+      tagged += st.tagged;
+    }
+    // Not vacuous: the fill tags voxels and finds cell kinds.
+    expect(preVoxels).toBeGreaterThan(64 * 1000);
+    expect(preKinds).toBeGreaterThan(64 * 50);
+    expect(tagged).toBeGreaterThan(64 * 1000);
+  }, 300_000);
+
+  test('the muted trees: a tap set to a constant (a point interval, ties at its bounds) tags the same with the pre-tags', () => {
+    for (const name of ['entrances', 'cheese', 'spag3d', 'spag2d', 'pillars', 'noodle', 'precave']) {
+      const tree = JSON.parse(JSON.stringify(DEFAULT_DENSITY_TREE)) as { root: unknown; defs: Record<string, unknown> };
+      const walk = (v: unknown): void => {
+        if (v === null || typeof v !== 'object') return;
+        const o = v as Record<string, unknown>;
+        if (o['op'] === 'tap' && o['name'] === name) o['mute'] = name === 'precave' ? 3 : -0.5;
+        for (const x of Object.values(o)) walk(x);
+      };
+      walk(tree);
+      const params = paramsWith({ density: { defs: tree } } as never);
+      compare(createGenContext(seedFromInput('42'), params), bitExactSets()[0]!.columns.slice(0, 8), `${name} muted`);
     }
   }, 300_000);
 });

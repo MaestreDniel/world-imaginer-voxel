@@ -30,6 +30,11 @@
  * noodle above 0, or at most 0 and below the lowest family), every density-air voxel of the cell takes that kind
  * without reading its taps; otherwise each is tagged by `tagVoxel`. The comparisons that decide are strict where the
  * rule's are, so no voxel is a tie, and the kind is `tagVoxel`'s.
+ * The pre-tags (Task 31p, output-keeping). The T stage passes a `PreTags` to its density fill as the fill's hooks
+ * (`FillHooks`): at each cell whose corner interval the fill computes it records the cell's kind, and at each air voxel the fill evaluates in a cell with no kind it records the voxel's kind while the compile's
+ * registers still hold that voxel, so the taps `voxelFn` just evaluated are read from its memo. `tagColumn` given them
+ * runs neither the cell's interval nor those voxels' taps again: a cell's corner interval is a function of the cell
+ * and its corners alone, and a voxel's kind of the voxel alone, so the tags are the same.
  * `nearestCave` is the Caves tab's finder (SP6a spec §7.3, D12, D16): the search core of the pool's `findCave` job, its
  * clock, its stop and its loaded columns injected; `nearestCaveBiome` is its biome form (SP6b spec §9.3, D11), on the
  * same rings (`searchRings`), the core of a `findCave` with a `biome`.
@@ -40,7 +45,7 @@ import { inWindow } from '../../core/coords';
 import type { ColumnView } from '../../world/store/api';
 import { caveBiomeAt, caveBiomeInputsAt, caveY0, cavePickerOf } from '../biomes/cavePicker';
 import { newPointRecord, samplePoint } from '../column/columnPoint';
-import type { DensityBounds } from '../density/bounds';
+import type { DensityBounds, FillHooks } from '../density/bounds';
 import type { CompiledDensity } from '../density/compile';
 import type { DensityContext } from '../density/context';
 import { probe } from '../density/probe';
@@ -150,6 +155,14 @@ export function caveReadersOf(c: CompiledDensity): CaveReaders {
  */
 export function tagVoxel(c: CompiledDensity, r: CaveReaders, pillarThreshold: number, lx: number, y: number, lz: number): number {
   c.atVoxel(lx, y, lz);
+  return tagCurrentVoxel(r, pillarThreshold);
+}
+
+/**
+ * `tagVoxel` at the voxel the compile's registers hold (its last `voxelFn` or `atVoxel` call), without setting them
+ * again: right after `voxelFn` there, the taps it evaluated are read from its memo, not evaluated again.
+ */
+function tagCurrentVoxel(r: CaveReaders, pillarThreshold: number): number {
   const pre = r.precave ?? r.terrain;
   if (pre === null || !(pre() > 0)) return 0;
   const fe = r.entrances, fc = r.cheese, f3 = r.spaghetti3d, f2 = r.spaghetti2d, fp = r.pillars, fn = r.noodle;
@@ -217,6 +230,55 @@ function cellKind(iv: Float64Array, nd: Int32Array, th: number): number {
   return -1;
 }
 
+/** `PreTags.kinds`' entry for a cell whose corner interval the fill did not compute. */
+const NOT_COMPUTED = -2;
+/** `PreTags.voxels`' entry for a voxel the fill did not tag. */
+const NO_TAG = 255;
+
+/**
+ * The tag pass's work done during the density fill (Task 31p, output-keeping): the `FillHooks` of a `fillDensityColumn`
+ * call, recording per cell whose corner interval the fill computed its cell kind (`cellKind` on that interval, −1 when
+ * it decides none, or always −1 without the cell tags), and at each air voxel the fill evaluated in a cell with no kind
+ * its `tagVoxel` kind, read from what `voxelFn` memoised. A cell's corner interval is a function of the cell and its
+ * corners alone, and a voxel's kind of the voxel alone, so `tagColumn` given them tags exactly as without them, but
+ * runs neither again.
+ */
+export interface PreTags extends FillHooks {
+  /** Per cell `(ck·4 + cj)·4 + ci`: its kind as the fill found it, or NOT_COMPUTED (−2). */
+  readonly kinds: Int8Array;
+  /** Per voxel `((y + 64)·16 + lz)·16 + lx`: its kind as the fill found it, or NO_TAG (255). */
+  readonly voxels: Uint8Array;
+  /** Clears both and binds the hooks to `bounds` (its compile's tap readers) and `pillarThreshold`: call before each fill. */
+  begin(bounds: DensityBounds, pillarThreshold: number): void;
+}
+
+/** A fresh `PreTags` (98,304 + 768 bytes). */
+export function createPreTags(): PreTags {
+  const kinds = new Int8Array(768), voxels = new Uint8Array(98304);
+  let ivs: Float64Array | null = null, readers: CaveReaders | null = null, nodes: Int32Array | null = null, th = 0;
+  return {
+    kinds,
+    voxels,
+    begin(bounds, pillarThreshold) {
+      kinds.fill(NOT_COMPUTED);
+      voxels.fill(NO_TAG);
+      const c = bounds.compiled, res = resolve(c);
+      ivs = bounds.nodeIntervals;
+      readers = res.readers;
+      th = pillarThreshold;
+      nodes = c.interpolatedSlotCount > 0 && bounds.cellTags ? res.cellNodes : null;
+    },
+    corners(cell) {
+      kinds[cell] = nodes === null ? -1 : cellKind(ivs!, nodes, th);
+    },
+    air(j) {
+      // The cell (j >> 11, (j >> 6) & 3, (j >> 2) & 3): a cell with a kind tags its voxels without their taps.
+      if (kinds[((j >> 11) << 4) | (((j >> 6) & 3) << 2) | ((j >> 2) & 3)]! >= 0) return;
+      voxels[j] = tagCurrentVoxel(readers!, th);
+    },
+  };
+}
+
 /** Whether cell (ci, ck, cj) holds a density-air voxel above y −64: air in `solid` that the carve did not tag in `out`. */
 function hasAir(solid: Uint8Array, out: Uint8Array, ci: number, ck: number, cj: number): boolean {
   const y0 = -64 + 8 * ck;
@@ -238,12 +300,14 @@ function hasAir(solid: Uint8Array, out: Uint8Array, ci: number, ck: number, cj: 
  * otherwise has its corners evaluated first (always so without `bounds`: exact, only slower). With `carved` (the T
  * stage, after `carveColumn`), `solid` is the carved solidity and `out` already holds the carve's tags (§3.2 step 4: a
  * carver kind exactly at the voxels it carved, 0 elsewhere) and is not cleared: a voxel is density air where it is air
- * and untagged, and a carved voxel keeps its carver kind. Throws a RangeError on other sizes, an Error when `bounds` is
- * not `c`'s.
+ * and untagged, and a carved voxel keeps its carver kind. A non-null `pre` (`PreTags`, begun with `bounds` and
+ * `pillarThreshold` before the fill that left `solid` and `cells`, and passed to it as its hooks) gives the cell kinds and
+ * voxel kinds that fill computed, which are used instead of computing them again (the same tags). Throws a RangeError
+ * on other sizes, an Error when `bounds` is not `c`'s.
  */
 export function tagColumn(
   c: CompiledDensity, r: CaveReaders, pillarThreshold: number, solid: Uint8Array, cells: Uint8Array, out: Uint8Array,
-  bounds: DensityBounds | null = null, carved = false,
+  bounds: DensityBounds | null = null, carved = false, pre: PreTags | null = null,
 ): void {
   if (solid.length !== 98304 || out.length !== 98304 || cells.length !== 768) {
     throw new RangeError('tagColumn: solid and out need 98,304 entries, cells 768');
@@ -274,15 +338,20 @@ export function tagColumn(
         if (cellNodes !== null) {
           // A cell decided solid after its corners has nothing to tag.
           if (!hasAir(solid, out, ci, ck, cj)) continue;
-          bounds!.cellIntervalCorners(ci, ck, cj, IV, 0);
-          kind = cellKind(bounds!.nodeIntervals, cellNodes, pillarThreshold);
+          kind = pre !== null ? pre.kinds[cell]! : NOT_COMPUTED;
+          if (kind === NOT_COMPUTED) {
+            bounds!.cellIntervalCorners(ci, ck, cj, IV, 0);
+            kind = cellKind(bounds!.nodeIntervals, cellNodes, pillarThreshold);
+          }
         }
         for (let y = y0 < -63 ? -63 : y0; y < y0 + 8; y++) {
           for (let lz = 4 * cj; lz < 4 * cj + 4; lz++) {
             const row = ((y + 64) * 16 + lz) * 16;
             for (let lx = 4 * ci; lx < 4 * ci + 4; lx++) {
               if (solid[row + lx] !== 0 || out[row + lx] !== 0) continue;
-              out[row + lx] = kind >= 0 ? kind : tagVoxel(c, r, pillarThreshold, lx, y, lz);
+              if (kind >= 0) out[row + lx] = kind;
+              else if (pre !== null && pre.voxels[row + lx] !== NO_TAG) out[row + lx] = pre.voxels[row + lx]!;
+              else out[row + lx] = tagVoxel(c, r, pillarThreshold, lx, y, lz);
             }
           }
         }
