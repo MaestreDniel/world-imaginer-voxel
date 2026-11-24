@@ -1108,6 +1108,25 @@ The dry run (2026-11-24, HEAD c6588f4 plus Task 31's metric calls, no generator 
 
 - **The red**: T4 `deepFloor` 7 on full (7 wet positions of large_biomes' regions whose floor, `oceanFloorWG` − 1, lies at or below −50; quick reads 0, the re-asserted table above). It joins the full-tier reds above (`C9.entrancesMax`, R3's pose search) for the user. `floorSd` passes on full at 3.38 against its 3.
 
+### Task 31c: the user's round-2 decisions (rulings R24)
+
+The user approved the controller's recommendations on 2026-11-24 ("Ok a las recomendaciones", rulings R24). Applied here (HEAD dabee90 plus Task 31c's harness, threshold and spec changes; no `src/` change, `git diff dabee90 -- test/goldens.json` empty): items 1 and 3-8; item 2 (a `terrain.real` p99 task before Task 32) is a task of its own.
+
+| decision (R24) | change | readings | verdict |
+|---|---|---|---|
+| 1. `C7.waterWall` record-only (a LOOSEN, the user's) | row `activeFrom` 'SP6a' → 'SP7b', bound 3.3 kept there; still computed, `.out/C7.tuning.json` and `C7.waterWallAny` | fast 718.9; quick 435.1 default / 463.4 archipelago; full 282.3 / 279.0 per km² (amplified 619.1, recorded) | recorded; SP7b owns its definition and bound (§17); the user reviews the fronts at Task 47 |
+| 3. `A5.springsTruncated` ≤ 0.685 | none (already gated) | quick 0.5 (3 of 6), full 0.684 (13 of 19) | met, accepted by the user |
+| 4. `A5.lavaFalls` ≥ 0.6 (the user's) | gated, every tier, presets and biomes groups | fast biomes 0.647 (3 / 463,434); quick presets 1.117 (12 / 1,074,535), biomes 0.647; full presets 0.887 (43 / 4,850,143), biomes 0.647 | met |
+| 5. `A5.borderRatio` 0.8-1.25 in a group of ≥ 50 springs | gated on full in the presets group; recorded elsewhere; a gated group under 50 springs fails | full presets 0.875 (16 of 78); quick presets 0.512 (3 of 25) and biomes 2.133 (2 of 4) recorded | met |
+| 6. B5 `lakeAirAdjacent` on T record-only | §13.2 and master B5 wording, no row | quick 247 (16 windows, 1,338 shore positions; `lakeSpill` 2,082); Task 31's fast 76, full 451 | recorded |
+| 7. C9 counts entrances onto untagged air | `dryOpenings` (C9's openings and `entrancesMax`; C2 unchanged); Spec correction, master C9 row | `entrancesMax` full 183.1 → **74.1** (233 of 576 components; seeds '2' and '3' 57/54/46 and 66/62/62 → 1/23/0 and 0/0/0), quick 145.6 → **132.9** (bound 150); `nearestEntrance` full 73.1 default / 70.5 archipelago, quick 76.6 / 65.2 (72.1 / 64 before; bound 192) | met |
+| 7. T4 reads the pre-cave sea bed | `preCaveFloors`; Spec correction, master T4 row | full `deepFloor` 7 → **0**, lowest floor −51 → 5 (large_biomes) and 5 (default), `floorSd` 3.193 large_biomes (main read 3.193) / 5.69 default, `exposedBedrock` 0; quick `floorSd` 3.164 / 7.52, `deepFloor` 0 | met |
+| 8. R3: fluid fallback only for a kind with no dry candidate | `poseCandidates`; Spec correction of SP6b §12.4's poses (§13.2) | full: 64 poses, `wronglyCulled` 0, `popIn` 0, `culledUnderground` 0.709; seed '2' `cave_heavy` (−16, −16)'s corner pose alone takes a fluid-filled voxel (eye (−15.75, −16.25, −63.75)); fast (8 poses) and quick (32) `.out/R3.poses.json` equal Task 31b's tree apart from timings (`culledUnderground` 0.7046 / 0.7470 unchanged) | met |
+
+Commands, one at a time under the heavy-command lock and the 6 GB cap: `npm run typecheck`; `npm test -- --maxWorkers=4` (1,541 s: 379 files passed, 3 skipped; 7,413 tests passed, 1 expected fail, 17 skipped; **0 failed**); `METRICS_TIMEOUT_SCALE=3 npm run test:metrics -- --maxWorkers=4` (1,256 s: 20 files, 106 passed, 9 skipped); on full `METRICS_CAVE_GROUPS=<g> METRICS_TIMEOUT_SCALE=3 npx vitest run --project metrics-full test/metrics/caves.metric.ts` for g default (244 s, 29 passed), biomes (232 s, 22 passed, 1 skipped) and presets (343 s, 24 passed), and `METRICS_TIMEOUT_SCALE=3 npx vitest run --project metrics-full test/metrics/terrain.metric.ts -t T4` (255 s, passed). A note for the user: on full, the floating_islands regions of seeds '1', '2' and '3' hold 88-113 C2 components and no entrance onto air (every one opens only onto untagged water; not examined further), while seed '42''s holds 68 of 68; the presets group's `nearestEntrance` reads the regions that hold openings.
+
+**The known-red list (R13, R19) is empty**: every gated part passes on fast, quick and the full-tier files run here; Task 32's push condition on it holds.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
