@@ -1063,7 +1063,7 @@ The bench after the EC check (2026-11-24 03:12: AC online; 6 own busy threads 4.
 
 ### Task 31: the tuning's dry run (§13.1-§13.2)
 
-The dry run (2026-11-24, HEAD c6588f4 plus Task 31's metric calls, no generator change): `caves.metric.ts` per group (`METRICS_CAVE_GROUPS`) on fast, quick and full, and `region.metric.ts` (B5) on each tier, one at a time under `METRICS_TIMEOUT_SCALE=3` (full: default 161 s, presets 256 s, biomes 143 s, region 570 s); `A5.waterfalls` on its steep-land sample (`waterfalls.metric.ts`, quick: 87 s wall in 4 worker threads locally, against about 218 s single-threaded; the sample and its reading are the same on every tier). The other files of `test:metrics:full` (S1, T1 and the rest) hold none of these parts and are left to the full-tier run (Task 53). Fast measures no preset region (its presets column is empty); "—" is a group with no sample of the part. Gated below: the parts at their bounds from this commit; **bold** a miss.
+The dry run (2026-11-24, HEAD c6588f4 plus Task 31's metric calls, no generator change): `caves.metric.ts` per group (`METRICS_CAVE_GROUPS`) on fast, quick and full, and `region.metric.ts` (B5) on each tier, one at a time under `METRICS_TIMEOUT_SCALE=3` (full: default 161 s, presets 256 s, biomes 143 s, region 570 s); `A5.waterfalls` on its steep-land sample (`waterfalls.metric.ts`, quick: 87 s wall in 4 worker threads locally, against about 218 s single-threaded; the sample and its reading are the same on every tier). `surface.metric.ts` (S1-S3, B2, B4) and `terrain.metric.ts` (T1-T5, B3) were then run on full too (below, "S1 and T1 on full"); the other files of `test:metrics:full` hold none of these parts and are left to the full-tier run (Task 53). Fast measures no preset region (its presets column is empty); "—" is a group with no sample of the part. Gated below: the parts at their bounds from this commit; **bold** a miss.
 
 | part | bound | fast default | fast biomes | quick default | quick presets | quick biomes | full default | full presets | full biomes |
 |---|---|---|---|---|---|---|---|---|---|
@@ -1085,6 +1085,25 @@ The dry run (2026-11-24, HEAD c6588f4 plus Task 31's metric calls, no generator 
 - **The misses** (Step 3's STOP, rulings R23's dispatch item 5: no lever was tried for them at Task 27, and none is loosened here): `lavaFalls` in the biomes group on every tier (3 lava falls in the biome region) and in the presets group on full; `borderRatio` in the biomes group on every tier (2 of its 4 springs on a border) and in the presets group on quick (3 of 25), while presets on full reads 0.875 (16 of 78); B5's master bound 0 on every tier (`lakes.rimRise` stays 2, rulings R23 item 4). They stay recorded (`.out/A5.<group>.json`, `.out/B5.lake.json`) until the user's bound.
 - **Reds outside these parts on the full tier** (found by the dry run, not Task 31's to fix): `C9.entrancesMax` 183.1 per km² on the full default group (bound 150; quick passes; SP6b's exit read 72.5 on full); R3's pose search throws on seed '2' `cave_heavy` (−16, −16) ("no underground cave air on a section corner"); `C7.waterWall` (R19's known red) 282.3 (full default) and 279.0 (full presets) per km².
 - **DT1** `settleReference` and `settleIsolated` 0 on fast, quick and full (full: 3 windows, 10,616,832 interior voxels).
+
+**S1 and T1 on full** (2026-11-24, HEAD 6b968eb, no generator change; Task 31's review: a full-tier red belongs with the user's decisions before Task 32's push): `METRICS_TIMEOUT_SCALE=3 npx vitest run --project metrics-full test/metrics/surface.metric.ts` (411 s; 5 passed, the column-slice test skipped), then the same with `test/metrics/terrain.metric.ts` (508 s; 6 passed, **T4 failed**), one at a time. Seeds '42', '1', '2', '3'; each part the worst of the two profiles (S1's `buried` and `grassNoSky`, S3's `snowNoSky`, T4's `exposedBedrock` and `deepFloor` the sum); B3 the default profile's windows.
+
+| part | bound | full default | full large_biomes | gated (worst) |
+|---|---|---|---|---|
+| S1 `buried` / `grassNoSky` | 0 / 0 | 0 / 0 (2,249,077 land tops) | 0 / 0 (9,017,012) | 0 / 0 |
+| S1 `ymod16` | ≥ 0.001 | 0.0294 (4,531) | 0.0646 (20,241) | 0.0294 |
+| S2 `deepslateBelow0` / `deepslateAbove8` / `bedrockFloor` | ≥ 0.95 / ≤ 0.01 / ≥ 1 | 0.9999999 / 0 / 1 | 1 / 0 / 1 | 0.9999999 / 0 / 1 |
+| S3 `snowAboveLine` / `snowNoSky` | ≥ 0.9 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
+| B2 `riverChannelWater` | ≥ 0.85 | 0.9255 (55,162) | 0.9204 (58,482) | 0.9204 |
+| B4 `snowInDesert` / `coastBandBeachVoxel` / `landTopsBelowSea` | 0 / ≥ 0.7 / ≤ 0.01 | 0 / 0.8956 / 0.00115 | 0 / 0.9281 / 0.00037 | 0 / 0.8956 / 0.00115 |
+| T1 `band` / `span` / `above120` / `above200` | ≤ 0.25 / ≥ 60 / ≥ 0.06 / ≥ 0.005 | 0.2370 / 105 / 0.1565 / 0.0203 | 0.1820 / 107 / 0.1787 / 0.0214 | 0.2370 / 105 / 0.1565 / 0.0203 |
+| T2 `overhangs` / `overhangsPeaks` | ≥ 0.015 / ≥ 0.1 | 0.0372 / 0.1087 | 0.0430 / 0.1176 | 0.0372 / 0.1087 |
+| T3 `value` (full only) | ≤ 1.5 | 1.188 | 1.054 | 1.188 |
+| T4 `floorSd` / `exposedBedrock` / `deepFloor` | ≥ 3 / 0 / 0 | 5.83 / 0 / 0 (lowest floor −47) | 3.38 / 0 / **7** (lowest floor −51) | 3.38 / 0 / **7** |
+| T5 `median` / `p90` / `p99` | ≤ 1 / ≤ 2 / ≤ 6 | 1 / 2 / 3 | 1 / 2 / 4 | 1 / 2 / 4 |
+| B3 `lushMin` / `dripstoneMin` / `abyssMin` / `windowAir` | ≥ 0.005 each / ≥ 50,000 | 0.1167 / 0.1080 / 0.0455 / 1,129,095 | (not read) | 0.1167 / 0.1080 / 0.0455 / 1,129,095 |
+
+- **The red**: T4 `deepFloor` 7 on full (7 wet positions of large_biomes' regions whose floor, `oceanFloorWG` − 1, lies at or below −50; quick reads 0, the re-asserted table above). It joins the full-tier reds above (`C9.entrancesMax`, R3's pose search) for the user. `floorSd` passes on full at 3.38 against its 3.
 
 ## Threshold log
 
