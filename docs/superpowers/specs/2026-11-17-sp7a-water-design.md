@@ -1144,7 +1144,17 @@ Not taken (measured, slower): splitting an undecided cell into boxes for the tag
 
 **Measured** (scratch, both trees in one process, columns interleaved A/B so clock changes hit both alike; per column the median of 6, over t = 1 … 100): base → HEAD p50 10.71 → 9.57 ms, p99 20.54 → 18.33 ms, the sum ×0.887; a second round 13.47 → 12.16 / 27.10 → 23.09 (×0.888; the clocks capped, below). The worst columns lose 2.0-4.4 ms.
 
-**The bench protocol (R22)**: not run. The EC check before it read the CPU capped three times (22:26-22:30, AC online): 6 own busy threads 2.9-3.2 GHz falling to 1.6-1.8 GHz at 56-58 °C, 20 threads 1.34-1.50 GHz at 53-55 °C; rulings R6: no gated measurement until the user resets the EC. `npm run bench` (3 consecutive gated passes within 6 runs) and `npm run bench:record` (R21 item 1's re-record) remain to be run on HEAD after the reset.
+**The bench protocol (R22)**, run by Task 31q on HEAD d75ecef (Task 31p's code) after the user's EC reset. At Task 31p the EC check read the CPU capped three times (22:26-22:30: 20 own busy threads 1.34-1.50 GHz at 53-55 °C), so nothing was measured until the reset. Task 31q's EC checks, AC online: 22:54, 6 own busy threads 4.10 GHz at every sample (≤ 81 °C), 20 threads 4.0-4.1 GHz then 2.9-3.0 GHz (≤ 86 °C); 23:05, before `bench:record`, 6 threads 4.10 GHz (≤ 70 °C), 20 threads 4.0-4.1 GHz then 2.9-3.1 GHz (≤ 78 °C); no cap. Each run started with the 1-minute load below 1, under the heavy-command lock and the 6 GB cap, nothing else heavy running.
+
+| run | start | `terrain.real` p50 / p99 (ms, columns) | `terrain.islands` p50 / p99 | `aquifer.column` p50 / p99 | `decorate.column` p50 / p99 | exit |
+|---|---|---|---|---|---|---|
+| gated 1 | 22:57 | 10.067 / 16.171 (97) | 11.227 / 17.969 | 0.299 / 1.014 | 1.126 / 1.581 | 0 |
+| gated 2 | 23:00 | 10.007 / 15.095 (97) | 11.301 / 18.492 | 0.298 / 1.074 | 1.128 / 1.539 | 0 |
+| gated 3 | 23:03 | 10.204 / 15.400 (96) | 11.225 / 17.756 | 0.298 / 1.071 | 1.147 / 1.626 | 0 |
+| `bench:record` | 23:08 | 10.011 / 15.188 (97) | 11.341 / 18.368 | 0.301 / 1.113 | 1.239 / 1.680 | 0 |
+
+- **Three consecutive gated passes in 3 runs** (R22: at most 6). `terrain.real`'s p99 median over the gated runs is **15.400 ms**, so R24 item 2's target (≤ 18.5 ms) is met, with 4.6 ms of margin under the 20 ms gate; its p50 10.0-10.2 ms (gate 13). Against Task 27l's step-4 runs (p50 10.8-11.5, p99 18.6-19.8 over 83-87 columns), the p50 is about 0.9 ms lower and the p99 about 3.5 ms lower; the row now fits 96-97 columns in its time. `terrain.islands` 11.2-11.3 / 17.8-18.5 (gates 14.5 / 26.5; 12.55 / 22.44 at Task 27l's record).
+- **`bench:record`** (R21 item 1's re-record) wrote `test/baselines.json` (killRatio 0.821, was 0.846). Ratios against Task 27l's baselines: `terrain.real` ×0.923 and `terrain.islands` ×0.903 (Task 31p's levers); `light.column` ×1.179, `paste.max` ×1.140, `surface.column` ×1.081, `decorate.column` ×1.083 and `paste.maxLit` ×1.078, rows that Task 31p does not touch, after the output-changing commits since Task 27l's record (9f1d6c3, e1bf906, 15592c1, e53ed75; `light.column` p50 3.17 ms against its 4 ms gate, 3.13-3.19 in the gated runs); every other kernel within 5 %.
 
 ## Threshold log
 
