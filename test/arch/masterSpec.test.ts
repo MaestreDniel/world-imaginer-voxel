@@ -265,6 +265,10 @@
  * The tuning (Task 31) lands item 16's A1-A5 and A2 rows at their bounds, each cross-checked against `THRESHOLDS` (A1-A4
  * on every tier; A5's `waterfalls`, `islandFalls` and `springsTruncated` on quick and full, `lavaFalls` and `borderRatio`
  * recorded until the user's bound), and §1's test entry naming `metrics/waterfalls.metric.ts` (an `SP7A_MODULES` row).
+ * The user's round-2 decisions (Task 31c, the SP7a spec's rulings R24) reword the A5 row (`lavaFalls` at ≥ 0.6 on every
+ * tier, `borderRatio` only in a group holding ≥ 50 springs, on full) and the C7 row (`waterWall` recorded in SP7a, its
+ * `THRESHOLDS` row SP7b's), and amend the C9 row (openings onto untagged air holding no fluid), the T4 row (the pre-cave
+ * sea bed) and B5's third part (recorded on T), each cross-checked against `THRESHOLDS`.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2443,7 +2447,9 @@ describe('master spec amendments (SP6a §13)', () => {
    */
   test('§6.4\'s C1-C9 rows name the tuning parts and their bounds, which THRESHOLDS holds activeFrom SP6a (SP6a spec §13 item 18, §10.1, R21)', () => {
     const QF = ['quick', 'full'] as const;
-    type Bound = { min?: number; max?: number; tiers?: readonly string[] };
+    // `activeFrom` 'SP6a' unless a part says otherwise (C7.waterWall: recorded in SP7a, its row SP7b's, the SP7a spec's
+    // rulings R24 item 1).
+    type Bound = { min?: number; max?: number; tiers?: readonly string[]; activeFrom?: SubProjectId };
     // C1's, C6's and C7's threshold cells moved to 'master spec amendments (SP6b §15)' (SP6b §15 item 20 rewords them;
     // ruling P27): null here, their parts and bounds still checked.
     const rows: Array<[id: 'C1' | 'C2' | 'C3' | 'C4' | 'C5' | 'C6' | 'C7' | 'C8' | 'C9', parts: Array<[part: string, bound: Bound]>, cell: string | null]> = [
@@ -2458,7 +2464,7 @@ describe('master spec amendments (SP6a §13)', () => {
       ['C6', [['latticeBias', { max: 1.25 }]], null],
       ['C7', [
         ['borderPlaneRatio', { min: 0.9, max: 1.1 }], ['verticalStep', { max: 8.1 }], ['flatWallShare', { max: 0.037 }], ['switchWall', { max: 2 }],
-        ['waterWall', { max: 3.3 }],
+        ['waterWall', { max: 3.3, activeFrom: 'SP7b' }],
       ], null],
       ['C8', [['aperiodicity', { min: 0.63, tiers: QF }], ['typeMixVariation', { min: 0.021 }], ['sizeSpread', { min: 1.5, tiers: QF }]], '≥ 0.63 / ≥ 0.021 / ≥ 1.5'],
       ['C9', [['nearestEntrance', { max: 192 }], ['entrancesMax', { max: 150, tiers: QF }], ['holedSurface', { max: 0.02 }], ['thinRoof', { max: 0.05 }]],
@@ -2476,11 +2482,12 @@ describe('master spec amendments (SP6a §13)', () => {
         const i = cells[1]!.indexOf(`\`${part}\``, from);
         expect(i, `§6.4's ${id} row does not name \`${part}\` after the previous part`).toBeGreaterThan(-1);
         from = i;
-        expect(THRESHOLDS[id]?.[part], `THRESHOLDS.${id}.${part}`).toEqual({ ...bound, activeFrom: 'SP6a' });
+        expect(THRESHOLDS[id]?.[part], `THRESHOLDS.${id}.${part}`).toEqual({ activeFrom: 'SP6a', ...bound });
       }
       // THRESHOLDS holds no other tuning part of the id (C7's construction parts come first, pinned above).
       // SP6a's parts only: SP6b appends its own (C7.bottomPlane, …), which its describe pins (SP6b rulings P16, P27).
-      const tuning = Object.keys(THRESHOLDS[id] ?? {}).filter((p) => THRESHOLDS[id]?.[p]?.activeFrom === 'SP6a').slice(id === 'C7' ? 4 : 0);
+      const tuning = Object.keys(THRESHOLDS[id] ?? {})
+        .filter((p) => THRESHOLDS[id]?.[p]?.activeFrom === 'SP6a' || (id === 'C7' && p === 'waterWall')).slice(id === 'C7' ? 4 : 0);
       expect(tuning, `${id}'s tuning parts`).toEqual(parts.map(([p]) => p));
       // Each row says where its parts gated on quick and full are gated, as THRESHOLDS does.
       if (parts.some(([, b]) => b.tiers !== undefined)) expect(cells[1], `${id}'s row`).toContain('gated on quick and full');
@@ -3875,17 +3882,20 @@ describe('master spec amendments (SP7a §16)', () => {
       expect(r, `no ${id} row in §6.4`).toBeDefined();
       return r!;
     };
-    expect(row('A5')).toBe('| A5 | springs and falls: visible waterfalls per km² of steep land / lava falls per 100,000 abyss cave-air voxels / island falls per km² of island area / springs on chunk borders over springs ÷ 60/256 / aquifer water voxels of the abyss nibble / water springs with a truncated front over water springs. SP7a: over the caves regions\' interiors after the global settle reference, per group over the group\'s own regions of each part: `waterfalls` on a fixed default-profile sample of seed \'42\' holding steep land, not the regions (the lattice chunks (4a, 4b), a, b in −240 … 239, whose column sample holds steep land; the SP7a spec\'s rulings R20 correction; a visible fall a water spring\'s outlet with no block above it and a straight fall ≥ 8; steep land a position whose column sample reads `steep` ≥ 1.2 and `offset` ≥ 80) / `lavaFalls` the biome region\'s and every region\'s with ≥ 50,000 abyss cave-air voxels (a fall ≥ 4) / `islandFalls` floating_islands\' (island area the positions holding a solid run whose bottom ≥ 181) / `borderRatio` every region\'s / `abyssWater` 0 by construction (the proto\'s water there; the settle\'s, which may fall into the abyss since the SP7a spec\'s rulings R23, recorded as `waterIntoAbyss`), gated from SP7a / `springsTruncated` the default group\'s and the presets group\'s amplified region (a spring\'s voxels by its lone front, truncated when one carries bit 6 outside the water/lava contact set, as A2\'s unsettled); from SP7a\'s tuning `waterfalls`, `islandFalls` and `springsTruncated` (in the presets group, whose amplified region holds the water springs; the default group\'s regions hold none) gated on quick and full, `lavaFalls` and `borderRatio` recorded until the user\'s bound; recorded beside them `clarkEvans` of the visible falls, `waterIntoAbyss`, `abyssWaterFace`, `adjacentSprings` (added by SP7a) | 25-100 (the user\'s 50) / ≥ 1 / ≥ 2 / 0.8-1.25 / 0 / ≤ 68.5%, the user\'s (SP7a) |');
+    expect(row('A5')).toBe('| A5 | springs and falls: visible waterfalls per km² of steep land / lava falls per 100,000 abyss cave-air voxels / island falls per km² of island area / springs on chunk borders over springs ÷ 60/256 / aquifer water voxels of the abyss nibble / water springs with a truncated front over water springs. SP7a: over the caves regions\' interiors after the global settle reference, per group over the group\'s own regions of each part: `waterfalls` on a fixed default-profile sample of seed \'42\' holding steep land, not the regions (the lattice chunks (4a, 4b), a, b in −240 … 239, whose column sample holds steep land; the SP7a spec\'s rulings R20 correction; a visible fall a water spring\'s outlet with no block above it and a straight fall ≥ 8; steep land a position whose column sample reads `steep` ≥ 1.2 and `offset` ≥ 80) / `lavaFalls` the biome region\'s and every region\'s with ≥ 50,000 abyss cave-air voxels (a fall ≥ 4) / `islandFalls` floating_islands\' (island area the positions holding a solid run whose bottom ≥ 181) / `borderRatio` every region\'s / `abyssWater` 0 by construction (the proto\'s water there; the settle\'s, which may fall into the abyss since the SP7a spec\'s rulings R23, recorded as `waterIntoAbyss`), gated from SP7a / `springsTruncated` the default group\'s and the presets group\'s amplified region (a spring\'s voxels by its lone front, truncated when one carries bit 6 outside the water/lava contact set, as A2\'s unsettled); from SP7a\'s tuning `waterfalls`, `islandFalls` and `springsTruncated` (in the presets group, whose amplified region holds the water springs; the default group\'s regions hold none) gated on quick and full; `lavaFalls` at the user\'s ≥ 0.6 in the presets and biomes groups (those holding its sample) on every tier, and `borderRatio` only in a group holding ≥ 50 springs (the presets group, on full; the user\'s sample-size rule, the bound unchanged), the SP7a spec\'s rulings R24; recorded beside them `clarkEvans` of the visible falls, `waterIntoAbyss`, `abyssWaterFace`, `adjacentSprings` (added by SP7a) | 25-100 (the user\'s 50) / ≥ 0.6, the user\'s (SP7a) / ≥ 2 / 0.8-1.25 / 0 / ≤ 68.5%, the user\'s (SP7a) |');
     // The A5 row sits after A4's.
     const lines = text.split('\n');
     expect(lines.findIndex((l) => l.startsWith('| A5 |'))).toBe(lines.findIndex((l) => l.startsWith('| A4 |')) + 1);
     // Cross-checked against THRESHOLDS: `abyssWater` gated from Task 24, three parts from the tuning (Task 31) on quick and
-    // full; `lavaFalls` and `borderRatio` recorded (no row) until the user's bound.
+    // full; `lavaFalls` and `borderRatio` from the user's round-2 decisions (Task 31c, rulings R24): `lavaFalls` every
+    // tier, `borderRatio` on full (the presets group's 78 springs, the only group holding ≥ 50).
     expect(THRESHOLDS.A5).toEqual({
       abyssWater: { max: 0, activeFrom: 'SP7a' },
       waterfalls: { min: 25, max: 100, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
       islandFalls: { min: 2, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
       springsTruncated: { max: 0.685, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
+      lavaFalls: { min: 0.6, activeFrom: 'SP7a' },
+      borderRatio: { min: 0.8, max: 1.25, activeFrom: 'SP7a', tiers: ['full'] },
     });
     // F1-F3: SP7b's, their rows recorded as inactive in SP7a with the master's bounds.
     const SP7B = ' (SP7b: `THRESHOLDS` rows from SP7a, inactive until SP7b starts; amended by SP7a) | ';
@@ -3901,12 +3911,12 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(max('F3')).toEqual({ idleTicks: 0, idleDiffEntries: 0, idleUnsettledChanged: 0, ticksOutsideFront: 0 });
   });
 
-  test('§6.4\'s C7 row: `waterWall` read after settle over truncated fronts, no abyss stop (SP7a spec §16 item 16; rulings R23)', () => {
+  test('§6.4\'s C7 row: `waterWall` read after settle over truncated fronts, no abyss stop, recorded in SP7a (SP7a spec §16 item 16; rulings R23, R24)', () => {
     const c7 = text.split('\n').find((l) => l.startsWith('| C7 |'));
     expect(c7, 'no C7 row in §6.4').toBeDefined();
-    expect(c7).toContain('/ `waterWall`, water voxels horizontally adjacent to tagged air, per km² (default and archipelago), read after settle, over truncated fronts with a dry target (no abyss stop, the SP7a spec\'s rulings R23) (SP7a: the settle reference\'s fluid on the caves regions\' interiors, falls and spill rims excluded; SP6a\'s count recorded as `waterWallAny`);');
-    // The bound stays (spec §13.2: no lock change).
-    expect(THRESHOLDS.C7?.waterWall).toEqual({ max: 3.3, activeFrom: 'SP6a' });
+    expect(c7).toContain('/ `waterWall`, water voxels horizontally adjacent to tagged air, per km² (default and archipelago), read after settle, over truncated fronts with a dry target (no abyss stop, the SP7a spec\'s rulings R23) (SP7a: the settle reference\'s fluid on the caves regions\' interiors, falls and spill rims excluded; SP6a\'s count recorded as `waterWallAny`; recorded, not gated, in SP7a, SP7b owning its final definition and bound, the SP7a spec\'s rulings R24, the user\'s);');
+    // The bound stays 3.3; the row is SP7b's (Task 31c: the user's LOOSEN, rulings R24 item 1), so SP7a records it.
+    expect(THRESHOLDS.C7?.waterWall).toEqual({ max: 3.3, activeFrom: 'SP7b' });
   });
 
   test('§6.4\'s C9 and T4 rows: entrances onto untagged air, the pre-cave sea bed (SP7a spec §13.2; rulings R24 item 7)', () => {
@@ -3921,6 +3931,13 @@ describe('master spec amendments (SP7a §16)', () => {
     // T4: the pre-cave sea bed (the harness' `preCaveFloors`), the bounds unchanged.
     expect(row('T4')).toBe('| T4 | ocean floor sd per 256² / exposed bedrock under water / floor ≤ −50 (SP7a: the floor is the pre-cave sea bed, the highest voxel solid or tagged, so a cave opened through the bed is not read as the floor; the SP7a spec\'s rulings R24; amended by SP7a) | ≥ 3 / 0 / 0 |');
     expect(THRESHOLDS.T4).toEqual({ floorSd: { min: 3, activeFrom: 'SP3b' }, exposedBedrock: { max: 0, activeFrom: 'SP3b' }, deepFloor: { max: 0, activeFrom: 'SP3b' } });
+  });
+
+  test('§6.4\'s B5 row: its third part recorded on T (SP7a spec §13.2; rulings R24 item 6)', () => {
+    const b5 = text.split('\n').find((l) => l.startsWith('| B5 |'));
+    expect(b5, 'no B5 row in §6.4').toBeDefined();
+    expect(b5).toBe('| B5 | lakes per km² of land / share with Lw ≥ 70 / lake water with air horizontally adjacent (SP7a: read on T, recorded, not gated, the user\'s, the settle\'s spill into a rim\'s breaches carrying its intent, `B5.lakeSpill`; the SP7a spec\'s rulings R24; amended by SP7a) | 0.2-2 / ≥ 30% / 0 |');
+    expect(THRESHOLDS.B5?.lakeAirAdjacent).toBeUndefined();
   });
 
   test('§6.5\'s A3 line names its lava sources (SP7a spec §16 item 16)', () => {

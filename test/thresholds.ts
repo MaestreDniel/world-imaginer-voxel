@@ -132,7 +132,11 @@ export const THRESHOLDS: ThresholdTable = {
     carverReference: { max: 0, activeFrom: 'SP6a' }, reachOverflow: { max: 0, activeFrom: 'SP6a' }, endTaper: { max: 0, activeFrom: 'SP6a' },
     islandCapAir: { max: 0, activeFrom: 'SP6a', tiers: ['quick', 'full'] },
     borderPlaneRatio: { min: 0.9, max: 1.1, activeFrom: 'SP6a' }, verticalStep: { max: 8.1, activeFrom: 'SP6a' },
-    flatWallShare: { max: 0.037, activeFrom: 'SP6a' }, switchWall: { max: 2, activeFrom: 'SP6a' }, waterWall: { max: 3.3, activeFrom: 'SP6a' },
+    flatWallShare: { max: 0.037, activeFrom: 'SP6a' }, switchWall: { max: 2, activeFrom: 'SP6a' },
+    // SP7a spec §13.2 (the user, rulings R24 item 1; a LOOSEN): `waterWall` (after settle, over truncated fronts with a
+    // dry target) recorded, not gated, in SP7a (`.out/C7.tuning.json`, `C7.waterWallAny` beside it): SP7b, the runtime
+    // sim, owns its final definition and bound; the user reviews the fronts in-world (SP7a's Task 47).
+    waterWall: { max: 3.3, activeFrom: 'SP7b' },
     // SP6b spec §12.3 (D6, D26; Task 20): the flat floor faces on the bedrock plane (y −63) over all flat faces, per group
     // and the worst group's (`.out/C7.bottomPlane.json`); 15.7-34.5 % before the rock floor, which holds it by construction.
     bottomPlane: { max: 0.01, activeFrom: 'SP6b' },
@@ -177,13 +181,17 @@ export const THRESHOLDS: ThresholdTable = {
   // Point 2's 25-100; the sample is the same on every tier, read on quick and full only, spec §14), `islandFalls` (the
   // presets group's floating_islands region) and `springsTruncated` (the presets group's amplified region; its bound
   // the worst reading over the tiers it gates after Task 28's levers, a loosening of the proposed 5 % the user approved,
-  // rulings R23 item 1). `lavaFalls` and `borderRatio` stay recorded per group in `.out/A5.<group>.json` pending the
-  // user's bound (Task 31's STOP).
+  // rulings R23 item 1, accepted by the user, R24 item 3). The user's round-2 decisions (rulings R24, Task 31c):
+  // `lavaFalls` at the user's ≥ 0.6 (item 4) in the groups that hold its sample (presets and biomes), every tier;
+  // `borderRatio` at 0.8-1.25 only in a group holding ≥ 50 springs (item 5, a sample-size rule, the bound unchanged):
+  // the presets group on full (78 springs), so full only; the other groups and tiers record it.
   A5: {
     abyssWater: { max: 0, activeFrom: 'SP7a' },
     waterfalls: { min: 25, max: 100, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
     islandFalls: { min: 2, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
     springsTruncated: { max: 0.685, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
+    lavaFalls: { min: 0.6, activeFrom: 'SP7a' },
+    borderRatio: { min: 0.8, max: 1.25, activeFrom: 'SP7a', tiers: ['full'] },
   },
   // SP4a spec §9.1 (D26): `grassSky0`, the master's grass at sky 0, recorded from SP4a (`light.metric.ts`), gated by SP6a.
   S1: {

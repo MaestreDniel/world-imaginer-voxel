@@ -1,5 +1,5 @@
 {
-  "sha256": "edb672d8935432d04e931ceacec32af8385a46790356fd944be678acddb755ec",
+  "sha256": "61e7a15fa50368adb626ea9f44d77ca55c672bcc72a7dd10a8e8dc0cdd67cb6d",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -67,6 +67,14 @@
           "activeFrom": "SP7a",
           "max": 0
         },
+        "borderRatio": {
+          "activeFrom": "SP7a",
+          "max": 1.25,
+          "min": 0.8,
+          "tiers": [
+            "full"
+          ]
+        },
         "islandFalls": {
           "activeFrom": "SP7a",
           "min": 2,
@@ -74,6 +82,10 @@
             "quick",
             "full"
           ]
+        },
+        "lavaFalls": {
+          "activeFrom": "SP7a",
+          "min": 0.6
         },
         "springsTruncated": {
           "activeFrom": "SP7a",
@@ -420,7 +432,7 @@
           "max": 8.1
         },
         "waterWall": {
-          "activeFrom": "SP6a",
+          "activeFrom": "SP7b",
           "max": 3.3
         }
       },

@@ -75,7 +75,9 @@ import { THRESHOLDS } from '../thresholds';
  *   at the tuning (Task 31) A1's `dryShare`, A2's two parts, A3's `lavaBelow54`, `lavaSupported`, `lavaSkyRegions`
  *   (`.out/A3.tuning.json`) and A4's `aquiferBodies` gated per job, the worst of its groups, and `A5.springsTruncated`
  *   (`.out/A5.springs.json`) and `A5.islandFalls` in the groups their literals name (`A5.waterfalls` reads its own
- *   steep-land sample, `test/metrics/waterfalls.metric.ts`).
+ *   steep-land sample, `test/metrics/waterfalls.metric.ts`); from the user's round-2 decisions (rulings R24, Task 31c)
+ *   `A5.lavaFalls` (`.out/A5.lavaFalls.json`) and `A5.borderRatio` (`.out/A5.borderRatio.json`) likewise, and
+ *   `C7.waterWall` recorded, not gated (its row `activeFrom` 'SP7b': SP7b owns its definition and bound).
  *
  * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
  * - `carverReference`: over every region of the run's groups (the preset regions included), the voxels of the region
@@ -468,7 +470,10 @@ const c1c6 = (): Promise<Record<C1C6Part, number>> => (c16Run ??= measureC1C6())
  */
 const C79_NAN_ON_FAST: readonly string[] = ['C8.aperiodicity', 'C8.sizeSpread', 'C8.largeShare'];
 
-/** C7's and C9's per-group parts (each the worst of the groups measured, `c7c9Parts`), gated in every group's job. */
+/**
+ * C7's and C9's per-group parts (each the worst of the groups measured, `c7c9Parts`), in every group's job (C7.waterWall
+ * recorded there, not gated: its row is SP7b's, rulings R24 item 1).
+ */
 const PER_GROUP_C7: readonly string[] = ['verticalStep', 'flatWallShare', 'waterWall'];
 const PER_GROUP_C9: readonly string[] = ['nearestEntrance', 'holedSurface'];
 /** The C7-C9 parts this run gates: every one with the default group, else the per-group parts alone. */
@@ -846,7 +851,7 @@ test('A2 by origin per job after the settle reference (recorded)', async () => {
 
 /**
  * A5's record (SP7a spec §13.1, D30; Task 24; `springsTruncated` and `islandFalls` gated below from the tuning, Task 31,
- * `lavaFalls` and `borderRatio` recorded until the user's bound, `abyssWater` from Task 24), as built in
+ * `lavaFalls` and `borderRatio` from the user's bounds, Task 31c, `abyssWater` from Task 24), as built in
  * `test/harness/water.ts` (`springFacts`, `a5RegionCounts`, `a5Parts`): per job over its regions' interiors after the
  * global settle reference (Spec correction 11: a job reads only its own regions), `waterfalls` (the default group's
  * regions), `lavaFalls` (the biome region and the regions with ≥ 50,000 abyss cave-air voxels), `islandFalls` (the
@@ -901,12 +906,15 @@ async function regionsByGroup<T>(pick: (m: Measured) => T | null): Promise<Array
 /**
  * A per-group part (SP7a spec §13.1: per group, the worst; each job gates its own regions, Spec correction 11): each
  * group's value, recorded in `rec` as `<part>.<group>`, and the worst of them, the least for a minimum bound, the
- * largest for a maximum; NaN with no group or a NaN group (a gated NaN fails, `metric.ts`).
+ * largest for a maximum, the farthest from 1 by ratio for a band around 1 (`borderRatio`); NaN with no group or a NaN
+ * group (a gated NaN fails, `metric.ts`).
  */
-function worstOfGroups(part: string, values: ReadonlyArray<readonly [CaveGroup, number]>, worst: 'min' | 'max', rec: Record<string, number>): number {
+function worstOfGroups(part: string, values: ReadonlyArray<readonly [CaveGroup, number]>, worst: 'min' | 'max' | 'ratio', rec: Record<string, number>): number {
   for (const [g, v] of values) rec[`${part}.${g}`] = v;
   if (values.length === 0) return Number.NaN;
   const vs = values.map(([, v]) => v);
+  if (vs.some(Number.isNaN)) return Number.NaN;
+  if (worst === 'ratio') return vs.reduce((a, v) => (Math.abs(Math.log(v)) > Math.abs(Math.log(a)) ? v : a));
   return worst === 'min' ? Math.min(...vs) : Math.max(...vs);
 }
 
@@ -921,6 +929,18 @@ function worstOfGroups(part: string, values: ReadonlyArray<readonly [CaveGroup, 
  */
 const SPRINGS_TRUNCATED_GATED: Readonly<Record<CaveGroup, boolean>> = { default: false, presets: true, biomes: false };
 const ISLAND_FALLS_GATED: Readonly<Record<CaveGroup, boolean>> = { default: false, presets: true, biomes: false };
+/**
+ * The groups whose jobs gate `A5.lavaFalls` and `A5.borderRatio` (the user's round-2 decisions, rulings R24 items 4-5;
+ * Task 31c), literals decided from Task 31's dry run as above. `lavaFalls` (the biome region and the regions with
+ * ≥ 50,000 abyss cave-air voxels): the groups that hold that sample, presets (the amplified regions) and biomes (the
+ * biome region), on every tier that measures them. `borderRatio`: only a group holding ≥ `BORDER_RATIO_MIN_SPRINGS`
+ * springs (a sample-size rule; the bound unchanged), which on the dry run is the presets group on full (78 springs;
+ * presets on quick 25, biomes 4, default none), so its row is gated on full only; a gated group that holds fewer springs
+ * fails (the literal is then re-decided, never a short sample turned into a pass).
+ */
+const LAVA_FALLS_GATED: Readonly<Record<CaveGroup, boolean>> = { default: false, presets: true, biomes: true };
+const BORDER_RATIO_GATED: Readonly<Record<CaveGroup, boolean>> = { default: false, presets: true, biomes: false };
+const BORDER_RATIO_MIN_SPRINGS = 50;
 
 // A1 (master :1528; SP7a spec §13.1): `dryShare` after settle per group, the worst (≥ 40 %), with each group's value and
 // on T alone (`dryShareT.<group>`, recorded).
@@ -997,6 +1017,37 @@ if (RUN_GROUPS.some((g) => ISLAND_FALLS_GATED[g])) {
     }
     return { islandFalls: worstOfGroups('islandFalls', gs.map(([g, p]) => [g, p.islandFalls] as const), 'min', rec), ...rec };
   }, 900_000, { outName: 'A5.islandFalls' });
+}
+
+// `A5.lavaFalls` (SP7a spec §13.1): lava springs with a fall ≥ 4 per 100,000 abyss cave-air voxels (≥ 0.6, the user's,
+// rulings R24 item 4), in the groups `LAVA_FALLS_GATED` names, the worst, with each gated group's falls and abyss air.
+if (RUN_GROUPS.some((g) => LAVA_FALLS_GATED[g])) {
+  metricTest('A5', ['lavaFalls'], async () => {
+    const rec: Record<string, number> = {};
+    const gs = (await regionsByGroup((m) => m.a5)).filter(([g]) => LAVA_FALLS_GATED[g]).map(([g, rs]) => [g, a5Parts(rs)] as const);
+    for (const [g, p] of gs) {
+      rec[`falls.${g}`] = p.counts.lavaFalls;
+      rec[`abyssAir.${g}`] = p.counts.abyssAir;
+    }
+    return { lavaFalls: worstOfGroups('lavaFalls', gs.map(([g, p]) => [g, p.lavaFalls] as const), 'min', rec), ...rec };
+  }, 900_000, { outName: 'A5.lavaFalls' });
+}
+
+// `A5.borderRatio` (SP7a spec §13.1): springs on a chunk-border voxel over springs ÷ 60/256 (0.8-1.25), in the groups
+// `BORDER_RATIO_GATED` names (a group holding ≥ 50 springs, rulings R24 item 5), the farthest from 1, with each gated
+// group's springs; on a tier its row gates, a gated group holding fewer than `BORDER_RATIO_MIN_SPRINGS` springs fails.
+if (RUN_GROUPS.some((g) => BORDER_RATIO_GATED[g])) {
+  metricTest('A5', ['borderRatio'], async () => {
+    const rec: Record<string, number> = {};
+    const gs = (await regionsByGroup((m) => m.a5)).filter(([g]) => BORDER_RATIO_GATED[g]).map(([g, rs]) => [g, a5Parts(rs)] as const);
+    const gated = THRESHOLDS.A5?.borderRatio?.tiers?.includes(TIER) ?? true;
+    for (const [g, p] of gs) {
+      rec[`springs.${g}`] = p.counts.springs;
+      rec[`borderSprings.${g}`] = p.counts.borderSprings;
+      if (gated) expect(p.counts.springs, `A5.borderRatio: the ${g} group's springs (a gated group holds ≥ ${BORDER_RATIO_MIN_SPRINGS})`).toBeGreaterThanOrEqual(BORDER_RATIO_MIN_SPRINGS);
+    }
+    return { borderRatio: worstOfGroups('borderRatio', gs.map(([g, p]) => [g, p.borderRatio] as const), 'ratio', rec), ...rec };
+  }, 900_000, { outName: 'A5.borderRatio' });
 }
 
 /**
