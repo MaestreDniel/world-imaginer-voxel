@@ -25,7 +25,45 @@ import { createStore } from '../../src/world/store/store';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { createGenContext } from '../../src/gen/context';
+import type { GenContext } from '../../src/gen/context';
 import { AQUIFER_LEAVES, CTX, ISLAND_SPRING_LEAVES, LAVA_SPRING_LEAVES, SPRING_LEAVES, U2_LEAVES, columns, leaf } from './fixtures/liveness';
+
+/**
+ * The cave air of column (cx, cz) at seed 42, re-derived from a fresh T column: the lowest y holding cave air, the column
+ * sample's lattice offsets and, with `margin` set, the tagged voxels outside the abyss in the abyss margin's band between
+ * `aquifer.abyssMargin`'s steps (in the margin at the widest m and not at the narrowest; 0 without `margin`).
+ */
+function caveAirFacts(cx: number, cz: number, margin: boolean): { lowest: number; band: number; offsets: number[] } {
+  const store = createStore({ shared: false, maxBlockBytes: 1 << 20, maxByteBytes: 1 << 20 });
+  expect(fillColumnT(store, CTX, cx, cz, () => false)).toBe(true);
+  const v = store.proto(cx, cz)!;
+  const sample = buildColumnSample(CTX, cx, cz, newColumnSample());
+  const offsets = Array.from(sample.f.offset);
+  let wide = null, narrow = null, pick = null, pass = null;
+  if (margin) {
+    const steps = perturbations(leaf('aquifer.abyssMargin'), DEFAULTS.aquifer.abyssMargin) as number[];
+    wide = aquiferInputs(CTX, { ...DEFAULTS.aquifer, abyssMargin: Math.max(DEFAULTS.aquifer.abyssMargin, ...steps) }, DEFAULTS.aquifer.noises);
+    narrow = aquiferInputs(CTX, { ...DEFAULTS.aquifer, abyssMargin: Math.min(DEFAULTS.aquifer.abyssMargin, ...steps) }, DEFAULTS.aquifer.noises);
+    pick = cavePickerOf(CTX);
+    pass = fillCaveColumnPass(pick, sample, newCaveColumnPass());
+  }
+  let lowest = Infinity, band = 0;
+  for (let y = -63; y <= 319; y++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
+    const b = v.cave(lx, y, lz);
+    if ((b & 15) === 0) continue;
+    lowest = Math.min(lowest, y);
+    const x = 16 * cx + lx, z = 16 * cz + lz;
+    if (pass !== null && b >> 4 !== 3 && inAbyssMargin(wide!, pick!, pass, x, y, z) && !inAbyssMargin(narrow!, pick!, pass, x, y, z)) band++;
+  }
+  return { lowest, band, offsets };
+}
+
+const SPRINGS = newSpringList();
+/** How many springs of kind `kind` (0 water, 1 island, 2 lava) the springs step of column (cx, cz) accepts under `ctx`. */
+function springsAccepted(ctx: GenContext, cx: number, cz: number, kind: 0 | 1 | 2): number {
+  terrainSpringsDebug(ctx, cx, cz, SPRINGS);
+  return Array.from(SPRINGS.kind.subarray(0, SPRINGS.n)).filter((k) => k === kind).length;
+}
 
 /**
  * Each aquifer leaf's U2 verdict at seed 42 (the class columns, the cave columns among them and the intended cave class
@@ -104,23 +142,9 @@ describe('the aquifer\'s leaves in U2 (SP7a spec §1.9, §13.7; Task 13, Spec co
       expect(w.draws, p).toBeLessThanOrEqual(32768);
       // The witness column's tagged air holds what the leaf acts on (re-derived from a fresh T column).
       const [cx, cz] = w.via!.slice('aquifer witness column ('.length, -1).split(', ').map(Number) as [number, number];
-      const store = createStore({ shared: false, maxBlockBytes: 1 << 20, maxByteBytes: 1 << 20 });
-      expect(fillColumnT(store, CTX, cx, cz, () => false)).toBe(true);
-      const v = store.proto(cx, cz)!;
       const steps = perturbations(leaf(p), getPath(DEFAULTS, p)) as number[];
       // The margin's witness: a tagged voxel outside the abyss in the margin at the widest m and not at the narrowest.
-      const wide = aquiferInputs(CTX, { ...DEFAULTS.aquifer, abyssMargin: Math.max(DEFAULTS.aquifer.abyssMargin, ...steps) }, DEFAULTS.aquifer.noises);
-      const narrow = aquiferInputs(CTX, { ...DEFAULTS.aquifer, abyssMargin: Math.min(DEFAULTS.aquifer.abyssMargin, ...steps) }, DEFAULTS.aquifer.noises);
-      const pick = cavePickerOf(CTX);
-      const pass = fillCaveColumnPass(pick, buildColumnSample(CTX, cx, cz, newColumnSample()), newCaveColumnPass());
-      let lowest = Infinity, band = 0;
-      for (let y = -63; y <= 319; y++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
-        const b = v.cave(lx, y, lz);
-        if ((b & 15) === 0) continue;
-        lowest = Math.min(lowest, y);
-        const x = 16 * cx + lx, z = 16 * cz + lz;
-        if (p === 'aquifer.abyssMargin' && b >> 4 !== 3 && inAbyssMargin(wide, pick, pass, x, y, z) && !inAbyssMargin(narrow, pick, pass, x, y, z)) band++;
-      }
+      const { lowest, band } = caveAirFacts(cx, cz, p === 'aquifer.abyssMargin');
       if (p === 'aquifer.abyssMargin') expect(band, p).toBeGreaterThan(0);
       else if (p === 'aquifer.lavaLevel') expect(lowest, p).toBeLessThan(Math.max(DEFAULTS.aquifer.lavaLevel, ...steps));
       else if (p === 'aquifer.lavaMaxLevel') expect(lowest, p).toBeLessThanOrEqual(Math.max(DEFAULTS.aquifer.lavaMaxLevel, ...steps));
@@ -157,7 +181,6 @@ describe('the water springs\' leaves in U2 (SP7a spec §3.5, §13.7; Task 19, Sp
   test('each of the 2 is decided on the mountain witness: a column whose springs step accepts a water spring at the defaults, where a step changes the T column', () => {
     const all = [...columns(), ...CAVE_SLOTS.map((slot) => caveColumn(CTX, slot)!)];
     const lines: string[] = [];
-    const list = newSpringList();
     for (const p of SPRING_LEAVES) {
       const r = leafLiveness(CTX, p, all);
       lines.push(`${p}: ${r.live ? 'live' : 'DEAD'} via ${r.via}`);
@@ -170,8 +193,7 @@ describe('the water springs\' leaves in U2 (SP7a spec §3.5, §13.7; Task 19, Sp
       expect(w.draws, p).toBeLessThanOrEqual(65536);
       // The witness column's springs step accepts a water spring at the defaults (re-derived).
       const [cx, cz] = w.via!.slice('mountain witness column ('.length, -1).split(', ').map(Number) as [number, number];
-      terrainSpringsDebug(CTX, cx, cz, list);
-      expect(list.n, p).toBeGreaterThan(0);
+      expect(springsAccepted(CTX, cx, cz, 0), p).toBeGreaterThan(0);
     }
     console.log(`the water springs' leaves:\n${lines.join('\n')}`);
     expect(() => springWitness(CTX, 'aquifer.enabled')).toThrow('not a springs leaf');
@@ -206,7 +228,6 @@ describe('the island springs\' leaves in U2 (SP7a spec §3.3, §3.5, §13.7; Tas
     const all = [...columns(), ...CAVE_SLOTS.map((slot) => caveColumn(CTX, slot)!)];
     const fi = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
     const lines: string[] = [];
-    const list = newSpringList();
     for (const p of ISLAND_SPRING_LEAVES) {
       const r = leafLiveness(CTX, p, all);
       lines.push(`${p}: ${r.live ? 'live' : 'DEAD'} via ${r.via}`);
@@ -219,11 +240,9 @@ describe('the island springs\' leaves in U2 (SP7a spec §3.3, §3.5, §13.7; Tas
       expect(w.draws, p).toBeLessThanOrEqual(65536);
       // The witness column's springs step on the floating_islands base accepts an island spring (re-derived).
       const [cx, cz] = w.via!.slice('island witness column ('.length, -1).split(', ').map(Number) as [number, number];
-      terrainSpringsDebug(fi, cx, cz, list);
-      expect(Array.from(list.kind.subarray(0, list.n)).filter((k) => k === 1).length, p).toBeGreaterThan(0);
+      expect(springsAccepted(fi, cx, cz, 1), p).toBeGreaterThan(0);
       // On the default base (islands off) the same column holds no island spring.
-      terrainSpringsDebug(CTX, cx, cz, list);
-      expect(Array.from(list.kind.subarray(0, list.n)).filter((k) => k === 1).length, p).toBe(0);
+      expect(springsAccepted(CTX, cx, cz, 1), p).toBe(0);
     }
     console.log(`the island springs' leaves:\n${lines.join('\n')}`);
     expect(() => islandSpringWitness(CTX, 'springs.water.tries')).toThrow('not an island springs leaf');
@@ -258,7 +277,6 @@ describe('the lava springs\' leaves in U2 (SP7a spec §3.4, §3.5, §13.7; Task 
   test('each of the 2 is decided on the abyss witness: a column whose springs step accepts a lava spring at the defaults, where a step changes the T column', () => {
     const all = [...columns(), ...CAVE_SLOTS.map((slot) => caveColumn(CTX, slot)!)];
     const lines: string[] = [];
-    const list = newSpringList();
     for (const p of LAVA_SPRING_LEAVES) {
       const r = leafLiveness(CTX, p, all);
       lines.push(`${p}: ${r.live ? 'live' : 'DEAD'} via ${r.via}`);
@@ -271,8 +289,7 @@ describe('the lava springs\' leaves in U2 (SP7a spec §3.4, §3.5, §13.7; Task 
       expect(w.draws, p).toBeLessThanOrEqual(32768);
       // The witness column's springs step accepts a lava spring at the defaults (re-derived).
       const [cx, cz] = w.via!.slice('abyss witness column ('.length, -1).split(', ').map(Number) as [number, number];
-      terrainSpringsDebug(CTX, cx, cz, list);
-      expect(Array.from(list.kind.subarray(0, list.n)).filter((k) => k === 2).length, p).toBeGreaterThan(0);
+      expect(springsAccepted(CTX, cx, cz, 2), p).toBeGreaterThan(0);
     }
     console.log(`the lava springs' leaves:\n${lines.join('\n')}`);
     expect(() => lavaSpringWitness(CTX, 'springs.water.tries')).toThrow('not a lava springs leaf');
@@ -322,39 +339,19 @@ describe('U2\'s full-tier audit over SP7a\'s leaves (SP7a spec §13.7; Task 30)'
     // The status leaves' columns lie both under land and under the sea.
     expect(new Set(Object.values(LEAF_TABLE).map(([, k]) => k))).toEqual(new Set(['land', 'sea', 'deep', 'gully', 'margin', 'mountain', 'island', 'abyss']));
     const fi = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
-    const list = newSpringList();
-    const pick = cavePickerOf(CTX);
     const lines: string[] = [];
     for (const p of leaves) {
       const [via, kind] = LEAF_TABLE[p]!;
       const [cx, cz] = via.slice(via.lastIndexOf('(') + 1, -1).split(', ').map(Number) as [number, number];
       if (kind === 'mountain' || kind === 'island' || kind === 'abyss') {
-        const k = kind === 'mountain' ? 0 : kind === 'island' ? 1 : 2;
-        terrainSpringsDebug(kind === 'island' ? fi : CTX, cx, cz, list);
-        const n = Array.from(list.kind.subarray(0, list.n)).filter((b) => b === k).length;
+        const n = springsAccepted(kind === 'island' ? fi : CTX, cx, cz, kind === 'mountain' ? 0 : kind === 'island' ? 1 : 2);
         lines.push(`${p}: ${via}, ${kind}, ${n} accepted`);
         expect([p, n > 0]).toEqual([p, true]);
         continue;
       }
-      const store = createStore({ shared: false, maxBlockBytes: 1 << 20, maxByteBytes: 1 << 20 });
-      expect(fillColumnT(store, CTX, cx, cz, () => false)).toBe(true);
-      const v = store.proto(cx, cz)!;
-      const sample = buildColumnSample(CTX, cx, cz, newColumnSample());
-      const offsets = Array.from(sample.f.offset);
-      const steps = perturbations(leaf(p), getPath(DEFAULTS, p)) as number[];
-      const wide = aquiferInputs(CTX, { ...DEFAULTS.aquifer, abyssMargin: Math.max(DEFAULTS.aquifer.abyssMargin, ...steps) }, DEFAULTS.aquifer.noises);
-      const narrow = aquiferInputs(CTX, { ...DEFAULTS.aquifer, abyssMargin: Math.min(DEFAULTS.aquifer.abyssMargin, ...steps) }, DEFAULTS.aquifer.noises);
-      const pass = kind === 'margin' ? fillCaveColumnPass(pick, buildColumnSample(CTX, cx, cz, newColumnSample()), newCaveColumnPass()) : null;
-      let lowest = Infinity, band = 0;
-      for (let y = -63; y <= 319; y++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
-        const b = v.cave(lx, y, lz);
-        if ((b & 15) === 0) continue;
-        lowest = Math.min(lowest, y);
-        const x = 16 * cx + lx, z = 16 * cz + lz;
-        if (pass !== null && b >> 4 !== 3 && inAbyssMargin(wide, pick, pass, x, y, z) && !inAbyssMargin(narrow, pick, pass, x, y, z)) band++;
-      }
+      const { lowest, band, offsets } = caveAirFacts(cx, cz, kind === 'margin');
       const lo = Math.min(...offsets), hi = Math.max(...offsets);
-      lines.push(`${p}: ${via}, ${kind}, lowest cave air ${lowest}, offset ${lo.toFixed(1)} … ${hi.toFixed(1)}${pass !== null ? `, ${band} in the margin's band` : ''}`);
+      lines.push(`${p}: ${via}, ${kind}, lowest cave air ${lowest}, offset ${lo.toFixed(1)} … ${hi.toFixed(1)}${kind === 'margin' ? `, ${band} in the margin's band` : ''}`);
       if (kind === 'land') expect([p, lowest <= SEA_LEVEL, lo > SEA_LEVEL]).toEqual([p, true, true]);
       else if (kind === 'sea') expect([p, lowest <= SEA_LEVEL, hi < SEA_LEVEL]).toEqual([p, true, true]);
       else if (kind === 'deep') expect([p, lowest <= DEFAULTS.aquifer.lavaMaxLevel]).toEqual([p, true]);

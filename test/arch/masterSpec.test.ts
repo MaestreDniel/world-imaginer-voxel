@@ -3705,7 +3705,7 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(u2, 'no U2 row in §6.4').toBeDefined();
     const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
     expect(n).toBe(213);
-    expect(u2).toContain(`; U2 covers 193 leaves (amended by SP6b); SP7a: the aquifer.* leaves are decided on bounded aquifer witnesses (stream columns with cave air under land and sea, a deep cell, a gully below \`aquifer.lavaLevel\`, an abyss margin), the springs.* leaves on mountain, island and abyss witnesses; U2 covers ${n} leaves (amended by SP7a) |`);
+    expect(u2).toContain(`; U2 covers 193 leaves (amended by SP6b); SP7a: the aquifer.* leaves are decided on the class columns, the cave columns first, else on bounded aquifer witnesses (stream columns with cave air under land and sea, a deep cell, a gully below \`aquifer.lavaLevel\`, an abyss margin), the springs.* leaves on mountain, island and abyss witnesses; U2 covers ${n} leaves (amended by SP7a) |`);
     // The leaf groups' interim counts are gone from the row.
     for (const k of [208, 210, 211]) expect(u2).not.toContain(`U2 covers ${k} leaves`);
     expect(u2!.split('(amended by SP7a)').length - 1, 'one SP7a clause').toBe(1);
