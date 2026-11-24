@@ -6,6 +6,7 @@
  * shares with the other liveness files are in `fixtures/liveness.ts`.
  */
 import { describe, expect, test } from 'vitest';
+import { SEA_LEVEL } from '../../src/core/constants';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { getPath } from '../../src/core/params/kit';
 import { SCHEMA } from '../../src/core/params/schema';
@@ -275,5 +276,91 @@ describe('the lava springs\' leaves in U2 (SP7a spec §3.4, §3.5, §13.7; Task 
     }
     console.log(`the lava springs' leaves:\n${lines.join('\n')}`);
     expect(() => lavaSpringWitness(CTX, 'springs.water.tries')).toThrow('not a lava springs leaf');
+  }, 600_000);
+});
+
+/**
+ * U2's full-tier audit over SP7a's leaves (SP7a spec §13.7, Task 30; the plan's leaf table, "U2 decides it on"): each new
+ * leaf's deciding column, the one U2 reports (the verdicts above, each pinned against `leafLiveness`), is the witness the
+ * leaf table names for it: the status leaves, the thresholds, `surfaceBand`, `barrierBand` and the floodedness, spread
+ * and barrier noises on a column with cave air at or below y 63, under land (every lattice offset above sea level) for
+ * some and under the sea (every lattice offset below it) for others; the lava leaves on a deep cell (cave air at or below
+ * `aquifer.lavaMaxLevel`); `aquifer.lavaLevel` on a gully (cave air below it: −50 since Task 27n, rulings R23);
+ * `abyssMargin` on an abyss-margin column (a tagged voxel outside the abyss in the margin's band between its steps); the
+ * springs' leaves on a mountain, an island (floating_islands) and an abyss witness (their springs step accepts a spring
+ * of the kind at the defaults). No leaf group is left to a column the table does not name.
+ */
+type WitnessKind = 'land' | 'sea' | 'deep' | 'gully' | 'margin' | 'mountain' | 'island' | 'abyss';
+const LEAF_TABLE: Readonly<Record<string, readonly [via: string, kind: WitnessKind]>> = {
+  'aquifer.enabled': [VERDICT['aquifer.enabled'], 'land'],
+  'aquifer.surfaceBand': [VERDICT['aquifer.surfaceBand'], 'sea'],
+  'aquifer.thresholds.fullInland': [VERDICT['aquifer.thresholds.fullInland'], 'land'],
+  'aquifer.thresholds.fullOcean': [VERDICT['aquifer.thresholds.fullOcean'], 'sea'],
+  'aquifer.thresholds.partialInland': [VERDICT['aquifer.thresholds.partialInland'], 'land'],
+  'aquifer.thresholds.partialOcean': [VERDICT['aquifer.thresholds.partialOcean'], 'sea'],
+  'aquifer.lavaMaxLevel': [VERDICT['aquifer.lavaMaxLevel'], 'deep'],
+  'aquifer.lavaThreshold': [VERDICT['aquifer.lavaThreshold'], 'deep'],
+  'aquifer.lavaLevel': [VERDICT['aquifer.lavaLevel'], 'gully'],
+  'aquifer.barrierBand': [VERDICT['aquifer.barrierBand'], 'land'],
+  'aquifer.abyssMargin': [VERDICT['aquifer.abyssMargin'], 'margin'],
+  'aquifer.noises.floodedness': [VERDICT['aquifer.noises.floodedness'], 'land'],
+  'aquifer.noises.spread': [VERDICT['aquifer.noises.spread'], 'land'],
+  'aquifer.noises.lava': [VERDICT['aquifer.noises.lava'], 'deep'],
+  'aquifer.noises.barrier': [VERDICT['aquifer.noises.barrier'], 'land'],
+  'springs.water.tries': [SPRING_VERDICT['springs.water.tries'], 'mountain'],
+  'springs.water.minFall': [SPRING_VERDICT['springs.water.minFall'], 'mountain'],
+  'springs.island.tries': [ISLAND_SPRING_VERDICT['springs.island.tries'], 'island'],
+  'springs.lava.tries': [LAVA_SPRING_VERDICT['springs.lava.tries'], 'abyss'],
+  'springs.lava.minFall': [LAVA_SPRING_VERDICT['springs.lava.minFall'], 'abyss'],
+};
+
+describe('U2\'s full-tier audit over SP7a\'s leaves (SP7a spec §13.7; Task 30)', () => {
+  test('every new leaf\'s deciding column is the witness the plan\'s leaf table names: cave air under land and sea, a deep cell, a gully, an abyss margin; a mountain, an island and an abyss', () => {
+    const leaves = [...AQUIFER_LEAVES, ...SPRING_LEAVES, ...ISLAND_SPRING_LEAVES, ...LAVA_SPRING_LEAVES];
+    expect(Object.keys(LEAF_TABLE)).toEqual(leaves);
+    expect(leaves.length).toBe(U2_LEAVES - 193);
+    // The status leaves' columns lie both under land and under the sea.
+    expect(new Set(Object.values(LEAF_TABLE).map(([, k]) => k))).toEqual(new Set(['land', 'sea', 'deep', 'gully', 'margin', 'mountain', 'island', 'abyss']));
+    const fi = createGenContext(seedFromInput('42'), resolveProfile('floating_islands'));
+    const list = newSpringList();
+    const pick = cavePickerOf(CTX);
+    const lines: string[] = [];
+    for (const p of leaves) {
+      const [via, kind] = LEAF_TABLE[p]!;
+      const [cx, cz] = via.slice(via.lastIndexOf('(') + 1, -1).split(', ').map(Number) as [number, number];
+      if (kind === 'mountain' || kind === 'island' || kind === 'abyss') {
+        const k = kind === 'mountain' ? 0 : kind === 'island' ? 1 : 2;
+        terrainSpringsDebug(kind === 'island' ? fi : CTX, cx, cz, list);
+        const n = Array.from(list.kind.subarray(0, list.n)).filter((b) => b === k).length;
+        lines.push(`${p}: ${via}, ${kind}, ${n} accepted`);
+        expect([p, n > 0]).toEqual([p, true]);
+        continue;
+      }
+      const store = createStore({ shared: false, maxBlockBytes: 1 << 20, maxByteBytes: 1 << 20 });
+      expect(fillColumnT(store, CTX, cx, cz, () => false)).toBe(true);
+      const v = store.proto(cx, cz)!;
+      const sample = buildColumnSample(CTX, cx, cz, newColumnSample());
+      const offsets = Array.from(sample.f.offset);
+      const steps = perturbations(leaf(p), getPath(DEFAULTS, p)) as number[];
+      const wide = aquiferInputs(CTX, { ...DEFAULTS.aquifer, abyssMargin: Math.max(DEFAULTS.aquifer.abyssMargin, ...steps) }, DEFAULTS.aquifer.noises);
+      const narrow = aquiferInputs(CTX, { ...DEFAULTS.aquifer, abyssMargin: Math.min(DEFAULTS.aquifer.abyssMargin, ...steps) }, DEFAULTS.aquifer.noises);
+      const pass = kind === 'margin' ? fillCaveColumnPass(pick, buildColumnSample(CTX, cx, cz, newColumnSample()), newCaveColumnPass()) : null;
+      let lowest = Infinity, band = 0;
+      for (let y = -63; y <= 319; y++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
+        const b = v.cave(lx, y, lz);
+        if ((b & 15) === 0) continue;
+        lowest = Math.min(lowest, y);
+        const x = 16 * cx + lx, z = 16 * cz + lz;
+        if (pass !== null && b >> 4 !== 3 && inAbyssMargin(wide, pick, pass, x, y, z) && !inAbyssMargin(narrow, pick, pass, x, y, z)) band++;
+      }
+      const lo = Math.min(...offsets), hi = Math.max(...offsets);
+      lines.push(`${p}: ${via}, ${kind}, lowest cave air ${lowest}, offset ${lo.toFixed(1)} … ${hi.toFixed(1)}${pass !== null ? `, ${band} in the margin's band` : ''}`);
+      if (kind === 'land') expect([p, lowest <= SEA_LEVEL, lo > SEA_LEVEL]).toEqual([p, true, true]);
+      else if (kind === 'sea') expect([p, lowest <= SEA_LEVEL, hi < SEA_LEVEL]).toEqual([p, true, true]);
+      else if (kind === 'deep') expect([p, lowest <= DEFAULTS.aquifer.lavaMaxLevel]).toEqual([p, true]);
+      else if (kind === 'gully') expect([p, lowest < DEFAULTS.aquifer.lavaLevel]).toEqual([p, true]);
+      else expect([p, band > 0]).toEqual([p, true]);
+    }
+    console.log(`SP7a's leaves, each deciding column and its witness:\n${lines.join('\n')}`);
   }, 600_000);
 });

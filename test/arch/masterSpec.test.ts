@@ -259,6 +259,9 @@
  * `root.rules[2].rules[1]` and `[2]`; the SP6b describe's "SP7, with aquifers" pin moved here, the plan's Spec
  * correction 2) and the "As built by SP7a" paragraph (the terrain stage 6, `GENERATOR_VERSION` 10, the water-gated
  * fast-path class, the GV9 trees' migration), pinned beside the code-only test of the stage and the version.
+ * U2's full-tier audit (Task 30) words item 16's U2 row as built: one SP7a clause (the aquifer leaves on bounded aquifer
+ * witnesses, the springs' on mountain, island and abyss witnesses; 213 leaves) in place of the four the leaf groups
+ * appended (208, 210, 211, 213).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -3410,12 +3413,6 @@ describe('master spec amendments (SP6b §15)', () => {
 });
 
 describe('master spec amendments (SP7a §16)', () => {
-  /** §6.4's U2 clause for the springs' leaves (Task 19's mountain witness). */
-  const U2_SPRINGS_CLAUSE = 'the springs.water.* leaves on a bounded mountain witness (stream columns whose springs step accepts a water spring, where a step changes the T column)';
-  /** §6.4's U2 clause for the island springs' leaves (Task 20's island witness on the floating_islands base). */
-  const U2_ISLAND_SPRINGS_CLAUSE = 'the springs.island.* leaf (`tries`; the least fall is a constant) on a bounded island witness on the floating_islands base (stream columns holding an island whose springs step accepts an island spring, where a step changes the T column)';
-  /** §6.4's U2 clause for the lava springs' leaves (Task 21's abyss witness). */
-  const U2_LAVA_SPRINGS_CLAUSE = 'the springs.lava.* leaves on a bounded abyss witness (stream columns whose cave-biome pass gives the abyss on its grid and whose springs step accepts a lava spring, where a step changes the T column)';
   /** [§1 entry head, the token its entry holds, the file on disk]; Tasks 17, 19 and 22 append theirs. */
   const SP7A_MODULES: Array<[head: RegExp, token: string, file: string]> = [
     [/^\s+blocks\/kinds\.ts /, 'fluidRules.ts (SP7a; also the fluid surface', 'src/world/blocks/fluidRules.ts'],
@@ -3698,16 +3695,20 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(SCHEMA.leaves.filter((l) => l.path.startsWith('aquifer.')).length).toBe(15);
   });
 
-  test('§6.4\'s U2 row (SP7a spec §16 item 16)', () => {
+  test('§6.4\'s U2 row as built (SP7a spec §16 item 16)', () => {
     // The schema's count, moved from the SP6b describe: 193 and the 15 aquifer leaves (Task 13), 208; the springs add 5
     // (Tasks 19-21): 210 with springs.water.* (Task 19; no minY, its Spec correction), 211 with springs.island.* (Task 20;
-    // no minFall, its Spec correction), 213 with springs.lava.* (Task 21).
+    // no minFall, its Spec correction), 213 with springs.lava.* (Task 21). U2's full-tier audit (Task 30) words the row as
+    // built: one SP7a clause in place of the four the leaf groups appended, with the witnesses the plan's leaf table names
+    // (the bottom-lava gully below `aquifer.lavaLevel`, −50 since Task 27n, rulings R23).
     const u2 = text.split('\n').find((l) => l.startsWith('| U2 |'));
     expect(u2, 'no U2 row in §6.4').toBeDefined();
     const n = SCHEMA.leaves.filter((l) => l.meta.stage !== undefined && ['climate', 'shape', 'biome2d', 'terrain'].includes(l.meta.stage)).length;
     expect(n).toBe(213);
-    expect(u2).toContain('; SP7a: the aquifer.* leaves are decided on the class columns, the cave columns first, else on a bounded aquifer witness (stream columns whose tagged air holds what the leaf acts on: cave air at or below y 63, under land or sea, below the lava levels for the lava leaves, the abyss for `aquifer.abyssMargin`, where a step changes the T column); U2 covers 208 leaves (amended by SP7a);');
-    expect(u2).toContain(`; U2 covers 208 leaves (amended by SP7a); ${U2_SPRINGS_CLAUSE}; U2 covers 210 leaves (amended by SP7a); ${U2_ISLAND_SPRINGS_CLAUSE}; U2 covers 211 leaves (amended by SP7a); ${U2_LAVA_SPRINGS_CLAUSE}; U2 covers ${n} leaves (amended by SP7a) |`);
+    expect(u2).toContain(`; U2 covers 193 leaves (amended by SP6b); SP7a: the aquifer.* leaves are decided on bounded aquifer witnesses (stream columns with cave air under land and sea, a deep cell, a gully below \`aquifer.lavaLevel\`, an abyss margin), the springs.* leaves on mountain, island and abyss witnesses; U2 covers ${n} leaves (amended by SP7a) |`);
+    // The leaf groups' interim counts are gone from the row.
+    for (const k of [208, 210, 211]) expect(u2).not.toContain(`U2 covers ${k} leaves`);
+    expect(u2!.split('(amended by SP7a)').length - 1, 'one SP7a clause').toBe(1);
   });
 
   test('the terrain stage 6 and GENERATOR_VERSION 10 (SP7a §15.3)', () => {

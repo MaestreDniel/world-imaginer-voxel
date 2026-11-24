@@ -113,6 +113,30 @@ describe('panel tree', () => {
     for (const c of controlsOf(caves)) expect([c.path, scopeBadge(c.scope).label]).toEqual([c.path, 'Terrain']);
   });
 
+  test('SP7a spec §1.9, §3.5 (Task 30): the root ends Caves, Aquifer, Springs; Aquifer\'s own leaves, then Thresholds and Noises; Springs\' Water, Island edges, Lava', () => {
+    const root = panelTree();
+    expect(root.sections.slice(-3).map((s) => [s.path, s.label])).toEqual([['caves', 'Caves'], ['aquifer', 'Aquifer'], ['springs', 'Springs']]);
+    const aquifer = root.sections.at(-2)!;
+    expect(aquifer.controls.map((c) => [c.path, c.kind])).toEqual([
+      ['aquifer.enabled', 'bool'], ['aquifer.surfaceBand', 'int'], ['aquifer.lavaMaxLevel', 'int'], ['aquifer.lavaThreshold', 'number'],
+      ['aquifer.lavaLevel', 'int'], ['aquifer.barrierBand', 'number'], ['aquifer.abyssMargin', 'number'],
+    ]);
+    expect(aquifer.sections.map((s) => [s.path, s.label, s.controls.map((c) => c.path.split('.').at(-1)), s.sections])).toEqual([
+      ['aquifer.thresholds', 'Thresholds', ['fullInland', 'fullOcean', 'partialInland', 'partialOcean'], []],
+      ['aquifer.noises', 'Noises', ['floodedness', 'spread', 'lava', 'barrier'], []],
+    ]);
+    const springs = root.sections.at(-1)!;
+    expect(springs.controls).toEqual([]);
+    // No springs.water.minY nor springs.island.minFall (Tasks 19-20's Spec corrections, rulings R17, R18).
+    expect(springs.sections.map((s) => [s.path, s.label, s.controls.map((c) => c.path.split('.').at(-1)), s.sections])).toEqual([
+      ['springs.water', 'Water', ['tries', 'minFall'], []],
+      ['springs.island', 'Island edges', ['tries'], []],
+      ['springs.lava', 'Lava', ['tries', 'minFall'], []],
+    ]);
+    // Every aquifer.* and springs.* control's badge reads Terrain (D21: a change re-runs T).
+    for (const c of [...controlsOf(aquifer), ...controlsOf(springs)]) expect([c.path, scopeBadge(c.scope).label]).toEqual([c.path, 'Terrain']);
+  });
+
   test("a section's own controls come before its sub-sections (climate: the fields, then Warps)", () => {
     const climate = panelTree().sections[0]!;
     expect(climate.controls.map((c) => c.path)).toEqual([
