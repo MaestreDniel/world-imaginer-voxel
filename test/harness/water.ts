@@ -20,7 +20,8 @@
  *   part their share with no fluid after settle (`a1Dry` over `a1Population`), recorded with no fluid in T (`a1DryT`)
  *   over the same population.
  * - **A3** (after settle; lava voxels of the interior): `lavaBelow54` (rulings R21 item 6, the key kept) the interior's
- *   tagged non-solid voxels at y ≤ `aquifer.lavaLevel` (the profile's level, passed in; −54 by default) holding lava,
+ *   tagged non-solid voxels at y < `aquifer.lavaLevel` (the profile's level, passed in; −50 by default; the layer the
+ *   floor rule fills, rulings R23) holding lava,
  *   over that population, `lavaBelow54Population` (pooled over the regions' voxels; NaN over an empty population,
  *   recorded as vacuous with its size 0, not a miss); `aquiferLavaAbove10` (rulings P19) the proto lava voxels above y −10 whose cave tag is not 0
  *   (springs are written untagged and untagged air takes only water, so a spring is never one; 0 by construction);
@@ -175,7 +176,7 @@ export interface WaterRegionCounts {
   readonly a1Population: number;
   readonly a1Dry: number;
   readonly a1DryT: number;
-  /** A3: the tagged voxels at y ≤ `aquifer.lavaLevel` holding lava and all of them, the tagged proto lava voxels above −10, the lava voxels, those supported, those touching C2's cave air. */
+  /** A3: the tagged voxels at y < `aquifer.lavaLevel` holding lava and all of them, the tagged proto lava voxels above −10, the lava voxels, those supported, those touching C2's cave air. */
   readonly lavaBelow54: number;
   readonly lavaBelow54Population: number;
   readonly aquiferLavaAbove10: number;
@@ -665,7 +666,7 @@ export function waterRegionCounts(
         const c = cells[i]!;
         if (y > AQUIFER_LAVA_Y && (c & TAG_MASK) !== 0 && (c & FLUID_BIT) !== 0 && fluidType(protoOf(L, i)) === FLUID_LAVA) aquiferLavaAbove10++;
         if (skyOpen(L, i) && groundTop[z * w + x]! - y > SKY_OPEN_DEEP) skyOpenDeep++;
-        if (y <= lavaLevel && caveCell(c)) {
+        if (y < lavaLevel && caveCell(c)) {
           lavaBelow54Population++;
           if (fluidType(b) === FLUID_LAVA) lavaBelow54++;
         }
@@ -979,7 +980,7 @@ export interface WaterParts {
   /** A1's share after settle, pooled over the regions, and on T alone over the same population. */
   readonly dryShare: number;
   readonly dryShareT: number;
-  /** A3: the share of the tagged voxels at y ≤ `aquifer.lavaLevel` holding lava (NaN over none: vacuous) and their number; the tagged proto lava above −10; the supported share; the regions where lava touches C2's cave air over the regions. */
+  /** A3: the share of the tagged voxels at y < `aquifer.lavaLevel` holding lava (NaN over none: vacuous) and their number; the tagged proto lava above −10; the supported share; the regions where lava touches C2's cave air over the regions. */
   readonly lavaBelow54: number;
   readonly lavaBelow54Population: number;
   readonly aquiferLavaAbove10: number;

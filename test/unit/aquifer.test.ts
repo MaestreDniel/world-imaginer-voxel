@@ -248,11 +248,13 @@ describe('the aquifer voxel rule (SP7a spec §1.4-§1.6, D20, Spec correction 7)
     expect(voxelRule(ST, -55, 0, W63, 100, W63, 0, true, false)).toBe(LAVA_SOURCE); // the −54 rule applies unchanged
   });
 
-  test('an empty voxel at y −55 is a lava source, at −54 air; a water status filling there keeps its water', () => {
-    expect(voxelRule(ST, -55, 0, EMPTY, 100, EMPTY, 0, false, false)).toBe(LAVA_SOURCE);
-    expect(voxelRule(ST, -54, 0, EMPTY, 100, EMPTY, 0, false, false)).toBe(0);
-    expect(voxelRule(ST, -55, 0, pk(FLUID_WATER, -60), 100, EMPTY, 0, false, false)).toBe(LAVA_SOURCE); // above its level
-    expect(voxelRule(ST, -55, 0, pk(FLUID_WATER, -50), 100, EMPTY, 0, false, false)).toBe(WATER_SOURCE);
+  test('an empty voxel below aquifer.lavaLevel (−50 since rulings R23) is a lava source, at the level air; a water status filling there keeps its water', () => {
+    const y = ST.lavaLevel - 1;
+    expect(ST.lavaLevel).toBe(-50);
+    expect(voxelRule(ST, y, 0, EMPTY, 100, EMPTY, 0, false, false)).toBe(LAVA_SOURCE);
+    expect(voxelRule(ST, ST.lavaLevel, 0, EMPTY, 100, EMPTY, 0, false, false)).toBe(0);
+    expect(voxelRule(ST, y, 0, pk(FLUID_WATER, -60), 100, EMPTY, 0, false, false)).toBe(LAVA_SOURCE); // above its level
+    expect(voxelRule(ST, y, 0, pk(FLUID_WATER, ST.lavaLevel), 100, EMPTY, 0, false, false)).toBe(WATER_SOURCE);
   });
 });
 

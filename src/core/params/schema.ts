@@ -396,7 +396,7 @@ export const ROOT = group('Parameters', 'World generation parameters.', {
     }),
     lavaMaxLevel: int(-10, { ...TERRAIN, label: 'Lava below', doc: 'A partially flooded cell whose level is at most this y holds lava where the lava noise passes the lava threshold.', unit: 'y', min: -64, max: 63 }),
     lavaThreshold: num(0.3, { ...TERRAIN, label: 'Lava threshold', doc: 'A deep partial cell holds lava where |lava noise| is above this (the noise is read once per 64 × 40 × 64 blocks).', min: 0, max: 1, step: 0.01 }),
-    lavaLevel: int(-54, { ...TERRAIN, label: 'Lava floor', doc: 'Cave air below this y that no cell fills is lava (the deepest gullies of the rock floor).', unit: 'y', min: -64, max: -40 }),
+    lavaLevel: int(-50, { ...TERRAIN, label: 'Lava floor', doc: 'Cave air below this y that no cell fills is lava (the deepest gullies of the rock floor).', unit: 'y', min: -64, max: -40 }),
     barrierBand: num(30, { ...TERRAIN, label: 'Barrier band', doc: 'Where a voxel\'s two nearest cells differ and their squared distances differ by less than this, the pressure and the barrier noise may put rock between them: higher → more barriers.', min: 1, max: 64, step: 1 }),
     abyssMargin: num(0.06, { ...TERRAIN, label: 'Abyss margin', doc: 'Water is off in the abyss; within this margin around the abyss box (in C′ and E′ units, with 0.1 of depth) water becomes rock, so it never touches abyss air.', min: 0, max: 0.2, step: 0.005 }),
     noises: group('Noises', 'The aquifer\'s noises, 3D, at unscaled world block coordinates (the floodedness read at 0.67·y, the spread at 0.714·y, the barrier at 0.5·y), each clamped to [−1, 1].', {

@@ -1020,11 +1020,11 @@ describe('T\'s aquifer step (SP7a §1.7, D17-D20)', () => {
     const viaDefaults = aquiferInputs(ctx, DEFAULTS.aquifer, DEFAULTS.aquifer.noises);
     expect(viaSchema.settings).toEqual(DEFAULTS.aquifer);
     // §1.9's defaults as Tasks 5-6 pinned them before the schema (rulings P5; abyssMargin 0.06, Task 6's m), barrierBand 30 since
-    // Task 27l's lever (rulings R21).
+    // Task 27l's lever (rulings R21), lavaLevel −50 since Task 27n (rulings R23).
     const noise = (wavelength: number) => completeNoiseDef({ wavelength, octaves: 1, double: true, clampSigma: 3 });
     expect(DEFAULTS.aquifer).toEqual({
       enabled: true, surfaceBand: 12, thresholds: { fullInland: 0.8, fullOcean: -0.3, partialInland: 0.4, partialOcean: -0.8 },
-      lavaMaxLevel: -10, lavaThreshold: 0.3, lavaLevel: -54, barrierBand: 30, abyssMargin: 0.06,
+      lavaMaxLevel: -10, lavaThreshold: 0.3, lavaLevel: -50, barrierBand: 30, abyssMargin: 0.06,
       noises: { floodedness: noise(128), spread: noise(32), lava: noise(2), barrier: noise(8) },
     });
     let flooded = 0;
