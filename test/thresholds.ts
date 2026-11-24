@@ -135,7 +135,8 @@ export const THRESHOLDS: ThresholdTable = {
     flatWallShare: { max: 0.037, activeFrom: 'SP6a' }, switchWall: { max: 2, activeFrom: 'SP6a' },
     // SP7a spec §13.2 (the user, rulings R24 item 1; a LOOSEN): `waterWall` (after settle, over truncated fronts with a
     // dry target) recorded, not gated, in SP7a (`.out/C7.tuning.json`, `C7.waterWallAny` beside it): SP7b, the runtime
-    // sim, owns its final definition and bound; the user reviews the fronts in-world (SP7a's Task 47).
+    // sim, owns its final definition and bound; the user reviews the fronts in-world (SP7a's Task 47, from §13.9's
+    // `wallFrontN` links).
     waterWall: { max: 3.3, activeFrom: 'SP7b' },
     // SP6b spec §12.3 (D6, D26; Task 20): the flat floor faces on the bedrock plane (y −63) over all flat faces, per group
     // and the worst group's (`.out/C7.bottomPlane.json`); 15.7-34.5 % before the rock floor, which holds it by construction.
