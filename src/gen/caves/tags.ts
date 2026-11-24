@@ -30,8 +30,13 @@
  * noodle above 0, or at most 0 and below the lowest family), every density-air voxel of the cell takes that kind
  * without reading its taps; otherwise each is tagged by `tagVoxel`. The comparisons that decide are strict where the
  * rule's are, so no voxel is a tie, and the kind is `tagVoxel`'s.
+ * The partial cell tags (Task 31p, output-keeping). In a cell whose intervals decide no kind they may still decide parts
+ * of the rule at every voxel (`cellKnown`): the pre-cave tap above 0, one family strictly below the other three, the
+ * pillar keep at −1e6, the noodle above 0. Its voxels are then tagged without reading those taps (the family's three
+ * others, the pre-cave tap, the pillars, the noodle), with the same strict comparisons, so the kind is `tagVoxel`'s.
  * The pre-tags (Task 31p, output-keeping). The T stage passes a `PreTags` to its density fill as the fill's hooks
- * (`FillHooks`): at each cell whose corner interval the fill computes it records the cell's kind, and at each air voxel the fill evaluates in a cell with no kind it records the voxel's kind while the compile's
+ * (`FillHooks`): at each cell whose corner interval the fill computes it records the cell's kind (and its partial
+ * one), and at each air voxel the fill evaluates in a cell with no kind it records the voxel's kind while the compile's
  * registers still hold that voxel, so the taps `voxelFn` just evaluated are read from its memo. `tagColumn` given them
  * runs neither the cell's interval nor those voxels' taps again: a cell's corner interval is a function of the cell
  * and its corners alone, and a voxel's kind of the voxel alone, so the tags are the same.
@@ -155,27 +160,41 @@ export function caveReadersOf(c: CompiledDensity): CaveReaders {
  */
 export function tagVoxel(c: CompiledDensity, r: CaveReaders, pillarThreshold: number, lx: number, y: number, lz: number): number {
   c.atVoxel(lx, y, lz);
-  return tagCurrentVoxel(r, pillarThreshold);
+  return tagCurrentVoxel(r, pillarThreshold, 0);
 }
 
 /**
  * `tagVoxel` at the voxel the compile's registers hold (its last `voxelFn` or `atVoxel` call), without setting them
- * again: right after `voxelFn` there, the taps it evaluated are read from its memo, not evaluated again.
+ * again: right after `voxelFn` there, the taps it evaluated are read from its memo, not evaluated again. `known`
+ * (`cellKnown`'s bits for the voxel's cell, 0 for none) names what the cell's tap intervals already tell at every voxel
+ * of it, and those taps are not read: K_PRE the pre-cave tap above 0, a family index in K_FAMILY's bits (that family
+ * strictly below the other three, so it is the lowest with its kind), K_KEEP_LOW the pillar keep −1e6, K_NO_NOODLE the
+ * noodle above 0 (never a candidate). The kind is the same as with every tap read.
  */
-function tagCurrentVoxel(r: CaveReaders, pillarThreshold: number): number {
+function tagCurrentVoxel(r: CaveReaders, pillarThreshold: number, known: number): number {
   const pre = r.precave ?? r.terrain;
-  if (pre === null || !(pre() > 0)) return 0;
+  if (pre === null) return 0;
+  if ((known & K_PRE) === 0 && !(pre() > 0)) return 0;
   const fe = r.entrances, fc = r.cheese, f3 = r.spaghetti3d, f2 = r.spaghetti2d, fp = r.pillars, fn = r.noodle;
-  const e = fe === null ? Infinity : fe();
-  const ch = fc === null ? Infinity : fc();
-  const s3 = f3 === null ? Infinity : f3();
-  const s2 = f2 === null ? Infinity : f2();
-  let lowest = e, kind = fe === null ? K_OTHER : K_ENTRANCE;
-  if (fc !== null && ch < lowest) { lowest = ch; kind = K_CHEESE; }
-  if (f3 !== null && s3 < lowest) { lowest = s3; kind = K_SPAG3D; }
-  if (f2 !== null && s2 < lowest) { lowest = s2; kind = K_SPAG2D; }
+  const fam = (known & K_FAMILY) >> 1;
+  let lowest: number, kind: number;
+  if (fam !== 0) {
+    lowest = (fam === 1 ? fe : fam === 2 ? fc : fam === 3 ? f3 : f2)!();
+    kind = FAMILY_KINDS[fam]!;
+  } else {
+    const e = fe === null ? Infinity : fe();
+    const ch = fc === null ? Infinity : fc();
+    const s3 = f3 === null ? Infinity : f3();
+    const s2 = f2 === null ? Infinity : f2();
+    lowest = e;
+    kind = fe === null ? K_OTHER : K_ENTRANCE;
+    if (fc !== null && ch < lowest) { lowest = ch; kind = K_CHEESE; }
+    if (f3 !== null && s3 < lowest) { lowest = s3; kind = K_SPAG3D; }
+    if (f2 !== null && s2 < lowest) { lowest = s2; kind = K_SPAG2D; }
+  }
   let keep = -Infinity;
-  if (fp !== null) {
+  if ((known & K_KEEP_LOW) !== 0) keep = -1e6;
+  else if (fp !== null) {
     const pv = fp();
     keep = pv * 0.0625 < pillarThreshold ? -1e6 : pv;
   }
@@ -183,11 +202,39 @@ function tagCurrentVoxel(r: CaveReaders, pillarThreshold: number): number {
   const caves = keep > lowest ? keep : lowest;
   let best = Infinity, out = K_OTHER;
   if (caves <= 0) { best = lowest; out = kind; }
-  if (fn !== null) {
+  if (fn !== null && (known & K_NO_NOODLE) === 0) {
     const nv = fn();
     if (nv <= 0 && nv < best) out = K_NOODLE;
   }
   return out;
+}
+
+/** `cellKnown`'s bits (`tagCurrentVoxel`): the pre-cave tap above 0, the lowest family (bits 1-3), the keep low, no noodle. */
+const K_PRE = 1;
+const K_FAMILY = 14;
+const K_KEEP_LOW = 16;
+const K_NO_NOODLE = 32;
+
+/**
+ * What the tap intervals `iv` at nodes `nd` (`CELL_TAPS`) of a cell tell at every voxel of it, as `tagCurrentVoxel`'s
+ * `known` bits (Task 31p, output-keeping; for a cell `cellKind` leaves undecided): each bit only from finite intervals,
+ * by strict comparisons where the rule's are strict, so no voxel of the cell is a tie the bit would decide otherwise.
+ */
+function cellKnown(iv: Float64Array, nd: Int32Array, th: number): number {
+  const fin = (q: number): boolean => FINITE(iv[2 * nd[q]!]!) && FINITE(iv[2 * nd[q]! + 1]!);
+  let known = 0;
+  if (fin(0) && iv[2 * nd[0]!]! > 0) known |= K_PRE;
+  if (fin(1) && fin(2) && fin(3) && fin(4)) {
+    for (let q = 1; q <= 4; q++) {
+      const h = iv[2 * nd[q]! + 1]!;
+      let below = true;
+      for (let o = 1; o <= 4; o++) if (o !== q && !(h < iv[2 * nd[o]!]!)) { below = false; break; }
+      if (below) { known |= q << 1; break; }
+    }
+  }
+  if (fin(5) && iv[2 * nd[5]! + 1]! * 0.0625 < th) known |= K_KEEP_LOW;
+  if (fin(6) && iv[2 * nd[6]!]! > 0) known |= K_NO_NOODLE;
+  return known;
 }
 
 /**
@@ -246,21 +293,25 @@ const NO_TAG = 255;
 export interface PreTags extends FillHooks {
   /** Per cell `(ck·4 + cj)·4 + ci`: its kind as the fill found it, or NOT_COMPUTED (−2). */
   readonly kinds: Int8Array;
+  /** Per cell whose kind is −1: `cellKnown` of its corner interval (0 without the cell tags). */
+  readonly known: Uint8Array;
   /** Per voxel `((y + 64)·16 + lz)·16 + lx`: its kind as the fill found it, or NO_TAG (255). */
   readonly voxels: Uint8Array;
   /** Clears both and binds the hooks to `bounds` (its compile's tap readers) and `pillarThreshold`: call before each fill. */
   begin(bounds: DensityBounds, pillarThreshold: number): void;
 }
 
-/** A fresh `PreTags` (98,304 + 768 bytes). */
+/** A fresh `PreTags` (98,304 + 2 × 768 bytes). */
 export function createPreTags(): PreTags {
-  const kinds = new Int8Array(768), voxels = new Uint8Array(98304);
+  const kinds = new Int8Array(768), known = new Uint8Array(768), voxels = new Uint8Array(98304);
   let ivs: Float64Array | null = null, readers: CaveReaders | null = null, nodes: Int32Array | null = null, th = 0;
   return {
     kinds,
+    known,
     voxels,
     begin(bounds, pillarThreshold) {
       kinds.fill(NOT_COMPUTED);
+      known.fill(0);
       voxels.fill(NO_TAG);
       const c = bounds.compiled, res = resolve(c);
       ivs = bounds.nodeIntervals;
@@ -269,12 +320,15 @@ export function createPreTags(): PreTags {
       nodes = c.interpolatedSlotCount > 0 && bounds.cellTags ? res.cellNodes : null;
     },
     corners(cell) {
-      kinds[cell] = nodes === null ? -1 : cellKind(ivs!, nodes, th);
+      const kind = nodes === null ? -1 : cellKind(ivs!, nodes, th);
+      kinds[cell] = kind;
+      if (kind < 0 && nodes !== null) known[cell] = cellKnown(ivs!, nodes, th);
     },
     air(j) {
       // The cell (j >> 11, (j >> 6) & 3, (j >> 2) & 3): a cell with a kind tags its voxels without their taps.
-      if (kinds[((j >> 11) << 4) | (((j >> 6) & 3) << 2) | ((j >> 2) & 3)]! >= 0) return;
-      voxels[j] = tagCurrentVoxel(readers!, th);
+      const cell = ((j >> 11) << 4) | (((j >> 6) & 3) << 2) | ((j >> 2) & 3);
+      if (kinds[cell]! >= 0) return;
+      voxels[j] = tagCurrentVoxel(readers!, th, known[cell]!);
     },
   };
 }
@@ -334,7 +388,7 @@ export function tagColumn(
           }
           if (slots) c.cellCorners(ci, ck, cj);
         }
-        let kind = -1;
+        let kind = -1, known = 0;
         if (cellNodes !== null) {
           // A cell decided solid after its corners has nothing to tag.
           if (!hasAir(solid, out, ci, ck, cj)) continue;
@@ -342,7 +396,8 @@ export function tagColumn(
           if (kind === NOT_COMPUTED) {
             bounds!.cellIntervalCorners(ci, ck, cj, IV, 0);
             kind = cellKind(bounds!.nodeIntervals, cellNodes, pillarThreshold);
-          }
+            if (kind < 0) known = cellKnown(bounds!.nodeIntervals, cellNodes, pillarThreshold);
+          } else if (kind < 0) known = pre!.known[cell]!;
         }
         for (let y = y0 < -63 ? -63 : y0; y < y0 + 8; y++) {
           for (let lz = 4 * cj; lz < 4 * cj + 4; lz++) {
@@ -351,7 +406,10 @@ export function tagColumn(
               if (solid[row + lx] !== 0 || out[row + lx] !== 0) continue;
               if (kind >= 0) out[row + lx] = kind;
               else if (pre !== null && pre.voxels[row + lx] !== NO_TAG) out[row + lx] = pre.voxels[row + lx]!;
-              else out[row + lx] = tagVoxel(c, r, pillarThreshold, lx, y, lz);
+              else {
+                c.atVoxel(lx, y, lz);
+                out[row + lx] = tagCurrentVoxel(r, pillarThreshold, known);
+              }
             }
           }
         }

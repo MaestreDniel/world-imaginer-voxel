@@ -524,7 +524,7 @@ describe('the cell tags: a cell\'s cave kind from its tap intervals (SP6a R13)',
   }, 300_000);
 });
 
-describe('the pre-tags: the tag pass\'s work done during the fill (Task 31p)', () => {
+describe('the pre-tags and the partial cell tags: the tag pass\'s work done during the fill (Task 31p)', () => {
   /** Fills and tags each column of `columns` twice, without and with a `PreTags`; the first difference throws. */
   const compare = (ctx: GenContext, columns: readonly (readonly [number, number])[], label: string) => {
     const dc = createDensityContext(ctx);
@@ -534,7 +534,7 @@ describe('the pre-tags: the tag pass\'s work done during the fill (Task 31p)', (
     const solid = [new Uint8Array(98304), new Uint8Array(98304)], values = [new Float64Array(98304), new Float64Array(98304)];
     const mask = [new Uint8Array(98304), new Uint8Array(98304)], cells = [new Uint8Array(768), new Uint8Array(768)];
     const tags = [new Uint8Array(98304), new Uint8Array(98304)];
-    const stats = { preVoxels: 0, preKinds: 0, tagged: 0 };
+    const stats = { preVoxels: 0, preKinds: 0, known: 0, tagged: 0 };
     for (const [cx, cz] of columns) {
       buildColumnSample(ctx, cx, cz, s);
       expect(fillDensityColumn(b, s, solid[0]!, values[0]!, mask[0]!, NEVER, cells[0]!)).toBe(true);
@@ -555,22 +555,25 @@ describe('the pre-tags: the tag pass\'s work done during the fill (Task 31p)', (
         expect(cells[1]![cell]).toBe(cells[0]![cell]);
         // A kind is recorded exactly at the cells whose corner interval the fill computed.
         if (pre.kinds[cell] !== -2) { expect(cells[0]![cell]).toBe(1); stats.preKinds++; }
+        if (pre.known[cell] !== 0) { expect(pre.kinds[cell]).toBe(-1); stats.known++; }
       }
     }
     return stats;
   };
 
   test('with and without the pre-tags, the fill (solidity, cells, evaluated voxels and values) and every tag of 64 columns are equal', () => {
-    let preVoxels = 0, preKinds = 0, tagged = 0;
+    let preVoxels = 0, preKinds = 0, known = 0, tagged = 0;
     for (const set of bitExactSets()) {
       const st = compare(createGenContext(seedFromInput('42'), set.params), set.columns, set.name);
       preVoxels += st.preVoxels;
       preKinds += st.preKinds;
+      known += st.known;
       tagged += st.tagged;
     }
-    // Not vacuous: the fill tags voxels and finds cell kinds.
+    // Not vacuous: the fill tags voxels, finds cell kinds and partial cell kinds.
     expect(preVoxels).toBeGreaterThan(64 * 1000);
     expect(preKinds).toBeGreaterThan(64 * 50);
+    expect(known).toBeGreaterThan(64 * 10);
     expect(tagged).toBeGreaterThan(64 * 1000);
   }, 300_000);
 
