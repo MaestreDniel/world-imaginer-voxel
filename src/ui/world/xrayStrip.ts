@@ -10,17 +10,20 @@
  *
  * The strip `#world-xray-strip` (DOM, beside the build HUD) reads "X-ray · y a … b · by cave type" (the minus sign
  * U+2212, as the spec writes it) above the legend, the nine cave kinds and the surface in the X-ray's colours
- * (`render/xrayPalette.ts`). It shows while the X-ray is on; `set` writes the element only when the state changed, never
- * per frame, and its text only when the band changed. Text only through `textContent`.
+ * (`render/xrayPalette.ts`), then Flooded and Lava. It shows while the X-ray is on; `set` writes the element only when
+ * the state changed, never per frame, and its text only when the band changed. Text only through `textContent`.
  *
  * SP6b's colour mode (SP6b spec §7.3, D7): C switches the X-ray between by cave type (0) and by cave biome (1). The line
  * ends "· by cave type" or "· by cave biome", and the strip holds two prebuilt legends, the kinds' and the biomes' (Plain
  * cave, Lush, Dripstone, Abyss, Surface), and shows one. A switch writes the two legends' `hidden` and the line's own
  * text node from the two lines kept for the band (made when the band changes), so it builds no node and allocates
- * nothing (SP6a spec §5.3's rule).
+ * nothing (SP6a spec §5.3's rule). Both legends end with the fluid tint's rows, Flooded and Lava (SP7a spec §10.1, D13:
+ * flooded and lava-filled caves' walls are tinted in both colour modes).
  */
 import { HEIGHT, MIN_Y } from '../../core/constants';
-import { XRAY_BIOME_COLORS, XRAY_BIOME_LABELS, XRAY_COLORS, XRAY_LABELS } from '../../render/xrayPalette';
+import {
+  XRAY_BIOME_COLORS, XRAY_BIOME_LABELS, XRAY_COLORS, XRAY_FLUID_COLORS, XRAY_FLUID_LABELS, XRAY_LABELS,
+} from '../../render/xrayPalette';
 import { el } from '../common/dom';
 
 /** The X-ray's depth band, world y: `all` (every depth, −64 … 319) or the band `yMin` … `yMax`, both inclusive. */
@@ -77,12 +80,11 @@ export function stripText(b: XrayBand, mode: 0 | 1): string {
   return `X-ray · y ${yText(b.yMin)} … ${yText(b.yMax)} · ${mode === 1 ? 'by cave biome' : 'by cave type'}`;
 }
 
-/** A legend's entries in index order: those with a label (the kinds 1-9 and 15; the biomes 0-3 and 15). */
+/** A legend's entries in index order: those with a label (the kinds 1-9 and 15; the biomes 0-3 and 15; the fluids 1-2). */
 const labelled = (labels: readonly string[]): readonly number[] => labels.flatMap((label, i) => (label === '' ? [] : [i]));
 
-/** A legend: a swatch and a label per labelled entry, in the X-ray's colours. */
-function legendOf(colors: readonly string[], labels: readonly string[]): HTMLElement {
-  const legend = el('div', 'world-xray-legend');
+/** Appends to `legend` a swatch and a label per labelled entry of `labels`, in the X-ray's `colors`. */
+function appendKeys(legend: HTMLElement, colors: readonly string[], labels: readonly string[]): void {
   for (const i of labelled(labels)) {
     const key = el('span', 'world-xray-key');
     const swatch = el('span', 'world-xray-swatch');
@@ -90,6 +92,13 @@ function legendOf(colors: readonly string[], labels: readonly string[]): HTMLEle
     key.append(swatch, el('span', '', labels[i]!));
     legend.append(key);
   }
+}
+
+/** A legend: its own entries, then the fluid tint's (Flooded, Lava), each a swatch and a label in the X-ray's colours. */
+function legendOf(colors: readonly string[], labels: readonly string[]): HTMLElement {
+  const legend = el('div', 'world-xray-legend');
+  appendKeys(legend, colors, labels);
+  appendKeys(legend, XRAY_FLUID_COLORS, XRAY_FLUID_LABELS);
   return legend;
 }
 

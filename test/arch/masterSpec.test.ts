@@ -269,6 +269,10 @@
  * tier, `borderRatio` only in a group holding ≥ 50 springs, on full) and the C7 row (`waterWall` recorded in SP7a, its
  * `THRESHOLDS` row SP7b's), and amend the C9 row (openings onto untagged air holding no fluid), the T4 row (the pre-cave
  * sea bed) and B5's third part (recorded on T), each cross-checked against `THRESHOLDS`.
+ * The X-ray's fluid tint (Task 40, D13) lands item 11's X-ray word (§4.4: `fluid` in bits 11-12, the merge key with it;
+ * the SP6b describe's pin of the word's end moved here) and item 16's R1 part (§6.4's R1 row: `xrayFluid`, gated from
+ * SP7a; the SP6b describe's pin of the threshold cell's end moved here), each cross-checked against `PACK_LAYOUT` and
+ * `THRESHOLDS`.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2987,7 +2991,8 @@ describe('master spec amendments (SP6b §15)', () => {
     expect(from, 'no §4.4').toBeGreaterThanOrEqual(0);
     const xray = lines.slice(from, to).find((l) => l.startsWith('  - X-ray (SP6a, pass 3):'));
     expect(xray, 'no X-ray word in §4.4\'s vertex format').toBeDefined();
-    expect(xray).toContain('`face3 | kind4 | biome4`; `face` 0-2, `kind` 3-6 (the cave kind, `CAVE_KIND`, or 15 the surface film), `biome` 7-10, spare 11-31.');
+    // The word's end (the fluid bits and the spare bits) moved to 'master spec amendments (SP7a §16)' (SP7a §16 item 11).
+    expect(xray).toContain('`face` 0-2, `kind` 3-6 (the cave kind, `CAVE_KIND`, or 15 the surface film), `biome` 7-10, ');
     expect(xray).toContain('The mesher writes `biome` from the `cave` byte\'s bits 4-7 (the cave biome, `CAVE_BIOME`; the film\'s 0) and merges on (kind | biome << 4, face), so a quad splits only where the biome changes inside one kind\'s walls (amended by SP6b).');
     // The bit positions the line names are PACK_LAYOUT.xray's.
     const x = PACK_LAYOUT.xray;
@@ -2997,7 +3002,8 @@ describe('master spec amendments (SP6b §15)', () => {
   test('§6.4\'s R1 row gains xrayBiome (SP6b spec §15 item 20)', () => {
     const [, def, cell] = row64('R1');
     expect(def).toContain('SP6b: `xrayBiome` counts the X-ray faces whose `biome` bits (the `xray` word\'s bits 7-10) ≠ the cave biome in bits 4-7 of the `cave` byte at their hollow voxel (the film\'s ≠ 0), over both meshings of R1\'s sites (amended by SP6b)');
-    expect(cell).toBe('0 / 0; `xrayBiome` 0 |');
+    // The cell's end moved to 'master spec amendments (SP7a §16)' (SP7a §16 item 16 appends `xrayFluid`).
+    expect(cell.startsWith('0 / 0; `xrayBiome` 0')).toBe(true);
     expect(THRESHOLDS.R1?.xrayBiome).toEqual({ max: 0, activeFrom: 'SP6b' });
   });
 
@@ -3968,5 +3974,29 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(exit).toContain(`P1 with the gates in force and the aquifer row (${gates});`);
     const rows: readonly string[] = BENCH_ROWS;
     for (const row of ['terrain.real', 'terrain.islands', 'aquifer.column', 'decorate.column']) expect(rows, `BENCH_ROWS does not measure ${row}`).toContain(row);
+  });
+
+  test('§4.4\'s X-ray word: `fluid` in bits 11-12, the merge key with it (SP7a spec §16 item 11)', () => {
+    // Item 11's X-ray half (Task 40, D13): the word's spare bits give the wall's hollow voxel's fluid type.
+    const lines = text.split('\n');
+    const from = lines.findIndex((l) => l.startsWith('### 4.4 '));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('### 4.5 '));
+    const xray = lines.slice(from, to).find((l) => l.startsWith('  - X-ray (SP6a, pass 3):'));
+    expect(xray, 'no X-ray word in §4.4\'s vertex format').toBeDefined();
+    expect(xray!.startsWith('  - X-ray (SP6a, pass 3): `face3 | kind4 | biome4 | fluid2`; `face` 0-2, `kind` 3-6 (the cave kind, `CAVE_KIND`, or 15 the surface film), `biome` 7-10, `fluid` 11-12 (0 dry, 1 water, 2 lava: the fluid type of the hollow voxel a wall bounds, the film\'s 0; SP7a), spare 13-31.'), 'the word as built').toBe(true);
+    expect(xray!.endsWith(' (amended by SP6b). SP7a\'s merge key adds the fluid (kind | biome << 4 | fluid << 8, face), so a flooded or lava-filled wall never merges with a dry one, and the X-ray material mixes the wall\'s colour toward water blue or lava orange by `xrayFluidMix` (0.5) (amended by SP7a).'), 'the merge key and the tint').toBe(true);
+    expect(text, 'the pre-SP7a spare bits are gone').not.toContain('`biome` 7-10, spare 11-31.');
+    const x = PACK_LAYOUT.xray;
+    expect([x.fluid.offset, x.fluid.bits]).toEqual([11, 2]);
+  });
+
+  test('§6.4\'s R1 row: xrayFluid (SP7a spec §16 item 16)', () => {
+    // Item 16's R1 part (Task 40, §10.1): 0 by construction, gated from SP7a.
+    const r1 = text.split('\n').find((l) => l.startsWith('| R1 |'));
+    expect(r1, 'no R1 row in §6.4').toBeDefined();
+    const [, def, cell] = r1!.split(' | ');
+    expect(def!.endsWith('(amended by SP6b); SP7a: `xrayFluid` counts the X-ray faces whose `fluid` bits (the `xray` word\'s bits 11-12) ≠ the fluid type of their hollow voxel (the film\'s ≠ 0), over both meshings of R1\'s sites (amended by SP7a)'), 'the row\'s definition ends with SP7a\'s part').toBe(true);
+    expect(cell).toBe('0 / 0; `xrayBiome` 0; `xrayFluid` 0 |');
+    expect(THRESHOLDS.R1?.xrayFluid).toEqual({ max: 0, activeFrom: 'SP7a' });
   });
 });

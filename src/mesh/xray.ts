@@ -6,20 +6,22 @@
  *   section's tag but is no longer hollow, and a dug voxel has tag 0, so it never is (Review Focus 2);
  * - **wall:** each face of a hollow voxel whose neighbour shows an opaque full face (PASS opaque with the facing bit in
  *   `fullFaces`, `meshSolid`'s occlusion test), kind = the hollow's kind and biome = its tag's bits 4-7 (the cave
- *   biome, `CAVE_BIOME`; SP6b spec §7.1, D17); nothing toward a cutout block, water or air;
+ *   biome, `CAVE_BIOME`; SP6b spec §7.1, D17) and fluid = the hollow's fluid type (0 dry, 1 water, 2 lava; SP7a spec
+ *   §10.1, D13), so the walls of a flooded or lava-filled cave are told from a dry one's; nothing toward a cutout block,
+ *   water or air;
  * - **film:** each up face of an opaque full cube or a fluid voxel whose up neighbour is air without fluid at sky light
  *   15, kind `CAVE_FILM_KIND` (15), biome 0; an overhang or a canopy leaves a gap in it (D10). A cell's up face is a
  *   wall or a film, never both (a wall needs an opaque neighbour above, the film air);
- * - **merge:** greedy on (key, face) only, key = the wall's whole tag byte (kind | biome << 4) or 15 for the film,
- *   through `mesh/faces.ts`' `mergeSlice` (no light, no AO, so no diagonal rule: every quad splits along v0-v2), so a
- *   quad splits only where the biome changes inside one kind's walls. Each vertex's word is `PACK_LAYOUT.xray`:
- *   `face`, `kind` (key & 15), `biome` (key >> 4 & 15).
+ * - **merge:** greedy on (key, face) only, key = the wall's whole tag byte with its fluid (kind | biome << 4 | fluid << 8)
+ *   or 15 for the film (biome and fluid 0), through `mesh/faces.ts`' `mergeSlice` (no light, no AO, so no diagonal rule:
+ *   every quad splits along v0-v2), so a quad splits only where the biome or the fluid changes inside one kind's walls.
+ *   Each vertex's word is `PACK_LAYOUT.xray`: `face`, `kind` (key & 15), `biome` (key >> 4 & 15), `fluid` (key >> 8).
  * Only the section's own voxels emit; the border is read as their neighbours. A section with no tagged voxel meshes
  * only its up faces (the film).
  */
 import { CAVE_FILM_KIND } from '../core/constants';
 import { AIR, FULL_FACES, PASS } from '../world/blocks/index';
-import { hasFluid } from '../world/blocks/fluid';
+import { fluidType, hasFluid } from '../world/blocks/fluid';
 import { ALL_FACES, FACE_UP, PASS_OPAQUE } from '../world/blocks/kinds';
 import { padIndex, type PaddedSection } from '../world/store/padded';
 import type { MeshBuilder, MeshPass } from './builder';
@@ -35,6 +37,7 @@ const OPAQUE = PASS_OPAQUE;
 const FULL = ALL_FACES;
 const UP = FACE_UP;
 const HAS_FLUID = hasFluid;
+const FLUID_TYPE = fluidType;
 const PAD_INDEX = padIndex;
 const AX_N = AXIS_N;
 const AX_U = AXIS_U;
@@ -52,6 +55,10 @@ const KIND_SHIFT = XRAY.kind.offset;
 const KIND_MASK = 2 ** XRAY.kind.bits - 1;
 const BIOME_SHIFT = XRAY.biome.offset;
 const BIOME_MASK = 2 ** XRAY.biome.bits - 1;
+const FLUID_SHIFT = XRAY.fluid.offset;
+const FLUID_MASK = 2 ** XRAY.fluid.bits - 1;
+/** Where a wall's key holds its hollow's fluid type, above the tag byte. */
+const KEY_FLUID_SHIFT = 8;
 
 /** The builder pass of the X-ray (`MESH_PASS_XRAY`, SP6a spec D23). */
 const XRAY_PASS: MeshPass = 3;
@@ -59,9 +66,9 @@ const XRAY_PASS: MeshPass = 3;
 const UP_STRIDE = STRIDES[1];
 
 /**
- * The slice's key mask (index v·16 + u; the cell's key, kind | biome << 4, 0 for no face) and the two all-zero masks
- * `mergeSlice` also compares, reused by every call (the mesher runs one section at a time); the corner and word scratch
- * of `SINK`.
+ * The slice's key mask (index v·16 + u; the cell's key, kind | biome << 4 | fluid << 8, 0 for no face) and the two
+ * all-zero masks `mergeSlice` also compares, reused by every call (the mesher runs one section at a time); the corner
+ * and word scratch of `SINK`.
  */
 const MASK = new Uint32Array(256);
 const NO_KEY = new Uint32Array(256);
@@ -70,10 +77,14 @@ const WORDS = new Uint32Array(4);
 /** The builder of the call in progress, read by `SINK` (one module-level sink, so a call allocates nothing). */
 let target: MeshBuilder | null = null;
 
-/** Writes one merged quad: corners in 1/8 units, four equal words (face, kind key & 15, biome key >> 4), no flip. */
+/**
+ * Writes one merged quad: corners in 1/8 units, four equal words (face, kind key & 15, biome key >> 4 & 15, fluid
+ * key >> 8), no flip.
+ */
 const SINK: QuadSink = (f, d, i, j, w, h, ka) => {
   QUAD_CORNERS(f, d, i, j, w, h, CORNERS);
-  const word = (f << FACE_SHIFT | (ka & KIND_MASK) << KIND_SHIFT | (ka >> 4 & BIOME_MASK) << BIOME_SHIFT) >>> 0;
+  const word = (f << FACE_SHIFT | (ka & KIND_MASK) << KIND_SHIFT | (ka >> 4 & BIOME_MASK) << BIOME_SHIFT
+    | (ka >> KEY_FLUID_SHIFT & FLUID_MASK) << FLUID_SHIFT) >>> 0;
   WORDS[0] = word;
   WORDS[1] = word;
   WORDS[2] = word;
@@ -121,7 +132,7 @@ export function meshXray(padded: PaddedSection, builder: MeshBuilder): void {
             const tag = cave[v]!;
             if ((tag & 15) !== 0 && !opaqueFull) {
               const ns = blocks[v + normal]!;
-              if (PASS_OF[ns] === OPAQUE && (FULL_FACES_OF[ns]! & oppBit) !== 0) key = tag;
+              if (PASS_OF[ns] === OPAQUE && (FULL_FACES_OF[ns]! & oppBit) !== 0) key = tag | FLUID_TYPE(fluid[v]!) << KEY_FLUID_SHIFT;
             }
             if (key === 0 && up && (opaqueFull || HAS_FLUID(fluid[v]!))) {
               const q = v + UP_STRIDE;

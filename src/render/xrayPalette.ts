@@ -66,3 +66,14 @@ export const XRAY_BIOME_LABELS: readonly string[] = byKind('', [
   [CAVE_BIOME.abyss, 'Abyss'],
   [CAVE_FILM_KIND, 'Surface'],
 ]);
+
+/**
+ * The X-ray's fluid tint and the legend's names by fluid (SP7a spec §10.1, D13): index = the X-ray pack's `fluid` (2
+ * bits: 0 dry, 1 water, 2 lava, 3 unused), the fluid type of the hollow voxel a wall bounds. The material mixes a wall's
+ * kind or biome colour toward its fluid's by `xrayFluidMix` (`materials/uniforms.ts`), in both colour modes; both of the
+ * strip's legends end with the two rows. Entries 0 and 3 are the unused colour and no label (a dry wall is not mixed).
+ */
+export const XRAY_FLUID_COLORS: readonly string[] = Object.freeze([UNUSED_COLOR, '#1e64ff', '#ff4a00', UNUSED_COLOR]);
+
+/** The fluid legend's names: [1] "Flooded", [2] "Lava"; 0 and 3 empty. */
+export const XRAY_FLUID_LABELS: readonly string[] = Object.freeze(['', 'Flooded', 'Lava', '']);

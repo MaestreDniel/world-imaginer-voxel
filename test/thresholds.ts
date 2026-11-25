@@ -210,6 +210,9 @@ export const THRESHOLDS: ThresholdTable = {
     // SP6b spec §12.5, §7.1 (Task 32): each X-ray face's biome bits against the cave biome at its hollow voxel (the
     // film's 0).
     xrayBiome: { max: 0, activeFrom: 'SP6b' },
+    // SP7a spec §10.1, §13.3 (Task 40, D13): each X-ray face's fluid bits against the fluid type at its hollow voxel (the
+    // film's 0), 0 by construction.
+    xrayFluid: { max: 0, activeFrom: 'SP7a' },
   },
   R2: { quadsPerFaceAo: { max: 0.85, activeFrom: 'SP4a' }, quadsPerFaceNoAo: { max: 0.55, activeFrom: 'SP4a' } },
   // SP6b spec §12.4 (D22; Task 39): cave culling's walk against the raycast reference (`caves.metric.ts`' biomes group,

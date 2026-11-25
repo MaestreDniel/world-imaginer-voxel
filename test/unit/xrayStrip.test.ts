@@ -1,11 +1,15 @@
 /**
  * The X-ray's depth band and its strip (SP6a spec §5.3, §7.2; D11; Review Focus 3; ruling P24), with SP6b's colour mode:
- * the line's "· by cave type" or "· by cave biome" and the two prebuilt legends (SP6b spec §7.3, D7).
+ * the line's "· by cave type" or "· by cave biome" and the two prebuilt legends (SP6b spec §7.3, D7), each ending with
+ * SP7a's fluid tint rows, Flooded and Lava (SP7a spec §10.1, D13).
  */
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { CAVE_BIOME, CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
-import { XRAY_BIOME_COLORS, XRAY_BIOME_LABELS, XRAY_COLORS, XRAY_LABELS } from '../../src/render/xrayPalette';
+import {
+  XRAY_BIOME_COLORS, XRAY_BIOME_LABELS, XRAY_COLORS, XRAY_FLUID_COLORS, XRAY_FLUID_LABELS, XRAY_LABELS,
+} from '../../src/render/xrayPalette';
+import { FLUID_LAVA, FLUID_WATER } from '../../src/world/blocks/fluid';
 import { bandSet, bandStep, createXrayStrip, stripText, XRAY_ALL, type XrayBand } from '../../src/ui/world/xrayStrip';
 import { installDom } from './fixtures/domShim';
 
@@ -88,7 +92,7 @@ describe('the strip #world-xray-strip (SP6a spec §7.2)', () => {
   afterEach(() => { vi.unstubAllGlobals(); });
   const mount = () => createXrayStrip(dom.body as unknown as HTMLElement);
 
-  test('mounted hidden with every depth\'s line; the legend lists the nine kinds and the surface, each in the X-ray\'s colour', () => {
+  test('mounted hidden with every depth\'s line; the legend lists the nine kinds and the surface, then Flooded and Lava, each in the X-ray\'s colour', () => {
     mount();
     const box = dom.el('world-xray-strip');
     expect(box.hidden).toBe(true);
@@ -100,11 +104,12 @@ describe('the strip #world-xray-strip (SP6a spec §7.2)', () => {
       CAVE_KIND.cheese, CAVE_KIND.spaghetti3d, CAVE_KIND.spaghetti2d, CAVE_KIND.noodle, CAVE_KIND.entrance, CAVE_KIND.worm,
       CAVE_KIND.ravine, CAVE_KIND.undergroundWorm, CAVE_KIND.other, CAVE_FILM_KIND,
     ];
-    expect(legend!.children.map((k) => k.textContent)).toEqual(kinds.map((k) => XRAY_LABELS[k]));
+    expect(legend!.children.slice(0, 10).map((k) => k.textContent)).toEqual(kinds.map((k) => XRAY_LABELS[k]));
     expect(legend!.children.map((k) => k.textContent)).toEqual([
       'Cheese', 'Spaghetti 3D', 'Spaghetti 2D', 'Noodle', 'Entrance', 'Worm', 'Ravine', 'Underground worm', 'Other density air', 'Surface',
+      'Flooded', 'Lava',
     ]);
-    expect(legend!.children.map((k) => k.children[0]!.style['background'])).toEqual(kinds.map((k) => XRAY_COLORS[k]));
+    expect(legend!.children.slice(0, 10).map((k) => k.children[0]!.style['background'])).toEqual(kinds.map((k) => XRAY_COLORS[k]));
   });
 
   test('set shows it on and hides it off; the line names the band; each written only when it changed (never per frame)', () => {
@@ -134,13 +139,24 @@ describe('the strip #world-xray-strip (SP6a spec §7.2)', () => {
     expect([box.hidden, line.textContent]).toEqual([false, 'X-ray · y −64 … 319 · by cave type']);
   });
 
-  test('the biome legend (SP6b spec §7.3, D7): Plain cave, Lush, Dripstone, Abyss and Surface, each in the X-ray\'s biome colour', () => {
+  test('the biome legend (SP6b spec §7.3, D7): Plain cave, Lush, Dripstone, Abyss and Surface, each in the X-ray\'s biome colour, then Flooded and Lava', () => {
     mount();
     const biomes = dom.el('world-xray-strip').children[2]!;
     const ids = [CAVE_BIOME.plain, CAVE_BIOME.lush, CAVE_BIOME.dripstone, CAVE_BIOME.abyss, CAVE_FILM_KIND];
-    expect(biomes.children.map((k) => k.textContent)).toEqual(ids.map((i) => XRAY_BIOME_LABELS[i]));
-    expect(biomes.children.map((k) => k.textContent)).toEqual(['Plain cave', 'Lush', 'Dripstone', 'Abyss', 'Surface']);
-    expect(biomes.children.map((k) => k.children[0]!.style['background'])).toEqual(ids.map((i) => XRAY_BIOME_COLORS[i]));
+    expect(biomes.children.slice(0, 5).map((k) => k.textContent)).toEqual(ids.map((i) => XRAY_BIOME_LABELS[i]));
+    expect(biomes.children.map((k) => k.textContent)).toEqual(['Plain cave', 'Lush', 'Dripstone', 'Abyss', 'Surface', 'Flooded', 'Lava']);
+    expect(biomes.children.slice(0, 5).map((k) => k.children[0]!.style['background'])).toEqual(ids.map((i) => XRAY_BIOME_COLORS[i]));
+  });
+
+  test('both legends end with Flooded and Lava in the fluid tint\'s colours (SP7a spec §10.1, D13: the walls of flooded and lava-filled caves tinted in both colour modes)', () => {
+    mount();
+    const [, kinds, biomes] = dom.el('world-xray-strip').children;
+    for (const legend of [kinds!, biomes!]) {
+      const tail = legend.children.slice(-2);
+      expect(tail.map((k) => k.textContent)).toEqual([XRAY_FLUID_LABELS[FLUID_WATER], XRAY_FLUID_LABELS[FLUID_LAVA]]);
+      expect(tail.map((k) => k.textContent)).toEqual(['Flooded', 'Lava']);
+      expect(tail.map((k) => k.children[0]!.style['background'])).toEqual([XRAY_FLUID_COLORS[FLUID_WATER], XRAY_FLUID_COLORS[FLUID_LAVA]]);
+    }
   });
 
   test('a mode switch flips the two legends\' `hidden` and the line\'s mode, and rebuilds no node (SP6b spec §7.3: a switch allocates nothing)', () => {

@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import { CAVE_BIOME, CAVE_BIOME_COLORS, CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
-import { XRAY_BIOME_COLORS, XRAY_BIOME_LABELS, XRAY_COLORS, XRAY_LABELS } from '../../src/render/xrayPalette';
+import {
+  XRAY_BIOME_COLORS, XRAY_BIOME_LABELS, XRAY_COLORS, XRAY_FLUID_COLORS, XRAY_FLUID_LABELS, XRAY_LABELS,
+} from '../../src/render/xrayPalette';
+import { FLUID_LAVA, FLUID_NONE, FLUID_WATER } from '../../src/world/blocks/fluid';
 
 /** The kinds the X-ray draws: the nine cave kinds (1-9) and the surface film (15). */
 const SHOWN = [1, 2, 3, 4, 5, 6, 7, 8, 9, 15] as const;
@@ -59,5 +62,27 @@ describe('the X-ray palette by cave biome (SP6b spec §7.2, D7)', () => {
     expect(Object.isFrozen(XRAY_BIOME_LABELS)).toBe(true);
     expect([0, 1, 2, 3, 15].map((k) => XRAY_BIOME_LABELS[k])).toEqual(['Plain cave', 'Lush', 'Dripstone', 'Abyss', 'Surface']);
     for (let k = 4; k < 15; k++) expect(XRAY_BIOME_LABELS[k], `entry ${k}`).toBe('');
+  });
+});
+
+describe('the X-ray\'s fluid tint (SP7a spec §10.1, D13)', () => {
+  test('4 sRGB hex colours by the pack\'s fluid (2 bits): 1 water blue, 2 lava orange; 0 (dry) and 3 the unused colour', () => {
+    expect(XRAY_FLUID_COLORS).toHaveLength(4);
+    expect(Object.isFrozen(XRAY_FLUID_COLORS)).toBe(true);
+    for (const c of XRAY_FLUID_COLORS) expect(c).toMatch(/^#[0-9a-f]{6}$/);
+    expect(XRAY_FLUID_COLORS[FLUID_WATER]).toBe('#1e64ff');
+    expect(XRAY_FLUID_COLORS[FLUID_LAVA]).toBe('#ff4a00');
+    expect(XRAY_FLUID_COLORS[FLUID_NONE]).toBe(XRAY_COLORS[0]);
+    expect(XRAY_FLUID_COLORS[3]).toBe(XRAY_COLORS[0]);
+    // Told apart from each other and from every colour the X-ray already draws (styling deferred).
+    const shown = new Set([...SHOWN.map((k) => XRAY_COLORS[k]), ...[0, 1, 2, 3, 15].map((k) => XRAY_BIOME_COLORS[k])]);
+    for (const f of [FLUID_WATER, FLUID_LAVA]) expect(shown.has(XRAY_FLUID_COLORS[f]!), `fluid ${f}`).toBe(false);
+    expect(XRAY_FLUID_COLORS[FLUID_WATER]).not.toBe(XRAY_FLUID_COLORS[FLUID_LAVA]);
+  });
+
+  test('the legend\'s labels: [1] "Flooded", [2] "Lava"; 0 and 3 empty', () => {
+    expect(XRAY_FLUID_LABELS).toHaveLength(4);
+    expect(Object.isFrozen(XRAY_FLUID_LABELS)).toBe(true);
+    expect([...XRAY_FLUID_LABELS]).toEqual(['', 'Flooded', 'Lava', '']);
   });
 });

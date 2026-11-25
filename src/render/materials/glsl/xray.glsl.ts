@@ -2,8 +2,10 @@
  * The X-ray's shaders (SP6a spec §5.2, §5.3, D10), in the `batch` and `mesh` variants: the cave walls and the surface
  * film of the X-ray pass (`mesh/xray.ts`, `PACK_LAYOUT.xray`) in a flat colour, `xrayPalette[kind]` ×
  * `FACE_SHADE[face]` (SP6b spec §7.2: a wall's `xrayBiomePalette[biome]` instead while `xrayColorMode` is 1; the film
- * keeps its kind's in both modes), at alpha 0.14 for a wall and 0.05 for the film (kind 15), faded to 0 over the fog's
- * band (`fogStart` … `fogEnd`, the end (RD − 1)·16), then three's colour-space chunk; the material blends it
+ * keeps its kind's in both modes; SP7a spec §10.1, D13: a wall whose `fluid` is not 0 has that colour mixed toward
+ * `xrayFluidPalette[fluid]`, water blue or lava orange, by `xrayFluidMix`, before the shade), at alpha 0.14 for a wall
+ * and 0.05 for the film (kind 15), faded to 0 over the fog's band (`fogStart` … `fogEnd`, the end (RD − 1)·16), then
+ * three's colour-space chunk; the material blends it
  * additively, so overlaps read brighter and nothing needs sorting. Every fragment beyond `xrayRadius` is discarded; a
  * wall's fragment also when its hollow voxel's y lies outside the band [`xrayYMin`, `xrayYMax` + 1), the film never (it
  * shows whatever the band, D10). The voxel's y is the fragment's world y moved half a block into the hollow voxel
@@ -23,19 +25,21 @@ import { FACE_SHADE, floatArray, glslFloat } from './terrain.glsl';
 export const XRAY_WALL_ALPHA = 0.14;
 export const XRAY_FILM_ALPHA = 0.05;
 
-/** The X-ray vertex shader: decodes the X-ray `data` word (kind, face, biome flat); collapsed while the X-ray is off. */
+/** The X-ray vertex shader: decodes the X-ray `data` word (kind, face, biome, fluid flat); collapsed while it is off. */
 export function xrayVertex(variant: MaterialVariant): string {
   return `${vertexHead(variant)}
 ${packingGlsl()}${COLLAPSED_GLSL}in uint data;
 flat out uint vKind;
 flat out uint vFace;
 flat out uint vBiome;
+flat out uint vFluid;
 out vec3 vViewPos;
 out vec3 vWorldPos;
 void main() {
   vKind = pkX_kind(data);
   vFace = pkX_face(data);
   vBiome = pkX_biome(data);
+  vFluid = pkX_fluid(data);
 ${vertexPlace(variant, 'position')}  vViewPos = mvPos4.xyz;
   vWorldPos = worldPos4.xyz;
   if (xrayOn < 0.5) gl_Position = COLLAPSED;
@@ -43,11 +47,13 @@ ${vertexPlace(variant, 'position')}  vViewPos = mvPos4.xyz;
 `;
 }
 
-/** The X-ray fragment shader, shared by both variants; `xrayPalette` and `xrayBiomePalette` are linear. */
+/** The X-ray fragment shader, shared by both variants; `xrayPalette`, `xrayBiomePalette` and `xrayFluidPalette` linear. */
 export const XRAY_FRAGMENT = `${FRAGMENT_OUTPUT}
 uniform vec3 xrayPalette[16];
 uniform vec3 xrayBiomePalette[16];
 uniform float xrayColorMode;
+uniform vec3 xrayFluidPalette[4];
+uniform float xrayFluidMix;
 uniform float xrayYMin;
 uniform float xrayYMax;
 uniform float xrayRadius;
@@ -56,6 +62,7 @@ uniform float fogEnd;
 flat in uint vKind;
 flat in uint vFace;
 flat in uint vBiome;
+flat in uint vFluid;
 in vec3 vViewPos;
 in vec3 vWorldPos;
 ${floatArray('FACE_SHADE', FACE_SHADE)}
@@ -66,7 +73,9 @@ void main() {
     float cellY = floor(vWorldPos.y - (vFace == ${FACE_UP}u ? 0.5 : vFace == ${FACE_DOWN}u ? -0.5 : 0.0));
     if (cellY < xrayYMin || cellY >= xrayYMax + 1.0) discard;
   }
-  vec3 color = (xrayColorMode > 0.5 && vKind != ${CAVE_FILM_KIND}u ? xrayBiomePalette[vBiome] : xrayPalette[vKind]) * FACE_SHADE[min(vFace, 5u)];
+  vec3 color = xrayColorMode > 0.5 && vKind != ${CAVE_FILM_KIND}u ? xrayBiomePalette[vBiome] : xrayPalette[vKind];
+  if (vFluid != 0u) color = mix(color, xrayFluidPalette[vFluid], xrayFluidMix);
+  color *= FACE_SHADE[min(vFace, 5u)];
   float alpha = vKind == ${CAVE_FILM_KIND}u ? ${glslFloat(XRAY_FILM_ALPHA)} : ${glslFloat(XRAY_WALL_ALPHA)};
   float fade = 1.0 - smoothstep(fogStart, fogEnd, dist);
   gl_FragColor = vec4(color, alpha * fade);

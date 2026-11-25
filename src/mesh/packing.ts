@@ -10,8 +10,9 @@
  * - fluid: `layer` 0-9, `face` 10-12, `sky` 13-16, `block` 17-20, `depth` 21-24, `tint` 25-27, `cornerDrop` 28-31
  *   (ninths of a block below the voxel's top);
  * - xray (SP6a spec §5.1, D23; the X-ray pass, `mesh/xray.ts`): the position as the solid word's, then `face` 0-2,
- *   `kind` 3-6 (the cave kind, `CAVE_KIND`, or 15 for the surface film, `CAVE_FILM_KIND`), `biome` 7-10 (reserved for
- *   SP6b's cave biome, written 0), bits 11-31 spare.
+ *   `kind` 3-6 (the cave kind, `CAVE_KIND`, or 15 for the surface film, `CAVE_FILM_KIND`), `biome` 7-10 (the cave
+ *   biome, SP6b), `fluid` 11-12 (0 dry, 1 water, 2 lava: the fluid type of the hollow voxel a wall bounds, the film's 0;
+ *   SP7a spec §10.1, D13), bits 13-31 spare.
  */
 
 /** One field: its lowest bit and its width. */
@@ -35,6 +36,7 @@ export interface XrayFields {
   face: number;
   kind: number;
   biome: number;
+  fluid: number;
 }
 
 export interface FluidFields {
@@ -74,6 +76,7 @@ const XRAY: Readonly<Record<keyof XrayFields, PackField>> = Object.freeze({
   face: field(0, 3),
   kind: field(3, 4),
   biome: field(7, 4),
+  fluid: field(11, 2),
 });
 
 /** Offset and width of every field of each variant (SP4a spec §5.5; SP6a spec §5.1's `xray`), deep-frozen. */

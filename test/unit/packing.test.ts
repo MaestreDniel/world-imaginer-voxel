@@ -22,7 +22,7 @@ type Fields = Record<string, number>;
 const VARIANTS = {
   solid: { pack: (f: Fields) => packSolid(f as unknown as SolidFields), unpack: (w: number): Fields => ({ ...unpackSolid(w) }), top: 30 },
   fluid: { pack: (f: Fields) => packFluid(f as unknown as FluidFields), unpack: (w: number): Fields => ({ ...unpackFluid(w) }), top: 31 },
-  xray: { pack: (f: Fields) => packXray(f as unknown as XrayFields), unpack: (w: number): Fields => ({ ...unpackXray(w) }), top: 10 },
+  xray: { pack: (f: Fields) => packXray(f as unknown as XrayFields), unpack: (w: number): Fields => ({ ...unpackXray(w) }), top: 12 },
 } as const;
 /** The GLSL variant letter of each layout (`packing.glsl.ts`). */
 const LETTER = { solid: 'S', fluid: 'F', xray: 'X' } as const;
@@ -34,7 +34,7 @@ const max = (bits: number): number => 2 ** bits - 1;
 /** The define name of a field: camelCase to UPPER_SNAKE (cornerDrop → CORNER_DROP). */
 const defineName = (name: string): string => name.replace(/[A-Z]/g, (c) => `_${c}`).toUpperCase();
 
-test('PACK_LAYOUT is the spec §5.5 bit order (SP4a spec §5.5, D11), with the glass frame at bit 30 (SP5a spec §1.3) and the X-ray word (SP6a spec §5.1)', () => {
+test('PACK_LAYOUT is the spec §5.5 bit order (SP4a spec §5.5, D11), with the glass frame at bit 30 (SP5a spec §1.3) and the X-ray word (SP6a spec §5.1) with its fluid bits (SP7a spec §10.1)', () => {
   expect(PACK_LAYOUT).toEqual({
     solid: {
       layer: { offset: 0, bits: 10 }, face: { offset: 10, bits: 3 }, ao: { offset: 13, bits: 2 }, sky: { offset: 15, bits: 4 },
@@ -44,7 +44,7 @@ test('PACK_LAYOUT is the spec §5.5 bit order (SP4a spec §5.5, D11), with the g
       layer: { offset: 0, bits: 10 }, face: { offset: 10, bits: 3 }, sky: { offset: 13, bits: 4 }, block: { offset: 17, bits: 4 },
       depth: { offset: 21, bits: 4 }, tint: { offset: 25, bits: 3 }, cornerDrop: { offset: 28, bits: 4 },
     },
-    xray: { face: { offset: 0, bits: 3 }, kind: { offset: 3, bits: 4 }, biome: { offset: 7, bits: 4 } },
+    xray: { face: { offset: 0, bits: 3 }, kind: { offset: 3, bits: 4 }, biome: { offset: 7, bits: 4 }, fluid: { offset: 11, bits: 2 } },
   });
 });
 
@@ -110,13 +110,17 @@ test('a LAVA_LAYER vertex\'s flags (its corner drop in ninths, SP7a spec §6.3) 
   }
 });
 
-test('the X-ray word: face 0-2, kind 3-6, biome 7-10 (reserved for SP6b, written 0), bits 11-31 spare (SP6a spec §5.1)', () => {
-  const word = packXray({ face: 4, kind: 15, biome: 0 });
+test('the X-ray word: face 0-2, kind 3-6, biome 7-10 (SP6b\'s cave biome), fluid 11-12 (0 dry, 1 water, 2 lava; SP7a spec §10.1), bits 13-31 spare (SP6a spec §5.1)', () => {
+  const word = packXray({ face: 4, kind: 15, biome: 0, fluid: 0 });
   expect(word).toBe(4 | 15 << 3);
-  expect(unpackXray(word)).toEqual({ face: 4, kind: 15, biome: 0 });
-  expect(unpackXray(packXray({ face: 5, kind: 8, biome: 11 }))).toEqual({ face: 5, kind: 8, biome: 11 });
-  // Bits 11-31 are spare: the unpack ignores them.
-  expect(unpackXray((word | 0xFFFFF800) >>> 0)).toEqual({ face: 4, kind: 15, biome: 0 });
+  expect(unpackXray(word)).toEqual({ face: 4, kind: 15, biome: 0, fluid: 0 });
+  expect(unpackXray(packXray({ face: 5, kind: 8, biome: 11, fluid: 2 }))).toEqual({ face: 5, kind: 8, biome: 11, fluid: 2 });
+  // A flooded wall: fluid 1 in bits 11-12, beside its kind and biome.
+  const flooded = packXray({ face: 1, kind: 1, biome: 3, fluid: 1 });
+  expect(flooded).toBe(1 | 1 << 3 | 3 << 7 | 1 << 11);
+  expect((flooded >>> PACK_LAYOUT.xray.fluid.offset) & 3).toBe(1);
+  // Bits 13-31 are spare: the unpack ignores them.
+  expect(unpackXray((word | 0xFFFFE000) >>> 0)).toEqual({ face: 4, kind: 15, biome: 0, fluid: 0 });
 });
 
 describe('packingGlsl', () => {
@@ -124,8 +128,8 @@ describe('packingGlsl', () => {
   const defines = new Map<string, number>();
   for (const m of glsl.matchAll(/^#define (PK_[SFX]_\w+_(?:OFFSET|MASK)) (\d+)u$/gm)) defines.set(m[1]!, Number(m[2]));
 
-  test('the #defines equal PACK_LAYOUT (18 fields × 2 defines)', () => {
-    expect(defines.size).toBe(36);
+  test('the #defines equal PACK_LAYOUT (19 fields × 2 defines)', () => {
+    expect(defines.size).toBe(38);
     for (const v of ALL_VARIANTS) {
       const V = LETTER[v];
       for (const [name, f] of fieldsOf(v)) {
@@ -135,7 +139,7 @@ describe('packingGlsl', () => {
     }
   });
 
-  test('one unpack function per field, built from its defines; the X-ray\'s are pkX_face, pkX_kind and pkX_biome', () => {
+  test('one unpack function per field, built from its defines; the X-ray\'s are pkX_face, pkX_kind, pkX_biome and pkX_fluid', () => {
     for (const v of ALL_VARIANTS) {
       const V = LETTER[v];
       for (const [name] of fieldsOf(v)) {
@@ -143,8 +147,8 @@ describe('packingGlsl', () => {
         expect(glsl).toContain(`uint pk${V}_${name}(uint d) { return (d >> ${N}_OFFSET) & ${N}_MASK; }`);
       }
     }
-    expect(glsl.match(/^uint pk[SFX]_\w+\(uint d\)/gm)).toHaveLength(18);
-    for (const name of ['face', 'kind', 'biome']) expect(glsl).toMatch(new RegExp(`^uint pkX_${name}\\(uint d\\)`, 'm'));
+    expect(glsl.match(/^uint pk[SFX]_\w+\(uint d\)/gm)).toHaveLength(19);
+    for (const name of ['face', 'kind', 'biome', 'fluid']) expect(glsl).toMatch(new RegExp(`^uint pkX_${name}\\(uint d\\)`, 'm'));
   });
 
   test('the JS port of each define equals unpackSolid, unpackFluid and unpackXray on 1,000 words', () => {

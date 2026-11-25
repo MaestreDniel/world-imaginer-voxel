@@ -1,6 +1,6 @@
 import { Color, SRGBColorSpace, Vector3, type DataArrayTexture, type DataTexture, type IUniform } from 'three';
 import { HEIGHT, MIN_Y } from '../../core/constants';
-import { XRAY_BIOME_COLORS, XRAY_COLORS } from '../xrayPalette';
+import { XRAY_BIOME_COLORS, XRAY_COLORS, XRAY_FLUID_COLORS } from '../xrayPalette';
 
 /**
  * The uniform objects the materials share (SP4a spec §6.4-§6.6): every material's `uniforms` holds the same objects, so
@@ -37,6 +37,10 @@ export interface SharedUniforms {
   readonly xrayBiomePalette: IUniform<Color[]>;
   /** The X-ray's colour mode (SP6b spec §7.2), 0 or 1: its walls by kind (0) or by cave biome (1); the film by kind. */
   readonly xrayColorMode: IUniform<number>;
+  /** The X-ray's 4 colours by fluid (`XRAY_FLUID_COLORS`, SP7a spec §10.1), linear: water blue, lava orange. */
+  readonly xrayFluidPalette: IUniform<Color[]>;
+  /** How far a flooded or lava-filled wall's colour is mixed toward its fluid's, `XRAY_FLUID_MIX` (SP7a spec §10.1). */
+  readonly xrayFluidMix: IUniform<number>;
   /** The water tier (SP7a spec §7, D28), 0 Fast or 1 Fancy: one water program, its fragment shader branches on it. */
   readonly waterTier: IUniform<number>;
   /** The frame's clock in seconds, wrapped every 3,600 s (`FrameState.seconds`): Fancy's ripples scroll with it. */
@@ -67,6 +71,8 @@ export function createSharedUniforms(albedo: DataArrayTexture, lightmap: DataTex
     xrayPalette: { value: XRAY_COLORS.map((hex) => new Color().setStyle(hex, SRGBColorSpace)) },
     xrayBiomePalette: { value: XRAY_BIOME_COLORS.map((hex) => new Color().setStyle(hex, SRGBColorSpace)) },
     xrayColorMode: { value: 0 },
+    xrayFluidPalette: { value: XRAY_FLUID_COLORS.map((hex) => new Color().setStyle(hex, SRGBColorSpace)) },
+    xrayFluidMix: { value: XRAY_FLUID_MIX },
     waterTier: { value: 1 },
     timeSeconds: { value: 0 },
     eyeFluid: { value: 0 },
@@ -149,6 +155,9 @@ export function waterUniforms(u: SharedUniforms): Uniforms {
   };
 }
 
+/** The X-ray's fluid tint: a flooded or lava-filled wall's kind or biome colour mixed halfway to its fluid's (SP7a §10.1). */
+export const XRAY_FLUID_MIX = 0.5;
+
 /** The selection tool's ghost's alpha (SP5c spec §6.2, D11). */
 export const GHOST_ALPHA = 0.45;
 
@@ -162,8 +171,8 @@ export function ghostUniforms(u: SharedUniforms): Uniforms {
 
 /**
  * The X-ray's uniforms (SP6a spec §5.2, §5.3): the toggle, the band, the radius and the palette, and the fog's start
- * and end, over which its walls and film fade to 0; SP6b's biome palette and colour mode (spec §7.2). No lightmap: the
- * light floor and night vision do not touch it.
+ * and end, over which its walls and film fade to 0; SP6b's biome palette and colour mode (spec §7.2); SP7a's fluid
+ * palette and mix (spec §10.1). No lightmap: the light floor and night vision do not touch it.
  */
 export function xrayUniforms(u: SharedUniforms): Uniforms {
   return {
@@ -176,5 +185,7 @@ export function xrayUniforms(u: SharedUniforms): Uniforms {
     xrayPalette: u.xrayPalette,
     xrayBiomePalette: u.xrayBiomePalette,
     xrayColorMode: u.xrayColorMode,
+    xrayFluidPalette: u.xrayFluidPalette,
+    xrayFluidMix: u.xrayFluidMix,
   };
 }

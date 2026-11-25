@@ -3,20 +3,26 @@
  * hollow when its tag's low 4 bits are not 0 and its block is not an opaque full cube; a wall is each face of a hollow
  * voxel whose neighbour shows an opaque full face, kind = the hollow's tag's low 4 bits and biome its high 4 (SP6b spec
  * §7.1); the film is each up face of an opaque or fluid voxel whose up neighbour is air (no fluid) with sky light 15,
- * kind 15, biome 0; quads merge greedily on (kind | biome << 4, face) only. The pass is the builder's pass 3; passes 0-2
- * stay empty. Review Focus 2's placed stone and dug voxel are here on fixtures and in
- * `test/integration/caveSavedWorld.test.ts` on a real saved world.
+ * kind 15, biome 0; a wall's `fluid` is its hollow voxel's fluid type (0 dry, 1 water, 2 lava; SP7a spec §10.1, D13),
+ * the film's 0; quads merge greedily on (kind | biome << 4 | fluid << 8, face) only. The pass is the builder's pass 3;
+ * passes 0-2 stay empty. Review Focus 2's placed stone and dug voxel are here on fixtures and in
+ * `test/integration/caveSavedWorld.test.ts` on a real saved world. R1's `xrayFluid` (SP7a spec §10.1, §13.3) is checked
+ * here on a hand-built 3 × 3 store's view.
  */
 import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
 import { CAVE_BIOME, CAVE_FILM_KIND, CAVE_KIND } from '../../src/core/constants';
 import { createMeshBuilder, type MeshBuilder } from '../../src/mesh/builder';
+import { createMeshScratch, meshColumnPayload } from '../../src/mesh/column';
 import { unpackXray } from '../../src/mesh/packing';
 import { meshXray } from '../../src/mesh/xray';
 import { AIR, FULL_FACES, GLASS, GRASS_BLOCK, PASS, STONE } from '../../src/world/blocks/index';
-import { hasFluid, WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { FLUID_LAVA, FLUID_NONE, FLUID_WATER, fluidType, hasFluid, LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { ALL_FACES, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import { createPaddedSection, PAD_VOXELS, padIndex, type PaddedSection } from '../../src/world/store/padded';
+import { createStore } from '../../src/world/store/store';
+import { bruteXrayFaces, meshFaceCounts, xrayFluidMismatches, xrayKeyFields } from '../harness/refs';
+import { regionView } from '../harness/regionView';
 import { testRng } from '../harness/stats';
 import { paddedFrom, quadsOf, type ReadQuad, type VoxelFn } from './fixtures/padded';
 
@@ -52,14 +58,15 @@ function mesh(p: PaddedSection): Meshed {
 const faceOf = (q: ReadQuad): number => unpackXray(q.words[0]!).face;
 const kindOf = (q: ReadQuad): number => unpackXray(q.words[0]!).kind;
 const biomeOf = (q: ReadQuad): number => unpackXray(q.words[0]!).biome;
+const fluidOf = (q: ReadQuad): number => unpackXray(q.words[0]!).fluid;
 
 /**
- * The unit faces a quad covers, as `x,y,z,face,key` keys of the voxel that owns each face, key = kind | biome << 4 (the
- * kind alone when the biome is 0).
+ * The unit faces a quad covers, as `x,y,z,face,key` keys of the voxel that owns each face, key = kind | biome << 4 |
+ * fluid << 8 (the kind alone when the biome and the fluid are 0).
  */
 function unitFaces(q: ReadQuad): string[] {
   const f = faceOf(q);
-  const k = kindOf(q) | biomeOf(q) << 4;
+  const k = kindOf(q) | biomeOf(q) << 4 | fluidOf(q) << 8;
   const a = AXIS[f]!;
   const plane = q.corners[0]![a]! / 8;
   const lo = [0, 1, 2].map((ax) => Math.min(...q.corners.map((c) => c[ax]!)) / 8);
@@ -79,7 +86,8 @@ const allUnitFaces = (quads: readonly ReadQuad[]): string[] => quads.flatMap(uni
 
 /**
  * The brute force of spec §5.1, voxel by voxel over the section, under the registry's tables: a wall's key is the
- * hollow's whole tag byte (kind | biome << 4, SP6b spec §7.1), the film's 15 (biome 0).
+ * hollow's whole tag byte (kind | biome << 4, SP6b spec §7.1) with the hollow's fluid type << 8 (SP7a spec §10.1), the
+ * film's 15 (biome 0, fluid 0).
  */
 function bruteFaces(p: PaddedSection): string[] {
   const opaqueFull = (s: number): boolean => PASS[s] === PASS_OPAQUE && FULL_FACES[s] === ALL_FACES;
@@ -94,7 +102,9 @@ function bruteFaces(p: PaddedSection): string[] {
           for (let f = 0; f < 6; f++) {
             const [dx, dy, dz] = NORMAL[f]!;
             const n = p.blocks[padIndex(x + dx, y + dy, z + dz)]!;
-            if (PASS[n] === PASS_OPAQUE && (FULL_FACES[n]! & (1 << OPPOSITE[f]!)) !== 0) out.push(`${x},${y},${z},${f},${p.cave[i]!}`);
+            if (PASS[n] === PASS_OPAQUE && (FULL_FACES[n]! & (1 << OPPOSITE[f]!)) !== 0) {
+              out.push(`${x},${y},${z},${f},${p.cave[i]! | fluidType(p.fluid[i]!) << 8}`);
+            }
           }
         }
         if (opaqueFull(s) || hasFluid(p.fluid[i]!)) {
@@ -107,9 +117,9 @@ function bruteFaces(p: PaddedSection): string[] {
   return out.sort();
 }
 
-/** Every quad: four equal words with bits 11-31 clear, the position's fourth byte 0, the split along v0-v2 (no flip). */
+/** Every quad: four equal words with bits 13-31 clear, the position's fourth byte 0, the split along v0-v2 (no flip). */
 function expectWellFormed(m: Meshed): void {
-  const bad = m.quads.filter((q) => q.words.some((w) => w !== q.words[0]) || q.words[0]! >>> 11 !== 0
+  const bad = m.quads.filter((q) => q.words.some((w) => w !== q.words[0]) || q.words[0]! >>> 13 !== 0
     || q.w.some((w) => w !== 0) || q.index.join() !== '0,1,2,0,2,3');
   expect(bad).toEqual([]);
   for (const pass of [0, 1, 2] as const) expect(m.b.view(pass).vertices).toBe(0);
@@ -319,7 +329,10 @@ describe('meshXray: cave biomes (SP6b spec §7.1, D17)', () => {
     expect(water.quads.map((q) => [faceOf(q), kindOf(q), biomeOf(q)]).sort()).toEqual([[UP, CAVE_FILM_KIND, 0], [5, cheese, lush]]);
   });
 
-  test('a section with no nibble meshes byte-identically to before (SP6a\'s pass 3, digest recorded before SP6b)', () => {
+  test('a section with no nibble and no fluid in a tagged voxel meshes byte-identically to before (digest recorded with the pass 3 before SP7a)', () => {
+    // SP6a's fixture (digest 17d929be… recorded before SP6b) held water in tagged voxels, whose walls SP7a tints and no
+    // longer merges with dry ones (spec §10.1); the same draws with the fluid cleared in every tagged voxel, its digest
+    // recorded on the X-ray pass before SP7a's fluid bits (Task 40, at 92997d3, where SP6a's fixture still read 17d929be…).
     const next = testRng(2026);
     const pick = (n: number): number => Math.floor(next() / 2 ** 32 * n);
     const STATES = [AIR, AIR, AIR, STONE, STONE, GRASS_BLOCK, GLASS] as const;
@@ -332,12 +345,158 @@ describe('meshXray: cave biomes (SP6b spec §7.1, D17)', () => {
         p.fluid[i] = s === AIR && pick(4) === 0 ? WATER_SOURCE : 0;
         p.light[i] = (pick(2) === 0 ? 15 : pick(16)) << 4;
         p.cave[i] = pick(3) === 0 ? 0 : pick(16);
+        if ((p.cave[i]! & 15) !== 0) p.fluid[i] = 0;
       }
       const v = mesh(p).b.view(3);
       expect(v.vertices).toBeGreaterThan(0);
       for (const a of [v.position, v.data, v.index]) hash.update(new Uint8Array(a.buffer, a.byteOffset, a.byteLength));
     }
-    expect(hash.digest('hex')).toBe('17d929bea96e868f935d737884367bfc6dd396cfd2a46cc1d8feac2473c2e030');
+    expect(hash.digest('hex')).toBe('8d2fc377d8a1533892cb105e9bf808bc53a53013112d355f9efc485d778e3688');
+  });
+});
+
+describe('meshXray: the fluid tint (SP7a spec §10.1, D13)', () => {
+  const box = (x: number, y: number, z: number, x0: number): boolean => x >= x0 && x <= x0 + 2 && y >= 4 && y <= 6 && z >= 4 && z <= 6;
+
+  test('a flooded cave\'s walls carry fluid 1, a lava pool\'s 2, a dry cave\'s 0; kind and biome as before', () => {
+    // Three 3³ voids in stone, apart: dry cheese at x 1-3, flooded spaghetti 3D at x 6-8, lava-filled worm at x 11-13.
+    const kindAt = (x: number, y: number, z: number): number =>
+      box(x, y, z, 1) ? cheese : box(x, y, z, 6) ? spaghetti3d | lush << 4 : box(x, y, z, 11) ? worm : 0;
+    const p = section((x, y, z) => (kindAt(x, y, z) !== 0 ? AIR : STONE), {
+      light: DARK,
+      cave: kindAt,
+      fluid: (x, y, z) => (box(x, y, z, 6) ? WATER_SOURCE : box(x, y, z, 11) ? LAVA_SOURCE : 0),
+    });
+    const m = checked(p);
+    expect(m.quads).toHaveLength(18);
+    const want = new Map<number, number[]>([[cheese, [FLUID_NONE, 0]], [spaghetti3d, [FLUID_WATER, lush]], [worm, [FLUID_LAVA, 0]]]);
+    for (const q of m.quads) expect([fluidOf(q), biomeOf(q)], `kind ${kindOf(q)}`).toEqual(want.get(kindOf(q)));
+    for (const k of [cheese, spaghetti3d, worm]) expect(m.quads.filter((q) => kindOf(q) === k)).toHaveLength(6);
+  });
+
+  test('a lava pool under dry air in one cave: the lava\'s walls carry 2, the dry air\'s 0; the side walls split at the pool\'s surface', () => {
+    // One cheese void (x 5-7, y 4-6, z 4-6) with lava in its lowest layer (y 4).
+    const p = section((x, y, z) => (box(x, y, z, 5) ? AIR : STONE), {
+      light: DARK, cave: (x, y, z) => (box(x, y, z, 5) ? cheese : 0), fluid: (x, y, z) => (box(x, y, z, 5) && y === 4 ? LAVA_SOURCE : 0),
+    });
+    const m = checked(p);
+    // Four sides × (the lava row, the two dry rows above), the dry ceiling, the lava floor.
+    expect(m.quads).toHaveLength(10);
+    for (const q of m.quads) {
+      const ys = unitFaces(q).map((k) => Number(k.split(',')[1]));
+      expect(fluidOf(q), `face ${faceOf(q)} at y ${ys.join()}`).toBe(ys.every((y) => y === 4) ? FLUID_LAVA : FLUID_NONE);
+      expect(ys.every((y) => y === 4) || ys.every((y) => y > 4), 'a quad holds one fluid').toBe(true);
+    }
+    expect(m.quads.filter((q) => fluidOf(q) === FLUID_LAVA).map(faceOf).sort()).toEqual([0, 1, 2, 3, 5]);
+  });
+
+  test('two wall faces differing only in fluid do not merge: a flooded half and a dry half of one row, one tag', () => {
+    // A cheese row (lush) at (y 5, z 5), x 4 … 7, in stone: x 4-5 hold water, x 6-7 are dry.
+    const row = (wet: (x: number) => boolean): PaddedSection => section(
+      (x, y, z) => (y === 5 && z === 5 && x >= 4 && x <= 7 ? AIR : STONE),
+      {
+        light: DARK,
+        cave: (x, y, z) => (y === 5 && z === 5 && x >= 4 && x <= 7 ? cheese | lush << 4 : 0),
+        fluid: (x, y, z) => (y === 5 && z === 5 && x >= 4 && x <= 7 && wet(x) ? WATER_SOURCE : 0),
+      },
+    );
+    const half = checked(row((x) => x <= 5));
+    // North, south, up and down: one flooded and one dry quad each; west flooded, east dry.
+    expect(half.quads).toHaveLength(10);
+    for (const f of [0, 2, 4, 5]) {
+      const quads = half.quads.filter((q) => faceOf(q) === f);
+      expect(quads.map(fluidOf).sort(), `face ${f}`).toEqual([FLUID_NONE, FLUID_WATER]);
+      for (const q of quads) {
+        const xs = unitFaces(q).map((k) => Number(k.split(',')[0]));
+        expect(xs.sort(), `face ${f}, fluid ${fluidOf(q)}`).toEqual(fluidOf(q) === FLUID_WATER ? [4, 5] : [6, 7]);
+      }
+    }
+    expect(half.quads.filter((q) => faceOf(q) === 3).map(fluidOf)).toEqual([FLUID_WATER]);
+    expect(half.quads.filter((q) => faceOf(q) === 1).map(fluidOf)).toEqual([FLUID_NONE]);
+    for (const q of half.quads) expect([kindOf(q), biomeOf(q)]).toEqual([cheese, lush]);
+    // The same row all flooded or all dry: one quad per face, the dry row's words without fluid bits.
+    const wet = checked(row(() => true));
+    const dry = checked(row(() => false));
+    expect([wet.quads.length, dry.quads.length]).toEqual([6, 6]);
+    expect(wet.quads.map((q) => q.words)).toEqual(dry.quads.map((q) => q.words.map((w) => (w | FLUID_WATER << 11) >>> 0)));
+  });
+
+  test('the film keeps fluid 0 over a flooded cave open to the sky; the water\'s down walls carry 1', () => {
+    const water = checked(section((_x, y) => (y < 3 ? STONE : AIR), {
+      fluid: (_x, y) => (y >= 3 && y < 6 ? WATER_SOURCE : 0), cave: (_x, y) => (y >= 3 && y < 6 ? cheese : 0),
+    }));
+    expect(water.quads.map((q) => [faceOf(q), kindOf(q), fluidOf(q)]).sort()).toEqual([[UP, CAVE_FILM_KIND, 0], [5, cheese, FLUID_WATER]]);
+  });
+});
+
+describe('R1.xrayFluid on a hand-built view (SP7a spec §10.1, §13.3)', () => {
+  /**
+   * A 4 × 3 of committed columns: stone below y 40 and air above (sky 15 there, 0 below), and in column (1, 1) three caves
+   * of y 4 … 7: a dry cheese room (x 18-20), a flooded spaghetti 3D room (x 23-25) and a worm room holding a lava pool in
+   * its lowest layer (x 28-30), each z 20 … 22, plus a flooded cheese room across the seam to column (2, 1) (x 30-33,
+   * z 26-27); columns (1, 1) and (2, 1) are interior.
+   */
+  function handBuilt() {
+    const s = createStore({ shared: false, maxBlockBytes: 16 * (1 << 20), maxByteBytes: 16 * (1 << 20) });
+    const blocks = new Uint16Array(4096);
+    const fluid = new Uint8Array(4096);
+    const light = new Uint8Array(4096);
+    const cave = new Uint8Array(4096);
+    const room = (x: number, y: number, z: number, x0: number, x1: number, z0: number, z1: number): boolean =>
+      x >= x0 && x <= x1 && y >= 4 && y <= 7 && z >= z0 && z <= z1;
+    for (let cz = 0; cz < 3; cz++) {
+      for (let cx = 0; cx < 4; cx++) {
+        const w = s.claimColumn(cx, cz, 0);
+        for (let sy = 0; sy < 24; sy++) {
+          for (let i = 0; i < 4096; i++) {
+            const x = cx * 16 + (i & 15);
+            const z = cz * 16 + ((i >> 4) & 15);
+            const y = sy * 16 - 64 + (i >> 8);
+            const dry = room(x, y, z, 18, 20, 20, 22);
+            const flooded = room(x, y, z, 23, 25, 20, 22) || room(x, y, z, 30, 33, 26, 27);
+            const lava = room(x, y, z, 28, 30, 20, 22);
+            const hollow = dry || flooded || lava;
+            blocks[i] = y >= 40 || hollow ? AIR : STONE;
+            fluid[i] = flooded ? WATER_SOURCE : lava && y === 4 ? LAVA_SOURCE : 0;
+            light[i] = y >= 40 ? 0xf0 : 0;
+            cave[i] = dry ? cheese : flooded ? (x >= 30 ? cheese : spaghetti3d) : lava ? worm : 0;
+          }
+          w.setProto(sy, blocks, fluid, cave);
+          w.shareFinal(sy, light);
+        }
+        w.commit(3);
+      }
+    }
+    return s;
+  }
+
+  test('the mesh\'s X-ray faces equal bruteXrayFaces with their fluid, and xrayFluid (faces whose fluid ≠ their hollow voxel\'s fluid type, the film\'s ≠ 0) is 0 in both meshings', () => {
+    const s = handBuilt();
+    const view = regionView(s, 0, 0, 4, 3);
+    for (const [cx, cz] of [[1, 1], [2, 1]] as const) {
+      const brute = bruteXrayFaces(view, cx, cz);
+      for (const o of [{ ao: true, smoothLight: true }, { ao: false, smoothLight: false }]) {
+        const m = meshFaceCounts(meshColumnPayload(s.neighborhood(cx, cz), createMeshScratch(), o));
+        expect(Buffer.from(m.xray.buffer).equals(Buffer.from(brute.buffer)), `(${cx}, ${cz})`).toBe(true);
+        expect(xrayFluidMismatches(view, cx, cz, m.xray), `(${cx}, ${cz})`).toBe(0);
+      }
+    }
+    // Not vacuous: column (1, 1) holds dry, flooded and lava walls and the film; the flooded room crosses into (2, 1).
+    const fluids = (cx: number, cz: number): number[] => [...new Set([...bruteXrayFaces(view, cx, cz)].map((k) => xrayKeyFields(k).fluid))].sort();
+    expect(fluids(1, 1)).toEqual([FLUID_NONE, FLUID_WATER, FLUID_LAVA]);
+    expect(fluids(2, 1)).toEqual([FLUID_NONE, FLUID_WATER]);
+    const kinds = [...bruteXrayFaces(view, 1, 1)].map((k) => xrayKeyFields(k));
+    expect(kinds.some((f) => f.kind === CAVE_FILM_KIND && f.fluid === 0)).toBe(true);
+    expect(kinds.filter((f) => f.kind === worm && f.fluid === FLUID_LAVA).length).toBeGreaterThan(0);
+    expect(kinds.filter((f) => f.kind === worm && f.fluid === FLUID_NONE).length).toBeGreaterThan(0);
+    // A face whose fluid bits are wrong is counted: the brute's keys with one wall's fluid flipped.
+    const brute = bruteXrayFaces(view, 1, 1);
+    const at = [...brute].findIndex((k) => xrayKeyFields(k).kind === spaghetti3d);
+    const f = xrayKeyFields(brute[at]!);
+    expect(f.fluid).toBe(FLUID_WATER);
+    const wrong = Uint32Array.from(brute);
+    wrong[at] = brute[at]! - FLUID_WATER * 2 ** 28;
+    expect(xrayFluidMismatches(view, 1, 1, wrong)).toBe(1);
   });
 });
 

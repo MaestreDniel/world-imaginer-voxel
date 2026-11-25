@@ -9,8 +9,8 @@ import { LAVA_LAYER } from '../../src/mesh/greedy';
 import { packingGlsl } from '../../src/render/materials/glsl/packing.glsl';
 import { GHOST_LIGHT_FLOOR, glslFloat, TERRAIN_FRAGMENT, terrainVertex } from '../../src/render/materials/glsl/terrain.glsl';
 import { createMaterialSystem, fogRange, type MaterialSystem, type MaterialVariant } from '../../src/render/materials/index';
-import { GHOST_ALPHA } from '../../src/render/materials/uniforms';
-import { XRAY_BIOME_COLORS, XRAY_COLORS } from '../../src/render/xrayPalette';
+import { GHOST_ALPHA, XRAY_FLUID_MIX } from '../../src/render/materials/uniforms';
+import { XRAY_BIOME_COLORS, XRAY_COLORS, XRAY_FLUID_COLORS } from '../../src/render/xrayPalette';
 import { FACE_DOWN, FACE_EAST, FACE_NORTH, FACE_SOUTH, FACE_UP, FACE_WEST } from '../../src/world/blocks/kinds';
 import type { FrameState } from '../../src/render/frameState';
 import { createFlatColorArray } from '../../src/render/textureArray';
@@ -506,7 +506,8 @@ describe('the X-ray material and the collapse uniform (SP6a spec §5.2, §5.3)',
       expect(src).toContain('uniform vec3 xrayPalette[16];');
       expect(src).toContain('const float FACE_SHADE[6] = float[6](0.8, 0.6, 0.8, 0.6, 1.0, 0.5);');
       const body = mainOf(src);
-      expect(body).toContain('vec3 color = (xrayColorMode > 0.5 && vKind != 15u ? xrayBiomePalette[vBiome] : xrayPalette[vKind]) * FACE_SHADE[min(vFace, 5u)];');
+      expect(body).toContain('vec3 color = xrayColorMode > 0.5 && vKind != 15u ? xrayBiomePalette[vBiome] : xrayPalette[vKind];');
+      expect(body).toContain('color *= FACE_SHADE[min(vFace, 5u)];');
       expect(body).toContain('float alpha = vKind == 15u ? 0.05 : 0.14;');
       expect(body).toContain('float fade = 1.0 - smoothstep(fogStart, fogEnd, dist);');
       expect(body).toContain('gl_FragColor = vec4(color, alpha * fade);');
@@ -605,6 +606,39 @@ describe('the X-ray material and the collapse uniform (SP6a spec §5.2, §5.3)',
       });
       // Stored linear: lush's red 0x4d converts below 0x4d / 255.
       expect(palette[1]!.r).toBeLessThan(0x4d / 255);
+    }
+  });
+
+  test('the fluid tint (SP7a spec §10.1, D13): both variants mix the kind or biome colour toward xrayFluidPalette[vFluid] by xrayFluidMix (0.5) when the face\'s fluid is not 0, before the face shade; the palette is XRAY_FLUID_COLORS in linear', () => {
+    for (const v of VARIANTS) {
+      const m = SYSTEMS[v];
+      const src = m.xray.fragmentShader;
+      expect(src, v).toContain('uniform vec3 xrayFluidPalette[4];');
+      expect(src, v).toContain('uniform float xrayFluidMix;');
+      expect(src, v).toContain('flat in uint vFluid;');
+      // The vertex shader passes the word's fluid bits (11-12) flat.
+      expect(m.xray.vertexShader, v).toContain('flat out uint vFluid;');
+      expect(mainOf(m.xray.vertexShader), v).toContain('vFluid = pkX_fluid(data);');
+      const body = mainOf(src);
+      const pick = body.indexOf('vec3 color = xrayColorMode > 0.5');
+      const mix = body.indexOf('if (vFluid != 0u) color = mix(color, xrayFluidPalette[vFluid], xrayFluidMix);');
+      const shade = body.indexOf('color *= FACE_SHADE[min(vFace, 5u)];');
+      expect([pick, mix, shade].every((i) => i >= 0), v).toBe(true);
+      expect(pick, v).toBeLessThan(mix);
+      expect(mix, v).toBeLessThan(shade);
+      // One mix, in every colour mode (the walls by kind or by biome alike; the film's fluid is 0).
+      expect(body.split('xrayFluidPalette[').length - 1, v).toBe(1);
+      expect(body.split('xrayFluidMix').length - 1, v).toBe(1);
+      expect(XRAY_FLUID_MIX).toBe(0.5);
+      expect(system(v).xray.uniforms['xrayFluidMix']!.value, v).toBe(0.5);
+      const palette = m.xray.uniforms['xrayFluidPalette']!.value as Color[];
+      expect(palette, v).toHaveLength(4);
+      palette.forEach((c, i) => {
+        expect(c.isColor, `fluid ${i}`).toBe(true);
+        expect(`#${c.getHexString(SRGBColorSpace)}`, `fluid ${i}`).toBe(XRAY_FLUID_COLORS[i]);
+      });
+      // Stored linear: water's green 0x64 converts below 0x64 / 255.
+      expect(palette[1]!.g).toBeLessThan(0x64 / 255);
     }
   });
 
