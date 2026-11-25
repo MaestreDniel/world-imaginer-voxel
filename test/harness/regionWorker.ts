@@ -7,7 +7,7 @@
  * `genContextWith`: the GenContext with its carver path cache built at that capacity, SP6a spec §10.3), answered
  * `{type: 'ready'}`; then one job per message on the shared store, never stopped:
  * - `{type: 'column', cx, cz}`: `fillColumnT` (epoch 0);
- * - `{type: 'decorate', cx, cz}`: `fillColumnD` (`src/workers/worldJobs.ts`);
+ * - `{type: 'decorate', cx, cz}`: `fillColumnD` (`src/metrics/region.ts`);
  * - `{type: 'light', cx, cz}`: `fillColumnL`, with this worker's light scratch;
  * each answered `{type: 'done', cx, cz, ms, carverCacheSize}` (the paths its context's carver cache holds after the
  *   job, ruling P28);
@@ -30,11 +30,11 @@ import { surfaceEst3 } from '../../src/gen/column/surfaceEstimate';
 import { createGenContext, type GenContext } from '../../src/gen/context';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import { createLightScratch, type LightScratch } from '../../src/light/initial';
-import { fillColumnT } from '../../src/metrics/region';
+import { fillColumnD, fillColumnT } from '../../src/metrics/region';
 import { createMeshScratch, type ColumnMeshPayload, type MeshScratch } from '../../src/mesh/column';
 import type { MeshOptions } from '../../src/mesh/greedy';
 import { attachStore, type StoreHandles, type VoxelStore } from '../../src/world/store/store';
-import { fillColumnD, fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
+import { fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
 import { analyseColumn, caveDepthOf, newScatterScratch, newScattered, preCaveTop, type Scattered, type ScatterScratch } from './terrainAnalysis';
 
 export interface RegionAttachMsg {

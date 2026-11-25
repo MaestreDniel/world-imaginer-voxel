@@ -1,8 +1,10 @@
 /**
  * The SP7a goldens (SP7a spec §15.3, D33), chained last into `allGoldenKeys` after SP6b's. The generator push adds
  * `sp7a.aquifer.points` (Task 14: the aquifer's point functions `fluidAt` and `barrierAt` at 256 fixed 3D points,
- * recomputed here from the module comment) and `sp7a.springs` (Task 21: the springs of 16 fixed chunks per kind,
- * recomputed here from the module comment); `sp7a.region.D.water` (Task 32) follows. The keys match `test/goldens.json`.
+ * recomputed here from the module comment), `sp7a.springs` (Task 21: the springs of 16 fixed chunks per kind,
+ * recomputed here from the module comment) and `sp7a.region.D.water` (Task 32: the final fluid of the 6 × 6 interior of
+ * DT1's first settle window, its literal pinned to `SETTLE_WINDOWS[0]` and its hash recomputed here over the region
+ * harness's D). The keys match `test/goldens.json`.
  */
 import { describe, expect, test } from 'vitest';
 import { fnv1a32, fnv1a64Bytes, hex64 } from '../../src/core/hash';
@@ -12,22 +14,30 @@ import { seedFromInput } from '../../src/core/seed';
 import { createGenContext } from '../../src/gen/context';
 import { createDensityContext } from '../../src/gen/density/context';
 import { aquiferOf, barrierAt, fluidAt } from '../../src/gen/fluids/aquifer';
+import { finalFluidHash, genRegionDInProcess } from '../../src/metrics/region';
 import { allGoldenKeys, computeAnyGolden } from '../../src/metrics/sp2aGoldens';
 import { newSpringList } from '../../src/gen/fluids/springs';
 import { terrainSpringsDebug } from '../../src/gen/pipeline/terrainStage';
 import {
-  aquiferPoints, aquiferPointsDigest, computeSp7aGolden, ISLAND_CHUNKS, LAVA_CHUNKS, springsDigest, sp7aGoldenKeys, WATER_CHUNKS,
+  aquiferPoints, aquiferPointsDigest, computeSp7aGolden, ISLAND_CHUNKS, LAVA_CHUNKS, SETTLE_WINDOW_GOLDEN, settleWindowWaterDigest,
+  springsDigest, sp7aGoldenKeys, WATER_CHUNKS,
 } from '../../src/metrics/sp7aGoldens';
+import { createStore } from '../../src/world/store/store';
 import { expectGolden } from '../harness/goldens';
+import { genRegion } from '../harness/region';
+import { SETTLE_WINDOWS } from '../harness/settleWindows';
+import { settleWindowAt } from '../harness/windowScans';
 
-test('2 SP7a keys, chained last into allGoldenKeys after SP6b\'s: 67 goldens', () => {
-  const keys = ['sp7a.aquifer.points', 'sp7a.springs'];
+test('3 SP7a keys, chained last into allGoldenKeys after SP6b\'s: 68 goldens', () => {
+  const keys = ['sp7a.aquifer.points', 'sp7a.springs', 'sp7a.region.D.water'];
   expect(sp7aGoldenKeys()).toEqual(keys);
-  expect(allGoldenKeys().slice(-2)).toEqual(keys);
-  expect(allGoldenKeys().slice(-5, -2)).toEqual(['sp6b.registry', 'sp6b.caveBiome.points', 'sp6b.region.T.biomes']);
-  expect(allGoldenKeys()).toHaveLength(67);
-  expect(new Set(allGoldenKeys()).size).toBe(67);
-  for (const bad of ['sp7a.aquifer', 'sp7a.aquifer.points.x', 'sp7a.springs.x', 'sp7a.region.D.water', 'sp7a.nope']) {
+  expect(allGoldenKeys().slice(-3)).toEqual(keys);
+  expect(allGoldenKeys().slice(-6, -3)).toEqual(['sp6b.registry', 'sp6b.caveBiome.points', 'sp6b.region.T.biomes']);
+  expect(allGoldenKeys()).toHaveLength(68);
+  expect(new Set(allGoldenKeys()).size).toBe(68);
+  for (const bad of [
+    'sp7a.aquifer', 'sp7a.aquifer.points.x', 'sp7a.springs.x', 'sp7a.region.D', 'sp7a.region.D.water.x', 'sp7a.region.T.water', 'sp7a.nope',
+  ]) {
     expect(() => computeSp7aGolden(bad)).toThrow(/unknown golden/);
     expect(() => computeAnyGolden(bad)).toThrow(/unknown golden/);
   }
@@ -113,6 +123,54 @@ describe('sp7a.springs (§3, §15.3, Task 21)', () => {
     expect(computeSp7aGolden('sp7a.springs')).toBe(springsDigest());
     expect(computeAnyGolden('sp7a.springs')).toBe(springsDigest());
   }, 120_000);
+});
+
+describe('sp7a.region.D.water (§13.4, §15.3, Task 32)', () => {
+  test('SETTLE_WINDOW_GOLDEN mirrors SETTLE_WINDOWS[0] (the coast window holding a water spring): candidate S(a, b), its 6 × 6 interior at chunk (6a, 6b)', () => {
+    const w = SETTLE_WINDOWS[0]!;
+    expect(w.feature).toBe('coast');
+    expect(SETTLE_WINDOW_GOLDEN).toEqual({ a: w.a, b: w.b });
+    // `settleWindowAt`'s 10 × 10 region keeps two rings around the interior the golden hashes.
+    const r = settleWindowAt(w.a, w.b);
+    expect([r.cx0 + 2, r.cz0 + 2, r.size - 4]).toEqual([6 * SETTLE_WINDOW_GOLDEN.a, 6 * SETTLE_WINDOW_GOLDEN.b, 6]);
+  });
+
+  test('is the FNV-1a 64 of the interior\'s final fluid (cz outer, cx inner; per column its 24 sections\' 4096 fluid bytes, uniform sections expanded), each column decorated from its own 3 × 3 (the region harness\'s D, spiral order)', async () => {
+    const [cx0, cz0] = [6 * SETTLE_WINDOW_GOLDEN.a, 6 * SETTLE_WINDOW_GOLDEN.b];
+    const { view } = await genRegion({ seed: '42', params: resolveProfile('default'), cx0, cz0, w: 6, h: 6, upTo: 'D', order: 'spiral', threads: 1 });
+    const parts: Uint8Array[] = [];
+    let settled = 0;
+    for (let cz = cz0; cz < cz0 + 6; cz++) {
+      for (let cx = cx0; cx < cx0 + 6; cx++) {
+        const fin = view.store.final(cx, cz)!;
+        const proto = view.store.proto(cx, cz)!;
+        for (let sy = 0; sy < 24; sy++) {
+          const f = fin.sectionFluid(sy);
+          const bytes = typeof f === 'number' ? new Uint8Array(4096).fill(f) : f.slice();
+          const p = proto.sectionFluid(sy);
+          for (let i = 0; i < 4096; i++) if (bytes[i] !== (typeof p === 'number' ? p : p[i]!)) settled++;
+          parts.push(bytes);
+        }
+      }
+    }
+    const all = new Uint8Array(parts.length * 4096);
+    parts.forEach((p, i) => all.set(p, 4096 * i));
+    expect(settleWindowWaterDigest()).toBe(hex64(fnv1a64Bytes(all)));
+    expect(computeSp7aGolden('sp7a.region.D.water')).toBe(settleWindowWaterDigest());
+    expect(computeAnyGolden('sp7a.region.D.water')).toBe(settleWindowWaterDigest());
+    // The hash covers the settle: the interior's final fluid differs from its proto (measured at Task 32: 650 voxels).
+    expect(settled).toBeGreaterThan(0);
+  }, 120_000);
+
+  test('genRegionDInProcess needs an interior (w and h at least 3); finalFluidHash throws on a column below Decorated', () => {
+    const ctx = createGenContext(seedFromInput('42'), resolveProfile('default'));
+    expect(() => genRegionDInProcess(createStore({ shared: false }), ctx, 0, 0, 2, 6)).toThrow(/has no interior/);
+    expect(() => genRegionDInProcess(createStore({ shared: false }), ctx, 0, 0, 6, 2)).toThrow(/has no interior/);
+    const store = createStore({ shared: false });
+    genRegionDInProcess(store, ctx, 0, 0, 3, 3);
+    expect(finalFluidHash(store, 1, 1, 1, 1)).toEqual(finalFluidHash(store, 1, 1, 1, 1));
+    expect(() => finalFluidHash(store, 0, 0, 2, 2)).toThrow(/column \(0, 0\) has no final set/);
+  }, 60_000);
 });
 
 describe('SP7a goldens', () => {

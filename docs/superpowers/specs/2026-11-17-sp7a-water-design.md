@@ -1193,6 +1193,28 @@ No truncated water spring remains on quick or full, so there are no `truncatedN`
 
 **Tests**: `npm run typecheck`; `npm test -- --maxWorkers=4` (379 files passed, 3 skipped; 7,420 tests passed, 1 expected fail, 17 skipped, 0 failed); metrics-quick in the golden re-record (every part green but U2, the water springs' `tries` witness dead at the old search bound; after the bound, `params.metric.ts` on quick 2 of 2); on full, `caves.metric.ts` for the presets (24 passed) and biomes (22 passed, 1 skipped) groups and `waterfalls.metric.ts` (passed), `METRICS_TIMEOUT_SCALE=3`.
 
+### The generator push (Task 32)
+
+The record of the generator push (Tasks 12-32, base `<push base>` 78c48e4), on ddeefa1 (Task 31r's head). The known-red list is empty (R13's C5 closed by Task 27l, `C7.waterWall` recorded by R24 item 1).
+
+**The last key** `sp7a.region.D.water` (§13.4, §15.3): `finalFluidHash` (`src/metrics/region.ts`) of the 6 × 6 interior of DT1's first settle window, the coast window S(19, −30) that holds a water spring, each column decorated from its own 3 × 3 (`genRegionDInProcess` over the 8 × 8 window around it: T on the interior grown by one ring, then D on the interior, in process, through the workers' `fillColumnD`, which moves unchanged beside `fillColumnT`, rulings P36). The window is mirrored in `src/metrics/sp7aGoldens.ts` as `SETTLE_WINDOW_GOLDEN` and pinned equal to `SETTLE_WINDOWS[0]` by `goldens.sp7a.test.ts`, which also recomputes the hash over the region harness's D in spiral order. The interior's final fluid differs from its proto at 650 voxels, so the key covers the settle. "Each SETTLE_WINDOWS entry still holds its feature" passes at the head (no window moved).
+
+**Goldens** (the push rule, rulings R8's split form): `git checkout 78c48e4 -- test/goldens.json`, `UPDATE_GOLDENS=1` over unit and metrics-quick at 4 workers (`caves.metric.ts` SIGKILLed under the 6 GB cap and re-run alone at 3 workers into the same observations), then the merge. `git diff 78c48e4 -- test/goldens.json` lists exactly `generatorVersion` 9 → 10, `sp1.params`, `sp3a.region.T.default`, `.large_biomes`, `sp3c.surface.ops`, `sp3e.region.T.amplified`, `.archipelago`, `.floating_islands`, `sp6a.region.T.caves`, `sp6b.region.T.biomes`, and the added `sp7a.aquifer.points` (07aada42dd881b45), `sp7a.springs` (79a224a14f54cdf9) and `sp7a.region.D.water` (2f41153c83c5e97a): 68 keys (`sp6b.registry`'s line differs by its trailing comma alone, its value unchanged). `sp3b.density.default` is unchanged (Spec correction 8), as is every other expected-unchanged key. Against ddeefa1 only `sp7a.region.D.water` is added. `npx --yes bun@1 test/tools/goldensJsc.ts`: 68/68 match on Bun 1.4.5 (JavaScriptCore).
+
+**The bench** (rulings R21 item 1 and R22: the EC check, `bench:record`, then gated runs until three consecutive passes, each run under the heavy-command lock and the 6 GB cap, the 1-minute load below 1). EC check, AC online, 01:43: 6 own busy threads 4.10 GHz at every sample (≤ 77 °C), 20 threads 3.74-3.78 GHz then 2.74-2.89 GHz (≤ 81 °C); no cap. Task 32 changes no generated block, so the record re-reads Task 31r's tree.
+
+| run | start | `terrain.real` p50 / p99 (ms, columns) | `terrain.islands` p50 / p99 | `aquifer.column` p50 / p99 | `decorate.column` p50 / p99 | exit |
+|---|---|---|---|---|---|---|
+| `bench:record` | 01:46 | 10.016 / 15.849 (97) | 11.230 / 18.029 | 0.299 / 1.208 | 1.137 / 1.637 | 0 |
+| gated 1 | 01:48 | 9.496 / 15.220 (105) | 11.301 / 17.825 | 0.298 / 1.037 | 1.197 / 1.682 | 0 |
+| gated 2 | 01:51 | 10.314 / 16.159 (95) | 11.093 / 18.165 | 0.296 / 0.984 | 1.184 / 1.999 | 0 |
+| gated 3 | 01:54 | 9.528 / 15.380 (103) | 11.167 / 18.741 | 0.298 / 1.108 | 1.149 / 1.625 | 0 |
+
+- **Three consecutive gated passes in 3 runs**: `terrain.real` ≤ 13 / 20 ms (p99 median 15.380 ms), `terrain.islands` ≤ 14.5 / 26.5, `aquifer.column` ≤ 1.0 / 2.5, every other gate and the +30 % rule.
+- **`bench:record`** wrote `test/baselines.json` (killRatio 0.850, was 0.858). Ratios against Task 31r's baselines: `paste.max` ×0.893, `paste.maxLit` ×0.932, `caveBiome.column` ×0.932, every other kernel within 5 % (`terrain.real` ×1.044).
+
+**Tests**: `npm run typecheck`; `npm test -- --maxWorkers=4` (379 files passed, 3 skipped; 7,424 tests passed, 1 expected fail, 17 skipped, 0 failed); `npm run test:metrics -- --maxWorkers=3` (20 files, 106 tests passed, 9 skipped; DT1 `settleReference` and `settleIsolated` 0, the coast window's interior settling 650 voxels as the golden's own count).
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)

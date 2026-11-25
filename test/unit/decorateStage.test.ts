@@ -18,14 +18,13 @@ import { hex64, fnv1a64Bytes } from '../../src/core/hash';
 import { decorateStage, decorateStatsInto } from '../../src/gen/pipeline/decorateStage';
 import { seedSectionsOf } from '../../src/gen/fluids/settle';
 import { writeFinalHeightmaps } from '../../src/gen/pipeline/finalHeightmaps';
-import { fillColumnT } from '../../src/metrics/region';
+import { fillColumnD, fillColumnT } from '../../src/metrics/region';
 import { FLUID_WATER, NO_FLUID, packFluid, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, GLASS, OAK_PLANKS, STONE, TORCH } from '../../src/world/blocks/index';
 import type { AuxBView, AuxView, ColumnDiff, ColumnWriter } from '../../src/world/store/api';
 import { finalAt, protoAt, REC_GEN_FLUID, REC_GEN_FLUID_MASK, SECTIONS, STATUS_DECORATED, STATUS_PROTO } from '../../src/world/store/columnTable';
 import { FINAL_BLOCKS, FINAL_FLUID, PROTO_BLOCKS, PROTO_FLUID } from '../../src/world/store/section';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
-import { fillColumnD } from '../../src/workers/worldJobs';
 import { ctxFor } from '../harness/gen';
 
 const MiB = 1 << 20;

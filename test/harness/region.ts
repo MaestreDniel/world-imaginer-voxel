@@ -18,7 +18,7 @@
 import { performance } from 'node:perf_hooks';
 import { Worker } from 'node:worker_threads';
 import { colKey } from '../../src/core/coords';
-import { createFnv64, type Hash64 } from '../../src/core/hash';
+import type { Hash64 } from '../../src/core/hash';
 import { MEDIUM } from '../../src/core/params/graphicsPresets';
 import type { Params } from '../../src/core/params/schema';
 import { Xoshiro128 } from '../../src/core/rng';
@@ -28,12 +28,12 @@ import { carverCacheOf } from '../../src/gen/caves/carverCache';
 import type { GenContext } from '../../src/gen/context';
 import { createDensityContext } from '../../src/gen/density/context';
 import { createLightScratch, type LightScratch } from '../../src/light/initial';
-import { fillColumnT, regionHash } from '../../src/metrics/region';
+import { fillColumnD, fillColumnT, finalFluidHash as windowFluidHash, regionHash } from '../../src/metrics/region';
 import { createMeshScratch, type ColumnMeshPayload } from '../../src/mesh/column';
 import type { MeshOptions } from '../../src/mesh/greedy';
 import type { ColumnDiff } from '../../src/world/store/api';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
-import { fillColumnD, fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
+import { fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
 import { readRegionDump, regionCachePath, srcKey, writeRegionDump, type RegionCacheHeader, type RegionUpTo } from './cache';
 import { ask, buildNodeTaskWorker } from './nodeWorker';
 import { genContextWith, type RegionAttachMsg, type RegionColumnMsg, type RegionMeshMsg, type RegionWorkerReply } from './regionWorker';
@@ -413,20 +413,13 @@ export async function genRegion(o: GenRegionOptions): Promise<RegionResult> {
 }
 
 /**
- * The hash of column (cx, cz)'s final fluid (SP7a spec §13.4, `DT1.settleIsolated`): FNV-1a 64 over its 24 sections'
- * 4096 fluid bytes in section order, voxel order within each, uniform sections expanded (as `regionHash` hashes the
- * proto's). Throws when the column has no final set.
+ * The hash of column (cx, cz)'s final fluid (SP7a spec §13.4, `DT1.settleIsolated`): the 1 × 1 window of
+ * `src/metrics/region.ts`' `finalFluidHash`, FNV-1a 64 over its 24 sections' 4096 fluid bytes in section order, voxel
+ * order within each, uniform sections expanded (as `regionHash` hashes the proto's). Throws when the column has no final
+ * set.
  */
 export function finalFluidHash(store: VoxelStore, cx: number, cz: number): Hash64 {
-  const v = store.final(cx, cz);
-  if (v === null) throw new Error(`finalFluidHash: column (${cx}, ${cz}) has no final set in the store`);
-  const fnv = createFnv64();
-  for (let sy = 0; sy < 24; sy++) {
-    const f = v.sectionFluid(sy);
-    if (typeof f === 'number') fnv.updateRepeatU8(f, 4096);
-    else fnv.update(f);
-  }
-  return fnv.digest();
+  return windowFluidHash(store, cx, cz, 1, 1);
 }
 
 /**

@@ -22,7 +22,7 @@ import { MEDIUM } from '../../src/core/params/graphicsPresets';
 import { createWorkerPool, type ColumnDone, type WorkerLike, type WorkerPool } from '../../src/engine/workerPool';
 import { decorateStage } from '../../src/gen/pipeline/decorateStage';
 import { centreSection, createLightScratch, DEFAULT_LIGHT_TABLES, lightRegion } from '../../src/light/initial';
-import { fillColumnT, regionHash } from '../../src/metrics/region';
+import { fillColumnD, fillColumnT, regionHash } from '../../src/metrics/region';
 import { createMeshScratch, payloadProblem } from '../../src/mesh/column';
 import { NO_FLUID } from '../../src/world/blocks/fluid';
 import { AIR, GLASS, STONE, TORCH } from '../../src/world/blocks/index';
@@ -30,7 +30,7 @@ import type { ColumnDiff } from '../../src/world/store/api';
 import { REC_GEN_FLUID_MASK, STATUS_DECORATED, STATUS_PUBLISHED } from '../../src/world/store/columnTable';
 import { copyLightRegion } from '../../src/world/store/padded';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
-import { fillColumnD, fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
+import { fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
 import { ctxFor } from '../harness/gen';
 import { buildNodeTaskWorker } from '../harness/nodeWorker';
 

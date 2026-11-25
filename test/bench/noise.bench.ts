@@ -29,7 +29,7 @@ import { decorateStage, decorateStatsInto } from '../../src/gen/pipeline/decorat
 import { aquiferColumn, aquiferOf, createAquiferScratch } from '../../src/gen/fluids/aquifer';
 import type { CavePickerInputs } from '../../src/gen/biomes/cavePicker';
 import { paintTile } from '../../src/gen/map/tile';
-import { fillColumnT } from '../../src/metrics/region';
+import { fillColumnD, fillColumnT } from '../../src/metrics/region';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { createDiffStore, type DiffStore } from '../../src/sim/diffStore';
 import type { StateRecord } from '../../src/persist/saves';
@@ -38,7 +38,7 @@ import { applyEdits, createEditScratch, type Edit, type EditResult } from '../..
 import { NO_FLUID } from '../../src/world/blocks/fluid';
 import { AIR, OPACITY, STONE, TORCH } from '../../src/world/blocks/index';
 import { createTaskHandler } from '../../src/workers/taskHandler';
-import { fillColumnD, fillColumnL } from '../../src/workers/worldJobs';
+import { fillColumnL } from '../../src/workers/worldJobs';
 import { MEDIUM } from '../../src/core/params/graphicsPresets';
 import { centreSection, createLightScratch, DEFAULT_LIGHT_TABLES, lightRegion } from '../../src/light/initial';
 import { createMeshScratch, isTrivial } from '../../src/mesh/column';

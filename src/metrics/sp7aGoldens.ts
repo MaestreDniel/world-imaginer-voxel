@@ -1,7 +1,7 @@
 /**
  * SP7a golden digests (SP7a spec §15.3, D33), chained last into `allGoldenKeys`/`computeAnyGolden` (`sp2aGoldens.ts`),
  * so the unit tests, `?selftest=1` and `test/tools/goldensJsc.ts` all check them. The generator push adds
- * `sp7a.aquifer.points` (Task 14) and `sp7a.springs` (Task 21); `sp7a.region.D.water` (Task 32) follows.
+ * `sp7a.aquifer.points` (Task 14), `sp7a.springs` (Task 21) and `sp7a.region.D.water` (Task 32).
  * - `sp7a.aquifer.points` (SP7a spec §1, §13.4, §15.3): the aquifer's point functions at 256 fixed 3D points, world seed
  *   '42', default profile: `fluidAt` (the proto fluid byte T writes there) and `barrierAt` (whether T makes it barrier
  *   rock) over `aquiferOf(ctx)` and a DensityContext of `ctx`. The points are drawn from
@@ -19,6 +19,14 @@
  *   (−3000, −1182). The digest is the FNV-1a 64 of, per chunk, its spring count (one byte), then per spring in decision
  *   order its world x, y and z (int32 little-endian each), its kind byte (0 water, 1 island, 2 lava) and its outlet's
  *   direction (0 … 3, N, E, S, W): every spring of the chunk, whatever its kind.
+ * - `sp7a.region.D.water` (SP7a spec §13.4, §15.3; Task 32): the final fluid of the 6 × 6 interior of DT1's first settle
+ *   window (the coast window, which holds a water spring), world seed '42', default profile: the interior's columns at
+ *   chunks (6a … 6a + 5, 6b … 6b + 5) for candidate S(a, b) = `SETTLE_WINDOW_GOLDEN`, each decorated (D with its settle)
+ *   from its own 3 × 3 at Proto, so T runs on the interior grown by one ring (`genRegionDInProcess` over the 8 × 8 window
+ *   at (6a − 1, 6b − 1), in process on a fresh `ArrayBuffer` store). `SETTLE_WINDOW_GOLDEN` mirrors `SETTLE_WINDOWS[0]`
+ *   (`test/harness/settleWindows.ts`; a `metrics/` module cannot import `test/`), pinned equal by
+ *   `goldens.sp7a.test.ts`, and moves with it when a lever re-scans the window. The digest is `finalFluidHash` of the
+ *   interior: per column (cz outer, cx inner) its 24 sections' 4096 final fluid bytes.
  * Follows the core determinism rules (in `DET_FILES`, arch-tested). Every value is hex64.
  */
 import { fnv1a32, fnv1a64Bytes, hex64 } from '../core/hash';
@@ -30,6 +38,8 @@ import { createDensityContext } from '../gen/density/context';
 import { aquiferOf, barrierAt, fluidAt } from '../gen/fluids/aquifer';
 import { newSpringList } from '../gen/fluids/springs';
 import { terrainSpringsDebug } from '../gen/pipeline/terrainStage';
+import { createStore } from '../world/store/store';
+import { finalFluidHash, genRegionDInProcess } from './region';
 
 const FNV32 = fnv1a32;
 const FNV64 = fnv1a64Bytes;
@@ -44,6 +54,9 @@ const FLUID_AT = fluidAt;
 const BARRIER_AT = barrierAt;
 const NEW_SPRING_LIST = newSpringList;
 const SPRINGS_OF = terrainSpringsDebug;
+const CREATE_STORE = createStore;
+const GEN_REGION_D = genRegionDInProcess;
+const FINAL_FLUID_HASH = finalFluidHash;
 
 const POINTS = 256;
 /** The points' horizontal reach (±4,096 blocks) and height range (y −63 … 120). */
@@ -122,12 +135,31 @@ export function springsDigest(): string {
   return HEX64(FNV64(Uint8Array.from(bytes)));
 }
 
+/**
+ * `sp7a.region.D.water`'s settle window, candidate S(a, b) of DT1's settle windows: `SETTLE_WINDOWS[0]` (the coast,
+ * Task 19's re-scan S(19, −30), kept by Tasks 21-31r), mirrored here as a literal (module comment).
+ */
+export const SETTLE_WINDOW_GOLDEN: { readonly a: number; readonly b: number } = Object.freeze({ a: 19, b: -30 });
+/** The settle window's interior side, in chunks (the 10 × 10 window keeps two rings around it). */
+const SETTLE_INTERIOR = 6;
+const MiB = 1048576;
+
+/** `sp7a.region.D.water`: `finalFluidHash` of the settle window's 6 × 6 interior after D (module comment). */
+export function settleWindowWaterDigest(): string {
+  const cx0 = 6 * SETTLE_WINDOW_GOLDEN.a;
+  const cz0 = 6 * SETTLE_WINDOW_GOLDEN.b;
+  const store = CREATE_STORE({ shared: false, maxBlockBytes: 32 * MiB, maxByteBytes: 16 * MiB });
+  GEN_REGION_D(store, CREATE_CTX(SEED('42'), RESOLVE('default')), cx0 - 1, cz0 - 1, SETTLE_INTERIOR + 2, SETTLE_INTERIOR + 2);
+  return HEX64(FINAL_FLUID_HASH(store, cx0, cz0, SETTLE_INTERIOR, SETTLE_INTERIOR));
+}
+
 export function sp7aGoldenKeys(): string[] {
-  return ['sp7a.aquifer.points', 'sp7a.springs'];
+  return ['sp7a.aquifer.points', 'sp7a.springs', 'sp7a.region.D.water'];
 }
 
 export function computeSp7aGolden(key: string): string {
   if (key === 'sp7a.aquifer.points') return aquiferPointsDigest();
   if (key === 'sp7a.springs') return springsDigest();
+  if (key === 'sp7a.region.D.water') return settleWindowWaterDigest();
   throw new Error(`unknown golden ${key}`);
 }

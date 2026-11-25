@@ -9,7 +9,7 @@
 import { beforeAll, describe, expect, test } from 'vitest';
 import { MIN_Y } from '../../src/core/constants';
 import { createLightScratch } from '../../src/light/initial';
-import { fillColumnT } from '../../src/metrics/region';
+import { fillColumnD, fillColumnT } from '../../src/metrics/region';
 import { createMeshBuilder } from '../../src/mesh/builder';
 import {
   createMeshScratch,
@@ -39,7 +39,7 @@ import type { NeighborhoodReader } from '../../src/world/store/api';
 import { SECTIONS, STATUS_DECORATED } from '../../src/world/store/columnTable';
 import { copyPaddedSection, createPaddedSection } from '../../src/world/store/padded';
 import { createStore, type VoxelStore } from '../../src/world/store/store';
-import { fillColumnD, fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
+import { fillColumnL, meshColumnJob } from '../../src/workers/worldJobs';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
 import type { JsonValue } from '../../src/core/params/json';
 import type { GenContext } from '../../src/gen/context';

@@ -14,7 +14,7 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULTS } from '../../src/core/params/defaults';
 import { createLightScratch } from '../../src/light/initial';
-import { fillColumnT, regionHash } from '../../src/metrics/region';
+import { fillColumnD, fillColumnT, regionHash } from '../../src/metrics/region';
 import { ROW_INTS } from '../../src/mesh/column';
 import { CAVE_KIND, caveKindOf } from '../../src/core/constants';
 import { caveTagAt } from '../../src/gen/caves/tags';
@@ -23,7 +23,7 @@ import {
   cellOf, FIND_BUDGET_MS, FIND_RADIUS, findCaveProblem, parseFromWorker, parseToWorker, payloadOfMeshResult, type FromWorker, type MeshColumnResultMsg,
 } from '../../src/workers/protocol';
 import { createTaskHandler, drainAfterReply, LIMBO_RETRY_MS, type TaskHandler } from '../../src/workers/taskHandler';
-import { fillColumnD, fillColumnL, fillProtoOnly } from '../../src/workers/worldJobs';
+import { fillColumnL, fillProtoOnly } from '../../src/workers/worldJobs';
 import { STATUS_DECORATED, STATUS_PROTO, STATUS_PUBLISHED } from '../../src/world/store/columnTable';
 import type { SlabPool } from '../../src/world/store/pool';
 import { R_STORE_ID } from '../../src/world/store/reclaim';

@@ -29,7 +29,7 @@
  *   sections, the settled ones and the overlay's rebuilt ones (`nb.final` is null below Decorated), so WORLD_SURFACE
  *   and MOTION_BLOCKING count the waterfalls. `tintTH` stays 0 (SP8a writes it) and no proto is freed.
  * `decorateStatsInto` is a test and bench hook (the last run's visits, seeds and changed sections). freeze_top_layer
- * (SP8b) is a later step. Never commits: the caller does (`fillColumnD`, `workers/worldJobs.ts`). Follows the gen
+ * (SP8b) is a later step. Never commits: the caller does (`fillColumnD`, `metrics/region.ts`). Follows the gen
  * determinism rules.
  */
 import { MIN_Y } from '../../core/constants';

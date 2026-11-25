@@ -3,13 +3,19 @@
  * imports `test/`): `fillColumnT` runs the T stage on one claimed column, `genRegionInProcess` fills a
  * region in process, and `regionHash` digests any generated window. Follows the core determinism rules
  * (in `DET_FILES`, arch-tested).
+ * SP7a (spec §13.4, §15.3; ruling P36): `fillColumnD`, the D job's core, lives here beside `fillColumnT` (the workers
+ * import both), so `genRegionDInProcess` decorates a window's interior in process as the workers do, and
+ * `finalFluidHash` digests the settled fluid (`sp7a.region.D.water`).
  */
 import { createFnv64, type Fnv64 as Fnv64T, type Hash64 } from '../core/hash';
 import type { GenContext } from '../gen/context';
+import { decorateStage } from '../gen/pipeline/decorateStage';
 import { terrainStage } from '../gen/pipeline/terrainStage';
+import type { ColumnDiff } from '../world/store/api';
 import type { VoxelStore } from '../world/store/store';
 
 const CREATE_FNV = createFnv64;
+const DECORATE = decorateStage;
 const TERRAIN = terrainStage;
 
 const NEVER = (): boolean => false;
@@ -47,6 +53,34 @@ export function genRegionInProcess(store: VoxelStore, ctx: GenContext, cx0: numb
   checkRegion('genRegionInProcess', w, h);
   for (let cz = cz0; cz < cz0 + h; cz++) {
     for (let cx = cx0; cx < cx0 + w; cx++) fillColumnT(store, ctx, cx, cz, NEVER);
+  }
+}
+
+/**
+ * The D job of (cx, cz) (SP4a spec §2.3): `reopenColumn(cx, cz, 1)`, the D skeleton over `store.neighborhood(cx, cz)`
+ * (§3), then `commit(2)`. True when the column was committed at Decorated. A stop (false) or a throw leaves the
+ * column at Proto with its versions unchanged: the skeleton writes nothing before its shares, and nothing is committed.
+ * Throws when the column is not at Proto (`reopenColumn`) or a source column of its 3 × 3 is missing.
+ * SP5a (spec §2.5, D21): `diff`, the column's edit entries from the sim, is overlaid by `decorateStage` (null: none).
+ */
+export function fillColumnD(store: VoxelStore, ctx: GenContext, cx: number, cz: number, stop: () => boolean, diff: ColumnDiff | null = null): boolean {
+  const w = store.reopenColumn(cx, cz, 1);
+  if (!DECORATE(ctx, store.neighborhood(cx, cz), w, stop, diff)) return false;
+  w.commit(2);
+  return true;
+}
+
+/**
+ * `genRegionInProcess` over the w × h window at (cx0, cz0), then `fillColumnD` (never stopped, no diff) for every column
+ * of its interior, the window without its outer ring ((w − 2) × (h − 2) at (cx0 + 1, cz0 + 1), cz outer, cx inner), each
+ * from its own 3 × 3 at Proto (SP7a spec §13.4). Throws when the window has no interior (w or h below 3).
+ */
+export function genRegionDInProcess(store: VoxelStore, ctx: GenContext, cx0: number, cz0: number, w: number, h: number): void {
+  checkRegion('genRegionDInProcess', w, h);
+  if (w < 3 || h < 3) throw new RangeError(`genRegionDInProcess: a ${w} × ${h} window has no interior`);
+  genRegionInProcess(store, ctx, cx0, cz0, w, h);
+  for (let cz = cz0 + 1; cz < cz0 + h - 1; cz++) {
+    for (let cx = cx0 + 1; cx < cx0 + w - 1; cx++) fillColumnD(store, ctx, cx, cz, NEVER);
   }
 }
 
@@ -93,6 +127,29 @@ export function regionHash(store: VoxelStore, cx0: number, cz0: number, w: numbe
       // caveBiomeQ sits at offset 0 of the aux B slot, so a 4096-byte view from it is the whole slot.
       if (b === null) fnv.updateRepeatU8(0, 4096);
       else fnv.update(new Uint8Array(b.caveBiomeQ.buffer, b.caveBiomeQ.byteOffset, 4096));
+    }
+  }
+  return fnv.digest();
+}
+
+/**
+ * FNV-1a 64 of the final fluid of the w × h window at (cx0, cz0) (SP7a spec §13.4, §15.3): cz outer, cx inner; per
+ * column its 24 sections' 4096 fluid bytes in section order, voxel-index order within each, uniform sections expanded
+ * (as `regionHash` hashes the proto's), so it covers D's settle and nothing else. Throws when a column of the window has
+ * no final set (status below Decorated).
+ */
+export function finalFluidHash(store: VoxelStore, cx0: number, cz0: number, w: number, h: number): Hash64 {
+  checkRegion('finalFluidHash', w, h);
+  const fnv = CREATE_FNV();
+  for (let cz = cz0; cz < cz0 + h; cz++) {
+    for (let cx = cx0; cx < cx0 + w; cx++) {
+      const v = store.final(cx, cz);
+      if (v === null) throw new Error(`finalFluidHash: column (${cx}, ${cz}) has no final set in the store`);
+      for (let sy = 0; sy < 24; sy++) {
+        const f = v.sectionFluid(sy);
+        if (typeof f === 'number') fnv.updateRepeatU8(f, 4096);
+        else fnv.update(f);
+      }
     }
   }
   return fnv.digest();

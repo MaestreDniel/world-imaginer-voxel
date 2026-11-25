@@ -1,26 +1,24 @@
 /**
  * The world column jobs on the attached shared store (SP4a spec §2.3), run by the task handler: the cores
- * `fillColumnD`, `fillColumnL` and `meshColumnJob` (T is `fillColumnT`, `metrics/region.ts`), and one reply wrapper per
- * job (ruling P29), `terrainReply`, `decorateReply`, `lightReply` and `meshColumnReply`. Each wrapper times its core and
- * returns `{msg, transfer}`, or null when the job stopped (the handler's ABORTED), as `fieldSliceJob.ts`'s jobs do; a
- * throw (`StoreFull` and `StoreCorrupt` included) goes to the handler.
+ * `fillColumnL` and `meshColumnJob` (T is `fillColumnT` and D `fillColumnD`, both in `metrics/region.ts`, whose goldens
+ * run them in process; ruling P36), and one reply wrapper per job (ruling P29), `terrainReply`, `decorateReply`,
+ * `lightReply` and `meshColumnReply`. Each wrapper times its core and returns `{msg, transfer}`, or null when the job
+ * stopped (the handler's ABORTED), as `fieldSliceJob.ts`'s jobs do; a throw (`StoreFull` and `StoreCorrupt` included)
+ * goes to the handler.
  * SP4b (spec §2.4, §3.7): L resets its column's light before writing it, so a retry after a partial write succeeds;
  * `fillProtoOnly` is `T(protoOnly)`, the regeneration of a freed proto, which `terrainReply` runs for `protoOnly`.
  */
 import type { GenContext } from '../gen/context';
-import { decorateStage } from '../gen/pipeline/decorateStage';
 import { terrainStage } from '../gen/pipeline/terrainStage';
 import { centreSection, DEFAULT_LIGHT_TABLES, lightRegion, type LightScratch } from '../light/initial';
-import { fillColumnT } from '../metrics/region';
+import { fillColumnD, fillColumnT } from '../metrics/region';
 import { meshColumnPayload, type ColumnMeshPayload, type MeshScratch } from '../mesh/column';
 import type { MeshOptions } from '../mesh/greedy';
-import type { ColumnDiff } from '../world/store/api';
 import { SECTIONS, STATUS_PUBLISHED } from '../world/store/columnTable';
 import { copyLightRegion } from '../world/store/padded';
 import type { VoxelStore } from '../world/store/store';
 import type { ColumnDoneMsg, MeshColumnResultMsg, WorldJobMsg } from './protocol';
 
-const DECORATE = decorateStage;
 const COPY_LIGHT_REGION = copyLightRegion;
 const LIGHT_REGION = lightRegion;
 const LIGHT_TABLES = DEFAULT_LIGHT_TABLES;
@@ -29,21 +27,8 @@ const SECTION_COUNT = SECTIONS;
 const MESH_COLUMN = meshColumnPayload;
 const PUBLISHED = STATUS_PUBLISHED;
 const FILL_T = fillColumnT;
+const FILL_D = fillColumnD;
 const TERRAIN = terrainStage;
-
-/**
- * The D job of (cx, cz) (SP4a spec §2.3): `reopenColumn(cx, cz, 1)`, the D skeleton over `store.neighborhood(cx, cz)`
- * (§3), then `commit(2)`. True when the column was committed at Decorated. A stop (false) or a throw leaves the
- * column at Proto with its versions unchanged: the skeleton writes nothing before its shares, and nothing is committed.
- * Throws when the column is not at Proto (`reopenColumn`) or a source column of its 3 × 3 is missing.
- * SP5a (spec §2.5, D21): `diff`, the column's edit entries from the sim, is overlaid by `decorateStage` (null: none).
- */
-export function fillColumnD(store: VoxelStore, ctx: GenContext, cx: number, cz: number, stop: () => boolean, diff: ColumnDiff | null = null): boolean {
-  const w = store.reopenColumn(cx, cz, 1);
-  if (!DECORATE(ctx, store.neighborhood(cx, cz), w, stop, diff)) return false;
-  w.commit(2);
-  return true;
-}
 
 /**
  * The L job of (cx, cz) (SP4a spec §2.3, §4.2): reads the 3 × 3 `versions()`, `reopenColumn(cx, cz, 2)`, copies the
@@ -149,7 +134,7 @@ export function terrainReply(store: VoxelStore, ctx: GenContext, m: WorldJobMsg,
 /** The D job's reply (SP4a spec §2.3): `fillColumnD`, with the message's `diff` when it carries one (SP5a spec §2.5). */
 export function decorateReply(store: VoxelStore, ctx: GenContext, m: WorldJobMsg, stop: () => boolean): WorldJobReply<ColumnDoneMsg> | null {
   const t0 = performance.now();
-  if (!fillColumnD(store, ctx, m.cx, m.cz, stop, m.diff ?? null)) return null;
+  if (!FILL_D(store, ctx, m.cx, m.cz, stop, m.diff ?? null)) return null;
   return done(m, 'decorate', performance.now() - t0, null);
 }
 
