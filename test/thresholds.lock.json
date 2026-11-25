@@ -1,5 +1,5 @@
 {
-  "sha256": "f775013a39a1ff0692e3f418307cb69eb9d8a2942217e21e798c0c8eaa66814b",
+  "sha256": "06da66b6c776abf539c6b070de048ac6476e6de0c55cfb6828bf3a05739a8c04",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -89,7 +89,7 @@
         },
         "springsTruncated": {
           "activeFrom": "SP7a",
-          "max": 0.685,
+          "max": 0,
           "tiers": [
             "quick",
             "full"

@@ -182,7 +182,8 @@ export const THRESHOLDS: ThresholdTable = {
   // Point 2's 25-100; the sample is the same on every tier, read on quick and full only, spec §14), `islandFalls` (the
   // presets group's floating_islands region) and `springsTruncated` (the presets group's amplified region; its bound
   // the worst reading over the tiers it gates after Task 28's levers, a loosening of the proposed 5 % the user approved,
-  // rulings R23 item 1, accepted by the user, R24 item 3). The user's round-2 decisions (rulings R24, Task 31c):
+  // rulings R23 item 1, accepted by the user, R24 item 3; tightened to 0 by the user, rulings R26 item 2, Task 34r, after
+  // Task 31r read 0 on quick and full). The user's round-2 decisions (rulings R24, Task 31c):
   // `lavaFalls` at the user's ≥ 0.6 (item 4) in the groups that hold its sample (presets and biomes), every tier;
   // `borderRatio` at 0.8-1.25 only in a group holding ≥ 50 springs (item 5, a sample-size rule, the bound unchanged):
   // the presets group on full (78 springs), so full only; the other groups and tiers record it.
@@ -190,7 +191,7 @@ export const THRESHOLDS: ThresholdTable = {
     abyssWater: { max: 0, activeFrom: 'SP7a' },
     waterfalls: { min: 25, max: 100, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
     islandFalls: { min: 2, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
-    springsTruncated: { max: 0.685, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
+    springsTruncated: { max: 0, activeFrom: 'SP7a', tiers: ['quick', 'full'] },
     lavaFalls: { min: 0.6, activeFrom: 'SP7a' },
     borderRatio: { min: 0.8, max: 1.25, activeFrom: 'SP7a', tiers: ['full'] },
   },
