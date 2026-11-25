@@ -3605,7 +3605,7 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(text, 'the pre-SP7a underwater sentence is gone').not.toContain('fog switches to exponential (about 48-60 blocks) with a screen tint');
   });
 
-  test('§4.11 and §4.12 name SP7b; the bench route\'s flood is SP7b\'s and R5\'s row is gated from SP7a (SP7a spec §16 item 13)', () => {
+  test('§4.11 and §4.12 name SP7b; the bench route\'s flood is SP7b\'s and R5\'s row is gated from SP7b (SP7a spec §16 item 13; rulings R26 item 1)', () => {
     const at = text.indexOf('### 4.11 ');
     const s411to412 = text.slice(at, text.indexOf('### 4.13 ', at));
     expect(s411to412).toContain('schedules fluid ticks for the 6 neighbours (SP7b)');
@@ -3613,9 +3613,9 @@ describe('master spec amendments (SP7a §16)', () => {
     const bench = text.split('\n').find((l) => l.startsWith('**Bench route `?bench=<preset>`'));
     expect(bench).toContain('SP6a adds the cave scenario, SP7b the flood)');
     const r5 = text.split('\n').find((l) => l.startsWith('| R5 |'));
-    expect(r5).toBe('| R5 | water surface quads per face | ≤ 0.1 (recorded from SP4a; gated from SP7a) |');
-    // R5 stays ungated until the commit that reaches ≤ 0.1 moves it to 'SP7a' (SP7a spec §13.3; the plan's Spec
-    // correction 1): 'SP7b' has not started.
+    expect(r5).toBe('| R5 | water surface quads per face | ≤ 0.1 (recorded from SP4a; gated from SP7b, amended by SP7a) |');
+    // R5 is record-only in SP7a (the user reverted Lever 1, SP7a spec §6.5's rulings R26 item 1; §13.3, the plan's Spec
+    // correction 1): SP7b gates it, and 'SP7b' has not started.
     expect(THRESHOLDS.R5?.waterQuadsPerFace).toEqual({ max: 0.1, activeFrom: 'SP7b' });
     expect(STARTED_SPS).not.toContain('SP7b');
   });
