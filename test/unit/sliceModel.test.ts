@@ -30,7 +30,7 @@ import {
   createFieldSliceRequests, fieldSliceSpec, fieldSliceView, sliceRequestKey, tooHeavyText, BLOCKS_HORIZONTAL_NOTE, RULE_HORIZONTAL_NOTE,
   SLICE_DRAFT_N, SLICE_DRAFT_PRIORITY, SLICE_FULL_N, SLICE_FULL_PRIORITY, type ConfiguredDraft, type SliceWant,
   contourPath, createSlicePins, pinWant, PIN_DUPLICATE_TEXT, PIN_FULL_TEXT, PIN_MAX, sliceImage, createCaveGestureHold, widestCaveExtent,
-  CAVES_LABEL, CAVES_SOLID, CAVES_SOLID_RGB, cavesRgba, fieldOptionLabel,
+  CAVES_LABEL, CAVES_SOLID, CAVES_SOLID_RGB, cavesRgba, fieldOptionLabel, cavesAquiferText, cavesLegend, CAVES_LEGEND_HELP,
   BIOME3D_LABEL, biome3dCodeText, biome3dLegend, biome3dRgba, sliceHoverText,
 } from '../../src/ui/inspector/sliceModel';
 import { CAVE_BIOME_COLORS } from '../../src/core/constants';
@@ -40,8 +40,9 @@ import { planFieldSlice, type FieldSliceSpec } from '../../src/workers/protocol'
 import { partWorstParams } from '../harness/sliceTrees';
 import { paramsWith } from '../harness/gen';
 import { caveFreeTree, steepTree } from './fixtures/editedTrees';
-import { WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { FLUID_LAVA, FLUID_WATER, packFluid, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { AIR, REGISTRY, STONE } from '../../src/world/blocks/index';
+import { AQUIFER_EMPTY } from '../../src/core/constants';
 
 const W = WINDOW_HALF;
 const pixel = (img: Uint8ClampedArray, i: number): number[] => [img[4 * i]!, img[4 * i + 1]!, img[4 * i + 2]!, img[4 * i + 3]!];
@@ -259,6 +260,48 @@ describe('blocks and rule fields', () => {
     expect(() => blocksRgba(states, fluid.subarray(1), n)).toThrow(RangeError);
   });
 
+  test('lava is not water (SP7a §10.2, D13): lava\'s colour, no water run started in the depth ramp, and its own key in the legend', () => {
+    const n = 32;
+    const states = new Uint16Array(n * n);
+    const fluid = new Uint8Array(n * n);
+    // Sample column 5: air above y 200, flowing lava from y 200 down to y 150, water from y 150 down to y 40, stone below.
+    for (let k = 0; k < n; k++) {
+      const y = sliceRowY(k, n);
+      states[5 * n + k] = y < 40 ? STONE : AIR;
+      fluid[5 * n + k] = y >= 150 && y < 200 ? packFluid(FLUID_LAVA, 2) : y >= 40 && y < 150 ? WATER_SOURCE : 0;
+    }
+    const img = blocksRgba(states, fluid, n);
+    // The water's run starts at its own top (below the lava), not at the lava's.
+    const waterTop = Array.from({ length: n }, (_, k) => k).find((k) => fluid[5 * n + k] === WATER_SOURCE)!;
+    let lava = 0;
+    for (let k = 0; k < n; k++) {
+      const f = fluid[5 * n + k]!;
+      if (f !== 0 && f !== WATER_SOURCE) {
+        lava++;
+        expect(rgb(img, k * n + 5)).toEqual([...VOXEL_COLORS.lava]);
+      } else if (f === WATER_SOURCE) {
+        expect(rgb(img, k * n + 5)).toEqual([...voxelRgb(AIR, f, sliceRowY(waterTop, n) - sliceRowY(k, n))]);
+      }
+    }
+    expect(lava).toBeGreaterThan(2);
+    expect(rgb(img, waterTop * n + 5)).toEqual([...VOXEL_COLORS.water]);
+    expect(blocksLegend(states, fluid)).toEqual([
+      { label: REGISTRY.stateKey(AIR), rgb: voxelRgb(AIR, 0, 0) }, { label: REGISTRY.stateKey(STONE), rgb: voxelRgb(STONE, 0, 0) },
+      { label: 'water', rgb: VOXEL_COLORS.water }, { label: 'lava', rgb: VOXEL_COLORS.lava },
+    ]);
+    // Lava alone: "lava", no "water".
+    const dry = fluid.map((f) => (f === WATER_SOURCE ? 0 : f));
+    expect(blocksLegend(states, dry).map((k) => k.label)).toEqual([REGISTRY.stateKey(AIR), REGISTRY.stateKey(STONE), 'lava']);
+    expect(blocksLegend(states, new Uint8Array(n * n)).map((k) => k.label)).toEqual([REGISTRY.stateKey(AIR), REGISTRY.stateKey(STONE)]);
+    // The hover names lava as lava.
+    const g = sliceGeometryOf({ plane: 'vertical', field: 'blocks', y: 63, extent: 2048, cx: 0, cz: 0 }, { ax: 0, az: 0, bx: 1023, bz: 0 }, n);
+    if (!g.ok) throw new Error(g.problem);
+    const shown = { sessionEpoch: 1, key: 'k', geometry: g.geometry, result: { n, field: 'blocks' as const, values: states, fluid } };
+    const lavaRow = Array.from({ length: n }, (_, k) => k).find((k) => fluid[5 * n + k] === packFluid(FLUID_LAVA, 2))!;
+    expect(sliceHoverText(shown, 5, lavaRow).text).toMatch(/ · blocks lava$/);
+    expect(sliceHoverText(shown, 5, waterTop).text).toMatch(/ · blocks water$/);
+  });
+
   test('rule masks: two colours and grey for n/a; the share of 1s among the solid voxels', () => {
     const n = 2;
     const v = Uint8Array.from([1, RULE_NA, 0, 1]);
@@ -362,16 +405,74 @@ describe('field select', () => {
     expect(CAVES_SOLID).toBe(16);
     expect(CAVES_SOLID_RGB).toEqual([0xd8, 0xd8, 0xd8]);
     const v = Uint8Array.from([0, 1, CAVES_SOLID, 7]);
-    const h = cavesRgba(v, 2, 'horizontal');
+    const h = cavesRgba(v, new Uint8Array(4), 2, 'horizontal');
     expect([rgb(h, 0), rgb(h, 1), rgb(h, 2), rgb(h, 3)]).toEqual([[...VOXEL_COLORS.sky], hex(XRAY_COLORS[1]!), [216, 216, 216], hex(XRAY_COLORS[7]!)]);
     expect(rgb(h, 1)).toEqual([0xff, 0xb0, 0x00]);
     // Vertical: sample column c is the pixel column.
-    const vt = cavesRgba(v, 2, 'vertical');
+    const vt = cavesRgba(v, new Uint8Array(4), 2, 'vertical');
     expect([rgb(vt, 0), rgb(vt, 1), rgb(vt, 2), rgb(vt, 3)]).toEqual([rgb(h, 0), rgb(h, 2), rgb(h, 1), rgb(h, 3)]);
-    for (let k = 1; k <= 9; k++) expect(rgb(cavesRgba(Uint8Array.of(k), 1, 'horizontal'), 0)).toEqual(hex(XRAY_COLORS[k]!));
+    for (let k = 1; k <= 9; k++) expect(rgb(cavesRgba(Uint8Array.of(k), Uint8Array.of(0), 1, 'horizontal'), 0)).toEqual(hex(XRAY_COLORS[k]!));
     // sliceImage draws a caves result the same way, without a contour or statistics.
-    const img = sliceImage({ n: 2, field: 'caves', values: v, fluid: null }, 'horizontal', null);
+    const img = sliceImage({ n: 2, field: 'caves', values: v, fluid: new Uint8Array(4), aquifer: new Int32Array(4) }, 'horizontal', null);
     expect([img.rgba, img.contour, img.stats]).toEqual([h, [], null]);
+  });
+
+  /** An `aquifer` word: kind << 24 | the packed status (type << 16 | level + 32768; `AQUIFER_EMPTY` for an empty cell). */
+  const word = (kind: number, type: number, level: number): number => (kind << 24) | (type << 16) | (level + 32768);
+
+  test('SP7a §10.2 (D13): carved samples draw aquifer water blue and lava orange; the legend lists them, with its help', () => {
+    const hex = (h: string): number[] => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    // Cheese with water, ravine with lava, a dry cheese sample, other solid.
+    const v = Uint8Array.from([1, 7, 1, CAVES_SOLID]);
+    const f = Uint8Array.from([FLUID_WATER, FLUID_LAVA, 0, 0]);
+    const h = cavesRgba(v, f, 2, 'horizontal');
+    expect([rgb(h, 0), rgb(h, 1), rgb(h, 2), rgb(h, 3)]).toEqual([[...VOXEL_COLORS.water], [...VOXEL_COLORS.lava], hex(XRAY_COLORS[1]!), [216, 216, 216]]);
+    const vt = cavesRgba(v, f, 2, 'vertical');
+    expect([rgb(vt, 0), rgb(vt, 1), rgb(vt, 2), rgb(vt, 3)]).toEqual([rgb(h, 0), rgb(h, 2), rgb(h, 1), rgb(h, 3)]);
+    const img = sliceImage({ n: 2, field: 'caves', values: v, fluid: f, aquifer: new Int32Array(4) }, 'horizontal', null);
+    expect(img.rgba).toEqual(h);
+    // The legend: the kinds present, then water and lava when present, then other solid and open air.
+    expect(cavesLegend(v, f)).toEqual([
+      { label: 'Cheese', rgb: hex(XRAY_COLORS[1]!) }, { label: 'Ravine', rgb: hex(XRAY_COLORS[7]!) },
+      { label: 'water', rgb: VOXEL_COLORS.water }, { label: 'lava', rgb: VOXEL_COLORS.lava }, { label: 'other solid', rgb: [216, 216, 216] },
+    ]);
+    expect(cavesLegend(v, Uint8Array.from([0, FLUID_LAVA, 0, 0])).map((k) => k.label)).toEqual(['Cheese', 'Ravine', 'lava', 'other solid']);
+    expect(cavesLegend(v, new Uint8Array(4)).map((k) => k.label)).toEqual(['Cheese', 'Ravine', 'other solid']);
+    expect(CAVES_LEGEND_HELP).toBe('springs and the settle\'s water are not shown');
+  });
+
+  test('SP7a §10.2 (D13): the hover adds the fluid and the aquifer cell\'s level and kind, the five cases; a partial cell at level 63 reads "partial"', () => {
+    expect(cavesAquiferText(FLUID_WATER, word(1, FLUID_WATER, 63))).toBe('water (aquifer level 63, near-surface)');
+    expect(cavesAquiferText(FLUID_WATER, word(2, FLUID_WATER, 63))).toBe('water (aquifer level 63, flooded)');
+    expect(cavesAquiferText(FLUID_WATER, word(3, FLUID_WATER, -23))).toBe('water (aquifer level −23, partial)');
+    expect(cavesAquiferText(FLUID_LAVA, word(3, FLUID_LAVA, -23))).toBe('lava (aquifer level −23, lava)');
+    expect(cavesAquiferText(0, AQUIFER_EMPTY)).toBe('dry (aquifer empty)');
+    // The kind tells a partial cell at 63 from a flooded one (the packed statuses are equal).
+    expect(word(3, FLUID_WATER, 63) & 0xffffff).toBe(word(2, FLUID_WATER, 63) & 0xffffff);
+    expect(cavesAquiferText(FLUID_WATER, word(3, FLUID_WATER, 63))).toBe('water (aquifer level 63, partial)');
+    // A near-surface cell on land (level −∞) is empty whatever its kind; a dry voxel above its cell's level; lava below
+    // `lavaLevel` in an empty cell.
+    expect(cavesAquiferText(0, (1 << 24) | AQUIFER_EMPTY)).toBe('dry (aquifer empty)');
+    expect(cavesAquiferText(0, word(2, FLUID_WATER, 63))).toBe('dry (aquifer level 63, flooded)');
+    expect(cavesAquiferText(FLUID_LAVA, AQUIFER_EMPTY)).toBe('lava (aquifer empty)');
+    // Through the slice hover: a carved sample names its kind, then its aquifer; open air and other solid as before.
+    const g = sliceGeometryOf({ plane: 'horizontal', field: 'caves', y: -30, extent: 256, cx: 0, cz: 0 }, null, 32);
+    if (!g.ok) throw new Error(g.problem);
+    const values = new Uint8Array(32 * 32).fill(CAVES_SOLID);
+    const fluid = new Uint8Array(32 * 32);
+    const aquifer = new Int32Array(32 * 32);
+    values[0] = 1;
+    fluid[0] = FLUID_WATER;
+    aquifer[0] = word(2, FLUID_WATER, 63);
+    values[1] = 7;
+    fluid[1] = FLUID_LAVA;
+    aquifer[1] = word(3, FLUID_LAVA, -23);
+    values[2] = 1;
+    values[3] = 0;
+    const shown = { sessionEpoch: 1, key: 'k', geometry: g.geometry, result: { n: 32, field: 'caves' as const, values, fluid, aquifer } };
+    expect([0, 1, 2, 3, 4].map((px) => sliceHoverText(shown, px, 0).text.split(' · caves ')[1])).toEqual([
+      'Cheese · water (aquifer level 63, flooded)', 'Ravine · lava (aquifer level −23, lava)', 'Cheese · dry (aquifer empty)', 'open air', 'other solid',
+    ]);
   });
 });
 
@@ -1027,7 +1128,7 @@ describe('the request stream (§4.5: draft then full on the resolved configure, 
   describe('the caves field\'s requests (SP6a §7.4, D13: refusable like density, held during a cave drag, ruling R16)', () => {
     const CAVES_V: SliceState = { ...VERT, field: 'caves' };
     const CAVES_H: SliceState = { ...HORI, field: 'caves', extent: 256 };
-    const caves = (n: number): FieldSliceResult => ({ n, field: 'caves', values: new Uint8Array(n * n).fill(1), fluid: null });
+    const caves = (n: number): FieldSliceResult => ({ n, field: 'caves', values: new Uint8Array(n * n).fill(1), fluid: new Uint8Array(n * n), aquifer: new Int32Array(n * n) });
 
     test('vertical: a 32² draft, then the 128² slice, with sliceCostOf\'s caves costs and the two budgets', async () => {
       const { r, calls } = harness(DEFAULTS);

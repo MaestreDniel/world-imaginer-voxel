@@ -41,20 +41,38 @@ describe('fieldSlice and fieldProbe messages: parseToWorker checks the shape onl
 });
 
 describe('fieldSliceResult and fieldProbeResult: parseFromWorker and the guard-failure outcome (SP3d spec §5.1, §5.3)', () => {
-  const result = (field: string, n: number, from: number, to: number, values: unknown, fluid: unknown = null, jobId: unknown = 7) =>
-    ({ type: 'fieldSliceResult', jobId, epoch: 2, n, field, from, to, values, fluid });
+  const result = (field: string, n: number, from: number, to: number, values: unknown, fluid: unknown = null, jobId: unknown = 7, aquifer: unknown = null) =>
+    ({ type: 'fieldSliceResult', jobId, epoch: 2, n, field, from, to, values, fluid, aquifer });
   const ok = (field: string, n: number, from: number, to: number) => {
     const b = fieldSliceBytes(n, field as never, to - from);
-    return result(field, n, from, to, new ArrayBuffer(b.values), b.fluid === 0 ? null : new ArrayBuffer(b.fluid));
+    return result(field, n, from, to, new ArrayBuffer(b.values), b.fluid === 0 ? null : new ArrayBuffer(b.fluid), 7, b.aquifer === 0 ? null : new ArrayBuffer(b.aquifer));
   };
+  /** A caves reply of `columns` sample columns of 32 with the given aquifer buffer (values and fluid well formed). */
+  const caves = (aquifer: unknown, columns = 2) => result('caves', 32, 0, columns, new ArrayBuffer(32 * columns), new ArrayBuffer(32 * columns), 7, aquifer);
 
-  test('the exact byte lengths: Float64 for density and node, u16 states plus u8 fluid for blocks, u8 for rule and caves', () => {
+  test('the exact byte lengths: Float64 for density and node, u16 states plus u8 fluid for blocks, u8 for rule, u8 plus u8 fluid and Int32 aquifer words for caves', () => {
     expect([fieldSliceBytes(128, 'density', 3), fieldSliceBytes(32, 'node', 32), fieldSliceBytes(128, 'blocks', 1), fieldSliceBytes(32, 'rule', 5), fieldSliceBytes(128, 'caves', 7)])
-      .toEqual([{ values: 3072, fluid: 0 }, { values: 8192, fluid: 0 }, { values: 256, fluid: 128 }, { values: 160, fluid: 0 }, { values: 896, fluid: 0 }]);
+      .toEqual([
+        { values: 3072, fluid: 0, aquifer: 0 }, { values: 8192, fluid: 0, aquifer: 0 }, { values: 256, fluid: 128, aquifer: 0 }, { values: 160, fluid: 0, aquifer: 0 },
+        { values: 896, fluid: 896, aquifer: 3584 },
+      ]);
     for (const field of ['density', 'node', 'blocks', 'rule', 'caves']) {
       for (const [n, from, to] of [[128, 0, 128], [32, 31, 32], [128, 79, 100]] as const) expect(parseFromWorker(ok(field, n, from, to)), `${field} ${n} [${from}, ${to})`).toMatchObject({ type: 'fieldSliceResult' });
     }
   });
+  test('SP7a §10.2: fieldSliceCheck refuses a caves reply whose aquifer is missing, null, not an ArrayBuffer or of another byte length', () => {
+    expect(parseFromWorker(caves(new ArrayBuffer(256)))).toMatchObject({ type: 'fieldSliceResult', field: 'caves' });
+    for (const [aquifer, reason] of [
+      [null, 'aquifer is not an ArrayBuffer'], [undefined, 'aquifer is not an ArrayBuffer'], [new Int32Array(64), 'aquifer is not an ArrayBuffer'],
+      [new ArrayBuffer(255), 'aquifer of 255 bytes, expected 256'], [new ArrayBuffer(64), 'aquifer of 64 bytes, expected 256'], [new ArrayBuffer(512), 'aquifer of 512 bytes, expected 256'],
+    ] as const) {
+      expect(parseFromWorker(caves(aquifer)), String(aquifer)).toEqual({ bad: true, jobId: 7, reason: `fieldSliceResult: ${reason}` });
+    }
+    // Without the key at all.
+    const { aquifer: _drop, ...noKey } = caves(new ArrayBuffer(256));
+    expect(parseFromWorker(noKey)).toEqual({ bad: true, jobId: 7, reason: 'fieldSliceResult: aquifer is not an ArrayBuffer' });
+  });
+
   test('a readable envelope with a failing body is {bad, jobId, reason}: n, field, range and byte lengths', () => {
     const bad = (m: unknown) => parseFromWorker(m) as { bad?: boolean; jobId?: number; reason?: string } | null;
     const f64 = (k: number) => new ArrayBuffer(8 * k);
@@ -63,9 +81,13 @@ describe('fieldSliceResult and fieldProbeResult: parseFromWorker and the guard-f
       result('steep', 32, 0, 1, f64(32)), result('density', 32, 0, 1, f64(31)), result('density', 32, 0, 1, new Float64Array(32)), result('density', 32, 0, 1, f64(32), new ArrayBuffer(32)),
       result('blocks', 32, 0, 1, new ArrayBuffer(64), null), result('blocks', 32, 0, 1, new ArrayBuffer(64), new ArrayBuffer(31)), result('blocks', 32, 0, 1, new ArrayBuffer(32), new ArrayBuffer(32)),
       result('rule', 32, 0, 2, new ArrayBuffer(63)), result('node', 32, 0, 1, f64(32), new ArrayBuffer(0)), { ...ok('rule', 32, 0, 1), epoch: null },
-      // SP6a §7.4: caves is u8 values and no fluid.
-      result('caves', 32, 0, 2, new ArrayBuffer(63)), result('caves', 32, 0, 1, f64(32)), result('caves', 32, 0, 1, new ArrayBuffer(32), new ArrayBuffer(32)),
-      result('caves', 32, 0, 1, new Uint8Array(32)),
+      // SP6a §7.4: caves is u8 values (with SP7a's fluid and aquifer, §10.2).
+      result('caves', 32, 0, 2, new ArrayBuffer(63), new ArrayBuffer(64), 7, new ArrayBuffer(256)), result('caves', 32, 0, 1, f64(32), new ArrayBuffer(32), 7, new ArrayBuffer(128)),
+      result('caves', 32, 0, 1, new Uint8Array(32), new ArrayBuffer(32), 7, new ArrayBuffer(128)),
+      // SP7a §10.2: a caves reply's fluid is u8 per sample.
+      result('caves', 32, 0, 1, new ArrayBuffer(32), null, 7, new ArrayBuffer(128)), result('caves', 32, 0, 1, new ArrayBuffer(32), new ArrayBuffer(31), 7, new ArrayBuffer(128)),
+      // Only caves carries aquifer words.
+      { ...ok('blocks', 32, 0, 1), aquifer: new ArrayBuffer(128) }, { ...ok('density', 32, 0, 1), aquifer: new ArrayBuffer(0) },
     ]) {
       const r = bad(m);
       expect(r, JSON.stringify(m)).toMatchObject({ bad: true, jobId: 7 });
@@ -227,8 +249,8 @@ describe('the biome3d field on the wire (SP6b spec §9.2, D10): a slice field li
     expect(parseToWorker({ ...P, field: 'biome3d', path: '' })).toBeNull();
   });
   test('its reply is one byte per sample with no fluid, checked as caves\'s', () => {
-    expect(fieldSliceBytes(128, 'biome3d', 7)).toEqual({ values: 896, fluid: 0 });
-    const reply = (values: unknown, fluid: unknown = null) => ({ type: 'fieldSliceResult', jobId: 7, epoch: 2, n: 32, field: 'biome3d', from: 0, to: 2, values, fluid });
+    expect(fieldSliceBytes(128, 'biome3d', 7)).toEqual({ values: 896, fluid: 0, aquifer: 0 });
+    const reply = (values: unknown, fluid: unknown = null) => ({ type: 'fieldSliceResult', jobId: 7, epoch: 2, n: 32, field: 'biome3d', from: 0, to: 2, values, fluid, aquifer: null });
     expect(parseFromWorker(reply(new ArrayBuffer(64)))).toMatchObject({ type: 'fieldSliceResult', field: 'biome3d' });
     for (const m of [reply(new ArrayBuffer(63)), reply(new ArrayBuffer(512)), reply(new ArrayBuffer(64), new ArrayBuffer(64))]) {
       expect((parseFromWorker(m) as { bad?: boolean } | null)?.bad, JSON.stringify(m)).toBe(true);

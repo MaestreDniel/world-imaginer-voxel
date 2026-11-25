@@ -62,7 +62,10 @@ export function fieldSliceArgs(ctx: GenContext, m: FieldSliceMsg): SliceGeometry
   return FIELD_PROBLEM(ctx, m.field, m.path, m.plane) ?? PART_PROBLEM(to - from, SLICE_COST(ctx.params, m.field, m.path, m.plane, n, m.plane === 'horizontal' ? m.extent : undefined), m.field) ?? g;
 }
 
-/** Runs a fieldSlice job in `ctx`: its reply (values, and fluid for blocks, transferred), its BAD_ARGS, or null when stopped. */
+/**
+ * Runs a fieldSlice job in `ctx`: its reply (values, fluid for blocks and caves, and caves' aquifer words, transferred),
+ * its BAD_ARGS, or null when stopped.
+ */
 export function runFieldSlice(ctx: GenContext, m: FieldSliceMsg, stop: () => boolean, tColumns: TColumnSource): FieldJobReply<FieldSliceResultMsg> {
   const g = fieldSliceArgs(ctx, m);
   if (typeof g === 'string') return { badArgs: g };
@@ -70,8 +73,12 @@ export function runFieldSlice(ctx: GenContext, m: FieldSliceMsg, stop: () => boo
   if (r === null) return null;
   const values = r.values.buffer;
   const fluid = r.fluid === null ? null : r.fluid.buffer;
-  const msg: FieldSliceResultMsg = { type: 'fieldSliceResult', jobId: m.jobId, epoch: m.epoch, n: m.n, field: m.field, from: m.from, to: m.to, values, fluid };
-  return { msg, transfer: fluid === null ? [values] : [values, fluid] };
+  const aquifer = r.field === 'caves' ? r.aquifer.buffer : null;
+  const msg: FieldSliceResultMsg = { type: 'fieldSliceResult', jobId: m.jobId, epoch: m.epoch, n: m.n, field: m.field, from: m.from, to: m.to, values, fluid, aquifer };
+  const transfer = [values];
+  if (fluid !== null) transfer.push(fluid);
+  if (aquifer !== null) transfer.push(aquifer);
+  return { msg, transfer };
 }
 
 /**

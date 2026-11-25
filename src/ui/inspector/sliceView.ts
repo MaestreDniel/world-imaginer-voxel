@@ -8,7 +8,8 @@
  *   smaller of its cell's width and height (at least 128 px), with an SVG overlay (the 0-contour, the sea level and the y
  *   level on vertical planes), the axes' end labels in blocks, a hover readout overlay and a "stale" label (dimmed).
  * - Beside it the histogram and its statistics for `density`/`node`, the Voxels legend for `blocks`, the share of 1s
- *   for `rule`, the kinds present in the X-ray's colours for `caves`, the cave biomes present in their colours for
+ *   for `rule`, the kinds present in the X-ray's colours for `caves` (then aquifer water and lava, the legend's title
+ *   its help `CAVES_LEGEND_HELP`, SP7a §10.2), the cave biomes present in their colours for
  *   `biome3d` (`CAVE_BIOME_COLORS`); a status line and the request stream's notice (the field's note, a refusal, `failed: …`).
  * - Requests (§4.5): `createFieldSliceRequests` on the pool's resolved configure; the page calls `update()` on every
  *   session change, driver status change, line change and selection change; while a gesture drags a `caves.*` leaf,
@@ -32,7 +33,7 @@ import type { SlicePlane } from '../map/clickAction';
 import type { HoverVoxel } from './hoverModel';
 import type { Selection } from './model';
 import {
-  biome3dLegend, blocksLegend, cavesLegend, contourPath, createCaveGestureHold, createFieldSliceRequests, createSlicePins, fieldOptionLabel, fieldOptions, fieldSliceView, histogram,
+  biome3dLegend, blocksLegend, CAVES_LEGEND_HELP, cavesLegend, contourPath, createCaveGestureHold, createFieldSliceRequests, createSlicePins, fieldOptionLabel, fieldOptions, fieldSliceView, histogram,
   histogramLabels, initialSliceState, levelLine, parseScale, parseSliceY, PIN_FULL_TEXT, PIN_MAX, pointerPixel, ruleShare,
   ruleShareText, sliceAxisLabels, sliceBoxSide, sliceEmptyText, sliceHoverText, sliceImage, slicePointer, sliceStatusText,
   withCentre, withExtent, type ConfiguredDraft, type FieldChoice, type SlicePin, type SlicePointer, type SliceShown,
@@ -320,6 +321,7 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
     const img = sliceImage(r, plane, fixedScale);
     histo.replaceChildren();
     legend.replaceChildren();
+    legend.title = r.field === 'caves' ? CAVES_LEGEND_HELP : '';
     histo.style.display = 'none';
     switch (r.field) {
       case 'density': case 'node': {
@@ -336,7 +338,7 @@ export function createSliceView(host: HTMLElement, deps: SliceViewDeps): SliceVi
       }
       case 'blocks': case 'caves': case 'biome3d':
         stats.textContent = '';
-        legend.append(...(r.field === 'blocks' ? blocksLegend(r.values, r.fluid) : r.field === 'caves' ? cavesLegend(r.values) : biome3dLegend(r.values)).map((k) => {
+        legend.append(...(r.field === 'blocks' ? blocksLegend(r.values, r.fluid) : r.field === 'caves' ? cavesLegend(r.values, r.fluid) : biome3dLegend(r.values)).map((k) => {
           const key = el('span', 'sv-key');
           const sw = el('span', 'sv-swatch');
           sw.style.background = rgbCss(k.rgb);

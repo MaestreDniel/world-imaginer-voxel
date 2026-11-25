@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'vitest';
-import { CAVE_BIOME, CAVE_KIND, CAVE_SLICE_SOLID, caveBiomeOf, caveKindOf, DENSITY_COLUMN_COST_MAX, SLICE_RULE_NA } from '../../src/core/constants';
+import { AQUIFER_EMPTY, CAVE_BIOME, CAVE_KIND, CAVE_SLICE_SOLID, caveBiomeOf, caveKindOf, DENSITY_COLUMN_COST_MAX, SLICE_RULE_NA } from '../../src/core/constants';
 import { caveBiomeAt } from '../../src/gen/biomes/cavePicker';
 import { caveTagAt, caveTagBatch, caveTagRun, chunkColumnOrder } from '../../src/gen/caves/tags';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
-import { aquiferOf, barrierAt } from '../../src/gen/fluids/aquifer';
+import { aquiferOf, aquiferStatusLevel, aquiferStatusType, barrierAt, fluidAt } from '../../src/gen/fluids/aquifer';
 import type { GenContext } from '../../src/gen/context';
 import { createCornerMemo, createDensityReference } from '../../src/gen/density/reference';
 import { probe, solidAt } from '../../src/gen/density/probe';
@@ -23,7 +23,7 @@ import { terrainStage } from '../../src/gen/pipeline/terrainStage';
 import { fillColumnT } from '../../src/metrics/region';
 import type { ColumnView } from '../../src/world/store/api';
 import { AIR } from '../../src/world/blocks/index';
-import { WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { FLUID_LAVA, FLUID_WATER, fluidType, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import { createStore } from '../../src/world/store/store';
 import { ctxFor, paramsWith } from '../harness/gen';
 import { DEFAULT_DENSITY_TREE } from '../../src/core/params/defaultTrees';
@@ -603,6 +603,69 @@ describe('evaluateFieldSlice: biome3d, the cave biome (SP6b spec §9.2, D10)', (
     expect(r).not.toBeNull();
     expect(polls).toBe(2);
     expect(evaluateFieldSlice(ctxFor('42'), { geometry: g, field: 'biome3d', path: '', from: 0, to: 32 }, () => true)).toBeNull();
+  });
+});
+
+describe('evaluateFieldSlice: caves, the aquifer at its carved samples (SP7a spec §10.2, D13; Spec correction 9)', () => {
+  /**
+   * A vertical slice through flooded caves of seed '42': the lush columns' line of the biome3d tests (terrainStage.test.ts'
+   * LUSH (200, 467), flooded and dry lush floors), whose carved samples hold fully and partially flooded water, a lava
+   * cell above its level and lava below `aquifer.lavaLevel`.
+   */
+  const LUSH: Segment = { ax: 3200, az: 7480, bx: 3231, bz: 7480 };
+
+  test('a vertical 128² slice: `fluid` is T\'s proto fluid type at each carved sample (the blocks field\'s), `aquifer` the cell fluidAt\'s rule reads; other samples 0 and AQUIFER_EMPTY', () => {
+    const ctx = ctxFor('42');
+    const g = vertical(LUSH, 128);
+    const r = run(ctx, g, 'caves');
+    if (r.field !== 'caves') throw new Error('not a caves slice');
+    expect(r.fluid).toBeInstanceOf(Uint8Array);
+    expect(r.aquifer).toBeInstanceOf(Int32Array);
+    expect([r.fluid.length, r.aquifer.length]).toEqual([128 * 128, 128 * 128]);
+    const blocks = run(ctx, g, 'blocks');
+    // The point function on a context of its own: [s1's packed status, s1's kind] (rulings P39).
+    const other = ctxFor('42');
+    const dc = createDensityContext(other);
+    const inp = aquiferOf(other);
+    const out = new Int32Array(2);
+    const bad: string[] = [];
+    const n = { carved: 0, flooded: 0, partial: 0, lava: 0, dry: 0, emptyCell: 0 };
+    for (const { i, x, y, z } of samples(g)) {
+      const code = r.values[i]!;
+      if (code === 0 || code === CAVE_SLICE_SOLID) {
+        if (r.fluid[i] !== 0 || r.aquifer[i] !== AQUIFER_EMPTY) bad.push(`untagged (${x}, ${y}, ${z}): fluid ${r.fluid[i]} aquifer ${r.aquifer[i]}`);
+        continue;
+      }
+      n.carved++;
+      const want = fluidType(blocks.fluid![i]!);
+      if (r.fluid[i] !== want) bad.push(`fluid (${x}, ${y}, ${z}): ${r.fluid[i]} ≠ T's ${want}`);
+      const byte = fluidAt(inp, dc, x, y, z, out);
+      if (fluidType(byte) !== want) bad.push(`fluidAt (${x}, ${y}, ${z}): ${byte} ≠ T's type ${want}`);
+      const word = (out[1]! << 24) | out[0]!;
+      if (r.aquifer[i] !== word) bad.push(`aquifer (${x}, ${y}, ${z}): ${r.aquifer[i]} ≠ ${word}`);
+      // The status agrees with the fluid: water at or below its cell's level.
+      const status = word & 0xffffff;
+      const kind = word >>> 24;
+      if (want === FLUID_WATER && !(aquiferStatusType(status) === FLUID_WATER && y <= aquiferStatusLevel(status))) bad.push(`water (${x}, ${y}, ${z}) above or outside its cell ${status}`);
+      if (want === FLUID_WATER && kind === 2) n.flooded++;
+      if (want === FLUID_WATER && kind === 3) n.partial++;
+      if (want === FLUID_LAVA) n.lava++;
+      if (want === 0) n.dry++;
+      if (status === AQUIFER_EMPTY) n.emptyCell++;
+    }
+    expect(bad.slice(0, 10)).toEqual([]);
+    // Not vacuous: flooded and partially flooded water, lava, dry carved samples and empty cells.
+    for (const [k, v] of Object.entries(n)) expect(v, k).toBeGreaterThan(0);
+    // The parts concatenate into the whole, the fluid and aquifer arrays too, on another context.
+    const parts = [[0, 37], [37, 38], [38, 128]].map(([from, to]) => run(ctxFor('42'), g, 'caves', '', from, to));
+    expect(parts.flatMap((p) => [...p.fluid!])).toEqual([...r.fluid]);
+    expect(parts.flatMap((p) => (p.field === 'caves' ? [...p.aquifer] : []))).toEqual([...r.aquifer]);
+  }, 120_000);
+
+  test('biome3d keeps no fluid or aquifer arrays', () => {
+    const r = run(ctxFor('42'), vertical(LUSH, 32), 'biome3d');
+    expect(r.fluid).toBeNull();
+    expect('aquifer' in r).toBe(false);
   });
 });
 

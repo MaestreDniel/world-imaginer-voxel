@@ -273,6 +273,8 @@
  * the SP6b describe's pin of the word's end moved here) and item 16's R1 part (§6.4's R1 row: `xrayFluid`, gated from
  * SP7a; the SP6b describe's pin of the threshold cell's end moved here), each cross-checked against `PACK_LAYOUT` and
  * `THRESHOLDS`.
+ * The slice's aquifer fluid (Task 41, D13) lands item 15 (§5.5: the slice's "aquifer level and status" field and the
+ * probe's "aquifer cell / level / status" → SP10, the caves field's aquifer fluid and hover SP7a's).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -3988,6 +3990,20 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(text, 'the pre-SP7a spare bits are gone').not.toContain('`biome` 7-10, spare 11-31.');
     const x = PACK_LAYOUT.xray;
     expect([x.fluid.offset, x.fluid.bits]).toEqual([11, 2]);
+  });
+
+  test('§5.5: the slice\'s aquifer level and status field and the probe\'s aquifer cell / level / status → SP10; the caves field draws aquifer fluid and its hover the cell\'s status (SP7a spec §16 item 15)', () => {
+    // Item 15 (Task 41, D13, §10.2): the caves field's aquifer fluid and hover are SP7a's; the field and the probe SP10's.
+    const at55 = text.indexOf('### 5.5 Density inspector');
+    const s55 = text.slice(at55, text.indexOf('### 5.6 ', at55));
+    const lines = s55.split('\n');
+    const view = lines.find((l) => l.startsWith('- **Slice view (L):**'));
+    expect(view, 'no `- **Slice view (L):**` line in §5.5').toBeDefined();
+    expect(view).toContain(', aquifer level and status (→ SP10; the caves field draws aquifer fluid and its hover the cell\'s status (SP7a), amended by SP7a), ');
+    const probe = lines.find((l) => l.startsWith('- **Probe:**'));
+    expect(probe, 'no `- **Probe:**` line in §5.5').toBeDefined();
+    expect(probe).toContain(', carver hit, aquifer cell / level / status (→ SP10, amended by SP7a), biome 2D and 3D ');
+    expect(text, 'the pre-SP7a wording is gone').not.toContain('aquifer level and status, biome3d');
   });
 
   test('§6.4\'s R1 row: xrayFluid (SP7a spec §16 item 16)', () => {

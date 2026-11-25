@@ -818,7 +818,8 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
         const out: FieldSliceResult = field === 'density' || field === 'node'
           ? { n, field, values: new Float64Array(n * n), fluid: null }
           : field === 'blocks' ? { n, field, values: new Uint16Array(n * n), fluid: new Uint8Array(n * n) }
-            : { n, field, values: new Uint8Array(n * n), fluid: null };
+            : field === 'caves' ? { n, field, values: new Uint8Array(n * n), fluid: new Uint8Array(n * n), aquifer: new Int32Array(n * n) }
+              : { n, field, values: new Uint8Array(n * n), fluid: null };
         const base = req.plane === 'vertical'
           ? { plane: req.plane, ax: req.ax, az: req.az, bx: req.bx, bz: req.bz }
           : { plane: req.plane, cx: req.cx, cz: req.cz, extent: req.extent };
@@ -835,7 +836,12 @@ export function createWorkerPool(size: number, spawn: () => WorkerLike, opts: Po
             if (out.field === 'blocks') {
               out.values.set(new Uint16Array(r.values), from * n);
               out.fluid.set(new Uint8Array(r.fluid!), from * n);
-            } else if (out.field === 'rule' || out.field === 'caves' || out.field === 'biome3d') out.values.set(new Uint8Array(r.values), from * n);
+            } else if (out.field === 'caves') {
+              // SP7a §10.2: the aquifer fluid bytes and words, part by part as the values.
+              out.values.set(new Uint8Array(r.values), from * n);
+              out.fluid.set(new Uint8Array(r.fluid!), from * n);
+              out.aquifer.set(new Int32Array(r.aquifer!), from * n);
+            } else if (out.field === 'rule' || out.field === 'biome3d') out.values.set(new Uint8Array(r.values), from * n);
             else out.values.set(new Float64Array(r.values), from * n);
             if (--left === 0) { done = true; resolve(out); }
           }).catch((err: unknown) => fail(err instanceof Error ? err : new Error(String(err))));

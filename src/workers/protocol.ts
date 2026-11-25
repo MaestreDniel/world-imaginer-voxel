@@ -237,13 +237,14 @@ export interface SurfaceProbeResultMsg { readonly type: 'surfaceProbeResult'; re
 /**
  * Sample columns [from, to) of a field slice of n (transferred), each sample column's n samples in row order at
  * (c − from)·n + k: Float64 values for density and node, u16 states plus u8 `fluid` for blocks, u8 for rule (0, 1 or
- * SLICE_RULE_NA) and for caves (0, the cave kinds 1-9 or CAVE_SLICE_SOLID, SP6a spec §7.4); `fluid` is null but for
- * blocks (byte lengths: `fieldSliceBytes`).
+ * SLICE_RULE_NA) and for caves (0, the cave kinds 1-9 or CAVE_SLICE_SOLID, SP6a spec §7.4) with the u8 aquifer `fluid`
+ * type and the i32 `aquifer` word (`kind << 24 | status`, SP7a spec §10.2); `fluid` is null but for blocks and caves,
+ * `aquifer` but for caves (byte lengths: `fieldSliceBytes`).
  */
 export interface FieldSliceResultMsg {
   readonly type: 'fieldSliceResult'; readonly jobId: number; readonly epoch: number;
   readonly n: number; readonly field: SliceField; readonly from: number; readonly to: number;
-  readonly values: ArrayBuffer; readonly fluid: ArrayBuffer | null;
+  readonly values: ArrayBuffer; readonly fluid: ArrayBuffer | null; readonly aquifer: ArrayBuffer | null;
 }
 /** A fieldProbe's value: any number (NaN and ±∞ are shown as such); 0, 1 or SLICE_RULE_NA for rule. */
 export interface FieldProbeResultMsg { readonly type: 'fieldProbeResult'; readonly jobId: number; readonly epoch: number; readonly value: number }
@@ -343,14 +344,19 @@ const fieldSliceOk = (m: Record<string, unknown>): boolean => {
 const fieldProbeOk = (m: Record<string, unknown>): boolean =>
   scopedOk(m) && typeof m['field'] === 'string' && PROBE_FIELDS.includes(m['field']) && isPath(m['path']) && VOXEL_KEYS.every((k) => typeof m[k] === 'number');
 
-/** The byte lengths of a fieldSlice reply's `values` and `fluid` (0: null) for `columns` sample columns of n samples. */
-export function fieldSliceBytes(n: number, field: SliceField, columns: number): { readonly values: number; readonly fluid: number } {
+/**
+ * The byte lengths of a fieldSlice reply's `values`, `fluid` and `aquifer` (0: null) for `columns` sample columns of n
+ * samples.
+ */
+export function fieldSliceBytes(n: number, field: SliceField, columns: number): { readonly values: number; readonly fluid: number; readonly aquifer: number } {
   const samples = n * columns;
   switch (field) {
-    case 'density': case 'node': return { values: 8 * samples, fluid: 0 };
-    case 'blocks': return { values: 2 * samples, fluid: samples };
-    // rule, SP6a's caves (spec §7.4) and SP6b's biome3d (spec §9.2): one byte per sample.
-    default: return { values: samples, fluid: 0 };
+    case 'density': case 'node': return { values: 8 * samples, fluid: 0, aquifer: 0 };
+    case 'blocks': return { values: 2 * samples, fluid: samples, aquifer: 0 };
+    // SP6a's caves (spec §7.4): one byte per sample, with SP7a's aquifer fluid byte and Int32 word (spec §10.2).
+    case 'caves': return { values: samples, fluid: samples, aquifer: 4 * samples };
+    // rule and SP6b's biome3d (spec §9.2): one byte per sample.
+    default: return { values: samples, fluid: 0, aquifer: 0 };
   }
 }
 
@@ -612,7 +618,8 @@ const fieldSliceCheck: ReplyCheck = (m) => {
   if (typeof field !== 'string' || !SLICE_FIELDS.includes(field)) return `field ${String(field)} is not a slice field`;
   if (!isInt(from) || !isInt(to) || from < 0 || from >= to || to > n) return `samples [${String(from)}, ${String(to)}) are not integers with 0 ≤ from < to ≤ ${n}`;
   const b = fieldSliceBytes(n, field as SliceField, to - from);
-  return all(epochProblem(m), bufferProblem('values', m['values'], b.values), bufferProblem('fluid', m['fluid'], b.fluid));
+  return all(epochProblem(m), bufferProblem('values', m['values'], b.values), bufferProblem('fluid', m['fluid'], b.fluid),
+    bufferProblem('aquifer', m['aquifer'], b.aquifer));
 };
 const COLUMN_DONE_JOBS: readonly string[] = ['terrain', 'decorate', 'light'];
 /** Bytes of a light job's or a mesh payload's 3 × 3 versions (Int32 × 18) and of a payload's connectivity (Uint16 × 24). */

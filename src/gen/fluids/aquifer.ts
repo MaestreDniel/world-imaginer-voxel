@@ -35,6 +35,9 @@
  *   density probe's solidity, `caveTagAt` and `caveBiomeAt` in place of T's arrays and the column sample through the
  *   DensityContext's cache; neither rule reads the column's `top`, so they equal T at every voxel (DT2). They keep one
  *   status cache and one cave-biome pass, for the column last asked (`terrainSolidAt`, `solidAt.ts`, builds on them).
+ *   `fluidAt`'s optional `statusOut` gives a tagged voxel's nearest cell's packed status and kind (`cellKindOf`), from
+ *   the same selection, for the slice's `caves` field (rulings P39); `aquiferStatusType` and `aquiferStatusLevel` read
+ *   a packed status.
  * Follows the gen determinism rules: every value in world coordinates, one fixed operation order.
  */
 import {
@@ -476,16 +479,17 @@ function resetScratch(sc: AquiferScratch, cx: number, cz: number): void {
   sc.pointFilled.fill(0);
 }
 
-/** `nearestTwo`'s result: the two nearest squared distances d1 ≤ d2 and their statuses s1, s2. */
+/** `nearestTwo`'s result: the two nearest squared distances d1 ≤ d2 and their statuses s1, s2 (and s1's cache entry). */
 let N_D1 = 0;
 let N_D2 = 0;
 let N_S1 = EMPTY;
 let N_S2 = EMPTY;
+let N_E1 = 0;
 
 /**
  * The two nearest centres of voxel (x, y, z) of `sc`'s column among its 12 candidates (base cell (i0, j0, k0) =
- * `cellOf`'s), into `N_D1`, `N_S1`, `N_D2`, `N_S2`; a tie goes to the lower candidate index (`cellCandidates`' order).
- * The one selection of the column step and the point functions.
+ * `cellOf`'s), into `N_D1`, `N_S1`, `N_D2`, `N_S2` (and s1's cache entry into `N_E1`); a tie goes to the lower candidate
+ * index (`cellCandidates`' order). The one selection of the column step and the point functions.
  */
 function nearestTwo(inp: AquiferInputs, sc: AquiferScratch, x: number, y: number, z: number, i0: number, j0: number, k0: number): void {
   const centre = sc.centre;
@@ -494,6 +498,7 @@ function nearestTwo(inp: AquiferInputs, sc: AquiferScratch, x: number, y: number
   let d2 = Infinity;
   let s1 = EMPTY;
   let s2 = EMPTY;
+  let e1 = 0;
   for (let di = 0; di <= 1; di++) {
     for (let dj = -1; dj <= 1; dj++) {
       for (let dk = 0; dk <= 1; dk++) {
@@ -507,6 +512,7 @@ function nearestTwo(inp: AquiferInputs, sc: AquiferScratch, x: number, y: number
           s2 = s1;
           d1 = d;
           s1 = status[e]!;
+          e1 = e;
         } else if (d < d2) {
           d2 = d;
           s2 = status[e]!;
@@ -518,6 +524,23 @@ function nearestTwo(inp: AquiferInputs, sc: AquiferScratch, x: number, y: number
   N_D2 = d2;
   N_S1 = s1;
   N_S2 = s2;
+  N_E1 = e1;
+}
+
+const KIND = new Int32Array(1);
+
+/**
+ * The kind (`cellKindOf`: 0 empty, 1 near-surface, 2 fully, 3 partially flooded) of cache entry e's cell (filled), from
+ * `statusAtPoint` on its grid column's sampled values, as `cellStatus`'s `kindOut`.
+ */
+function cachedKind(inp: AquiferInputs, sc: AquiferScratch, e: number): number {
+  const kk = e % 3;
+  const row = (e - kk) / 3;
+  const jj = row % ROWS;
+  const ii = (row - jj) / ROWS;
+  const g = ii * 3 + kk;
+  statusAtPoint(inp, ii + sc.cx - 1, jj + J_MIN, kk + sc.cz - 1, sc.pointOffset[g]!, sc.pointLevel[g]!, KIND);
+  return KIND[0]!;
 }
 
 /**
@@ -678,9 +701,14 @@ let POINT_PICK: CavePickerInputs | null = null;
  * y −64 (T's bedrock); at an untagged voxel (`caveTagAt` 0) `WATER_SOURCE` iff y ≤ ⌊`surfaceWaterLevel`⌋ at its nearest
  * quart corner (the column sample from `dc.columns`); at a tagged one, 0 when the aquifer is off, else `ruleOf` over
  * its two nearest centres (`nearestTwo` on the point cache), its nibble from `caveBiomeAt`, its margin from the pass of
- * its column (filled only where the margin decides): a fluid byte, 0 or `AQUIFER_BARRIER`.
+ * its column (filled only where the margin decides): a fluid byte, 0 or `AQUIFER_BARRIER`. `statusOut`, when given,
+ * receives [s1's packed status, s1's kind] where the rule reads its two nearest centres, else [`AQUIFER_EMPTY`, 0].
  */
-function pointRule(inp: AquiferInputs, dc: DensityContext, x: number, y: number, z: number): number {
+function pointRule(inp: AquiferInputs, dc: DensityContext, x: number, y: number, z: number, statusOut?: Int32Array): number {
+  if (statusOut !== undefined) {
+    statusOut[0] = EMPTY;
+    statusOut[1] = 0;
+  }
   if (SOLID_AT(dc, x, y, z) || y === Y0) return 0;
   const cx = x >> 4;
   const cz = z >> 4;
@@ -694,6 +722,10 @@ function pointRule(inp: AquiferInputs, dc: DensityContext, x: number, y: number,
     POINT_INP = inp;
   }
   nearestTwo(inp, sc, x, y, z, FLOOR((x - OFFSET_XZ) / CELL_XZ), FLOOR((y + OFFSET_Y) / CELL_Y), FLOOR((z - OFFSET_XZ) / CELL_XZ));
+  if (statusOut !== undefined) {
+    statusOut[0] = N_S1;
+    statusOut[1] = cachedKind(inp, sc, N_E1);
+  }
   const abyss = BIOME_AT(dc, x, y, z) === ABYSS;
   let margin = false;
   if (marginDecides(y, N_S1, abyss)) {
@@ -713,11 +745,25 @@ function pointRule(inp: AquiferInputs, dc: DensityContext, x: number, y: number,
  * density probe's, y −64 included) or a barrier; at an untagged non-solid voxel D19's rule, `WATER_SOURCE` iff y ≤
  * ⌊`surfaceWaterLevel`⌋ at its nearest quart corner (no `top` read); at a tagged one `voxelRule`'s byte, with its nibble
  * from `caveBiomeAt` and its margin from its column's pass. `dc` is a DensityContext of `inp.ctx`. Integers only, y in
- * −64 … 319, (x, z) in the world window (a RangeError otherwise, as `probe`).
+ * −64 … 319, (x, z) in the world window (a RangeError otherwise, as `probe`). `statusOut` (2 entries), when given,
+ * receives at a tagged non-solid voxel [the packed status of its nearest centre's cell s1, that cell's kind
+ * (`cellKindOf`, `cellStatus`'s `kindOut`)], from the rule's own selection and cache (a barrier included), and
+ * [`AQUIFER_EMPTY`, 0] at any other voxel or with the aquifer off (rulings P39: the slice's `caves` field); the byte
+ * returned does not depend on it.
  */
-export function fluidAt(inp: AquiferInputs, dc: DensityContext, x: number, y: number, z: number): number {
-  const r = pointRule(inp, dc, x, y, z);
+export function fluidAt(inp: AquiferInputs, dc: DensityContext, x: number, y: number, z: number, statusOut?: Int32Array): number {
+  const r = pointRule(inp, dc, x, y, z, statusOut);
   return r === BARRIER ? 0 : r;
+}
+
+/** A packed status's fluid type: 0 for `AQUIFER_EMPTY`, else `FLUID_WATER` or `FLUID_LAVA` (the slice's hover). */
+export function aquiferStatusType(s: number): number {
+  return typeOfStatus(s);
+}
+
+/** A packed status's level (the highest fluid y), −∞ for `AQUIFER_EMPTY` (the slice's hover). */
+export function aquiferStatusLevel(s: number): number {
+  return s === EMPTY ? -Infinity : levelOfStatus(s);
 }
 
 /**

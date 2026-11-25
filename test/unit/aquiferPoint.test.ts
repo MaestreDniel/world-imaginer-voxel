@@ -6,7 +6,7 @@
  * sky-open rule, which reads no `top`.
  */
 import { describe, expect, test } from 'vitest';
-import { CAVE_BIOME, MIN_Y } from '../../src/core/constants';
+import { AQUIFER_EMPTY, CAVE_BIOME, MIN_Y } from '../../src/core/constants';
 import { resolveProfile } from '../../src/core/params/profiles';
 import { seedFromInput } from '../../src/core/seed';
 import { caveBiomeAt, cavePickerOf, fillCaveColumnPass, newCaveColumnPass, type CaveColumnPass, type CavePickerInputs } from '../../src/gen/biomes/cavePicker';
@@ -17,7 +17,7 @@ import { createGenContext, type GenContext } from '../../src/gen/context';
 import { createDensityContext, type DensityContext } from '../../src/gen/density/context';
 import { solidAt } from '../../src/gen/density/probe';
 import {
-  aquiferColumn, aquiferInputs, barrierAt, cellCentre, cellStatus, createAquiferScratch, fluidAt, inAbyssMargin,
+  aquiferColumn, aquiferInputs, aquiferStatusLevel, aquiferStatusType, barrierAt, cellCandidates, cellCentre, cellStatus, createAquiferScratch, fluidAt, inAbyssMargin,
   type AquiferInputs, type AquiferSettings,
 } from '../../src/gen/fluids/aquifer';
 import { terrainSolidAt } from '../../src/gen/fluids/solidAt';
@@ -214,6 +214,61 @@ describe('the aquifer point functions (SP7a D19, D20; Spec correction 4)', () =>
     expect(wrong).toBe(0);
     expect(tagged).toBeGreaterThan(0);
     expect(fluid).toBeGreaterThan(0);
+  }, 300_000);
+
+  test('fluidAt\'s statusOut (rulings P39): at a tagged non-solid voxel the status and kind (cellStatus\'s kindOut) of its nearest candidate, elsewhere [AQUIFER_EMPTY, 0]; the byte unchanged', () => {
+    const out = new Int32Array(2);
+    const cand = new Int32Array(36);
+    const centre = new Int32Array(3);
+    const kind = new Int32Array(1);
+    const rng = testRng(41);
+    const kinds = new Set<number>();
+    let tagged = 0;
+    let other = 0;
+    let wrong = 0;
+    let first = '';
+    for (const { name, inp: cInp, col } of columns) {
+      for (let n = 0; n < 1500; n++) {
+        const r = rng();
+        const x = 16 * col.cx + (r & 15);
+        const z = 16 * col.cz + ((r >>> 4) & 15);
+        const y = -63 + ((r >>> 8) % 383);
+        out.fill(-7);
+        const byte = fluidAt(cInp, col.dc, x, y, z, out);
+        const plain = fluidAt(cInp, col.dc, x, y, z);
+        let want: [number, number] = [AQUIFER_EMPTY, 0];
+        if (!solidAt(col.dc, x, y, z) && caveTagAt(col.dc, x, y, z) !== 0) {
+          // The nearest of the 12 candidates by squared distance, a tie to the lower index (the header's rule).
+          cellCandidates(x, y, z, cand);
+          let best = -1;
+          let bestD = Infinity;
+          for (let c = 0; c < 12; c++) {
+            cellCentre(cInp, cand[3 * c]!, cand[3 * c + 1]!, cand[3 * c + 2]!, centre);
+            const d = (x - centre[0]!) ** 2 + (y - centre[1]!) ** 2 + (z - centre[2]!) ** 2;
+            if (d < bestD) {
+              bestD = d;
+              best = c;
+            }
+          }
+          const status = cellStatus(cInp, cand[3 * best]!, cand[3 * best + 1]!, cand[3 * best + 2]!, kind);
+          want = [status, kind[0]!];
+          tagged++;
+          kinds.add(kind[0]!);
+        } else other++;
+        if (byte !== plain || out[0] !== want[0] || out[1] !== want[1]) {
+          if (wrong++ === 0) first = `${name}: (${x}, ${y}, ${z}) byte ${byte} / ${plain}, statusOut [${out[0]}, ${out[1]}], want [${want[0]}, ${want[1]}]`;
+        }
+      }
+    }
+    expect(wrong, first).toBe(0);
+    expect(tagged).toBeGreaterThan(0);
+    expect(other).toBeGreaterThan(0);
+    // Every kind is read: empty, near-surface, fully and partially flooded.
+    expect([...kinds].sort()).toEqual([0, 1, 2, 3]);
+    // The decoders: a status's type and level, −∞ for an empty cell.
+    expect([aquiferStatusType(AQUIFER_EMPTY), aquiferStatusLevel(AQUIFER_EMPTY)]).toEqual([0, -Infinity]);
+    expect([aquiferStatusType((1 << 16) | (63 + 32768)), aquiferStatusLevel((1 << 16) | (63 + 32768))]).toEqual([1, 63]);
+    expect([aquiferStatusType((2 << 16) | (-23 + 32768)), aquiferStatusLevel((2 << 16) | (-23 + 32768))]).toEqual([2, -23]);
   }, 300_000);
 
   test('an untagged voxel in the open sky above a coast takes water at y ≤ 63 and air above, whatever the column\'s top (D19)', () => {

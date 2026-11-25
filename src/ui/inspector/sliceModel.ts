@@ -17,11 +17,13 @@
  * - **Histogram.** 64 bins over [p1, p99] (outside values in the end bins), nearest-rank percentiles
  *   (`sorted[⌈q·N⌉ − 1]`), population sd and the share below 0, all over the finite values; p1 = p99 is one bar and
  *   "constant v".
- * - **Blocks** use the Voxels palette and legend; **rule** masks two colours, grey for n/a, and the share of 1s among
- *   the solid voxels; **caves** ("Cave type", SP6a spec §7.4, D13, both planes) colours each kind in the X-ray's palette,
- *   other solid pale grey and open air the sky, with a legend of the kinds present; **biome3d** ("Cave biome", SP6b spec
- *   §9.2, D10, both planes) colours cave air by its cave biome (`CAVE_BIOME_COLORS`), other solid and open air alike,
- *   with a legend of the biomes present.
+ * - **Blocks** use the Voxels palette and legend (water and lava apart, SP7a §10.2); **rule** masks two colours, grey for
+ *   n/a, and the share of 1s among the solid voxels; **caves** ("Cave type", SP6a spec §7.4, D13, both planes) colours
+ *   each kind in the X-ray's palette, other solid pale grey and open air the sky, with a legend of the kinds present;
+ *   since SP7a (§10.2, D13) its carved samples holding aquifer water draw blue and lava orange, the legend lists them
+ *   (its help: springs and the settle's water are not shown) and the hover adds the fluid and the aquifer cell's level
+ *   and kind; **biome3d** ("Cave biome", SP6b spec §9.2, D10, both planes) colours cave air by its cave biome
+ *   (`CAVE_BIOME_COLORS`), other solid and open air alike, with a legend of the biomes present.
  * - **Requests** (`createFieldSliceRequests`, §4.5): per (session epoch, request key), a 32² draft at priority 2 then the
  *   128² slice at priority 500, on the draft the pool's last resolved configure holds; a new request supersedes the
  *   previous one (its queued parts dropped, its running parts' results discarded: P1); a density or node slice refused
@@ -45,9 +47,10 @@ import { JobCancelled, SliceTooHeavy, type FieldSliceHandle, type FieldSliceResu
 import {
   sliceAcquisitionCost, sliceCostOf, sliceGeometryProblem, sliceRowY, sliceSampleVoxel, type SliceField, type SliceGeometry,
 } from '../../gen/inspect/fieldSlice';
+import { aquiferStatusLevel, aquiferStatusType } from '../../gen/fluids/aquifer';
 import { segmentLength, segmentPointAt, segmentProblem, type Segment } from '../../metrics/crossSection';
 import { XRAY_BIOME_LABELS, XRAY_LABELS } from '../../render/xrayPalette';
-import { fluidType } from '../../world/blocks/fluid';
+import { FLUID_LAVA, FLUID_WATER, fluidType } from '../../world/blocks/fluid';
 import { AIR, REGISTRY } from '../../world/blocks/index';
 import { isRefusableField, planFieldSlice, type FieldSliceSpec } from '../../workers/protocol';
 import { countText } from '../biomeTable/model';
@@ -454,11 +457,13 @@ export function contourPath(segs: readonly ContourSegment[]): string {
 
 // ---------------------------------------------------------------- blocks and rule
 
-const isWater = (state: number, fluid: number): boolean => state === AIR && fluidType(fluid) !== 0;
+const isWater = (state: number, fluid: number): boolean => state === AIR && fluidType(fluid) === FLUID_WATER;
+const isLava = (state: number, fluid: number): boolean => state === AIR && fluidType(fluid) === FLUID_LAVA;
 
 /**
  * A `blocks` slice (vertical only; states and fluid in sample order) as an n × n RGBA image in the Voxels palette:
- * water darkens with its depth in blocks below the top of its run in the sample column (`sliceRowY` of the rows).
+ * water darkens with its depth in blocks below the top of its run in the sample column (`sliceRowY` of the rows); lava
+ * is not water there (SP7a §10.2): it draws lava's colour and starts no water run.
  */
 export function blocksRgba(states: Uint16Array, fluid: Uint8Array, n: number): Uint8ClampedArray<ArrayBuffer> {
   checkLength(states.length, n, 'blocks');
@@ -486,16 +491,19 @@ export interface BlocksLegendKey {
   readonly rgb: Rgb;
 }
 
-/** The blocks legend (in the histogram's place): the states present in state order, then water when present. */
+/** The blocks legend (in the histogram's place): the states present in state order, then water and lava when present. */
 export function blocksLegend(states: Uint16Array, fluid: Uint8Array): BlocksLegendKey[] {
   const present = new Set<number>();
   let water = false;
+  let lava = false;
   for (let i = 0; i < states.length; i++) {
     present.add(states[i]!);
     if (isWater(states[i]!, fluid[i] ?? 0)) water = true;
+    if (isLava(states[i]!, fluid[i] ?? 0)) lava = true;
   }
   const keys: BlocksLegendKey[] = [...present].sort((p, q) => p - q).map((s) => ({ label: REGISTRY.stateKey(s), rgb: voxelRgb(s, 0, 0) }));
   if (water) keys.push({ label: 'water', rgb: VOXEL_COLORS.water });
+  if (lava) keys.push({ label: 'lava', rgb: VOXEL_COLORS.lava });
   return keys;
 }
 
@@ -557,21 +565,54 @@ export function cavesCodeText(code: number): string {
   return KINDS.includes(code) ? XRAY_LABELS[code]! : `code ${code}`;
 }
 
-/** A `caves` slice (sample order) as an n × n RGBA image (`cavesCodeRgb`). */
-export function cavesRgba(values: Uint8Array, n: number, plane: SlicePlane): Uint8ClampedArray<ArrayBuffer> {
+/** A `caves` sample's colour: aquifer water blue and lava orange (SP7a §10.2, D13), else its code's (`cavesCodeRgb`). */
+export function cavesSampleRgb(code: number, fluid: number): Rgb {
+  if (fluid === FLUID_WATER) return VOXEL_COLORS.water;
+  if (fluid === FLUID_LAVA) return VOXEL_COLORS.lava;
+  return cavesCodeRgb(code);
+}
+
+/** A `caves` slice (codes and aquifer fluid types in sample order) as an n × n RGBA image (`cavesSampleRgb`). */
+export function cavesRgba(values: Uint8Array, fluid: Uint8Array, n: number, plane: SlicePlane): Uint8ClampedArray<ArrayBuffer> {
   const img = imageOrder(values, n, plane);
-  return rgbaOf(n, (i) => cavesCodeRgb(img[i]!));
+  const wet = imageOrder(fluid, n, plane);
+  return rgbaOf(n, (i) => cavesSampleRgb(img[i]!, wet[i]!));
 }
 
 /**
  * The `caves` legend (in the histogram's place): the cave kinds present in kind order, each with its X-ray colour and
- * label, then other solid and open air when present.
+ * label, then water and lava when an aquifer fluid is present (SP7a §10.2), then other solid and open air when present.
  */
-export function cavesLegend(values: Uint8Array): BlocksLegendKey[] {
+export function cavesLegend(values: Uint8Array, fluid: Uint8Array): BlocksLegendKey[] {
   const present = new Set<number>(values);
+  const wet = new Set<number>(fluid);
   const keys: BlocksLegendKey[] = KINDS.filter((k) => present.has(k)).map((k) => ({ label: cavesCodeText(k), rgb: cavesCodeRgb(k) }));
+  if (wet.has(FLUID_WATER)) keys.push({ label: 'water', rgb: VOXEL_COLORS.water });
+  if (wet.has(FLUID_LAVA)) keys.push({ label: 'lava', rgb: VOXEL_COLORS.lava });
   for (const code of [CAVES_SOLID, 0]) if (present.has(code)) keys.push({ label: cavesCodeText(code), rgb: cavesCodeRgb(code) });
   return keys;
+}
+
+/** The `caves` legend's help (SP7a §10.2): the field shows the aquifer's fluid only, T's proto fluid in caves. */
+export const CAVES_LEGEND_HELP = 'springs and the settle\'s water are not shown';
+
+/** The aquifer cell kinds' names (`cellKindOf`): 1 near-surface, 2 fully flooded, 3 partially flooded (water). */
+const AQUIFER_KIND_NAMES: Readonly<Record<number, string>> = { 1: 'near-surface', 2: 'flooded', 3: 'partial' };
+
+/**
+ * A carved `caves` sample's aquifer as the hover reads it (SP7a §10.2, D13): its fluid (`water`, `lava` or `dry`), then
+ * its cell's level and kind from the `aquifer` word (`kind << 24 | status`): "water (aquifer level 63, flooded)",
+ * "water (aquifer level −23, partial)", "lava (aquifer level −23, lava)" (a partially flooded lava cell), "dry (aquifer
+ * empty)" (an empty cell, whatever its kind).
+ */
+export function cavesAquiferText(fluid: number, aquifer: number): string {
+  const what = fluid === FLUID_WATER ? 'water' : fluid === FLUID_LAVA ? 'lava' : 'dry';
+  const status = aquifer & 0xffffff;
+  const level = aquiferStatusLevel(status);
+  if (level === -Infinity) return `${what} (aquifer empty)`;
+  const kind = aquifer >>> 24;
+  const name = kind === 3 && aquiferStatusType(status) === FLUID_LAVA ? 'lava' : (AQUIFER_KIND_NAMES[kind] ?? `kind ${kind}`);
+  return `${what} (aquifer level ${level < 0 ? `−${-level}` : level}, ${name})`;
 }
 
 // ---------------------------------------------------------------- biome3d (SP6b spec §9.2, D10)
@@ -996,7 +1037,7 @@ export function sliceImage(r: FieldSliceResult, plane: SlicePlane, fixed: number
     }
     case 'blocks': return { rgba: blocksRgba(r.values, r.fluid, r.n), contour: [], stats: null };
     case 'rule': return { rgba: ruleRgba(r.values, r.n, plane), contour: [], stats: null };
-    case 'caves': return { rgba: cavesRgba(r.values, r.n, plane), contour: [], stats: null };
+    case 'caves': return { rgba: cavesRgba(r.values, r.fluid, r.n, plane), contour: [], stats: null };
     case 'biome3d': return { rgba: biome3dRgba(r.values, r.n, plane), contour: [], stats: null };
   }
 }
@@ -1137,9 +1178,13 @@ export function pointerPixel(p: SlicePointer | null, n: number): { readonly px: 
 function sampleText(r: FieldSliceResult, i: number): string {
   switch (r.field) {
     case 'density': case 'node': return formatSliceValue(r.values[i]!);
-    case 'blocks': return isWater(r.values[i]!, r.fluid[i]!) ? 'water' : REGISTRY.stateKey(r.values[i]!);
+    case 'blocks': return isWater(r.values[i]!, r.fluid[i]!) ? 'water' : isLava(r.values[i]!, r.fluid[i]!) ? 'lava' : REGISTRY.stateKey(r.values[i]!);
     case 'rule': return r.values[i] === 1 ? 'yes' : r.values[i] === 0 ? 'no' : r.values[i] === RULE_NA ? 'n/a' : String(r.values[i]);
-    case 'caves': return cavesCodeText(r.values[i]!);
+    case 'caves': {
+      // SP7a §10.2: a carved sample adds its aquifer fluid and cell.
+      const code = r.values[i]!;
+      return code === 0 || code === CAVES_SOLID ? cavesCodeText(code) : `${cavesCodeText(code)} · ${cavesAquiferText(r.fluid[i]!, r.aquifer[i]!)}`;
+    }
     case 'biome3d': return biome3dCodeText(r.values[i]!);
   }
 }

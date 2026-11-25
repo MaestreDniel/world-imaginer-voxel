@@ -26,7 +26,10 @@
  * an injected T-column source, since gen cannot reach the worker's store) and `rule` (1 when the voxel's rule path
  * passes through the selected rule, or the selected condition holds there; 0 otherwise; `SLICE_RULE_NA` on voxels the
  * rules never evaluate) on vertical planes only; `caves` (SP6a spec §7.4, D13: the cave type, both planes) through
- * `caveTagRun` on the stage's compile, one chunk column at a time (`caveTagBatch`'s codes); `biome3d` (SP6b spec §9.2,
+ * `caveTagRun` on the stage's compile, one chunk column at a time (`caveTagBatch`'s codes), with the aquifer at its
+ * carved samples (SP7a spec §10.2, D13; Spec correction 9): `fluidAt` (`aquiferOf(ctx)`, the stage's DensityContext)
+ * gives the sample's fluid type, T's proto fluid there (springs, untagged, and the settle's water, D's, are not
+ * shown), and its `statusOut` the cell the rule reads (rulings P39); `biome3d` (SP6b spec §9.2,
  * D10: the cave biome, both planes) through the same runs, then T's cave-biome step over each run's tags: the column's
  * picker pass (`fillCaveColumnPass`) once per chunk column holding a tagged sample, and `caveBiomeOfPass` at each tagged
  * sample, so a value is 1 + the nibble T stores there. A part covers the sample columns [from, to) and
@@ -42,10 +45,11 @@
  * Follows the gen determinism rules; every lookup keyed by tree content is own-property only.
  */
 import {
-  CAVE_SLICE_SOLID, COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, HEIGHT, MIN_Y, SLICE_EXTENTS, SLICE_NS, SLICE_RULE_NA,
+  AQUIFER_EMPTY, CAVE_SLICE_SOLID, COLUMN_SAMPLE_COST, CORNER_SAMPLE_COST, CORNER_STEEP_COST, HEIGHT, MIN_Y, SLICE_EXTENTS, SLICE_NS, SLICE_RULE_NA,
 } from '../../core/constants';
 import { inWindow, MAX_Y, WINDOW_HALF } from '../../core/coords';
 import type { Params } from '../../core/params/schema';
+import { fluidType } from '../../world/blocks/fluid';
 import type { ColumnView } from '../../world/store/api';
 import { cavePickerOf, caveBiomeOfPass, fillCaveColumnPass, newCaveColumnPass } from '../biomes/cavePicker';
 import { newPointRecord, samplePoint, type ColumnPoint, type PointRecord } from '../column/columnPoint';
@@ -55,6 +59,7 @@ import type { GenContext } from '../context';
 import { EXPR_CHILD_KEYS, type DensityExpr, type Expr } from '../density/expr';
 import { createCornerMemo, createDensityReference, type DensityReference } from '../density/reference';
 import { resolveDensity, resolveDensityNode } from '../density/source';
+import { aquiferOf, fluidAt } from '../fluids/aquifer';
 import { surfaceContextOf, type SurfaceContext, type SurfaceProbeColumn } from '../surface/context';
 import { surfaceProbeColumn } from '../surface/probe';
 import type { RuleNodeRef } from '../surface/reference';
@@ -95,6 +100,12 @@ const BIOME_OF_PASS = caveBiomeOfPass;
 const NEW_PASS = newCaveColumnPass;
 /** The `biome3d` field's column pass (refilled for each chunk column of a part that holds a tagged sample). */
 const PASS = NEW_PASS();
+const AQUIFER_OF = aquiferOf;
+const FLUID_AT = fluidAt;
+const FLUID_TYPE = fluidType;
+const AQ_EMPTY = AQUIFER_EMPTY;
+/** The `caves` field's `fluidAt` status out-parameter: [s1's packed status, s1's kind] (rulings P39). */
+const STATUS = new Int32Array(2);
 
 /** A line point (xᵢ, zᵢ) in blocks. */
 export type SlicePoint = readonly [x: number, z: number];
@@ -305,14 +316,19 @@ export type TColumnSource = (cx: number, cz: number, stop: () => boolean) => Col
 /**
  * A part's values, each sample column's n samples in row order at (c − from)·n + k: Float64 values for `density` and
  * `node`; u16 block states plus u8 fluid for `blocks`; u8 for `rule` (0, 1 or `SLICE_RULE_NA`); u8 for `caves` (0 open
- * air, the cave kinds 1-9, `CAVE_SLICE_SOLID` other solid: `caveTagBatch`); u8 for `biome3d` (0 open air, 1 + the cave
- * biome of `CAVE_BIOME` for cave air, `CAVE_SLICE_SOLID` other solid; SP6b spec §9.2).
+ * air, the cave kinds 1-9, `CAVE_SLICE_SOLID` other solid: `caveTagBatch`) with, per sample (SP7a §10.2, Spec correction
+ * 9), its aquifer `fluid` type (0 dry, 1 water, 2 lava) and the `aquifer` word `kind << 24 | status` of the cell its rule
+ * reads (the packed status and `cellKindOf`'s kind, `fluidAt`'s `statusOut`) at carved samples (a kind 1-9), 0 and
+ * `AQUIFER_EMPTY` elsewhere; u8 for `biome3d` (0 open air, 1 + the cave biome of `CAVE_BIOME` for cave air,
+ * `CAVE_SLICE_SOLID` other solid; SP6b spec §9.2).
  */
 export type FieldSliceValues =
   | { readonly field: 'density' | 'node'; readonly values: Float64Array<ArrayBuffer>; readonly fluid: null }
   | { readonly field: 'blocks'; readonly values: Uint16Array<ArrayBuffer>; readonly fluid: Uint8Array<ArrayBuffer> }
   | { readonly field: 'rule'; readonly values: Uint8Array<ArrayBuffer>; readonly fluid: null }
-  | { readonly field: 'caves'; readonly values: Uint8Array<ArrayBuffer>; readonly fluid: null }
+  | {
+    readonly field: 'caves'; readonly values: Uint8Array<ArrayBuffer>; readonly fluid: Uint8Array<ArrayBuffer>; readonly aquifer: Int32Array<ArrayBuffer>;
+  }
   | { readonly field: 'biome3d'; readonly values: Uint8Array<ArrayBuffer>; readonly fluid: null };
 
 /** A DensityReference with the way a horizontal plane samples its expression. */
@@ -419,7 +435,8 @@ function ruleValue(sc: SurfaceContext, node: RuleNodeRef, id: string, c: Surface
  * Vertical `density`/`node` samples read the ColumnCache's ColumnSample of each chunk column; horizontal ones corner
  * samples memoised over this part (or full samples, `horizontalSampling`); `rule` the SurfaceContext's probe column, whose
  * build polls `stop()` too (`surfaceProbeColumn`'s density fill); `caves` visits its samples grouped by chunk column
- * (`chunkColumnOrder`, then `caveTagRun` per column, `caveTagBatch`'s codes), polling `stop()` before each; `biome3d`
+ * (`chunkColumnOrder`, then `caveTagRun` per column, `caveTagBatch`'s codes), polling `stop()` before each, then
+ * `fluidAt` with its `statusOut` at each carved sample of the run (the `fluid` and `aquifer` arrays); `biome3d`
  * visits them alike and turns each run's tags into 1 + T's nibble (the column's picker pass filled once, at its first
  * tagged sample).
  */
@@ -515,12 +532,25 @@ export function evaluateFieldSlice(ctx: GenContext, req: FieldSliceRequest, stop
     const values = new Uint8Array(size);
     const dc = sc.density;
     const inp = field === 'biome3d' ? PICKER_OF(ctx) : null;
+    // SP7a §10.2: `caves` evaluates the aquifer at its carved samples only, through `fluidAt`'s own selection.
+    const aq = field === 'caves' ? AQUIFER_OF(ctx) : null;
+    const fluid = aq === null ? null : new Uint8Array(size);
+    const aquifer = aq === null ? null : new Int32Array(size).fill(AQ_EMPTY);
     for (let t = 0; t < size;) {
       if (stop()) return null;
       const key = keys[order[t]!]!;
       let u = t + 1;
       while (u < size && keys[order[u]!] === key) u++;
       CAVE_RUN(dc, xv, yv, zv, order, t, u, values);
+      if (aq !== null) {
+        for (let r = t; r < u; r++) {
+          const q = order[r]!;
+          const code = values[q]!;
+          if (code === 0 || code === CAVE_SOLID) continue;
+          fluid![q] = FLUID_TYPE(FLUID_AT(aq, dc, xv[q]!, yv[q]!, zv[q]!, STATUS));
+          aquifer![q] = (STATUS[1]! << 24) | STATUS[0]!;
+        }
+      }
       if (inp !== null) {
         let filled = false;
         for (let r = t; r < u; r++) {
@@ -536,7 +566,7 @@ export function evaluateFieldSlice(ctx: GenContext, req: FieldSliceRequest, stop
       }
       t = u;
     }
-    return { field, values, fluid: null };
+    return field === 'caves' ? { field, values, fluid: fluid!, aquifer: aquifer! } : { field, values, fluid: null };
   }
 
   if (field === 'blocks') {

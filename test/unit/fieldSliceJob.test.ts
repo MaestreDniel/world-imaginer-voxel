@@ -48,7 +48,7 @@ describe('the fieldSlice job (SP3d spec §5.1)', () => {
     const h = createTaskHandler();
     h.handle(configure(3));
     const r = h.handle(msg);
-    expect(r.msg).toMatchObject({ type: 'fieldSliceResult', jobId: 9, epoch: 3, n: 32, field: msg.field, from: msg.from, to: msg.to, fluid: null });
+    expect(r.msg).toMatchObject({ type: 'fieldSliceResult', jobId: 9, epoch: 3, n: 32, field: msg.field, from: msg.from, to: msg.to, fluid: null, aquifer: null });
     if (r.msg.type !== 'fieldSliceResult') return;
     expect(r.transfer).toEqual([r.msg.values]);
     const want = evaluateFieldSlice(ctx, { geometry: g, field: msg.field, path: msg.path, from: msg.from, to: msg.to }, NEVER)!;
@@ -75,6 +75,28 @@ describe('the fieldSlice job (SP3d spec §5.1)', () => {
     expect(job.resident().length).toBeGreaterThan(20);
     h.handle(configure(4));
     expect(job.resident()).toEqual([]);
+  }, 60_000);
+  test('caves (SP7a §10.2): the values, the aquifer fluid bytes and the aquifer words, all three transferred, equal gen\'s evaluation part by part', () => {
+    const h = createTaskHandler();
+    h.handle(configure(3));
+    // The lush columns' line of fieldSlice.test.ts (flooded caves of seed '42').
+    const LUSH: Segment = { ax: 3200, az: 7480, bx: 3231, bz: 7480 };
+    const g = vGeom(LUSH);
+    const want = evaluateFieldSlice(ctx, { geometry: g, field: 'caves', path: '', from: 0, to: 32 }, NEVER)!;
+    if (want.field !== 'caves') throw new Error('not a caves slice');
+    expect(want.fluid.some((f) => f !== 0) && want.aquifer.some((w) => w !== 0)).toBe(true);
+    for (const [from, to] of [[0, 13], [13, 32]] as const) {
+      const r = h.handle(vMsg(LUSH, 'caves', '', from, to));
+      if (r.msg.type !== 'fieldSliceResult' || r.msg.fluid === null || r.msg.aquifer === null) throw new Error(JSON.stringify(r.msg));
+      expect(r.transfer).toEqual([r.msg.values, r.msg.fluid, r.msg.aquifer]);
+      expect([r.msg.values.byteLength, r.msg.fluid.byteLength, r.msg.aquifer.byteLength]).toEqual([32 * (to - from), 32 * (to - from), 4 * 32 * (to - from)]);
+      expect(bytes(r.msg.values).equals(bytes(want.values.subarray(from * 32, to * 32))), `values [${from}, ${to})`).toBe(true);
+      expect(bytes(r.msg.fluid).equals(bytes(want.fluid.subarray(from * 32, to * 32))), `fluid [${from}, ${to})`).toBe(true);
+      expect(bytes(r.msg.aquifer).equals(bytes(want.aquifer.subarray(from * 32, to * 32))), `aquifer [${from}, ${to})`).toBe(true);
+    }
+    // Other fields carry no aquifer words.
+    const d = h.handle(vMsg(MOUNTAIN, 'density', '', 0, 1));
+    expect(d.msg).toMatchObject({ type: 'fieldSliceResult', fluid: null, aquifer: null });
   }, 60_000);
   test('BAD_ARGS: n, the segment, the square, y on both planes, extent, the field on its plane, the path, the range and the part bound', () => {
     const h = createTaskHandler();
