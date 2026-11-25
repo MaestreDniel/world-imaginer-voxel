@@ -19,10 +19,8 @@
  *   share every corner exactly: a water voxel with water above is `CORNER_FULL`, any other water voxel its
  *   `surfaceHeight`, a passable fluid-free voxel `CORNER_DRY` and anything else (solid, lava) `CORNER_SOLID`. A voxel
  *   with water above and a falling voxel are full height (drop 0 on every corner); bottom corners are 0;
- * - **depth:** every side and down face of voxel i carries `depth[i]` (`fluidDepths`: the column's vertical water run,
- *   clamped to 15) in its data word and its key; a top face carries its depth band's rounded middle (`TOP_DEPTH`: 0-1
- *   → 1, 2-3 → 3, 4-7 → 6, 8-15 → 12; SP7a spec §6.5, D27's Lever 1), so tops of one band merge and the Fast colour
- *   takes the band's middle;
+ * - **depth:** every face of voxel i carries `depth[i]` (`fluidDepths`: the column's vertical water run, clamped to
+ *   15) in its data word and its key;
  * - **light:** §5.3's smooth light per vertex, AO off;
  * - **merge:** per axis and slice, the greedy keys `(face, depth, cornerDrop×4)`, `(sky×4, block×4)` and
  *   `(layer, tint)` (spec §5.6; the third key is constant in SP4a's world, where a water voxel's state is air, and
@@ -126,12 +124,6 @@ const KA_DEPTH = 3;
 const KA_DROP = 7;
 const KA_LAVA = 1 << 23;
 const KA_PRESENT = 0x80000000;
-
-/**
- * A water top face's `depth` per voxel depth 0 … 15 (SP7a spec §6.5, D27's Lever 1): its band's rounded middle, the
- * bands 0-1, 2-3, 4-7 and 8-15 giving 1, 3, 6 and 12, in its key (tops of one band merge) and its words (the colour).
- */
-const TOP_DEPTH = Uint8Array.of(1, 1, 3, 3, 6, 6, 6, 6, 12, 12, 12, 12, 12, 12, 12, 12);
 
 /**
  * The parts of the merge keys a test-only `keyMask` can drop (R5's split by key, SP7a spec §6.5, D27): key A's `depth`,
@@ -306,8 +298,8 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
           if (nt === LAVA && f === FACE_DOWN && topDrops(blocks, fluid, q, LAVA) === 0) continue;
           const lava = ft === LAVA;
           const li = d * la + i * lu + j * lv;
-          // Lava's keys carry no depth and no state (its words hold neither); a water top carries its depth band.
-          const dep = lava ? 0 : f === FACE_UP ? TOP_DEPTH[depth[li]!]! : depth[li]!;
+          // Lava's keys carry no depth and no state (its words hold neither).
+          const dep = lava ? 0 : depth[li]!;
           const kind = lava ? KA_LAVA : 0;
           const drops = DROPS[li]!;
           const s = blocks[v]!;
