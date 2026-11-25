@@ -1248,6 +1248,27 @@ Task 33's readings were above 0.1 on every tier, so Lever 1 ran (rulings R4). A 
 - R1 reads 0 hidden emitted and 0 visible missing, `xray` 0, on fast (5 regions, 120 columns), quick (9, 472) and full (15, 856).
 - **STOP (§6.5): R5 is above 0.1 after Lever 1.** The measurements go to the user. No gate is set or loosened: R5 stays ungated (`activeFrom` 'SP7b'), and `test/thresholds.ts` and the locks are untouched. No generated output changed (goldens: no diff against HEAD).
 
+### The bench's water rows (Task 42)
+
+§13.5's last two P1 rows (D14, D32), on f36c9b9 (Task 41's head); no generated block changes (no golden diff).
+
+- **`light.column.lava`** (gated at `light.column`'s `LIGHT_P50_MAX_MS` 4 / `LIGHT_P99_MAX_MS` 8, `test/bench/gates.ts`, `BENCH_ROWS` right after `light.column`): `light.column`'s job and protocol (`LIGHT_RUN`, `mayEmit` false, each column timed once) on 256 columns whose light region (`copyLightRegion`'s copy) holds generated lava, so `lightRegion`'s block-light BFS runs from the lava after the sky's. **Rulings P43's fallback applies**: the scan (seed '42', profile default, T on every column of the 128 × 128 chunks x, z in −64 … 63) found no 18 × 18 region whose 256 interior columns all hold lava in their 3 × 3. By the columns' proto lava (which bounds the light region's from above, but for D's flowing lava) the most was 240; 20.0 % of the columns hold lava and 62.7 % of the 3 × 3s. A second scan of 128 × 128 chunks around the SP6b biome region (centre (−96, 96)) found none either (most 247). So the row takes the 256 lava columns from the smallest scanned area that holds them: a 17 × 17 square, the first such (the most such columns, then the lowest z, then x) at chunk (37, −43), pinned in the bench as `LAVA_AREA`. It is generated untimed on a store of its own (T on the area grown by two rings, D on it grown by one, so every column's 3 × 3 is at Decorated). Its light regions hold lava for 260 of its 289 columns (lava voxels per region p50 387, min 1, max 3,033), and the row takes the first 256 in (z, x) order, each checked on its copy in the bench.
+- **`mesh.section`** (gate 1.0 / 2.5): its sample gains the non-trivial sections of the 6 × 6 interiors of `SETTLE_WINDOWS[0]` (the coast S(19, −30): spills, a water spring's falls, a flooded cave's border) and `SETTLE_WINDOWS[1]` (the water/lava contact S(1, 0) with its flowing lava; rulings P42), each window's 10 × 10 generated untimed on a store of its own (T on it grown by one ring, D on it, L on its 8 × 8). That adds 829 sections, 64 holding flowing fluid and 35 lava, after the region's 1,024 (1,853 in all, each timed once; `mesh.xray` times the pass alone on the same sample). It is read with Task 34's Lever 1 in (water top faces carry their depth band, 92997d3), whose keep-or-revert decision is pending with the user.
+- **`slice.caves128`** re-measured with Task 41's aquifer arrays: 243.9-247.3 ms p50 (gate 300; ratio ×1.160 against Task 32's record).
+
+The protocol (rulings R6, R21 item 1, R22): the EC check, then `BENCH_EXEMPT=mesh.section,mesh.xray,slice.caves128 npm run bench` (the rows whose code or sample changed since the record: `mesh.xray`'s pass changed in Task 40; `slice.biome3d128` is not exempt, since Task 41's `fluidAt` runs only in the `caves` field), then `bench:record`, then gated runs until three consecutive passes. Each run used the heavy-command lock and the 6 GB cap, with the 1-minute load below 1 at its start. EC check at 06:25, AC online: 6 own busy threads at 4.10 GHz at every sample (≤ 66 °C), 20 threads at 3.77-3.78 GHz, then 2.92 GHz at 14 s (PL1, 58 °C), `package_throttle_count` unchanged; no cap.
+
+| run | start | `terrain.real` p50 / p99 (ms, columns) | `light.column` p50 / p99 | `light.column.lava` p50 / p99 | `mesh.section` p50 / p99 | `mesh.xray` p50 / p99 | `slice.caves128` p50 | exit |
+|---|---|---|---|---|---|---|---|---|
+| exempt | 06:28 | 10.060 / 15.966 (96) | 3.172 / 4.834 | 3.560 / 4.055 | 0.334 / 0.805 | 0.075 / 0.179 | 243.914 | 0 |
+| `bench:record` | 06:31 | 9.984 / 15.602 (97) | 3.124 / 4.773 | 3.520 / 4.051 | 0.335 / 0.800 | 0.075 / 0.178 | 247.305 | 0 |
+| gated 1 | 06:34 | 10.102 / 15.322 (97) | 3.161 / 4.795 | 3.534 / 4.020 | 0.331 / 0.826 | 0.076 / 0.177 | 246.457 | 0 |
+| gated 2 | 06:37 | 9.898 / 15.261 (97) | 3.180 / 4.785 | 3.556 / 4.028 | 0.333 / 0.803 | 0.075 / 0.178 | 245.004 | 0 |
+| gated 3 | 06:40 | 10.096 / 15.390 (97) | 3.161 / 4.773 | 3.563 / 4.042 | 0.343 / 0.803 | 0.075 / 0.177 | 247.292 | 0 |
+
+- **Three consecutive gated passes in 3 runs**: `light.column.lava` ≤ 4 / 8 ms (p50 3.52-3.56 ms, 89 % of its gate), `mesh.section` ≤ 1.0 / 2.5, `slice.caves128` ≤ 300, every other absolute gate (`terrain.real` p99 median 15.322 ms) and the +30 % rule. Task 43 does not fire.
+- **`bench:record`** wrote `test/baselines.json` (killRatio 0.851, was 0.850). Ratios against Task 32's record: `mesh.xray` ×3.461 (p50 0.022 → 0.075 ms: Task 40's fluid in the wall key and the widened sample; ratio-gated only), `slice.caves128` ×1.160, `mesh.section` ×1.006, every other kernel within 5 % (`worker.configure` ×0.957 the lowest).
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)

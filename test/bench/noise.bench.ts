@@ -35,7 +35,7 @@ import { createDiffStore, type DiffStore } from '../../src/sim/diffStore';
 import type { StateRecord } from '../../src/persist/saves';
 import { flushSyncPart } from '../../src/workers/simHandler';
 import { applyEdits, createEditScratch, type Edit, type EditResult } from '../../src/sim/edits';
-import { NO_FLUID } from '../../src/world/blocks/fluid';
+import { FLUID_LAVA, fluidType, NO_FLUID } from '../../src/world/blocks/fluid';
 import { AIR, OPACITY, STONE, TORCH } from '../../src/world/blocks/index';
 import { createTaskHandler } from '../../src/workers/taskHandler';
 import { fillColumnL } from '../../src/workers/worldJobs';
@@ -479,6 +479,55 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
     sink += lightOut[24 * 4096 - 1]!;
   }, LIGHT_RUN, () => { lc = 0; });
   expect(lc, 'light.column: one probe, one warm-up and 256 timed calls, each column timed once').toBe(1 + LIGHT_RUN.warmupIterations + LIGHT_RUN.iterations);
+  // SP7a §13.5 (D14, D32; rulings P43): light.column.lava — light.column's job and protocol (LIGHT_RUN, `mayEmit` false,
+  // cyclic, each column timed once) on 256 columns whose light region holds generated lava, so `lightRegion` runs the
+  // block-light BFS from the lava (`anyLava` opens it, spec §9.1) after the sky's. The columns are found by a scan and
+  // their area pinned (`LAVA_AREA`), generated outside the timing on a store of their own: T on the area grown by two
+  // rings, D on it grown by one, so each column of the area has its 3 × 3 at Decorated. The scan (Task 42, seed '42',
+  // profile default, T on every column of the 128 × 128 chunks x, z in −64 … 63): no 18 × 18 region's 256 interior
+  // columns all hold lava in their 3 × 3 (the most, 240, by the columns' proto lava, which bounds the light region's
+  // from above but for D's flowing lava; 20 % of the columns hold lava, 63 % of the 3 × 3s), so rulings P43's fallback
+  // applies: the smallest square holding 256 such columns is 17 × 17, the first of them (the most such columns, then
+  // the lowest z, then x) at chunk (37, −43), whose light regions hold lava for 260 of its 289 columns (Exit evidence).
+  // The row takes the first 256 in (z, x) order; each one's lava is checked here on its `copyLightRegion` copy.
+  const LAVA_AREA = { cx0: 37, cz0: -43, size: 17 } as const;
+  const lavaGen = createGenContext(seedFromInput('42'), DEFAULTS);
+  const lavaStore = createStore({ shared: true });
+  const { cx0: lx0, cz0: lz0, size: lSize } = LAVA_AREA;
+  for (let z = lz0 - 2; z < lz0 + lSize + 2; z++) for (let x = lx0 - 2; x < lx0 + lSize + 2; x++) fillColumnT(lavaStore, lavaGen, x, z, never);
+  for (let z = lz0 - 1; z < lz0 + lSize + 1; z++) {
+    for (let x = lx0 - 1; x < lx0 + lSize + 1; x++) if (!fillColumnD(lavaStore, lavaGen, x, z, never)) throw new Error(`light.column.lava: D of (${x}, ${z}) stopped`);
+  }
+  /** The lava voxels of a light region copy's fluid (`anyLava`'s test, counted). */
+  const lavaVoxels = (fluid: Uint8Array): number => {
+    let n = 0;
+    for (let i = 0; i < fluid.length; i++) if (fluidType(fluid[i]!) === FLUID_LAVA) n++;
+    return n;
+  };
+  const lavaCols: (readonly [number, number])[] = [];
+  const lavaCounts: number[] = [];
+  let lavaHeld = 0;
+  for (let z = lz0; z < lz0 + lSize; z++) {
+    for (let x = lx0; x < lx0 + lSize; x++) {
+      copyLightRegion(lavaStore.neighborhood(x, z), lightScratch.region);
+      const n = lavaVoxels(lightScratch.region.fluid);
+      if (n === 0) continue;
+      lavaHeld++;
+      if (lavaCols.length === LIGHT_RUN.iterations) continue;
+      lavaCols.push([x, z]);
+      lavaCounts.push(n);
+    }
+  }
+  expect(lavaCols.length, 'light.column.lava: 256 columns of LAVA_AREA whose light region holds generated lava').toBe(LIGHT_RUN.iterations);
+  let llc = 0;
+  const lightLavaRun = await measure('light.column.lava', 1, () => {
+    const [lx, lz] = lavaCols[llc++ % lavaCols.length]!;
+    copyLightRegion(lavaStore.neighborhood(lx, lz), lightScratch.region);
+    lightRegion(lightScratch, DEFAULT_LIGHT_TABLES, false);
+    for (let sy = 0; sy < 24; sy++) lightOut.set(centreSection(lightScratch, sy), sy * 4096);
+    sink += lightOut[24 * 4096 - 1]!;
+  }, LIGHT_RUN, () => { llc = 0; });
+  expect(llc, 'light.column.lava: one probe, one warm-up and 256 timed calls, each column timed once').toBe(1 + LIGHT_RUN.warmupIterations + LIGHT_RUN.iterations);
   // SP7a §13.5 (D32): decorate.column — D with its settle, as `fillColumnD` runs it (`reopenColumn` at Proto, then
   // `decorateStage` over the 3 × 3's proto views) but never committed, so a column can be decorated again: D's
   // `clearGeneratedFluid` releases the layer a run left and its shares replace the final entries. On the 256 interior
@@ -536,11 +585,57 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
     }
   }
   expect(nonTrivial.length, 'mesh.section: the region has at least 1024 non-trivial sections').toBeGreaterThanOrEqual(MESH_RUN.iterations);
-  const meshSections = Array.from({ length: MESH_RUN.iterations }, (_, i) => nonTrivial[Math.floor((i * nonTrivial.length) / MESH_RUN.iterations)]!);
+  const regionSections = Array.from({ length: MESH_RUN.iterations }, (_, i) => nonTrivial[Math.floor((i * nonTrivial.length) / MESH_RUN.iterations)]!);
+  // SP7a §13.5 (D32; rulings P42): the sample gains flowing water and lava, the non-trivial sections of the 6 × 6
+  // interiors of the first two settle windows (`SETTLE_WINDOWS[0]`, the coast with its spills, a spring's falls and a
+  // flooded cave's border, and `SETTLE_WINDOWS[1]`, the water/lava contact with its flowing lava), each window's 10 × 10
+  // (`settleWindowAt`) generated outside the timing on a store of their own: T on it grown by one ring, D on it, L on
+  // its 8 × 8 inner columns, so each interior column's 3 × 3 is Published. Each window's sections in (cz, cx, sy) order
+  // after the region's; their sections holding flowing fluid (a level above 0 or falling) are counted for the log.
+  const winGen = createGenContext(seedFromInput('42'), DEFAULTS);
+  const winStore = createStore({ shared: true });
+  const winSections: { readonly nb: NeighborhoodReader; readonly sy: number }[] = [];
+  let winFlowing = 0;
+  let winLava = 0;
+  for (const w of SETTLE_WINDOWS.slice(0, 2)) {
+    const r = settleWindowAt(w.a, w.b);
+    for (let z = r.cz0 - 1; z < r.cz0 + r.size + 1; z++) for (let x = r.cx0 - 1; x < r.cx0 + r.size + 1; x++) fillColumnT(winStore, winGen, x, z, never);
+    for (let z = r.cz0; z < r.cz0 + r.size; z++) {
+      for (let x = r.cx0; x < r.cx0 + r.size; x++) if (!fillColumnD(winStore, winGen, x, z, never)) throw new Error(`mesh.section: D of (${x}, ${z}) stopped`);
+    }
+    for (let z = r.cz0 + 1; z < r.cz0 + r.size - 1; z++) {
+      for (let x = r.cx0 + 1; x < r.cx0 + r.size - 1; x++) if (fillColumnL(winStore, x, z, lightScratch, never) === null) throw new Error(`mesh.section: L of (${x}, ${z}) stopped`);
+    }
+    for (let z = r.cz0 + 2; z < r.cz0 + r.size - 2; z++) {
+      for (let x = r.cx0 + 2; x < r.cx0 + r.size - 2; x++) {
+        const nb = winStore.neighborhood(x, z);
+        const v = nb.final(0, 0)!;
+        for (let sy = 0; sy < 24; sy++) {
+          if (isTrivial(nb, sy) !== 0) continue;
+          winSections.push({ nb, sy });
+          const f = v.sectionFluid(sy);
+          let flowing = false;
+          let lava = false;
+          for (let i = 0; i < (typeof f === 'number' ? 1 : 4096); i++) {
+            const b = typeof f === 'number' ? f : f[i]!;
+            if (fluidType(b) === 0) continue;
+            if ((b & 15) !== 0) flowing = true;
+            if (fluidType(b) === FLUID_LAVA) lava = true;
+          }
+          if (flowing) winFlowing++;
+          if (lava) winLava++;
+        }
+      }
+    }
+  }
+  const meshSections = [...regionSections, ...winSections];
+  /** mesh.section's and mesh.xray's run: MESH_RUN over the whole sample, each section timed once. */
+  const meshSampleRun = { ...MESH_RUN, iterations: meshSections.length };
   // mesh.section: one non-trivial section as the mesh job runs it (`meshColumnPayload`'s per-section work, without the
-  // column buffers' append): the padded copy, the solid passes, the water depths and still water, SP6a's X-ray pass
-  // (`meshXray`, pass 3, since Task 34: §10.5 keeps the row's gates with pass 3 inside it) and the connectivity, with the
-  // Medium preset's AO and smooth light (the page's jobs); cyclic, each section timed once.
+  // column buffers' append): the padded copy, the solid passes, the water depths and the flowing water (SP7a's corner
+  // heights, sloped tops, strips and lava's drops), SP6a's X-ray pass (`meshXray`, pass 3, since Task 34: §10.5 keeps
+  // the row's gates with pass 3 inside it) and the connectivity, with the Medium preset's AO and smooth light (the page's
+  // jobs); cyclic over the region's 1024 sections and the windows', each section timed once.
   const meshScratch = createMeshScratch();
   const meshOptions: MeshOptions = { ao: MEDIUM.ao, smoothLight: MEDIUM.smoothLight };
   let mc = 0;
@@ -555,8 +650,8 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
     MESH_XRAY(meshScratch.padded, meshScratch.builder);
     sink += connectivity15(meshScratch.padded);
     for (let pass = 0 as 0 | 1 | 2 | 3; pass <= 3; pass++) quads += meshScratch.builder.view(pass).indices / 6;
-  }, MESH_RUN, () => { mc = 0; quads = 0; });
-  expect(mc, 'mesh.section: one probe, one warm-up and 1024 timed calls, each section timed once').toBe(1 + MESH_RUN.warmupIterations + MESH_RUN.iterations);
+  }, meshSampleRun, () => { mc = 0; quads = 0; });
+  expect(mc, 'mesh.section: one probe, one warm-up and one timed call per section of the sample').toBe(1 + MESH_RUN.warmupIterations + meshSections.length);
   expect(quads, 'mesh.section meshes quads').toBeGreaterThan(0);
 
   // SP5a §6.2: relight.edit — one edit's relight on the lit region, each call a one-edit `applyEdits` (the sim's own
@@ -813,9 +908,10 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
     return `${kind} ${us.toFixed(2)} µs, ${(ells / (8 * out.length)).toFixed(1)} ellipsoids (${out.length} of ${tried} sources roll)`;
   });
 
-  // SP6a §10.5: mesh.xray — the X-ray pass alone (`meshXray`, pass 3) on mesh.section's 1024 sections (MESH_RUN: cyclic,
-  // each timed once); the padded copy and the builder's reset run in the call but only the pass is timed
-  // (`overriddenDuration`). The paste and relight rows left the region as it began, so the sections are mesh.section's.
+  // SP6a §10.5: mesh.xray — the X-ray pass alone (`meshXray`, pass 3) on mesh.section's sample (its run: cyclic, each
+  // section timed once; SP7a's settle windows included); the padded copy and the builder's reset run in the call but only
+  // the pass is timed (`overriddenDuration`). The paste and relight rows left the region as it began, so the sections are
+  // mesh.section's.
   let xc = 0;
   let xrayQuads = 0;
   const xrayRun = await measure('mesh.xray', 1, () => {
@@ -827,8 +923,8 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
     const ms = performance.now() - t0;
     xrayQuads += meshScratch.builder.view(3).indices / 6;
     return { overriddenDuration: ms };
-  }, MESH_RUN, () => { xc = 0; xrayQuads = 0; });
-  expect(xc, 'mesh.xray: one probe, one warm-up and 1024 timed calls, each section timed once').toBe(1 + MESH_RUN.warmupIterations + MESH_RUN.iterations);
+  }, meshSampleRun, () => { xc = 0; xrayQuads = 0; });
+  expect(xc, 'mesh.xray: one probe, one warm-up and one timed call per section of mesh.section\'s sample').toBe(1 + MESH_RUN.warmupIterations + meshSections.length);
   expect(xrayQuads, 'mesh.xray meshes quads').toBeGreaterThan(0);
 
   // SP6a §7.4, §10.5 (D13): slice.caves128 — the horizontal 128² `caves` slice, 256 blocks across (a step of 2 blocks:
@@ -1184,6 +1280,13 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
   console.log(`session.commitMaxTree ${ms(commitRun)} (${commits} commits; trees of ${canonicalJSON(cappedDefs).length} and ${canonicalJSON(session.state.params.surface.rules).length} characters)`);
   console.log(`light.column ${ms(lightRun)} (mayEmit false (scan gate closed); ${litCols.length} interior columns of the 18 × 18 region at (${rx0}, ${rz0}); ${lc} calls)`);
   {
+    const lv = sortedOf(lavaCounts);
+    console.log(
+      `light.column.lava ${ms(lightLavaRun)} (mayEmit false, the block BFS opened by lava; the first ${lavaCols.length} of the ${lavaHeld} columns of the ${lSize} × ${lSize} area at `
+      + `(${lx0}, ${lz0}) whose light region holds lava; lava voxels per region p50 ${q(lv, 0.5)}, min ${q(lv, 0)}, max ${q(lv, 1)}; ${llc} calls; light.column p50 ${lightRun.latency.p50.toFixed(3)} ms)`,
+    );
+  }
+  {
     // SP7a §13.5 (D32): D with its settle, against master's 3 / 8 ms and 20k visits.
     const vs = sortedOf(Array.from(decVisits)), lit = sortedOf(Array.from(decVisits.subarray(0, litCols.length))), win = sortedOf(Array.from(decVisits.subarray(litCols.length)));
     const changedCols = decChanged.reduce((n, v) => n + (v > 0 ? 1 : 0), 0);
@@ -1193,7 +1296,10 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
       + `(light region p50 ${q(lit, 0.5)}, p99 ${q(lit, 0.99)}; settle window p50 ${q(win, 0.5)}, p99 ${q(win, 0.99)}; target 20k); ${changedCols} columns with a settled section`,
     );
   }
-  console.log(`mesh.section ${ms(meshRun)} (${meshSections.length} of the ${nonTrivial.length} non-trivial sections of its 14 × 14 inner columns; ${mc} calls, ${quads} quads)`);
+  console.log(
+    `mesh.section ${ms(meshRun)} (${regionSections.length} of the ${nonTrivial.length} non-trivial sections of its 14 × 14 inner columns and the ${winSections.length} of settle windows 0-1's `
+    + `6 × 6 interiors, ${winFlowing} with flowing fluid, ${winLava} with lava; ${mc} calls, ${quads} quads)`,
+  );
   console.log(`relight.edit ${ms(relightRun)} (torch at (${tx}, ${ty}, ${tz}), stone at (${sx}, ${sy}, ${sz}), shaft cap at (${hx}, ${hy}, ${hz}) over a room topped at y ${roomTop}; ${rc} calls)`);
   console.log(`persist.flush ${ms(persistRun)} (64 columns, ${persistDenseAt.length} dense, ${persistEntries} entries, ${persistBytes} bytes encoded; ${pc} calls)`);
   for (const [row, p] of [[maxRow, pasteMax], [litRow, pasteLit]] as const) {
@@ -1262,7 +1368,8 @@ test('SP1, SP2a, SP2b, SP3a, SP3b, SP3c, SP3d, SP3e, SP4a, SP5a, SP5b, SP5c and 
     aquiferP50: aquiferRun.latency.p50, aquiferP99: aquiferRun.latency.p99,
     sliceV128P50: vRun.latency.p50, slicePartP50: wRun.latency.p50, sessionCommitP50: commitRun.latency.p50,
     islandsP50: islandsRun.latency.p50, islandsP99: islandsRun.latency.p99,
-    lightP50: lightRun.latency.p50, lightP99: lightRun.latency.p99, meshP50: meshRun.latency.p50, meshP99: meshRun.latency.p99,
+    lightP50: lightRun.latency.p50, lightP99: lightRun.latency.p99, lightLavaP50: lightLavaRun.latency.p50, lightLavaP99: lightLavaRun.latency.p99,
+    meshP50: meshRun.latency.p50, meshP99: meshRun.latency.p99,
     relightP95: relightRun.latency.p99, persistFlushP99: persistRun.latency.p99,
     pasteMaxP99: pasteMax.run.latency.p99, pasteLitP99: pasteLit.run.latency.p99, sliceCaves128P50: cRun.latency.p50,
     sliceBiome3d128P50: bRun.latency.p50,

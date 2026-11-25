@@ -42,7 +42,7 @@ test('constants', () => {
 /** Latencies within every absolute gate, at their bounds. */
 const AT_GATES = {
   columnP50: 0.7, columnP95: 1.2, terrainP50: 13, terrainP99: 20, aquiferP50: 1.0, aquiferP99: 2.5, sliceV128P50: 300, slicePartP50: 250, sessionCommitP50: 4, islandsP50: 14.5, islandsP99: 26.5,
-  lightP50: 4, lightP99: 8, meshP50: 1.0, meshP99: 2.5, relightP95: 3, persistFlushP99: 2, pasteMaxP99: 800, pasteLitP99: 1600, sliceCaves128P50: 300,
+  lightP50: 4, lightP99: 8, lightLavaP50: 4, lightLavaP99: 8, meshP50: 1.0, meshP99: 2.5, relightP95: 3, persistFlushP99: 2, pasteMaxP99: 800, pasteLitP99: 1600, sliceCaves128P50: 300,
   sliceBiome3d128P50: 300,
 };
 
@@ -152,6 +152,22 @@ test('absolute gates (SP4a §9.3): light.column p50 ≤ 4 ms, p99 ≤ 8 ms; mesh
     'terrain.real p50 13.010 ms > 13 ms',
     'session.commitMaxTree p50 4.010 ms > 4 ms',
     'mesh.section p99 3.000 ms > 2.5 ms',
+  ]);
+});
+
+test('absolute gates (SP7a §13.5, D14, D32): light.column.lava at light.column\'s LIGHT_P50_MAX_MS 4 / LIGHT_P99_MAX_MS 8, inclusive, each on its own line, right after light.column\'s', () => {
+  // A p50 of 4.1 ms fails with its message; 3.9 passes.
+  expect(absoluteGateFailures({ ...AT_GATES, lightLavaP50: 4.1 })).toEqual(['light.column.lava p50 4.100 ms > 4 ms']);
+  expect(absoluteGateFailures({ ...AT_GATES, lightLavaP50: 3.9 })).toEqual([]);
+  expect(absoluteGateFailures({ ...AT_GATES, lightLavaP99: 8.01 })).toEqual(['light.column.lava p99 8.010 ms > 8 ms']);
+  expect(absoluteGateFailures({ ...AT_GATES, lightLavaP50: 2.4, lightLavaP99: 5.1 })).toEqual([]);
+  // light.column's lines, then the lava twin's, then mesh.section's.
+  expect(absoluteGateFailures({ ...AT_GATES, lightP50: 4.01, lightP99: 8.01, lightLavaP50: 4.1, lightLavaP99: 8.1, meshP50: 1.01 })).toEqual([
+    'light.column p50 4.010 ms > 4 ms',
+    'light.column p99 8.010 ms > 8 ms',
+    'light.column.lava p50 4.100 ms > 4 ms',
+    'light.column.lava p99 8.100 ms > 8 ms',
+    'mesh.section p50 1.010 ms > 1 ms',
   ]);
 });
 
@@ -313,18 +329,19 @@ test('parseBenchExempt: a comma-separated list of BENCH_ROWS names, empty when u
   expect(parseBenchExempt([...BENCH_ROWS].reverse().join(','))).toEqual([...BENCH_ROWS].reverse());
 });
 
-test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, SP5b\'s persist.flush, SP5c\'s paste.max and paste.maxLit, then SP6a\'s terrain.caves.warm, carver.paths, mesh.xray and slice.caves128, then SP6b\'s slice.biome3d128, cull.walk.rd12 and cull.walk.rd16, with SP6a\'s density.cornerInlined right after density.corner, SP7a\'s aquifer.column right after terrain.real, then SP6b\'s caveBiome.column, and SP7a\'s decorate.column right after light.column', () => {
+test('the bench rows: SP1 to SP2b, the SP3a store row, the SP3b density corner and real T rows, SP3c surface.column, SP3d\'s slice and session rows, SP3e\'s terrain.islands, SP4a\'s light.column and mesh.section, SP5a\'s relight.edit, SP5b\'s persist.flush, SP5c\'s paste.max and paste.maxLit, then SP6a\'s terrain.caves.warm, carver.paths, mesh.xray and slice.caves128, then SP6b\'s slice.biome3d128, cull.walk.rd12 and cull.walk.rd16, with SP6a\'s density.cornerInlined right after density.corner, SP7a\'s aquifer.column right after terrain.real, then SP6b\'s caveBiome.column, and SP7a\'s light.column.lava right after light.column, then decorate.column', () => {
   expect(BENCH_ROWS).toEqual([
     'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
     'normal.z3.density3d', 'spline.offset', 'spline.mix3', 'detErf', 'stageHashes.genKey', 'column.point', 'column.sample',
     'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
     'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'aquifer.column', 'caveBiome.column', 'surface.column',
     'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
-    'light.column', 'decorate.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
+    'light.column', 'light.column.lava', 'decorate.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
     'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128', 'slice.biome3d128', 'cull.walk.rd12', 'cull.walk.rd16',
   ]);
-  // SP7a §13.5 (D32): D with its settle (decorate.column), measured right after light.column on the same region.
-  expect(BENCH_ROWS.slice(-14, -9)).toEqual(['light.column', 'decorate.column', 'mesh.section', 'relight.edit', 'persist.flush']);
+  // SP7a §13.5 (D14, D32): light.column's lava twin on a region holding generated lava (light.column.lava), measured
+  // right after light.column; then D with its settle (decorate.column) on light.column's region.
+  expect(BENCH_ROWS.slice(-15, -9)).toEqual(['light.column', 'light.column.lava', 'decorate.column', 'mesh.section', 'relight.edit', 'persist.flush']);
   expect(BENCH_ROWS.slice(BENCH_ROWS.indexOf('density.corner'), BENCH_ROWS.indexOf('density.corner') + 3)).toEqual(['density.corner', 'density.cornerInlined', 'terrain.real']);
   // SP7a §13.5 (D32): T's aquifer step alone, measured right after terrain.real; then SP6b §12.5's (D25) cave-biome step
   // of T alone (the column pass and the picks at T's tagged voxels).

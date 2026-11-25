@@ -43,7 +43,9 @@ export const SLICE_BIOME3D_P50_MAX_MS = 300;
 /**
  * SP4a §9.3 (master §7's L and Mesh rows): one column's light job (`light.column`: the region copy, the BFS and the
  * 24 output sections) and one non-trivial section's padded copy and mesh (`mesh.section`), p50 and p99 in ms (p99 as
- * the upper bound of p95, the `column.sample` precedent).
+ * the upper bound of p95, the `column.sample` precedent). SP7a §13.5 (D14, D32) gates `light.column.lava`, the same job
+ * on columns whose light region holds generated lava (its block-light BFS open), at the same LIGHT_P50_MAX_MS /
+ * LIGHT_P99_MAX_MS.
  */
 export const LIGHT_P50_MAX_MS = 4;
 export const LIGHT_P99_MAX_MS = 8;
@@ -87,6 +89,9 @@ export const ISLANDS_COLUMNS = 512;
  * The SP4a rows' runs (§9.3), on `ISLANDS_RUN`'s pattern: exactly one warm-up call, then one timed call per lit column
  * (`light.column`, 256) or per non-trivial section (`mesh.section`, 1024). Each row walks its items cyclically, so the
  * probe and the warm-up take the first two and the last two timed calls take them again: every item is timed once.
+ * `light.column.lava` (SP7a) runs on LIGHT_RUN; SP7a §13.5 widens `mesh.section`'s sample (and `mesh.xray`'s, the same
+ * sections) to the 1024 sections plus the settle windows' (D32, rulings P42), each timed once: MESH_RUN with its
+ * iterations set to the sample's length.
  */
 export const LIGHT_RUN = Object.freeze({ iterations: 256, time: 0, warmupIterations: 1, warmupTime: 0 });
 export const MESH_RUN = Object.freeze({ iterations: 1024, time: 0, warmupIterations: 1, warmupTime: 0 });
@@ -164,7 +169,9 @@ export function spiralCells(n: number): Array<readonly [number, number]> {
  * SP7a §13.5 (D32) inserts `aquifer.column` (T's aquifer step alone, gated at AQUIFER_P50_MAX_MS / AQUIFER_P99_MAX_MS)
  * right after `terrain.real` and `decorate.column` (D with its settle on the interior columns of `light.column`'s region
  * and of the first settle window, recorded against master's 3 / 8 ms, gated only by the ratio) right after
- * `light.column`, where each is measured.
+ * `light.column`, where each is measured. SP7a §13.5 (D14, D32) inserts `light.column.lava` (light.column's job on
+ * 256 columns of a scanned area whose light region holds generated lava, rulings P43, gated at LIGHT_P50_MAX_MS /
+ * LIGHT_P99_MAX_MS) right after `light.column`, before `decorate.column`, where it is measured.
  */
 export const BENCH_ROWS = [
   'calibration.fmix32', 'lattice3.slice', 'perm512.slice', 'lattice3.random', 'perm512.random', 'normal.z2.climateC',
@@ -172,7 +179,7 @@ export const BENCH_ROWS = [
   'map.tile.b64.biome', 'map.tile.b16.relief', 'worker.configure', 'map.tile.b256.biome', 'map.tile.b256.relief',
   'store.alloc', 'density.corner', 'density.cornerInlined', 'terrain.real', 'aquifer.column', 'caveBiome.column', 'surface.column',
   'slice.vertical128', 'slice.horizontal128', 'slice.partWorst', 'session.commitMaxTree', 'terrain.islands',
-  'light.column', 'decorate.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
+  'light.column', 'light.column.lava', 'decorate.column', 'mesh.section', 'relight.edit', 'persist.flush', 'paste.max', 'paste.maxLit',
   'terrain.caves.warm', 'carver.paths', 'mesh.xray', 'slice.caves128', 'slice.biome3d128', 'cull.walk.rd12', 'cull.walk.rd16',
 ] as const;
 
@@ -336,6 +343,9 @@ export interface AbsoluteLatencies {
   /** SP4a §9.3: `light.column` and `mesh.section` p50 and p99 (p99 bounds p95 from above). */
   readonly lightP50: number;
   readonly lightP99: number;
+  /** SP7a §13.5 (D14, D32): `light.column.lava` p50 and p99, gated at LIGHT_P50_MAX_MS and LIGHT_P99_MAX_MS. */
+  readonly lightLavaP50: number;
+  readonly lightLavaP99: number;
   readonly meshP50: number;
   readonly meshP99: number;
   /** SP5a §6.2: `relight.edit` p99 (the upper bound of p95), gated at RELIGHT_P95_MAX_MS. */
@@ -354,8 +364,9 @@ export interface AbsoluteLatencies {
 /**
  * The absolute gates (P1 column budget, SP2a; the real T budget, SP3b, its p50 and p99 with caves, SP6a; the slice and
  * session commit budgets, SP3d; the light and mesh budgets, SP4a; the relight budget, SP5a; the flush's synchronous part,
- * SP5b; the maximum pastes, SP5c; the caves slice, SP6a; the cave-biome slice, SP6b; T's aquifer step, SP7a): checked by
- * `npm run bench` and before `npm run bench:record` writes, so a record refuses to write when one fails.
+ * SP5b; the maximum pastes, SP5c; the caves slice, SP6a; the cave-biome slice, SP6b; T's aquifer step and the light job
+ * on generated lava, SP7a): checked by `npm run bench` and before `npm run bench:record` writes, so a record refuses to
+ * write when one fails.
  */
 export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
   const out: string[] = [];
@@ -372,6 +383,8 @@ export function absoluteGateFailures(l: AbsoluteLatencies): string[] {
   if (l.sessionCommitP50 > SESSION_COMMIT_P50_MAX_MS) out.push(`session.commitMaxTree p50 ${l.sessionCommitP50.toFixed(3)} ms > ${SESSION_COMMIT_P50_MAX_MS} ms`);
   if (l.lightP50 > LIGHT_P50_MAX_MS) out.push(`light.column p50 ${l.lightP50.toFixed(3)} ms > ${LIGHT_P50_MAX_MS} ms`);
   if (l.lightP99 > LIGHT_P99_MAX_MS) out.push(`light.column p99 ${l.lightP99.toFixed(3)} ms > ${LIGHT_P99_MAX_MS} ms`);
+  if (l.lightLavaP50 > LIGHT_P50_MAX_MS) out.push(`light.column.lava p50 ${l.lightLavaP50.toFixed(3)} ms > ${LIGHT_P50_MAX_MS} ms`);
+  if (l.lightLavaP99 > LIGHT_P99_MAX_MS) out.push(`light.column.lava p99 ${l.lightLavaP99.toFixed(3)} ms > ${LIGHT_P99_MAX_MS} ms`);
   if (l.meshP50 > MESH_P50_MAX_MS) out.push(`mesh.section p50 ${l.meshP50.toFixed(3)} ms > ${MESH_P50_MAX_MS} ms`);
   if (l.meshP99 > MESH_P99_MAX_MS) out.push(`mesh.section p99 ${l.meshP99.toFixed(3)} ms > ${MESH_P99_MAX_MS} ms`);
   if (l.relightP95 > RELIGHT_P95_MAX_MS) out.push(`relight.edit p99 ${l.relightP95.toFixed(3)} ms > ${RELIGHT_P95_MAX_MS} ms`);
