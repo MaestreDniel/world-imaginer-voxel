@@ -3,8 +3,9 @@
  * faces against non-occluders that are not the same fluid, full-height positions with each top corner's drop from the
  * 4 voxels around it (a still source among stone keeps drop 1), sloped tops one quad per voxel with the fixed split,
  * falls at full height, side strips between levels of one fluid and between water and lava, the column's `depth` in
- * every water word and key, water in the translucent pass; lava in the opaque pass with its drops in the solid word's
- * `flags`; R1's brute force in lockstep on a hand-built view; and `fluidDepths` on a hand-built store.
+ * every water side and down face's word and key and its band's middle in a top face's (SP7a §6.5, D27's Lever 1),
+ * water in the translucent pass; lava in the opaque pass with its drops in the solid word's `flags`; R1's brute force in
+ * lockstep on a hand-built view; and `fluidDepths` on a hand-built store.
  */
 import { describe, expect, test } from 'vitest';
 import { createMeshBuilder, type MeshBuilder } from '../../src/mesh/builder';
@@ -99,7 +100,7 @@ function bruteWaterFaces(p: PaddedSection): string[] {
 const ys = (q: ReadQuad): number[] => q.corners.map((c) => c[1]);
 
 describe('meshFluid (SP4a spec §5.6)', () => {
-  test('an open sea section: one merged top quad per 16 × 16 slice where depth > 15, corners at position y = 8·(ly + 1), cornerDrop 1 on all four', () => {
+  test('an open sea section: one merged top quad per 16 × 16 slice where depth > 15, corners at position y = 8·(ly + 1), cornerDrop 1 on all four, depth 12 (band 8-15)', () => {
     // Water up to local y 9 everywhere, the padding included (the sea goes on past the section and below it).
     const water: VoxelFn = (_x, y) => (y <= 9 ? WATER_SOURCE : NO_FLUID);
     const p = paddedFrom(() => AIR, () => 0xF0, water);
@@ -113,7 +114,8 @@ describe('meshFluid (SP4a spec §5.6)', () => {
     expect(allUnitFaces(passes[2])).toHaveLength(256);
     for (const w of top.words) {
       const f = fieldsOf(w);
-      expect([f.cornerDrop, f.depth, f.sky, f.block, f.face, f.layer]).toEqual([1, 15, 15, 0, 4, AIR]);
+      // The top face carries its depth band's middle (8-15 → 12; SP7a §6.5, D27's Lever 1).
+      expect([f.cornerDrop, f.depth, f.sky, f.block, f.face, f.layer]).toEqual([1, 12, 15, 0, 4, AIR]);
     }
   });
 
@@ -193,24 +195,50 @@ describe('meshFluid (SP4a spec §5.6)', () => {
     }
   });
 
-  test('meshFluid emits depth[i]: every face of voxel i carries depth[i], and different depths do not merge', () => {
-    // A row of eight isolated sources along x at y 4 (one apart), each with its own depth.
+  test("meshFluid emits depth: a side or down face of voxel i carries depth[i], a top face its band's middle (rulings P35; SP7a §6.5, D27's Lever 1)", () => {
+    // A row of eight isolated sources along x at y 4 (one apart), each with its own depth 1 … 8.
     const at = (x: number, y: number, z: number): boolean => y === 4 && z === 8 && x % 2 === 0 && x < 16;
     const p = paddedFrom((_x, y) => (y <= 3 ? STONE : AIR), () => 0xF0, (x, y, z) => (at(x, y, z) ? WATER_SOURCE : NO_FLUID));
     const depth = depthFrom((x, y, z) => (at(x, y, z) ? 1 + x / 2 : 0));
     const { passes } = mesh(p, depth);
     expect(passes[2]).toHaveLength(8 * 5);
+    /** The bands 0-1, 2-3, 4-7, 8-15 and their rounded middles 1, 3, 6, 12. */
+    const band = (d: number): number => (d <= 1 ? 1 : d <= 3 ? 3 : d <= 7 ? 6 : 12);
     for (const q of passes[2]) {
       const owners = new Set(unitFaces(q).map((k) => k.split(',').slice(0, 3).join(',')));
       expect(owners.size).toBe(1);
       const [x, y, z] = [...owners][0]!.split(',').map(Number) as [number, number, number];
-      for (const w of q.words) expect(fieldsOf(w).depth).toBe(depth[local(x, y, z)]);
+      const d = depth[local(x, y, z)]!;
+      for (const w of q.words) expect(fieldsOf(w).depth).toBe(faceOf(q) === FACE_UP ? band(d) : d);
     }
-    // The same surface with two depths: the top merges only within equal depth.
+    // The same surface with two depths in different bands: the top merges only within a band.
     const sea = paddedFrom(() => AIR, () => 0xF0, (_x, y) => (y <= 2 ? WATER_SOURCE : NO_FLUID));
     const tops = mesh(sea, depthFrom((x, y) => (y <= 2 ? (x < 8 ? 3 : 15) : 0))).passes[2];
     expect(tops).toHaveLength(2);
-    expect(tops.map((q) => fieldsOf(q.words[0]!).depth).sort((a, b) => a - b)).toEqual([3, 15]);
+    expect(tops.map((q) => fieldsOf(q.words[0]!).depth).sort((a, b) => a - b)).toEqual([3, 12]);
+    // Down faces keep the exact depth: a slab of water over air, 4 deep at x < 8 and 7 deep at x ≥ 8, draws two downs.
+    const slab = paddedFrom(() => AIR, () => 0xF0, (_x, y) => (y >= 8 && y <= 10 ? WATER_SOURCE : NO_FLUID));
+    const downs = mesh(slab, depthFrom((x, y) => (y >= 8 && y <= 10 ? (x < 8 ? 4 : 7) : 0))).passes[2].filter((q) => faceOf(q) === FACE_DOWN);
+    expect(downs.map((q) => fieldsOf(q.words[0]!).depth).sort((a, b) => a - b)).toEqual([4, 7]);
+  });
+
+  test("Lever 1 (SP7a §6.5, D27): a top face's key holds its depth band, so depths 4 and 7 merge into one top quad at 6 and depths 3 and 4 do not (3 and 6); side faces keep the exact depth and do not merge", () => {
+    // A sea up to local y 6 behind a glass wall at z 0 (the pads continue it in x, z and below): one flat top over
+    // z 1 … 15, and the north faces against the glass, `lo` deep at x < 8 and `hi` deep at x ≥ 8. The north faces of
+    // row y 6 carry drop 1 on their top corners and those below drop 0, so each run of one depth draws two north quads.
+    const sea = paddedFrom((_x, y, z) => (z === 0 && y <= 6 ? GLASS : AIR), () => 0xF0, (_x, y, z) => (z >= 1 && y <= 6 ? WATER_SOURCE : NO_FLUID));
+    const quads = (lo: number, hi: number): { tops: number[]; norths: number[] } => {
+      const q = mesh(sea, depthFrom((x, y, z) => (z >= 1 && y <= 6 ? (x < 8 ? lo : hi) : 0))).passes[2];
+      const depths = (f: number): number[] => q.filter((r) => faceOf(r) === f).map((r) => fieldsOf(r.words[0]!).depth).sort((a, b) => a - b);
+      expect(q.every((r) => faceOf(r) === FACE_UP || faceOf(r) === FACE_NORTH)).toBe(true);
+      return { tops: depths(FACE_UP), norths: depths(FACE_NORTH) };
+    };
+    expect(quads(4, 7)).toEqual({ tops: [6], norths: [4, 4, 7, 7] });
+    expect(quads(3, 4)).toEqual({ tops: [3, 6], norths: [3, 3, 4, 4] });
+    expect(quads(8, 15)).toEqual({ tops: [12], norths: [8, 8, 15, 15] });
+    expect(quads(1, 2)).toEqual({ tops: [1, 3], norths: [1, 1, 2, 2] });
+    // One depth throughout: the north faces merge across x (two quads, the top row and the rows below).
+    expect(quads(5, 5)).toEqual({ tops: [6], norths: [5, 5] });
   });
 
   test("a test-only keyMask naming depth merges a pool's top across two depths (3 and 4, rulings P35): one quad, two without it (R5's split, SP7a §6.5)", () => {
@@ -223,7 +251,8 @@ describe('meshFluid (SP4a spec §5.6)', () => {
       return quadsOf(b.view(2));
     };
     expect(topsWith(0)).toHaveLength(2);
-    expect(topsWith(0).map((q) => fieldsOf(q.words[0]!).depth).sort((a, b) => a - b)).toEqual([3, 4]);
+    // The tops carry their bands' middles (2-3 → 3, 4-7 → 6; D27's Lever 1).
+    expect(topsWith(0).map((q) => fieldsOf(q.words[0]!).depth).sort((a, b) => a - b)).toEqual([3, 6]);
     const merged = topsWith(FLUID_KEY_DEPTH);
     expect(merged).toHaveLength(1);
     expect(faceOf(merged[0]!)).toBe(FACE_UP);
@@ -262,7 +291,7 @@ describe('meshFluid (SP4a spec §5.6)', () => {
       return out.sort((a, b) => a[1] - b[1]);
     };
     const medium: MeshOptions = { ao: true, smoothLight: true };
-    expect(waterQuads(medium)).toEqual([[FACE_UP, 3], [FACE_UP, 4]]);
+    expect(waterQuads(medium)).toEqual([[FACE_UP, 3], [FACE_UP, 6]]);
     expect(waterQuads({ ...medium, fluidKeyMask: FLUID_KEY_DEPTH })).toHaveLength(1);
     expect(waterQuads({ ...medium, fluidKeyMask: FLUID_KEY_DEPTH })[0]![0]).toBe(FACE_UP);
   });
