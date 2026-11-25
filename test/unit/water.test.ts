@@ -6,7 +6,8 @@
  * (`referenceSettleOrigins`, `a2RegionCounts`), and the springs found from a region's proto (`springsOfRegion`, on
  * real columns of seed '42' and on hand-built side-by-side springs) with a spring's own front (`springFront`); A5's
  * springs and falls (`springFacts`, `a5RegionCounts`, `a5Parts`) and their review poses (`a5Examples`); B5's lake rim on T
- * and its settled spill (`lakeAirAdjacentCount`, `lakeSpillCount`, SP7a §13.2).
+ * and its settled spill (`lakeAirAdjacentCount`, `lakeSpillCount`, SP7a §13.2); R5's surface top faces and their quads
+ * (`surfaceTopWaterCounts`, SP7a §6.5, D27; rulings P34) on a hand-built 3 × 3 of Published columns.
  */
 import { describe, expect, test } from 'vitest';
 import { CAVE_BIOME, CAVE_KIND, MIN_Y } from '../../src/core/constants';
@@ -20,16 +21,19 @@ import { createSettleScratch } from '../../src/gen/fluids/settle';
 import { newSpringList, springTries, type SpringList } from '../../src/gen/fluids/springs';
 import { terrainSpringsDebug } from '../../src/gen/pipeline/terrainStage';
 import { LAVA_CHUNKS, WATER_CHUNKS } from '../../src/metrics/sp7aGoldens';
+import { createMeshScratch, meshColumnPayload } from '../../src/mesh/column';
 import { FLUID_WATER, fluidLevel, fluidUnsettled, LAVA_SOURCE, NO_FLUID, packFluid, WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { FACE_UP } from '../../src/world/blocks/kinds';
+import { SECTIONS } from '../../src/world/store/columnTable';
 import { AIR, STONE } from '../../src/world/blocks/index';
-import { createStore } from '../../src/world/store/store';
+import { createStore, type VoxelStore } from '../../src/world/store/store';
 import { spreadSides } from '../harness/caveMetrics';
-import { referenceSettle, referenceSettleKey, referenceSettleOrigins } from '../harness/refs';
+import { meshFaceCounts, referenceSettle, referenceSettleKey, referenceSettleOrigins } from '../harness/refs';
 import { genRegion, regionView, type RegionView } from '../harness/region';
 import {
   a2Parts, a2RegionCounts, a5Examples, a5Parts, a5RegionCounts, lakeAirAdjacentCount, lakeSpillCount, loadWaterRegion, ORIGIN_AQUIFER, ORIGIN_SKY_OPEN,
-  ORIGIN_SPRING, pooledClarkEvans, protoRuleReader, regionSpringList, regionVoxelOf, SPILL_SLOPE_MIN, springFacts, springFront, springsOfRegion, waterExamples,
-  waterParts, waterRegionCounts,
+  ORIGIN_SPRING, pooledClarkEvans, protoRuleReader, regionSpringList, regionVoxelOf, SPILL_SLOPE_MIN, springFacts, springFront, springsOfRegion,
+  surfaceTopWaterCounts, waterExamples, waterParts, waterRegionCounts,
   type A2RegionCounts, type A5RegionOptions, type WaterBox, type WaterRegionCounts,
 } from '../harness/water';
 
@@ -807,5 +811,58 @@ describe('B5: lake water with air horizontally adjacent on T, and its settled sp
     const view = viewOf(lake());
     expect(() => lakeAirAdjacentCount(view, new Uint8Array(16))).toThrow(RangeError);
     expect(() => lakeSpillCount(view, new Map(), new Uint8Array(16))).toThrow(RangeError);
+  });
+});
+
+describe("R5's surface top faces (SP7a spec §6.5, D27; rulings P34)", () => {
+  /**
+   * A hand-built 3 × 3 of Published columns around (0, 0), light 0xF0, on a stone floor (y ≤ 3), at y 4 …:
+   * - a 4 × 4 pool of sources two deep (x, z 2 … 5, y 4 … 5) in the air: 16 surface voxels at y 5, whose tops are the
+   *   inner 2 × 2 (every corner drop 1, flat: one merged quad) and the ring of 12 (sloped: one quad each); the 16 at y 4
+   *   have water above;
+   * - a source under stone at (8, 4, 8): a surface voxel whose top the stone hides (no face);
+   * - a source under a lava source at (11, 4, 11): no water above, so a surface voxel, its top drawn (flat, drop 3).
+   */
+  function scene(): VoxelStore {
+    const at = new Map<string, number>();
+    for (let y = 4; y <= 5; y++) for (let z = 2; z <= 5; z++) for (let x = 2; x <= 5; x++) at.set(key(x, y, z), WATER_SOURCE);
+    at.set(key(8, 4, 8), WATER_SOURCE);
+    at.set(key(11, 4, 11), WATER_SOURCE);
+    at.set(key(11, 5, 11), LAVA_SOURCE);
+    const s = createStore({ shared: false, maxBlockBytes: 32 * MiB, maxByteBytes: 32 * MiB });
+    for (let cz = -1; cz <= 1; cz++) {
+      for (let cx = -1; cx <= 1; cx++) {
+        const w = s.claimColumn(cx, cz, 0);
+        for (let sy = 0; sy < SECTIONS; sy++) {
+          const blocks = new Uint16Array(4096);
+          const fluid = new Uint8Array(4096);
+          for (let i = 0; i < 4096; i++) {
+            const [x, y, z] = [16 * cx + (i & 15), -64 + 16 * sy + (i >> 8), 16 * cz + ((i >> 4) & 15)];
+            blocks[i] = y <= 3 || (x === 8 && y === 5 && z === 8) ? STONE : AIR;
+            fluid[i] = at.get(key(x, y, z)) ?? NO_FLUID;
+          }
+          w.setFinal(sy, blocks, new Uint8Array(4096).fill(0xF0), fluid);
+        }
+        w.commit(3);
+      }
+    }
+    return s;
+  }
+
+  test('counts only the top faces of surface voxels (no water above, not hidden) and the up quads over them, sloped apart', () => {
+    const s = scene();
+    const view = regionView(s, -1, -1, 3, 3);
+    const p = meshColumnPayload(s.neighborhood(0, 0), createMeshScratch(), { ao: true, smoothLight: true });
+    expect(surfaceTopWaterCounts(view, 0, 0, p)).toEqual({ quads: 1 + 12 + 1, sloped: 12, faces: 16 + 1 });
+    // The mesh's own water faces: the counted tops are exactly its up faces, and its sides and down faces are more quads.
+    const m = meshFaceCounts(p);
+    expect(new Set([...m.water].filter((k) => k % 6 === FACE_UP)).size).toBe(17);
+    expect(m.quadsWater).toBeGreaterThan(14);
+  });
+
+  test("the payload must be the column's own", () => {
+    const s = scene();
+    const p = meshColumnPayload(s.neighborhood(0, 0), createMeshScratch(), { ao: true, smoothLight: true });
+    expect(() => surfaceTopWaterCounts(regionView(s, -1, -1, 3, 3), 1, 0, p)).toThrow(RangeError);
   });
 });

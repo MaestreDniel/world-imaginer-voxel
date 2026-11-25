@@ -9,8 +9,8 @@
 import { describe, expect, test } from 'vitest';
 import { createMeshBuilder, type MeshBuilder } from '../../src/mesh/builder';
 import { createMeshScratch, meshColumnPayload, type ColumnMeshPayload } from '../../src/mesh/column';
-import { fluidDepths, meshFluid } from '../../src/mesh/fluid';
-import { LAVA_LAYER, type MeshTables } from '../../src/mesh/greedy';
+import { FLUID_KEY_DEPTH, fluidDepths, meshFluid } from '../../src/mesh/fluid';
+import { LAVA_LAYER, type MeshOptions, type MeshTables } from '../../src/mesh/greedy';
 import { packFluid as packFluidWord, packSolid, unpackFluid, unpackSolid, type FluidFields } from '../../src/mesh/packing';
 import { AIR, GLASS, ICE, LADDER, REGISTRY, STONE, TORCH } from '../../src/world/blocks/index';
 import { FLUID_LAVA, FLUID_WATER, LAVA_SOURCE, NO_FLUID, WATER_SOURCE, packFluid } from '../../src/world/blocks/fluid';
@@ -211,6 +211,60 @@ describe('meshFluid (SP4a spec §5.6)', () => {
     const tops = mesh(sea, depthFrom((x, y) => (y <= 2 ? (x < 8 ? 3 : 15) : 0))).passes[2];
     expect(tops).toHaveLength(2);
     expect(tops.map((q) => fieldsOf(q.words[0]!).depth).sort((a, b) => a - b)).toEqual([3, 15]);
+  });
+
+  test("a test-only keyMask naming depth merges a pool's top across two depths (3 and 4, rulings P35): one quad, two without it (R5's split, SP7a §6.5)", () => {
+    // A sea up to local y 6, 3 deep for x < 8 and 4 deep for x ≥ 8: one flat surface, two depths.
+    const sea = paddedFrom(() => AIR, () => 0xF0, (_x, y) => (y <= 6 ? WATER_SOURCE : NO_FLUID));
+    const depth = depthFrom((x, y) => (y <= 6 ? (x < 8 ? 3 : 4) : 0));
+    const topsWith = (keyMask: number): ReadQuad[] => {
+      const b = createMeshBuilder();
+      meshFluid(sea, depth, b, undefined, keyMask);
+      return quadsOf(b.view(2));
+    };
+    expect(topsWith(0)).toHaveLength(2);
+    expect(topsWith(0).map((q) => fieldsOf(q.words[0]!).depth).sort((a, b) => a - b)).toEqual([3, 4]);
+    const merged = topsWith(FLUID_KEY_DEPTH);
+    expect(merged).toHaveLength(1);
+    expect(faceOf(merged[0]!)).toBe(FACE_UP);
+    expect(allUnitFaces(merged)).toEqual(allUnitFaces(topsWith(0)));
+  });
+
+  test("through meshColumnPayload, MeshOptions.fluidKeyMask naming depth merges the same two depths into one top quad; absent, two", () => {
+    // A 3 × 3 of Published columns: stone up to y 3 where x < 8 in each column, up to y 2 elsewhere, water up to y 6:
+    // the centre column's surface is 3 deep at x < 8 and 4 deep at x ≥ 8, every corner a source among sources.
+    const s = createStore({ shared: false, maxBlockBytes: 32 << 20, maxByteBytes: 32 << 20 });
+    for (let cz = -1; cz <= 1; cz++) {
+      for (let cx = -1; cx <= 1; cx++) {
+        const w = s.claimColumn(cx, cz, 0);
+        for (let sy = 0; sy < SECTIONS; sy++) {
+          const blocks = new Uint16Array(4096);
+          const fluid = new Uint8Array(4096);
+          for (let i = 0; i < 4096; i++) {
+            const y = -64 + 16 * sy + (i >> 8);
+            const floor = (i & 15) < 8 ? 3 : 2;
+            blocks[i] = y <= floor ? STONE : AIR;
+            fluid[i] = y > floor && y <= 6 ? WATER_SOURCE : NO_FLUID;
+          }
+          w.setFinal(sy, blocks, new Uint8Array(4096).fill(0xF0), fluid);
+        }
+        w.commit(3);
+      }
+    }
+    /** Each water quad's (pass 2) face and depth, from its first vertex's word. */
+    const waterQuads = (o: MeshOptions): Array<[face: number, depth: number]> => {
+      const p = meshColumnPayload(s.neighborhood(0, 0), createMeshScratch(), o);
+      const out: Array<[number, number]> = [];
+      for (let r = 0; r < p.rows.length / 6; r++) {
+        if (p.rows[6 * r + 1] !== 2) continue;
+        for (let v = p.rows[6 * r + 2]!; v < p.rows[6 * r + 2]! + p.rows[6 * r + 3]!; v += 4) out.push([fieldsOf(p.data[v]!).face, fieldsOf(p.data[v]!).depth]);
+      }
+      return out.sort((a, b) => a[1] - b[1]);
+    };
+    const medium: MeshOptions = { ao: true, smoothLight: true };
+    expect(waterQuads(medium)).toEqual([[FACE_UP, 3], [FACE_UP, 4]]);
+    expect(waterQuads({ ...medium, fluidKeyMask: FLUID_KEY_DEPTH })).toHaveLength(1);
+    expect(waterQuads({ ...medium, fluidKeyMask: FLUID_KEY_DEPTH })[0]![0]).toBe(FACE_UP);
   });
 
   test("water faces carry §5.3's smooth light per vertex; every word unpacks to in-range fields", () => {

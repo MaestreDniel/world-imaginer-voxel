@@ -112,6 +112,12 @@
  *   horizontal and downward steps through voxels the overlay changed to water (the steps water takes, so the spill a
  *   lake source feeds; where it merges with another body's spill both count, and a new source on the way passes the
  *   flood on but is not counted).
+ * - **R5** (Task 33, SP7a spec §6.5, D27; `surfaceTopWaterCounts`; `render.metric.ts` reads it per interior column of
+ *   its water regions, rulings P34): over one column's final set and its mesh payload, `faces` the surface voxels'
+ *   top faces, one per water voxel (fluid type water) with no water above whose voxel above does not hide its top (a
+ *   PASS opaque state with its down face full; y 319's above is air), so a water top under lava counts; `quads` the
+ *   payload's water quads (pass 2) on the up face, which `meshFluid` draws only on such voxels; `sloped` those whose
+ *   four vertices' `cornerDrop`s are not all equal (SP7a spec §6.2: one quad per voxel). R5 reads quads over faces.
  */
 import { CAVE_BIOME, caveBiomeOf, ISLAND_SPRING_MIN_FALL } from '../../src/core/constants';
 import type { Seed64 } from '../../src/core/hash';
@@ -124,11 +130,15 @@ import { createDensityContext } from '../../src/gen/density/context';
 import { aquiferOf, barrierAt, inAbyssMargin } from '../../src/gen/fluids/aquifer';
 import { createSettleScratch, settleWindow, type SettleScratch, type SettleSink, type SettleSource } from '../../src/gen/fluids/settle';
 import { springTries, type SpringKind, type SpringList } from '../../src/gen/fluids/springs';
+import { MESH_PASS_TRANSLUCENT, type ColumnMeshPayload } from '../../src/mesh/column';
+import { DEFAULT_MESH_TABLES } from '../../src/mesh/greedy';
+import { PACK_LAYOUT } from '../../src/mesh/packing';
 import {
   FLUID_LAVA, FLUID_WATER, fluidFalling, fluidLevel, fluidType, fluidUnsettled, hasFluid, LAVA_SOURCE, NO_FLUID, WATER_SOURCE,
 } from '../../src/world/blocks/fluid';
 import { capOf, FLUID_VALUE_FALLING, FLUID_VALUE_SOURCE, isPassable, ruleOffers, type FluidRuleReader } from '../../src/world/blocks/fluidRules';
 import { AIR, STONE } from '../../src/world/blocks/index';
+import { FACE_DOWN, FACE_UP, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import type { ColumnView } from '../../src/world/store/store';
 import {
   BIOME_SHIFT, caveComponents, caveGridOf, deepSkyLabels, FLUID_BIT, GRID_H, GRID_Y0, longestRunYaw, preCaveTops, SOLID_BIT, TAG_MASK,
@@ -1594,4 +1604,60 @@ export function lakeSpillCount(view: RegionView, settled: Map<number, number>, l
     step(x, y, z);
   }
   return n;
+}
+
+/** R5's counts of one column (SP7a spec §6.5, D27; see the header). */
+export interface SurfaceTopCounts {
+  /** Water quads on the up face. */
+  readonly quads: number;
+  /** Of `quads`, those whose four vertices' corner drops differ (sloped tops, one per voxel). */
+  readonly sloped: number;
+  /** The surface voxels' visible top faces (distinct unit faces). */
+  readonly faces: number;
+}
+
+/**
+ * R5's counts over column (cx, cz) of `view` (its final set) and `p`, the column's own mesh payload (SP7a spec §6.5, D27;
+ * rulings P34; see the header). Throws a RangeError when `p` is another column's.
+ */
+export function surfaceTopWaterCounts(view: RegionView, cx: number, cz: number, p: ColumnMeshPayload): SurfaceTopCounts {
+  if (p.cx !== cx || p.cz !== cz) throw new RangeError(`surfaceTopWaterCounts: the payload is column (${p.cx}, ${p.cz})'s, not (${cx}, ${cz})'s`);
+  const col = view.store.final(cx, cz);
+  if (col === null) throw new Error(`surfaceTopWaterCounts: column (${cx}, ${cz}) has no final set`);
+  const { pass, fullFaces } = DEFAULT_MESH_TABLES;
+  const downBit = 1 << FACE_DOWN;
+  let faces = 0;
+  for (let sy = 0; sy < 24; sy++) {
+    const own = col.sectionFluid(sy);
+    if (typeof own === 'number' && fluidType(own) !== FLUID_WATER) continue;
+    for (let y = GRID_Y0 + 16 * sy; y < GRID_Y0 + 16 * sy + 16; y++) {
+      for (let lz = 0; lz < 16; lz++) {
+        for (let lx = 0; lx < 16; lx++) {
+          if (fluidType(col.fluid(lx, y, lz)) !== FLUID_WATER) continue;
+          if (y < GRID_Y0 + GRID_H - 1) {
+            if (fluidType(col.fluid(lx, y + 1, lz)) === FLUID_WATER) continue;
+            const above = col.block(lx, y + 1, lz);
+            if (pass[above] === PASS_OPAQUE && (fullFaces[above]! & downBit) !== 0) continue;
+          }
+          faces++;
+        }
+      }
+    }
+  }
+  const face = PACK_LAYOUT.fluid.face;
+  const drop = PACK_LAYOUT.fluid.cornerDrop;
+  const field = (w: number, f: { offset: number; bits: number }): number => (w >>> f.offset) & ((1 << f.bits) - 1);
+  let quads = 0;
+  let sloped = 0;
+  for (let r = 0; r < p.rows.length / 6; r++) {
+    if (p.rows[6 * r + 1] !== MESH_PASS_TRANSLUCENT) continue;
+    const v0 = p.rows[6 * r + 2]!;
+    for (let v = v0; v < v0 + p.rows[6 * r + 3]!; v += 4) {
+      if (field(p.data[v]!, face) !== FACE_UP) continue;
+      quads++;
+      const d = field(p.data[v]!, drop);
+      if (field(p.data[v + 1]!, drop) !== d || field(p.data[v + 2]!, drop) !== d || field(p.data[v + 3]!, drop) !== d) sloped++;
+    }
+  }
+  return { quads, sloped, faces };
 }

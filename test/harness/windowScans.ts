@@ -6,7 +6,7 @@ import { createGenContext } from '../../src/gen/context';
 import { newSpringList } from '../../src/gen/fluids/springs';
 import { terrainSpringsDebug } from '../../src/gen/pipeline/terrainStage';
 import { ringCandidates } from '../../src/metrics/sp3eGoldens';
-import { FLUID_LAVA, FLUID_WATER, NO_FLUID, WATER_SOURCE, fluidFalling, fluidLevel, fluidType } from '../../src/world/blocks/fluid';
+import { FLUID_LAVA, FLUID_WATER, NO_FLUID, WATER_SOURCE, fluidFalling, fluidLevel, fluidType, hasFluid } from '../../src/world/blocks/fluid';
 import { AIR, GRASS_BLOCK } from '../../src/world/blocks/index';
 import { genRegion, type RegionView } from './region';
 
@@ -39,6 +39,14 @@ import { genRegion, type RegionView } from './region';
  *   (`interiorSprings`, no region generated). Since the lava springs (SP7a Task 21, rulings P42) the contact window also
  *   holds flowing lava (`SettleFeatures.flowingLava`: lava steps or falls), the lava half of R1's and `mesh.section`'s
  *   flowing-fluid sites.
+ * - R5's water windows (`render.metric.ts`; SP7a spec §6.5, D27, Task 33): candidate V(a, b) of interior side n is the
+ *   (n + 2) × (n + 2) region at chunk origin (na − 1, nb − 1), whose interior is the n × n chunks at (na, nb) (n 4: fast's
+ *   coast; n 8: quick's and full's coast and lake), in the same rings, seed '42', profile default, generated up to 'D'.
+ *   The features are read over the interior from the blocks and the final fluid (`waterWindowFeatures`): a coast holds
+ *   ≥ 256 sea positions, ≥ 256 land positions and ≥ 1 flowing water voxel (the settle's spills); a lake ≥ 256 lake
+ *   positions (`waterWindowHolds`). The scan skips a candidate whose lattice over the interior (block (16na + 8i + 4,
+ *   16nb + 8j + 4), i, j < 2n; `waterWindowPoints`) holds fewer than an eighth of its points of each: sea and land
+ *   (`coastPoints`' rules) for a coast, lake (`wetMask` 1) for a lake.
  */
 
 /** A window's region: its chunk origin and its side in chunks; the interior is the region minus its border ring. */
@@ -403,4 +411,97 @@ export async function scanSettleWindow(
     }
   }
   throw new Error(`windowScans: no settle window holding '${feature}' at seed '${seed}' within ring ${maxRing}`);
+}
+
+// ---------------------------------------------------------------- R5's water windows
+
+/** The kinds of R5's water windows (SP7a spec §6.5, D27). */
+export const WATER_WINDOW_KINDS = ['coast', 'lake'] as const;
+export type WaterWindowKind = (typeof WATER_WINDOW_KINDS)[number];
+
+/** A water window's predicate: positions of each counted kind in the interior, at least. */
+export const MIN_WATER_POSITIONS = 256;
+
+/** Candidate V(a, b) of R5's water windows of interior side `side` chunks (header). */
+export const waterWindowAt = (side: number, a: number, b: number): WindowRegion => ({ cx0: side * a - 1, cz0: side * b - 1, size: side + 2 });
+
+/** What `waterWindowFeatures` counts over a water window's interior. */
+export interface WaterWindowFeatures {
+  /** Positions whose voxel at y SEA_LEVEL holds water under an air voxel with no fluid (the sea's or a river's top). */
+  readonly sea: number;
+  /** Positions whose block at y SEA_LEVEL + 1 is not air (ground above the sea's top). */
+  readonly land: number;
+  /** Positions holding a water source above y SEA_LEVEL under an air voxel with no fluid (a lake's surface). */
+  readonly lake: number;
+  /** Flowing water voxels (level > 0 or falling). */
+  readonly flowing: number;
+}
+
+/** The features of a water window's interior (the region minus its border ring), from its blocks and final fluid. */
+export function waterWindowFeatures(block: VoxelAt, fluid: VoxelAt, r: WindowRegion): WaterWindowFeatures {
+  let sea = 0, land = 0, lake = 0, flowing = 0;
+  const x0 = 16 * (r.cx0 + 1);
+  const z0 = 16 * (r.cz0 + 1);
+  const n = 16 * (r.size - 2);
+  const dryAir = (x: number, y: number, z: number): boolean => block(x, y, z) === AIR && !hasFluid(fluid(x, y, z));
+  for (let z = z0; z < z0 + n; z++) {
+    for (let x = x0; x < x0 + n; x++) {
+      if (block(x, SEA_LEVEL + 1, z) !== AIR) land++;
+      else if (fluidType(fluid(x, SEA_LEVEL, z)) === FLUID_WATER && dryAir(x, SEA_LEVEL + 1, z)) sea++;
+      let surface = false;
+      for (let y = -64; y < 320; y++) {
+        const f = fluid(x, y, z);
+        if (fluidType(f) !== FLUID_WATER) continue;
+        if (fluidLevel(f) > 0 || fluidFalling(f)) flowing++;
+        else if (!surface && y > SEA_LEVEL && y < 319 && dryAir(x, y + 1, z)) surface = true;
+      }
+      if (surface) lake++;
+    }
+  }
+  return { sea, land, lake, flowing };
+}
+
+/** Whether a water window's interior holds `kind` (header). */
+export function waterWindowHolds(kind: WaterWindowKind, f: WaterWindowFeatures): boolean {
+  if (kind === 'coast') return f.sea >= MIN_WATER_POSITIONS && f.land >= MIN_WATER_POSITIONS && f.flowing >= 1;
+  return f.lake >= MIN_WATER_POSITIONS;
+}
+
+/** The water windows' prefilter counts at V(a, b) of interior side `side`, profile default, at `seed` (header). */
+export function waterWindowPoints(seed: string, side: number, a: number, b: number): { points: number; sea: number; land: number; lake: number } {
+  const ctx = createGenContext(seedFromInput(seed), resolveProfile('default'));
+  const p = newPointRecord();
+  const k = 2 * side;
+  let sea = 0, land = 0, lake = 0;
+  for (let j = 0; j < k; j++) {
+    for (let i = 0; i < k; i++) {
+      samplePoint(ctx, 16 * side * a + 8 * i + 4, 16 * side * b + 8 * j + 4, false, p);
+      if (p.wetMask === 1) lake++;
+      if (p.offset < SEA_LEVEL && !p.riverWet && p.lakeMask === 0) sea++;
+      else if (p.offset > SEA_LEVEL) land++;
+    }
+  }
+  return { points: k * k, sea, land, lake };
+}
+
+/**
+ * The scan for R5's water window of `kind` and interior side `side` at `seed` (header): the first candidate that holds
+ * it, with its features and ring.
+ */
+export async function scanWaterWindow(
+  seed: string, kind: WaterWindowKind, side: number, maxRing = 48,
+): Promise<{ a: number; b: number; ring: number } & WaterWindowFeatures> {
+  const params = resolveProfile('default');
+  for (let ring = 0; ring <= maxRing; ring++) {
+    for (const [a, b] of ringCandidates(ring)) {
+      const c = waterWindowPoints(seed, side, a, b);
+      const min = c.points / 8;
+      if (kind === 'coast' ? c.sea < min || c.land < min : c.lake < min) continue;
+      const r = waterWindowAt(side, a, b);
+      const { view } = await genRegion({ seed, params, cx0: r.cx0, cz0: r.cz0, w: r.size, h: r.size, upTo: 'D', order: 'spiral', threads: 4, workerDir: 'windowScanWorker' });
+      const f = waterWindowFeatures((x, y, z) => view.block(x, y, z), (x, y, z) => view.fluid(x, y, z), r);
+      if (waterWindowHolds(kind, f)) return { a, b, ring, ...f };
+    }
+  }
+  throw new Error(`windowScans: no ${kind} water window of side ${side} at seed '${seed}' within ring ${maxRing}`);
 }

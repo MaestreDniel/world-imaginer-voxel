@@ -27,7 +27,10 @@
  *   keeps a merged quad's words exact if a waterlogged state ever meshes here). A flat top (four equal drops) merges
  *   greedily; a sloped top is one quad per voxel, split along the diagonal joining the two corners of lower summed
  *   height (`splitV0V2` over the drawn heights in ninths, ties v0-v2; SP7a spec §6.2); every other quad splits along
- *   v0-v2.
+ *   v0-v2. A test-only `keyMask` (`FLUID_KEY_*`; R5's split, SP7a spec §6.5, D27) drops the parts it names from the
+ *   merged faces' keys (key A's `depth` or its four `cornerDrop`s, or key B's light), so faces differing only there
+ *   merge; the merged quad's words then carry 0 for those parts, which only a measurement reads. The page never sets
+ *   it (`MeshOptions.fluidKeyMask` absent: 0).
  *
  * Lava (SP5a spec §1.3; SP7a spec §6.3, D9, D26): a lava voxel draws a face against a neighbour that does not occlude
  * it and is not lava (so also against glass, ice and the box states, whose faces toward it are culled; against water
@@ -121,6 +124,15 @@ const KA_DEPTH = 3;
 const KA_DROP = 7;
 const KA_LAVA = 1 << 23;
 const KA_PRESENT = 0x80000000;
+
+/**
+ * The parts of the merge keys a test-only `keyMask` can drop (R5's split by key, SP7a spec §6.5, D27): key A's `depth`,
+ * key A's four `cornerDrop`s, key B's light (sky and block per vertex). Sloped tops and side strips are one quad per
+ * voxel whatever the mask.
+ */
+export const FLUID_KEY_DEPTH = 1;
+export const FLUID_KEY_DROP = 2;
+export const FLUID_KEY_LIGHT = 4;
 
 /** The slice masks (index v·16 + u), reused by every call (the mesher runs one section at a time). */
 const MASK_A = new Uint32Array(256);
@@ -233,13 +245,17 @@ function topCornerDrops(blocks: Uint16Array, fluid: Uint8Array): void {
  * Meshes the water of the padded section `p` into `b`'s translucent pass (pass 2) and its lava into the opaque pass
  * (pass 0), adding to what `b` holds (SP4a spec §5.6; SP5a spec §1.3; SP7a spec §6.1-§6.3). `depth` holds 4096
  * values, section-local `y·256 + z·16 + x` (`fluidDepths`; water's only); the padded view is used for face
- * visibility, light and the top corners' heights.
+ * visibility, light and the top corners' heights. `keyMask` (test-only, `FLUID_KEY_*`, default 0) drops those parts
+ * from the merged faces' keys (header).
  */
-export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t: MeshTables = TABLES): void {
+export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t: MeshTables = TABLES, keyMask = 0): void {
   const { blocks, light, fluid } = p;
   const pass = t.pass;
   const full = t.fullFaces;
   const tint = t.tint;
+  // The key bits a merged face keeps (all of them without a mask).
+  const keepA = ~(((keyMask & FLUID_KEY_DEPTH) !== 0 ? 15 << KA_DEPTH : 0) | ((keyMask & FLUID_KEY_DROP) !== 0 ? 0xFFFF << KA_DROP : 0));
+  const keepB = (keyMask & FLUID_KEY_LIGHT) !== 0 ? 0 : -1;
   /** 1 when the state is opaque for smooth light (PASS opaque, `fullFaces` 63), else 0. */
   const solid = (s: number): number => (pass[s] === OPAQUE && full[s] === FULL ? 1 : 0);
   const sink: QuadSink = (f, d, i, j, w, h, ka, kb, kc) => emit(f, d, i, j, w, h, ka, kb, kc, b);
@@ -309,8 +325,8 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
             emit(f, d, i, j, 1, 1, ka, kb, kc, b);
             continue;
           }
-          MASK_A[m] = ka;
-          MASK_B[m] = kb;
+          MASK_A[m] = (ka & keepA) >>> 0;
+          MASK_B[m] = (kb & keepB) >>> 0;
           MASK_C[m] = kc;
           any = true;
         }

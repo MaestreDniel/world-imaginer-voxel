@@ -95,6 +95,11 @@ export const DEFAULT_MESH_TABLES: MeshTables = { pass: PASS_OF, fullFaces: FULL_
 export interface MeshOptions {
   readonly ao: boolean;
   readonly smoothLight: boolean;
+  /**
+   * Test-only: the merge-key parts `meshFluid` drops (`fluid.ts`' `FLUID_KEY_*`; R5's split, SP7a spec §6.5, D27).
+   * Absent (the page's options): none.
+   */
+  readonly fluidKeyMask?: number;
 }
 
 /** The brightness factor of each `ao2` (09's table, SP4a spec §5.3); the shaders apply it. */

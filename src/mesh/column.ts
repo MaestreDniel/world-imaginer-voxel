@@ -16,7 +16,7 @@ import { meshBoxes } from './boxes';
 import { createMeshBuilder, type MeshBuilder, type MeshPass, type MeshView } from './builder';
 import { connectivity15 } from './connectivity';
 import { fluidDepths, meshFluid } from './fluid';
-import { meshSolid, type MeshOptions } from './greedy';
+import { DEFAULT_MESH_TABLES, meshSolid, type MeshOptions } from './greedy';
 import { meshXray } from './xray';
 
 const AIR_STATE = AIR;
@@ -31,6 +31,7 @@ const MESH_SOLID = meshSolid;
 const MESH_BOXES = meshBoxes;
 const MESH_FLUID = meshFluid;
 const MESH_XRAY = meshXray;
+const TABLES = DEFAULT_MESH_TABLES;
 const FLUID_DEPTHS = fluidDepths;
 const CONNECTIVITY = connectivity15;
 const NEW_PADDED = createPaddedSection;
@@ -298,7 +299,7 @@ function finalsOnce(nb: NeighborhoodReader): NeighborhoodReader {
  * The mesh payload of the centre column of `nb` (SP4a spec §5.8), whose 3 × 3 holds final sets (the job checks they are
  * Published). `versions` is read first, before any copy. Per section: a trivial one (`isTrivial`) gets connectivity
  * 0x7FFF or 0 and no rows; any other is copied into the padded view and meshed (`meshSolid`, `meshBoxes`, then
- * `fluidDepths` and, when the section holds fluid, `meshFluid`, then SP6a's `meshXray` into pass 3), with
+ * `fluidDepths` and, when the section holds fluid, `meshFluid` with `o.fluidKeyMask`, then SP6a's `meshXray` into pass 3), with
  * `connectivity15` and one row per non-empty pass, in (sy, pass) order. The column has one position, one data and one
  * index buffer, indices relative to each row's `vertexStart`. Every array of the payload is a fresh, exact, unshared copy (ruling P27): `s` is reused by the next
  * call, and the job transfers each buffer. The nine views are fetched once, after `versions` (SP4b spec §3.13, D27):
@@ -323,7 +324,7 @@ export function meshColumnPayload(nb: NeighborhoodReader, s: MeshScratch, o: Mes
     s.builder.reset();
     MESH_SOLID(s.padded, o, s.builder);
     MESH_BOXES(s.padded, o, s.builder);
-    if (FLUID_DEPTHS(once, sy, s.depth)) MESH_FLUID(s.padded, s.depth, s.builder);
+    if (FLUID_DEPTHS(once, sy, s.depth)) MESH_FLUID(s.padded, s.depth, s.builder, TABLES, o.fluidKeyMask ?? 0);
     MESH_XRAY(s.padded, s.builder);
     connectivity[sy] = CONNECTIVITY(s.padded);
     for (const pass of PASSES) {

@@ -1215,6 +1215,23 @@ The record of the generator push (Tasks 12-32, base `<push base>` 78c48e4), on d
 
 **Tests**: `npm run typecheck`; `npm test -- --maxWorkers=4` (379 files passed, 3 skipped; 7,424 tests passed, 1 expected fail, 17 skipped, 0 failed); `npm run test:metrics -- --maxWorkers=3` (20 files, 106 tests passed, 9 skipped; DT1 `settleReference` and `settleIsolated` 0, the coast window's interior settling 650 voxels as the golden's own count).
 
+### R5's measuring task (Task 33)
+
+R5 (§6.5, D27) now reads water quads on top faces of surface voxels (water with no water above) over the distinct surface top faces, on the Medium meshing, over the interior columns of its named water regions (`test/metrics/render.metric.ts`, the count `surfaceTopWaterCounts` in `test/harness/water.ts`, rulings P34). The water windows were found by `scanWaterWindow` (`test/harness/windowScans.ts`, kept as code with the other window scans, rulings P18/P28's precedent) at seed '42', profile default, and pinned: fast's `R5_COAST_FAST` V(−15, −15) of 4 × 4 chunks (ring 15: 890 sea and 2,137 land positions, 276 flowing water voxels); quick's and full's `R5_COAST` V(−8, −8) of 8 × 8 (ring 8: 13,118 sea, 2,158 land, 839 flowing) and `R5_LAKE` V(−2, 0) of 8 × 8 (ring 2: 3,413 lake positions). Quick and full also read R1's regions, which gain the interiors of `SETTLE_WINDOWS[0]` and `[1]` (the coast with its spills and spring, the water/lava contact with flowing lava; rulings P42) on every tier. R2 and R4 keep their regions (R2 quick reads 631,194 visible opaque faces, as before). R1 reads 0 hidden emitted and 0 visible missing, `xray` 0, on fast (5 regions, 120 columns), quick (9, 472) and full (15, 856), flowing water and lava included (K5).
+
+The split meshes each R5 column that holds water again in process through `meshColumnPayload` with the test-only `MeshOptions.fluidKeyMask` (`meshFluid`'s `keyMask`, `FLUID_KEY_DEPTH`, `FLUID_KEY_DROP`, `FLUID_KEY_LIGHT`), which drops one key part from the merged faces' keys. Light is key B's, so the mask covers key B's light as well as key A's `depth` and `cornerDrop`s (§6.5 splits by `depth`, `cornerDrop` and light). Sloped tops and side strips stay one quad per voxel under any mask.
+
+| tier (R5 regions, columns) | R5 (tops) | sloped share of the tops | all faces (before Task 33) | sides | downs | quads top / side / down | no `depth` | no `cornerDrop` | no light |
+|---|---|---|---|---|---|---|---|---|---|
+| fast (1, 16) | 0.4648 (462 / 994) | 0.284 | 0.5074 (648 / 1,277) | 0.726 | 0.327 | 71.3 / 26.2 / 2.5 % | 0.1761 (all 0.2780) | 0.4648 (all 0.4902) | 0.4588 (all 0.4957) |
+| quick (9, 472) | 0.2633 (12,522 / 47,557) | 0.336 | 0.3188 (20,352 / 63,835) | 0.484 | 0.300 | 61.5 / 38.1 / 0.4 % | 0.1744 (all 0.2512) | 0.2633 (all 0.2936) | 0.2014 (all 0.2643) |
+| full (15, 856) | 0.2885 (18,077 / 62,669) | 0.334 | 0.3339 (28,669 / 85,858) | 0.458 | 0.318 | 63.1 / 36.7 / 0.3 % | 0.1748 (all 0.2493) | 0.2885 (all 0.3084) | 0.2386 (all 0.2897) |
+
+- **Today's 0.2236, re-read.** The figure predates the flowing mesher and the generator push. On today's tree the definition before Task 33 over the regions before Task 33 reads 0.3478 on quick (13,589 / 39,072) and 0.3586 on full (21,906 / 61,095), the flowing water's sloped tops and strips included. Under §6.5's definition on R5's regions it reads 0.2633 on quick and 0.2885 on full, against the 0.1 gate.
+- **By face.** Sides are about 37 % of the water quads (full), so dropping them from the definition removes 0.045 on full. Downs are under 0.5 %.
+- **By key.** `depth` is the largest part: without it the top ratio falls to 0.1748 on full (−0.114), which bounds Lever 1 (four bands keep some of it). Light comes next (0.2386, −0.050). `cornerDrop` changes nothing: flat tops share their drops (a still body sits at drop 1), and a sloped top is one quad per voxel by §6.2's rule whatever its key. That rule is the `cornerDrop` part, and the sloped share of the tops (0.334 on full) measures it. Removing all of `depth` would still leave 0.175 > 0.1, so Task 34's levers start from these readings.
+- R5 stays ungated (`activeFrom` 'SP7b', Task 1). No generated output changed (goldens: no diff against HEAD).
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
