@@ -2053,6 +2053,41 @@ describe('master spec amendments (SP5c §13)', () => {
   });
 });
 
+/**
+ * Ruling P52's completeness check, shared by the SP6a, SP6b and SP7a describes: every item ("n. **") of a spec's
+ * master-amendments section, between its heading and the next (both at a line start, since the section's intro may
+ * quote them), is named by a title of the calling test's describe ("§16 item 16", "§13 items 1-7", "§13 items 7 and 11",
+ * "§13 items 14, 15", or with a ruling after it: "§16 item 13; rulings R26 item 1"), and no title names an item the
+ * section lacks. `count`, when given, pins the section's length.
+ */
+function expectSectionItemsPinned(task: { suite?: { tasks: ReadonlyArray<{ name: string }> } }, sp: string, specFile: string, heading: string, nextHeading: string, sign: string, count?: number): void {
+  const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/${specFile}`, 'utf8');
+  const start = spec.indexOf(`\n${heading}\n`);
+  const end = spec.indexOf(`\n${nextHeading}\n`);
+  expect(start, `the ${sp} spec has no "${heading}" heading`).toBeGreaterThan(-1);
+  expect(end, `the ${sp} spec has no "${nextHeading}" heading after it`).toBeGreaterThan(start);
+  const items = [...spec.slice(start, end).matchAll(/^(\d+)\. \*\*/gm)].map((m) => Number(m[1]));
+  if (count === undefined) expect(items.length, `the ${sp} spec ${sign} lists no items`).toBeGreaterThan(0);
+  else expect(items.length, `the ${sp} spec ${sign} lists items 1-${count}`).toBe(count);
+  expect(items, `${sign}'s items are numbered 1 … n`).toEqual(items.map((_, i) => i + 1));
+  const pinned = new Set<number>();
+  const titles = (task.suite?.tasks ?? []).map((t) => t.name);
+  expect(titles.length, 'the describe\'s tests').toBeGreaterThan(1);
+  for (const title of titles) {
+    for (const m of title.matchAll(new RegExp(`${sign} items? ([^§)]*)`, 'g'))) {
+      for (const token of m[1]!.split(/[,;]\s*|\s+and\s+/)) {
+        const range = /^(\d+)(?:-(\d+))?$/.exec(token.trim());
+        if (range === null) break;
+        const from = Number(range[1]), to = Number(range[2] ?? range[1]);
+        for (let i = from; i <= to; i++) pinned.add(i);
+      }
+    }
+  }
+  const missing = items.filter((i) => !pinned.has(i));
+  expect(missing, `the ${sp} spec ${sign} items with no test naming them in this describe`).toEqual([]);
+  expect([...pinned].filter((i) => !items.includes(i)), `tests naming a ${sign} item the spec does not have`).toEqual([]);
+}
+
 describe('master spec amendments (SP6a §13)', () => {
   test('§10\'s SP6a and SP6b entries, the split and the hand-overs (SP6a spec §13 items 1-7, §14)', () => {
     // Item 1: the split paragraph.
@@ -2616,27 +2651,7 @@ describe('master spec amendments (SP6a §13)', () => {
    * and from the spec's §13 as it stands, so an item added to §13 without its pin turns this red.
    */
   test('every item of the SP6a spec §13 is pinned by a test of this describe that names it (ruling P52)', ({ task }) => {
-    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-02-sp6a-cave-shapes-design.md`, 'utf8');
-    const s13 = spec.slice(spec.indexOf('## 13. Master-spec amendments made with this spec'), spec.indexOf('## 14. Notes handed to later SPs'));
-    const items = [...s13.matchAll(/^(\d+)\. \*\*/gm)].map((m) => Number(m[1]));
-    expect(items.length, 'the SP6a spec §13 lists no items').toBeGreaterThan(0);
-    expect(items, '§13\'s items are numbered 1 … n').toEqual(items.map((_, i) => i + 1));
-    const pinned = new Set<number>();
-    const titles = (task.suite?.tasks ?? []).map((t) => t.name);
-    expect(titles.length, 'the describe\'s tests').toBeGreaterThan(1);
-    for (const title of titles) {
-      for (const m of title.matchAll(/§13 items? ([^§)]*)/g)) {
-        for (const token of m[1]!.split(/[,;]\s*|\s+and\s+/)) {
-          const range = /^(\d+)(?:-(\d+))?$/.exec(token.trim());
-          if (range === null) break;
-          const from = Number(range[1]), to = Number(range[2] ?? range[1]);
-          for (let i = from; i <= to; i++) pinned.add(i);
-        }
-      }
-    }
-    const missing = items.filter((i) => !pinned.has(i));
-    expect(missing, 'the SP6a spec §13 items with no test naming them in this describe').toEqual([]);
-    expect([...pinned].filter((i) => !items.includes(i)), 'tests naming a §13 item the spec does not have').toEqual([]);
+    expectSectionItemsPinned(task, 'SP6a', '2026-11-02-sp6a-cave-shapes-design.md', '## 13. Master-spec amendments made with this spec', '## 14. Notes handed to later SPs', '§13');
   });
 });
 
@@ -3414,32 +3429,7 @@ describe('master spec amendments (SP6b §15)', () => {
    * stands, so an item added to §15 without its pin turns this red.
    */
   test('every item of the SP6b spec §15 is pinned by a test of this describe that names it (ruling P52)', ({ task }) => {
-    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-12-sp6b-cave-biomes-design.md`, 'utf8');
-    // The headings at a line start: §15's intro quotes both in its text.
-    const start = spec.indexOf('\n## 15. Master-spec amendments made with this spec\n');
-    const end = spec.indexOf('\n## 16. Notes handed to later SPs\n');
-    expect(start, 'the SP6b spec has no §15 heading').toBeGreaterThan(-1);
-    expect(end, 'the SP6b spec has no §16 heading after §15').toBeGreaterThan(start);
-    const s15 = spec.slice(start, end);
-    const items = [...s15.matchAll(/^(\d+)\. \*\*/gm)].map((m) => Number(m[1]));
-    expect(items.length, 'the SP6b spec §15 lists items 1-21').toBe(21);
-    expect(items, '§15\'s items are numbered 1 … n').toEqual(items.map((_, i) => i + 1));
-    const pinned = new Set<number>();
-    const titles = (task.suite?.tasks ?? []).map((t) => t.name);
-    expect(titles.length, 'the describe\'s tests').toBeGreaterThan(1);
-    for (const title of titles) {
-      for (const m of title.matchAll(/§15 items? ([^§)]*)/g)) {
-        for (const token of m[1]!.split(/[,;]\s*|\s+and\s+/)) {
-          const range = /^(\d+)(?:-(\d+))?$/.exec(token.trim());
-          if (range === null) break;
-          const from = Number(range[1]), to = Number(range[2] ?? range[1]);
-          for (let i = from; i <= to; i++) pinned.add(i);
-        }
-      }
-    }
-    const missing = items.filter((i) => !pinned.has(i));
-    expect(missing, 'the SP6b spec §15 items with no test naming them in this describe').toEqual([]);
-    expect([...pinned].filter((i) => !items.includes(i)), 'tests naming a §15 item the spec does not have').toEqual([]);
+    expectSectionItemsPinned(task, 'SP6b', '2026-11-12-sp6b-cave-biomes-design.md', '## 15. Master-spec amendments made with this spec', '## 16. Notes handed to later SPs', '§15', 21);
   });
 });
 
@@ -4151,34 +4141,10 @@ describe('master spec amendments (SP7a §16)', () => {
   /**
    * Every item of the SP7a spec's §16 has a test in this describe that names it in its title ("§16 item 16", or with a
    * ruling after it: "§16 item 13; rulings R26 item 1"); the item numbers come from the describe's registered tests and
-   * from the spec's §16 as it stands, so an item added to §16 without its pin turns this red (SP6b's pattern).
+   * from the spec's §16 as it stands, so an item added to §16 without its pin turns this red (SP6b's pattern, through
+   * `expectSectionItemsPinned`).
    */
   test('every item of the SP7a spec §16 is pinned by a test of this describe that names it', ({ task }) => {
-    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-17-sp7a-water-design.md`, 'utf8');
-    // The headings at a line start: §16's intro quotes both in its text.
-    const start = spec.indexOf('\n## 16. Master-spec amendments made with this spec\n');
-    const end = spec.indexOf('\n## 17. Notes handed to later SPs\n');
-    expect(start, 'the SP7a spec has no §16 heading').toBeGreaterThan(-1);
-    expect(end, 'the SP7a spec has no §17 heading after §16').toBeGreaterThan(start);
-    const s16 = spec.slice(start, end);
-    const items = [...s16.matchAll(/^(\d+)\. \*\*/gm)].map((m) => Number(m[1]));
-    expect(items.length, 'the SP7a spec §16 lists items 1-19').toBe(19);
-    expect(items, '§16\'s items are numbered 1 … n').toEqual(items.map((_, i) => i + 1));
-    const pinned = new Set<number>();
-    const titles = (task.suite?.tasks ?? []).map((t) => t.name);
-    expect(titles.length, 'the describe\'s tests').toBeGreaterThan(1);
-    for (const title of titles) {
-      for (const m of title.matchAll(/§16 items? ([^§)]*)/g)) {
-        for (const token of m[1]!.split(/[,;]\s*|\s+and\s+/)) {
-          const range = /^(\d+)(?:-(\d+))?$/.exec(token.trim());
-          if (range === null) break;
-          const from = Number(range[1]), to = Number(range[2] ?? range[1]);
-          for (let i = from; i <= to; i++) pinned.add(i);
-        }
-      }
-    }
-    const missing = items.filter((i) => !pinned.has(i));
-    expect(missing, 'the SP7a spec §16 items with no test naming them in this describe').toEqual([]);
-    expect([...pinned].filter((i) => !items.includes(i)), 'tests naming a §16 item the spec does not have').toEqual([]);
+    expectSectionItemsPinned(task, 'SP7a', '2026-11-17-sp7a-water-design.md', '## 16. Master-spec amendments made with this spec', '## 17. Notes handed to later SPs', '§16', 19);
   });
 });
