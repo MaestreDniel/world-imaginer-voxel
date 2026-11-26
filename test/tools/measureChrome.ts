@@ -65,11 +65,11 @@ const WINDOW_READS = 8;
 /** The pause between two steps of the sequence, so the window manager applies each one before the next. */
 const WINDOW_STEP_MS = 300;
 /**
- * Where every route writes (SP6b spec §12.6, D31: SP6b's assets, every route re-measured there with cave culling and the
- * X-ray's biome mode; SP4a's-SP6a's files stay in `assets/sp4a/`, `assets/sp4b/`, `assets/sp4c/`, `assets/sp5a/`,
- * `assets/sp5b/`, `assets/sp5c/` and `assets/sp6a/`).
+ * Where every route writes (SP7a spec §13.6, D36: SP7a's assets, every route re-measured there with the generated water,
+ * L13 on dry cave air and the water segment LW; SP4a's-SP6b's files stay in `assets/sp4a/`, `assets/sp4b/`,
+ * `assets/sp4c/`, `assets/sp5a/`, `assets/sp5b/`, `assets/sp5c/`, `assets/sp6a/` and `assets/sp6b/`).
  */
-export const ASSETS = 'docs/superpowers/specs/assets/sp6b';
+export const ASSETS = 'docs/superpowers/specs/assets/sp7a';
 
 /**
  * The bench's review shots (SP4b spec §8.7; SP4c spec §8.7's `apply-before`, `apply-mid`, `apply-after`, `teleport`;

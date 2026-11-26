@@ -154,7 +154,7 @@
  * world handles none of them (`worldIgnoresKeys`); otherwise H, G, M, B and E go through `paletteFirst`.
  */
 import { CAVE_KIND, GENERATOR_VERSION, MIN_Y } from '../../core/constants';
-import { chunkCoord, colKey, MAX_Y } from '../../core/coords';
+import { chunkCoord, colKey, MAX_Y, SECTIONS } from '../../core/coords';
 import { createFnv64, hex64, type Seed64 } from '../../core/hash';
 import { MEDIUM } from '../../core/params/graphicsPresets';
 import { SCHEMA_VERSION, type JsonObject } from '../../core/params/migrate';
@@ -168,7 +168,7 @@ import {
 } from '../../engine/coordinator';
 import { appliedDraftOf, type WorldStage } from '../../engine/invalidation';
 import { RD_MAX, defaultRenderDistance, reservationRdCap, resolveRenderDistance } from '../../engine/renderDistance';
-import type { Stage } from '../../engine/rings';
+import { discOffsets, type Stage } from '../../engine/rings';
 import type { SessionState, WorldSession } from '../../engine/session';
 import { SimFailed, createBrowserSim, type SimClient } from '../../engine/simClient';
 import { createThrottle } from '../../engine/throttle';
@@ -219,7 +219,7 @@ import { mountSettingsPanel, type SettingsPanel } from '../settingsPanel';
 import {
   BENCH_DB, BENCH_IDLE_FRAMES, BENCH_REFILL, BENCH_TIME_SPEED, benchInterval, createBenchRecorder, createBenchSimLog, createLiveReveals, jsHeapMB,
   type BenchCaveHooks, type BenchDriver, type BenchFlush, type BenchGhostBuild, type BenchPasteHooks, type BenchPose, type BenchSimLog, type BenchTimed, type BenchWorld,
-  type BenchXrayHooks, type EnterResult,
+  type BenchWaterHooks, type BenchXrayHooks, type EnterResult,
 } from './bench';
 import { firstView } from './firstView';
 import type { FlightContext } from './flight';
@@ -452,8 +452,9 @@ function voxelValue(store: VoxelStore, x: number, y: number, z: number): number 
  * L13's hooks as the bench route composes them (SP6a spec §10.6, D29): the finder's job for the nearest entrance (the
  * pool's `findCave` with `CAVE_KIND.entrance`, its default radius and budget), and the main thread's reads of the
  * loaded store that `caveRoute` walks: the cave byte's kind at a voxel of a Published column's final set (0 where the
- * column is not Published or y is outside the world) and whether the voxel collides (`physics.ts`' `solidAt`: false
- * where not Published), each inside a read section; the culling-off segment's switch, the section renderer's
+ * column is not Published or y is outside the world), whether the voxel collides (`physics.ts`' `solidAt`: false
+ * where not Published) and its fluid byte (`VoxelStore.fluidAt`: 0 where not Published; SP7a spec §13.6, the route
+ * walks only dry cave air), each inside a read section; the culling-off segment's switch, the section renderer's
  * `setCulling` (SP6b spec §12.6).
  */
 export function benchCaves(o: {
@@ -479,6 +480,14 @@ export function benchCaves(o: {
       store.enterRead();
       try {
         return collidesAt(store, x, y, z);
+      } finally {
+        store.exitRead();
+      }
+    },
+    fluidAt(x, y, z) {
+      store.enterRead();
+      try {
+        return store.fluidAt(x, y, z);
       } finally {
         store.exitRead();
       }
@@ -515,6 +524,46 @@ export function benchXray(o: {
     drawCalls: () => o.renderer.xrayDrawCalls(),
     vertexBytes: () => o.renderer.xrayVertexBytes(),
     radius: () => o.radius(),
+  };
+}
+
+/**
+ * LW's hooks as the bench route composes them (SP7a spec §13.6, D36): the teleport and its disc through the live legs'
+ * (`live.teleport`, which marks the reveals, and `live.settled`, every column of the RD 12 disc revealed since); the
+ * water tier through the renderer's `setWaterTier` (what the Water setting writes, SP7a spec §7); and the store's dense
+ * fluid sections per Published column of the disc of `rd()` around the camera's column `centre()` (a section whose
+ * final `sectionFluid` is a slot, not a uniform byte), in one read section; NaN with no Published column.
+ */
+export function benchWater(o: {
+  readonly store: Pick<VoxelStore, 'enterRead' | 'exitRead' | 'final' | 'publishedAt'>;
+  readonly renderer: Pick<WorldRenderer, 'setWaterTier'>;
+  readonly live: { teleport(x: number, z: number): Promise<boolean>; settled(): boolean };
+  centre(): readonly [number, number];
+  rd(): number;
+}): BenchWaterHooks {
+  const { store } = o;
+  return {
+    teleport: (x, z) => o.live.teleport(x, z),
+    settled: () => o.live.settled(),
+    setWaterTier: (tier) => o.renderer.setWaterTier(tier),
+    fluidSlots() {
+      const [cx, cz] = o.centre();
+      let columns = 0;
+      let slots = 0;
+      store.enterRead();
+      try {
+        for (const [dx, dz] of discOffsets(o.rd())) {
+          if (!store.publishedAt((cx + dx) * 16, (cz + dz) * 16)) continue;
+          const v = store.final(cx + dx, cz + dz);
+          if (v === null) continue;
+          columns++;
+          for (let sy = 0; sy < SECTIONS; sy++) if (typeof v.sectionFluid(sy) !== 'number') slots++;
+        }
+      } finally {
+        store.exitRead();
+      }
+      return columns === 0 ? Number.NaN : slots / columns;
+    },
   };
 }
 
@@ -4793,6 +4842,16 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
           return benchMap;
         };
         const benchMapOpen = (): void => benchMapCreate().open();
+        // The live legs' teleport (L9's, and LW's): the click is the reveals' mark (D24: "within 0.5 s of the click").
+        const benchLiveTeleport = (x: number, z: number): Promise<boolean> => {
+          reveals.mark();
+          landing = true;
+          landingFailure = null;
+          return teleporter.go(x, z).then((ok) => {
+            if (!ok && landingFailure !== null) throw landingFailure.cause;
+            return ok;
+          });
+        };
         // The script's RD steps never exceed the reservation's cap (Task 26b); the review shots' camera reads the ground's
         // height under the frozen pose (rulings R9); the live legs edit, undo and teleport through the pieces above; the
         // review scenes build through the edit path, fix the clock and walk through F's path (no hold repeat here).
@@ -4805,16 +4864,7 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
               reveals.reset();
               if (!session.undo()) throw new Error('the bench\'s undo found nothing to undo');
             },
-            teleport(x, z) {
-              // The click is L9's mark (D24: "within 0.5 s of the click").
-              reveals.mark();
-              landing = true;
-              landingFailure = null;
-              return teleporter.go(x, z).then((ok) => {
-                if (!ok && landingFailure !== null) throw landingFailure.cause;
-                return ok;
-              });
-            },
+            teleport: benchLiveTeleport,
             settled: () => reveals.filled,
           },
           edit: {
@@ -4839,6 +4889,14 @@ export function mountWorldPage(root: HTMLElement, q: WorldQuery, hash: string, o
             live: { set: liveSet, settled: () => reveals.filled },
             filled: (r) => filledRadius(Math.floor(fly.x) >> 4, Math.floor(fly.z) >> 4, r, isRevealed) === r,
             radius: () => xrayRadiusOf(liveRd),
+          }),
+          // LW (SP7a spec §13.6): the teleport and its refill as L9's, the renderer's water tier, the store's fluid slots.
+          water: benchWater({
+            store,
+            renderer: world,
+            live: { teleport: benchLiveTeleport, settled: () => reveals.filled },
+            centre: () => [Math.floor(fly.x) >> 4, Math.floor(fly.z) >> 4],
+            rd: () => refillRd,
           }),
           setTime: (hours) => benchSetTime(frame, benchClock, hours),
           walk: (on) => benchWalk({ fly, walk, world, repeat: NO_REPEAT }, on),

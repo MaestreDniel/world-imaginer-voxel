@@ -7199,7 +7199,9 @@ describe('the Water setting in the page (SP7a spec §7, D10, D28; ruling P44)', 
     const src = SRC();
     expect(src).toMatch(/const applySettings = \(s: WorldSettings\): void => \{[\s\S]*?applyWaterSetting\(settings, s, world\);\n\s+settings = change\.settings;/);
     expect(src).toMatch(/\n\s+wr = world;\n(\s+\/\/[^\n]*\n)+\s+world\.setWaterTier\(waterTierOf\(settings\.water\)\);\n/);
-    expect(src.match(/setWaterTier\(/g)).toHaveLength(2);
+    // The third write is the bench's water segment LW's (`benchWater`, SP7a spec §13.6), never the play page's.
+    expect(src).toMatch(/export function benchWater\([\s\S]*?setWaterTier: \(tier\) => o\.renderer\.setWaterTier\(tier\),/);
+    expect(src.match(/setWaterTier\(/g)).toHaveLength(3);
   });
 });
 

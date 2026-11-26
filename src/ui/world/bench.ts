@@ -38,6 +38,12 @@
  *    filled, X on, the hold and the sweep again; the `xray` block holds each segment's figures (the map's open frames
  *    left out, `BENCH_MAP_OPEN_FRAMES`; the biome segment's frames its own), the open's longest frame, the most sections
  *    culled with the X-ray on and the refill's time;
+ * 2h. then the water segment LW (SP7a spec §13.6, D36; `BENCH_WATER`), a leg of its own (L0-L6 hold no ocean leg: Spec
+ *    correction 17), at RD 12: the teleport to the coast pose's column (`BENCH_WATER_POSE`), the pose held there until
+ *    the disc is revealed, then 10 s with Fast water, 10 s with Fancy (`BenchWaterHooks.setWaterTier`) and 10 s at the
+ *    same pose 6 blocks under the sea's surface; the `water` block holds each part's figures, G1's `waterFancyGpuMs`,
+ *    `waterFancyP95`, `waterTierToggleMaxMs` and `underwaterP95`, and, recorded, the GPU MB, the draw calls and the
+ *    store's fluid slots per column;
  * 3. hands the driver the run's fixed figures (`done`); the driver publishes `summarizeBench`'s JSON as
  *    `window.__wiBench.result` (read by `measureChrome.ts --route bench`) and a "Download JSON" button (the Firefox
  *    cells, by hand).
@@ -116,12 +122,13 @@ export const BENCH_IDLE_FRAMES = 120;
  * hover, uses that slack). SP6a spec §10.6 adds L13's 90 s at its caps (`BENCH_CAVES_LEG`), 21,600 frames: 144,768 holds
  * 603 s, the script's 601; and L14's 82 s at its caps (`BENCH_XRAY_LEG`), 19,680 frames: 164,448 holds 685 s, the
  * script's 683. SP6b spec §12.6 adds L13's culling-off 20 s and L14's biome segment's 18 s, 9,120 frames: 173,568 holds
- * 723 s, the script's 721.
+ * 723 s, the script's 721. SP7a spec §13.6 adds LW's 50 s at its caps (`BENCH_WATER_LEG`: the arrival's 20 s and its three
+ * 10 s parts; ruling P46), 12,000 frames: 185,568 holds 773 s, the script's 771.
  */
-export const BENCH_FRAME_CAPACITY = 173_568;
+export const BENCH_FRAME_CAPACITY = 185_568;
 
 export interface BenchLeg {
-  readonly name: 'L0' | 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6' | 'L7' | 'L8' | 'L9' | 'L10' | 'L11' | 'L12' | 'L13' | 'L14';
+  readonly name: 'L0' | 'L1' | 'L2' | 'L3' | 'L4' | 'L5' | 'L6' | 'L7' | 'L8' | 'L9' | 'L10' | 'L11' | 'L12' | 'L13' | 'L14' | 'LW';
   readonly seconds: number;
   /** Blocks per second; 0 hovers. */
   readonly speed: number;
@@ -360,11 +367,45 @@ export const BENCH_XRAY_LEG: BenchLeg = {
 };
 
 /**
+ * The water segment LW (SP7a spec §13.6, D36), after L14, a leg of its own: L0-L6 are a hover and straight flights and
+ * hold no ocean leg (Spec correction 17), so the timed script, its refill window, the shots' times and G1's stream cells
+ * stay as they were. At RD 12 (L14 ends at RD 16): the teleport (the page's, as L9's) to `BENCH_WATER_POSE`'s column at
+ * its first frame, the camera left where it is until the teleport arrives, then posed at the coast pose until the RD 12
+ * disc around it is revealed since the teleport (`BenchWaterHooks.settled`), at most `arriveMaxS` s from LW's start (a
+ * teleport that never arrives or a disc never revealed is named in the `water` block's `timedOut` as `'arrive'` and
+ * ends the script, as L13's time-outs do); then three parts of `partS` s each at the coast pose: Fast water
+ * (`setWaterTier(0)` at its first frame, where the store's fluid slots are read once), Fancy (`setWaterTier(1)`, the
+ * Medium tier the page started with), and Fancy at the same x, z, yaw and pitch with the eye at `underY`, 6 blocks under
+ * the sea's surface at y 64.
+ */
+export const BENCH_WATER = { arriveMaxS: 20, partS: 10 } as const;
+
+/**
+ * LW's coast pose (plan; spec §13.6), at seed '42' in the default profile: found by a scan over chunks −96 … 95 on both
+ * axes at T, of the positions whose voxel at y 63 is untagged water under air at y 64 and holds water from y 53 up,
+ * with land (a non-air block at y 64) within 32 blocks along one of −x, +x, −z, +z (the first found, nearest first) and
+ * such water ahead, away from the land, every 4 blocks to 96 and 8 blocks to each side; the nearest to the origin,
+ * (−929, −809), its land 6 blocks east. The eye faces west, away from the land, 2.5 above the surface voxel at pitch −10
+ * (the review poses' `coastFancy` view, a grazing view over the water); under water at y 58. `bench.test.ts` pins it on
+ * the generated world.
+ */
+export const BENCH_WATER_POSE = { x: -928.5, y: 65.5, z: -808.5, yaw: 270, pitch: -10, underY: 58 } as const;
+
+/** LW as a leg (`seconds` its caps: the arrival's and the three parts'; ruling P46); it ends on its own, not on a timeline. */
+export const BENCH_WATER_LEG: BenchLeg = {
+  name: 'LW',
+  seconds: BENCH_WATER.arriveMaxS + 3 * BENCH_WATER.partS,
+  speed: 0,
+  headings: [],
+  rdSteps: [],
+};
+
+/**
  * Every leg, index = the record's `leg` (L0-L6 the timed script, L7-L9 the live legs, L10 the edit leg, L11 the save
- * leg, L12 the paste leg, L13 the cave leg, L14 the X-ray leg).
+ * leg, L12 the paste leg, L13 the cave leg, L14 the X-ray leg, LW the water segment).
  */
 const ALL_LEGS: readonly BenchLeg[] = [
-  ...BENCH_LEGS, ...BENCH_LIVE_LEGS, BENCH_EDIT_LEG, BENCH_SAVE_LEG, BENCH_PASTE_LEG, BENCH_CAVES_LEG, BENCH_XRAY_LEG,
+  ...BENCH_LEGS, ...BENCH_LIVE_LEGS, BENCH_EDIT_LEG, BENCH_SAVE_LEG, BENCH_PASTE_LEG, BENCH_CAVES_LEG, BENCH_XRAY_LEG, BENCH_WATER_LEG,
 ];
 /** The first live leg's index. */
 const FIRST_LIVE = BENCH_LEGS.length;
@@ -378,6 +419,8 @@ const PASTE_LEG = SAVE_LEG + 1;
 const CAVES_LEG = PASTE_LEG + 1;
 /** L14's index. */
 const XRAY_LEG = CAVES_LEG + 1;
+/** LW's index. */
+const WATER_LEG = XRAY_LEG + 1;
 
 /** Each leg's start, s, and the timed script's length (95 s; the live legs follow it). */
 const LEG_STARTS: readonly number[] = BENCH_LEGS.map((_, i) => BENCH_LEGS.slice(0, i).reduce((s, l) => s + l.seconds, 0));
@@ -485,13 +528,14 @@ const routeRank = (kind: number): number =>
   kind === CAVE_KIND.cheese ? 0 : kind === CAVE_KIND.spaghetti3d ? 1 : kind === CAVE_KIND.spaghetti2d ? 2 : 3;
 
 /**
- * L13's route (SP6a spec §10.6, D29; plan): a walk of at most `blocks` moves through cave air from `start` (the
+ * L13's route (SP6a spec §10.6, D29; plan): a walk of at most `blocks` moves through dry cave air from `start` (the
  * finder's hit), as the voxels the feet stand in, x y z per point. Pure: the same reads give the same route, so it is
- * the same for the same seed and generator and needs no update after a retune.
- * - The first point is `start` lowered onto its floor (the first voxel at or below it whose voxel below is solid); a
- *   solid `start` gives no point.
- * - A point after it is cave air (`tagAt` ≠ 0, not `solidAt`) one block above a floor: its voxel below solid (on the
- *   floor), or, for a step, its voxel below air and the one under that solid. Two steps never follow each other: a
+ * the same for the same seed and generator and needs no update after a retune. Cave air is dry (SP7a spec §13.6): its
+ * `fluidAt` is 0, so the leg walks what it walked before caves held water, and never a flooded voxel.
+ * - The first point is `start` lowered through dry air onto its floor (the first voxel at or below it whose voxel
+ *   below is solid or holds fluid); a solid `start`, or one holding fluid, gives no point.
+ * - A point after it is cave air (`tagAt` ≠ 0, not `solidAt`, `fluidAt` 0) one block above a floor: its voxel below
+ *   solid (on the floor), or, for a step, its voxel below air and the one under that solid. Two steps never follow each other: a
  *   step is entered up from the floor below it only when one of its horizontal neighbours is an unvisited voxel on a
  *   floor (a ledge to climb onto), or sideways off a ledge, and it is left down or onto a ledge.
  * - A drop: off a floor's edge, sideways into cave air deeper than a step, the route falls straight down, one voxel per
@@ -511,15 +555,17 @@ const routeRank = (kind: number): number =>
 export function caveRoute(
   tagAt: (x: number, y: number, z: number) => number,
   solidAt: (x: number, y: number, z: number) => boolean,
+  fluidAt: (x: number, y: number, z: number) => number,
   start: readonly [number, number, number],
   blocks: number,
 ): Float64Array {
   const [sx, sy0, sz] = start;
-  if (solidAt(sx, sy0, sz)) return new Float64Array(0);
+  if (solidAt(sx, sy0, sz) || fluidAt(sx, sy0, sz) !== 0) return new Float64Array(0);
   let sy = sy0;
-  while (sy - 1 > MIN_Y && !solidAt(sx, sy - 1, sz)) sy--;
+  while (sy - 1 > MIN_Y && !solidAt(sx, sy - 1, sz) && fluidAt(sx, sy - 1, sz) === 0) sy--;
   const onFloor = (x: number, y: number, z: number): boolean => y - 1 >= MIN_Y && solidAt(x, y - 1, z);
-  const caveAir = (x: number, y: number, z: number): boolean => y > MIN_Y && y <= MAX_Y && tagAt(x, y, z) !== 0 && !solidAt(x, y, z);
+  const caveAir = (x: number, y: number, z: number): boolean =>
+    y > MIN_Y && y <= MAX_Y && tagAt(x, y, z) !== 0 && !solidAt(x, y, z) && fluidAt(x, y, z) === 0;
   const stepAt = (x: number, y: number, z: number): boolean => y - 2 >= MIN_Y && solidAt(x, y - 2, z);
   const visited = new Set<number>([routeKey(sx, sy, sz)]);
   const out: number[] = [sx, sy, sz];
@@ -1229,6 +1275,48 @@ export interface XrayFigures {
   readonly timedOut: readonly string[];
 }
 
+/**
+ * One LW part's figures (SP7a spec §13.6) over its frames: the snapped frames' nearest-rank p50, p95, p99, max and the
+ * count over 33 ms, the main thread's p95, and `gpuMs` p50 and p95 over the timer's samples. A figure with no sample is
+ * null.
+ */
+export interface WaterPartFigures {
+  readonly p50: number | null;
+  readonly p95: number | null;
+  readonly p99: number | null;
+  readonly max: number | null;
+  readonly over33: number;
+  readonly mainP95: number | null;
+  readonly gpuMs: { readonly p50: number; readonly p95: number } | null;
+}
+
+/**
+ * LW's block (SP7a spec §13.6, D36): the coast pose; `arriveMs`, from LW's start (the teleport's post) to the frame that
+ * found the disc revealed (null when it never did); each part's figures (`fast`, `fancy`, `under`); G1's parts:
+ * `waterFancyGpuMs`, Fancy's GPU p50 minus Fast's (master's "water (Fancy) ≤ 1.2 ms"), `waterFancyP95` (Fancy's frame
+ * p95), `waterTierToggleMaxMs` (the longest snapped frame of each tier write's own frame and the two after it,
+ * `BENCH_TOGGLE_FRAMES`), `underwaterP95` (under water's frame p95); recorded over the three parts' frames: `gpuMB` (the
+ * GPU estimate's peak), `drawCalls` (max and mean) and `fluidSlotsPerColumn` (the store's dense fluid sections per
+ * Published column of the RD 12 disc, read at Fast's start; master §2.6's "~1.5 fluid slots"); `timedOut` (`'arrive'`)
+ * and `teleportError` (as L9's `live.teleportError`). A figure with no sample is null.
+ */
+export interface WaterFigures {
+  readonly pose: typeof BENCH_WATER_POSE;
+  readonly arriveMs: number | null;
+  readonly fast: WaterPartFigures;
+  readonly fancy: WaterPartFigures;
+  readonly under: WaterPartFigures;
+  readonly waterFancyGpuMs: number | null;
+  readonly waterFancyP95: number | null;
+  readonly waterTierToggleMaxMs: number | null;
+  readonly underwaterP95: number | null;
+  readonly gpuMB: number | null;
+  readonly drawCalls: { readonly max: number; readonly mean: number } | null;
+  readonly fluidSlotsPerColumn: number | null;
+  readonly timedOut: readonly string[];
+  readonly teleportError: string | null;
+}
+
 /** What the driver knows of L10 (SP5a spec §6.2) and hands `summarizeBench`. */
 export interface BenchEditRun {
   /**
@@ -1569,9 +1657,10 @@ const NO_PASTE_RUN: BenchPasteRun = { parts: [], ops: [], log: NO_PASTE_LOG, poo
 /**
  * L13's hooks (SP6a spec §10.6): the finder's job for the nearest entrance from voxel (x, y, z) (the pool's `findCave`
  * with `CAVE_KIND.entrance`, its default radius and budget: its hit, an air voxel, null unless `reason` is `found`), and
- * the loaded store's reads for `caveRoute`: the cave byte at a voxel (0 where its column is not Published) and whether
- * the voxel collides (`physics.ts`' `solidAt`; false where not Published); the bench's switch for cave culling (the
- * section renderer's `setCulling`, SP6b spec §12.6: off for the culling-off segment).
+ * the loaded store's reads for `caveRoute`: the cave byte at a voxel (0 where its column is not Published), whether
+ * the voxel collides (`physics.ts`' `solidAt`; false where not Published) and its fluid byte (SP7a spec §13.6: the route
+ * walks only dry cave air; 0 where not Published); the bench's switch for cave culling (the section renderer's
+ * `setCulling`, SP6b spec §12.6: off for the culling-off segment).
  */
 export interface BenchCaveHooks {
   find(x: number, y: number, z: number): Promise<{
@@ -1580,6 +1669,7 @@ export interface BenchCaveHooks {
   }>;
   tagAt(x: number, y: number, z: number): number;
   solidAt(x: number, y: number, z: number): boolean;
+  fluidAt(x: number, y: number, z: number): number;
   setCulling(on: boolean): void;
 }
 
@@ -1665,6 +1755,42 @@ const NO_XRAY_RUN: BenchXrayRun = {
   edit: BENCH_XRAY_SCRIPT.edit, rd12: null, biome: null, rd16: null, applyRefillMs: null, mapOpenS: null, timedOut: [],
 };
 
+/**
+ * LW's hooks (SP7a spec §13.6): the page's teleport to block column (x, z) (as L9's: true once the camera moved there),
+ * whether the RD 12 disc around the camera's column was revealed since that teleport (the live legs' reveals), the
+ * renderer's water tier (0 Fast, 1 Fancy: what the Water setting writes, SP7a spec §7), and the store's dense fluid
+ * sections per Published column of the RD 12 disc around the camera (recorded).
+ */
+export interface BenchWaterHooks {
+  teleport(x: number, z: number): Promise<boolean>;
+  settled(): boolean;
+  setWaterTier(tier: 0 | 1): void;
+  fluidSlots(): number;
+}
+
+/** What the driver knows of LW (SP7a spec §13.6) and hands `summarizeBench`. */
+export interface BenchWaterRun {
+  /** From LW's start to the frame that found the disc revealed, ms; null when it never did. */
+  readonly arriveMs: number | null;
+  /** Each part's script window [tS0, tS1), s; null for a part that never started. */
+  readonly fast: { readonly tS0: number; readonly tS1: number } | null;
+  readonly fancy: { readonly tS0: number; readonly tS1: number } | null;
+  readonly under: { readonly tS0: number; readonly tS1: number } | null;
+  /** The tier writes' script times, s (Fast's, then Fancy's). */
+  readonly toggles: readonly number[];
+  /** The store's fluid slots per column, read at Fast's start; null without it. */
+  readonly fluidSlots: number | null;
+  /** `'arrive'` for an arrival still pending at its cap. */
+  readonly timedOut: readonly string[];
+  /** Why the teleport did not arrive (`name: message`, or that it did not move the camera); null otherwise. */
+  readonly teleportError: string | null;
+}
+
+/** No LW (a run that ended before it, or a driver bound without the water hooks). */
+const NO_WATER_RUN: BenchWaterRun = {
+  arriveMs: null, fast: null, fancy: null, under: null, toggles: [], fluidSlots: null, timedOut: [], teleportError: null,
+};
+
 /** The bench's JSON (spec §8.3; SP4c spec §8.4's `live`; SP5a spec §6.2's `edit`). */
 export interface BenchResult {
   readonly route: 'bench=medium';
@@ -1701,6 +1827,8 @@ export interface BenchResult {
   readonly caves: CaveFigures;
   /** L14: the X-ray leg (SP6a spec §10.6). */
   readonly xray: XrayFigures;
+  /** LW: the water segment (SP7a spec §13.6). */
+  readonly water: WaterFigures;
   /** Every frame whose snapped time is over 33 ms: its raw delta and its own and the previous frame's main ms. */
   readonly longFrames: ReadonlyArray<{
     readonly frame: number; readonly leg: string; readonly rawMs: number; readonly snappedMs: number; readonly mainMs: number;
@@ -2135,13 +2263,68 @@ function xrayFiguresOf(rec: BenchRecord, idx: readonly number[], run: BenchXrayR
   };
 }
 
+/** One LW part's figures (SP7a spec §13.6) over its rows `rows`. */
+function waterPartOf(rec: BenchRecord, rows: readonly number[]): WaterPartFigures {
+  const snapped = pick(rec.snappedMs, rows);
+  const gpu = finite(pick(rec.gpuMs, rows));
+  return {
+    p50: percentileOrNull(snapped, 50),
+    p95: percentileOrNull(snapped, 95),
+    p99: percentileOrNull(snapped, 99),
+    max: snapped.length === 0 ? null : maxOf(snapped),
+    over33: countIf(snapped, (v) => v > LONG_FRAME_MS),
+    mainP95: percentileOrNull(pick(rec.mainMs, rows), 95),
+    gpuMs: gpu.length === 0 ? null : { p50: percentile(gpu, 50), p95: percentile(gpu, 95) },
+  };
+}
+
+/** LW's block (SP7a spec §13.6) over its rows `idx`: each part's frames its own window's. */
+function waterFiguresOf(rec: BenchRecord, idx: readonly number[], run: BenchWaterRun): WaterFigures {
+  const within = (w: { readonly tS0: number; readonly tS1: number } | null): number[] =>
+    w === null ? [] : idx.filter((i) => rec.tMs[i]! >= w.tS0 * 1000 && rec.tMs[i]! < w.tS1 * 1000);
+  const rows = [within(run.fast), within(run.fancy), within(run.under)] as const;
+  const [fast, fancy, under] = rows.map((r) => waterPartOf(rec, r)) as [WaterPartFigures, WaterPartFigures, WaterPartFigures];
+  // Each tier write's own row (the first at or after it) and the two after it, among LW's rows.
+  let toggleMax = Number.NEGATIVE_INFINITY;
+  for (const t of run.toggles) {
+    const k = idx.findIndex((i) => rec.tMs[i]! >= t * 1000);
+    if (k < 0) continue;
+    for (let j = k; j < Math.min(k + BENCH_TOGGLE_FRAMES, idx.length); j++) toggleMax = Math.max(toggleMax, rec.snappedMs[idx[j]!]!);
+  }
+  const parts = [...rows[0], ...rows[1], ...rows[2]];
+  // −∞ until a row is read (reported as null).
+  let peakMB = Number.NEGATIVE_INFINITY;
+  let calls = 0;
+  for (const i of parts) {
+    peakMB = Math.max(peakMB, rec.geometryMB[i]! + rec.texturesMB[i]! + rec.drawingBufferMB[i]!);
+    calls += rec.calls[i]!;
+  }
+  return {
+    pose: BENCH_WATER_POSE,
+    arriveMs: run.arriveMs,
+    fast,
+    fancy,
+    under,
+    waterFancyGpuMs: fast.gpuMs === null || fancy.gpuMs === null ? null : fancy.gpuMs.p50 - fast.gpuMs.p50,
+    waterFancyP95: fancy.p95,
+    waterTierToggleMaxMs: finiteOrNull(toggleMax),
+    underwaterP95: under.p95,
+    gpuMB: finiteOrNull(peakMB),
+    drawCalls: parts.length === 0 ? null : { max: maxOf(pick(rec.calls, parts)), mean: calls / parts.length },
+    fluidSlotsPerColumn: run.fluidSlots,
+    timedOut: [...run.timedOut],
+    teleportError: run.teleportError,
+  };
+}
+
 /**
  * The bench's JSON from its record and the fixed figures (spec §8.3): `stream` over L1-L6 (the streaming legs; L0's
  * hover only settles the first frames), the same frame figures per leg, L5's refill and L6's frames, `live` over L7-L9
  * (SP4c spec §8.4), `edit` over L10 with the driver's `editRun` (SP5a spec §6.2), `persist` over L11 with the driver's
  * `saveRun` (SP5b spec §6.2), `paste` over L12 with the driver's `pasteRun` and `saveRun`'s flushes (SP5c spec §10.4),
- * `caves` over L13 with the driver's `caveRun` and `xray` over L14 with its `xrayRun` (SP6a spec §10.6), every long
- * frame and every structural frame. `gpuMB` is the largest per-frame sum of the breakdown, which is reported at that
+ * `caves` over L13 with the driver's `caveRun` and `xray` over L14 with its `xrayRun` (SP6a spec §10.6), `water` over LW
+ * with its `waterRun` (SP7a spec §13.6; its frames are its own leg's, never the stream's), every long frame and every
+ * structural frame. `gpuMB` is the largest per-frame sum of the breakdown, which is reported at that
  * frame. The live legs' MESH set is the RD they ran at: 12, or the reservation's
  * cap below it. It throws on a full record (`n` at `capacity`), whose last frames were dropped (final review GOV-7).
  */
@@ -2154,6 +2337,7 @@ export function summarizeBench(
   pasteRun: BenchPasteRun = NO_PASTE_RUN,
   caveRun: BenchCaveRun = NO_CAVE_RUN,
   xrayRun: BenchXrayRun = NO_XRAY_RUN,
+  waterRun: BenchWaterRun = NO_WATER_RUN,
 ): BenchResult {
   // A full record dropped the frames after it, so the last legs' figures (L11's parts) would read a cut part (final
   // review GOV-7): an error, not a JSON.
@@ -2242,6 +2426,7 @@ export function summarizeBench(
     paste: pasteFiguresOf(rec, byLeg[PASTE_LEG]!, pasteRun, saveRun.flushes),
     caves: caveFiguresOf(rec, byLeg[CAVES_LEG]!, caveRun),
     xray: xrayFiguresOf(rec, byLeg[XRAY_LEG]!, xrayRun),
+    water: waterFiguresOf(rec, byLeg[WATER_LEG]!, waterRun),
     longFrames,
     structuralFrames,
   };
@@ -2507,6 +2692,8 @@ export interface BenchWorld {
   readonly caves?: BenchCaveHooks;
   /** L14's hooks (SP6a spec §10.6): the page's X-ray, its map and its edit. Absent, the script ends after L13. */
   readonly xray?: BenchXrayHooks;
+  /** LW's hooks (SP7a spec §13.6): the teleport, its disc, the water tier, the fluid slots. Absent, the script ends after L14. */
+  readonly water?: BenchWaterHooks;
   /** The review scenes' clock (SP5a spec §6.5): fixed at `hours` (0 … 24) and paused. */
   setTime(hours: number): void;
   /** The review scenes' mode (SP5a spec §6.5): F's path (`toggleMode`, the near plane) when the mode differs. */
@@ -2532,7 +2719,9 @@ export interface BenchWorld {
  * the hooks between frames, each step awaited and resumed at a later `pose`. With `caves` bound, L13 follows L12 there
  * (`BENCH_CAVES`, SP6a spec §10.6; never after an L12 time-out): `caves.find` from the camera's voxel at its first
  * frame, the route from the hit, the flight and the walk. With `xray` bound too, L14 follows L13 (`BENCH_XRAY`, never
- * after an L13 time-out) where L13 left the camera; its RD 16 part returns RD 16 (under `rdMax`). The page writes each
+ * after an L13 time-out) where L13 left the camera; its RD 16 part returns RD 16 (under `rdMax`). With `water` bound too,
+ * LW follows L14 (`BENCH_WATER`, SP7a spec §13.6) at RD 12: `water.teleport` to the coast pose's column, its parts at the
+ * coast pose through `water.setWaterTier`. The page writes each
  * rendered frame into
  * `record` (`createBenchRecorder`). `fail` ends the script with an error (a failure after the reveal), once.
  */
@@ -2610,7 +2799,7 @@ const L11_PARTS = 2;
 /** L12's parts' caps, s, in `BENCH_PASTE_PARTS`' order. */
 const PASTE_CAPS: readonly number[] = [BENCH_PASTE.hoverS, BENCH_PASTE.houseMaxS, BENCH_PASTE.maxMaxS, BENCH_PASTE.sweepS];
 /** The leg index after the last leg: the script has ended. */
-const DONE_LEG = XRAY_LEG + 1;
+const DONE_LEG = WATER_LEG + 1;
 /** L13's phases: the finder's answer awaited, the flight to the route's start, the walk, the culling-off segment. */
 const L13_FIND = 0;
 const L13_FLY = 1;
@@ -2637,6 +2826,14 @@ const SEG_BIOME = 2;
 const SEGMENTS = 3;
 /** The tolerance L14's schedule allows the script's float times, s (as L11's). */
 const XRAY_EPS_S = 1e-6;
+/** LW's phases: the arrival (the teleport and the disc's refill), then its parts: Fast, Fancy, under water. */
+const LW_ARRIVE = 0;
+const LW_FAST = 1;
+const LW_FANCY = 2;
+const LW_UNDER = 3;
+/** LW's script times in the driver's `waterTimes`: its start, then each part's start (Fast, Fancy, under water), its end. */
+const LWT_START = 0;
+const LWT_END = 4;
 /** One L14 segment's slots in the driver's `xraySeg` (`SEGMENTS` segments): see `BenchXraySegment`. */
 const SEG_RD = 0;
 const SEG_ON0 = 1;
@@ -2799,6 +2996,17 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let scriptRd = BENCH_RD;
   const xraySeg = new Float64Array(SEGMENTS * SEG_SLOTS).fill(Number.NaN);
   const xrayTimedOut: string[] = [];
+  // LW (SP7a spec §13.6): its hooks (null until `bind`, and without them no LW), whether it started, its phase, whether
+  // its teleport arrived and why it did not (null until it fails), its script times (`LWT_*`: the start, each part's
+  // start in phase order, the end; NaN where not reached), the store's fluid slots (NaN before Fast) and the time-outs.
+  let water: BenchWaterHooks | null = null;
+  let waterStarted = false;
+  let waterPhase = LW_ARRIVE;
+  let waterArrived = false;
+  let waterError: string | null = null;
+  const waterTimes = new Float64Array(5).fill(Number.NaN);
+  let fluidSlots = Number.NaN;
+  const waterTimedOut: string[] = [];
   const capped = (rd: number): number => Math.min(rd, rdMax);
 
   /** The live legs' pose (SP4c spec §8.4): x, z and the yaw kept; pitch −15; y 150 until L9's arrival, then kept. */
@@ -3350,7 +3558,10 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
    */
   const planRoute = (hit: { readonly x: number; readonly y: number; readonly z: number }): boolean => {
     const hooks = caves!;
-    route = caveRoute((x, y, z) => hooks.tagAt(x, y, z), (x, y, z) => hooks.solidAt(x, y, z), [hit.x, hit.y, hit.z], BENCH_CAVE_ROUTE.blocks);
+    route = caveRoute(
+      (x, y, z) => hooks.tagAt(x, y, z), (x, y, z) => hooks.solidAt(x, y, z), (x, y, z) => hooks.fluidAt(x, y, z), [hit.x, hit.y, hit.z],
+      BENCH_CAVE_ROUTE.blocks,
+    );
     const n = route.length / 3;
     routeEye = new Float64Array(n);
     const counts: Record<string, number> = {};
@@ -3661,6 +3872,68 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     xrayNext(L14_HOLD16, tS);
     return true;
   };
+  /** LW's pose: the coast pose, the eye under water in its last part. */
+  const waterPose = (out: BenchPose, under: boolean): void => {
+    out.x = BENCH_WATER_POSE.x;
+    out.y = under ? BENCH_WATER_POSE.underY : BENCH_WATER_POSE.y;
+    out.z = BENCH_WATER_POSE.z;
+    out.yaw = BENCH_WATER_POSE.yaw;
+    out.pitch = BENCH_WATER_POSE.pitch;
+  };
+  /**
+   * One frame of LW at `tS` (SP7a spec §13.6), after `livePose`: the teleport posted at its first frame (RD 12 from
+   * there), the camera left where it is until it arrives, then the coast pose until the disc is revealed (at most
+   * `arriveMaxS` from LW's start); the Fast part from that frame (the tier written, the fluid slots read), Fancy after
+   * `partS`, under water after `partS` more, the end after `partS` more. False once the leg has ended (an arrival at its
+   * cap is named in `timedOut`).
+   */
+  const waterStep = (tS: number, out: BenchPose): boolean => {
+    const h = water!;
+    if (!waterStarted) {
+      waterStarted = true;
+      waterTimes[LWT_START] = tS;
+      scriptRd = BENCH_RD;
+      h.teleport(BENCH_WATER_POSE.x, BENCH_WATER_POSE.z).then((ok) => {
+        if (ok) waterArrived = true;
+        else waterError = 'the teleport did not move the camera';
+      }, (e: unknown) => {
+        waterError = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      });
+      return true;
+    }
+    if (waterPhase === LW_ARRIVE) {
+      if (waterArrived) waterPose(out, false);
+      if (!waterArrived || !h.settled()) {
+        if (tS - waterTimes[LWT_START]! < BENCH_WATER.arriveMaxS - XRAY_EPS_S) return true;
+        waterTimedOut.push('arrive');
+        waterTimes[LWT_END] = tS;
+        return false;
+      }
+      waterPhase = LW_FAST;
+      waterTimes[LW_FAST] = tS;
+      h.setWaterTier(0);
+      fluidSlots = h.fluidSlots();
+    }
+    // The parts in order, each `partS` long from its first frame.
+    while (tS - waterTimes[waterPhase]! >= BENCH_WATER.partS - XRAY_EPS_S) {
+      if (waterPhase === LW_UNDER) {
+        waterTimes[LWT_END] = tS;
+        return false;
+      }
+      waterPhase++;
+      waterTimes[waterPhase] = tS;
+      if (waterPhase === LW_FANCY) h.setWaterTier(1);
+    }
+    waterPose(out, waterPhase === LW_UNDER);
+    return true;
+  };
+  /** LW's part `phase`'s window [its start, the next's or the end), or null when it never started. */
+  const waterWindow = (phase: number): { tS0: number; tS1: number } | null => {
+    const t0 = waterTimes[phase]!;
+    if (Number.isNaN(t0)) return null;
+    const t1 = waterTimes[phase + 1]!;
+    return { tS0: t0, tS1: Number.isNaN(t1) ? Number.POSITIVE_INFINITY : t1 };
+  };
   /** Segment `g` as it ran (`end` closes a window still open: the script ended inside it), or null before it started. */
   const xraySegment = (g: number, end: number): BenchXraySegment | null => {
     if (Number.isNaN(segAt(g, SEG_ON0)) && Number.isNaN(segAt(g, SEG_OFF0))) return null;
@@ -3703,7 +3976,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
         if (leg === 9) toEdit = true;
         else next = (leg + 1) as LiveLeg;
       }
-    } else if (liveLeg !== EDIT_LEG && liveLeg !== SAVE_LEG && liveLeg !== PASTE_LEG && liveLeg !== CAVES_LEG && liveLeg !== XRAY_LEG) return false;
+    } else if (liveLeg < EDIT_LEG || liveLeg > WATER_LEG) return false;
     if (o.shot === 'apply-mid' && !Number.isNaN(l7StartS) && tS - l7StartS >= APPLY_MID_AFTER_S) frozenLive = true;
     if (o.shot === 'teleport' && !Number.isNaN(arrivedS) && tS - arrivedS >= TELEPORT_SHOT_AFTER_S) frozenLive = true;
     if (frozenLive) return true;
@@ -3752,6 +4025,15 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       legStartS = tS;
     }
     if (liveLeg === XRAY_LEG && !xrayStep(tS, out)) {
+      // L14 ended: LW follows when its hooks are bound (SP7a spec §13.6).
+      if (water === null) {
+        liveLeg = DONE_LEG;
+        return false;
+      }
+      liveLeg = WATER_LEG;
+      legStartS = tS;
+    }
+    if (liveLeg === WATER_LEG && !waterStep(tS, out)) {
       liveLeg = DONE_LEG;
       return false;
     }
@@ -3774,6 +4056,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
       paste = world.paste ?? null;
       caves = world.caves ?? null;
       xray = world.xray ?? null;
+      water = world.water ?? null;
       sceneHooks = { setTime: (h) => world.setTime(h), walk: (on) => world.walk(on) };
     },
     pose(tS, out, fogRd) {
@@ -3858,6 +4141,12 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
             rd16: xraySegment(SEG_RD16, Number.POSITIVE_INFINITY),
             applyRefillMs: Number.isNaN(xrayTimes[3]!) ? null : xrayTimes[3]!,
             mapOpenS: Number.isNaN(xrayTimes[4]!) ? null : xrayTimes[4]!, timedOut: [...xrayTimedOut],
+          },
+          {
+            arriveMs: Number.isNaN(waterTimes[LW_FAST]!) ? null : (waterTimes[LW_FAST]! - waterTimes[LWT_START]!) * 1000,
+            fast: waterWindow(LW_FAST), fancy: waterWindow(LW_FANCY), under: waterWindow(LW_UNDER),
+            toggles: [waterTimes[LW_FAST]!, waterTimes[LW_FANCY]!].filter((t) => !Number.isNaN(t)),
+            fluidSlots: Number.isNaN(fluidSlots) ? null : fluidSlots, timedOut: [...waterTimedOut], teleportError: waterError,
           },
         );
       } catch (e) {
@@ -3969,10 +4258,10 @@ export async function mountBenchRoute(app: HTMLElement, query: URLSearchParams):
   const driver = createBenchDriver({ shot, publish });
   const { mountWorldPage } = await import('./worldPage');
   // The legs after the timed script at their caps: the live legs, L10, L11 (its hover included), L12 (its fill included),
-  // L13 and L14.
+  // L13, L14 and LW.
   const liveS = BENCH_LIVE_LEGS.reduce((t, l) => t + l.seconds, 0) + BENCH_EDIT_LEG.seconds + BENCH_SAVE_LEG.seconds
-    + BENCH_PASTE.fillMaxS + BENCH_PASTE_LEG.seconds + BENCH_CAVES_LEG.seconds + BENCH_XRAY_LEG.seconds;
-  panel?.say(`running the ${BENCH_SECONDS} s script, then the live, edit, save, paste, cave and X-ray legs (up to ${liveS} s more) after the reveal (keep this tab in front)…`);
+    + BENCH_PASTE.fillMaxS + BENCH_PASTE_LEG.seconds + BENCH_CAVES_LEG.seconds + BENCH_XRAY_LEG.seconds + BENCH_WATER_LEG.seconds;
+  panel?.say(`running the ${BENCH_SECONDS} s script, then the live, edit, save, paste, cave, X-ray and water legs (up to ${liveS} s more) after the reveal (keep this tab in front)…`);
   const page = await mountWorldPage(app, benchQuery(query), benchHash(), { hud: false, overlay: false, bench: driver });
   if (page.state !== 'revealed' && !published) publish.result({ route: 'bench=medium', error: `the world did not load (page ${page.state})` });
 }

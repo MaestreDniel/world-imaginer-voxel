@@ -12,7 +12,7 @@ import { decodeColumnDiff } from '../../src/persist/diffCodec';
 import { loadParams, normalizeState, olderGenerator, parseWorldRecord, todayStateTable, type HistoryWrite } from '../../src/persist/saves';
 import { discOffsets } from '../../src/engine/rings';
 import { AIR, GLASS, ICE, REGISTRY, STONE, TORCH } from '../../src/world/blocks';
-import { LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
+import { FLUID_WATER, fluidType, LAVA_SOURCE, WATER_SOURCE } from '../../src/world/blocks/fluid';
 import type { CopiedMsg, Edit, EditedMsg, FlushedMsg } from '../../src/workers/protocol';
 import type { ColumnDiff } from '../../src/world/store/api';
 import { CLIPBOARD_KEY, decodeClipboard, encodeClipboard } from '../../src/persist/clipboard';
@@ -20,13 +20,13 @@ import type { RayHit } from '../../src/player/raycast';
 import { EYE } from '../../src/player/walk';
 import { MAX_STEP_EDITS } from '../../src/sim/edits';
 import {
-  BENCH_CAVE_ROUTE, BENCH_CAVES, BENCH_CAVES_LEG, BENCH_MAP_OPEN_FRAMES, BENCH_TOGGLE_FRAMES, BENCH_XRAY, BENCH_XRAY_LEG, BENCH_XRAY_SCRIPT, BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
+  BENCH_CAVE_ROUTE, BENCH_CAVES, BENCH_CAVES_LEG, BENCH_WATER, BENCH_WATER_LEG, BENCH_WATER_POSE, BENCH_SECONDS, BENCH_MAP_OPEN_FRAMES, BENCH_TOGGLE_FRAMES, BENCH_XRAY, BENCH_XRAY_LEG, BENCH_XRAY_SCRIPT, BENCH_EDIT, BENCH_FIELDS, BENCH_FRAME_CAPACITY, BENCH_IDLE_FRAMES, BENCH_LEGS, BENCH_LIVE, BENCH_LIVE_LEGS, BENCH_PITCH, BENCH_RD, BENCH_REFILL,
   BENCH_PASTE, BENCH_PASTE_LEG, BENCH_PASTE_PARTS, BENCH_PASTE_SCRIPT, BENCH_PROFILE, BENCH_SAVE, BENCH_SAVE_LEG, BENCH_SAVE_PARTS, BENCH_SEED, BENCH_SHOT_ABOVE, BENCH_SHOT_PITCH, BENCH_SHOTS, BENCH_TIME_SPEED, BENCH_Y, benchInterval, benchPose, createBenchDriver,
   createBenchRecord, createBenchRecorder, createLiveReveals, ENTER_AUTO_KEY, ENTER_AUTO_SETUP_PATH, ENTER_DENSE_COLUMNS, ENTER_DISC_RD, ENTER_PAIRS, ENTER_POSE, ENTER_SPARSE,
   enterAutoEnded, enterAutoJson, enterAutoRecorded, enterAutoStart, enterOrder as benchEnterOrder, enterPaths as benchEnterPaths, enterSaveDump, gpuOfRenderer, summarizeEnter, REVIEW_HOUSE, REVIEW_POOL, REVIEW_SCENE_BATCH, REVIEW_SCENES, REVIEW_SETTLE_S, REVIEW_SITE,
   REVIEW_SHOTS, benchHouse, caveRoute, createBenchSimLog, reviewSceneEdits, summarizeBench, type BenchCaveHooks, type BenchCaveRun, type BenchEditsRecord, type BenchError, type BenchFixed, type BenchFlush,
   type BenchPasteHooks, type BenchPasteRun, type BenchPose, type BenchRecord, type BenchResult, type BenchSaveRun, type BenchSources, type BenchWorld,
-  type BenchXrayHooks, type BenchXrayRun, type ReviewShot, type SceneVoxel,
+  type BenchXrayHooks, type BenchXrayRun, type BenchWaterHooks, type BenchWaterRun, type ReviewShot, type SceneVoxel,
 } from '../../src/ui/world/bench';
 import { turnClipboard, turnedCell } from '../../src/ui/world/clipboard';
 import { createEditLatency } from '../../src/ui/world/editLatency';
@@ -36,8 +36,9 @@ import { pasteLitBlock, pasteMaxBlock } from '../../src/ui/world/pasteBlocks';
 import { DEFAULT_MAP_STATE, openMapSession } from '../../src/ui/map/mapState';
 import { parseWorldQuery } from '../../src/ui/world/query';
 import { STATE_BOUNDS } from '../../src/ui/world/stateBounds';
-import { BENCH_DB, benchCaves, benchXray, closeBenchSave, createBenchPaste, createBenchSave, enterResult, newWorldRecord, openBenchSave, type GhostHost } from '../../src/ui/world/worldPage';
+import { BENCH_DB, benchCaves, benchWater, benchXray, closeBenchSave, createBenchPaste, createBenchSave, enterResult, newWorldRecord, openBenchSave, type GhostHost } from '../../src/ui/world/worldPage';
 import { ENTER_PAIRS as TOOL_ENTER_PAIRS, enterOrder as toolEnterOrder, enterPaths as toolEnterPaths, enterSummary, type EnterPair } from '../tools/measureChrome';
+import { genRegion } from '../harness/region';
 
 const START = { x: 1000, z: -2000 };
 const HZ240 = 1000 / 240;
@@ -59,15 +60,17 @@ describe('the bench script (SP4b spec §8.3, D22)', () => {
     expect(BENCH_FRAME_CAPACITY).toBeGreaterThan(95 * 240);
   });
 
-  test('`BENCH_FRAME_CAPACITY` is 173,568 (SP6b spec §12.6: SP6a\'s 164,448, L13\'s culling-off 20 s and L14\'s biome segment\'s 18 s at 240 Hz)', () => {
-    expect(BENCH_FRAME_CAPACITY).toBe(173_568);
+  test('`BENCH_FRAME_CAPACITY` is 185,568 (SP7a spec §13.6, ruling P46: SP6b\'s 173,568 and LW\'s 50 s at its caps, its arrival\'s 20 s and three 10 s parts, at 240 Hz)', () => {
+    expect(BENCH_FRAME_CAPACITY).toBe(185_568);
     expect(87_168 + 150 * 240).toBe(123_168);
     expect(123_168 + 90 * 240).toBe(144_768);
     expect(144_768 + 82 * 240).toBe(164_448);
     expect(164_448 + (20 + 18) * 240).toBe(173_568);
+    expect(BENCH_WATER_LEG.seconds).toBe(BENCH_WATER.arriveMaxS + 3 * BENCH_WATER.partS);
+    expect(173_568 + BENCH_WATER_LEG.seconds * 240).toBe(185_568);
   });
 
-  test('the capacity holds the script\'s 721 s at 240 Hz (SP4c\'s 150 s, L10\'s 91 s at its caps, L11\'s four 30 s parts, L12\'s 150 s, L13\'s 110 s, L14\'s 100 s): 723 s', () => {
+  test('the capacity holds the script\'s 771 s at 240 Hz (SP4c\'s 150 s, L10\'s 91 s at its caps, L11\'s four 30 s parts, L12\'s 150 s, L13\'s 110 s, L14\'s 100 s, LW\'s 50 s): 773 s', () => {
     expect(BENCH_EDIT).toEqual({ count: 100, everyMs: 250, radius: 8, hoverMaxS: 60, streamingCount: 20, streamingFlightS: 6, streamingSpeed: 20 });
     const liveS = BENCH_LIVE_LEGS.reduce((s, l) => s + l.seconds, 0);
     const l10S = BENCH_EDIT.hoverMaxS + (BENCH_EDIT.count * BENCH_EDIT.everyMs) / 1000 + BENCH_EDIT.streamingFlightS;
@@ -86,11 +89,15 @@ describe('the bench script (SP4b spec §8.3, D22)', () => {
     // band's 4 s, the map and the refill's 20 s, RD 16's 40 s.
     const l14S = BENCH_XRAY.holdS + (BENCH_XRAY.holdS + BENCH_XRAY.sweepS) + BENCH_XRAY.sweepS + BENCH_XRAY.bandS + BENCH_XRAY.refillMaxS + BENCH_XRAY.rd16MaxS;
     expect(BENCH_XRAY_LEG).toEqual({ name: 'L14', seconds: l14S, speed: 0, headings: [], rdSteps: [] });
-    expect([95 + liveS, l10S, l11S, l12S, l13S, l14S]).toEqual([150, 91, 120, 150, 110, 100]);
-    expect(95 + liveS + l10S + l11S + l12S + l13S + l14S).toBe(721);
-    expect(BENCH_FRAME_CAPACITY).toBeGreaterThanOrEqual(721 * 240);
-    // 723 s at 240 Hz.
-    expect(Math.floor(BENCH_FRAME_CAPACITY / 240)).toBe(723);
+    // LW's caps (SP7a spec §13.6, ruling P46): the arrival's 20 s (the teleport and the disc's refill), Fast, Fancy and
+    // under water, 10 s each.
+    const lwS = BENCH_WATER.arriveMaxS + 3 * BENCH_WATER.partS;
+    expect(BENCH_WATER_LEG).toEqual({ name: 'LW', seconds: lwS, speed: 0, headings: [], rdSteps: [] });
+    expect([95 + liveS, l10S, l11S, l12S, l13S, l14S, lwS]).toEqual([150, 91, 120, 150, 110, 100, 50]);
+    expect(95 + liveS + l10S + l11S + l12S + l13S + l14S + lwS).toBe(771);
+    expect(BENCH_FRAME_CAPACITY).toBeGreaterThanOrEqual(771 * 240);
+    // 773 s at 240 Hz.
+    expect(Math.floor(BENCH_FRAME_CAPACITY / 240)).toBe(773);
   });
 
   test('the capacity holds 150 s at 240 Hz (36,000 frames): the 95 s script and the live legs at their caps (SP4c spec §8.4)', () => {
@@ -266,8 +273,8 @@ describe('summarizeBench (SP4b spec §8.3)', () => {
     const r = summarizeBench(recordOf([{ leg: 0 }, { leg: 1 }, { leg: 5 }, { leg: 6 }]), FIXED);
     expect(Object.keys(r)).toEqual([
       'route', 'seed', 'profile', 'rd', 'rdClampedTo', 'workers', 'sectionRenderer', 'userAgent', 'renderer', 'vendor', 'multiDraw', 'timerQuery', 'screen', 'dpr',
-      'pixelRatio', 'displayIntervalMs', 'load', 'stream', 'legs', 'L5', 'L6', 'live', 'edit', 'persist', 'paste', 'caves', 'xray', 'longFrames',
-      'structuralFrames',
+      'pixelRatio', 'displayIntervalMs', 'load', 'stream', 'legs', 'L5', 'L6', 'live', 'edit', 'persist', 'paste', 'caves', 'xray', 'water',
+      'longFrames', 'structuralFrames',
     ]);
     expect(r.route).toBe('bench=medium');
     expect(r.rdClampedTo).toBeNull();
@@ -284,7 +291,7 @@ describe('summarizeBench (SP4b spec §8.3)', () => {
     expect(Object.keys(r.stream.coordinatorMs)).toEqual(['p95', 'max']);
     expect(Object.keys(r.stream.uploadMs)).toEqual(['p95', 'max']);
     expect(Object.keys(r.stream.drawCalls)).toEqual(['max', 'mean']);
-    expect(Object.keys(r.legs)).toEqual(['L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'L9', 'L10', 'L11', 'L12', 'L13', 'L14']);
+    expect(Object.keys(r.legs)).toEqual(['L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'L9', 'L10', 'L11', 'L12', 'L13', 'L14', 'LW']);
     expect(Object.keys(r.legs.L1.frames)).toEqual(['count', 'p50', 'p95', 'p99', 'max', 'over33']);
     expect(r.L5).toEqual({ refillMs: 1234 });
     expect(Object.keys(r.L6)).toEqual(['frames']);
@@ -1358,13 +1365,15 @@ function fakeSave(o: { filled?: () => boolean } = {}) {
  * Runs the live legs (each settling at once) and L10 (its 100 edits, its 6 s flight east from L9's arrival at
  * (20,000.5, 90, 0.5)) with `save` bound, to L11's first frame at 129 s.
  */
-async function toL11(save: NonNullable<BenchWorld['save']>, paste?: BenchPasteHooks, caves?: BenchCaveHooks, xray?: BenchXrayHooks, capacity?: number) {
+async function toL11(
+  save: NonNullable<BenchWorld['save']>, paste?: BenchPasteHooks, caves?: BenchCaveHooks, xray?: BenchXrayHooks, capacity?: number, water?: BenchWaterHooks,
+) {
   const run = driverOf(null, capacity);
   const f = fakeLive();
   f.settle[7] = true;
   f.settle[8] = true;
   f.settle[9] = true;
-  run.driver.bind({ rdMax: 16, heightAt: () => 70, live: f.live, edit: fakeEdit().edit, save, paste, caves, xray, ...NO_SCENE });
+  run.driver.bind({ rdMax: 16, heightAt: () => 70, live: f.live, edit: fakeEdit().edit, save, paste, caves, xray, water, ...NO_SCENE });
   const p: BenchPose = { x: 0.5, y: 80, z: 0.5, yaw: 0, pitch: 0 };
   run.driver.pose(0, p, 12);
   run.driver.pose(95, p, 12);
@@ -2875,6 +2884,9 @@ function fixtureCave() {
 const pointsOf = (r: Float64Array): Array<[number, number, number]> =>
   Array.from({ length: r.length / 3 }, (_, k) => [r[3 * k]!, r[3 * k + 1]!, r[3 * k + 2]!]);
 
+/** No fluid anywhere: every cave voxel is dry (SP7a spec §13.6's `fluidAt`). */
+const DRY = (): number => 0;
+
 describe('caveRoute: L13\'s walk through cave air (SP6a spec §10.6, D29; plan)', () => {
   test('the constants: 258 blocks, 4.3 × 60, at 4.3 blocks per second; the flight at 64; the caps 20, 10 and 60 s, and the culling-off segment\'s 20 s (SP6b spec §12.6)', () => {
     expect(BENCH_CAVES).toEqual({ findMaxS: 20, flyMaxS: 10, walkS: 60, offS: 20 });
@@ -2885,8 +2897,8 @@ describe('caveRoute: L13\'s walk through cave air (SP6a spec §10.6, D29; plan)'
 
   test('on the fixture cave the route is the same twice, starts on the floor under the hit, and prefers cheese, then spaghetti 3D, then 2D', () => {
     const w = fixtureCave();
-    const a = caveRoute(w.tagAt, w.solidAt, [0, 12, 1], 258);
-    const b = caveRoute(w.tagAt, w.solidAt, [0, 12, 1], 258);
+    const a = caveRoute(w.tagAt, w.solidAt, DRY, [0, 12, 1], 258);
+    const b = caveRoute(w.tagAt, w.solidAt, DRY, [0, 12, 1], 258);
     expect(Array.from(b)).toEqual(Array.from(a));
     const pts = pointsOf(a);
     // Lowered from (0, 12, 1) onto the room's floor.
@@ -2910,7 +2922,7 @@ describe('caveRoute: L13\'s walk through cave air (SP6a spec §10.6, D29; plan)'
 
   test('every point is cave air one block above a floor, never solid; consecutive points are exactly 1 block apart, the dead ends walked back', () => {
     const w = fixtureCave();
-    const pts = pointsOf(caveRoute(w.tagAt, w.solidAt, [0, 12, 1], 258));
+    const pts = pointsOf(caveRoute(w.tagAt, w.solidAt, DRY, [0, 12, 1], 258));
     const step = ([x, y, z]: readonly number[]): boolean => !w.solidAt(x!, y! - 1, z!);
     for (const [x, y, z] of pts) {
       expect(w.solidAt(x, y, z), `${x}, ${y}, ${z}`).toBe(false);
@@ -2941,14 +2953,14 @@ describe('caveRoute: L13\'s walk through cave air (SP6a spec §10.6, D29; plan)'
 
   test('the route stops at `blocks` moves; a solid start gives no point; the search never expands a voxel twice', () => {
     const w = fixtureCave();
-    expect(pointsOf(caveRoute(w.tagAt, w.solidAt, [0, 12, 1], 5))).toHaveLength(6);
-    expect(caveRoute(w.tagAt, w.solidAt, [0, 9, 1], 258)).toHaveLength(0);
+    expect(pointsOf(caveRoute(w.tagAt, w.solidAt, DRY, [0, 12, 1], 5))).toHaveLength(6);
+    expect(caveRoute(w.tagAt, w.solidAt, DRY, [0, 9, 1], 258)).toHaveLength(0);
     // An endless slab of cheese: 258 moves west (−x first), each voxel new.
     const slab = {
       tagAt: (_x: number, y: number): number => (y === 40 || y === 41 ? CAVE_KIND.cheese : 0),
       solidAt: (_x: number, y: number): boolean => y < 40 || y > 41,
     };
-    const pts = pointsOf(caveRoute(slab.tagAt, slab.solidAt, [7, 41, 3], 258));
+    const pts = pointsOf(caveRoute(slab.tagAt, slab.solidAt, DRY, [7, 41, 3], 258));
     expect(pts).toHaveLength(259);
     expect(pts[0]).toEqual([7, 40, 3]);
     expect(pts[258]).toEqual([7 - 258, 40, 3]);
@@ -2956,7 +2968,7 @@ describe('caveRoute: L13\'s walk through cave air (SP6a spec §10.6, D29; plan)'
 
   test('off a floor\'s edge the route drops down a shaft deeper than 1 block, one voxel per point, onto the floor below; never sideways mid-fall; never a drop that lands nowhere; links on to an unvisited floor, then back to its first point', () => {
     const w = shaftCave(0);
-    const pts = pointsOf(caveRoute(w.tagAt, w.solidAt, [1, 31, 0], 258));
+    const pts = pointsOf(caveRoute(w.tagAt, w.solidAt, DRY, [1, 31, 0], 258));
     const at = (p: readonly number[]): number => pts.findIndex((q) => q.join() === p.join());
     expect(pts[0]).toEqual([1, 30, 0]);
     // The fall: off the corridor's edge at (3, 30, 0), straight down 15 voxels to the room's floor, one point each.
@@ -2998,6 +3010,27 @@ describe('caveRoute: L13\'s walk through cave air (SP6a spec §10.6, D29; plan)'
     expect(back).toBeGreaterThan(top + 16);
     for (let k = 1; k <= 15; k++) expect(pts[back - k], `${k}`).toEqual([3, 30 - k, 0]);
   });
+
+  test('L13 walks dry cave air only (SP7a spec §13.6): with the tunnel west of the room flooded (`fluidAt` a water source), the route walks the dry room and never the flooded half; a start in water gives no point', () => {
+    const w = fixtureCave();
+    const flooded = (x: number): number => (x < 0 ? WATER_SOURCE : 0);
+    // Dry, the route enters the tunnel.
+    expect(pointsOf(caveRoute(w.tagAt, w.solidAt, DRY, [0, 12, 1], 258)).some(([x]) => x < 0)).toBe(true);
+    const pts = pointsOf(caveRoute(w.tagAt, w.solidAt, flooded, [0, 12, 1], 258));
+    expect(pts[0]).toEqual([0, 10, 1]);
+    for (const [x, y, z] of pts) {
+      expect(flooded(x), `${x}, ${y}, ${z}`).toBe(0);
+      expect(w.tagAt(x, y, z), `${x}, ${y}, ${z}`).not.toBe(0);
+      expect(w.solidAt(x, y, z), `${x}, ${y}, ${z}`).toBe(false);
+    }
+    // Every floor voxel of the dry room is walked; the walk ends back at its start, short of 258 blocks (laps).
+    const room = new Set(pts.map((p) => p.join()));
+    for (let x = 0; x <= 3; x++) for (let z = 0; z <= 3; z++) if (!(x === 3 && z === 3)) expect(room.has([x, 10, z].join()), `${x}, ${z}`).toBe(true);
+    expect(pts.length - 1).toBeLessThan(258);
+    expect(pts[pts.length - 1]).toEqual([0, 10, 1]);
+    // A start in the flooded tunnel: no point.
+    expect(caveRoute(w.tagAt, w.solidAt, flooded, [-3, 10, 1], 258)).toHaveLength(0);
+  });
 });
 
 /**
@@ -3035,6 +3068,7 @@ function fakeCaves(answer: (() => Promise<Awaited<ReturnType<BenchCaveHooks['fin
     },
     tagAt: (_x, y) => (y === 40 || y === 41 ? CAVE_KIND.cheese : 0),
     solidAt: (_x, y) => y < 40 || y > 41,
+    fluidAt: DRY,
     setCulling(on) {
       culling.push({ on, t: scriptClock.t });
     },
@@ -3044,22 +3078,27 @@ function fakeCaves(answer: (() => Promise<Awaited<ReturnType<BenchCaveHooks['fin
 const found = (x: number, y: number, z: number) => () => Promise.resolve({ hit: { x, y, z, yaw: 90 }, reason: 'found' });
 
 /**
- * Runs L1-L12 with `caves` (and `xray`) bound (L12's hooks answering at once), then L12, L13 (and L14) at `o.stepS`
- * (0.1 s) steps until the script ends. Returns the published JSON, L13's and L14's frames (script time, pose, the RD
- * asked for) and the script's end. `clock` follows the script time, for the hooks' logs. With `o.l14Row`, each L14
- * frame's row is kept in the record (the fake record is otherwise never advanced), `o.l14Row` filling its timings.
+ * Runs L1-L12 with `caves` (and `xray`, and `water`) bound (L12's hooks answering at once), then L12, L13 (and L14, and
+ * LW) at `o.stepS` (0.1 s) steps until the script ends. Returns the published JSON, L13's, L14's and LW's frames (script
+ * time, pose, the RD asked for) and the script's end. `clock` follows the script time, for the hooks' logs. With
+ * `o.l14Row` (`o.lwRow`), each L14 (LW) frame's row is kept in the record (the fake record is otherwise never advanced),
+ * the function filling its timings.
  */
 async function runL13(
   caves: BenchCaveHooks,
   xray?: (at: () => number) => BenchXrayHooks,
-  o: { stepS?: number; l14Row?: (rec: BenchRecord, i: number, t: number) => void } = {},
+  o: {
+    stepS?: number; l14Row?: (rec: BenchRecord, i: number, t: number) => void; water?: (at: () => number) => BenchWaterHooks;
+    lwRow?: (rec: BenchRecord, i: number, t: number) => void;
+  } = {},
 ) {
   const stepS = o.stepS ?? 0.1;
   let t = 0;
   const s = fakeSave();
   const stub = stubPaste({ at: () => t });
   // Room for every L14 row `o.l14Row` keeps (82 s at the smallest step).
-  const { driver, p, published } = await toL11(s.save, stub.hooks, caves, xray?.(() => t), o.l14Row === undefined ? undefined : 4096);
+  const keep = o.l14Row !== undefined || o.lwRow !== undefined;
+  const { driver, p, published } = await toL11(s.save, stub.hooks, caves, xray?.(() => t), keep ? 4096 : undefined, o.water?.(() => t));
   driver.pose(129.05, p, 12);
   await flush();
   const t0 = 129.1;
@@ -3073,6 +3112,7 @@ async function runL13(
   type LegFrame = { readonly t: number; readonly x: number; readonly y: number; readonly z: number; readonly yaw: number; readonly pitch: number; readonly rd: number };
   const l13: LegFrame[] = [];
   const l14: LegFrame[] = [];
+  const lw: LegFrame[] = [];
   let lastL12: BenchPose | null = null;
   let end = Number.NaN;
   for (let i = 0; i < 8000; i++) {
@@ -3094,11 +3134,17 @@ async function runL13(
         o.l14Row(rec, rec.n, t);
         rec.n++;
       }
+    } else if (leg === 15) {
+      lw.push(frame);
+      if (o.lwRow !== undefined) {
+        o.lwRow(rec, rec.n, t);
+        rec.n++;
+      }
     } else lastL12 = { ...p };
     await microtasks();
   }
   driver.done(FIXED);
-  return { result: published[0] as BenchResult, l13, l14, end, lastL12: lastL12! };
+  return { result: published[0] as BenchResult, l13, l14, lw, end, lastL12: lastL12! };
 }
 
 describe('createBenchDriver: the cave leg L13 (SP6a spec §10.6, D29; plan)', () => {
@@ -3157,11 +3203,11 @@ describe('createBenchDriver: the cave leg L13 (SP6a spec §10.6, D29; plan)', ()
 
   test('a route shorter than 258 blocks (its search exhausted, walked back to its start) is walked again from its start until the 60 s end; a fall moves the eye at walking speed', async () => {
     const w = shaftCave(20010);
-    const route = pointsOf(caveRoute(w.tagAt, w.solidAt, [20011, 31, 0], 258));
+    const route = pointsOf(caveRoute(w.tagAt, w.solidAt, DRY, [20011, 31, 0], 258));
     const moves = route.length - 1;
     expect(moves).toBeLessThan(258);
     expect(route[moves]).toEqual(route[0]);
-    const run = await runL13({ find: found(20011, 31, 0), tagAt: w.tagAt, solidAt: w.solidAt, setCulling() {} });
+    const run = await runL13({ find: found(20011, 31, 0), tagAt: w.tagAt, solidAt: w.solidAt, fluidAt: DRY, setCulling() {} });
     const c = run.result.caves;
     expect([c.routeBlocks, c.timedOut, c.stoppedBy]).toEqual([moves, [], null]);
     const walk = run.l13.filter((q) => q.pitch === 0);
@@ -3301,7 +3347,7 @@ describe('createBenchDriver: the cave leg L13 (SP6a spec §10.6, D29; plan)', ()
     expect(summarizeBench(recordOf(frames), FIXED, null, undefined, undefined, undefined, { ...run, cullOff: null }).caves.cullOff).toEqual(empty);
   });
 
-  test('the page\'s cave hooks (`benchCaves`): the finder\'s job for the nearest entrance; the cave kind and the collision of a Published voxel, each in a read section; the culling switch is the section renderer\'s `setCulling`', async () => {
+  test('the page\'s cave hooks (`benchCaves`): the finder\'s job for the nearest entrance; the cave kind, the collision and the fluid byte of a Published voxel, each in a read section; the culling switch is the section renderer\'s `setCulling`', async () => {
     const asked: unknown[] = [];
     const switched: boolean[] = [];
     let sections = 0;
@@ -3313,7 +3359,8 @@ describe('createBenchDriver: the cave leg L13 (SP6a spec §10.6, D29; plan)', ()
         publishedAt: (x) => published(x),
         final: (cx, cz) => (cx < 0 ? null : { cave: (lx: number, y: number, lz: number) => (y === 40 ? 0x30 | CAVE_KIND.noodle : lx + lz === 3 && cz === -1 ? CAVE_KIND.ravine : 0) } as never),
         blockAt: (x, y) => (!published(x) ? -1 : y < 40 ? STONE : AIR),
-        fluidAt: () => 0,
+        // The store's own rule: 0 where the column is not Published.
+        fluidAt: (x, y) => (sections === 0 ? Number.NaN : !published(x) ? 0 : y === 40 ? WATER_SOURCE : 0),
       },
       pool: {
         findCave(req) {
@@ -3329,6 +3376,8 @@ describe('createBenchDriver: the cave leg L13 (SP6a spec §10.6, D29; plan)', ()
     expect([hooks.tagAt(5, 40, 5), hooks.tagAt(1, 41, -14), hooks.tagAt(5, 41, 5), hooks.tagAt(5, 320, 5), hooks.tagAt(5, -65, 5), hooks.tagAt(-1, 40, 5)])
       .toEqual([CAVE_KIND.noodle, CAVE_KIND.ravine, 0, 0, 0, 0]);
     expect([hooks.solidAt(5, 39, 5), hooks.solidAt(5, 40, 5), hooks.solidAt(-1, 39, 5)]).toEqual([true, false, false]);
+    // The fluid byte L13's route reads (SP7a spec §13.6), inside a read section; 0 where not Published.
+    expect([hooks.fluidAt(5, 40, 5), hooks.fluidAt(5, 41, 5), hooks.fluidAt(-1, 40, 5)]).toEqual([WATER_SOURCE, 0, 0]);
     expect(sections).toBe(0);
     hooks.setCulling(false);
     hooks.setCulling(true);
@@ -3769,6 +3818,263 @@ describe('createBenchDriver: the X-ray leg L14 (SP6a spec §10.6, D10, D29; plan
     expect(calls).toEqual(['open', 'set caves.cheese.offset 0.2', 'close']);
     expect([hooks.mapReady(), hooks.settled(), hooks.filled(12), hooks.filled(16)]).toEqual([true, false, true, false]);
     expect([hooks.drawCalls(), hooks.vertexBytes(), hooks.radius()]).toEqual([17, 123_456, 176]);
+  });
+});
+
+// ---------------------------------------------------------------- LW (SP7a spec §13.6, D36)
+
+/**
+ * LW's hooks on a fake page, each call logged with the script time (`at`): the teleport arriving at once (`'ok'`, the
+ * default), resolving false, rejecting or never settling; the disc revealed `settleAfterS` s after the arrival (2 s by
+ * default; null: never); the water tier's writes; the store's fluid slots per column, 1.75.
+ */
+function fakeWater(at: () => number, o: { arrive?: 'ok' | 'false' | 'reject' | 'never'; settleAfterS?: number | null } = {}) {
+  const events: Array<{ readonly what: string; readonly t: number }> = [];
+  let arrivedAt = Number.NaN;
+  const hooks: BenchWaterHooks = {
+    teleport(x, z) {
+      events.push({ what: `teleport ${x} ${z}`, t: at() });
+      const a = o.arrive ?? 'ok';
+      if (a === 'never') return new Promise(() => {});
+      if (a === 'reject') return Promise.reject(new Error('NO_LANDING'));
+      if (a === 'false') return Promise.resolve(false);
+      arrivedAt = at();
+      return Promise.resolve(true);
+    },
+    settled() {
+      const d = o.settleAfterS === undefined ? 2 : o.settleAfterS;
+      return d !== null && !Number.isNaN(arrivedAt) && at() - arrivedAt >= d - 1e-9;
+    },
+    setWaterTier(tier) { events.push({ what: `tier ${tier}`, t: at() }); },
+    fluidSlots() {
+      events.push({ what: 'fluid slots', t: at() });
+      return 1.75;
+    },
+  };
+  return { hooks, events };
+}
+
+/** The coast pose as an array: x, y, z, yaw, pitch (`under`: the eye 6 blocks under the surface). */
+const coastPose = (under = false): number[] =>
+  [BENCH_WATER_POSE.x, under ? BENCH_WATER_POSE.underY : BENCH_WATER_POSE.y, BENCH_WATER_POSE.z, BENCH_WATER_POSE.yaw, BENCH_WATER_POSE.pitch];
+
+describe('createBenchDriver: the water segment LW (SP7a spec §13.6, D36, Spec correction 17; plan)', () => {
+  test('LW\'s constants: the arrival\'s 20 s cap and three 10 s parts (ruling P46); the coast pose at seed \'42\'; L0-L6, the timed script\'s 95 s and L5\'s refill window unchanged (L0-L6 hold no ocean leg)', () => {
+    expect(BENCH_WATER).toEqual({ arriveMaxS: 20, partS: 10 });
+    expect(BENCH_WATER_LEG).toEqual({ name: 'LW', seconds: 50, speed: 0, headings: [], rdSteps: [] });
+    // Facing west, away from the land, 2.5 above the sea's surface voxel 63 at pitch −10 (the review poses' coastFancy
+    // view); under water the eye at y 58, 6 below the surface at 64.
+    expect(BENCH_WATER_POSE).toEqual({ x: -928.5, y: 65.5, z: -808.5, yaw: 270, pitch: -10, underY: 58 });
+    expect([BENCH_WATER_POSE.y - 63, 64 - BENCH_WATER_POSE.underY]).toEqual([2.5, 6]);
+    expect(BENCH_LEGS.map((l) => l.name)).toEqual(['L0', 'L1', 'L2', 'L3', 'L4', 'L5', 'L6']);
+    expect(BENCH_SECONDS).toBe(95);
+    expect(BENCH_REFILL).toEqual({ leg: 5, fromS: 70, toS: 80, rd: 12 });
+  });
+
+  test('the coast pose at seed \'42\' (the default profile, after D): sky-open sea water from y 53 to its surface voxel 63 under the eye and air above; 12 blocks of such sea ahead (west); the land 6 blocks behind (east)', async () => {
+    const { view } = await genRegion({ seed: BENCH_SEED, params: resolveProfile(BENCH_PROFILE), cx0: -59, cz0: -51, w: 2, h: 1, upTo: 'D', order: 'spiral', threads: 1 });
+    const x = Math.floor(BENCH_WATER_POSE.x);
+    const z = Math.floor(BENCH_WATER_POSE.z);
+    const sea = (bx: number): boolean => {
+      if (view.tag(bx, 63, z) !== 0 || view.block(bx, 64, z) !== AIR || view.fluid(bx, 64, z) !== 0) return false;
+      for (let y = 53; y <= 63; y++) if (fluidType(view.fluid(bx, y, z)) !== FLUID_WATER) return false;
+      return true;
+    };
+    for (let k = 0; k <= 12; k++) expect(sea(x - k), `x ${x - k}`).toBe(true);
+    // Behind the eye, the first block above the sea's surface (a non-air block at y 64) is 6 blocks east.
+    for (let k = 1; k < 6; k++) expect(view.block(x + k, 64, z), `x ${x + k}`).toBe(AIR);
+    expect(view.block(x + 6, 64, z)).not.toBe(AIR);
+    expect(view.fluid(x + 6, 64, z)).toBe(0);
+    // The eye under water is in water; above it, in air.
+    expect(fluidType(view.fluid(x, BENCH_WATER_POSE.underY, z))).toBe(FLUID_WATER);
+    expect(view.block(x, Math.floor(BENCH_WATER_POSE.y), z)).toBe(AIR);
+  });
+
+  test('LW follows L14 at RD 12: the teleport to the coast pose\'s column, the pose held there once arrived until the disc is revealed; then 10 s with Fast, 10 s with Fancy, 10 s 6 blocks under the surface; its frames are LW\'s', async () => {
+    let w: ReturnType<typeof fakeWater> | null = null;
+    const run = await runL13(fakeCaves(found(20010, 41, 0)).hooks, (at) => fakeXray(at).hooks, { water: (at) => (w = fakeWater(at)).hooks });
+    const f = w!;
+    expect(run.result.xray.timedOut).toEqual([]);
+    expect(run.lw.length).toBeGreaterThan(0);
+    const t0 = run.lw[0]!.t;
+    // LW starts at the frame L14 ends at (L14's last frame is the one before), where L14 left the camera.
+    const last14 = run.l14[run.l14.length - 1]!;
+    expect(t0).toBeCloseTo(last14.t + 0.1, 6);
+    expect([run.lw[0]!.x, run.lw[0]!.y, run.lw[0]!.z]).toEqual([last14.x, last14.y, last14.z]);
+    expect(f.events.map((e) => e.what)).toEqual([`teleport ${BENCH_WATER_POSE.x} ${BENCH_WATER_POSE.z}`, 'tier 0', 'fluid slots', 'tier 1']);
+    expect(f.events[0]!.t).toBe(t0);
+    // Every LW frame asks for RD 12 (L14 ended at RD 16).
+    expect(run.lw.every((q) => q.rd === 12)).toBe(true);
+    // Arrived (its promise settles before the next frame): the coast pose from the next frame; the disc revealed 2 s
+    // after the arrival, where Fast starts (the tier's write and the store's fluid slots, read once).
+    const tFast = f.events[1]!.t;
+    expect(tFast).toBe(firstAt(run.lw, t0 + 2).t);
+    expect(f.events[2]!.t).toBe(tFast);
+    const tFancy = f.events[3]!.t;
+    expect(tFancy).toBe(firstAt(run.lw, tFast + BENCH_WATER.partS).t);
+    const tUnder = firstAt(run.lw, tFancy + BENCH_WATER.partS).t;
+    for (const q of run.lw.filter((q) => q.t > t0 && q.t < tUnder)) expect([q.x, q.y, q.z, q.yaw, q.pitch], `${q.t}`).toEqual(coastPose());
+    const under = run.lw.filter((q) => q.t >= tUnder);
+    expect(under.length).toBeGreaterThan(95);
+    for (const q of under) expect([q.x, q.y, q.z, q.yaw, q.pitch], `${q.t}`).toEqual(coastPose(true));
+    expect(run.end).toBeCloseTo(tUnder + BENCH_WATER.partS, 6);
+    // What the driver hands `summarizeBench` (no rows kept here, so the frame figures are empty).
+    const r = run.result.water;
+    expect(r.arriveMs).toBeCloseTo((tFast - t0) * 1000, 6);
+    expect([r.timedOut, r.teleportError, r.fluidSlotsPerColumn]).toEqual([[], null, 1.75]);
+    expect(r.pose).toEqual(BENCH_WATER_POSE);
+  });
+
+  test('LW\'s parts read their own rows: the published `water` block from the driver\'s windows and toggles', async () => {
+    const run = await runL13(fakeCaves(found(20010, 41, 0)).hooks, (at) => fakeXray(at).hooks, {
+      water: (at) => fakeWater(at).hooks,
+      lwRow: (rec, i, t) => {
+        rec.snappedMs[i] = HZ240;
+        rec.rawMs[i] = HZ240;
+        rec.mainMs[i] = 1;
+        rec.calls[i] = 40;
+        rec.tMs[i] = t * 1000;
+        rec.gpuMs[i] = Number.NaN;
+      },
+    });
+    const r = run.result.water;
+    expect(r.timedOut).toEqual([]);
+    // Each part's 100 frames (10 s at 0.1 s), every frame at 240 Hz; no GPU sample.
+    for (const part of [r.fast, r.fancy, r.under]) expect([part.p50, part.p95, part.over33, part.mainP95, part.gpuMs]).toEqual([HZ240, HZ240, 0, 1, null]);
+    expect([r.waterFancyGpuMs, r.waterFancyP95, r.waterTierToggleMaxMs, r.underwaterP95]).toEqual([null, HZ240, HZ240, HZ240]);
+    expect(run.result.legs.LW.frames.count).toBe(run.lw.length);
+  });
+
+  test('LW ends at its arrival\'s cap, `timedOut` [\'arrive\'], with no part and no tier write: a teleport that never settles, one that resolves false or fails (its cause kept), a disc never revealed', async () => {
+    const run = async (o: Parameters<typeof fakeWater>[1]) => {
+      let w: ReturnType<typeof fakeWater> | null = null;
+      const r = await runL13(fakeCaves(found(20010, 41, 0)).hooks, (at) => fakeXray(at).hooks, { water: (at) => (w = fakeWater(at, o)).hooks });
+      return { ...r, f: w! };
+    };
+    for (const [o, error] of [
+      [{ arrive: 'never' }, null], [{ arrive: 'false' }, 'the teleport did not move the camera'], [{ arrive: 'reject' }, 'Error: NO_LANDING'], [{ settleAfterS: null }, null],
+    ] as const) {
+      const r = await run(o);
+      const t0 = r.lw[0]!.t;
+      expect(r.result.water.timedOut, JSON.stringify(o)).toEqual(['arrive']);
+      expect(r.result.water.teleportError, JSON.stringify(o)).toBe(error);
+      expect(r.f.events.map((e) => e.what), JSON.stringify(o)).toEqual([`teleport ${BENCH_WATER_POSE.x} ${BENCH_WATER_POSE.z}`]);
+      expect(r.end - t0).toBeGreaterThanOrEqual(BENCH_WATER.arriveMaxS - 1e-9);
+      expect(r.end - t0).toBeLessThan(BENCH_WATER.arriveMaxS + 0.1 + 1e-9);
+      expect([r.result.water.arriveMs, r.result.water.fluidSlotsPerColumn, r.result.water.fast.p95]).toEqual([null, null, null]);
+    }
+    // Arrived but never revealed: held at the coast pose while it waited.
+    const held = await run({ settleAfterS: null });
+    for (const q of held.lw.slice(1)) expect([q.x, q.y, q.z, q.yaw, q.pitch]).toEqual(coastPose());
+  });
+
+  test('LW runs only after L14: without the water hooks the script ends after L14; after an L13 time-out neither runs', async () => {
+    const without = await runL13(fakeCaves(found(20010, 41, 0)).hooks, (at) => fakeXray(at).hooks);
+    expect(without.l14.length).toBeGreaterThan(0);
+    expect(without.lw).toEqual([]);
+    expect(without.result.water.timedOut).toEqual([]);
+    const hang = await runL13(fakeCaves(null).hooks, (at) => fakeXray(at).hooks, { water: (at) => fakeWater(at).hooks });
+    expect([hang.l14, hang.lw]).toEqual([[], []]);
+  });
+
+  test('the `water` block\'s fields and shapes: each part\'s frames, the Fancy-minus-Fast GPU p50, Fancy\'s and under water\'s p95, the toggles\' longest frames; the GPU MB, draw calls and fluid slots recorded; LW\'s frames outside L0-L6\'s stream cells and the live legs\'', () => {
+    const frames: Frame[] = [];
+    // L1 and L7 frames, which LW's must not join.
+    for (let i = 0; i < 5; i++) frames.push({ leg: 1, tMs: 10_000 + 100 * i });
+    for (let i = 0; i < 5; i++) frames.push({ leg: 7, tMs: 100_000 + 100 * i });
+    // LW at 1 s a frame from 0 s: the arrival [0, 10) (long frames, never counted), Fast [10, 20), Fancy [20, 30), under
+    // water [30, 40).
+    for (let i = 0; i < 40; i++) {
+      frames.push({
+        leg: 15, tMs: 1000 * i,
+        snappedMs: i < 10 ? 20 * HZ240 : i === 11 ? 5 * HZ240 : i === 21 ? 7 * HZ240 : i === 27 ? 4 * HZ240 : i === 35 ? 6 * HZ240 : i === 24 ? 9 * HZ240 : HZ240,
+        mainMs: i === 36 ? 3 : 1,
+        gpuMs: i < 10 ? 50 : i < 20 ? 3 : i < 30 ? 3.75 : 2.5,
+        calls: i === 5 ? 99 : i === 15 ? 70 : 40,
+        geometryMB: i === 3 ? 500 : i === 33 ? 90 : 30,
+      });
+    }
+    const run: BenchWaterRun = {
+      arriveMs: 2100, fast: { tS0: 10, tS1: 20 }, fancy: { tS0: 20, tS1: 30 }, under: { tS0: 30, tS1: 40 }, toggles: [10, 20], fluidSlots: 1.75,
+      timedOut: [], teleportError: null,
+    };
+    const all = summarizeBench(recordOf(frames), FIXED, null, undefined, undefined, undefined, undefined, undefined, run);
+    const r = all.water;
+    expect(Object.keys(r)).toEqual([
+      'pose', 'arriveMs', 'fast', 'fancy', 'under', 'waterFancyGpuMs', 'waterFancyP95', 'waterTierToggleMaxMs', 'underwaterP95', 'gpuMB', 'drawCalls',
+      'fluidSlotsPerColumn', 'timedOut', 'teleportError',
+    ]);
+    expect(r.pose).toEqual(BENCH_WATER_POSE);
+    expect(r.arriveMs).toBe(2100);
+    expect(Object.keys(r.fast)).toEqual(['p50', 'p95', 'p99', 'max', 'over33', 'mainP95', 'gpuMs']);
+    // Each part's 10 frames (nearest rank: p95 and p99 the 10th smallest).
+    expect(r.fast).toEqual({ p50: HZ240, p95: 5 * HZ240, p99: 5 * HZ240, max: 5 * HZ240, over33: 0, mainP95: 1, gpuMs: { p50: 3, p95: 3 } });
+    expect(r.fancy).toEqual({ p50: HZ240, p95: 9 * HZ240, p99: 9 * HZ240, max: 9 * HZ240, over33: 1, mainP95: 1, gpuMs: { p50: 3.75, p95: 3.75 } });
+    expect(r.under).toEqual({ p50: HZ240, p95: 6 * HZ240, p99: 6 * HZ240, max: 6 * HZ240, over33: 0, mainP95: 3, gpuMs: { p50: 2.5, p95: 2.5 } });
+    // G1's parts (spec §13.6): Fancy's GPU p50 minus Fast's; Fancy's p95; the longest of the toggle's frame and the two
+    // after each (Fast's 5, Fancy's 7; Fancy's 9 at 24 s is no toggle's); under water's p95.
+    expect([r.waterFancyGpuMs, r.waterFancyP95, r.waterTierToggleMaxMs, r.underwaterP95]).toEqual([0.75, 9 * HZ240, 7 * HZ240, 6 * HZ240]);
+    // Recorded over the three parts' frames: the GPU estimate's peak (90 + 10 + 15.8), the draw calls; the fluid slots.
+    expect(r.gpuMB).toBeCloseTo(115.8, 9);
+    expect(r.drawCalls).toEqual({ max: 70, mean: 41 });
+    expect([r.fluidSlotsPerColumn, r.timedOut, r.teleportError]).toEqual([1.75, [], null]);
+    // LW's frames are its own leg's, never the stream's (L1-L6) or the live legs' (L7-L9).
+    expect([all.stream.frames.count, all.live.frames.count, all.legs.LW.frames.count]).toEqual([5, 5, 40]);
+    expect(all.stream.drawCalls.max).toBe(40);
+    const json = JSON.stringify(r);
+    expect(json).not.toContain('NaN');
+    expect(JSON.parse(json)).toEqual(r);
+    // No LW: every figure empty, the pose kept.
+    const none = summarizeBench(recordOf([{ leg: 1 }]), FIXED).water;
+    const empty = { p50: null, p95: null, p99: null, max: null, over33: 0, mainP95: null, gpuMs: null };
+    expect(none).toEqual({
+      pose: BENCH_WATER_POSE, arriveMs: null, fast: empty, fancy: empty, under: empty, waterFancyGpuMs: null, waterFancyP95: null,
+      waterTierToggleMaxMs: null, underwaterP95: null, gpuMB: null, drawCalls: null, fluidSlotsPerColumn: null, timedOut: [], teleportError: null,
+    });
+  });
+
+  test('the page\'s water hooks (`benchWater`): the teleport and its settling as given; the tier through the renderer\'s `setWaterTier`; the fluid slots per Published column of the RD disc around the camera, read in one read section', () => {
+    const calls: string[] = [];
+    const tiers: number[] = [];
+    let sections = 0;
+    let reads = 0;
+    // Columns west of cx 0 are not Published; each Published column holds 2 dense fluid sections at sy 3 and 4, and
+    // column (1, 0) a third at sy 5.
+    const hooks = benchWater({
+      store: {
+        enterRead() { sections++; },
+        exitRead() { sections--; },
+        publishedAt: (x) => x >= 0,
+        final: (cx, cz) => {
+          if (sections !== 1) throw new Error('read outside a read section');
+          reads++;
+          return { sectionFluid: (sy: number) => (sy === 3 || sy === 4 || (sy === 5 && cx === 1 && cz === 0) ? new Uint8Array(4096) : 0) } as never;
+        },
+      },
+      renderer: { setWaterTier: (t) => { tiers.push(t); } },
+      live: {
+        teleport: (x, z) => {
+          calls.push(`teleport ${x} ${z}`);
+          return Promise.resolve(true);
+        },
+        settled: () => true,
+      },
+      centre: () => [0, 0],
+      rd: () => 2,
+    });
+    void hooks.teleport(-928.5, -808.5);
+    expect(calls).toEqual(['teleport -928.5 -808.5']);
+    expect(hooks.settled()).toBe(true);
+    hooks.setWaterTier(0);
+    hooks.setWaterTier(1);
+    expect(tiers).toEqual([0, 1]);
+    // The RD 2 disc (21 columns) around column (0, 0): the 13 with cx ≥ 0 are Published, 2 dense sections each and one
+    // more in (1, 0).
+    const disc = discOffsets(2);
+    const published = disc.filter(([dx]) => dx >= 0).length;
+    expect([disc.length, published]).toEqual([21, 13]);
+    expect(hooks.fluidSlots()).toBeCloseTo((2 * published + 1) / published, 12);
+    expect([sections, reads]).toEqual([0, published]);
   });
 });
 
