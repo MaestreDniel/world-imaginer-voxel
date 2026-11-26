@@ -96,7 +96,7 @@ import { PLACE_COLOURS, PLACE_SAVED_NOTICE } from '../../src/ui/world/places';
 import { turnClipboard } from '../../src/ui/world/clipboard';
 import { clipboardHash, xrayColorNotice } from '../../src/ui/world/worldPage';
 import { CAVE_BIOME, CAVE_BIOME_COLORS } from '../../src/core/constants';
-import { XRAY_BIOME_LABELS, XRAY_LABELS } from '../../src/render/xrayPalette';
+import { XRAY_BIOME_LABELS, XRAY_FLUID_LABELS, XRAY_LABELS } from '../../src/render/xrayPalette';
 import { findBiomeButtonText, findBiomeText } from '../../src/ui/map/cavesTab';
 import { cavePickerOf } from '../../src/gen/biomes/cavePicker';
 import { newPointRecord, samplePoint } from '../../src/gen/column/columnPoint';
@@ -107,6 +107,14 @@ import {
   XRAY_BIOME_LEGEND, XRAY_BIOME_MIN, XRAY_BIOME_PIXEL, XRAY_COLOR_NOTICES, XRAY_KIND_LEGEND_SIZE, xrayBiomeOf,
 } from '../tools/uiSmoke';
 import { profileHash, SP6B_AT, SP6B_MAP, SP6B_POSE_IDS, SP6B_POSES, SP6B_RAISED, SP6B_SHOTS, SP6B_XRAY_PITCH, sp6bLink, sp6bPose, sp6bShotQuery } from '../tools/uiSmoke';
+import {
+  blueDominant, boxMean, LAVA_POOL_Y, lavaSliceQuery, pixelsWithin, SLICE_LAVA, SURFACED_Y, WATER_PIXEL, WATER_PIXEL_TOL, WATER_POSES, WATER_SETTING,
+  WATER_TIER_BOX, waterPageQuery, XRAY_FLUID_LEGEND,
+} from '../tools/uiSmoke';
+import { mountSettingsPanel } from '../../src/ui/settingsPanel';
+import { cavesLegend } from '../../src/ui/inspector/sliceModel';
+import { FLUID_LAVA } from '../../src/world/blocks/fluid';
+import { caveSliceY } from '../../src/ui/map/cavesTab';
 import { createGenContext } from '../../src/gen/context';
 import { seedFromInput } from '../../src/core/seed';
 
@@ -318,15 +326,15 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(mountainSummaryOk(flat), flat).toBe(false);
   });
 
-  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream, then SP4c\'s overlay and overlay-mesh, then SP5a\'s build and walk, then SP5b\'s menus, save, crash, two tabs, export/import, places, modify and settings-world, then SP5c\'s select, then SP6a\'s caves before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, SP4c spec §8.6, SP5a spec §6.4, SP5b spec §6.5, SP5c spec §10.8, SP6a spec §10.9, ruling P52)', () => {
+  test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream, then SP4c\'s overlay and overlay-mesh, then SP5a\'s build and walk, then SP5b\'s menus, save, crash, two tabs, export/import, places, modify and settings-world, then SP5c\'s select, then SP6a\'s caves, then SP7a\'s water before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, SP4c spec §8.6, SP5a spec §6.4, SP5b spec §6.5, SP5c spec §10.8, SP6a spec §10.9, SP7a spec §13.9, ruling P52)', () => {
     expect(SMOKE_STEPS).toEqual([
       'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
       'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
       'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'build', 'walk', 'menus', 'save', 'crash', 'two tabs',
-      'export/import', 'places', 'modify', 'settings-world', 'select', 'caves', 'console',
+      'export/import', 'places', 'modify', 'settings-world', 'select', 'caves', 'water', 'console',
     ]);
     expect(SMOKE_STEPS.slice(SMOKE_STEPS.indexOf('walk'), SMOKE_STEPS.indexOf('console') + 1)).toEqual([
-      'walk', 'menus', 'save', 'crash', 'two tabs', 'export/import', 'places', 'modify', 'settings-world', 'select', 'caves', 'console',
+      'walk', 'menus', 'save', 'crash', 'two tabs', 'export/import', 'places', 'modify', 'settings-world', 'select', 'caves', 'water', 'console',
     ]);
     expect(SMOKE_STEPS.indexOf('density tab')).toBe(SMOKE_STEPS.indexOf('rule') + 1);
     expect(SMOKE_STEPS.indexOf('start')).toBe(SMOKE_STEPS.indexOf('preset profiles') + 1);
@@ -338,9 +346,11 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect(SMOKE_STEPS.indexOf('export/import')).toBe(SMOKE_STEPS.indexOf('two tabs') + 1);
     expect(SMOKE_STEPS.indexOf('select')).toBe(SMOKE_STEPS.indexOf('settings-world') + 1);
     expect(SMOKE_STEPS.indexOf('caves')).toBe(SMOKE_STEPS.indexOf('select') + 1);
-    expect(SMOKE_STEPS.indexOf('caves')).toBe(SMOKE_STEPS.indexOf('console') - 1);
+    expect(SMOKE_STEPS.indexOf('water')).toBe(SMOKE_STEPS.indexOf('caves') + 1);
+    expect(SMOKE_STEPS.indexOf('water')).toBe(SMOKE_STEPS.indexOf('console') - 1);
     expect(stepId('select: a house, Q, Ctrl+C, Ctrl+V, one turn')).toBe('select');
     expect(stepId('caves: X, PageDown, Home, L; the Caves tab, Cave slice, a cave parameter live')).toBe('caves');
+    expect(stepId('water: the Water row live; the underwater fog; the X-ray and slice legends')).toBe('water');
     expect(stepId('export/import: Export, Delete, Import; worldHash() equal')).toBe('export/import');
     expect(stepId('settings-world: G opens, FOV 80 applies, Esc closes')).toBe('settings-world');
     expect(SMOKE_STEPS.indexOf('console')).toBe(SMOKE_STEPS.length - 1);
@@ -2068,8 +2078,9 @@ describe('UI smoke test: the caves step\'s SP6b checks: C, the HUD and the strip
     expect(xrayStripText(-64, 319, 1)).toBe(stripText(XRAY_ALL, 1));
     expect(xrayStripText(-64, 319, 0)).toBe(stripText(XRAY_ALL, 0));
     expect(xrayStripText(-12, 19, 1)).toBe(stripText(bandSet(-12, 19), 1));
-    expect(XRAY_BIOME_LEGEND).toEqual(XRAY_BIOME_LABELS.filter((l) => l !== ''));
-    expect(XRAY_KIND_LEGEND_SIZE).toBe(XRAY_LABELS.filter((l) => l !== '').length);
+    // Both legends end with the fluid tint's rows, Flooded and Lava (SP7a spec §10.1, D13).
+    expect(XRAY_BIOME_LEGEND).toEqual([...XRAY_BIOME_LABELS.filter((l) => l !== ''), ...XRAY_FLUID_LABELS.filter((l) => l !== '')]);
+    expect(XRAY_KIND_LEGEND_SIZE).toBe(XRAY_LABELS.filter((l) => l !== '').length + XRAY_FLUID_LABELS.filter((l) => l !== '').length);
     expect(XRAY_COLOR_NOTICES).toEqual([xrayColorNotice(0), xrayColorNotice(1)]);
   });
 
@@ -2358,5 +2369,92 @@ describe('the overlay probes (SP6a, Task 48f)', () => {
     for (const [style, shown, closed] of cases) {
       expect([probe(OVERLAY_SHOWN, style), probe(OVERLAY_CLOSED, style)], JSON.stringify(style)).toEqual([shown, closed]);
     }
+  });
+});
+
+describe('UI smoke test: the water step (SP7a spec §13.9)', () => {
+  const src = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+  /** The body of the tool's function `name` (to its closing brace at the line start). */
+  const body = (name: string): string => {
+    const start = src.indexOf(`async function ${name}(`);
+    expect(start, name).toBeGreaterThan(-1);
+    return src.slice(start, src.indexOf('\n}\n', start));
+  };
+
+  test('the step\'s literals are the page\'s: the Water row (its select, its label, Fast then Fancy, Medium\'s Fancy with none stored), the X-ray legends\' fluid rows, the caves slice\'s lava row (SP7a spec §7, §10.1, §10.2)', () => {
+    const dom = installDom();
+    try {
+      mountSettingsPanel(dom.body as unknown as HTMLElement, {
+        settings: SETTINGS_DEFAULTS, onSettings: () => undefined, rdMax: 16, defaultRd: 8, onClose: () => undefined,
+      });
+      const select = dom.el(WATER_SETTING.id);
+      expect(select.tagName).toBe('SELECT');
+      expect(select.options.map((o) => o.value)).toEqual([...WATER_SETTING.tiers]);
+      expect(select.value).toBe(WATER_SETTING.defaultTier);
+      const row = dom.el('settings-graphics').children.find((r) => r.querySelector(`#${WATER_SETTING.id}`) !== null)!;
+      expect(row.className).toBe('help-setting');
+      expect(row.querySelectorAll('span').filter((sp) => sp.className === 'help-setting-label').map((sp) => sp.textContent)).toEqual([WATER_SETTING.label]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(SETTINGS_DEFAULTS.water).toBe(WATER_SETTING.defaultTier);
+    expect(XRAY_FLUID_LEGEND).toEqual(XRAY_FLUID_LABELS.filter((l) => l !== ''));
+    const lava = cavesLegend(Uint8Array.of(1), Uint8Array.of(FLUID_LAVA)).find((k) => sameJson(k.rgb, VOXEL_COLORS.lava));
+    expect(lava?.label).toBe(SLICE_LAVA);
+    expect(cavesLegend(Uint8Array.of(1), Uint8Array.of(0)).map((k) => k.label)).not.toContain(SLICE_LAVA);
+  });
+
+  test('each pose opens on its profile\'s world at its corner (RD 4, batch, the hook); the lava slice\'s eye in the pool\'s voxel, so Cave slice cuts the pool\'s y; the surface reading over the sea, the underwater pose under it', () => {
+    for (const [id, pose] of Object.entries(WATER_POSES)) {
+      const url = new URL(`/${waterPageQuery(pose)}`, 'http://127.0.0.1');
+      const q = parseWorldQuery(url.searchParams);
+      expect([q.at, q.y, q.yaw, q.pitch, q.rd, q.renderer, q.shot], id).toEqual([
+        { x: Math.floor(pose.x), z: Math.floor(pose.z) }, pose.y, pose.yaw, pose.pitch, WORLD_RD, 'batch', false,
+      ]);
+      expect(url.searchParams.get('wiTest'), id).toBe('1');
+      expect(url.hash, id).toBe(profileHash(pose.profile));
+      expect(readMapHash(url.hash), id).toMatchObject({ seed: '42', profile: pose.profile, patch: {} });
+      expect(parseWorldQuery(new URL(`/${waterPageQuery(pose, '&shot=1')}`, 'http://127.0.0.1').searchParams).shot, id).toBe(true);
+    }
+    expect([WATER_POSES.coastFancy.profile, WATER_POSES.underwater.profile, WATER_POSES.lavaPool.profile]).toEqual(['archipelago', 'archipelago', 'default']);
+    // The lava pool's voxel: 1.5 under the pose's eye (`a5Examples`' rule); the slice's page puts the eye in its
+    // middle.
+    expect(Number.isInteger(LAVA_POOL_Y)).toBe(true);
+    expect(LAVA_POOL_Y).toBe(WATER_POSES.lavaPool.y - 1.5);
+    const lq = parseWorldQuery(new URL(`/${lavaSliceQuery()}`, 'http://127.0.0.1').searchParams);
+    expect([lq.at, lq.y, lq.yaw, lq.pitch]).toEqual([{ x: Math.floor(WATER_POSES.lavaPool.x), z: Math.floor(WATER_POSES.lavaPool.z) }, LAVA_POOL_Y + 0.5, 90, -30]);
+    expect(caveSliceY(XRAY_ALL, lq.y!)).toBe(LAVA_POOL_Y);
+    // Under the sea surface (y 63 + 8/9) at the pose; 2 blocks over it once surfaced.
+    expect(WATER_POSES.underwater.y + 1).toBeLessThan(SEA_LEVEL);
+    expect(SURFACED_Y).toBe(SEA_LEVEL + 3);
+  });
+
+  test('the reads: the centre pixel and the far-water box inside the viewport; boxMean, pixelsWithin and blueDominant', () => {
+    expect(WATER_PIXEL).toEqual({ x: VIEWPORT.width / 2, y: VIEWPORT.height / 2, width: 1, height: 1 });
+    for (const b of [WATER_PIXEL, WATER_TIER_BOX]) {
+      expect(b.x >= 0 && b.y >= 0 && b.x + b.width <= VIEWPORT.width && b.y + b.height <= VIEWPORT.height, JSON.stringify(b)).toBe(true);
+    }
+    // A 4 × 2 capture: a 2 × 2 box over (1, 0) … (2, 1) averages its four pixels; a 1 × 1 box reads its pixel.
+    const rgba = new Uint8Array(4 * 2 * 4);
+    const put = (x: number, y: number, rgb: readonly number[]) => rgba.set([...rgb, 255], (y * 4 + x) * 4);
+    put(1, 0, [10, 20, 30]); put(2, 0, [20, 20, 30]); put(1, 1, [30, 21, 30]); put(2, 1, [40, 21, 31]); put(0, 0, [255, 255, 255]); put(3, 1, [255, 255, 255]);
+    expect(boxMean({ width: 4, rgba }, { x: 1, y: 0, width: 2, height: 2 })).toEqual([25, 21, 30]);
+    expect(boxMean({ width: 4, rgba }, { x: 3, y: 1, width: 1, height: 1 })).toEqual([255, 255, 255]);
+    expect(pixelsWithin([168, 204, 245], [160, 212, 245], WATER_PIXEL_TOL)).toBe(true);
+    expect(pixelsWithin([168, 204, 245], [159, 204, 245], WATER_PIXEL_TOL)).toBe(false);
+    expect(pixelsWithin([1, 2, 3], [1, 2], WATER_PIXEL_TOL)).toBe(false);
+    expect(blueDominant([20, 35, 70])).toBe(true);
+    expect(blueDominant([20, 70, 70])).toBe(false);
+    expect(blueDominant([168, 204, 200])).toBe(false);
+  });
+
+  test('the step presses the key map\'s G, X and C plain through SMOKE_KEYS and Space raw (the \'up\' binding); SMOKE_KEYS unchanged', () => {
+    expect(Object.keys(SMOKE_KEYS)).toHaveLength(14);
+    expect(body('waterRow')).toContain('SMOKE_KEYS.settings, 71);');
+    const lava = body('lavaLegendChecks');
+    expect(lava).toContain("worldKey(p, 'x', SMOKE_KEYS.xray, 88)");
+    expect(lava).toContain("worldKey(p, 'c', SMOKE_KEYS.xrayColor, 67)");
+    expect(body('underwaterChecks')).toContain("code: 'Space'");
+    expect(DEFAULT_KEYMAP.find((k) => k.action === 'up')!.bindings).toEqual([{ kind: 'code', code: 'Space' }]);
   });
 });

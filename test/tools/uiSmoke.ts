@@ -152,6 +152,15 @@
  *   slice" by cave biome opening the horizontal `biome3d` slice, "Nearest lush cave" moving the camera to its hit;
  *   `?map`'s caveBiome layer on `CAVE_MAP`, its y field drawing the lush colour at the canvas centre; `cave_heavy` in
  *   the map's profile select and New world's preset select, and its world generating;
+ * - water (SP7a spec §13.9), at SP7a's review poses (`WATER_POSES`, from the caves runs' `.out/sp7a.examples.json`),
+ *   each on its profile's world at RD 4 on batch with the hook: at `coastFancy` G opens the Settings, whose Water row
+ *   is in step with the setting (the stored tier, else Fancy), a change of tier is stored and live (the mean of a box
+ *   of far water, `WATER_TIER_BOX`, moves by more than 8 with no reload) and the row follows it, both ways
+ *   (`waterTierChecks`); in the capture mode, the centre pixel at `underwater` raised 8 blocks (the surface reading),
+ *   then at `underwater` (blue channel dominant, the fog on), then after Space raised the eye over the surface (back
+ *   within 8 of the surface reading, the fog off; `underwaterChecks`); in the lava pool (`lavaSliceQuery`) X's kinds'
+ *   legend and C's biome legend end with Flooded and Lava, and "Cave slice" cuts the pool, its legend listing lava
+ *   (`lavaLegendChecks`);
  * - console: no exception, console error or failed load, except the known favicon.ico 404 and Chrome's notice that it
  *   blocked a world page's `beforeunload` prompt when a step left it (`leaveGuardLog`); every step ran.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
@@ -554,14 +563,14 @@ export function presetProblems(text: string, expected: { readonly name: string; 
  * page), then SP5a's `build` and `walk` (SP5a spec §6.4, each on its own page), then SP5b's `menus`, `save`, `crash`,
  * `two tabs`, `export/import`, `places`, `modify` and `settings-world` (SP5b spec §6.5, on the saved world `menus`
  * creates and, from `export/import` on, its import), then SP5c's `select` (SP5c spec §10.8, on that import), then
- * SP6a's `caves` (SP6a spec §10.9, on unsaved pages of its own); `console` stays last, the closing step main() runs
- * after `runSmoke` (ruling P52).
+ * SP6a's `caves` (SP6a spec §10.9, on unsaved pages of its own), then SP7a's `water` (SP7a spec §13.9, on unsaved pages
+ * of its own); `console` stays last, the closing step main() runs after `runSmoke` (ruling P52).
  */
 export const SMOKE_STEPS = [
   'selftest', 'load', 'number', 'knot', 'slider', 'box', 'profile', 'presets', 'undo/redo', 'reload', 'cut line', 'voxels', 'tabs', 'rule',
   'density tab', 'density node', 'density mute', 'density json', 'density narrow', 'density horizontal', 'density drag', 'density times',
   'preset profiles', 'start', 'world', 'world-mesh', 'stream', 'overlay', 'overlay-mesh', 'build', 'walk', 'menus', 'save', 'crash', 'two tabs',
-  'export/import', 'places', 'modify', 'settings-world', 'select', 'caves', 'console',
+  'export/import', 'places', 'modify', 'settings-world', 'select', 'caves', 'water', 'console',
 ] as const;
 export type SmokeStep = (typeof SMOKE_STEPS)[number];
 
@@ -1443,7 +1452,7 @@ export function sp6bPose(id: Sp6bPoseId): CaveExamplePose & { readonly profile: 
 }
 
 /** The world page's hash of seed 42 on `profile` with no patch (`SEED_42_HASH` for the default profile). */
-export function profileHash(profile: 'default' | 'cave_heavy'): string {
+export function profileHash(profile: 'default' | 'cave_heavy' | 'archipelago'): string {
   return `#${mapHash({ ...START, profile })}`;
 }
 
@@ -1512,10 +1521,21 @@ export const CAVE_BIOME_RGB = [[0x6f, 0x86, 0xa6], [0x4d, 0xff, 0x7a], [0xff, 0x
 /** The lush cave biome's id (`CAVE_BIOME.lush`). */
 export const LUSH = 1;
 
-/** The X-ray strip's biome legend, in order (`XRAY_BIOME_LABELS`' labelled entries: a unit test compares them). */
-export const XRAY_BIOME_LEGEND = ['Plain cave', 'Lush', 'Dripstone', 'Abyss', 'Surface'] as const;
-/** The kinds' legend's size: the nine cave kinds and the surface film (`XRAY_LABELS`' labelled entries). */
-export const XRAY_KIND_LEGEND_SIZE = 10;
+/**
+ * The fluid tint's rows that end both of the X-ray strip's legends (SP7a spec §10.1, D13: `XRAY_FLUID_LABELS`' labelled
+ * entries; a unit test compares them).
+ */
+export const XRAY_FLUID_LEGEND = ['Flooded', 'Lava'] as const;
+/**
+ * The X-ray strip's biome legend, in order: `XRAY_BIOME_LABELS`' labelled entries, then the fluid tint's rows
+ * (`XRAY_FLUID_LEGEND`; a unit test compares them).
+ */
+export const XRAY_BIOME_LEGEND = ['Plain cave', 'Lush', 'Dripstone', 'Abyss', 'Surface', ...XRAY_FLUID_LEGEND] as const;
+/**
+ * The kinds' legend's size: the nine cave kinds and the surface film (`XRAY_LABELS`' labelled entries), then Flooded
+ * and Lava (`XRAY_FLUID_LEGEND`).
+ */
+export const XRAY_KIND_LEGEND_SIZE = 12;
 /** C's notices (`xrayColorNotice`): by cave type (mode 0), by cave biome (1). */
 export const XRAY_COLOR_NOTICES = ['X-ray by cave type', 'X-ray by cave biome'] as const;
 
@@ -1594,6 +1614,100 @@ export const SMOKE_MOSS = 58;
 /** The `cave_heavy` world's page (SP6b spec §6.2): seed 42 on the profile by its hash, RD 4 on batch with the test hook. */
 export function caveHeavyQuery(): string {
   return `?rd=${WORLD_RD}&renderer=batch&wiTest=1#${mapHash({ ...START, profile: 'cave_heavy' })}`;
+}
+
+// ---------------------------------------------------------------- the water step (SP7a spec §13.9)
+
+/**
+ * The water step's review poses at seed '42' (SP7a spec §13.9, D16), mirrored as literals from the caves runs' merged
+ * `.out/sp7a.examples.json` (rulings P22: the three groups' records, quick tier): `coastFancy`, a coast at grazing
+ * view, and `underwater`, the eye 6 blocks under the sea surface, on archipelago; `lavaPool`, the eye 1.5 blocks above
+ * a settled lava voxel on the abyss's floor looking 30° down, in the default profile's biome region. Each opens on its
+ * own profile's world (`profileHash`). Task 51 commits the file as `water.examples.json` and points these reads at its
+ * `SP7A_POSES` (rulings P55).
+ */
+export const WATER_POSES = {
+  coastFancy: { x: 199.5, y: 65.5, z: -87.5, yaw: 0, pitch: -10, profile: 'archipelago' },
+  underwater: { x: 208.5, y: 58, z: -90.5, yaw: 0, pitch: 0, profile: 'archipelago' },
+  lavaPool: { x: -1354.5, y: -49.5, z: 1328.5, yaw: 90, pitch: -30, profile: 'default' },
+} as const satisfies Record<string, CaveExamplePose & { readonly profile: 'default' | 'archipelago' }>;
+
+/**
+ * The query of a water step page at `pose` on its profile's world: RD 4, the batch renderer and the test hook, then
+ * `extra`.
+ */
+export function waterPageQuery(pose: CaveExamplePose & { readonly profile: 'default' | 'archipelago' }, extra = ''): string {
+  return caveQuery(pose, `&rd=${WORLD_RD}&renderer=batch&wiTest=1${extra}`, profileHash(pose.profile));
+}
+
+/**
+ * The Settings' Water row (SP7a spec §7, D10; `settingsPanel.ts`, a unit test mounts it): its select's id, its label,
+ * its tiers' values in order, and the tier with nothing stored (Medium's, `SETTINGS_DEFAULTS.water`).
+ */
+export const WATER_SETTING = { id: 'setting-water', label: 'Water', tiers: ['fast', 'fancy'], defaultTier: 'fancy' } as const;
+
+/**
+ * The pixel the underwater checks read (a 1 × 1 box, CSS px at DPR 1, 1400 × 900): the viewport's centre, in the
+ * capture mode (`shot=1`: no HUD, no notices and no pointer prompt; the crosshair shows only under the pointer lock).
+ */
+export const WATER_PIXEL = { x: VIEWPORT.width / 2, y: VIEWPORT.height / 2, width: 1, height: 1 } as const;
+/**
+ * The box the Water row's toggle reads at `coastFancy` (CSS px at DPR 1, 1400 × 900; its mean, `boxMean`): the far
+ * water right of the sand bank, where Fancy's Fresnel lifts the mean red by 25 to 36 over Fast (six Fancy readings 2 s
+ * apart, SwiftShader at 08:00), clear of the HUD, the notices, the hotbar and the pointer prompt. A box, not a pixel:
+ * Fancy's scrolling ripples move a pixel's red, and even a 21 px window's mean, by about 40 between readings 2 s apart
+ * (one such Fancy reading came within 11 of Fast's). The view's centre does not serve: the link opens at the pose's
+ * corner (199, −88), whose centre ray meets the sand bank under the pointer prompt.
+ */
+export const WATER_TIER_BOX = { x: 950, y: 470, width: 400, height: 90 } as const;
+
+/** The mean RGB, rounded, of a capture's pixels in `box` (page px; a 1 × 1 box: the pixel). */
+export function boxMean(c: { readonly width: number; readonly rgba: Uint8Array }, box: Box): number[] {
+  const sum = [0, 0, 0];
+  for (let y = box.y; y < box.y + box.height; y++) {
+    for (let x = box.x; x < box.x + box.width; x++) for (let k = 0; k < 3; k++) sum[k]! += c.rgba[(y * c.width + x) * 4 + k]!;
+  }
+  return sum.map((v) => Math.round(v / (box.width * box.height)));
+}
+
+/**
+ * How far a channel of two readings of one view may differ and still read the same (SwiftShader's rounding, the
+ * surfaced eye's overshoot); a toggle "changes" the reading when some channel moves by more.
+ */
+export const WATER_PIXEL_TOL = 8;
+
+/** Whether every channel of `a` is within `tol` of `b`'s. */
+export function pixelsWithin(a: readonly number[], b: readonly number[], tol: number): boolean {
+  return a.length === b.length && a.every((v, i) => Math.abs(v - b[i]!) <= tol);
+}
+
+/** Whether a pixel's blue channel is above its red and its green (the underwater fog: SP7a spec §8). */
+export function blueDominant(rgb: readonly number[]): boolean {
+  return rgb[2]! > rgb[0]! && rgb[2]! > rgb[1]!;
+}
+
+/**
+ * The eye's y above the surface at the underwater pose: 2 blocks over the sea surface there (y 64, the pose's eye 6
+ * blocks under it). The surface reading is taken at the pose raised to it; surfacing rises (Space) until the eye
+ * reaches it.
+ */
+export const SURFACED_Y = WATER_POSES.underwater.y + 8;
+
+/** The `caves` slice legend's lava row (SP7a spec §10.2: `cavesLegend`'s label; a unit test compares them). */
+export const SLICE_LAVA = 'lava';
+
+/**
+ * The lava pool's y: its voxel's, 1.5 blocks under the lavaPool pose's eye (`a5Examples`' rule,
+ * `test/harness/water.ts`).
+ */
+export const LAVA_POOL_Y = WATER_POSES.lavaPool.y - 1.5;
+
+/**
+ * The lava slice's page (SP7a spec §10.2): the lavaPool pose with the eye at the middle of the pool's voxel, so that
+ * "Cave slice" (the camera's ⌊y⌋ with the band at all, `caveSliceY`) cuts the pool at `LAVA_POOL_Y`.
+ */
+export function lavaSliceQuery(): string {
+  return waterPageQuery({ ...WATER_POSES.lavaPool, y: LAVA_POOL_Y + 0.5 });
 }
 
 /** The camera's pose as the hook reads it (`__wiTest.pose()`). */
@@ -2633,6 +2747,7 @@ async function runSmoke(t: Smoke): Promise<void> {
   await runWalk(t);
   await runSaved(t);
   await runCaves(t);
+  await runWater(t);
 }
 
 const statsOf = (s: SliceRead): SliceStatsText | null => parseSliceStats(s.stats);
@@ -5678,8 +5793,8 @@ const STRIP_LEGENDS = `(() => {
 })()`;
 /**
  * The page expression "the strip is shown at every depth in colour mode `mode` (SP6b spec §7.3): its line ends '· by
- * cave type' (0) or '· by cave biome' (1), and only that mode's legend shows: the ten kinds', or the five biomes' in
- * order (`XRAY_BIOME_LEGEND`)".
+ * cave type' (0) or '· by cave biome' (1), and only that mode's legend shows: the ten kinds' then Flooded and Lava
+ * (`XRAY_KIND_LEGEND_SIZE`), or the five biomes' then Flooded and Lava in order (`XRAY_BIOME_LEGEND`)".
  */
 const stripInMode = (mode: 0 | 1): string => `(() => {
   const l = ${STRIP_LEGENDS};
@@ -6130,6 +6245,170 @@ async function runCaves(t: Smoke): Promise<void> {
     if (await t.page.eval<boolean>(`typeof __wiTest === 'object' && ${NIGHT_VISION_STORED}`).catch(() => false)) await nightVisionTo(t, false).catch(() => undefined);
   }
   t.check(t.errors.length === errors0, 'caves: no page error during the shots', t.errors.slice(errors0));
+}
+
+// ---------------------------------------------------------------- the water step (SP7a spec §13.9)
+
+/**
+ * The Settings' Water row as it reads: its label, its select's value and tiers, shown or not, and the stored tier (null
+ * when none is); null without the row.
+ */
+const WATER_ROW_READ = `(() => {
+  const s = document.getElementById(${JSON.stringify(WATER_SETTING.id)});
+  if (s === null) return null;
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem(${JSON.stringify(SETTINGS_KEY)}) ?? '{}').water ?? null; } catch { stored = null; }
+  return {
+    label: s.closest('.help-setting')?.querySelector('.help-setting-label')?.textContent ?? null, value: s.value,
+    tiers: [...s.options].map((o) => o.value), shown: s.offsetParent !== null, stored,
+  };
+})()`;
+interface WaterRowRead { readonly label: string | null; readonly value: string; readonly tiers: string[]; readonly shown: boolean; readonly stored: string | null }
+/** The tier stored (`SETTINGS_KEY`), null when none is. */
+const WATER_STORED = `(() => { try { return JSON.parse(localStorage.getItem(${JSON.stringify(SETTINGS_KEY)}) ?? '{}').water ?? null; } catch { return null; } })()`;
+/** The stream settled at the water step's RD: every column within it revealed around the camera. */
+const WATER_STREAM_SETTLED = `__wiTest.rd() >= ${WORLD_RD} && __wiTest.filled() === __wiTest.rd()`;
+/** The live slice's legend labels in order (`.sv-legend`'s keys). */
+const SLICE_LEGEND = `[...document.querySelectorAll('.sv > .sv-body .sv-legend .sv-key')].map((k) => k.textContent)`;
+/** The live slice's y control as it reads. */
+const SLICE_Y = `document.querySelector('.sv > .sv-controls > label:nth-of-type(3) > input')?.value ?? null`;
+
+/** The mean of a capture's pixels in `box` (`boxMean`), once the stream settled and three frames drew. */
+async function waterRead(t: Smoke, box: Box, what: string): Promise<number[]> {
+  const p = t.page;
+  await holds(t, WATER_STREAM_SETTLED, `water: the stream settled at RD ${WORLD_RD} (${what})`, STREAM_SETTLED_MS, () => p.eval('[__wiTest.rd(), __wiTest.filled()]'));
+  await frames(p, 3, `water: three frames (${what})`);
+  return boxMean(await p.capture(), box);
+}
+
+/**
+ * G opens the Settings: the Water row is shown, labelled "Water", Fast then Fancy, and in step with the setting (its
+ * value the stored tier, or `WATER_SETTING.defaultTier` with none stored). The Settings stay open; null when they did
+ * not.
+ */
+async function waterRow(t: Smoke, what: string): Promise<WaterRowRead | null> {
+  const p = t.page;
+  await worldKey(p, 'g', SMOKE_KEYS.settings, 71);
+  if (!(await holds(t, SETTINGS_SHOWN, `water: G opens the Settings (${what})`, 5000, () => p.eval(FOCUSED)))) return null;
+  const row = await p.eval<WaterRowRead | null>(WATER_ROW_READ);
+  const want = row?.stored ?? WATER_SETTING.defaultTier;
+  t.check(row !== null && row.shown && row.label === WATER_SETTING.label && sameJson(row.tiers, WATER_SETTING.tiers) && row.value === want,
+    `water: ${what}: the Settings' "${WATER_SETTING.label}" row (${WATER_SETTING.tiers.join(', ')}) reads ${want}, the setting's tier (${row?.stored === null ? 'none stored' : 'stored'})`, row);
+  return row;
+}
+
+/** The Water select set to `tier` (the stored setting follows at once), then Esc closes the Settings. */
+async function waterTierTo(t: Smoke, tier: string, what: string): Promise<void> {
+  const p = t.page;
+  await p.choose(`#${WATER_SETTING.id}`, tier);
+  await holds(t, `${WATER_STORED} === ${JSON.stringify(tier)}`, `water: ${what}: the Water select's ${tier} is stored (wi.world.settings)`, 5000, () => p.eval(WATER_ROW_READ));
+  await p.key('Escape', 'Escape', 27);
+  await holds(t, SETTINGS_HIDDEN, `water: Esc closes the Settings (${what})`, 5000, () => p.eval(FOCUSED));
+}
+
+/**
+ * The Water row (SP7a spec §7, §13.9) at the coastFancy pose: in step with the setting at the open; a change of tier
+ * stored and live (`WATER_TIER_BOX`'s mean, on the water ahead, changes by more than `WATER_PIXEL_TOL` with no reload);
+ * the row in step with the new tier when the Settings open again; the first tier back, live again.
+ */
+async function waterTierChecks(t: Smoke): Promise<void> {
+  const p = t.page;
+  if (!(await openCavePage(t, waterPageQuery(WATER_POSES.coastFancy), 'water: the coastFancy pose'))) return;
+  const first = await waterRead(t, WATER_TIER_BOX, 'coastFancy');
+  const row = await waterRow(t, 'at the open');
+  if (row === null) return;
+  const t0 = row.value;
+  const t1 = t0 === 'fancy' ? 'fast' : 'fancy';
+  await waterTierTo(t, t1, `${t0} → ${t1}`);
+  const toggled = await waterRead(t, WATER_TIER_BOX, `coastFancy, ${t1}`);
+  t.check(!pixelsWithin(toggled, first, WATER_PIXEL_TOL),
+    `water: ${t0} → ${t1} is live: the mean of the ${WATER_TIER_BOX.width} × ${WATER_TIER_BOX.height} px at (${WATER_TIER_BOX.x}, ${WATER_TIER_BOX.y}) on the water at coastFancy changes by more than ${WATER_PIXEL_TOL} (rgb ${first.join(', ')} → ${toggled.join(', ')})`, { first, toggled });
+  if ((await waterRow(t, `after ${t0} → ${t1}`)) === null) return;
+  await waterTierTo(t, t0, `${t1} → ${t0}`);
+  const back = await waterRead(t, WATER_TIER_BOX, `coastFancy, ${t0} again`);
+  t.check(!pixelsWithin(back, toggled, WATER_PIXEL_TOL),
+    `water: ${t1} → ${t0} is live: the mean changes again by more than ${WATER_PIXEL_TOL} (rgb ${toggled.join(', ')} → ${back.join(', ')})`, { toggled, back });
+}
+
+/**
+ * The underwater fog (SP7a spec §8, §13.9), in the capture mode (`shot=1`: the clock fixed, no HUD): the surface
+ * reading at the underwater pose raised to `SURFACED_Y`; at the underwater pose the centre pixel's blue channel
+ * dominant and the pixel off the surface reading by more than `WATER_PIXEL_TOL`; Space held until the eye reaches
+ * `SURFACED_Y` (real key input, the same page): the pixel back within `WATER_PIXEL_TOL` of the surface reading.
+ */
+async function underwaterChecks(t: Smoke): Promise<void> {
+  const p = t.page;
+  const pose = WATER_POSES.underwater;
+  if (!(await openCavePage(t, waterPageQuery({ ...pose, y: SURFACED_Y }, '&shot=1'), `water: above the underwater pose (y ${SURFACED_Y})`))) return;
+  const surface = await waterRead(t, WATER_PIXEL, `y ${SURFACED_Y}, the surface reading`);
+  if (!(await openCavePage(t, waterPageQuery(pose, '&shot=1'), 'water: the underwater pose'))) return;
+  const under = await waterRead(t, WATER_PIXEL, 'underwater');
+  t.check(blueDominant(under) && !pixelsWithin(under, surface, WATER_PIXEL_TOL),
+    `water: the underwater fog is on at the underwater pose (y ${pose.y}): the centre pixel's blue channel dominant (rgb ${under.join(', ')}), off the surface reading (rgb ${surface.join(', ')}) by more than ${WATER_PIXEL_TOL}`, { under, surface });
+  const space = { key: ' ', code: 'Space', windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 };
+  await p.blur();
+  await p.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...space, text: ' ', unmodifiedText: ' ' });
+  await p.until(`__wiTest.pose().y >= ${SURFACED_Y}`, 'water: Space raises the eye out of the water', 5000).catch(() => 0);
+  await p.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...space });
+  await sleep(300);
+  const risen = await hookPose(p);
+  t.check(risen.y >= SURFACED_Y, `water: Space raises the eye from y ${pose.y} to ${risen.y.toFixed(2)} (≥ ${SURFACED_Y}, over the surface)`, risen);
+  const surfaced = await waterRead(t, WATER_PIXEL, 'surfaced');
+  t.check(pixelsWithin(surfaced, surface, WATER_PIXEL_TOL),
+    `water: the underwater fog is off after surfacing: the centre pixel (rgb ${surfaced.join(', ')}) back within ${WATER_PIXEL_TOL} of the surface reading (rgb ${surface.join(', ')})`, { surfaced, surface, under });
+}
+
+/**
+ * The X-ray legends' fluid rows (SP7a spec §10.1) and the slice's lava legend (§10.2), in the lava pool
+ * (`lavaSliceQuery`): X shows the kinds' legend ending with Flooded and Lava (`XRAY_FLUID_LEGEND`), C the biome legend
+ * ending with them (`XRAY_BIOME_LEGEND`); C and X again turn both back. Then M and the Caves tab's "Cave slice": the
+ * horizontal `caves` slice at the pool's y, its 128² slice, whose legend lists lava (`SLICE_LAVA`).
+ */
+async function lavaLegendChecks(t: Smoke): Promise<void> {
+  const p = t.page;
+  if (!(await openCavePage(t, lavaSliceQuery(), `water: in the lava pool (y ${LAVA_POOL_Y})`))) return;
+  const fluidRows = (which: 'kinds' | 'biomes'): string =>
+    `(() => { const l = ${STRIP_LEGENDS}; return l !== null && l.${which} !== null && JSON.stringify(l.${which}.slice(-2)) === ${JSON.stringify(JSON.stringify(XRAY_FLUID_LEGEND))}; })()`;
+  await worldKey(p, 'x', SMOKE_KEYS.xray, 88);
+  await holds(t, `${stripInMode(0)} && ${fluidRows('kinds')}`, `water: X shows the kinds' legend ending with ${XRAY_FLUID_LEGEND.join(' and ')}`, 5000, stripDetail(p));
+  await worldKey(p, 'c', SMOKE_KEYS.xrayColor, 67);
+  await holds(t, `${stripInMode(1)} && ${fluidRows('biomes')}`, `water: C shows the biome legend (${XRAY_BIOME_LEGEND.join(', ')})`, 5000, stripDetail(p));
+  await worldKey(p, 'c', SMOKE_KEYS.xrayColor, 67);
+  await holds(t, stripInMode(0), 'water: C again turns the strip back by cave type', 5000, stripDetail(p));
+  await worldKey(p, 'x', SMOKE_KEYS.xray, 88);
+  await holds(t, stripIs(false, XRAY_ALL_TEXT), 'water: X again turns the X-ray off', 5000, () => p.eval(STRIP_READ));
+
+  await pressM(p);
+  await p.until(OVERLAY_SHOWN, 'water: the overlay after M', 15_000);
+  if (await p.eval<boolean>(WORLD_SPLIT)) {
+    await p.click('#map-mode-full');
+    await p.until(`!(${WORLD_SPLIT})`, 'water: the map in full screen', 5000);
+  }
+  await p.click('#map-tab-caves');
+  await p.click('#map-caves-slice');
+  await holds(t, `document.querySelector(${JSON.stringify(SV_FIELD)})?.value === 'caves' && document.querySelector(${JSON.stringify(SV_PLANE)})?.value === 'horizontal' && (${SLICE_Y}) === ${JSON.stringify(String(LAVA_POOL_Y))}`,
+    `water: "Cave slice" opens the horizontal caves slice at the pool's y ${LAVA_POOL_Y}`, 5000, async () => ({ slice: await p.slice(), y: await p.eval(SLICE_Y) }));
+  await holds(t, Page.fresh(128), 'water: the lava slice draws its 128² slice', 60_000, () => p.slice());
+  await holds(t, `(${SLICE_LEGEND}).includes(${JSON.stringify(SLICE_LAVA)})`, `water: the slice through the lava pool lists ${SLICE_LAVA} in its legend`, 5000, () => p.eval(SLICE_LEGEND));
+  await pressM(p);
+  await p.until(OVERLAY_CLOSED, 'water: M closes the map', 10_000);
+}
+
+async function runWater(t: Smoke): Promise<void> {
+  const p = t.page;
+  t.step(`water: ${waterPageQuery(WATER_POSES.coastFancy)} (coastFancy): the Water row in step with the setting and live; the underwater fog on at the underwater pose and off after surfacing; the X-ray legends' Flooded and Lava rows and the lava slice's legend in the lava pool`);
+  const errors0 = t.errors.length;
+  await setViewport(p, VIEWPORT.width, VIEWPORT.height);
+  for (const [part, run] of [['the Water row', waterTierChecks], ['the underwater fog', underwaterChecks], ['the lava legends', lavaLegendChecks]] as const) {
+    try {
+      await run(t);
+    } catch (e) {
+      t.check(false, `water: ${part} stopped: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      await setViewport(p, VIEWPORT.width, VIEWPORT.height);
+    }
+  }
+  t.check(t.errors.length === errors0, 'water: no page error', t.errors.slice(errors0));
 }
 
 // ---------------------------------------------------------------- screenshots (spec §12)
