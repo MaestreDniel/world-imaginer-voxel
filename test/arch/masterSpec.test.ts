@@ -285,6 +285,9 @@
  * cross-checked against THRESHOLDS) and item 18 (§8 risk 3 not needed: `terrain.real`'s p50 after Tasks 27-28's levers
  * sits within 0.5 ms of SP6b's 9.89 ms, rulings P51, so its text is pinned unchanged and the Exit evidence records it;
  * risk 10 gains the caps 12 / 14 and the A2 readings, policy B SP7b's).
+ * The master pins II (Task 49) land item 3's Default receivers in pre-exit form (§18's four cut-line items after "SP7a
+ * vertex waves → SP11", each receiver read from the spec's §18; Task 56 Step 0 words each taken item as delivered) and
+ * the describe's last test, which checks that every item of the spec's §16 has a test naming it (SP6b's pattern).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -4130,5 +4133,52 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(r10).toContain(`the SP7a caps ${FLUID_CAP_WATER} / ${FLUID_CAP_LAVA} (water / lava, \`FLUID_CAP_WATER\` and \`FLUID_CAP_LAVA\`, beside the nearest-drop search ${FLUID_SEARCH_WATER} / ${FLUID_SEARCH_LAVA}) and the A2 readings after settle`);
     expect(r10).toContain(`against ≤ ${a2.unsupported!.max! * 100} % on every tier`);
     expect(r10).toContain('policy B needs SP7b');
+  });
+
+  test('the Default receivers name SP7a\'s cut-line items (SP7a spec §16 item 3)', () => {
+    // §18's four items in order, each with its receiver, in pre-exit form; Task 56 Step 0 appends "(delivered in SP7a,
+    // so nothing moved)" to each item taken.
+    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-17-sp7a-water-design.md`, 'utf8');
+    const s18 = spec.slice(spec.indexOf('\n## 18. Cut line\n'), spec.indexOf('\n## 19. Exit criteria\n'));
+    const cut = [...s18.matchAll(/^\d+\. \*\*.*? → (SP\w+)/gm)].map((m) => m[1]!);
+    expect(cut, 'the SP7a spec §18\'s four items and their receivers').toEqual(['SP10', 'SP10', 'SP7b', 'SP11']);
+    const receivers = text.split('\n').find((l) => l.startsWith('**Cut lines.**'));
+    expect(receivers, 'no Cut lines paragraph in §10').toBeDefined();
+    const entries = ['SP7a X-ray fluid tint', 'SP7a slice aquifer fluid', 'SP7a walk fluid height', 'SP7a bench water segment'].map((item, i) => `${item} → ${cut[i]}`);
+    expect(receivers, 'the four entries after SP7a vertex waves').toContain(`SP7a vertex waves → SP11; ${entries.join('; ')}; SP8a animation frames → SP11;`);
+  });
+
+  /**
+   * Every item of the SP7a spec's §16 has a test in this describe that names it in its title ("§16 item 16", or with a
+   * ruling after it: "§16 item 13; rulings R26 item 1"); the item numbers come from the describe's registered tests and
+   * from the spec's §16 as it stands, so an item added to §16 without its pin turns this red (SP6b's pattern).
+   */
+  test('every item of the SP7a spec §16 is pinned by a test of this describe that names it', ({ task }) => {
+    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-17-sp7a-water-design.md`, 'utf8');
+    // The headings at a line start: §16's intro quotes both in its text.
+    const start = spec.indexOf('\n## 16. Master-spec amendments made with this spec\n');
+    const end = spec.indexOf('\n## 17. Notes handed to later SPs\n');
+    expect(start, 'the SP7a spec has no §16 heading').toBeGreaterThan(-1);
+    expect(end, 'the SP7a spec has no §17 heading after §16').toBeGreaterThan(start);
+    const s16 = spec.slice(start, end);
+    const items = [...s16.matchAll(/^(\d+)\. \*\*/gm)].map((m) => Number(m[1]));
+    expect(items.length, 'the SP7a spec §16 lists items 1-19').toBe(19);
+    expect(items, '§16\'s items are numbered 1 … n').toEqual(items.map((_, i) => i + 1));
+    const pinned = new Set<number>();
+    const titles = (task.suite?.tasks ?? []).map((t) => t.name);
+    expect(titles.length, 'the describe\'s tests').toBeGreaterThan(1);
+    for (const title of titles) {
+      for (const m of title.matchAll(/§16 items? ([^§)]*)/g)) {
+        for (const token of m[1]!.split(/[,;]\s*|\s+and\s+/)) {
+          const range = /^(\d+)(?:-(\d+))?$/.exec(token.trim());
+          if (range === null) break;
+          const from = Number(range[1]), to = Number(range[2] ?? range[1]);
+          for (let i = from; i <= to; i++) pinned.add(i);
+        }
+      }
+    }
+    const missing = items.filter((i) => !pinned.has(i));
+    expect(missing, 'the SP7a spec §16 items with no test naming them in this describe').toEqual([]);
+    expect([...pinned].filter((i) => !items.includes(i)), 'tests naming a §16 item the spec does not have').toEqual([]);
   });
 });

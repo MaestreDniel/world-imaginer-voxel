@@ -1430,6 +1430,103 @@ Four of the five nearest lie in cave_heavy, a profile C7 does not gate on. So th
 - **§16 item 18 (§8 risk 3): not needed.** `terrain.real` p50 after Tasks 27-28's levers is 9.983 ms: rulings P51 reads the latest bench row a kept Task 28 step took, and Task 28d was kept by Task 31r (rulings R25), whose three gated runs read 9.883-10.203 ms (median 9.983). That is +0.093 ms on SP6b's 9.89 ms (`test/baselines.json` at the SP6b exit; D31), within 0.5 ms, so risk 3's text is unchanged. The reading rose before it fell: 11.2 ms at D31's checkpoint (Task 26) and 10.85-11.52 ms after Task 27's levers (Task 27l's record and gated runs); Task 31p's output-keeping levers then brought it to 10.0-10.2 ms (Task 31q), and the exit's baselines read 10.15 ms (Task 34r).
 - **§16 item 18 (§8 risk 10)**: the SP7a caps 12 / 14 and the A2 readings after settle: `unsupported` = `unsettled` 0.0430 % default / 0.0740 % biomes on fast (re-read for this task at f8ba0c3: `npx vitest run --project metrics-fast test/metrics/caves.metric.ts`, 38 passed, 4 skipped), 0.0277 % / 0.0311 % / 0.0621 % on quick and 0.0034 % / 0.0051 % / 0.0059 % on full (Tasks 31 and 31r), each within ≤ 0.1 %: A2 is met, SP7a takes no policy B, and policy B needs SP7b.
 
+### Master pins II and the obligations audit (Task 49; §16, §20)
+
+On c3cefb9 (Task 48's head); no generated block or bench file changes.
+
+- **§16:** all 19 items are pinned in 'master spec amendments (SP7a §16)'. Its last test checks that each item has a test naming it (SP6b's pattern), so an item added to §16 without its pin turns it red. Item 3's Default receivers land here in pre-exit form: master :1832 gains "SP7a X-ray fluid tint → SP10; SP7a slice aquifer fluid → SP10; SP7a walk fluid height → SP7b; SP7a bench water segment → SP11" after "SP7a vertex waves → SP11", pinned with each receiver read from §18. Task 56 Step 0 (scheduled) words items 1 and 3 as delivered: the SP7a entry's contents, Received items, Exit and Cut line, and "(delivered in SP7a, so nothing moved)" on each receiver whose item was taken.
+- **The cut line so far:** none of §18's four items was cut. The X-ray's fluid tint is 04559b7 (Task 40), the slice's aquifer fluid f36c9b9 (Task 41), the walk's fluid-height rule 170dfde (Task 39), and the bench's water segment 652c0f7, e250eac and 0f38043 (Tasks 44-45).
+
+**The audit.** Each row of §20 with the commit on `sp7a/water` that placed it, or the receiving SP's line in the master. Master line numbers are at Task 49's commit, and "Received" is that SP's "Received from SP7a (its spec §17; amended by SP7a)" line. A row whose last step is a later task names it: scheduled, not missing. **Missing: none**, so this audit hands Task 52 no blocking finding.
+
+| id | lands |
+|---|---|
+| O1 | 6d17243 (Task 1: the split paragraph, the SP7a header `(XL; SP6b, SP5a)` with the spec's name per Point 1 and D38, the SP7b entry; §16 item 1); the contents as built: Task 56 Step 0 (scheduled) |
+| O2, O49 | 1049b43, cf347c7, 6e27846 (Tasks 5-7: cells and statuses, the voxel rule with lava, barriers, the abyss and the fast path, the point functions); a958364 (Task 13: T's aquifer step, the `aquifer.*` leaves, `GENERATOR_VERSION` 10; master §3.9 as built, §16 item 7); e78406a (§3.9's Borders paragraph); 3ee07fd (the fast path's uniform-neighbourhood skip); 0fd2324 (barriers 30); 15592c1 (bottom lava at `aquifer.lavaLevel` −50); faa3b6d (DT2 `aquiferProbe`) |
+| O3, O47 | 1049b43 (D18: cell levels from the 2D `offset` and `surfaceWaterLevel` at the grid column, §1.2); a958364 (D19's untagged-air rule: seas, rivers and lakes at their `surfaceWaterLevel`; master §3.7, §16 item 6); e78406a (the settle flows v0's walls, D8) |
+| O4, O53, O54 | 9e19a3b, f406d32 (Task 3: the settle kernel, two fixed points, the cap per value); a712244 (Task 4: `replaceFluid`, the generated-fluid layer, aux B `seedSections`); e78406a (Task 16: D's step 2, T's seed sections; master §3.12's D order and §3.14, §16 items 9-10); e75c9fd (§3.12's springs sentence, §16 item 9); 15df946 (the settle reference, DT1); 3eb7c79 (the nearest-drop search skips the fluid's own sources); e1bf906 (water entering abyss air as any other, rulings R23) |
+| O5, O57, O91 (mesh) | 2c31dd7, d26a28a, 2ab1ddd (Tasks 9-11: corner heights, sloped tops and falls; side strips; lava's drops in the solid word, sources at 8/9; master §4.4, §16 item 11), merged by 78c48e4 |
+| O6, O58, O65 | c07fbae (Task 35: `waterTier` and `timeSeconds`, Fresnel and procedural ripples; master §4.6 / §4.10, §16 item 12); 6318a69 (Task 36: the live Water setting, Fancy at Medium; master §4.16, §16 item 14) |
+| O7 | e846d44 (Task 37: the eye's fluid by its surface height, D29); fa446ef, 2abf951 (Task 38: the underwater and lava fog and tint; master §4.6, §16 item 12); 0f38043 (`underwaterP95` 4.165 ms, gated) |
+| O8, O10, O14-O16, O26, O42, O62-O64, O71, O79, O90, O91 (ticks), O92 | → SP7b: master :1989 (the SP7b entry: the runtime sim, SP5c's ticks and the 8k cap, the ghost drawing fluids, the bench's flood scenario, the current's push) and :1992 (Received: drains, reactions, the caps and sim distance, the trailer's ticks, F1-F3, buckets placing flowing water); 6d17243 (the split, §16 items 1, 13) |
+| O9 | 6d17243 (the SP7a Deliverable, master :1981, §16 item 1); D1-D8 built: e75c9fd, 9f1d6c3, 43e517b (D1, D2: mountain-face springs, `minFall` 7, 28d with `tries` 18), 764f61c (D3), 6c4d530, cf347c7, e1bf906 (D4), b2eae5c (D5), cf347c7 (D6, D7's lava cells), 15592c1 (D7's bottom lava), a958364, e78406a (D8); the user's check: Task 58 (scheduled) |
+| O11 | the exit's checks (§19): Tasks 52-56 (scheduled); F1-F3: becc5f4 (their `THRESHOLDS` rows, `activeFrom` 'SP7b'), → SP7b: master :1993 (Exit: "F1, F2, F3"); the rule shapes unit-tested: 6d5439b (`fluidRules`), 9e19a3b (the settle); P1 by Point 4: 3dd027e (master §7's T gate line, §16 item 17) |
+| O12, O82 | 6d17243 (the SP7a Cut line in pre-exit form, §18's items in order, §16 item 1); Task 49 (this task: the Default receivers, §16 item 3); worded as taken: Task 56 Step 0 (scheduled) |
+| O13 | 6d17243 (the MVP line after SP7b, master :1995; §16 item 1) |
+| O17, O45, O46, O48 | b2eae5c (Task 15: the wet roof narrows to lakes, `wetMask` from the lake level, `waterDepth`, the lake guard and σ_w; master §3.6 and §3.8, §16 item 5) |
+| O18 | a958364 (every tagged non-solid voxel asks the aquifer in T, untagged air takes `surfaceWaterLevel`; master §3.8's sentence, §16 item 5) |
+| O19, O72 | 15df946 (Task 17: the global settle reference in `test/harness/refs.ts`); f10c98f (Task 22: A1, A3, A4 after it); 671d8a5 (Task 23: A2 by origin); becc5f4 (Task 24: A5); 9414b5a (A3's bottom-lava part relative to `aquifer.lavaLevel`); 6b968eb (Task 31: A1-A5 and A2 at their bounds; master §6.4, §16 item 16) |
+| O20 | by construction (§10.1); d26a28a (R1's brute force with flowing fluid, D26); 04559b7 (Task 40: the X-ray's fluid tint, `R1.xrayFluid` gated); 8897a29 (R1 0 re-asserted) |
+| O21 | f36c9b9 (Task 41: the caves slice field shows aquifer water and lava); cut line 2 not cut (built) |
+| O22, K2 | b2eae5c (`wetCover` rewritten for lakes, D24); f10c98f (`C7.waterWall` after settle over its settled population); 7f8557a (recorded in SP7a, `activeFrom` 'SP7b', rulings R24 item 1); 7dd0f5a, f8ba0c3 (the `wallFrontN` fronts and the user's verdict, Task 47); → SP7b: master :1992 (Received: "`C7.waterWall`'s final definition and bound") |
+| O23 | not needed (D18: a958364's cells read the 2D `offset` at their grid columns, no `col` level field); the SP7a entry's "Received from SP6a" item worded "not needed": Task 56 Step 0 (scheduled) |
+| O24 | → SP9: master :2035 (Received: "`surfaceEst3`'s quart cache if structures need it"); a958364 (master §3.7's caching line, §16 item 6) |
+| O25 | f10c98f (Task 22's water parts: `dryPitsBelowSea` after settle); 8897a29 (Task 25: `dryPitsBelowSea` on T, pre-settle, 0.0227 quick) |
+| O27, O34 | cf347c7 (the abyss keeps its lava); 6c4d530 (Task 21: lava springs in the abyss); 15592c1 (bottom lava at −50); 8897a29 (L1 0 with lava emitters; L2 `abyssLit` recorded, 6,135 of 55,648 abyss air voxels); 3c19ebf (Task 42: `light.column.lava`, gated at 4 / 8 ms) |
+| O28, O50 | cf347c7 (the abyss's water → air inside it, barrier rock in a margin around it, lava kept); a958364 (master §3.9 as built, §16 item 7); e1bf906, 3f2e9d1 (water a stream brings falls into it, rulings R23); becc5f4, 6b968eb (`A5.abyssWater` 0, gated) |
+| O29, K3 | cf347c7 (§1.4's bottom lava under the rock floor); 15592c1 (`aquifer.lavaLevel` −54 → −50, rulings R23 item 5); 8897a29, 6b968eb (`C7.bedrockExposed` 0 re-asserted on every group) |
+| O30, O51 | ac07f02 (Task 8: the water-gated fast-path class); e53ed75 (Task 29: rule 4's under-water branches; master §3.11, §16 item 8); 27a2d15 (the class in the surface pass's evaluated-voxel split) |
+| O31 | cf347c7 (barriers clear their tags); a958364 (flooded tagged voxels keep their tag and nibble, §1.7) |
+| O32 | 3dd027e (Task 26: master §7's T gate line and SP7a's exit per Point 4, §16 item 17); c3cefb9 (Task 48: §7's "Measured in SP7a", `terrain.real` p50 10.15 ms against 13); 95e0ed8 (the baselines after Task 34r) |
+| O33, O67 | e75c9fd, 764f61c, 6c4d530 (Tasks 19-21: the three spring kinds placed by T, 'springs' in the terrain stage's params, Terrain scope); 43e517b (28d, `tries` 18); 6d17243 (SP8b's contents lose the springs, its "Received from SP8b (moved by SP7a)" line, §16 item 2); e75c9fd (§3.12's springs sentence, §16 item 9) |
+| O35 | 764f61c (Task 20: island-edge springs) |
+| O36 | → SP8b: master :2015 (Received: "lava lakes as a D step-1 feature feeding settle") |
+| O37 | nothing to change (§9.1, verified: generated lava opens L's block-light scan by itself, `anyLava` in `src/light/initial.ts`); 8897a29 (L1 `mismatches` 0 with lava emitters) |
+| O38 | → SP8b: master :1576 (§6.4's R4 row, "asserted with full content in SP8b") and :2016 (SP8b's Exit: "R4 asserted with caves, water and leaves"); quads per column recorded by `render.metric.ts`' R4 (`activeFrom` 'SP8b', opaque and water quads per interior column), unchanged in SP7a and reading its water: `medianQuads` 1,293, `p95Quads` 3,114, max 4,210 on fast (2 regions, 32 columns; Task 49's `npm test`, `.out/R4.json`), against SP8b's 2,000 / 4,000 |
+| O39 | 6d5439b (`fluidRules` reads `FLUID_MODE` from the table); 9e19a3b (the settle's `hold` / `displace`, D22) |
+| O40 | a712244 (aux B `seedSections`, the record's generated-fluid layer; master §2.3, §16 item 4); e78406a (§2.2's bit 6, §16 item 4) |
+| O41 | 0f38043 (Task 45: 2.94 fluid slots per column at the coast pose, recorded); f8ba0c3 (Task 47: 2.94 in Firefox) |
+| O43 | a958364 (T writes the proto's blocks and fluid, §1.7) |
+| O44, O76 | 3dd027e (Task 26: `aquifer.column` gated at 1.0 / 2.5 ms, `decorate.column` and its visits recorded); 3c19ebf (Task 42: `light.column.lava`, `mesh.section` on flowing water); c3cefb9 (§7's "Measured in SP7a", §16 item 17) |
+| O52 | → SP8b: master :2015 (Received: "freeze_top_layer's ice on sky-exposed water") |
+| O55, O81 | e78406a (master §3.14 as §4.1's radius argument, the §3.16 row and §9's settle row "3 × 3 with distance cap 12 / 14", §16 item 10) |
+| O56 | a958364 (the untagged-air rule fills the sea under islands; v0's depth bound retired) |
+| O59 | → SP8a: master :2004 (Received: "water and lava animation frames"); the Default receivers :1832 ("SP8a animation frames → SP11"); c07fbae (Fancy's procedural ripples meanwhile, D10) |
+| O60 | nothing to change in L (lava emits 15 at any level, §9.1); 8897a29 (L1 0 with lava emitters); 3c19ebf (`light.column.lava` gated) |
+| O61 | → SP11: master :2061 (Received: "Fabulous water"); the Default receivers :1832 ("SP11 Ultra shadows, 3D clouds and Fabulous water → SP12") |
+| O66 | 170dfde (Task 39: swimming reads the fluid byte's surface height, `FLUID_WADE_DEPTH`) |
+| O68 | f36c9b9 (Task 41: the caves field draws aquifer fluid and its hover the cell's status; master §5.5, §16 item 15); → SP10: master :2050 (Received: the slice's "aquifer level and status" field, the crosshair probe's aquifer cell, level and status) |
+| O69, O70 | → SP10: master :2050 (Received: "a map aquifer layer; F3's fluid byte line") |
+| O73 | 6d5439b (`test/unit/fluidRules.test.ts`); 9e19a3b, f406d32 (`test/unit/settle.test.ts`: the diamond, the fall, the infinite source, the cap); drain and reactions → SP7b: master :1992 |
+| O74 | kept (§12): the rendering setup tests stay as they were, green at every commit's `npm test` |
+| O75 | f10c98f (A3's second part from aquifer cells; master §6.5's A3 line, §16 item 16); 9414b5a, 15592c1 (A3's bottom part relative to `aquifer.lavaLevel`) |
+| O77, K12 | 652c0f7, e250eac (Task 44: L13 on dry cave air, the water segment LW); 0f38043 (Task 45: every G1, G1.enter and G2 cell in `assets/sp7a/`, `waterFancyGpuMs` 0.486 ms gated at 1.2); f8ba0c3 (Task 47: the Firefox bench, recorded) |
+| O78 | c3cefb9 (Task 48: §16 item 18's risk-3 sentence not needed, `terrain.real` p50 9.983 ms within 0.5 ms of 9.89; risk 3 pinned unchanged) |
+| O80 | 671d8a5, 6b968eb (A2 recorded, then gated at ≤ 0.1 % and met on every tier); c3cefb9 (§8 risk 10 with the caps and the A2 readings, §16 item 18); policy B → SP7b: master :1992 (Received: "policy B (§8 risk 10) if SP7a's A2 needed it") |
+| O83, O84, Q1 | 6d17243 (SP8a-SP8c and SP12's dependencies, the critical path and parallelism, §16 items 2-3); c3cefb9 (the "Received from SP7a" lines, §16 item 2) |
+| O85 | 6d17243 (SP12's volcano "uses SP7a's generated lava", §16 item 2); → SP12: master :2070 (Received: "the volcano's crater lava on SP7a's generated lava") |
+| O86 | 6d17243 (§16 items 1-3 and 13; code comments name SP7a or SP7b); a958364 (§3.9's "(SP7)", §16 item 7); b2eae5c (§3.8's "(SP7; until then it is air)", §16 item 5); e53ed75 (§3.11's "SP7, with aquifers", §16 item 8) |
+| O87, O88 | a958364 (water v0 retired); e78406a (the settle flows the walls, D8); 671d8a5, 6b968eb (A2); f10c98f, 7f8557a (`C7.waterWall`); 6d17243 (`test/unit/archipelago.test.ts:187`'s comment names SP7a's settle) |
+| O89 | b4eb1f9 (Task 33: R5 on surface top faces of named water regions, D27); 92997d3, 412b06a (Task 34's lever 1, reverted, rulings R26 item 1); ef859d8 (R5 record-only in SP7a, master §6.4's row gated from SP7b); → SP7b: master :1992 (Received: "R5's gate … and its remaining lever") |
+| O93 | the rows named there: O18, O21, O2, O23, O24, O28, O19, O87, O25 |
+| O94 | 0675e1e (the approved spec: "What was agreed" item 7, D1-D7); e75c9fd, 764f61c, 6c4d530 (springs), cf347c7 (aquifers), b2eae5c (sealed lakes, Point 3); lava lakes → SP8b: master :2015 |
+| O95 | 8897a29 (Task 25: B5's lake rim on T and its settled spill, recorded); 6b968eb, 7f8557a (B5's third part recorded on T, the user's round-2 decision, rulings R24; master §6.4) |
+| K1 | 8897a29 (B3 re-asserted, quick); dabee90 (B3 on full) |
+| K4 | 8897a29 (C1-C9 re-asserted); e51e2b5 (C9 reads SP7a's flooded caves, rulings R24 items 7-8) |
+| K5 | d26a28a (R1's brute force in lockstep with the mesher); 04559b7 (`R1.xrayFluid`); 8897a29 (R1 0) |
+| K6 | 8897a29 (R3 0, fluid open in `connectivity15`); e51e2b5 (R3 reads SP7a's flooded caves) |
+| K7 | 8897a29 (L1 0 with lava emitters; L2 `enclosedLit` 0, `abyssLit` recorded) |
+| K8, Q15 | 6e27846 (`terrainSolidAt`, D20); faa3b6d (Task 14: DT2 `aquiferProbe`, `probeBulk` with barriers); 15df946 (Task 17: DT1 `settleReference`, `settleIsolated`); e75c9fd (DT1 re-measured with springs) |
+| K9-K11 | 8897a29 (S1, B4, B2, T4 re-asserted, quick); dabee90 (S1, B2, B4, T4 on full); e51e2b5 (T4 reads SP7a's flooded caves) |
+| K13 | a958364, b2eae5c, e75c9fd, 764f61c, 6c4d530 (each new leaf's liveness witness); 9c2aa8a (U4's migration of GV9's trees); ebe9f17, c6588f4 (Task 30: U2-U4 over SP7a's leaves on every tier; master §6.4's U2 row as built, §16 item 16) |
+| Q2 | c07fbae (D10: Fancy procedural, no animated texture); → SP8a: master :2004 (Received: "Fancy's animated texture"); → SP11: master :2061 (Received: "vertex waves on near water") |
+| Q3 | 6318a69 (Task 36: a live Water row, Fancy by default at Medium) |
+| Q4 | 0675e1e (Point 3: "Lagos sellados"); b2eae5c (D24: the wet roof under lakes) |
+| Q5 | 1049b43 (D18: the 2D `offset` at the cells' grid columns) |
+| Q6 | cf347c7 (D7: lava cells and the bottom lava); 6c4d530 (D4: lava springs); 15592c1 (bottom lava at −50) |
+| Q7 | e75c9fd (D21: springs as a T step) |
+| Q8 | 6d5439b, 9e19a3b (D22: `hold` / `displace` from `FLUID_MODE`) |
+| Q9 | 3dd027e (D32: `decorate.column` recorded); gated in SP8b: master :1693 (§7's D row, ≤ 3 / 8 ms) and :2016 (SP8b's Exit: "P1: D ≤ 3 ms p50") |
+| Q10 | e75c9fd (§3.5: Terrain scope, 'springs' in the terrain stage's params); → SP8b: master :2015 (Received: "springs stay Terrain scope") |
+| Q11 | f36c9b9 (§10.2's hover); → SP10: master :2050 |
+| Q12 | f10c98f (A3's second part counts aquifer lava only, springs excluded) |
+| Q13 | 0f38043 (D36: every Chrome cell re-measured into `assets/sp7a/`) |
+| Q14 | 671d8a5, 6b968eb (A2 met, so §4.4's fallback is not needed); c3cefb9 (risk 10); policy B → SP7b: master :1992 |
+| Q16 | 8897a29 (`riverChannelWater` 0.9210 quick, re-asserted); dabee90 (0.9204 on full) |
+| Q17 | b4eb1f9 (R5's named water regions per tier) |
+| Q18 | 764f61c (island-edge springs, agreed); lava lakes → SP8b: master :2015; vertex waves → SP11: the Default receivers :1832 and master :2061; P1 by Point 4: 3dd027e; CI: = brief: CI time |
+| brief: CI time | a958364, 6b968eb (the new heavy files named into `unitShards.mjs` and `metricShards.mjs` by measured time); the last two cold runs before the exit commit: Task 54 (scheduled), with §14's levers in Task 55 (conditional) |
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
