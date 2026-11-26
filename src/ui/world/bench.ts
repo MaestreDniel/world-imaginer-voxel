@@ -39,7 +39,8 @@
  *    left out, `BENCH_MAP_OPEN_FRAMES`; the biome segment's frames its own), the open's longest frame, the most sections
  *    culled with the X-ray on and the refill's time;
  * 2h. then the water segment LW (SP7a spec §13.6, D36; `BENCH_WATER`), a leg of its own (L0-L6 hold no ocean leg: Spec
- *    correction 17), at RD 12: the teleport to the coast pose's column (`BENCH_WATER_POSE`), the pose held there until
+ *    correction 17), at RD 12: L14's X-ray off and its edit set back, the teleport to the coast pose's column
+ *    (`BENCH_WATER_POSE`), the pose held there until
  *    the disc is revealed, then 10 s with Fast water, 10 s with Fancy (`BenchWaterHooks.setWaterTier`) and 10 s at the
  *    same pose 6 blocks under the sea's surface; the `water` block holds each part's figures, G1's `waterFancyGpuMs`,
  *    `waterFancyP95`, `waterTierToggleMaxMs` and `underwaterP95`, and, recorded, the GPU MB, the draw calls and the
@@ -369,9 +370,13 @@ export const BENCH_XRAY_LEG: BenchLeg = {
 /**
  * The water segment LW (SP7a spec §13.6, D36), after L14, a leg of its own: L0-L6 are a hover and straight flights and
  * hold no ocean leg (Spec correction 17), so the timed script, its refill window, the shots' times and G1's stream cells
- * stay as they were. At RD 12 (L14 ends at RD 16): the teleport (the page's, as L9's) to `BENCH_WATER_POSE`'s column at
- * its first frame, the camera left where it is until the teleport arrives, then posed at the coast pose until the RD 12
- * disc around it is revealed since the teleport (`BenchWaterHooks.settled`), at most `arriveMaxS` s from LW's start (a
+ * stay as they were. At RD 12 (L14 ends at RD 16), at its first frame: L14's state left first (L14 ends with the X-ray
+ * on, under which neither renderer draws terrain or water, so X off; and L14's edit, `BENCH_XRAY_SCRIPT.edit`, set back
+ * to its default through the apply control when it was made, so the disc refills on the default world the pose is
+ * pinned on: the Apply re-marks the reveals), then the teleport (the page's, as L9's) to `BENCH_WATER_POSE`'s column;
+ * the camera left where it is until the teleport arrives, then posed at the coast pose until the RD 12 disc around it
+ * is revealed since the teleport and the Apply (`BenchWaterHooks.settled`), and never within the X-off's
+ * `BENCH_TOGGLE_FRAMES`, at most `arriveMaxS` s from LW's start (a
  * teleport that never arrives or a disc never revealed is named in the `water` block's `timedOut` as `'arrive'` and
  * ends the script, as L13's time-outs do); then three parts of `partS` s each at the coast pose: Fast water
  * (`setWaterTier(0)` at its first frame, where the store's fluid slots are read once), Fancy (`setWaterTier(1)`, the
@@ -2720,7 +2725,8 @@ export interface BenchWorld {
  * (`BENCH_CAVES`, SP6a spec §10.6; never after an L12 time-out): `caves.find` from the camera's voxel at its first
  * frame, the route from the hit, the flight and the walk. With `xray` bound too, L14 follows L13 (`BENCH_XRAY`, never
  * after an L13 time-out) where L13 left the camera; its RD 16 part returns RD 16 (under `rdMax`). With `water` bound too,
- * LW follows L14 (`BENCH_WATER`, SP7a spec §13.6) at RD 12: `water.teleport` to the coast pose's column, its parts at the
+ * LW follows L14 (`BENCH_WATER`, SP7a spec §13.6) at RD 12: L14's X-ray off (`xray.toggle`) and its edit set back
+ * (`xray.set`), `water.teleport` to the coast pose's column, its parts at the
  * coast pose through `water.setWaterTier`. The page writes each
  * rendered frame into
  * `record` (`createBenchRecorder`). `fail` ends the script with an error (a failure after the reveal), once.
@@ -2996,11 +3002,13 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
   let scriptRd = BENCH_RD;
   const xraySeg = new Float64Array(SEGMENTS * SEG_SLOTS).fill(Number.NaN);
   const xrayTimedOut: string[] = [];
-  // LW (SP7a spec §13.6): its hooks (null until `bind`, and without them no LW), whether it started, its phase, whether
-  // its teleport arrived and why it did not (null until it fails), its script times (`LWT_*`: the start, each part's
-  // start in phase order, the end; NaN where not reached), the store's fluid slots (NaN before Fast) and the time-outs.
+  // LW (SP7a spec §13.6): its hooks (null until `bind`, and without them no LW), whether it started, the frames it posed,
+  // its phase, whether its teleport arrived and why it did not (null until it fails), its script times (`LWT_*`: the
+  // start, each part's start in phase order, the end; NaN where not reached), the store's fluid slots (NaN before Fast)
+  // and the time-outs.
   let water: BenchWaterHooks | null = null;
   let waterStarted = false;
+  let waterFrames = 0;
   let waterPhase = LW_ARRIVE;
   let waterArrived = false;
   let waterError: string | null = null;
@@ -3881,18 +3889,27 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     out.pitch = BENCH_WATER_POSE.pitch;
   };
   /**
-   * One frame of LW at `tS` (SP7a spec §13.6), after `livePose`: the teleport posted at its first frame (RD 12 from
-   * there), the camera left where it is until it arrives, then the coast pose until the disc is revealed (at most
-   * `arriveMaxS` from LW's start); the Fast part from that frame (the tier written, the fluid slots read), Fancy after
-   * `partS`, under water after `partS` more, the end after `partS` more. False once the leg has ended (an arrival at its
-   * cap is named in `timedOut`).
+   * One frame of LW at `tS` (SP7a spec §13.6), after `livePose`: at its first frame L14's state left (the X-ray off,
+   * which L14 ends with on and under which no terrain or water is drawn; L14's edit set back to its default through the
+   * apply control, so the teleport's refill, counted from the Apply's mark, is the default world the coast pose is
+   * pinned on), then the teleport posted (RD 12 from there), the camera left where it is until it arrives, then the
+   * coast pose until the disc is revealed (at most `arriveMaxS` from LW's start, and never within the X-off's
+   * `BENCH_TOGGLE_FRAMES`); the Fast part from that frame (the tier written, the fluid slots read), Fancy after `partS`,
+   * under water after `partS` more, the end after `partS` more. False once the leg has ended (an arrival at its cap is
+   * named in `timedOut`).
    */
   const waterStep = (tS: number, out: BenchPose): boolean => {
     const h = water!;
+    const posed = waterFrames++;
     if (!waterStarted) {
       waterStarted = true;
       waterTimes[LWT_START] = tS;
       scriptRd = BENCH_RD;
+      if (xrayOn) {
+        xray!.toggle();
+        xrayOn = false;
+      }
+      if (!Number.isNaN(xrayTimes[1]!)) xray!.set(BENCH_XRAY_SCRIPT.edit.path, BENCH_XRAY_SCRIPT.edit.from);
       h.teleport(BENCH_WATER_POSE.x, BENCH_WATER_POSE.z).then((ok) => {
         if (ok) waterArrived = true;
         else waterError = 'the teleport did not move the camera';
@@ -3903,7 +3920,7 @@ export function createBenchDriver(o: { readonly shot: BenchShot | null; readonly
     }
     if (waterPhase === LW_ARRIVE) {
       if (waterArrived) waterPose(out, false);
-      if (!waterArrived || !h.settled()) {
+      if (!waterArrived || !h.settled() || posed < BENCH_TOGGLE_FRAMES) {
         if (tS - waterTimes[LWT_START]! < BENCH_WATER.arriveMaxS - XRAY_EPS_S) return true;
         waterTimedOut.push('arrive');
         waterTimes[LWT_END] = tS;

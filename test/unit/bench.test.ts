@@ -3925,6 +3925,49 @@ describe('createBenchDriver: the water segment LW (SP7a spec §13.6, D36, Spec c
     expect(r.pose).toEqual(BENCH_WATER_POSE);
   });
 
+  test('LW\'s first frame leaves L14\'s state before the teleport: the X-ray off (L14 ends with it on, and with it on no terrain or water is drawn) and L14\'s cave edit set back to its default (the coast pose is pinned on the default world); no X-ray call after it; Fast never within the X-off\'s toggle frames', async () => {
+    const run = async (xo: Parameters<typeof fakeXray>[1], wo: Parameters<typeof fakeWater>[1]) => {
+      let x: ReturnType<typeof fakeXray> | null = null;
+      let w: ReturnType<typeof fakeWater> | null = null;
+      // The X-ray fake's log as the teleport found it.
+      let atTeleport: string[] | null = null;
+      const r = await runL13(fakeCaves(found(20010, 41, 0)).hooks, (at) => (x = fakeXray(at, xo)).hooks, {
+        water: (at) => {
+          w = fakeWater(at, wo);
+          const go = w.hooks.teleport;
+          return { ...w.hooks, teleport: (bx, bz) => { atTeleport = x!.events.map((e) => e.what); return go(bx, bz); } };
+        },
+      });
+      return { ...r, x: x!, w: w!, atTeleport: atTeleport! };
+    };
+    const xrayState = (log: readonly string[]): 'on' | 'off' => (log.filter((e) => e === 'X on').length > log.filter((e) => e === 'X off').length ? 'on' : 'off');
+    const edit = BENCH_XRAY_SCRIPT.edit;
+    const r = await run({}, {});
+    const t0 = r.lw[0]!.t;
+    // L14 left the X-ray on and its edit applied.
+    const before = r.x.events.filter((e) => e.t < t0).map((e) => e.what);
+    expect(xrayState(before)).toBe('on');
+    expect(before.filter((e) => e.startsWith('set '))).toEqual([`set ${edit.path} ${edit.to}`]);
+    // At LW's first frame, before the teleport: X off, the edit set back; nothing of the X-ray's after.
+    expect(r.x.events.filter((e) => e.t >= t0)).toEqual([{ what: 'X off', t: t0 }, { what: `set ${edit.path} ${edit.from}`, t: t0 }]);
+    expect(xrayState(r.atTeleport)).toBe('off');
+    expect(r.atTeleport[r.atTeleport.length - 1]).toBe(`set ${edit.path} ${edit.from}`);
+    expect(r.w.events[0]).toEqual({ what: `teleport ${BENCH_WATER_POSE.x} ${BENCH_WATER_POSE.z}`, t: t0 });
+    // A disc revealed at once: Fast still waits past the X-off's frame and the two after it (`BENCH_TOGGLE_FRAMES`).
+    const quick = await run({}, { settleAfterS: 0 });
+    const q0 = quick.lw[0]!.t;
+    expect(quick.x.events.filter((e) => e.t >= q0).map((e) => e.what)).toEqual(['X off', `set ${edit.path} ${edit.from}`]);
+    expect(quick.w.events.find((e) => e.what === 'tier 0')!.t).toBe(quick.lw[BENCH_TOGGLE_FRAMES]!.t);
+    expect(quick.result.water.arriveMs).toBeCloseTo(BENCH_TOGGLE_FRAMES * 100, 6);
+    // L14's map never mounted, so its edit was never made: LW sets nothing back, and still turns the X-ray off.
+    const noEdit = await run({ readyAfterS: null }, {});
+    expect(noEdit.result.xray.timedOut).toEqual(['map']);
+    const n0 = noEdit.lw[0]!.t;
+    expect(noEdit.x.events.some((e) => e.what.startsWith('set '))).toBe(false);
+    expect(noEdit.x.events.filter((e) => e.t >= n0).map((e) => e.what)).toEqual(['X off']);
+    expect(xrayState(noEdit.atTeleport)).toBe('off');
+  });
+
   test('LW\'s parts read their own rows: the published `water` block from the driver\'s windows and toggles', async () => {
     const run = await runL13(fakeCaves(found(20010, 41, 0)).hooks, (at) => fakeXray(at).hooks, {
       water: (at) => fakeWater(at).hooks,
