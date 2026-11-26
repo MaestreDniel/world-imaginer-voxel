@@ -77,7 +77,8 @@ import { THRESHOLDS } from '../thresholds';
  *   (`.out/A5.springs.json`) and `A5.islandFalls` in the groups their literals name (`A5.waterfalls` reads its own
  *   steep-land sample, `test/metrics/waterfalls.metric.ts`); from the user's round-2 decisions (rulings R24, Task 31c)
  *   `A5.lavaFalls` (`.out/A5.lavaFalls.json`) and `A5.borderRatio` (`.out/A5.borderRatio.json`) likewise, and
- *   `C7.waterWall` recorded, not gated (its row `activeFrom` 'SP7b': SP7b owns its definition and bound).
+ *   `C7.waterWall` recorded, not gated (its row `activeFrom` 'SP7b': SP7b owns its definition and bound), its fronts
+ *   listed for the user's in-world review in the job's `.out/sp7a.examples.<group>.json` (`wallFronts`, §13.9, Task 47).
  *
  * C7's construction parts (D26: hold by construction, gated from this commit, max 0):
  * - `carverReference`: over every region of the run's groups (the preset regions included), the voxels of the region
@@ -1071,6 +1072,62 @@ test('C7.waterWallAny per job (recorded)', async () => {
   expect(jobs.length).toBeGreaterThan(0);
 }, 900_000 * TIMEOUT_SCALE);
 
+/** The water-wall fronts listed per job (SP7a spec §13.9): at most this many… */
+const WALL_FRONTS_MAX = 10;
+/** …no two within this many blocks of each other (3D, voxel to voxel, whatever their profiles)… */
+const WALL_FRONT_SPACING = 32;
+/** …each with the eye this many blocks out on its dry side, level with it, facing it. */
+const WALL_FRONT_EYE = 16;
+/** The horizontal sides in `fluidRules.ts`' order (a `WaterWallFront`'s mask), their names and the yaw facing back. */
+const SIDES = [
+  { name: 'N', dx: 0, dz: -1, yaw: 180 }, { name: 'E', dx: 1, dz: 0, yaw: 270 },
+  { name: 'S', dx: 0, dz: 1, yaw: 0 }, { name: 'W', dx: -1, dz: 0, yaw: 90 },
+] as const;
+
+/** A water-wall front of `wallFrontsOf`: its pose, its dry target sides, the eye's side, its region and the region's reading. */
+interface WallFront extends CavePose {
+  readonly dry: string[];
+  readonly side: string;
+  readonly profile: string;
+  readonly region: string;
+  readonly distance: number;
+  /** The region's C7.waterWall per km² of its interior (`waterWall` / `waterWallKm2`). */
+  readonly regionWaterWall: number;
+}
+
+/**
+ * The water-wall fronts of a job's seed '42' regions (SP7a spec §13.9, rulings R24 item 1): the voxels C7.waterWall counts
+ * (`waterWallFronts`), nearest their profile's spawn first (horizontal distance from the voxel's centre; ties in region
+ * order, then in the count's order), a front kept when no front kept before it lies within `WALL_FRONT_SPACING` blocks
+ * (whatever its profile: at seed '42' the profiles share most of their caves near the spawn, so one place would otherwise
+ * repeat under several profiles), at most `WALL_FRONTS_MAX`; each with its dry target sides, the eye `WALL_FRONT_EYE`
+ * blocks out on the first of them (N, E, S, W) at the voxel's centre height, facing the front (yaw 0 faces −z, 90 +x;
+ * pitch 0), its profile, region and the region's C7.waterWall reading.
+ */
+function wallFrontsOf(rs: readonly Measured[], spawnOf: (profile: Site['profile']) => { x: number; z: number }): WallFront[] {
+  const all = rs.flatMap((m) => {
+    const spawn = spawnOf(m.site.profile);
+    const reading = m.c79.waterWall / m.c79.waterWallKm2;
+    return m.c79.waterWallFronts.map((f) => ({ f, m, reading, distance: Math.hypot(f.voxel[0] + 0.5 - spawn.x, f.voxel[2] + 0.5 - spawn.z) }));
+  }).map((e, k) => [e, k] as const).sort((a, b) => a[0].distance - b[0].distance || a[1] - b[1]).map(([e]) => e);
+  const kept: typeof all = [];
+  for (const e of all) {
+    if (kept.length === WALL_FRONTS_MAX) break;
+    const [x, y, z] = e.f.voxel;
+    if (kept.some((k) => Math.hypot(k.f.voxel[0] - x, k.f.voxel[1] - y, k.f.voxel[2] - z) < WALL_FRONT_SPACING)) continue;
+    kept.push(e);
+  }
+  return kept.map(({ f, m, reading, distance }) => {
+    const [x, y, z] = f.voxel;
+    const sides = SIDES.filter((_, i) => (f.dry & (1 << i)) !== 0);
+    const eye = sides[0]!;
+    return {
+      x: x + 0.5 + WALL_FRONT_EYE * eye.dx, y: y + 0.5, z: z + 0.5 + WALL_FRONT_EYE * eye.dz, yaw: eye.yaw, pitch: 0, voxel: f.voxel, component: 0,
+      dry: sides.map((s) => s.name), side: eye.name, profile: m.site.profile, region: m.site.label, distance, regionWaterWall: reading,
+    };
+  });
+}
+
 /**
  * SP7a's review poses (spec §13.9, D16; `waterExamples`) at seed '42', per job (rulings P22): per pose, of the poses the
  * job's seed '42' regions found (each nearest its own profile's `findSpawn`), the one nearest its profile's spawn (ties
@@ -1078,7 +1135,8 @@ test('C7.waterWallAny per job (recorded)', async () => {
  * was found). Task 24 adds A5's poses to the same record (`a5Examples`): the nearest `islandFall`, `lavaFall`, `lavaPool`
  * and `spillSlope` among the job's regions' as above, and `candidates`, every visible fall (`waterfall`, with its
  * height) and every truncated water spring (`truncated`, with its front) of the job's seed '42' regions, nearest its
- * profile's spawn first (ties in region order).
+ * profile's spawn first (ties in region order). Task 47 adds `wallFronts` (§13.9's water-wall fronts, rulings R24 item 1):
+ * `wallFrontsOf` over the voxels C7.waterWall counts in the same regions.
  */
 test('SP7a\'s review poses per job (sp7a.examples.<group>.json)', async () => {
   const measured = await measuredRegions();
@@ -1126,8 +1184,10 @@ test('SP7a\'s review poses per job (sp7a.examples.<group>.json)', async () => {
     const listOf = (pick: (m: (typeof rs)[number]) => readonly A5Pose[]): Placed[] =>
       a5.flatMap((m) => pick(m).map((p) => placed(m, p))).map((p, k) => [p, k] as const).sort((a, b) => a[0].distance - b[0].distance || a[1] - b[1]).map(([p]) => p);
     const candidates = { waterfall: listOf((m) => m.a5Examples!.waterfall), truncated: listOf((m) => m.a5Examples!.truncated) };
+    const wallFronts = wallFrontsOf(rs, spawnOf);
     writeFileSync(join(OUT_DIR, `sp7a.examples.${job}.json`), json({
       id: 'sp7a.examples', tier: process.env.METRICS_TIER ?? null, group: job, seed: '42', spawns: Object.fromEntries(spawns), poses, candidates,
+      wallFronts,
     }));
   }
 }, 900_000 * TIMEOUT_SCALE);

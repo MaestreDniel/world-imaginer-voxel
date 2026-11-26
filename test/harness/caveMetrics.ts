@@ -67,9 +67,11 @@
  *   rulings R23 no abyss stop, water enters abyss air as any other): the neighbour lies on one of the voxel's spread sides
  *   (`spreadSides`: `nearestDropDirsFor` over the proto, every open side when no drop is in reach; none when the voxel
  *   falls instead), so a front cut at the cap whose dry neighbour lies off its nearest-drop sides is not one; a water/lava
- *   contact's bit 6 (§4.1's merge, SP7b's reaction, counted in `A2.contacts`) is not a cut front (Task 23). SP6a's count,
- *   a fluid voxel of T with a horizontal neighbour that is tagged air (tagged, neither solid nor fluid), is recorded as
- *   `C7.waterWallAny` (`waterWallAnyCount`, over the whole region, per km² of it).
+ *   contact's bit 6 (§4.1's merge, SP7b's reaction, counted in `A2.contacts`) is not a cut front (Task 23). The voxels
+ *   counted, each with its dry target sides, are kept as `waterWallFronts` (§13.9's water-wall fronts, the user's in-world
+ *   review; rulings R24 item 1). SP6a's count, a fluid voxel of T with a horizontal neighbour that is tagged air
+ *   (tagged, neither solid nor fluid), is recorded as `C7.waterWallAny` (`waterWallAnyCount`, over the whole region, per
+ *   km² of it).
  * - C7's bottom parts (SP6b spec §12.3, D6): `bottomPlane` the flat floor faces (C7.flatWallShare's 6 × 6 patches, over
  *   every position) whose cave voxel lies at y −63, on the bedrock, over all flat faces; `bedrockExposed` the cave-air
  *   voxels (tagged, neither solid nor fluid, ruling R16) face-adjacent to a bedrock voxel, read from the grid's block
@@ -1608,13 +1610,17 @@ const NO_CONTACTS: ReadonlySet<number> = new Set();
  * lies on one of the voxel's spread sides (`spreadSides` over `rules`, the proto's reader; default `gridRuleReader`) and
  * the voxel's bit 6 is set (a truncated front with a dry target; no abyss stop since rulings R23). A voxel of `contacts`
  * (the water/lava contacts, `refs.ts`' `referenceSettleOrigins`, keyed by the grid's index, `cellAt`) carries bit 6 as
- * §4.1's merge sets it on a contact, not as a truncated front (SP7a Task 23), so it is no wall.
+ * §4.1's merge sets it on a contact, not as a truncated front (SP7a Task 23), so it is no wall. `sink`, when given,
+ * receives each counted voxel (world x, y, z) with its dry sides that are spread sides (the dry targets, a mask in
+ * `fluidRules.ts`' side order; SP7a spec §13.9's water-wall fronts, rulings R24 item 1); the count is the same with or
+ * without it.
  */
 export function waterWallCount(
   g: CaveGrid, settled: (x: number, y: number, z: number) => number,
   box: { readonly x0: number; readonly z0: number; readonly x1: number; readonly z1: number } = { x0: g.x0, z0: g.z0, x1: g.x0 + g.w, z1: g.z0 + g.d },
   rules: FluidRuleReader = gridRuleReader(g),
   contacts: ReadonlySet<number> = NO_CONTACTS,
+  sink?: (x: number, y: number, z: number, dry: number) => void,
 ): number {
   const { x0, z0, w, d, cells } = g;
   const plane = w * d;
@@ -1642,7 +1648,11 @@ export function waterWallCount(
           if ((c & TAG_MASK) === 0 || (c & SOLID_BIT) !== 0 || hasFluid(settled(x0 + nx, y, z0 + nz))) continue;
           dry |= 1 << f;
         }
-        if (dry !== 0 && (dry & spreadSides(rules, b, x0 + x, y, z0 + z)) !== 0) count++;
+        if (dry === 0) continue;
+        const targets = dry & spreadSides(rules, b, x0 + x, y, z0 + z);
+        if (targets === 0) continue;
+        count++;
+        sink?.(x0 + x, y, z0 + z, targets);
       }
     }
   }
@@ -2764,6 +2774,15 @@ export function surfaceCounts(g: CaveGrid, tops: Int16Array): { land: number; ho
 
 // ---------------------------------------------------------------- one region, and the parts
 
+/**
+ * A voxel C7.waterWall counts (SP7a spec §13.9's water-wall fronts, rulings R24 item 1): its world voxel and its dry
+ * sides that are spread sides (a mask in `fluidRules.ts`' side order: 1 N −z, 2 E +x, 4 S +z, 8 W −x).
+ */
+export interface WaterWallFront {
+  readonly voxel: readonly [number, number, number];
+  readonly dry: number;
+}
+
 /** One region's C7-C9 counts. */
 export interface CaveC7C9Counts {
   /** The region's area, km². */
@@ -2776,6 +2795,8 @@ export interface CaveC7C9Counts {
   /** C7.waterWall's count after settle (`waterWallCount`; NaN without settled bytes) and the area it covers, km². */
   readonly waterWall: number;
   readonly waterWallKm2: number;
+  /** The voxels C7.waterWall counts, each with its dry target sides (`waterWallCount`'s sink); empty without settled bytes. */
+  readonly waterWallFronts: WaterWallFront[];
   /** C7.waterWallAny's count (`waterWallAnyCount`, over the whole region, per `areaKm2`). */
   readonly waterWallAny: number;
   readonly lags: LagCount[];
@@ -2831,14 +2852,17 @@ export function caveC7C9Counts(g: CaveGrid, tops: Int16Array, c: CaveComponents,
   const { labels: entrances, mask: openings } = dryOpenings(g, tops, c);
   let open = 0;
   for (let p = 0; p < openings.length; p++) open += openings[p]!;
+  const fronts: WaterWallFront[] = [];
+  const toFronts = (x: number, y: number, z: number, dry: number): void => { fronts.push({ voxel: [x, y, z], dry }); };
   return {
     areaKm2: (g.w * g.d) / 1e6,
     residues: wallResidues(g),
     layers: layerCounts(g, tops),
     flat: flatWallDetail(g, o.seaFloor),
     switchWall: o.T === null ? null : switchWallCounts(g, o.T, o.stride),
-    waterWall: o.water === undefined ? Number.NaN : waterWallCount(g, o.water.settled, o.water.box, o.water.rules, o.water.contacts),
+    waterWall: o.water === undefined ? Number.NaN : waterWallCount(g, o.water.settled, o.water.box, o.water.rules, o.water.contacts, toFronts),
     waterWallKm2: o.water === undefined ? 0 : ((o.water.box.x1 - o.water.box.x0) * (o.water.box.z1 - o.water.box.z0)) / 1e6,
+    waterWallFronts: fronts,
     waterWallAny: waterWallAnyCount(g),
     lags: aperiodicCounts(g),
     mix: typeMixDivergences(g, o.tile ?? 128),

@@ -736,6 +736,44 @@ describe('the caves instruments on fixtures (SP6a §10.1, C7-C9)', () => {
     expect(spreadSides(pool, src, 5, 40, 5)).toBe(0b0010);
   });
 
+  test('C7.waterWall\'s fronts (SP7a §13.9, rulings R24 item 1): each counted voxel reported with its dry target sides; the count unchanged by the sink', () => {
+    // The cave with the hole at (8, 39, 5) above: the front at (5, 40, 5) has four dry neighbours, but east alone is a
+    // spread side, so it is reported at its voxel with east (0b0010) as its dry side.
+    const g = rock(16, 16, 60);
+    carve(g, K.cheese, 2, 13, 40, 45, 2, 13);
+    carve(g, K.cheese, 8, 8, 39, 39, 5, 5);
+    const front = packFluid(FLUID_WATER, 4, false, true);
+    const alone = (x: number, y: number, z: number): number => (y === 40 && z === 5 && x === 5 ? front : NO_FLUID);
+    const got: Array<[number, number, number, number]> = [];
+    const sink = (x: number, y: number, z: number, dry: number): void => { got.push([x, y, z, dry]); };
+    expect(waterWallCount(g, alone, undefined, undefined, undefined, sink)).toBe(waterWallCount(g, alone));
+    expect(got).toEqual([[5, 40, 5, 0b0010]]);
+    // A voxel that is not counted (its east neighbour wet: its dry sides lie off its spread side) is not reported.
+    const eastWet = (x: number, y: number, z: number): number =>
+      (y === 40 && z === 5 && x === 5 ? front : y === 40 && z === 5 && x === 6 ? packFluid(FLUID_WATER, 3) : NO_FLUID);
+    got.length = 0;
+    expect(waterWallCount(g, eastWet, undefined, undefined, undefined, sink)).toBe(0);
+    expect(got).toEqual([]);
+    // In a flat cave (no drop in reach) every open side is a spread side: a front at (37, 40, −45) has as dry targets
+    // north, east and south, its west neighbour (36, 40, −45) being wet; reported in world coordinates (the grid's origin
+    // at (32, −48)).
+    const flat = rock(16, 16, 60, 32, -48);
+    carve(flat, K.cheese, 34, 45, 40, 45, -46, -35);
+    const pair = (x: number, y: number, z: number): number =>
+      (y !== 40 || z !== -45 ? NO_FLUID : x === 37 ? front : x === 36 ? packFluid(FLUID_WATER, 3) : NO_FLUID);
+    got.length = 0;
+    expect(waterWallCount(flat, pair, undefined, undefined, undefined, sink)).toBe(waterWallCount(flat, pair));
+    expect(got).toEqual([[37, 40, -45, 0b0111]]);
+    // Through caveC7C9Counts: the fronts go to `waterWallFronts`, one per counted voxel (none without settled bytes).
+    const tops = preCaveTops(g);
+    const all = new Uint8Array(256).fill(1);
+    const o = { T: null, stride: 1, eligible: all, seaFloor: null, tile: 16 };
+    const counts = caveC7C9Counts(g, tops, caveComponents(g, tops), { ...o, water: { settled: alone, box: { x0: 0, z0: 0, x1: 16, z1: 16 } } });
+    expect(counts.waterWall).toBe(1);
+    expect(counts.waterWallFronts).toEqual([{ voxel: [5, 40, 5], dry: 0b0010 }]);
+    expect(caveC7C9Counts(g, tops, caveComponents(g, tops), o).waterWallFronts).toEqual([]);
+  });
+
   test('C7.waterWall: a water/lava contact beside dry tagged air is no wall (§4.1\'s merge sets its bit 6; SP7a Task 23)', () => {
     // The cave of the cases above: a flagged lava voxel on the floor beside dry tagged air is a cut front, a wall; the
     // same voxel in the contact set (keyed by the grid's index) carries bit 6 as a contact, and reads 0.
