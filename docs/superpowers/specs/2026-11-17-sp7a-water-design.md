@@ -1347,6 +1347,80 @@ L13 walked dry cave air (258 route blocks, `timedOut` [], `stoppedBy` null) in e
 
 Task 46 does not fire: every gate holds, the water segment's four parts with wide margins (`waterFancyGpuMs` at 41 % of its 1.2 ms).
 
+### The Firefox run and the in-world reviews (Task 47)
+
+**Step 0** (7dd0f5a): `waterWallCount` (`test/harness/caveMetrics.ts`) reports each counted voxel and its dry sides to an optional sink. The count is the same with and without the sink (`test/unit/cavesMetric.test.ts`). `caves.metric.ts` writes `wallFronts` into `.out/sp7a.examples.<group>.json`: up to 10 fronts per group, nearest the profile's spawn, no two within 32 blocks. The quick caves runs at 7dd0f5a also wrote the waterfall candidates `.out/sp7a.examples.json` (06:07, after the generator push head 64e8a5c). No generator output moved.
+
+**The run.** The user ran it by hand in their own Firefox 161 (`Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:161.0) Gecko/20100101 Firefox/161.0`), so the shader cache was not controlled. It took place on 2026-11-26, about 18:58-19:17. The page was the controller's `vite preview --port 4173 --strictPort` of 7dd0f5a's build (`index-CeBxYlMY.js`). 7dd0f5a's `src/` is e250eac's (`git diff e250eac 7dd0f5a -- src` is empty), the code of the Chrome cells (Task 45). Conditions:
+- kernel 7.0.0-44-generic, PRIME on-demand;
+- eDP-1 at 240 Hz, with HDMI-1-0 connected beside it at 143.60 Hz (rulings R26 item 3). The file's `displayIntervalMs` is 4.23, so Firefox paced at 240 Hz on eDP-1;
+- AC online, after an EC reset. The user had shut the laptop down, and the check at 18:50 found the cap on: 20 threads at 1.12-1.24 GHz, 55-57 °C. The user then reset the EC. The check right before the run (18:56) found no cap: 6 threads at 4.10 GHz at every sample (92 °C), 20 threads at 2.34-2.38 GHz (64 °C, PL1);
+- nothing else heavy ran.
+
+Committed in `assets/sp7a/`:
+- `selftest-firefox.json`, the user's pasted reading;
+- `bench-iris-firefox.json`, byte-identical (`cmp`) to the user's download `bench-firefox(10).json` (saved 19:17).
+
+Firefox's figures are recorded, not gated (§13.6). `g1.metric.ts` now reads this bench file from `assets/sp7a/` (`othersDir`, the newest directory first), and its 10 calls pass with the file in place. `dir` reads `assets/sp7a` in the `.out/G1.*.others.json` records of the stream, live, caves, X-ray and water rows. Firefox exposes no timer query (`timerQuery` false), so every `gpuMs` in the file is null, `waterFancyGpuMs` included. The rest of the setup is as in SP6b's Firefox file: the window at 1760 × 990 and a device pixel ratio of 1.09, the masked renderer string `Intel(R) HD Graphics, or similar`, `sectionRenderer` `mesh` (RegionMesh), `multiDraw` false, 6 workers. Frame times are snapped to the 4.23 ms display interval. Times in ms.
+
+- **`?selftest=1`**: 68/68. Every key's expected equals its actual and its entry in `test/goldens.json` (`generatorVersion` 10, 68 entries, compared key by key; SP7a's three: `sp7a.aquifer.points`, `sp7a.springs`, `sp7a.region.D.water`). The page's second section read `IndexedDB contract: 10/10 passed` (the file's `indexedDb`: 10 of 10, no failures).
+- **`?bench=medium`** (recorded): every leg L0-L14 and LW ran. `timedOut` is empty in the live, edit, persist, paste, cave, X-ray and water blocks, `stoppedBy` is null, and LW's `teleportError` is null. `dropped`, `failed` and `storeFull` are 0, and `partialColumnFrames` and `mixedColumnFrames` are 0 in the stream and live legs.
+
+| figure | SP7a (Firefox 161) | SP6b (Firefox 158) |
+|---|---|---|
+| reveal | 5,121.7 | 4,247 |
+| stream p95 / p99 / over33 / main p95 | 8.46 / 12.69 / 1 / 2.44 | 8.28 / 8.28 / 0 / 2.30 |
+| stream draw calls max / gpuMB | 27 / 180.6 | 22 / 169 |
+| L5 refill | 6,372 | 5,116 |
+| live p95 / over33 | 8.46 / 0 | 8.28 / 0 |
+| `editVisibleP95` | 36.8 | 34.3 |
+| caves p95 / over33 / main p95 | 8.46 / 0 / 1.14 | 8.28 / 0 / 0.96 |
+| `xrayApplyRefillMs` | 9,445 | 9,399 |
+| long frames (> 33 ms) | 9 | 6 |
+
+The frames over 33 ms:
+- L0's two are the first reveal's, 66.7 and 192.5, with main ≤ 0.4 ms (SP6b's file: 146.1 and 173.9).
+- L1's one is a 153.5 frame (frame 2,771), main 0.44 ms. It is the stream's only frame over 33 ms (the stream's `over33` 1; SP6b's 0).
+- L14's five: the X-ray toggle (42.3 after a 41.9 ms main-thread frame), the map's open (228.4, `xrayMapOpenMaxMs`; SP6b 165.6), two RegionMesh arena grows (33.8 and 38.1, 17.1 and 25.6 MB, main 31.0 and 35.8 ms) and the RD 16 toggle (55.0, SP6b's 49.7).
+- LW's one is 38.1 (frame 81,732, main 5.6 ms after a 22.9 ms main-thread frame). It falls in LW's arrival, not its three timed parts.
+
+The structural frames' largest `stutterMs` is 38.07, the L14 grow above (Chrome gates every structural frame ≤ 33; Firefox is recorded only).
+
+**LW, the water segment** (§13.6, D36; recorded): the pose (−928.5, 65.5, −808.5), yaw 270, pitch −10, under-water y 58. Arrival 7,775 (Chrome 6.4-8.4 s; cap 20 s).
+
+| part | p50 / p95 / p99 / max | over33 | main p95 |
+|---|---|---|---|
+| Fast | 4.23 / 8.46 / 8.46 / 12.69 | 0 | 0.86 |
+| Fancy | 4.23 / 8.46 / 8.46 / 12.69 | 0 | 0.82 |
+| under water | 4.23 / 8.46 / 8.46 / 12.69 | 0 | 0.96 |
+
+- `waterFancyP95` 8.46, `waterTierToggleMaxMs` 8.46 and `underwaterP95` 8.46, against Chrome's gates 16.7 / 33 / 16.7.
+- LW's gpuMB is 120.0 and its draw calls 18 at every frame of the three parts (Chrome 13).
+- Fluid slots per column: **2.94**, as in Chrome (Task 45).
+
+**L13 and L14** (recorded):
+- **L13 with RegionMesh's region culling**: frame p50 8.46, p95 8.46, p99 12.69, max 12.69, over33 0, main p95 1.14. `cullMainMeanMs` 0.01 and `cullMainMaxMs` 0.60 (Chrome's gates 1.0 and 1.5), 0.40 walks a second. The route walked 258 blocks, with 3 growth events. The finder hit Chrome's entrance (20408, 198, −4795) in 17.4 ms. Culled sections: p50 0, max 0, as in SP6b's file and for the reason recorded there (D23: a region is culled only when none of its sections is drawn). Triangles: p50 2,533,067 with culling on, 2,671,615 off.
+- **L14**: the X-ray at RD 12 p95 8.46, over33 2, main p95 1.90, gpuMB 215.3, draw calls max 32 (13 of them the X-ray's), toggle 42.3. The biome segment p95 8.46, over33 0, colour toggle 8.46. RD 16 p95 8.46, over33 1, gpuMB 324.4, draw calls max 47. `xrayApplyRefillMs` 9,445.
+
+**§6.6, the per-region translucent order** (Step 1's waterfall link, from `.out/sp7a.examples.json`'s `waterfall` candidate): amplified, region R(−5, −1), the outlet voxel (−444, 139, 62), a fall of 17. The user was given two links, a front view `/?at=-444,87&y=131&yaw=0.0&pitch=0.0&rd=12&time=10` and the spill from above `/?at=-441,74&y=128&yaw=0.0&pitch=-26.6&rd=12&time=10`, each with the amplified seed-'42' hash. **The user's verdict:** "visualmente me pareció OK" (no visible problem), though the user was unsure how to read the check. What it looks for was then explained to the user: through the fall the pool behind it should show, not vanish, flicker or show the rock beneath. Nothing is handed to SP11 (D37).
+
+**The water-wall fronts** (§13.9's `wallFrontN`, rulings R24 item 1). These are the five fronts nearest spawn over Step 0's merged `wallFronts`. The eye was moved off §13.9's level pose wherever that pose stood inside rock or faced away from the front (checked by the controller's screenshots), and kept on the dry side. Each link is `/?at=…&y=…&yaw=…&pitch=…&rd=12&time=10` with the profile's seed-'42' hash. The user was told to press L for night vision.
+
+| link | profile | front voxel, dry side | spawn distance | the region's `C7.waterWall` (per km², quick) | eye (`at`, `y`, yaw, pitch) |
+|---|---|---|---|---|---|
+| `wallFront1` | cave_heavy | (25, 29, 3), E | 25.7 | 852.0 | 32,−14; 39.5; 200.4; −28.2 |
+| `wallFront2` | cave_heavy | (0, 48, 30), N | 30.5 | 852.0 | 20,41; 52.5; 298.3; −10.2 |
+| `wallFront3` | default (also in cave_heavy and floating_islands) | (−62, −37, −11), W | 62.4 | 582.9 | −65,−13; −36.5; 125.5; 0.0 (a narrow tunnel: the eye 4.3 blocks out) |
+| `wallFront4` | cave_heavy | (−94, −6, 13), E | 94.5 | 852.0 | −110,28; 6.5; 48.7; −28.6 |
+| `wallFront5` | cave_heavy | (−107, 62, −27), N | 109.7 | 852.0 | −128,−23; 64.5; 80.8; −5.2 |
+| extra | default | (−85, 40, 122), N | 148.8 | 582.9 | −73,103; 52.5; 210.5; −27.9 |
+| extra | default | (−89, 7, −121), S (lava behind) | 149.5 | 582.9 | −109,−113; 11.5; 69.9; −10.4 |
+| extra | archipelago | (14, −50, −208), W (beside a lava lake) | 208.0 | 463.4 | 11,−189; −39.5; 10.7; −28.0 |
+
+Four of the five nearest lie in cave_heavy, a profile C7 does not gate on. So three fronts from the gated profiles were added (the extra rows).
+
+**The user's verdict** on all of them: "quedan aceptables, anotamos para SP7b". The fronts are acceptable, no front is asked to be fixed in SP7a (no finding before `main`), and the verdict goes to SP7b's `C7.waterWall` definition and bound (§17). In the controller's shots most fronts read as streams running down a cave wall that end in a straight sheet, not as a tall wall of water.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
