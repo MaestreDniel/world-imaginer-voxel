@@ -301,7 +301,10 @@ export const THRESHOLDS: ThresholdTable = {
   // L14, from its `xray` block's RD 12 segment (`G1.xray`; the RD 16 segment recorded). SP6b spec §8.5, §12.6 (D31): L13
   // with cave culling gains the walk's and the filter's main-thread time, its mean and its largest frame
   // (`cullMainMeanMs`, master :1683; `cullMainMaxMs`), and L14 a biome-mode segment (`xray.biome`: `xrayBiomeP95`,
-  // `xrayBiomeOver33`, `xrayColorToggleMaxMs`, the longest of the three frames from each C).
+  // `xrayBiomeOver33`, `xrayColorToggleMaxMs`, the longest of the three frames from each C). SP7a spec §13.6 (D36): every
+  // cell re-read from `assets/sp7a/` (the generated water, L13 on dry cave air), and the water segment LW at a coast pose
+  // (`G1.water`): Fancy's GPU p50 over Fast's (`waterFancyGpuMs`, master :1706), Fancy's frame p95, the longest frame
+  // of a tier toggle and the frame p95 under water.
   G1: {
     mediumStaticP95: { max: 16.7, activeFrom: 'SP4a' }, mediumStaticDrawCalls: { max: 100, activeFrom: 'SP4a' }, mediumStaticMainP95: { max: 6, activeFrom: 'SP4a' },
     mediumStreamP95: { max: 16.7, activeFrom: 'SP4b' },
@@ -328,6 +331,10 @@ export const THRESHOLDS: ThresholdTable = {
     xrayBiomeP95: { max: 16.7, activeFrom: 'SP6b' },
     xrayBiomeOver33: { max: 0, activeFrom: 'SP6b' },
     xrayColorToggleMaxMs: { max: 33, activeFrom: 'SP6b' },
+    waterFancyGpuMs: { max: 1.2, activeFrom: 'SP7a' },
+    waterFancyP95: { max: 16.7, activeFrom: 'SP7a' },
+    waterTierToggleMaxMs: { max: 33, activeFrom: 'SP7a' },
+    underwaterP95: { max: 16.7, activeFrom: 'SP7a' },
   },
   // SP5a spec §6.2 (D26): G2's edit part, the post → the frame the edited column's new mesh is shown, over the bench's
   // edit leg L10, from `assets/sp6b/bench-iris-chrome.json`'s `edit` block (`g1.metric.ts`, `G2.edit`). SP5b spec §6.2
@@ -335,7 +342,7 @@ export const THRESHOLDS: ThresholdTable = {
   // (`G2.flush`); the spec's `flushMainP95Ms` max 0.3 is recorded, not gated (the user's check decided it under D28).
   // SP5c spec §10.4 (D28): the paste parts over the bench's paste leg L12, pasting, moving and cutting a large build,
   // the maximum pastes and the ghost swept, from the same file's `paste` block (`G2.paste`). G2's Apply part stays
-  // SP10's.
+  // SP10's. SP7a spec §13.6 (D36): every part re-read from `assets/sp7a/bench-iris-chrome.json`.
   G2: {
     editVisibleP95: { max: 50, activeFrom: 'SP5a' },
     over33Added: { max: 1, activeFrom: 'SP5b' },

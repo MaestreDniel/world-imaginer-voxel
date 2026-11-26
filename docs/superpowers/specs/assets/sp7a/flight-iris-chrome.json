@@ -1,0 +1,134 @@
+{
+  "route": "flight=sp4a",
+  "seed": "42",
+  "profile": "default",
+  "rd": 12,
+  "workers": 6,
+  "sectionRenderer": "batch",
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  "renderer": "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)",
+  "vendor": "Google Inc. (Intel)",
+  "multiDraw": true,
+  "timerQuery": true,
+  "screen": {
+    "width": 1920,
+    "height": 1080
+  },
+  "dpr": 1,
+  "pixelRatio": 1,
+  "displayIntervalMs": 4.164999999999964,
+  "load": {
+    "revealMs": 4221.389999996871,
+    "stageMs": {
+      "T": 3761.164999999106,
+      "D": 3765.199999999255,
+      "L": 3769.634999997914,
+      "MESH": 3774.2649999968708
+    },
+    "mergeMs": 119.27499998733401,
+    "longTasks": {
+      "count": 2,
+      "maxMs": 69
+    },
+    "first120MaxMs": 8.354999999999563
+  },
+  "frames": {
+    "count": 14401,
+    "p50": 4.164999999999964,
+    "p95": 4.164999999999964,
+    "p99": 4.164999999999964,
+    "max": 4.164999999999964,
+    "over33": 0
+  },
+  "main": {
+    "p50": 1.2749999985098839,
+    "p95": 2.324999999254942,
+    "max": 4.625
+  },
+  "gpuMs": {
+    "p50": 0.856406,
+    "p95": 2.261979,
+    "samples": 10813
+  },
+  "drawCalls": {
+    "max": 18,
+    "mean": 11.079369488229984
+  },
+  "triangles": {
+    "max": 429669
+  },
+  "heapMB": 199.8018045425415,
+  "sabMB": 103.76292419433594,
+  "longFrames": [],
+  "durationMs": 60000,
+  "waypoints": [
+    {
+      "x": 0,
+      "y": 121,
+      "z": -109
+    },
+    {
+      "x": 50,
+      "y": 153,
+      "z": -50
+    },
+    {
+      "x": 109,
+      "y": 156,
+      "z": 0
+    },
+    {
+      "x": 50,
+      "y": 184,
+      "z": 50
+    },
+    {
+      "x": 0,
+      "y": 204,
+      "z": 109
+    },
+    {
+      "x": -50,
+      "y": 195,
+      "z": 50
+    },
+    {
+      "x": -109,
+      "y": 175,
+      "z": 0
+    },
+    {
+      "x": -50,
+      "y": 114,
+      "z": -50
+    }
+  ],
+  "waypointsAbove": [
+    40,
+    50,
+    60,
+    70,
+    80,
+    65,
+    50,
+    35
+  ],
+  "measuredBy": "measureChrome",
+  "loadAvg1Before": 0.97,
+  "loadAvg1After": 1.47,
+  "chromeVersion": "Chrome/155.0.8059.39",
+  "shaderCache": "cold",
+  "window": {
+    "left": 0,
+    "top": 0,
+    "width": 1920,
+    "height": 1080,
+    "windowState": "fullscreen"
+  },
+  "viewport": {
+    "innerWidth": 1920,
+    "innerHeight": 1080,
+    "devicePixelRatio": 1
+  },
+  "consoleErrors": []
+}

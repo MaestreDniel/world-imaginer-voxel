@@ -7,10 +7,10 @@ import { metricTest } from '../harness/metric';
 
 /**
  * G1's static cells (SP4a spec §9.1, §9.5, D24), every tier, milliseconds: read from the Chrome flight on the Iris Xe
- * re-measured on SP6b's code with cave culling, `docs/superpowers/specs/assets/sp6b/flight-iris-chrome.json` (`npm run
- * measure:chrome -- --route flight`, the `?flight=sp4a` route; SP4b spec §8.4; SP4c spec §8.4; SP5a spec §6.2; SP5b spec
- * §6.2; SP5c spec §10.4, D30; SP6a spec §10.6, D29; SP6b spec §12.6, D31: every G1 file re-measured into `assets/sp6b/`,
- * the SP6a files staying in `assets/sp6a/`). Its shape
+ * re-measured on SP7a's code with the generated water, `docs/superpowers/specs/assets/sp7a/flight-iris-chrome.json` (`npm
+ * run measure:chrome -- --route flight`, the `?flight=sp4a` route; SP4b spec §8.4; SP4c spec §8.4; SP5a spec §6.2; SP5b
+ * spec §6.2; SP5c spec §10.4, D30; SP6a spec §10.6, D29; SP6b spec §12.6, D31; SP7a spec §13.6, D36: every G1 file
+ * re-measured into `assets/sp7a/`, the SP6a and SP6b files staying in `assets/sp6a/` and `assets/sp6b/`). Its shape
  * is checked first: the route's JSON with the renderer naming the Iris Xe (as reported), the section renderer
  * RegionBatch ('batch'), RD 12, the default profile, a cold driver shader cache (`shaderCache`, rulings R11) and the
  * window fullscreen at 1920 × 1080 with a 1920 × 1080 @ 1 viewport (`screenFailures`, final review GOV-4). The three
@@ -22,16 +22,16 @@ import { metricTest } from '../harness/metric';
  * recorded, when present, in `.out/G1.others.json`, never gated (§9.5: the Firefox cells are checked at the exit).
  *
  * G1's streaming cells (SP4b spec §8.2, §8.4, D23), every tier, a second call (`G1.streaming`): read from the committed
- * Iris Xe Chrome bench files `assets/sp6b/bench-iris-chrome.json` (the default pool) and `bench-iris-chrome-w4.json`
- * (4 workers), `npm run measure:chrome -- --route bench`, re-measured on SP6b's code (SP6b spec §12.6, D31). Each file's
+ * Iris Xe Chrome bench files `assets/sp7a/bench-iris-chrome.json` (the default pool) and `bench-iris-chrome-w4.json`
+ * (4 workers), `npm run measure:chrome -- --route bench`, re-measured on SP7a's code (SP7a spec §13.6, D36). Each file's
  * shape is checked first: route `bench=medium`, the renderer naming the Iris Xe, RegionBatch, RD 12, the default
  * profile, a cold driver shader cache (rulings R11), the window fullscreen at 1920 × 1080 with a 1920 × 1080 @ 1
  * viewport (final review GOV-4), 4 workers in the w4 file, the `gpuMB` breakdown fields,
- * `structuralFrames` present, every entry's `leg` one of L0-L14, with every SP4b-leg entry's
+ * `structuralFrames` present, every entry's `leg` one of L0-L14 or LW, with every SP4b-leg entry's
  * (`leg` L0-L6) `stutterMs` ≤ 33 ms (the larger of its own snapped frame and the next one's, §8.4; rulings R10; SP4c's
  * live legs L7-L9 are `G1.live`'s; SP5a's edit leg L10's long frames are its `over33`, an exit check, not a G1 part;
  * SP5b's save leg L11's are `G2.flush`'s parts, SP5c's paste leg L12's `G2.paste`'s, SP6a's cave and X-ray legs L13 and
- * L14's `G1.caves`' and `G1.xray`'s),
+ * L14's `G1.caves`' and `G1.xray`'s, SP7a's water segment LW's `G1.water`'s),
  * `partialColumnFrames` and `mixedColumnFrames` 0. The six gated parts:
  * - `mediumStreamP95`: the default run's `stream.frames.p95`, max 16.7;
  * - `mediumStreamOver33`: its `stream.frames.over33`, max 0;
@@ -44,7 +44,7 @@ import { metricTest } from '../harness/metric';
  * `partialColumnFrames` and `mixedColumnFrames` 0; the RTX cell is checked at SP4b's exit (§8.4).
  *
  * G1's live cells (SP4c spec §8.2, §8.4, D22), every tier, a third call (`G1.live`): read from the same
- * `assets/sp6b/bench-iris-chrome.json`'s `live` block (the bench's Apply, undo and teleport legs L7-L9). The file's
+ * `assets/sp7a/bench-iris-chrome.json`'s `live` block (the bench's Apply, undo and teleport legs L7-L9). The file's
  * shape is checked as the streaming call's, plus the `live` block's: frames measured, the `gpuMB` breakdown, at least
  * one L7-L9 structural frame and every one's `stutterMs` ≤ 33 ms, `live.partialColumnFrames` and
  * `live.mixedColumnFrames` 0. The three
@@ -57,7 +57,7 @@ import { metricTest } from '../harness/metric';
  * p95 and over33 are exit checks (§8.4), not rows.
  *
  * G2's edit part (SP5a spec §6.2, D26), every tier, a fourth call (`G2.edit`): read from the same
- * `assets/sp6b/bench-iris-chrome.json`'s `edit` block (the bench's edit leg L10: 100 scripted edits through the page's
+ * `assets/sp7a/bench-iris-chrome.json`'s `edit` block (the bench's edit leg L10: 100 scripted edits through the page's
  * edit path). The file's shape is checked as the streaming call's, plus the `edit` block's: `timedOut` empty (the
  * hover's RD 12 disc filled) and `editVisibleP95` measured. The gated part:
  * - `editVisibleP95`: `edit.editVisibleP95`, the post → the frame the edited column's new mesh is shown, max 50.
@@ -66,7 +66,7 @@ import { metricTest } from '../harness/metric';
  * bench files' `edit` blocks are recorded, when present, in `.out/G2.edit.others.json`, never gated.
  *
  * G2's flush parts (SP5b spec §6.2, D28), every tier, a fifth call (`G2.flush`): read from the same
- * `assets/sp6b/bench-iris-chrome.json`'s `persist` block (the bench's save leg L11: four 30 s parts at one place,
+ * `assets/sp7a/bench-iris-chrome.json`'s `persist` block (the bench's save leg L11: four 30 s parts at one place,
  * autosave off, on, off, on, L11a-L11d). The file's shape is checked as the streaming call's, plus the `persist`
  * block's: `timedOut` empty, at least 20 flushes in the "on" parts, every figure a gated part reads measured, both
  * "on" parts' `editVisibleP95` measured (rulings P42), and at least 20 edits overlapping a flush
@@ -85,7 +85,7 @@ import { metricTest } from '../harness/metric';
  * Firefox bench files' `persist` blocks are recorded, when present, in `.out/G2.flush.others.json`, never gated.
  *
  * G1's enter part (SP5b spec §6.2, D28), every tier, a sixth call (`G1.enter`): read from the committed Iris Xe Chrome
- * enter file `assets/sp6b/enter-iris-chrome.json` (`npm run measure:chrome -- --route enter --gpu iris`). Its shape is
+ * enter file `assets/sp7a/enter-iris-chrome.json` (`npm run measure:chrome -- --route enter --gpu iris`). Its shape is
  * checked first: route `bench=enter`, the renderer naming the Iris Xe (rulings P42), a cold driver shader cache, six
  * pairs with the first (the cold cache) discarded, five kept, and (`enterFileFailures`, final review GOV-4) six
  * `pairRatios` each its pair's (b) / (a), `enterRatio` their median over pairs 1-5 recomputed, `gpu` 'iris' and the window
@@ -95,7 +95,7 @@ import { metricTest } from '../harness/metric';
  * and Firefox enter files are recorded, when present, in `.out/G1.enter.others.json`, never gated.
  *
  * G2's paste parts (SP5c spec §10.4, D28), every tier, a seventh call (`G2.paste`): read from the same
- * `assets/sp6b/bench-iris-chrome.json`'s `paste` block (the bench's paste leg L12: L12a the hover with the tool off,
+ * `assets/sp7a/bench-iris-chrome.json`'s `paste` block (the bench's paste leg L12: L12a the hover with the tool off,
  * L12b the house's 28 pastes, undos, redos, a move and a cut, L12c the two maximum blocks' 12 pastes and undos, L12d the
  * ghost swept). The file's shape is checked as the streaming call's, plus the `paste` block's (`pasteFailures`): L12 ran
  * whole (`timedOut` empty, `stoppedBy` null), L12b's 28 and L12c's 12 operations present, each 'ok' and shown, every
@@ -111,7 +111,7 @@ import { metricTest } from '../harness/metric';
  * The w4 and RTX bench files' `paste` blocks are recorded, when present, in `.out/G2.paste.others.json`, never gated.
  *
  * G1's cave parts (SP6a spec §10.6, D29), every tier, an eighth call (`G1.caves`): read from the same
- * `assets/sp6b/bench-iris-chrome.json`'s `caves` block (the bench's cave leg L13: the finder's nearest entrance, a flight
+ * `assets/sp7a/bench-iris-chrome.json`'s `caves` block (the bench's cave leg L13: the finder's nearest entrance, a flight
  * to it, then 60 s walking a route through cave air at 4.3 blocks per second while the world streams). The file's shape
  * is checked as the streaming call's, plus the `caves` block's: L13 ran whole (`timedOut` empty, `stoppedBy` null), the
  * finder answered with a hit, a route was walked and every gated figure measured. The gated parts:
@@ -155,10 +155,24 @@ import { metricTest } from '../harness/metric';
  * X-ray is on; on RegionBatch the filter is skipped then, so 0 is structural there: Task 49's review).
  * The w4, RTX and Firefox bench files' `xray` blocks are recorded, when present, in `.out/G1.xray.others.json`, never
  * gated.
+ *
+ * G1's water parts (SP7a spec §13.6, D36), every tier, a tenth call (`G1.water`): read from the same file's `water` block
+ * (the bench's water segment LW after L14: the teleport to the coast pose `BENCH_WATER_POSE` and the RD 12 disc's refill,
+ * then 10 s with Fast water, 10 s with Fancy and 10 s 6 blocks under the surface). The file's shape is checked as the
+ * streaming call's, plus the `water` block's: LW arrived within its cap (`timedOut` empty, `teleportError` null), and
+ * every gated figure and Fast's and Fancy's GPU ms measured. The gated parts:
+ * - `waterFancyGpuMs`: Fancy's GPU p50 minus Fast's (master :1706's "water (Fancy) ≤ 1.2 ms"), max 1.2;
+ * - `waterFancyP95`: Fancy's snapped frame p95, max 16.7;
+ * - `waterTierToggleMaxMs`: the longest of the three frames from each tier write, max 33;
+ * - `underwaterP95`: the snapped frame p95 under water, max 16.7.
+ * Recorded: LW's `gpuMB` peak, draw calls (max, mean; no new pass, D26), the store's fluid slots per column (master
+ * §2.6's "~1.5"), `arriveMs` and each part's figures. The w4, RTX and Firefox bench files' `water` blocks are recorded,
+ * when present, in `.out/G1.water.others.json`, never gated.
  */
 const ASSETS = fileURLToPath(new URL('../../docs/superpowers/specs/assets/sp4a/', import.meta.url));
 const ASSETS_SP6A = fileURLToPath(new URL('../../docs/superpowers/specs/assets/sp6a/', import.meta.url));
 const ASSETS_SP6B = fileURLToPath(new URL('../../docs/superpowers/specs/assets/sp6b/', import.meta.url));
+const ASSETS_SP7A = fileURLToPath(new URL('../../docs/superpowers/specs/assets/sp7a/', import.meta.url));
 const OUT_DIR = fileURLToPath(new URL('./.out/', import.meta.url));
 const GATED = 'flight-iris-chrome.json';
 const OTHERS = ['flight-iris-chrome-w4.json', 'flight-rtx-chrome.json', 'flight-iris-firefox.json', 'flight-rtx-firefox.json'] as const;
@@ -184,8 +198,8 @@ interface Flight extends ScreenOf {
 const read = <T = Flight>(dir: string, file: string): T => JSON.parse(readFileSync(join(dir, file), 'utf8')) as T;
 
 metricTest('G1', ['mediumStaticP95', 'mediumStaticDrawCalls', 'mediumStaticMainP95'], () => {
-  expect(existsSync(join(ASSETS_SP6B, GATED)), `${GATED} missing: run npm run measure:chrome -- --route flight --gpu iris`).toBe(true);
-  const f = read(ASSETS_SP6B, GATED);
+  expect(existsSync(join(ASSETS_SP7A, GATED)), `${GATED} missing: run npm run measure:chrome -- --route flight --gpu iris`).toBe(true);
+  const f = read(ASSETS_SP7A, GATED);
   expect(f.route, 'the ?flight=sp4a JSON').toBe('flight=sp4a');
   expect(f.renderer ?? '', 'the renderer names the Iris Xe').toMatch(/Iris/i);
   expect(f.sectionRenderer, 'measured on RegionBatch').toBe('batch');
@@ -223,18 +237,22 @@ const BENCH_W4 = 'bench-iris-chrome-w4.json';
 const BENCH_OTHERS = ['bench-rtx-chrome.json', 'bench-iris-firefox.json', 'bench-rtx-firefox.json'] as const;
 
 /**
- * Where a recorded file beside the gated ones is read: `assets/sp6b/` when it was measured there (the w4 file, Task 52's
- * Firefox bench), else `assets/sp6a/` (the RTX Chrome files and SP6a's Firefox bench, not re-measured in SP6b, so their
- * records stay in `.out/*.others.json`); null when neither holds it. The w4 file never falls back: it is gated from sp6b.
+ * Where a recorded file beside the gated ones is read: `assets/sp7a/` when it was measured there (the w4 file, SP7a's
+ * Firefox bench, SP7a Task 47), else `assets/sp6b/` (SP6b's Firefox bench, Task 52's), else `assets/sp6a/` (the RTX
+ * Chrome files and SP6a's Firefox bench, not re-measured since SP6a, so their records stay in `.out/*.others.json`); null
+ * when none holds it. The newest directory wins, so an older copy never shadows a file re-measured in SP7a. The w4 file
+ * never falls back: it is gated from sp7a.
  */
 function othersDir(file: string): string | null {
+  if (existsSync(join(ASSETS_SP7A, file))) return ASSETS_SP7A;
+  if (file === BENCH_W4) return null;
   if (existsSync(join(ASSETS_SP6B, file))) return ASSETS_SP6B;
-  if (file !== BENCH_W4 && existsSync(join(ASSETS_SP6A, file))) return ASSETS_SP6A;
+  if (existsSync(join(ASSETS_SP6A, file))) return ASSETS_SP6A;
   return null;
 }
 /** The `dir` field of an others record: which assets directory `othersDir` read it from. */
-function dirLabel(dir: string): 'assets/sp6b' | 'assets/sp6a' {
-  return dir === ASSETS_SP6B ? 'assets/sp6b' : 'assets/sp6a';
+function dirLabel(dir: string): 'assets/sp7a' | 'assets/sp6b' | 'assets/sp6a' {
+  return dir === ASSETS_SP7A ? 'assets/sp7a' : dir === ASSETS_SP6B ? 'assets/sp6b' : 'assets/sp6a';
 }
 /** SP4a's rule (spec §8.4): a snapped frame time above 33 ms counts; here, a structural frame's `stutterMs`. */
 const OVER_MS = 33;
@@ -251,6 +269,8 @@ const EDIT_LEGS: ReadonlySet<string> = new Set(['L10', 'L11']);
 const PASTE_LEGS: ReadonlySet<string> = new Set(['L12']);
 /** SP6a's cave and X-ray legs L13 and L14, whose frames are `G1.caves`' and `G1.xray`'s parts (SP6a spec §10.6): known. */
 const CAVE_LEGS: ReadonlySet<string> = new Set(['L13', 'L14']);
+/** SP7a's water segment LW, after L14, whose frames are `G1.water`'s parts (SP7a spec §13.6, D36): known. */
+const WATER_LEGS: ReadonlySet<string> = new Set(['LW']);
 
 /** A frame block of a bench JSON (`stream` over L1-L6, `live` over L7-L9, `edit.frames` over L10; `bench.ts`' StreamFigures). */
 interface BenchFrames {
@@ -394,6 +414,34 @@ interface Xray {
   readonly timedOut: readonly string[];
 }
 
+/** One LW part's figures (`bench.ts`' WaterPartFigures). */
+interface WaterPart {
+  readonly p50: number | null;
+  readonly p95: number | null;
+  readonly p99: number | null;
+  readonly max: number | null;
+  readonly over33: number;
+  readonly mainP95: number | null;
+  readonly gpuMs: { readonly p50: number; readonly p95: number } | null;
+}
+
+/** LW's block of a bench JSON (`bench.ts`' WaterFigures). */
+interface Water {
+  readonly arriveMs: number | null;
+  readonly fast: WaterPart;
+  readonly fancy: WaterPart;
+  readonly under: WaterPart;
+  readonly waterFancyGpuMs: number | null;
+  readonly waterFancyP95: number | null;
+  readonly waterTierToggleMaxMs: number | null;
+  readonly underwaterP95: number | null;
+  readonly gpuMB: number | null;
+  readonly drawCalls: { readonly max: number; readonly mean: number } | null;
+  readonly fluidSlotsPerColumn: number | null;
+  readonly timedOut: readonly string[];
+  readonly teleportError: string | null;
+}
+
 /** The parts of a bench JSON G1 reads (`src/ui/world/bench.ts`' BenchResult, plus measureChrome's additions). */
 interface Bench extends ScreenOf {
   readonly route: string;
@@ -443,6 +491,8 @@ interface Bench extends ScreenOf {
   readonly caves?: Caves;
   /** SP6a's X-ray leg L14 (SP6a spec §10.6; `bench.ts`' XrayFigures); absent from SP5c's files. */
   readonly xray?: Xray;
+  /** SP7a's water segment LW (SP7a spec §13.6, D36; `bench.ts`' WaterFigures); absent from SP6b's files. */
+  readonly water?: Water;
   readonly structuralFrames?: ReadonlyArray<{ readonly frame: number; readonly leg: string; readonly kind: string; readonly stutterMs: number }>;
   readonly shaderCache?: string;
 }
@@ -455,8 +505,8 @@ function checkReveal(file: string, b: Bench): void {
 
 /** The shape of a gated Iris Xe Chrome bench file (spec §8.4). */
 function checkBench(file: string, workers: number | null): Bench {
-  expect(existsSync(join(ASSETS_SP6B, file)), `${file} missing: run npm run measure:chrome -- --route bench --gpu iris${workers === 4 ? ' --workers 4' : ''}`).toBe(true);
-  const b = read<Bench>(ASSETS_SP6B, file);
+  expect(existsSync(join(ASSETS_SP7A, file)), `${file} missing: run npm run measure:chrome -- --route bench --gpu iris${workers === 4 ? ' --workers 4' : ''}`).toBe(true);
+  const b = read<Bench>(ASSETS_SP7A, file);
   expect(b.route, `${file}: the ?bench=medium JSON`).toBe('bench=medium');
   expect(b.renderer ?? '', `${file}: the renderer names the Iris Xe`).toMatch(/Iris/i);
   expect(b.sectionRenderer, `${file}: measured on RegionBatch`).toBe('batch');
@@ -473,9 +523,9 @@ function checkBench(file: string, workers: number | null): Bench {
   // Every entry names a known leg, so a relabelled leg cannot leave either stutter check reading an empty set (final
   // review GOV-3).
   const unknown = b.structuralFrames!
-    .filter((e) => !SP4B_LEGS.has(e.leg) && !LIVE_LEGS.has(e.leg) && !EDIT_LEGS.has(e.leg) && !PASTE_LEGS.has(e.leg) && !CAVE_LEGS.has(e.leg))
+    .filter((e) => !SP4B_LEGS.has(e.leg) && !LIVE_LEGS.has(e.leg) && !EDIT_LEGS.has(e.leg) && !PASTE_LEGS.has(e.leg) && !CAVE_LEGS.has(e.leg) && !WATER_LEGS.has(e.leg))
     .map((e) => e.leg);
-  expect(unknown, `${file}: structural frames of a leg outside L0-L14`).toEqual([]);
+  expect(unknown, `${file}: structural frames of a leg outside L0-L14 and LW`).toEqual([]);
   // SP4b's legs only, so the re-asserted streaming cells stay as SP4b gated them; L7-L9 are `G1.live`'s (SP4c spec §8.4);
   // L10's long frames are its `over33`, an exit check (SP5a spec §6.2), recorded by `G2.edit`.
   const over = b.structuralFrames!.filter((e) => SP4B_LEGS.has(e.leg) && !(e.stutterMs <= OVER_MS));
@@ -722,8 +772,8 @@ interface Enter extends ScreenOf {
 }
 
 metricTest('G1', ['enterRatio'], () => {
-  expect(existsSync(join(ASSETS_SP6B, ENTER)), `${ENTER} missing: run npm run measure:chrome -- --route enter --gpu iris`).toBe(true);
-  const e = read<Enter>(ASSETS_SP6B, ENTER);
+  expect(existsSync(join(ASSETS_SP7A, ENTER)), `${ENTER} missing: run npm run measure:chrome -- --route enter --gpu iris`).toBe(true);
+  const e = read<Enter>(ASSETS_SP7A, ENTER);
   expect(e.route, `${ENTER}: the ?bench=enter JSON`).toBe('bench=enter');
   expect(e.renderer ?? '', `${ENTER}: the renderer names the Iris Xe (rulings P42)`).toMatch(/Iris/i);
   expect(e.shaderCache, `${ENTER}: measured on a cold driver shader cache (rulings R11)`).toBe('cold');
@@ -987,3 +1037,61 @@ metricTest('G1', ['xrayP95', 'xrayOver33', 'xrayMainP95', 'xrayGpuMB', 'xrayDraw
     ...xraySegmentRecord('rd16', x.rd16),
   };
 }, 600_000, { outName: 'G1.xray' });
+
+/** One LW part's recorded figures, prefixed by its name (`fast`, `fancy`, `under`): numbers, or -1 with no sample. */
+function waterPartRecord(prefix: string, w: WaterPart): Record<string, number> {
+  return {
+    [`${prefix}P50`]: orNone(w.p50),
+    [`${prefix}P95`]: orNone(w.p95),
+    [`${prefix}P99`]: orNone(w.p99),
+    [`${prefix}MaxMs`]: orNone(w.max),
+    [`${prefix}Over33`]: w.over33,
+    [`${prefix}MainP95`]: orNone(w.mainP95),
+    [`${prefix}GpuMsP50`]: w.gpuMs?.p50 ?? -1,
+    [`${prefix}GpuMsP95`]: w.gpuMs?.p95 ?? -1,
+  };
+}
+
+metricTest('G1', ['waterFancyGpuMs', 'waterFancyP95', 'waterTierToggleMaxMs', 'underwaterP95'], () => {
+  // The streaming call's shape checks (route, Iris Xe, RegionBatch, RD 12, default profile, cold cache), then the water
+  // block's: LW reached its coast pose within its cap, every part measured (SP7a spec §13.6, D36).
+  const b = checkBench(BENCH, null);
+  expect(b.water, `${BENCH}: the water block (SP7a's LW) is present`).toBeDefined();
+  const w = b.water!;
+  expect(w.timedOut, `${BENCH}: LW arrived at the coast pose within its cap`).toEqual([]);
+  expect(w.teleportError, `${BENCH}: LW's teleport landed`).toBeNull();
+  for (const k of ['waterFancyGpuMs', 'waterFancyP95', 'waterTierToggleMaxMs', 'underwaterP95'] as const) {
+    expect(w[k], `${BENCH}: water.${k} measured`).not.toBeNull();
+  }
+  for (const k of ['fast', 'fancy'] as const) expect(w[k].gpuMs, `${BENCH}: water.${k}.gpuMs measured`).not.toBeNull();
+
+  // The w4, RTX and Firefox files' water blocks are recorded, never gated (SP7a spec §13.6).
+  const others: Record<string, unknown> = {};
+  for (const file of [BENCH_W4, ...BENCH_OTHERS]) {
+    const dir = othersDir(file);
+    if (dir === null) continue;
+    const o = read<Bench>(dir, file);
+    if (o.water === undefined) continue;
+    others[file] = { dir: dirLabel(dir), renderer: o.renderer, sectionRenderer: o.sectionRenderer, workers: o.workers, displayIntervalMs: o.displayIntervalMs, ...o.water };
+  }
+  mkdirSync(OUT_DIR, { recursive: true });
+  writeFileSync(join(OUT_DIR, 'G1.water.others.json'), `${JSON.stringify({ id: 'G1', tier: process.env.METRICS_TIER ?? null, others }, null, 2)}\n`);
+
+  return {
+    waterFancyGpuMs: w.waterFancyGpuMs!,
+    waterFancyP95: w.waterFancyP95!,
+    waterTierToggleMaxMs: w.waterTierToggleMaxMs!,
+    underwaterP95: w.underwaterP95!,
+    displayIntervalMs: b.displayIntervalMs,
+    // Recorded (SP7a spec §13.6): the GPU estimate's peak and the draw calls over LW's parts (no new pass, D26), the
+    // store's fluid slots per column (master §2.6's "~1.5"), the arrival and each part's figures.
+    waterGpuMB: orNone(w.gpuMB),
+    waterDrawCallsMax: w.drawCalls?.max ?? -1,
+    waterDrawCallsMean: w.drawCalls?.mean ?? -1,
+    fluidSlotsPerColumn: orNone(w.fluidSlotsPerColumn),
+    arriveMs: orNone(w.arriveMs),
+    ...waterPartRecord('fast', w.fast),
+    ...waterPartRecord('fancy', w.fancy),
+    ...waterPartRecord('under', w.under),
+  };
+}, 600_000, { outName: 'G1.water' });

@@ -430,7 +430,7 @@ Over the caves passes' 32 × 32-chunk regions (`test/metrics/caves.metric.ts`; s
 - **L13** walks dry cave air: `caveRoute` (`src/ui/world/bench.ts:511-534`) requires `fluidAt` = 0 along the route, so the leg measures what it measured.
 - **A water segment** (new; a leg of its own, **LW**, after L14 (Spec correction 17: L0-L6 are a hover and straight flights and hold no ocean leg, and `LEG_STARTS`, `BENCH_SECONDS`, `BENCH_REFILL` and G1's stream cells derive from their seconds), at a coast pose pinned as a literal at seed '42' (`BENCH_WATER_POSE`, found by a scan and pinned in `bench.test.ts`), reached, once L14's state is left (its X-ray turned off, under which no terrain or water is drawn, and its cave edit set back to the default, the world the pose is pinned on), by the page's teleport and the RD 12 disc's refill (at most 20 s); its frames carry their own leg index and stay out of L0-L6's stream cells): 10 s at the coast pose with Fast, 10 s with Fancy: `waterFancyGpuMs` = p50 difference ≤ 1.2 ms (master :1706), `waterFancyP95` ≤ 16.7, `waterTierToggleMaxMs` ≤ 33; and 10 s under water at the same pose: `underwaterP95` ≤ 16.7.
 - Recorded: `stream.gpuMB` (130.1 of 150 at SP6b; flooded caves and falls raise translucent use, `src/render/regionGrid.ts:47-50`); draw calls (no new pass, D26); the store's fluid slots per column (master §2.6's "~1.5 fluid slots", :480).
-- Measured as SP6b's Task 50 (its Exit evidence): the agent's headful Chrome on the Iris Xe, eDP-1 at 240 Hz, HDMI-1-0 disconnected, PRIME on-demand, load ≤ 1.0, the hottest zone checked, **and the EC CPU cap checked right before each run** (the cores' current clocks against their maximum under load; a capped package stops the run and asks the user for an EC reset, memory `ec_cpu_cap`); Firefox by the user, recorded.
+- Measured as SP6b's Task 50 (its Exit evidence): the agent's headful Chrome on the Iris Xe, eDP-1 at 240 Hz (HDMI-1-0 may stay connected beside it at 143.6 Hz: the window must land on eDP-1, which every run shows by its frame p95 ≈ 4.17 ms, while ≈ 6.9 ms means the wrong display and no measurement; rulings R26 item 3), PRIME on-demand, load ≤ 1.0, the hottest zone checked, **and the EC CPU cap checked right before each run** (the cores' current clocks against their maximum under load; a capped package stops the run and asks the user for an EC reset, memory `ec_cpu_cap`); Firefox by the user, recorded.
 
 ### 13.7 U2-U4, unit tests, locks
 
@@ -1296,6 +1296,57 @@ The user's choices on 2026-11-25 ("Vamos con las dos recomendadas del artifact",
 
 - **Three consecutive gated passes in 3 runs** (R22: at most 6). `bench:record` wrote `test/baselines.json` (95e0ed8; killRatio 0.849, was 0.851). Against Task 42's baselines, recorded with Lever 1: `mesh.section` ×1.033 (435,323 quads on its sample without the band merge), `mesh.xray` ×1.003, `paste.max` ×1.066 (a row the revert does not touch), `density.corner` ×0.884; every other kernel within 5 %.
 
+### The Chrome cells (Task 45)
+
+Every G1, G1.enter and G2 cell re-measured on SP7a's code (e250eac: the generated water, L13 on dry cave air, the water segment LW) into `assets/sp7a/` (§13.6, D36), on 2026-11-26 by the agent with `npm run measure:chrome` (its own build, preview, headful Chrome and `mktemp` profile each run; a cold driver shader cache, `MESA_SHADER_CACHE_DISABLE=true` in that Chrome's environment only). Raw files and logs: `test/metrics/.out/task45/` (git-ignored). `assets/sp6a/` and `assets/sp6b/` are untouched.
+
+**Conditions**, read-only right before each run: PRIME on-demand; eDP-1 connected primary at 240.00\*, HDMI-1-0 also connected at 143.60\* (rulings R26 item 3); the seat0 x11 session `LockedHint=no`; AC online; the 1-minute load below 1.0 at each start (waited down in a bounded loop after the EC check); at least 6 GB available; nothing else of the agent's running. Every run read `displayIntervalMs` 4.165 and frame p50 and p95 4.165, so the window paced at 240 Hz on eDP-1 (fullscreen at 0, 0, 1920 × 1080, viewport 1920 × 1080 @ 1), never at 6.9 ms.
+
+**The EC CPU-cap check** (rulings R6) right before each run: 6 own busy threads, then 20, 16 s each, the busiest cores' `scaling_cur_freq` sampled at 5, 10 and 14 s while busy. No cap on any run.
+
+| run | EC check | 6 threads | 20 threads (5 / 10 / 14 s) | hottest zone at the start | load at the start / end | exit |
+|---|---|---|---|---|---|---|
+| `--probe-only` | 03:38 | 4.10 GHz (71-74 °C) | 3.68 / 2.48 / 2.42 GHz (60 °C) | 46 °C (`iwlwifi_1`; `x86_pkg_temp` 44) | 1.40 / – | 0: Iris Xe, fullscreen on eDP-1 |
+| bench 1 (recorded) | 03:41 | 4.10 GHz (74-78 °C) | 3.59 / 2.48 / 2.42 GHz (62 °C) | 45 °C (`TCPU_PCI`; 43) | 0.87 / 2.85 | 0 |
+| bench 2 (committed) | 03:54 | 4.10 GHz (83-88 °C) | 2.48 GHz (66 °C) | 47 °C (`TCPU_PCI`; 45) | 0.91 / 2.48 | 0 |
+| bench, 4 workers | 04:06 | 4.10 GHz (86-88 °C) | 2.42-2.46 GHz (67 °C) | 47 °C (`TCPU_PCI`; 46) | 0.90 / 2.08 | 0 |
+| flight | 04:19 | 4.10 GHz (85-88 °C) | 2.42-2.48 GHz (66 °C) | 47 °C (`TCPU_PCI`; 45) | 0.97 / 1.47 | 0 |
+| enter | 04:23 | 4.10 GHz (81-83 °C) | 2.48 GHz (64 °C) | 46 °C (`TCPU_PCI`; 44) | 0.94 / 3.71 | 0 |
+
+The tool's end-of-run warning on the load (2.08-3.71 at the end) is the bench's own workers, as in SP6b (2.88 at the end of its committed bench). The enter file's 13 console entries are Chrome's "Blocked attempt to show a 'beforeunload' confirmation panel" notices, the same 13 as SP6b's file.
+
+**The gated cells** (`g1.metric.ts` on `assets/sp7a/`: 10 of 10 calls pass), bench 2 (committed) / bench 1 / the 4-worker run, against SP6b's committed files:
+
+| cell | gate | bench 2 | bench 1 | w4 (recorded) | SP6b |
+|---|---|---|---|---|---|
+| `waterFancyGpuMs` (Fancy's GPU p50 − Fast's) | ≤ 1.2 | **0.486** (2.174 − 1.688) | 0.491 | 0.497 | new |
+| `waterFancyP95` | ≤ 16.7 | **4.165** | 4.165 | 4.165 | new |
+| `waterTierToggleMaxMs` | ≤ 33 | **4.165** | 4.165 | 4.165 | new |
+| `underwaterP95` | ≤ 16.7 | **4.165** | 4.165 | 4.165 | new |
+| stream p95 / over33 / draw calls / main p95 | 16.7 / 0 / 100 / 6 | 4.165 / 0 / 15 / 3.61 | 4.165 / 0 / 15 / 3.62 | 4.165 / 0 / 15 / 2.88 | 4.165 / 0 / 16 / 3.18 |
+| `mediumGpuMB` (`stream.gpuMB`) | ≤ 150 | 138.5 | 138.3 | 138.6 | 130.1 |
+| `mediumFill4wMs` (the w4 run) | ≤ 6,000 | – | – | 5,724.5 | 5,010.5 |
+| live p95 / over33 / gpuMB | 16.7 / 0 / 150 | 8.33 / 0 / 117.5 | 8.33 / 0 / 117.0 | 4.165 / 0 / 117.5 | 4.165 / 0 / 114.0 |
+| `editVisibleP95` | ≤ 50 | 29.0 | 28.8 | 29.2 | 28.4 |
+| flush: over33Added / p95AddedMs / editVisibleAddedMs / flushEditVisibleP95 / replyDuringFlushP95Ms | 1 / 4.17 / 8.33 / 50 / 5 | 0 / 0 / −1.52 / 25.7 / 3.71 | 0 / 0 / −3.10 / 28.7 / 4.33 | 0 / 0 / 0.82 / 25.2 / 3.66 | 0 / 0 / 0.79 / 25.4 / 3.75 |
+| paste: over33 / sweep over33 / p95Added / house p95 / max paste / ghost slice | 0 / 0 / 4.17 / 500 / 2,000 / 4 | 0 / 0 / 0 / 148.6 / 446 / 1.94 | all L12 parts p95 4.165, over33 0 | the same | – |
+| caves p95 / over33 / main p95 / cullMainMeanMs / cullMainMaxMs | 16.7 / 0 / 6 / 1.0 / 1.5 | 4.165 / 0 / 2.54 / 0.027 / 0.615 | 4.165 / 0 / 2.56 / 0.026 / 0.570 | 4.165 / 0 / 2.50 / 0.027 / 0.595 | 4.165 / 0 / 2.22 / 0.027 / 0.580 |
+| xray p95 / over33 / main p95 / gpuMB / draw calls / toggle | 16.7 / 0 / 6 / 150 / 100 / 33 | 4.165 / 0 / 3.18 / 131.0 / 8 / 8.33 | 4.165 / 0 / 3.03 / 130.9 / 8 / 8.33 | 4.165 / 0 / 2.63 / 131.0 / 8 / 8.33 | 4.165 / 0 / 2.91 / 124.7 / 8 / 8.33 |
+| xray biome p95 / over33 / colour toggle | 16.7 / 0 / 33 | 4.165 / 0 / 4.165 | the same | the same | the same |
+| flight (`G1`): p95 / draw calls / main p95 | 16.7 / 100 / 6 | 4.165 / 18 / 2.33 (GPU p50 0.86, p95 2.26) | | | 4.165 / 11 / 1.91 |
+| `enterRatio` (median of pairs 1-5) | ≤ 1.10 | 1.030 (median (a) 5,212.9 ms, (b) 5,411.0 ms; the new world 4,353.5 ms) | | | 1.031 |
+
+L13 walked dry cave air (258 route blocks, `timedOut` [], `stoppedBy` null) in every run; L14 and LW ran whole (`timedOut` [] and LW's `teleportError` null). Every SP4b-leg structural frame's `stutterMs` ≤ 33 ms; `partialColumnFrames` and `mixedColumnFrames` 0 in the stream and the live legs. The frames over 33 ms: L0's in each run (the hover's first frames, 54.1 ms at frame 486-488, outside every gated cell, as in SP6b), and in bench 1 one 166.6 ms frame in L14, the map's open (`xrayMapOpenMaxMs`, left out of the segment's figures and recorded only, as `G1.xray` reads it; 20.8 ms in bench 2, 25.0 ms in w4).
+
+**Recorded** (§13.6):
+- `stream.gpuMB` 138.5 against SP6b's 130.1 (+8.4 MB: the generated water's translucent rows; 92 % of the 150 gate). L14's peak 131.0 (124.7 in SP6b), LW's 88.1.
+- Draw calls: the stream 15 (16 in SP6b), L14 8, LW 13 at every frame of its three parts (Fast, Fancy and under water draw the same calls: no new pass, D26). The flight's max rose from 11 to 18 (mean 7.5 → 11.1): the flight now crosses water, whose arena draws are the translucent pass's (not a new pass); recorded, far inside its 100.
+- The store's fluid slots per column at the coast pose: **2.94** (each run), against master §2.6's "~1.5" for a typical column: the RD 12 disc there holds the sea's dense sections and flooded caves under it (2.94 matches Task 44's dry run on the default world).
+- LW's arrival (the teleport and the RD 12 disc's refill after L14's set-back Apply): 6.4 s, 6.5 s and 8.4 s (w4), inside its 20 s cap. GPU ms p50 / p95: Fast 1.69 / 2.35, Fancy 2.17 / 3.37, under water 1.99 / 2.77 (bench 2).
+- L9's teleport refill 6.9 s (6.0 s in SP6b); L14's `xrayApplyRefillMs` 7.8 s (6.7 s); the first reveal 4.3 s (3.6 s), the w4 reveal 5.7 s (5.0 s): the generator's added work (T's aquifer and springs, D's settle) shows in every refill, within each gate.
+
+Task 46 does not fire: every gate holds, the water segment's four parts with wide margins (`waterFancyGpuMs` at 41 % of its 1.2 ms).
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
@@ -1327,3 +1378,4 @@ The user's choices on 2026-11-25 ("Vamos con las dos recomendadas del artifact",
 - 2026-11-25 — SP7a Task 40: R1.xrayFluid max 0, gated from SP7a (by construction, spec §10.1).
 - 2026-11-25 — SP7a Task 34r: A5.springsTruncated max 0.685 → 0 (TIGHTEN, the user's, rulings R26 item 2; quick 0/15, full 0/32 after Task 31r).
 - 2026-11-25 — SP7a Task 34r (no lock change; the user's, rulings R26 item 1): R5.waterQuadsPerFace stays activeFrom 'SP7b', record-only in SP7a (**LOOSEN of §6.5's "gated in SP7a", the user, R26 item 1**): Lever 1 reverted for its shore colour step (smooth gradient restored); R5 recorded at fast 0.4648, quick 0.2633, full 0.2885 (Task 33's readings); SP7b owns R5's gate (≤ 0.1) and the planar-sloped-top lever.
+- 2026-11-26 — SP7a Task 45: G1 waterFancyGpuMs max 1.2 (master :1706), waterFancyP95 max 16.7, waterTierToggleMaxMs max 33, underwaterP95 max 16.7, gated from SP7a from assets/sp7a/ (spec §13.6, D36); the other G1, G1.enter and G2 cells re-read from assets/sp7a; measured waterFancyGpuMs 0.486, waterFancyP95 4.165, waterTierToggleMaxMs 4.165, underwaterP95 4.165 (bench 1: 0.491, 4.165, 4.165, 4.165), stream.gpuMB 138.5, mediumFill4wMs 5,724.5, enterRatio 1.030, on eDP-1 at 240 Hz (HDMI-1-0 connected beside it, frame p95 4.165 ms; rulings R26 item 3).

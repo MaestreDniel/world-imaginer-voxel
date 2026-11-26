@@ -1,5 +1,5 @@
 {
-  "sha256": "06da66b6c776abf539c6b070de048ac6476e6de0c55cfb6828bf3a05739a8c04",
+  "sha256": "784645b3e5b306c5a059507af279ed252223926bdcab11c3a27880115d6eeb9c",
   "canonical": {
     "startedSps": [
       "SP0",
@@ -808,6 +808,22 @@
         "mediumStreamP95": {
           "activeFrom": "SP4b",
           "max": 16.7
+        },
+        "underwaterP95": {
+          "activeFrom": "SP7a",
+          "max": 16.7
+        },
+        "waterFancyGpuMs": {
+          "activeFrom": "SP7a",
+          "max": 1.2
+        },
+        "waterFancyP95": {
+          "activeFrom": "SP7a",
+          "max": 16.7
+        },
+        "waterTierToggleMaxMs": {
+          "activeFrom": "SP7a",
+          "max": 33
         },
         "xrayBiomeOver33": {
           "activeFrom": "SP6b",

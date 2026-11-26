@@ -2,11 +2,14 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import { enterFileFailures, pasteFailures, pasteGateOf, persistFailures, screenFailures, type EnterFileOf, type PasteOf, type PersistOf } from '../harness/benchFiles';
 
-/** The RTX cells, measured last in SP6a (SP6b measures no RTX cell, spec §12.6). */
+/** The RTX cells, measured last in SP6a (SP6b and SP7a measure no RTX cell, SP6b spec §12.6, SP7a spec §13.6). */
 const ASSETS_SP6A = new URL('../../docs/superpowers/specs/assets/sp6a/', import.meta.url);
-/** The gated Iris Xe Chrome cells, re-measured into `assets/sp6b/` (SP6b spec §12.6, D31). */
-const ASSETS_SP6B = new URL('../../docs/superpowers/specs/assets/sp6b/', import.meta.url);
-const read = <T>(file: string, dir: URL = ASSETS_SP6B): T => JSON.parse(readFileSync(new URL(file, dir), 'utf8')) as T;
+/**
+ * The gated Iris Xe Chrome cells, re-measured into `assets/sp7a/` (SP7a spec §13.6, D36); SP6b's copies in `assets/sp6b/`
+ * are not read, since a file present in both is read from sp7a.
+ */
+const ASSETS_SP7A = new URL('../../docs/superpowers/specs/assets/sp7a/', import.meta.url);
+const read = <T>(file: string, dir: URL = ASSETS_SP7A): T => JSON.parse(readFileSync(new URL(file, dir), 'utf8')) as T;
 
 const FULL = { window: { width: 1920, height: 1080, windowState: 'fullscreen' }, viewport: { innerWidth: 1920, innerHeight: 1080, devicePixelRatio: 1 } };
 
@@ -58,7 +61,7 @@ describe('the committed browser files\' derived figures (SP5b spec §6.2; final 
   });
 
   test('persistFailures: the committed bench files\' added parts are their parts\' differences', () => {
-    for (const [file, dir] of [['bench-iris-chrome.json', ASSETS_SP6B], ['bench-iris-chrome-w4.json', ASSETS_SP6B], ['bench-rtx-chrome.json', ASSETS_SP6A]] as const) {
+    for (const [file, dir] of [['bench-iris-chrome.json', ASSETS_SP7A], ['bench-iris-chrome-w4.json', ASSETS_SP7A], ['bench-rtx-chrome.json', ASSETS_SP6A]] as const) {
       expect(persistFailures(read<{ persist: PersistOf }>(file, dir).persist), file).toEqual([]);
     }
   });
