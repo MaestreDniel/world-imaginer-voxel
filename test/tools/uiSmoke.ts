@@ -27,8 +27,9 @@
  * - voxels: the tab's Voxels mode (SP3a spec §5.2): a fresh, non-empty slice, its legend (every registry state, water and
  *   the sea line: SP3c spec §6), the hover readout, back to Profile;
  * - tabs: ArrowRight, ArrowLeft, Home and End move the selection and the focus on both tab bars;
- * - rule: the Voxels mode on the mountain line (SP3c spec §6): the pointer on the top solid voxel of a sample (found in
- *   the slice image, not at a fixed height) shows the readout at once, then its surface rule id ` · rule root.…`;
+ * - rule: the Voxels mode on the mountain line (SP3c spec §6): its summary (`mountainSummaryOk`) and no column whose top
+ *   is water (`surfaceWaterSamples`); the pointer on the top solid voxel of a sample (found in the slice image, not at a
+ *   fixed height) shows the readout at once, then its surface rule id ` · rule root.…`;
  * - the Density tab (SP3d spec §6 steps 1-7), on that mountain page:
  *   - density tab: opened with the line drawn (the vertical plane), the field set to `density`; the slice hover and the
  *     node form's "value at the hover" (a `fieldProbe` job) agree;
@@ -165,8 +166,9 @@
  *   blocked a world page's `beforeunload` prompt when a step left it (`leaveGuardLog`); every step ran.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
  * repository keeps them re-saved as 256-colour palette PNGs, as SP1 and SP2a did), then the Voxels mode on the
- * mountain line (SP3b spec §7: `cross-section-voxels-mountain.png`; the line text is checked, and the slice summary
- * must show a ground top above y 200 and no water) with the pointer on the rule step's top voxel and its readout
+ * mountain line (SP3b spec §7: `cross-section-voxels-mountain.png`; the line text is checked, the slice summary must
+ * show a ground top above y 200, and no column's top may be water: the aquifer water of its caves, which the Voxels mode
+ * shows since SP7a spec §10.2, is allowed) with the pointer on the rule step's top voxel and its readout
  * showing the surface rule id (SP3c spec §6, §9: "a Voxels-mode screenshot with a hover rule id"), and last the
  * Density tab on the same line with the drawer at its tallest (SP3d spec §6 step 7, §11's review):
  * `density-vertical-hover.png` (the vertical density slice, the pointer on a ground voxel: the readout and the form's
@@ -332,11 +334,14 @@ export function voxelSummaryOk(text: string): boolean {
 }
 
 /**
- * The Voxels mode's summary of the mountain line (SP3b spec §7, §11): the format of `voxelSummaryOk`, a ground top
- * above y 200 (the review mountain's `topMax` > 200, as `reviewSlices.test` requires) and no water.
+ * The Voxels mode's summary of the mountain line (SP3b spec §7, §11): the format of `voxelSummaryOk` and a ground top
+ * above y 200 (the review mountain's `topMax` > 200, as `reviewSlices.test` requires). SP3b's "no water" no longer
+ * holds: since SP7a the Voxels mode shows the aquifer water of caves (SP7a spec §10.2), and the line's caves hold some
+ * ("water on 2.9 % of the line, up to 20 deep", y 109-178 under tops 134-257). That the line stays dry on top (no sea,
+ * lake or river on it) is `surfaceWaterSamples`' check on the slice image.
  */
 export function mountainSummaryOk(text: string): boolean {
-  const m = /^ground top y (-?\d+) to (-?\d+) · no water$/.exec(text);
+  const m = /^ground top y (-?\d+) to (-?\d+) · /.exec(text);
   return m !== null && voxelSummaryOk(text) && Number(m[2]) > 200;
 }
 
@@ -445,6 +450,21 @@ export const WATER_RGB = [40, 92, 222] as const;
 export function waterPixel(r: number, g: number, b: number): boolean {
   const f = b / WATER_RGB[2];
   return f >= 0.29 && f <= 1 && Math.abs(r - WATER_RGB[0] * f) <= 1 && Math.abs(g - WATER_RGB[1] * f) <= 1;
+}
+
+/**
+ * The samples of a 512 × 384 Voxels slice image (RGBA, row-major) whose top pixel that is not air's colour is water
+ * (`waterPixel`): water over the column's ground (a sea, lake or river), not the aquifer water of a cave under it.
+ * In sample order; empty on a line that is dry on top.
+ */
+export function surfaceWaterSamples(image: ArrayLike<number>): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < 512; i++) {
+    const column = sliceColumn(image, i);
+    const row = groundTopRow(column);
+    if (row !== null && waterPixel(column[4 * row]!, column[4 * row + 1]!, column[4 * row + 2]!)) out.push(i);
+  }
+  return out;
 }
 
 /** The lowest bottom voxel of an island run (`ISLAND_RUN_MIN_BOTTOM` in `src/core/constants.ts`; a unit test keeps them equal). */
@@ -2732,6 +2752,8 @@ async function runSmoke(t: Smoke): Promise<void> {
   t.step('rule: the hover rule id of a land top on the mountain line (SP3c spec §6)');
   const { text: lineText, summary: mountain } = await openMountainVoxels(p);
   t.check(mountainSummaryOk(mountain), `the mountain line ${lineText}: ${mountain}`, mountain);
+  const wetTops = surfaceWaterSamples(await voxelImage(p));
+  t.check(wetTops.length === 0, `no column of the mountain line has water on top (its caves' aquifer water may show, SP7a spec §10.2): ${wetTops.length === 0 ? 'none' : `samples ${wetTops.join(', ')}`}`, wetTops);
   const hover = await hoverTopRule(p);
   t.check(hover !== null, `sample ${RULE_SAMPLE} has a ground top (row ${hover?.row ?? '-'}, y ${hover === null ? '-' : 319 - hover.row})`);
   if (hover !== null) {
@@ -6508,7 +6530,9 @@ async function runShots(p: Page, dir: string): Promise<string[]> {
   // The Voxels mode on the mountain line (SP3b spec §7, §11): the real T's peaks, the pointer on the top voxel of the
   // rule step's sample and the readout with its surface rule id (SP3c spec §6, §9).
   const { text, summary } = await openMountainVoxels(p);
-  if (!mountainSummaryOk(summary)) throw new Error(`the mountain slice: ${summary} (expected a ground top above y 200 and no water)`);
+  if (!mountainSummaryOk(summary)) throw new Error(`the mountain slice: ${summary} (expected a ground top above y 200)`);
+  const wetTops = surfaceWaterSamples(await voxelImage(p));
+  if (wetTops.length > 0) throw new Error(`the mountain slice: water on top of samples ${wetTops.join(', ')} (expected none)`);
   console.log(`  mountain line: ${text}; ${summary}`);
   const hover = await hoverTopRule(p);
   if (hover === null || !hover.ruledOk) throw new Error(`the mountain screenshot's hover: ${hover?.ruled ?? `sample ${RULE_SAMPLE} is all air`}`);

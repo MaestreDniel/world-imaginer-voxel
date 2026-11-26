@@ -33,7 +33,7 @@ import {
   ISLAND_MIN_BOTTOM_Y, islandOverGround, islandsFloorOk, issueLineOk, mapHash, MOUNTAIN_LINE, mountainSummaryOk, oceanAndLandOk, parseArgs, parseSegment, parseSliceReadout,
   parseSliceStats, presetCentre, presetLine, PRESET_MAP, PRESET_SHOTS, PRESET_TOP_MIN, presetProblems, presetState, presetSummaryOk, readMapHash, READY_PROFILES,
   RULE_SAMPLE, sameJson, selftestAllMatch, KV_CONTRACT_CASES, KV_SELFTEST_DONE, kvSelftestPassed, SIZE_7, SIZE_8, SKY_RGB, sliceCellPoint, sliceColumn, SMOKE_PRESETS, SMOKE_STEPS, SQUARE_RGB, squareLabels, START, stepId,
-  summaryTopMax, timesText, VIEWPORT, viewportForDrawer, voxelLegendLabels, voxelReadoutOk, voxelRuleId, voxelSummaryOk, WATER_RGB, waterPixel, type MapUrlState,
+  summaryTopMax, surfaceWaterSamples, timesText, VIEWPORT, viewportForDrawer, voxelLegendLabels, voxelReadoutOk, voxelRuleId, voxelSummaryOk, WATER_RGB, waterPixel, type MapUrlState,
   type SmokePreset, pixelDiffShare, SWIFTSHADER_ARGS, START_SEED_7_HASH, PARITY_VIEW, PARITY_WATER_VIEW, PARITY_VIEWS, WORLD_RD, worldMeshQuery, PARITY_TOL, PARITY_MAX_SHARE, leaveGuardLog,
   expectedRenderer, HUD_POLL_MS, hudMoved, hudOnce, parseHud, STREAM_HOLD_MS, STREAM_MIN_MOVE, STREAM_RD, STREAM_RD_MS, STREAM_REVEAL_MS, STREAM_RUNS, streamQuery,
   type HudRead,
@@ -301,15 +301,20 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     expect((b[0] - a[0]) / view.bpp).toBe(512);
   });
 
-  test('the mountain slice\'s summary needs a ground top above y 200 and no water, not only the format (SP3b spec §7, §11)', () => {
-    // The recorded runs: "ground top y 140 to 257 · no water" and "ground top y 136 to 267 · no water".
+  test('the mountain slice\'s summary needs a ground top above y 200, not only the format; its caves\' water is allowed (SP3b spec §7, §11; SP7a spec §10.2)', () => {
+    // The recorded runs: "ground top y 140 to 257 · no water" and "ground top y 136 to 267 · no water" before SP7a, and
+    // since SP7a's aquifer (Task 50's smoke) the same line with its caves' water.
     expect(mountainSummaryOk('ground top y 140 to 257 · no water')).toBe(true);
     expect(mountainSummaryOk('ground top y 136 to 267 · no water')).toBe(true);
     expect(mountainSummaryOk('ground top y -3 to 201 · no water')).toBe(true);
-    // Well-formed, but flat (the highest top at or below 200) or wet.
+    expect(mountainSummaryOk('ground top y 134 to 257 · water on 2.9 % of the line, up to 20 deep')).toBe(true);
+    // Well-formed, but flat (the highest top at or below 200), wet or dry.
     expect(mountainSummaryOk('ground top y 62 to 200 · no water')).toBe(false);
     expect(mountainSummaryOk('ground top y 62 to 90 · no water')).toBe(false);
-    expect(mountainSummaryOk('ground top y 140 to 257 · water on 3.1 % of the line, up to 4 deep')).toBe(false);
+    expect(mountainSummaryOk('ground top y 20 to 86 · water on 44.5 % of the line, up to 43 deep')).toBe(false);
+    // Not the summary's format.
+    expect(mountainSummaryOk('ground top y 140 to 257 · water on 3 % of the line, up to 4 deep')).toBe(false);
+    expect(mountainSummaryOk('ground top y 140 to 257 · ')).toBe(false);
     expect(mountainSummaryOk('no ground · no water')).toBe(false);
     expect(mountainSummaryOk('')).toBe(false);
     // A real summary of a flat, partly wet slice fails although its format passes.
@@ -324,6 +329,29 @@ describe('UI smoke test: pure parts (SP2b spec §8 Tools, §12)', () => {
     const flat = sliceSummary({ blocks, fluid, cave: new Uint8Array(SLICE_SAMPLES) });
     expect(voxelSummaryOk(flat)).toBe(true);
     expect(mountainSummaryOk(flat), flat).toBe(false);
+  });
+
+  test('surfaceWaterSamples lists the slice image\'s samples whose top is water (a lake over the ground), not a cave\'s water under it (SP7a spec §10.2)', () => {
+    // A mountain of tops 150 + i % 100: samples 100-119 hold a cave of water at y 120-129 under their ground, samples
+    // 300-304 a lake (water y 251-255 over ground at 250), sample 511 is all air.
+    const mountain = (i: number, y: number): readonly [number, boolean] | null => {
+      if (i === 511) return null;
+      if (y === -64) return [BEDROCK, false];
+      if (i >= 300 && i < 305) return y <= 250 ? [STONE, false] : y <= 255 ? [AIR, true] : null;
+      if (y > 150 + (i % 100)) return null;
+      return i >= 100 && i < 120 && y >= 120 && y < 130 ? [AIR, true] : [STONE, false];
+    };
+    const s = slice(mountain);
+    expect(mountainSummaryOk(sliceSummary(s)), sliceSummary(s)).toBe(true);
+    expect(surfaceWaterSamples(sliceRgba(s))).toEqual([300, 301, 302, 303, 304]);
+    // Only the cave: dry on top, although the summary lists its water.
+    const caveOnly = slice((i, y) => (i >= 300 && i < 305 ? (y <= 250 ? [STONE, false] : null) : mountain(i, y)));
+    expect(sliceSummary(caveOnly)).toMatch(/ · water on 3\.9 % of the line, up to 10 deep$/);
+    expect(surfaceWaterSamples(sliceRgba(caveOnly))).toEqual([]);
+    // A sea over low ground: every sample's top is water; an all-air slice has none.
+    expect(surfaceWaterSamples(sliceRgba(slice(islandColumn(40, null))))).toHaveLength(512);
+    expect(surfaceWaterSamples(sliceRgba(slice(() => null)))).toEqual([]);
+    expect(() => surfaceWaterSamples(new Uint8ClampedArray(16))).toThrow(/512 × 384/);
   });
 
   test('the steps run in SMOKE_STEPS order: the Density steps after rule, then preset profiles (SP3e), then start, world and world-mesh (SP4a), then SP4b\'s stream, then SP4c\'s overlay and overlay-mesh, then SP5a\'s build and walk, then SP5b\'s menus, save, crash, two tabs, export/import, places, modify and settings-world, then SP5c\'s select, then SP6a\'s caves, then SP7a\'s water before console (SP3d spec §6, SP3e spec §8, SP4a spec §9.6, SP4b spec §8.6, SP4c spec §8.6, SP5a spec §6.4, SP5b spec §6.5, SP5c spec §10.8, SP6a spec §10.9, SP7a spec §13.9, ruling P52)', () => {
