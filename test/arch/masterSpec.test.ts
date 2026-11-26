@@ -275,6 +275,16 @@
  * `THRESHOLDS`.
  * The slice's aquifer fluid (Task 41, D13) lands item 15 (§5.5: the slice's "aquifer level and status" field and the
  * probe's "aquifer cell / level / status" → SP10, the caves field's aquifer fluid and hover SP7a's).
+ * The master pins I (Task 48) land item 2 (the "Received from SP7a" lines of SP7b-SP12, each after its entry's last
+ * "Received from" line, each phrase checked against the spec's §17 bullet: SP7b's carries `C7.waterWall`'s final
+ * definition and bound with the user's verdict on the fronts, R5's gate and its lever, and policy B; SP11's says the
+ * per-section sort was not needed, by Task 47's §6.6 check; item 1's SP7b pin moves past the new line), item 17 (§7's
+ * "Measured in SP7a" line: `terrain.real`, `terrain.islands`, `aquifer.column`, `decorate.column` with its visits,
+ * `light.column.lava` and `mesh.section`, which `BENCH_ROWS` measures, each with its measured value and the bench's
+ * gates, and the water segment read from `assets/sp7a/`'s gated Chrome file and its Firefox file, its gates
+ * cross-checked against THRESHOLDS) and item 18 (§8 risk 3 not needed: `terrain.real`'s p50 after Tasks 27-28's levers
+ * sits within 0.5 ms of SP6b's 9.89 ms, rulings P51, so its text is pinned unchanged and the Exit evidence records it;
+ * risk 10 gains the caps 12 / 14 and the A2 readings, policy B SP7b's).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -3483,10 +3493,12 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(sp7b[1], 'the SP7b contents').toBe('- The runtime fluid sim (edit-triggered, 20 TPS, rules from `fluidRules.ts`, reactions obsidian, cobblestone and stone, caps, sim distance, diffs and the trailer\'s ticks); SP5c\'s paste, cut and move ticks and the 8k cap; the ghost drawing fluids; the bench\'s flood scenario; the current\'s push.');
     expect(sp7b[2]).toBe('- **Deliverable:** break a lake rim and watch it drain.');
     expect(sp7b[3], 'SP7b\'s "Received from SP5c" line, moved from SP7\'s').toMatch(/^- Received from SP5c \(its spec §14; amended by SP5c\): .*8k-updates-per-tick/);
-    expect(sp7b[4]).toBe('- **Exit:** F1, F2, F3; DT1 with the sim\'s diffs; P1 tick p95 ≤ 4 ms.');
-    expect(sp7b[5]).toBe('- **Cut line:** lava reactions beyond obsidian and cobblestone (→ SP12).');
-    expect(sp7b[6]).toBe('- **MVP line:** after SP7b the app is a complete explorer and editor with caves, entrances and real water.');
-    expect(sp7b.slice(7).join('\n').trim(), 'nothing after the MVP line').toBe('');
+    // Item 2 (Task 48) adds SP7b's "Received from SP7a" line after it (pinned in its own test).
+    expect(sp7b[4]!.startsWith('- Received from SP7a (its spec §17; amended by SP7a): '), 'SP7b\'s "Received from SP7a" line').toBe(true);
+    expect(sp7b[5]).toBe('- **Exit:** F1, F2, F3; DT1 with the sim\'s diffs; P1 tick p95 ≤ 4 ms.');
+    expect(sp7b[6]).toBe('- **Cut line:** lava reactions beyond obsidian and cobblestone (→ SP12).');
+    expect(sp7b[7]).toBe('- **MVP line:** after SP7b the app is a complete explorer and editor with caves, entrances and real water.');
+    expect(sp7b.slice(8).join('\n').trim(), 'nothing after the MVP line').toBe('');
   });
 
   test('§10\'s SP8a, SP8b, SP8c and SP12 read SP7a or SP7b (SP7a spec §16 item 2)', () => {
@@ -4014,5 +4026,109 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(def!.endsWith('(amended by SP6b); SP7a: `xrayFluid` counts the X-ray faces whose `fluid` bits (the `xray` word\'s bits 11-12) ≠ the fluid type of their hollow voxel (the film\'s ≠ 0), over both meshings of R1\'s sites (amended by SP7a)'), 'the row\'s definition ends with SP7a\'s part').toBe(true);
     expect(cell).toBe('0 / 0; `xrayBiome` 0; `xrayFluid` 0 |');
     expect(THRESHOLDS.R1?.xrayFluid).toEqual({ max: 0, activeFrom: 'SP7a' });
+  });
+
+  test('§10\'s Received from SP7a lines (SP7a spec §16 item 2)', () => {
+    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-17-sp7a-water-design.md`, 'utf8');
+    const s17 = spec.slice(spec.indexOf('## 17. Notes handed to later SPs'), spec.indexOf('## 18. Cut line'));
+    const SP5C = '- Received from SP5c (its spec §14; amended by SP5c):';
+    const SP6B = '- Received from SP6b (its spec §16; amended by SP6b):';
+    const SP7A = '- Received from SP7a (its spec §17; amended by SP7a):';
+    // Each phrase is §17's text, so it is checked in §17's bullet too; each line follows the entry's last "Received from".
+    const handed: Array<[id: SubProjectId, entry: string, after: string, phrases: readonly string[]]> = [
+      ['SP7b', spEntry('SP7b', 'SP8a'), SP5C, ['the runtime sim on `fluidRules.ts`', 'drains (unsupported flow)', 'reactions (obsidian, cobblestone, stone; `obsidian` appended as a state)', 'truncated fronts wake only on an edit\'s update (bit 6 in the final set', 'if SP7a\'s A2 needed it', '`C7.waterWall`\'s final definition and bound (recorded, not gated, in SP7a, its row `activeFrom` \'SP7b\': the user, ', 'rulings R24 item 1', 'the user\'s verdict on them ("quedan aceptables, anotamos para SP7b", ', 'R5\'s gate (≤ 0.1, recorded, not gated, in SP7a: the user, ', 'rulings R26 item 1', 'and its remaining lever, merging planar sloped tops, plus any light-key change, judged in a shot']],
+      ['SP8a', spEntry('SP8a', 'SP8b'), SP6B, ['water and lava animation frames (Fancy\'s animated texture)', 'lava\'s emissive flag implied by its layer', 'the water tint per biome (`tint` bits, ']],
+      ['SP8b', spEntry('SP8b', 'SP8c'), SP6B, ['lava lakes as a D step-1 feature feeding settle', 'freeze_top_layer\'s ice on sky-exposed water (rule 5, S3\'s ice parts)', 'the generated-value layer extended from fluid to blocks', 'plants with `hold`/`displace` in settle', 'seagrass and kelp in flooded caves', 'floors under settle\'s spills re-skinned if wanted', 'the decorate-scope Apply path (springs stay Terrain scope)']],
+      ['SP8c', spEntry('SP8c', 'SP9'), SP6B, ['waterfall and lava-fall emitters (the spring list per column, which T can expose in aux B)', 'underwater muffling from `eyeFluid`', 'AU2\'s waterfall and lava scenes on SP7a\'s links']],
+      ['SP9', spEntry('SP9', 'SP10'), SP6B, ['structures and aquifers (a piece\'s box keeps its voxels dry: barriers or a structure term)', '`surfaceEst3`\'s quart cache if structures need it']],
+      ['SP10', spEntry('SP10', 'SP11'), SP6B, ['the crosshair probe\'s aquifer cell, level and status', 'the slice\'s "aquifer level and status" field', 'a map aquifer layer', 'F3\'s fluid byte line (if SP5a\'s HUD lacks it)']],
+      ['SP11', spEntry('SP11', 'SP12'), SP6B, ['vertex waves on near water', 'Fabulous water', 'the water tier in the quality presets (Low Fast)', 'RegionMesh\'s per-section translucent sort if the Firefox waterfall look needs it', 'not needed, the user saw no visible problem at SP7a\'s Firefox waterfall check (Task 47), so nothing moved']],
+      ['SP12', sp12Entry(), SP6B, ['water in mountain gorges (elevated rivers; a proposal, not asked for)', 'the volcano\'s crater lava on SP7a\'s generated lava', 'extra lava reactions (via SP7b)']],
+    ];
+    for (const [id, entry, after, phrases] of handed) {
+      const lines = entry.split('\n');
+      const at = lines.findIndex((l) => l.startsWith(SP7A));
+      expect(at, `${id} has no "Received from SP7a" line`).toBeGreaterThan(-1);
+      expect(lines.filter((l) => l.startsWith(SP7A)).length, `${id} has one "Received from SP7a" line`).toBe(1);
+      expect(lines[at - 1]!.startsWith(after), `${id}'s "Received from SP7a" line follows its ${after}`).toBe(true);
+      const bullet = s17.split('\n').find((l) => l.startsWith(`- **${id}:** `));
+      expect(bullet, `the SP7a spec §17 has no ${id} bullet`).toBeDefined();
+      for (const phrase of phrases) {
+        expect(lines[at], `${id}'s "Received from SP7a" line`).toContain(phrase);
+        expect(bullet, `the SP7a spec §17's ${id} bullet`).toContain(phrase);
+      }
+    }
+    // SP11 does not receive the per-section sort: the user saw no visible problem at §6.6's Firefox check (Task 47).
+    const evidence = spec.slice(spec.indexOf('## Exit evidence'), spec.indexOf('## Threshold log'));
+    expect(evidence).toContain('**The user\'s verdict:** "visualmente me pareció OK" (no visible problem)');
+    expect(evidence).toContain('Nothing is handed to SP11 (D37).');
+    // SP7a's own entry receives nothing from itself.
+    expect(spEntry('SP7a', 'SP7b')).not.toContain(SP7A);
+  });
+
+  test('§7 as measured in SP7a: the rows with their values and gates, the water segment (SP7a spec §16 item 17)', () => {
+    const lines = text.split('\n');
+    const line = lines.find((l) => l.startsWith('- **Measured in SP7a** (amended by SP7a):'));
+    expect(line, 'no `- **Measured in SP7a** (amended by SP7a): …` line in §7').toBeDefined();
+    // It follows SP6b's measured line, inside §7.
+    expect(lines[lines.indexOf(line!) - 1]!.startsWith('- **Measured in SP6b** (amended by SP6b):')).toBe(true);
+    expect(text.indexOf(line!)).toBeLessThan(text.indexOf('## 8. Risks'));
+    // The bench rows it names are measured by BENCH_ROWS, and each carries a measured value (a number of ms after its name).
+    const rows: readonly string[] = BENCH_ROWS;
+    for (const row of ['terrain.real', 'terrain.islands', 'aquifer.column', 'decorate.column', 'light.column.lava', 'mesh.section']) {
+      expect(line, `§7's "Measured in SP7a" line does not name ${row}`).toContain(`\`${row}\``);
+      expect(rows, `BENCH_ROWS does not measure ${row}`).toContain(row);
+      const after = line!.slice(line!.indexOf(`\`${row}\``));
+      expect(after, `${row} has no measured value`).toMatch(/^`[^`]+`[^;]*?\d+(?:\.\d+)? ms/);
+    }
+    // The gates are the bench's constants; decorate.column is recorded against the D row's targets.
+    expect(line).toContain(`gated at p50 ≤ ${TERRAIN_P50_MAX_MS} ms, p99 ≤ ${TERRAIN_P99_MAX_MS} ms by \`TERRAIN_P50_MAX_MS\` and \`TERRAIN_P99_MAX_MS\``);
+    expect(line).toContain(`gated at p50 ≤ ${ISLANDS_P50_MAX_MS} ms, p99 ≤ ${ISLANDS_P99_MAX_MS} ms by \`ISLANDS_P50_MAX_MS\` and \`ISLANDS_P99_MAX_MS\``);
+    expect(line).toContain(`gated at p50 ≤ ${AQUIFER_P50_MAX_MS.toFixed(1)} ms, p99 ≤ ${AQUIFER_P99_MAX_MS} ms by \`AQUIFER_P50_MAX_MS\` and \`AQUIFER_P99_MAX_MS\``);
+    expect(line).toContain(`gated at p50 ≤ ${LIGHT_P50_MAX_MS} ms, p99 ≤ ${LIGHT_P99_MAX_MS} ms by \`LIGHT_P50_MAX_MS\` and \`LIGHT_P99_MAX_MS\``);
+    expect(line).toContain(`gated at p50 ≤ ${MESH_P50_MAX_MS.toFixed(1)} ms, p99 ≤ ${MESH_P99_MAX_MS} ms by \`MESH_P50_MAX_MS\` and \`MESH_P99_MAX_MS\``);
+    expect(line).toContain('with the settle\'s visits per column p50 7, p99 633, max 750, recorded against the D row\'s 3 / 8 ms and 20k visits;');
+    expect(lines).toContain('| D | pull model over 9 sources + settle + stamp + diff | ≤ 3 / 8 |');
+    // The water segment: read from the committed Chrome file (gated by G1) and the Firefox file (recorded).
+    type Water = { timerQuery: boolean; water: { waterFancyGpuMs: number | null; waterFancyP95: number; waterTierToggleMaxMs: number; underwaterP95: number } };
+    const bench = (name: string): Water => JSON.parse(readFileSync(`${ROOT_DIR}docs/superpowers/specs/assets/sp7a/${name}`, 'utf8')) as Water;
+    const chrome = bench('bench-iris-chrome.json').water, firefox = bench('bench-iris-firefox.json');
+    const g1 = (part: string): number => THRESHOLDS.G1![part]!.max!;
+    expect(line).toContain(`\`waterFancyGpuMs\` (Fancy's GPU p50 − Fast's) ${chrome.waterFancyGpuMs!.toFixed(3)} ms in Chrome on the Iris Xe (\`assets/sp7a/bench-iris-chrome.json\`), gated at ≤ ${g1('waterFancyGpuMs')} ms (the GPU table's water (Fancy) row), with \`waterFancyP95\` ${chrome.waterFancyP95.toFixed(3)} ms, \`waterTierToggleMaxMs\` ${chrome.waterTierToggleMaxMs.toFixed(3)} ms and \`underwaterP95\` ${chrome.underwaterP95.toFixed(3)} ms, gated at ≤ ${g1('waterFancyP95')}, ${g1('waterTierToggleMaxMs')} and ${g1('underwaterP95')} ms;`);
+    expect(lines).toContain(`| water (Fancy) | ≤ ${g1('waterFancyGpuMs')} ms |`);
+    const ff = firefox.water;
+    expect([ff.waterFancyP95, ff.waterTierToggleMaxMs].map((v) => v.toFixed(2)), 'the Firefox file\'s three water p95 agree').toEqual([ff.underwaterP95.toFixed(2), ff.underwaterP95.toFixed(2)]);
+    expect([firefox.timerQuery, ff.waterFancyGpuMs]).toEqual([false, null]);
+    expect(line).toContain(`in Firefox (\`assets/sp7a/bench-iris-firefox.json\`, recorded, not gated) \`waterFancyP95\`, \`waterTierToggleMaxMs\` and \`underwaterP95\` ${ff.underwaterP95.toFixed(2)} ms each, \`waterFancyGpuMs\` not measured (no timer query).`);
+    // `terrain.real` against SP6b's 9.89 ms (D31; §8 risk 3's condition, the next test, rulings P51).
+    const real = /`terrain\.real`'s p50 after the levers of the SP7a spec's Tasks 27-28, (\d+(?:\.\d+)?) ms/.exec(line!);
+    expect(real, 'the line states terrain.real\'s p50 after the levers').not.toBeNull();
+    expect(Number(real![1]) - 9.89).toBeLessThanOrEqual(0.5);
+    expect(line!.endsWith('so §8 risk 3 gains no sentence.')).toBe(true);
+  });
+
+  test('§8 risk 3 unchanged, its sentence not needed; risk 10 with the SP7a caps and the A2 readings, policy B SP7b\'s (SP7a spec §16 item 18)', () => {
+    const r3 = text.slice(text.indexOf('3. **T cost of the full cave family in JS, plus DAG closures.**'), text.indexOf('4. **Hashed-lattice noise cost.**'));
+    const r3Lines = r3.trimEnd().split('\n');
+    expect(r3Lines.length, 'risk 3 keeps its header and three items').toBe(4);
+    expect(r3Lines[3]!.startsWith('   - Outcome (SP6a; amended by SP6a):')).toBe(true);
+    expect(r3).not.toContain('SP7a');
+    // The Exit evidence records item 18's risk-3 sentence as not needed, with terrain.real's p50 after Tasks 27-28's levers.
+    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-17-sp7a-water-design.md`, 'utf8');
+    const evidence = spec.slice(spec.indexOf('## Exit evidence'), spec.indexOf('## Threshold log'));
+    const item = evidence.split('\n').find((l) => l.startsWith('- **§16 item 18 (§8 risk 3): not needed.**'));
+    expect(item, 'the Exit evidence does not record §16 item 18\'s risk 3 as not needed').toBeDefined();
+    const p50 = /`terrain\.real` p50 after Tasks 27-28's levers is (\d+(?:\.\d+)?) ms/.exec(item!);
+    expect(p50, 'the item states terrain.real\'s p50 after the levers').not.toBeNull();
+    expect(Number(p50![1]) - 9.89).toBeLessThanOrEqual(0.5);
+    // Risk 10 gains the SP7a caps and the A2 readings; policy B needs SP7b.
+    const r10 = text.split('\n').find((l) => l.startsWith('10. **Truncated settle fronts that look like walls.**'));
+    expect(r10, 'no risk 10 in §8').toBeDefined();
+    expect(r10!.startsWith('10. **Truncated settle fronts that look like walls.** A2 counts them; tune the cap and barriers. Fallback (policy B, only if A2 cannot be met): natural ticks inside sim distance with a lineage bit so only edit-caused flows persist (D18). SP7a (amended by SP7a): ')).toBe(true);
+    const a2 = THRESHOLDS.A2!;
+    expect([a2.unsupported!.max, a2.unsettled!.max]).toEqual([0.001, 0.001]);
+    expect(r10).toContain(`the SP7a caps ${FLUID_CAP_WATER} / ${FLUID_CAP_LAVA} (water / lava, \`FLUID_CAP_WATER\` and \`FLUID_CAP_LAVA\`, beside the nearest-drop search ${FLUID_SEARCH_WATER} / ${FLUID_SEARCH_LAVA}) and the A2 readings after settle`);
+    expect(r10).toContain(`against ≤ ${a2.unsupported!.max! * 100} % on every tier`);
+    expect(r10).toContain('policy B needs SP7b');
   });
 });
