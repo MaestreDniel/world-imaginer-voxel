@@ -3589,6 +3589,13 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(vertex, 'the solid word\'s flags name the lava drop').toBe('  - opaque/cutout: `layer10 | face3 | ao2 | sky4 | block4 | tint3 | flags4 (emissive, waving, randomRotate, upper; for `LAVA_LAYER` the vertex\'s corner drop, SP7a) | 2 spare`;');
   });
 
+  test('§4.4\'s face visibility: a lowered fluid top is drawn under an occluder (SP7a spec §6.2; rulings R27 item 3)', () => {
+    const s44 = text.slice(text.indexOf('### 4.4 '), text.indexOf('**Fluid mesh:**')).split('\n');
+    const at = s44.indexOf('- translucent faces against a non-same-fluid neighbour that does not occlude them;');
+    expect(at, 'the translucent bullet, now followed by the lowered top\'s').toBeGreaterThan(0);
+    expect(s44[at + 1]).toBe('- a fluid\'s up face (water\'s and lava\'s) whose top is lowered (below the voxel\'s top at any corner: a source at 8/9, a flowing level; the fluid mesh below) is drawn under an occluder too, since it never reaches the plane it shares with the block above; a top drawn full (falling) is culled by an occluder as any face (amended by SP7a, its spec §6.2; rulings R27 item 3).');
+  });
+
   test('§4.6/§4.10\'s water tier as built (SP7a spec §16 item 12)', () => {
     // Item 12's Fancy half (Task 35): `water(tier)` is one program with a `waterTier` uniform; Fancy as built (Fresnel and
     // procedural ripples; the animated texture SP8a/SP11, vertex waves SP11). The underwater fog half is Task 38's.

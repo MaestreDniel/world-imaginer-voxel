@@ -1061,7 +1061,8 @@ Main thread: render (three), input/physics/raycast (reads SAB), Coordinator (sta
 **Face visibility.** A neighbour *occludes* a face when it is PASS opaque and its `FULL_FACES` has the facing bit (all six for cubes):
 - opaque faces are emitted only against a neighbour that does not occlude them — a partial shape never hides a neighbour's face;
 - cutout faces against a neighbour that does not occlude them and is a different block, except that cutout leaves also render faces against leaves (opaque leaves at Low do not);
-- translucent faces against a non-same-fluid neighbour that does not occlude them.
+- translucent faces against a non-same-fluid neighbour that does not occlude them;
+- a fluid's up face (water's and lava's) whose top is lowered (below the voxel's top at any corner: a source at 8/9, a flowing level; the fluid mesh below) is drawn under an occluder too, since it never reaches the plane it shares with the block above; a top drawn full (falling) is culled by an occluder as any face (amended by SP7a, its spec §6.2; rulings R27 item 3).
 
 In AO, smooth light and connectivity15, "opaque" means PASS opaque with `FULL_FACES` = 63 (`hasOpaque` stays "contains any PASS-opaque state"); slabs, stairs, doors, fences and other partial states count as open.
 

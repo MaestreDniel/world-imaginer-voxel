@@ -820,7 +820,9 @@ describe("R5's surface top faces (SP7a spec §6.5, D27; rulings P34)", () => {
    * - a 4 × 4 pool of sources two deep (x, z 2 … 5, y 4 … 5) in the air: 16 surface voxels at y 5, whose tops are the
    *   inner 2 × 2 (every corner drop 1, flat: one merged quad) and the ring of 12 (sloped: one quad each); the 16 at y 4
    *   have water above;
-   * - a source under stone at (8, 4, 8): a surface voxel whose top the stone hides (no face);
+   * - a source under stone at (8, 4, 8): a surface voxel whose top, lowered (alone in the air: flat, drop 3), the stone
+   *   does not hide (rulings R27 item 3);
+   * - falling water under stone at (13, 4, 4): a surface voxel drawn full, whose top the stone hides (no face);
    * - a source under a lava source at (11, 4, 11): no water above, so a surface voxel, its top drawn (flat, drop 3).
    */
   function scene(): VoxelStore {
@@ -829,6 +831,7 @@ describe("R5's surface top faces (SP7a spec §6.5, D27; rulings P34)", () => {
     at.set(key(8, 4, 8), WATER_SOURCE);
     at.set(key(11, 4, 11), WATER_SOURCE);
     at.set(key(11, 5, 11), LAVA_SOURCE);
+    at.set(key(13, 4, 4), packFluid(FLUID_WATER, 0, true));
     const s = createStore({ shared: false, maxBlockBytes: 32 * MiB, maxByteBytes: 32 * MiB });
     for (let cz = -1; cz <= 1; cz++) {
       for (let cx = -1; cx <= 1; cx++) {
@@ -838,7 +841,7 @@ describe("R5's surface top faces (SP7a spec §6.5, D27; rulings P34)", () => {
           const fluid = new Uint8Array(4096);
           for (let i = 0; i < 4096; i++) {
             const [x, y, z] = [16 * cx + (i & 15), -64 + 16 * sy + (i >> 8), 16 * cz + ((i >> 4) & 15)];
-            blocks[i] = y <= 3 || (x === 8 && y === 5 && z === 8) ? STONE : AIR;
+            blocks[i] = y <= 3 || (x === 8 && y === 5 && z === 8) || (x === 13 && y === 5 && z === 4) ? STONE : AIR;
             fluid[i] = at.get(key(x, y, z)) ?? NO_FLUID;
           }
           w.setFinal(sy, blocks, new Uint8Array(4096).fill(0xF0), fluid);
@@ -853,11 +856,11 @@ describe("R5's surface top faces (SP7a spec §6.5, D27; rulings P34)", () => {
     const s = scene();
     const view = regionView(s, -1, -1, 3, 3);
     const p = meshColumnPayload(s.neighborhood(0, 0), createMeshScratch(), { ao: true, smoothLight: true });
-    expect(surfaceTopWaterCounts(view, 0, 0, p)).toEqual({ quads: 1 + 12 + 1, sloped: 12, faces: 16 + 1 });
+    expect(surfaceTopWaterCounts(view, 0, 0, p)).toEqual({ quads: 1 + 12 + 1 + 1, sloped: 12, faces: 16 + 1 + 1 });
     // The mesh's own water faces: the counted tops are exactly its up faces, and its sides and down faces are more quads.
     const m = meshFaceCounts(p);
-    expect(new Set([...m.water].filter((k) => k % 6 === FACE_UP)).size).toBe(17);
-    expect(m.quadsWater).toBeGreaterThan(14);
+    expect(new Set([...m.water].filter((k) => k % 6 === FACE_UP)).size).toBe(18);
+    expect(m.quadsWater).toBeGreaterThan(15);
   });
 
   test("the payload must be the column's own", () => {

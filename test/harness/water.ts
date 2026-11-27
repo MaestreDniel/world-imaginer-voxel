@@ -115,11 +115,13 @@
  * - **R5** (Task 33, SP7a spec §6.5, D27; `surfaceTopWaterCounts`; `render.metric.ts` reads it per interior column of
  *   its water regions, rulings P34): over one column's final set and its mesh payload, `faces` the surface voxels'
  *   top faces, one per water voxel (fluid type water) with no water above whose voxel above does not hide its top (a
- *   PASS opaque state with its down face full; y 319's above is air), so a water top under lava counts; `quads` the
+ *   PASS opaque state with its down face full hides only a top drawn full, a falling voxel's: a lowered top, below its
+ *   voxel's top at any corner by SP7a spec §6.1's rule, never reaches the shared plane, rulings R27 item 3; y 319's
+ *   above is air), so a water top under lava counts; `quads` the
  *   payload's water quads (pass 2) on the up face, which `meshFluid` draws only on such voxels; `sloped` those whose
  *   four vertices' `cornerDrop`s are not all equal (SP7a spec §6.2: one quad per voxel). R5 reads quads over faces.
  */
-import { CAVE_BIOME, caveBiomeOf, ISLAND_SPRING_MIN_FALL } from '../../src/core/constants';
+import { CAVE_BIOME, caveBiomeOf, CORNER_DRY, CORNER_FULL, CORNER_SOLID, ISLAND_SPRING_MIN_FALL } from '../../src/core/constants';
 import type { Seed64 } from '../../src/core/hash';
 import type { Params } from '../../src/core/params/schema';
 import { seedFromInput } from '../../src/core/seed';
@@ -136,7 +138,9 @@ import { PACK_LAYOUT } from '../../src/mesh/packing';
 import {
   FLUID_LAVA, FLUID_WATER, fluidFalling, fluidLevel, fluidType, fluidUnsettled, hasFluid, LAVA_SOURCE, NO_FLUID, WATER_SOURCE,
 } from '../../src/world/blocks/fluid';
-import { capOf, FLUID_VALUE_FALLING, FLUID_VALUE_SOURCE, isPassable, ruleOffers, type FluidRuleReader } from '../../src/world/blocks/fluidRules';
+import {
+  capOf, cornerDrop, cornerHeight, FLUID_VALUE_FALLING, FLUID_VALUE_SOURCE, isPassable, ruleOffers, surfaceHeight, type FluidRuleReader,
+} from '../../src/world/blocks/fluidRules';
 import { AIR, STONE } from '../../src/world/blocks/index';
 import { FACE_DOWN, FACE_UP, PASS_OPAQUE } from '../../src/world/blocks/kinds';
 import type { ColumnView } from '../../src/world/store/store';
@@ -1626,6 +1630,16 @@ export function surfaceTopWaterCounts(view: RegionView, cx: number, cz: number, 
   if (col === null) throw new Error(`surfaceTopWaterCounts: column (${cx}, ${cz}) has no final set`);
   const { pass, fullFaces } = DEFAULT_MESH_TABLES;
   const downBit = 1 << FACE_DOWN;
+  /** A voxel's value in `cornerHeight` for water (SP7a spec §6.1; above y 319 air without fluid). */
+  const code = (x: number, y: number, z: number): number => {
+    const own = view.fluid(x, y, z);
+    if (fluidType(own) !== FLUID_WATER) return !hasFluid(own) && isPassable(view.block(x, y, z)) ? CORNER_DRY : CORNER_SOLID;
+    return y < GRID_Y0 + GRID_H - 1 && fluidType(view.fluid(x, y + 1, z)) === FLUID_WATER ? CORNER_FULL : surfaceHeight(own, false);
+  };
+  /** Whether water voxel (x, y, z), with no water above, has its drawn top below its voxel's top at any corner. */
+  const lowered = (x: number, y: number, z: number): boolean => !fluidFalling(view.fluid(x, y, z))
+    && [[x, z], [x + 1, z], [x + 1, z + 1], [x, z + 1]].some(([X, Z]) =>
+      cornerDrop(cornerHeight(code(X! - 1, y, Z! - 1), code(X!, y, Z! - 1), code(X!, y, Z!), code(X! - 1, y, Z!))) > 0);
   let faces = 0;
   for (let sy = 0; sy < 24; sy++) {
     const own = col.sectionFluid(sy);
@@ -1637,7 +1651,7 @@ export function surfaceTopWaterCounts(view: RegionView, cx: number, cz: number, 
           if (y < GRID_Y0 + GRID_H - 1) {
             if (fluidType(col.fluid(lx, y + 1, lz)) === FLUID_WATER) continue;
             const above = col.block(lx, y + 1, lz);
-            if (pass[above] === PASS_OPAQUE && (fullFaces[above]! & downBit) !== 0) continue;
+            if (pass[above] === PASS_OPAQUE && (fullFaces[above]! & downBit) !== 0 && !lowered(16 * cx + lx, y, 16 * cz + lz)) continue;
           }
           faces++;
         }

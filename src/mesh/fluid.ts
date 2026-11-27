@@ -4,7 +4,9 @@
  * - **visibility:** a water voxel (fluid type water) draws a face against a neighbour that does not occlude it (PASS
  *   opaque with the facing bit in `fullFaces`) and is not water, so also against glass, ice and the box states, whose
  *   own faces toward the water are the ones culled (`greedy.ts`, `boxes.ts`; SP5a spec §1.3); against lava its up face,
- *   and its down face unless that lava is drawn full (its top on the shared plane at all four corners);
+ *   and its down face unless that lava is drawn full (its top on the shared plane at all four corners); its up face
+ *   even under an occluder when its top is lowered (not drawn full: below the shared plane, SP7a spec §6.2; rulings
+ *   R27 item 3), as lava's;
  * - **side strips** (SP7a spec §6.2): a water voxel's side toward water or lava is a strip where the neighbour's top
  *   corners on the shared edge are lower than this voxel's drawn top there: its bottom vertices at the neighbour's
  *   corner drops (this voxel's where the neighbour's is higher), its top vertices at this voxel's, all four positions at
@@ -288,7 +290,10 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
           if (ft !== WATER && ft !== LAVA) continue;
           const q = v + normal;
           const ns = blocks[q]!;
-          if (pass[ns] === OPAQUE && (full[ns]! & oppBit) !== 0) continue;
+          const li = d * la + i * lu + j * lv;
+          // An occluder hides the face, except a lowered top (DROPS ≠ 0), which never reaches the plane it shares with the
+          // block above (SP7a spec §6.2; rulings R27 item 3): only a top drawn full (falling, or the same fluid above) is culled.
+          if (pass[ns] === OPAQUE && (full[ns]! & oppBit) !== 0 && (f !== FACE_UP || DROPS[li] === 0)) continue;
           const nt = typeOf(fluid[q]!);
           // Two voxels of one fluid share their corners, so only one drawn full beside one that is not can need a strip.
           if (nt === ft && (f >= FACE_UP || !(isFalling(fluid[v]!) || typeOf(fluid[v + UP]!) === ft))) continue;
@@ -297,7 +302,6 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
           // sits at its corners). Its top face is drawn only when no water is above (the skip above).
           if (nt === LAVA && f === FACE_DOWN && topDrops(blocks, fluid, q, LAVA) === 0) continue;
           const lava = ft === LAVA;
-          const li = d * la + i * lu + j * lv;
           // Lava's keys carry no depth and no state (its words hold neither).
           const dep = lava ? 0 : depth[li]!;
           const kind = lava ? KA_LAVA : 0;

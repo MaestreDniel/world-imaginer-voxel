@@ -143,6 +143,9 @@ const faceKey = (lx: number, y: number, lz: number, face: number): number => ((y
  *   corners (SP7a: lava's top at its corners); one holding water, through a side face as a side strip only (SP7a spec
  *   §6.2). A side strip shows when the neighbour's top corners on the shared edge are lower than this voxel's drawn top
  *   there, either corner strictly lower.
+ * The up face of a voxel holding water or lava whose drawn top lies below its voxel's top at any of its four corners
+ * shows against an occluding neighbour too (SP7a spec §6.2; rulings R27 item 3), by the rules above for a neighbour
+ * holding no fluid.
  * A drawn top corner is read voxel by voxel by SP7a spec §6.1 for the voxel's fluid type: 1 (drop 0) when the voxel
  * holds the same fluid above it or is falling; else `cornerDrop(cornerHeight(…))` of the 4 voxels around the corner at
  * the voxel's y, in the spec's world order (−x−z, +x−z, +x+z, −x+z), each `CORNER_FULL` when it holds that fluid with
@@ -182,9 +185,9 @@ export function bruteFaces(view: RegionView, cx: number, cz: number, t: MeshTabl
     }
     return false;
   };
-  /** Whether lava voxel (x, y, z)'s drawn top lies below its voxel's top at any of its four corners. */
-  const lavaTopBelow = (x: number, y: number, z: number): boolean =>
-    [[x, z], [x + 1, z], [x + 1, z + 1], [x, z + 1]].some(([X, Z]) => topDrop(x, y, z, FLUID_LAVA, X!, Z!) > 0);
+  /** Whether voxel (x, y, z), holding fluid type `t`, has its drawn top below its voxel's top at any of its four corners. */
+  const topBelow = (x: number, y: number, z: number, t: number): boolean =>
+    [[x, z], [x + 1, z], [x + 1, z + 1], [x, z + 1]].some(([X, Z]) => topDrop(x, y, z, t, X!, Z!) > 0);
   const opaque: number[] = [];
   const water: number[] = [];
   for (let y = -64; y < 320; y++) {
@@ -202,14 +205,17 @@ export function bruteFaces(view: RegionView, cx: number, cz: number, t: MeshTabl
         // FACES is in face order (north, east, south, west, up, down), so the keys come out sorted.
         for (const [f, dx, dy, dz, opp] of FACES) {
           const ns = blockAt(x + dx, y + dy, z + dz);
-          if (pass[ns] === PASS_OPAQUE && ((fullFaces[ns]! >> opp) & 1) !== 0) continue;
+          const occluded = pass[ns] === PASS_OPAQUE && ((fullFaces[ns]! >> opp) & 1) !== 0;
+          // A fluid's lowered top never reaches the plane it shares with the block above, so an occluder there does not
+          // hide it (SP7a spec §6.2; rulings R27 item 3).
+          if (occluded && !(dy > 0 && (wet || lava) && topBelow(x, y, z, ft))) continue;
           const nt = typeAt(x + dx, y + dy, z + dz);
-          if (solid && !(ps === PASS_CUTOUT && ns === s && (leaves === undefined || leaves[s] === 0))) opaque.push(faceKey(lx, y, lz, f));
+          if (solid && !occluded && !(ps === PASS_CUTOUT && ns === s && (leaves === undefined || leaves[s] === 0))) opaque.push(faceKey(lx, y, lz, f));
           if (lava && (nt !== FLUID_LAVA || (dy === 0 && stripShows(x, y, z, dx, dz, FLUID_LAVA, FLUID_LAVA)))) opaque.push(faceKey(lx, y, lz, f));
           if (!wet) continue;
           const shows = nt === FLUID_NONE ? true
             : dy > 0 ? nt === FLUID_LAVA
-              : dy < 0 ? nt === FLUID_LAVA && lavaTopBelow(x, y - 1, z)
+              : dy < 0 ? nt === FLUID_LAVA && topBelow(x, y - 1, z, FLUID_LAVA)
                 : stripShows(x, y, z, dx, dz, FLUID_WATER, nt);
           if (shows) water.push(faceKey(lx, y, lz, f));
         }
