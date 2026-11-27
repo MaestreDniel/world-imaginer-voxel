@@ -31,15 +31,22 @@ const DIR = 'test/unit';
  * (densityFast 39 s, carve 21 s, densityDefaults 19 s, floatingIslands 18 s); `rest` the other 285 files (about 595 s).
  * SP7a Task 13 (its spec §13.7, §14; the plan's Spec correction 5): `livenessSp7a` (the aquifer leaves' verdicts and
  * witnesses) joins `liveness` with the other liveness files.
+ *
+ * SP7a Task 55a (spec §14's lever (1)): rebalanced by the file times of eight runs (45760011056 #1-#2, 45875154988,
+ * 45915825910, 45927748952 #1-#2, 45940815116, 45942682469; each file's median). The shards summed heavy-a 369 s,
+ * heavy-b 571 s, liveness 668 s and rest 757 s (its slowest terrainScatter 57 s, water 50 s, springs 44 s, aquifer 30 s
+ * and simEdits 29 s, the SP7a files the plan names into the heavy shards); the job is about its longest file
+ * (livenessSp7a 232 s, cavesMetric 211 s, surfaceFuzz 153 s) or its sum over about 2.6. Those five join `heavy-a`
+ * (579 s); densityFast (36 s) and carve (22 s) leave `liveness` (610 s) for `rest` (605 s); `heavy-b` stays (571 s).
  */
 const named = (...names) => names.map((n) => `${DIR}/${n}.test.ts`);
 export const SHARDS = {
   'heavy-a': named('surfaceFuzz', 'floatingRules', 'fieldSlice', 'relight', 'zeroAlloc', 'reviewSlices', 'tile', 'caveContinuity',
-    'caveTags', 'splineFixtures', 'meshXray'),
+    'caveTags', 'splineFixtures', 'meshXray', 'terrainScatter', 'water', 'springs', 'aquifer', 'simEdits'),
   'heavy-b': named('cavesMetric', 'sliceJob', 'workerPool', 'treeMutator', 'terrainHeap', 'terrainStage', 'carverPaths',
     'surfaceProbe', 'columnStage', 'modifyMode'),
-  liveness: named('liveness', 'livenessBands', 'livenessSp6b', 'livenessCaveBiomes', 'livenessSp7a', 'densityFast', 'carve',
-    'densityDefaults', 'floatingIslands'),
+  liveness: named('liveness', 'livenessBands', 'livenessSp6b', 'livenessCaveBiomes', 'livenessSp7a', 'densityDefaults',
+    'floatingIslands'),
   rest: null,
 };
 

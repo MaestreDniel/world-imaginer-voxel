@@ -29,13 +29,14 @@ import { SHARDS } from '../../.github/scripts/unitShards.mjs';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 
 const unitFiles = (...names: string[]): string[] => names.map((n) => `test/unit/${n}.test.ts`);
+// SP7a Task 55a: terrainScatter, water, springs, aquifer and simEdits (the slowest of rest) join heavy-a.
 const HEAVY_A = unitFiles('surfaceFuzz', 'floatingRules', 'fieldSlice', 'relight', 'zeroAlloc', 'reviewSlices', 'tile', 'caveContinuity',
-  'caveTags', 'splineFixtures', 'meshXray');
+  'caveTags', 'splineFixtures', 'meshXray', 'terrainScatter', 'water', 'springs', 'aquifer', 'simEdits');
 const HEAVY_B = unitFiles('cavesMetric', 'sliceJob', 'workerPool', 'treeMutator', 'terrainHeap', 'terrainStage', 'carverPaths',
   'surfaceProbe', 'columnStage', 'modifyMode');
-// SP7a Task 13: livenessSp7a (the aquifer leaves) joins the liveness files.
-const LIVENESS = unitFiles('liveness', 'livenessBands', 'livenessSp6b', 'livenessCaveBiomes', 'livenessSp7a', 'densityFast', 'carve',
-  'densityDefaults', 'floatingIslands');
+// SP7a Task 13: livenessSp7a (the aquifer leaves) joins the liveness files; Task 55a moves densityFast and carve to rest.
+const LIVENESS = unitFiles('liveness', 'livenessBands', 'livenessSp6b', 'livenessCaveBiomes', 'livenessSp7a', 'densityDefaults',
+  'floatingIslands');
 
 describe('shardArgs (SP4b spec §1.1)', () => {
   test('the unit table (SP6b Task 58, ruling U14): heavy-a, heavy-b and liveness are their files, rest excludes each of them', () => {
@@ -43,12 +44,13 @@ describe('shardArgs (SP4b spec §1.1)', () => {
     expect(shardArgs(SHARDS, 'heavy-a')).toEqual(HEAVY_A);
     expect(shardArgs(SHARDS, 'heavy-b')).toEqual(HEAVY_B);
     expect(shardArgs(SHARDS, 'liveness')).toEqual(LIVENESS);
-    // The 21 heavy files of SP6b Task 31 are heavy-a's and heavy-b's.
-    expect([...HEAVY_A, ...HEAVY_B]).toHaveLength(21);
+    // The 21 heavy files of SP6b Task 31 and SP7a Task 55a's five are heavy-a's and heavy-b's.
+    expect([...HEAVY_A, ...HEAVY_B]).toHaveLength(26);
     const named = [...HEAVY_A, ...HEAVY_B, ...LIVENESS];
-    expect(new Set(named).size).toBe(30);
+    expect(new Set(named).size).toBe(33);
+    for (const f of unitFiles('densityFast', 'carve')) expect(named).not.toContain(f);
     const rest = shardArgs(SHARDS, 'rest');
-    expect(rest).toHaveLength(2 * 30);
+    expect(rest).toHaveLength(2 * 33);
     expect(rest).toEqual(named.flatMap((f) => ['--exclude', f]));
     for (const f of named) expect(existsSync(`${ROOT}${f}`), `${f} does not exist`).toBe(true);
   });
