@@ -13,7 +13,9 @@
  * by column (`METRICS_SLICE`, Stage 2 item 1: two slice shards each and the merge, `MERGE`, which `metrics-merge` runs)
  * and folds `edit-clipboard` into the preset caves group and `persist` into the biomes group. The metrics-fast table (SP4b spec §9's lever, taken after SP4c's
  * merge run) is `terrain-caves` (SP6a's `caves` folded into `terrain` by Task 58), `surface` and Task 58's `persist`,
- * plus `rest`. With `check`, 20 parallel test jobs (SP6b spec §13).
+ * plus `rest`. With `check`, 20 parallel test jobs (SP6b spec §13). SP7a Task 55's lever (0) (spec §14; rulings R27 item 2)
+ * moves `waterfalls.metric.ts` off `render`: its sample in two halves riding the large profile's terrain slices
+ * (`terrain-large-waterfalls-slice-k`), summed by the merge.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
@@ -60,20 +62,21 @@ describe('shardArgs (SP4b spec §1.1)', () => {
     const S = 'test/metrics/surface.metric.ts';
     const C = 'test/metrics/caves.metric.ts';
     expect(Object.keys(METRIC_SHARDS)).toEqual([
-      'terrain-surface-default', 'terrain-large-slice-0', 'terrain-large-slice-1', 'surface-large-slice-0', 'surface-large-slice-1', 'render',
+      'terrain-surface-default', 'terrain-large-waterfalls-slice-0', 'terrain-large-waterfalls-slice-1', 'surface-large-slice-0',
+      'surface-large-slice-1', 'render',
       'caves', 'caves-presets-edit-clipboard', 'caves-biomes-persist', 'region', 'rest',
     ]);
+    const W = 'test/metrics/waterfalls.metric.ts';
     const large = (slice: string): Record<string, string> => ({ METRICS_PROFILES: 'large_biomes', METRICS_SLICE: slice });
     expect(METRIC_SHARDS).toEqual({
       'terrain-surface-default': { files: [T, 'test/metrics/apply.metric.ts', S], env: { METRICS_PROFILES: 'default' } },
-      'terrain-large-slice-0': { files: [T], env: large('0/2') },
-      'terrain-large-slice-1': { files: [T], env: large('1/2') },
+      // SP7a Task 55's lever (0) (spec §14; rulings R27 item 2): A5.waterfalls' sample in two halves riding the large
+      // profile's terrain slices, off `render`.
+      'terrain-large-waterfalls-slice-0': { files: [T, W], env: large('0/2') },
+      'terrain-large-waterfalls-slice-1': { files: [T, W], env: large('1/2') },
       'surface-large-slice-0': { files: [S], env: large('0/2') },
       'surface-large-slice-1': { files: [S], env: large('1/2') },
-      render: [
-        'test/metrics/render.metric.ts', 'test/metrics/light.metric.ts', 'test/metrics/g1.metric.ts', 'test/metrics/stream.metric.ts',
-        'test/metrics/waterfalls.metric.ts',
-      ],
+      render: ['test/metrics/render.metric.ts', 'test/metrics/light.metric.ts', 'test/metrics/g1.metric.ts', 'test/metrics/stream.metric.ts'],
       caves: { files: [C], env: { METRICS_CAVE_GROUPS: 'default' } },
       'caves-presets-edit-clipboard': {
         files: [C, 'test/metrics/edit.metric.ts', 'test/metrics/clipboard.metric.ts'], env: { METRICS_CAVE_GROUPS: 'presets' },
@@ -82,8 +85,8 @@ describe('shardArgs (SP4b spec §1.1)', () => {
       region: ['test/metrics/region.metric.ts'],
       rest: null,
     });
-    // The merge (the `metrics-merge` job): both sliced files with the slices' profile, reading the two slices.
-    expect(METRIC_MERGE).toEqual({ files: [T, S], env: large('merge/2') });
+    // The merge (the `metrics-merge` job): the three sliced files with the slices' profile, reading the two slices.
+    expect(METRIC_MERGE).toEqual({ files: [T, S, W], env: large('merge/2') });
     expect(sliceProblems(METRIC_SHARDS, METRIC_MERGE)).toEqual([]);
     // An env shard selects its files and sets its env; a plain shard sets none.
     expect(shardArgs(METRIC_SHARDS, 'terrain-surface-default')).toEqual([T, 'test/metrics/apply.metric.ts', S]);
@@ -99,7 +102,8 @@ describe('shardArgs (SP4b spec §1.1)', () => {
     const shardsOf = (f: string): string[] => Object.entries(METRIC_SHARDS)
       .filter(([, s]) => s !== null && (Array.isArray(s) ? s : s.files).includes(f)).map(([n]) => n);
     expect(shardsOf('test/metrics/apply.metric.ts')).toEqual(['terrain-surface-default']);
-    expect(shardsOf(T)).toEqual(['terrain-surface-default', 'terrain-large-slice-0', 'terrain-large-slice-1']);
+    expect(shardsOf(T)).toEqual(['terrain-surface-default', 'terrain-large-waterfalls-slice-0', 'terrain-large-waterfalls-slice-1']);
+    expect(shardsOf(W)).toEqual(['terrain-large-waterfalls-slice-0', 'terrain-large-waterfalls-slice-1']);
     expect(shardsOf(S)).toEqual(['terrain-surface-default', 'surface-large-slice-0', 'surface-large-slice-1']);
     expect(shardsOf(C)).toEqual(['caves', 'caves-presets-edit-clipboard', 'caves-biomes-persist']);
     for (const f of ['edit', 'clipboard', 'persist']) expect(shardsOf(`test/metrics/${f}.metric.ts`)).toHaveLength(1);
@@ -117,13 +121,14 @@ describe('shardArgs (SP4b spec §1.1)', () => {
     const r = spawnSync(process.execPath, ['.github/scripts/metricShards.mjs', 'check'], { cwd: ROOT, encoding: 'utf8' });
     expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
     expect(r.stdout).toMatch(/^terrain-surface-default: test\/metrics\/apply\.metric\.ts test\/metrics\/surface\.metric\.ts test\/metrics\/terrain\.metric\.ts$/m);
-    expect(r.stdout).toMatch(/^terrain-large-slice-1: test\/metrics\/terrain\.metric\.ts$/m);
+    expect(r.stdout).toMatch(/^terrain-large-waterfalls-slice-1: test\/metrics\/terrain\.metric\.ts test\/metrics\/waterfalls\.metric\.ts$/m);
+    expect(r.stdout).toMatch(/^render: test\/metrics\/g1\.metric\.ts test\/metrics\/light\.metric\.ts test\/metrics\/render\.metric\.ts test\/metrics\/stream\.metric\.ts$/m);
     expect(r.stdout).toMatch(/^surface-large-slice-0: test\/metrics\/surface\.metric\.ts$/m);
     expect(r.stdout).toMatch(/^region: test\/metrics\/region\.metric\.ts$/m);
     expect(r.stdout).toMatch(/^caves-presets-edit-clipboard: test\/metrics\/caves\.metric\.ts test\/metrics\/clipboard\.metric\.ts test\/metrics\/edit\.metric\.ts$/m);
     expect(r.stdout).toMatch(/^caves-biomes-persist: test\/metrics\/caves\.metric\.ts test\/metrics\/persist\.metric\.ts$/m);
     expect(r.stdout).toMatch(/shards cover the \d+ metrics-quick files exactly once/);
-    expect(r.stdout).toMatch(/^merge: test\/metrics\/terrain\.metric\.ts test\/metrics\/surface\.metric\.ts \(METRICS_PROFILES=large_biomes METRICS_SLICE=merge\/2\), its slices sound$/m);
+    expect(r.stdout).toMatch(/^merge: test\/metrics\/terrain\.metric\.ts test\/metrics\/surface\.metric\.ts test\/metrics\/waterfalls\.metric\.ts \(METRICS_PROFILES=large_biomes METRICS_SLICE=merge\/2\), its slices sound$/m);
   }, 120_000);
 
   test('the metrics-fast table (SP6b Task 58, ruling U14): terrain with caves, surface and persist, rest excludes the four', () => {

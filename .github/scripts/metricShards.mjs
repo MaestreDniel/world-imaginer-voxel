@@ -35,18 +35,29 @@ export const SHARDS = {
   // Stage 2 item 1): after U14 `terrain-large` and `surface-large` set the wall (4:22-5:56 and 3:30-6:06 in run
   // 44054778989, vitest 247-334 s and 254-347 s), so each runs as two column slices (`METRICS_SLICE`,
   // test/harness/columnSlices.ts: slice k draws every column and T4 site as the whole run and keeps draws k, k + 2, …),
-  // whose records `MERGE` below sums and gates.
-  'terrain-large-slice-0': { files: [`${DIR}/terrain.metric.ts`], env: { METRICS_PROFILES: 'large_biomes', METRICS_SLICE: '0/2' } },
-  'terrain-large-slice-1': { files: [`${DIR}/terrain.metric.ts`], env: { METRICS_PROFILES: 'large_biomes', METRICS_SLICE: '1/2' } },
+  // whose records `MERGE` below sums and gates. SP7a Task 55's lever (0) (spec §14; rulings R27 item 2): `A5.waterfalls`'
+  // steep-land sample (`waterfalls.metric.ts`, 138-320 s in `render`, the long pole at 6:32-7:35, run 45754217502 on; the
+  // SP7a spec's Exit evidence, CI at the exit) leaves `render` and is read in two halves, its lattice row slices k, k + 2,
+  // … (`METRICS_SLICE`, which it reads like these files; it ignores `METRICS_PROFILES`, reading the default profile), riding
+  // the two terrain slices, the metrics-quick jobs with the most slack (1:42-3:19, vitest 89-93 s in run 45942682469); the
+  // merge sums the halves' counts (`mergeSampleAccs`, equal to the whole scan's whatever the slicing) and gates them, so
+  // the sample is whole (rulings R23) and the job count stays 20.
+  'terrain-large-waterfalls-slice-0': {
+    files: [`${DIR}/terrain.metric.ts`, `${DIR}/waterfalls.metric.ts`], env: { METRICS_PROFILES: 'large_biomes', METRICS_SLICE: '0/2' },
+  },
+  'terrain-large-waterfalls-slice-1': {
+    files: [`${DIR}/terrain.metric.ts`, `${DIR}/waterfalls.metric.ts`], env: { METRICS_PROFILES: 'large_biomes', METRICS_SLICE: '1/2' },
+  },
   'surface-large-slice-0': { files: [`${DIR}/surface.metric.ts`], env: { METRICS_PROFILES: 'large_biomes', METRICS_SLICE: '0/2' } },
   'surface-large-slice-1': { files: [`${DIR}/surface.metric.ts`], env: { METRICS_PROFILES: 'large_biomes', METRICS_SLICE: '1/2' } },
   // SP4a spec §10 (D28): the renderer's and the light's metric files (R1, R2, R4, R5; L1, L2, DT1.light, S1.light),
   // with their cold region caches, and G1's static cells (a JSON read; ruling P53). SP4b spec §8.1, §9: R7's streaming
   // flight (`stream.metric.ts`: planned 20-30 s; measured 38 s in CI's first sharded run, run 40077412950, and about
   // 12 s alone on the laptop; final review GOV-1). SP7a Task 31 (spec §13.1, §14; rulings R20): `A5.waterfalls`' steep-land
-  // sample (`waterfalls.metric.ts`, quick and full only, about 3.6 CPU-min read in 4 worker threads) joins this shard,
-  // the one with the most slack (2:04 in run 45144707470), so the job count stays 20.
-  render: [`${DIR}/render.metric.ts`, `${DIR}/light.metric.ts`, `${DIR}/g1.metric.ts`, `${DIR}/stream.metric.ts`, `${DIR}/waterfalls.metric.ts`],
+  // sample (`waterfalls.metric.ts`, quick and full only, about 3.6 CPU-min read in 4 worker threads) joined this shard,
+  // then the one with the most slack (2:04 in run 45144707470); SP7a Task 55's lever (0) moved it to the terrain slices
+  // (above).
+  render: [`${DIR}/render.metric.ts`, `${DIR}/light.metric.ts`, `${DIR}/g1.metric.ts`, `${DIR}/stream.metric.ts`],
   // SP6a spec §10.1, §11 (D26): the caves' metrics (`caves.metric.ts`), in shards of their own (SP6a Task 30: 106 s
   // alone, cold region cache, before C1-C9). SP6b spec §13 L4: by group (`METRICS_CAVE_GROUPS`): the six default-group
   // regions (C1-C6, the default group's C7-C9 and their `carverReference`). 171 s.
@@ -83,12 +94,14 @@ export const SHARDS = {
 
 /**
  * The column slices' merge (SP6b spec §13 Stage 2 item 1; the user's ruling U15), run by the `metrics-merge` job after
- * metrics-quick: both sliced files with the slices' profile and `METRICS_SLICE=merge/2`, which read the four slices'
- * records (CI's artifacts), sum them and run every T1-T5, B3 and S1-S3, B4, B2 test of the whole large_biomes run on the
- * sums, generating nothing (`check` holds it to the slices, `sliceProblems`).
+ * metrics-quick: the sliced files with the slices' profile and `METRICS_SLICE=merge/2`, which read the slices' records
+ * (CI's artifacts), sum them and run every T1-T5, B3 and S1-S3, B4, B2 test of the whole large_biomes run, and
+ * `A5.waterfalls` on its whole sample (SP7a Task 55's lever (0)), on the sums, generating nothing (`check` holds it to the
+ * slices, `sliceProblems`).
  */
 export const MERGE = {
-  files: [`${DIR}/terrain.metric.ts`, `${DIR}/surface.metric.ts`], env: { METRICS_PROFILES: 'large_biomes', METRICS_SLICE: 'merge/2' },
+  files: [`${DIR}/terrain.metric.ts`, `${DIR}/surface.metric.ts`, `${DIR}/waterfalls.metric.ts`],
+  env: { METRICS_PROFILES: 'large_biomes', METRICS_SLICE: 'merge/2' },
 };
 
 cli(import.meta.url, shardTool({ project: 'metrics-quick', dir: DIR, suffix: '.metric.ts', shards: SHARDS, merge: MERGE }), 'metricShards.mjs');
