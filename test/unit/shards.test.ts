@@ -18,7 +18,7 @@
  * (`terrain-large-waterfalls-slice-k`), summed by the merge.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { SHARDS as FAST_SHARDS } from '../../.github/scripts/fastShards.mjs';
@@ -117,6 +117,20 @@ describe('shardArgs (SP4b spec §1.1)', () => {
     expect(rest.filter((a) => a === T)).toHaveLength(1);
     expect(rest.filter((a) => a === C)).toHaveLength(1);
     expect(rest).toHaveLength(2 * 13);
+  });
+
+  test('B5\'s lake windows ride caves-biomes-persist (SP7a Task 55b, spec §14\'s lever (2); rulings P53): their test sits in caves.metric.ts\'s biomes-group block, not in region.metric.ts', () => {
+    const title = 'B5 lakeAirAdjacent on T and B5.lakeSpill after settle over the lake windows';
+    const region = readFileSync(`${ROOT}test/metrics/region.metric.ts`, 'utf8');
+    const caves = readFileSync(`${ROOT}test/metrics/caves.metric.ts`, 'utf8');
+    expect(region).not.toContain(title);
+    expect(caves.split(title)).toHaveLength(2);
+    const block = caves.lastIndexOf('\nif (BIOMES_GROUP) {\n', caves.indexOf(title));
+    expect(block, 'the B5 test inside an if (BIOMES_GROUP) block').toBeGreaterThan(0);
+    expect(caves.slice(block, caves.indexOf(title)).match(/^}/m), 'no top-level block closes between').toBeNull();
+    // The biomes group's job runs caves.metric.ts with METRICS_CAVE_GROUPS=biomes, and region.metric.ts is its own shard.
+    expect(shardEnv(METRIC_SHARDS, 'caves-biomes-persist')).toEqual({ METRICS_CAVE_GROUPS: 'biomes' });
+    expect(shardArgs(METRIC_SHARDS, 'caves-biomes-persist')).toContain('test/metrics/caves.metric.ts');
   });
 
   test('node .github/scripts/metricShards.mjs check passes (vitest list: every metrics-quick file in its shards exactly as the table says)', () => {

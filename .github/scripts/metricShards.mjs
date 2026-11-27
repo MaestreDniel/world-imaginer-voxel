@@ -84,10 +84,13 @@ export const SHARDS = {
   // SP6b spec §12.2-§12.3, §13 (Task 27): the biomes group, the 19th job: `cave_heavy`'s two regions (C1.caveHeavy, C2
   // and C9 recorded on it) and the biome region (B3's border parts with each biome | plain pair's 2,000-face minimum,
   // the T window's re-check, the review poses); the spec's estimate 3:10-4:00 cold with Tasks 28 and 39's additions.
-  // With `persist` since U15 (above).
+  // With `persist` since U15 (above). SP7a Task 55b (spec §14's lever (2); rulings P53): B5's lake windows (28-38 s in
+  // `region`'s job, runs 45951397852 #1-#3) moved from `region.metric.ts` into `caves.metric.ts`'s biomes-group block,
+  // so they run here.
   'caves-biomes-persist': { files: [`${DIR}/caves.metric.ts`, `${DIR}/persist.metric.ts`], env: { METRICS_CAVE_GROUPS: 'biomes' } },
   // SP6b Task 58 (the user's ruling U14): DT1 and the region parts (`region.metric.ts`) out of `rest`, which ran
-  // 5:08-6:08 at the exit (vitest 325 s in run 44041739227 #4: region 274 s, noise 218 s, params 129 s).
+  // 5:08-6:08 at the exit (vitest 325 s in run 44041739227 #4: region 274 s, noise 218 s, params 129 s). Without B5's
+  // lake windows since SP7a Task 55b (above).
   region: [`${DIR}/region.metric.ts`],
   rest: null,
 };
