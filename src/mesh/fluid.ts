@@ -23,7 +23,9 @@
  *   with water above and a falling voxel are full height (drop 0 on every corner); bottom corners are 0;
  * - **depth:** every face of voxel i carries `depth[i]` (`fluidDepths`: the column's vertical water run, clamped to
  *   15) in its data word and its key;
- * - **light:** §5.3's smooth light per vertex, AO off;
+ * - **light:** §5.3's smooth light per vertex, AO off, sampled in the plane of the voxel the face looks into, except a
+ *   lowered top drawn under an occluder, sampled in its own voxel's plane (the occluder holds light 0; rulings R27
+ *   item 3);
  * - **merge:** per axis and slice, the greedy keys `(face, depth, cornerDrop×4)`, `(sky×4, block×4)` and
  *   `(layer, tint)` (spec §5.6; the third key is constant in SP4a's world, where a water voxel's state is air, and
  *   keeps a merged quad's words exact if a waterlogged state ever meshes here). A flat top (four equal drops) merges
@@ -292,8 +294,11 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
           const ns = blocks[q]!;
           const li = d * la + i * lu + j * lv;
           // An occluder hides the face, except a lowered top (DROPS ≠ 0), which never reaches the plane it shares with the
-          // block above (SP7a spec §6.2; rulings R27 item 3): only a top drawn full (falling, or the same fluid above) is culled.
-          if (pass[ns] === OPAQUE && (full[ns]! & oppBit) !== 0 && (f !== FACE_UP || DROPS[li] === 0)) continue;
+          // block above (SP7a spec §6.2; rulings R27 item 3): only a top drawn full (falling, or the same fluid above) is
+          // culled. A lowered top drawn under an occluder takes its light from its own voxel's plane, not the occluder's,
+          // which the light engine never enters (light 0).
+          const occluded = pass[ns] === OPAQUE && (full[ns]! & oppBit) !== 0;
+          if (occluded && (f !== FACE_UP || DROPS[li] === 0)) continue;
           const nt = typeOf(fluid[q]!);
           // Two voxels of one fluid share their corners, so only one drawn full beside one that is not can need a strip.
           if (nt === ft && (f >= FACE_UP || !(isFalling(fluid[v]!) || typeOf(fluid[v + UP]!) === ft))) continue;
@@ -323,7 +328,7 @@ export function meshFluid(p: PaddedSection, depth: Uint8Array, b: MeshBuilder, t
           const d3 = drops >>> sh3 & 15;
           const ka = (KA_PRESENT | kind | f | dep << KA_DEPTH
             | d0 << KA_DROP | d1 << (KA_DROP + 4) | d2 << (KA_DROP + 8) | d3 << (KA_DROP + 12)) >>> 0;
-          const kb = CORNER_LIGHT(light, blocks, solid, SMOOTH, q, su, sv, VERTS);
+          const kb = CORNER_LIGHT(light, blocks, solid, SMOOTH, occluded ? v : q, su, sv, VERTS);
           // A sloped top is one quad per voxel (SP7a spec §6.2): emitted here, never merged.
           if (f === FACE_UP && (d0 !== d1 || d1 !== d2 || d2 !== d3)) {
             emit(f, d, i, j, 1, 1, ka, kb, kc, b);

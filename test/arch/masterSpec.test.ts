@@ -3593,7 +3593,7 @@ describe('master spec amendments (SP7a §16)', () => {
     const s44 = text.slice(text.indexOf('### 4.4 '), text.indexOf('**Fluid mesh:**')).split('\n');
     const at = s44.indexOf('- translucent faces against a non-same-fluid neighbour that does not occlude them;');
     expect(at, 'the translucent bullet, now followed by the lowered top\'s').toBeGreaterThan(0);
-    expect(s44[at + 1]).toBe('- a fluid\'s up face (water\'s and lava\'s) whose top is lowered (below the voxel\'s top at any corner: a source at 8/9, a flowing level; the fluid mesh below) is drawn under an occluder too, since it never reaches the plane it shares with the block above; a top drawn full (falling) is culled by an occluder as any face (amended by SP7a, its spec §6.2; rulings R27 item 3).');
+    expect(s44[at + 1]).toBe('- a fluid\'s up face (water\'s and lava\'s) whose top is lowered (below the voxel\'s top at any corner: a source at 8/9, a flowing level; the fluid mesh below) is drawn under an occluder too, since it never reaches the plane it shares with the block above; a top drawn full (falling) is culled by an occluder as any face; such a lowered top takes its smooth light in its own voxel\'s plane, since the occluder holds none (amended by SP7a, its spec §6.2; rulings R27 item 3).');
   });
 
   test('§4.6/§4.10\'s water tier as built (SP7a spec §16 item 12)', () => {

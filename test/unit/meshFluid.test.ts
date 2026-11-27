@@ -851,6 +851,26 @@ describe('a lowered top under an occluder (SP7a spec §6.2; rulings R27 item 3)'
     expect(faces).toContain('8,9,8,4');
     for (const w of quads.find((q) => faceOf(q) === FACE_UP)!.words) expect(fieldsOf(w).cornerDrop).toBe(3);
   });
+
+  test('its light comes from the fluid voxel\'s own plane, not from the occluder (stone at light 0, as the light engine leaves it)', () => {
+    // A stone floor (y ≤ 7) and a stone ceiling (y 9) holding light 0; lit air and fluid between them at sky 14, block
+    // 14. Sampled at the ceiling, the top would read 0 at every vertex; sampled at the voxel, its in-plane neighbours
+    // are lit air.
+    const lit = (at: ReadonlyMap<number, number>): PaddedSection => paddedFrom(
+      (_x, y) => (y <= 7 || y === 9 ? STONE : AIR),
+      (_x, y) => (y <= 7 || y === 9 ? 0 : 0xEE),
+      (x, y, z) => at.get(padIndex(x, y, z)) ?? NO_FLUID,
+    );
+    const lavaQuads = mesh(lit(new Map([[padIndex(8, 8, 8), LAVA_SOURCE]])), depth).passes[0];
+    const waterQuads = mesh(lit(new Map([[padIndex(8, 8, 8), WATER_SOURCE]])), depth).passes[2];
+    const lavaTop = lavaQuads.find((q) => unpackSolid(q.words[0]!).face === FACE_UP)!;
+    const waterTop = waterQuads.find((q) => faceOf(q) === FACE_UP)!;
+    expect(lavaTop.words.map((w) => [unpackSolid(w).sky, unpackSolid(w).block])).toEqual([[14, 14], [14, 14], [14, 14], [14, 14]]);
+    expect(waterTop.words.map((w) => [fieldsOf(w).sky, fieldsOf(w).block])).toEqual([[14, 14], [14, 14], [14, 14], [14, 14]]);
+    // The sides, unchanged, sample the lit air beside them.
+    const east = waterQuads.find((q) => faceOf(q) === FACE_EAST)!;
+    expect(east.words.map((w) => [fieldsOf(w).sky, fieldsOf(w).block])).toEqual([[14, 14], [14, 14], [14, 14], [14, 14]]);
+  });
 });
 
 describe("R1's brute force in lockstep with the strips (SP7a spec §6.2, §13.3; ruling P11)", () => {
