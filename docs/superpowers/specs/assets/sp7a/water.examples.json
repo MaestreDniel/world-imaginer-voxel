@@ -1,0 +1,415 @@
+{
+  "id": "sp7a.water.examples",
+  "tier": "quick",
+  "seed": "42",
+  "head": "8c94c439065a81a354868c2438dbf3242abcab58",
+  "groups": [
+    "default",
+    "presets",
+    "biomes"
+  ],
+  "source": "caves.metric.ts on quick at head, METRICS_CAVE_GROUPS = default, presets, biomes one at a time: .out/sp7a.examples.<group>.json merged (rulings P22)",
+  "spawns": {
+    "default": {
+      "x": 0,
+      "z": 0
+    },
+    "large_biomes": {
+      "x": 0,
+      "z": 0
+    },
+    "archipelago": {
+      "x": 0,
+      "z": 0
+    },
+    "amplified": {
+      "x": 0,
+      "z": 0
+    },
+    "floating_islands": {
+      "x": 0,
+      "z": 0
+    },
+    "cave_heavy": {
+      "x": 0,
+      "z": 0
+    }
+  },
+  "poses": {
+    "waterfall1": {
+      "x": -652.5,
+      "y": 85,
+      "z": -88.5,
+      "yaw": 0,
+      "pitch": 0,
+      "voxel": [
+        -653,
+        105,
+        -114
+      ],
+      "component": 0,
+      "fall": 41,
+      "profile": "amplified",
+      "region": "seed '42' amplified R(-5, -1)",
+      "distance": 662.2978937004103,
+      "eye": {
+        "x": -632,
+        "y": 99.5,
+        "z": -100,
+        "yaw": 301.4,
+        "pitch": -9.5
+      },
+      "eyeNote": "the computed eye (24 blocks out at the fall's mid-height, y 85) stands in the lake at the fall's foot (its surface at y 87), whose water hides the fall; the eye is shots.mjs' aimed eye at the falling voxel (-653, 95, -113), above the lake (a clear line, 24.3 blocks; Task 51), checked by its screenshot"
+    },
+    "waterfall2": {
+      "x": -510.5,
+      "y": 115,
+      "z": -114.5,
+      "yaw": 90,
+      "pitch": 0,
+      "voxel": [
+        -486,
+        124,
+        -115
+      ],
+      "component": 0,
+      "fall": 19,
+      "profile": "amplified",
+      "region": "seed '42' amplified R(-5, -1)",
+      "distance": 498.8191054881519
+    },
+    "waterfall3": {
+      "x": -491.5,
+      "y": 164.5,
+      "z": -132.5,
+      "yaw": 180,
+      "pitch": 0,
+      "voxel": [
+        -492,
+        173,
+        -108
+      ],
+      "component": 0,
+      "fall": 18,
+      "profile": "amplified",
+      "region": "seed '42' amplified R(-5, -1)",
+      "distance": 503.11877325339395
+    },
+    "islandFall": {
+      "x": -314.5,
+      "y": 165.5,
+      "z": 60.5,
+      "yaw": 180,
+      "pitch": 0,
+      "voxel": [
+        -315,
+        209,
+        85
+      ],
+      "component": 0,
+      "fall": 88,
+      "profile": "floating_islands",
+      "region": "seed '42' floating_islands R(-2, -1)",
+      "distance": 325.9148661844072
+    },
+    "lavaFall": {
+      "x": -1424.5,
+      "y": -45,
+      "z": 1435.5,
+      "yaw": 90,
+      "pitch": 0,
+      "voxel": [
+        -1408,
+        -43,
+        1435
+      ],
+      "component": 0,
+      "fall": 5,
+      "profile": "default",
+      "region": "seed '42' default biome region (-112, 80)",
+      "distance": 2010.402074213017,
+      "eye": {
+        "x": -1405,
+        "y": -42.5,
+        "z": 1447,
+        "yaw": 347.7,
+        "pitch": -9.6
+      },
+      "eyeNote": "the computed eye (16 blocks out, level) stands inside rock; the eye is Task 26's aimed eye for this spring (shots.mjs: a clear line to the voxel (-1408, -45, 1435), 11.9 blocks), checked by its screenshot"
+    },
+    "lavaPool": {
+      "x": -1354.5,
+      "y": -49.5,
+      "z": 1328.5,
+      "yaw": 90,
+      "pitch": -30,
+      "voxel": [
+        -1355,
+        -51,
+        1328
+      ],
+      "component": 0,
+      "fall": 0,
+      "profile": "default",
+      "region": "seed '42' default biome region (-112, 80)",
+      "distance": 1897.2565720007403,
+      "eye": {
+        "x": -1350,
+        "y": -47.5,
+        "z": 1329,
+        "yaw": 276.3,
+        "pitch": -33.5
+      },
+      "eyeNote": "the pool is one lava voxel at the foot of a one-wide slot right under the computed eye, which its view 30° down along the pocket does not show; the eye is shots.mjs' aimed eye at the pool's voxel (a clear line, 5.4 blocks; Task 51), checked by its screenshot"
+    },
+    "floodedUnderSea": {
+      "x": 189.5,
+      "y": 38.5,
+      "z": -133.5,
+      "yaw": 90,
+      "pitch": 0,
+      "voxel": [
+        189,
+        38,
+        -134
+      ],
+      "component": 1021,
+      "profile": "archipelago",
+      "region": "seed '42' archipelago R(1, -2)",
+      "distance": 231.80271784429104
+    },
+    "dryBelowSea": {
+      "x": 13.5,
+      "y": 40.5,
+      "z": 0.5,
+      "yaw": 90,
+      "pitch": 0,
+      "voxel": [
+        13,
+        40,
+        0
+      ],
+      "component": 4887,
+      "profile": "default",
+      "region": "seed '42' default (-16, -16)",
+      "distance": 13.509256086106296
+    },
+    "riverMouth": null,
+    "lake": {
+      "x": -186.5,
+      "y": 131,
+      "z": 80.5,
+      "yaw": 0,
+      "pitch": -45,
+      "voxel": [
+        -187,
+        122,
+        80
+      ],
+      "component": 0,
+      "profile": "large_biomes",
+      "region": "seed '42' large_biomes (-16, -16)",
+      "distance": 203.13173065771878
+    },
+    "coastFancy": {
+      "x": 199.5,
+      "y": 65.5,
+      "z": -87.5,
+      "yaw": 0,
+      "pitch": -10,
+      "voxel": [
+        199,
+        63,
+        -88
+      ],
+      "component": 0,
+      "profile": "archipelago",
+      "region": "seed '42' archipelago R(1, -2)",
+      "distance": 217.84512847433606
+    },
+    "underwater": {
+      "x": 208.5,
+      "y": 58,
+      "z": -90.5,
+      "yaw": 0,
+      "pitch": 0,
+      "voxel": [
+        208,
+        58,
+        -91
+      ],
+      "component": 0,
+      "profile": "archipelago",
+      "region": "seed '42' archipelago R(1, -2)",
+      "distance": 227.29386265361416
+    },
+    "spillSlope": {
+      "x": -441,
+      "y": 128,
+      "z": 74,
+      "yaw": 0,
+      "pitch": -26.6,
+      "voxel": [
+        -444,
+        139,
+        62
+      ],
+      "component": 0,
+      "fall": 17,
+      "profile": "amplified",
+      "region": "seed '42' amplified R(-5, -1)",
+      "distance": 447.88223898699084
+    },
+    "wallFront1": {
+      "x": 41.5,
+      "y": 29.5,
+      "z": 3.5,
+      "yaw": 270,
+      "pitch": 0,
+      "voxel": [
+        25,
+        29,
+        3
+      ],
+      "component": 0,
+      "profile": "cave_heavy",
+      "region": "seed '42' cave_heavy (-16, -16)",
+      "distance": 25.739075352467502,
+      "dry": [
+        "E"
+      ],
+      "side": "E",
+      "regionWaterWall": 852.0009566326531,
+      "eye": {
+        "x": 32,
+        "y": 39.5,
+        "z": -14,
+        "yaw": 200.4,
+        "pitch": -28.2
+      },
+      "verdict": "acceptable; handed to SP7b's C7.waterWall definition (the user, Task 47: \"quedan aceptables, anotamos para SP7b\")"
+    },
+    "wallFront2": {
+      "x": 0.5,
+      "y": 48.5,
+      "z": 14.5,
+      "yaw": 180,
+      "pitch": 0,
+      "voxel": [
+        0,
+        48,
+        30
+      ],
+      "component": 0,
+      "profile": "cave_heavy",
+      "region": "seed '42' cave_heavy (-16, -16)",
+      "distance": 30.50409808533929,
+      "dry": [
+        "N",
+        "E"
+      ],
+      "side": "N",
+      "regionWaterWall": 852.0009566326531,
+      "eye": {
+        "x": 20,
+        "y": 52.5,
+        "z": 41,
+        "yaw": 298.3,
+        "pitch": -10.2
+      },
+      "verdict": "acceptable; handed to SP7b's C7.waterWall definition (the user, Task 47: \"quedan aceptables, anotamos para SP7b\")"
+    },
+    "wallFront3": {
+      "x": -77.5,
+      "y": -36.5,
+      "z": -10.5,
+      "yaw": 90,
+      "pitch": 0,
+      "voxel": [
+        -62,
+        -37,
+        -11
+      ],
+      "component": 0,
+      "profile": "default",
+      "region": "seed '42' default (-16, -16)",
+      "distance": 62.38990302925626,
+      "dry": [
+        "W"
+      ],
+      "side": "W",
+      "regionWaterWall": 582.9480229591837,
+      "eye": {
+        "x": -65,
+        "y": -36.5,
+        "z": -13,
+        "yaw": 125.5,
+        "pitch": 0
+      },
+      "verdict": "acceptable; handed to SP7b's C7.waterWall definition (the user, Task 47: \"quedan aceptables, anotamos para SP7b\")"
+    },
+    "wallFront4": {
+      "x": -77.5,
+      "y": -5.5,
+      "z": 13.5,
+      "yaw": 270,
+      "pitch": 0,
+      "voxel": [
+        -94,
+        -6,
+        13
+      ],
+      "component": 0,
+      "profile": "cave_heavy",
+      "region": "seed '42' cave_heavy (-16, -16)",
+      "distance": 94.469571820772,
+      "dry": [
+        "E"
+      ],
+      "side": "E",
+      "regionWaterWall": 852.0009566326531,
+      "eye": {
+        "x": -110,
+        "y": 6.5,
+        "z": 28,
+        "yaw": 48.7,
+        "pitch": -28.6
+      },
+      "verdict": "acceptable; handed to SP7b's C7.waterWall definition (the user, Task 47: \"quedan aceptables, anotamos para SP7b\")"
+    },
+    "wallFront5": {
+      "x": -106.5,
+      "y": 62.5,
+      "z": -42.5,
+      "yaw": 180,
+      "pitch": 0,
+      "voxel": [
+        -107,
+        62,
+        -27
+      ],
+      "component": 0,
+      "profile": "cave_heavy",
+      "region": "seed '42' cave_heavy (-16, -16)",
+      "distance": 109.74743732771167,
+      "dry": [
+        "N",
+        "W"
+      ],
+      "side": "N",
+      "regionWaterWall": 852.0009566326531,
+      "eye": {
+        "x": -128,
+        "y": 64.5,
+        "z": -23,
+        "yaw": 80.8,
+        "pitch": -5.2
+      },
+      "verdict": "acceptable; handed to SP7b's C7.waterWall definition (the user, Task 47: \"quedan aceptables, anotamos para SP7b\")"
+    }
+  },
+  "missing": [
+    "riverMouth"
+  ],
+  "truncated": "none: the scanned seed '42' regions hold no water spring counted by A5.springsTruncated (0 in all groups)"
+}

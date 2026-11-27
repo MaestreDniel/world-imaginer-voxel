@@ -108,8 +108,11 @@ import {
 } from '../tools/uiSmoke';
 import { profileHash, SP6B_AT, SP6B_MAP, SP6B_POSE_IDS, SP6B_POSES, SP6B_RAISED, SP6B_SHOTS, SP6B_XRAY_PITCH, sp6bLink, sp6bPose, sp6bShotQuery } from '../tools/uiSmoke';
 import {
-  blueDominant, boxMean, LAVA_POOL_Y, lavaSliceQuery, pixelsWithin, SLICE_LAVA, SURFACED_Y, WATER_PIXEL, WATER_PIXEL_TOL, WATER_POSES, WATER_SETTING,
+  blueDominant, boxMean, LAVA_POOL_Y, lavaSliceQuery, pixelsWithin, SLICE_LAVA, SURFACED_Y, WATER_PIXEL, WATER_PIXEL_TOL, WATER_SETTING,
   WATER_TIER_BOX, waterPageQuery, XRAY_FLUID_LEGEND,
+} from '../tools/uiSmoke';
+import {
+  FAST_FANCY_CLIP, SP7A_AT, SP7A_NIGHT_VISION, SP7A_POSE_IDS, SP7A_EYES, SP7A_POSES, SP7A_SHOTS, sp7aLink, sp7aPose, sp7aShotQuery, type Sp7aPoseId, type Sp7aProfile,
 } from '../tools/uiSmoke';
 import { mountSettingsPanel } from '../../src/ui/settingsPanel';
 import { cavesLegend } from '../../src/ui/inspector/sliceModel';
@@ -2433,7 +2436,9 @@ describe('UI smoke test: the water step (SP7a spec §13.9)', () => {
   });
 
   test('each pose opens on its profile\'s world at its corner (RD 4, batch, the hook); the lava slice\'s eye in the pool\'s voxel, so Cave slice cuts the pool\'s y; the surface reading over the sea, the underwater pose under it', () => {
-    for (const [id, pose] of Object.entries(WATER_POSES)) {
+    // The step's three poses are SP7A_POSES' (rulings P55: the review poses, no literals of the step's own).
+    for (const id of ['coastFancy', 'underwater', 'lavaPool'] as const) {
+      const pose = SP7A_POSES[id];
       const url = new URL(`/${waterPageQuery(pose)}`, 'http://127.0.0.1');
       const q = parseWorldQuery(url.searchParams);
       expect([q.at, q.y, q.yaw, q.pitch, q.rd, q.renderer, q.shot], id).toEqual([
@@ -2444,16 +2449,16 @@ describe('UI smoke test: the water step (SP7a spec §13.9)', () => {
       expect(readMapHash(url.hash), id).toMatchObject({ seed: '42', profile: pose.profile, patch: {} });
       expect(parseWorldQuery(new URL(`/${waterPageQuery(pose, '&shot=1')}`, 'http://127.0.0.1').searchParams).shot, id).toBe(true);
     }
-    expect([WATER_POSES.coastFancy.profile, WATER_POSES.underwater.profile, WATER_POSES.lavaPool.profile]).toEqual(['archipelago', 'archipelago', 'default']);
+    expect([SP7A_POSES.coastFancy.profile, SP7A_POSES.underwater.profile, SP7A_POSES.lavaPool.profile]).toEqual(['archipelago', 'archipelago', 'default']);
     // The lava pool's voxel: 1.5 under the pose's eye (`a5Examples`' rule); the slice's page puts the eye in its
     // middle.
     expect(Number.isInteger(LAVA_POOL_Y)).toBe(true);
-    expect(LAVA_POOL_Y).toBe(WATER_POSES.lavaPool.y - 1.5);
+    expect(LAVA_POOL_Y).toBe(SP7A_POSES.lavaPool.y - 1.5);
     const lq = parseWorldQuery(new URL(`/${lavaSliceQuery()}`, 'http://127.0.0.1').searchParams);
-    expect([lq.at, lq.y, lq.yaw, lq.pitch]).toEqual([{ x: Math.floor(WATER_POSES.lavaPool.x), z: Math.floor(WATER_POSES.lavaPool.z) }, LAVA_POOL_Y + 0.5, 90, -30]);
+    expect([lq.at, lq.y, lq.yaw, lq.pitch]).toEqual([{ x: Math.floor(SP7A_POSES.lavaPool.x), z: Math.floor(SP7A_POSES.lavaPool.z) }, LAVA_POOL_Y + 0.5, 90, -30]);
     expect(caveSliceY(XRAY_ALL, lq.y!)).toBe(LAVA_POOL_Y);
     // Under the sea surface (y 63 + 8/9) at the pose; 2 blocks over it once surfaced.
-    expect(WATER_POSES.underwater.y + 1).toBeLessThan(SEA_LEVEL);
+    expect(SP7A_POSES.underwater.y + 1).toBeLessThan(SEA_LEVEL);
     expect(SURFACED_Y).toBe(SEA_LEVEL + 3);
   });
 
@@ -2484,5 +2489,197 @@ describe('UI smoke test: the water step (SP7a spec §13.9)', () => {
     expect(lava).toContain("worldKey(p, 'c', SMOKE_KEYS.xrayColor, 67)");
     expect(body('underwaterChecks')).toContain("code: 'Space'");
     expect(DEFAULT_KEYMAP.find((k) => k.action === 'up')!.bindings).toEqual([{ kind: 'code', code: 'Space' }]);
+  });
+});
+
+describe('UI smoke test: SP7a\'s review links and screenshots (SP7a spec §13.9, D16)', () => {
+  type WaterPose = {
+    x: number; y: number; z: number; yaw: number; pitch: number; voxel: [number, number, number]; component: number; fall?: number;
+    profile: Sp7aProfile; region: string; distance: number; dry?: string[]; side?: string; regionWaterWall?: number;
+    eye?: { x: number; y: number; z: number; yaw: number; pitch: number }; eyeNote?: string; verdict?: string;
+  };
+  /** The committed merge of the caves runs' `.out/sp7a.examples.<group>.json` (rulings P22). */
+  const readExamples = () => JSON.parse(readFileSync(new URL('../../docs/superpowers/specs/assets/sp7a/water.examples.json', import.meta.url), 'utf8')) as {
+    id: string; tier: string; seed: string; head: string; groups: string[]; poses: Record<string, WaterPose | null>; missing: string[]; truncated: string;
+  };
+  const src = readFileSync(new URL('../tools/uiSmoke.ts', import.meta.url), 'utf8');
+  /** §13.9's links in order: the poses, the water-wall fronts (no `truncatedN`: none is counted). */
+  const LINKS = [
+    'waterfall1', 'waterfall2', 'waterfall3', 'islandFall', 'lavaFall', 'lavaPool', 'floodedUnderSea', 'dryBelowSea', 'riverMouth', 'lake',
+    'coastFancy', 'underwater', 'spillSlope', 'wallFront1', 'wallFront2', 'wallFront3', 'wallFront4', 'wallFront5',
+  ];
+  const WALL_FRONTS = ['wallFront1', 'wallFront2', 'wallFront3', 'wallFront4', 'wallFront5'] as const;
+  const VERDICT = 'acceptable; handed to SP7b\'s C7.waterWall definition (the user, Task 47: "quedan aceptables, anotamos para SP7b")';
+
+  test('the committed water.examples.json: the quick tier at seed 42 and its HEAD, §13.9\'s links in order; no riverMouth found; no truncated spring, which the file says', () => {
+    const examples = readExamples();
+    expect([examples.id, examples.tier, examples.seed]).toEqual(['sp7a.water.examples', 'quick', '42']);
+    expect(examples.head).toMatch(/^[0-9a-f]{40}$/);
+    expect(examples.groups).toEqual(['default', 'presets', 'biomes']);
+    expect(Object.keys(examples.poses)).toEqual(LINKS);
+    expect(examples.missing).toEqual(['riverMouth']);
+    expect(examples.poses.riverMouth).toBeNull();
+    expect(Object.keys(examples.poses).filter((id) => /^truncated\d/.test(id))).toEqual([]);
+    expect(examples.truncated).toMatch(/^none: the scanned seed '42' regions hold no water spring counted by A5\.springsTruncated/);
+    // The three tallest visible falls within 2 km of spawn, tallest first; the island's on floating_islands.
+    const falls = ['waterfall1', 'waterfall2', 'waterfall3'].map((id) => examples.poses[id]!);
+    expect(falls.map((f) => f.fall)).toEqual([...falls.map((f) => f.fall!)].sort((a, b) => b - a));
+    for (const f of falls) expect(f.distance).toBeLessThanOrEqual(2000);
+    expect(examples.poses.islandFall!.profile).toBe('floating_islands');
+    // Each fall's eye 24 blocks out at the fall's mid-height, level, facing it.
+    for (const f of falls) {
+      const [fx, , fz] = lookVector(f.yaw, 0);
+      const target = [f.x + 24 * fx, f.z + 24 * fz];
+      expect(f.pitch).toBe(0);
+      expect(Math.abs(target[0]! - (f.voxel[0] + 0.5)) + Math.abs(target[1]! - (f.voxel[2] + 0.5))).toBeCloseTo(1, 9);
+      expect(f.y).toBe(f.voxel[1] + 0.5 - f.fall! / 2);
+    }
+    // The fronts: nearest spawn first, no two within 32 blocks, each with Task 47's eye and the user's verdict.
+    const fronts = WALL_FRONTS.map((id) => examples.poses[id]!);
+    expect(fronts.map((f) => f.distance)).toEqual([...fronts.map((f) => f.distance)].sort((a, b) => a - b));
+    for (let i = 0; i < fronts.length; i++) {
+      for (let j = 0; j < i; j++) expect(Math.hypot(...fronts[i]!.voxel.map((v, k) => v - fronts[j]!.voxel[k]!))).toBeGreaterThanOrEqual(32);
+      expect(fronts[i]!.eye, WALL_FRONTS[i]).toBeDefined();
+      expect(fronts[i]!.verdict, WALL_FRONTS[i]).toBe(VERDICT);
+    }
+  });
+
+  test('SP7A_POSES mirror the committed poses (x, y, z, yaw, pitch, profile) and SP7A_EYES their eyes; a link opens at its eye where one is recorded; the water step reads SP7A_POSES, with no literals of its own (rulings P55)', () => {
+    const examples = readExamples();
+    expect(SP7A_POSE_IDS).toEqual(LINKS.filter((id) => examples.poses[id] !== null));
+    for (const id of SP7A_POSE_IDS) {
+      const e = examples.poses[id]!;
+      expect(SP7A_POSES[id], id).toEqual({ x: e.x, y: e.y, z: e.z, yaw: e.yaw, pitch: e.pitch, profile: e.profile });
+      const eye = (SP7A_EYES as Partial<Record<Sp7aPoseId, unknown>>)[id];
+      expect(eye, id).toEqual(e.eye);
+      const { at: _at, ...opened } = sp7aPose(id);
+      expect(opened, id).toEqual({ ...SP7A_POSES[id], ...e.eye });
+    }
+    // An eye beside the computed pose only where the computed one shows nothing of the pose, each with why: the fronts
+    // (Task 47's eyes, the user's verdict beside each), lavaFall's in rock, waterfall1's in the lake at its foot, the
+    // lava pool under its eye's view.
+    expect(Object.keys(SP7A_EYES)).toEqual(['waterfall1', 'lavaFall', 'lavaPool', ...WALL_FRONTS]);
+    expect(examples.poses.lavaFall!.eyeNote).toMatch(/^the computed eye \(16 blocks out, level\) stands inside rock; /);
+    expect(examples.poses.waterfall1!.eyeNote).toMatch(/^the computed eye \(24 blocks out at the fall's mid-height, y 85\) stands in the lake at the fall's foot/);
+    expect(examples.poses.lavaPool!.eyeNote).toMatch(/^the pool is one lava voxel at the foot of a one-wide slot right under the computed eye/);
+    expect(src).not.toContain('WATER_POSES');
+    const step = src.slice(src.indexOf('async function waterTierChecks('), src.indexOf('async function lavaLegendChecks('));
+    expect(step).toContain('waterPageQuery(SP7A_POSES.coastFancy)');
+    expect(step).toContain('const pose = SP7A_POSES.underwater;');
+    expect(src).toContain('export const SURFACED_Y = SP7A_POSES.underwater.y + 8;');
+    expect(src).toContain('export const LAVA_POOL_Y = SP7A_POSES.lavaPool.y - 1.5;');
+  });
+
+  test('each SP7a link\'s `at` is CAVE_AT\'s corner of its eye\'s voxel on its own profile\'s generator (terrainSolidAt); lavaFall\'s computed eye is in rock', () => {
+    expect(Object.keys(SP7A_AT)).toEqual([...SP7A_POSE_IDS]);
+    const dcs = new Map<Sp7aProfile, ReturnType<typeof createDensityContext>>();
+    const densityOf = (profile: Sp7aProfile) => {
+      let dc = dcs.get(profile);
+      if (dc === undefined) dcs.set(profile, dc = createDensityContext(createGenContext(seedFromInput('42'), resolveProfile(profile))));
+      return dc;
+    };
+    for (const id of SP7A_POSE_IDS) {
+      const pose = sp7aPose(id);
+      const dc = densityOf(pose.profile);
+      const solid = (x: number, y: number, z: number): boolean => terrainSolidAt(aquiferOf(dc.ctx), dc, x, y, z);
+      const [vx, vy, vz] = [Math.floor(pose.x), Math.floor(pose.y), Math.floor(pose.z)];
+      expect(solid(vx, vy, vz), `${id}: its eye's voxel is open`).toBe(false);
+      const [fx, , fz] = lookVector(pose.yaw, 0);
+      const corners: Array<[number, number]> = [[vx, vz], [vx + 1, vz], [vx, vz + 1], [vx + 1, vz + 1]];
+      const solids = corners.map(([ax, az]) => ([[-1, -1], [0, -1], [-1, 0], [0, 0]] as const)
+        .filter(([dx, dz]) => solid(ax + dx, vy, az + dz))
+        .map(([dx, dz]) => [dx + 0.5, dz + 0.5] as const));
+      const clear = solids.findIndex((s) => s.length === 0);
+      const k = clear >= 0 ? clear : solids.findIndex((s) => s.every(([ox, oz]) => ox * fx + oz * fz < -1e-9));
+      expect(k, `${id}: a corner of its eye's voxel`).toBeGreaterThanOrEqual(0);
+      expect(SP7A_AT[id], id).toEqual(corners[k]);
+      expect(pose.at, id).toEqual(SP7A_AT[id]);
+    }
+    // lavaFall's computed eye (16 blocks out from its spring, level) stands inside rock, hence the file's `eye`.
+    const lava = readExamples().poses.lavaFall!;
+    const dc = densityOf('default');
+    expect(terrainSolidAt(aquiferOf(dc.ctx), dc, Math.floor(lava.x), Math.floor(lava.y), Math.floor(lava.z))).toBe(true);
+  });
+
+  test('a review link opens seed 42 on the pose\'s profile (its own hash) in flight at RD 12: `at` its corner, y exact, yaw and pitch as hereUrl writes them; its shot\'s page the same place on batch with the hook', () => {
+    for (const id of SP7A_POSE_IDS) {
+      const pose = sp7aPose(id);
+      const link = sp7aLink(id);
+      expect(link.startsWith('/?at='), id).toBe(true);
+      const url = new URL(link, 'http://127.0.0.1');
+      expect(url.hash, id).toBe(profileHash(pose.profile));
+      const st = decodeMapState(url.hash.slice(1));
+      expect(st.error, id).toBeNull();
+      expect(st.state, id).toEqual({ ...DEFAULT_MAP_STATE, profile: pose.profile });
+      const q = parseWorldQuery(url.searchParams);
+      expect(q.at, id).toEqual({ x: SP7A_AT[id][0], z: SP7A_AT[id][1] });
+      expect([q.y, q.yaw, q.pitch], id).toEqual([pose.y, pose.yaw, pose.pitch]);
+      expect([q.rd, q.renderer, q.world, q.shot], id).toEqual([SHOT_RD, null, null, false]);
+      const here = new URL(hereUrl(pose, null, profileHash(pose.profile)), 'http://127.0.0.1').searchParams;
+      expect([url.searchParams.get('yaw'), url.searchParams.get('pitch')], id).toEqual([here.get('yaw'), here.get('pitch')]);
+      const shot = new URL(`/${sp7aShotQuery(id)}`, 'http://127.0.0.1');
+      const sq = parseWorldQuery(shot.searchParams);
+      expect([sq.at, sq.y, sq.yaw, sq.pitch, sq.rd, sq.renderer, shot.searchParams.get('wiTest'), shot.hash], id)
+        .toEqual([q.at, q.y, q.yaw, q.pitch, SHOT_RD, 'batch', '1', url.hash]);
+    }
+  });
+
+  test('--shots writes SP7a\'s review screenshots (one per link, the X-ray, the aquifer slice, Fast beside Fancy), all committed in assets/sp7a at 1400 × 900', () => {
+    const kebab = (id: string): string => `review-${id.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}.png`;
+    expect(Object.keys(SP7A_SHOTS)).toEqual([...SP7A_POSE_IDS, 'xrayFlooded', 'sliceAquifer', 'fastVsFancy']);
+    for (const id of SP7A_POSE_IDS) expect(SP7A_SHOTS[id], id).toBe(kebab(id));
+    expect([SP7A_SHOTS.spillSlope, SP7A_SHOTS.xrayFlooded, SP7A_SHOTS.sliceAquifer, SP7A_SHOTS.fastVsFancy])
+      .toEqual(['review-spill-slope.png', 'review-xray-flooded.png', 'review-slice-aquifer.png', 'review-fast-vs-fancy.png']);
+    for (const name of Object.values(SP7A_SHOTS)) {
+      const png = readFileSync(new URL(`../../docs/superpowers/specs/assets/sp7a/${name}`, import.meta.url));
+      expect(png.subarray(1, 4).toString('latin1'), name).toBe('PNG');
+      expect([png.readUInt32BE(16), png.readUInt32BE(20)], name).toEqual([VIEWPORT.width, VIEWPORT.height]);
+    }
+    // Fast's and Fancy's halves: each the centre 700 × 900 of its 1400 × 900 frame (rulings P52).
+    expect(FAST_FANCY_CLIP).toEqual({ x: 350, y: 0, width: 700, height: 900 });
+    expect(SP7A_NIGHT_VISION).toEqual(['floodedUnderSea', 'dryBelowSea', ...WALL_FRONTS]);
+    const body = src.slice(src.indexOf('async function waterShots('), src.indexOf('\n}\n', src.indexOf('async function waterShots(')));
+    expect(body).toContain('for (const id of SP7A_POSE_IDS) {');
+    expect(body).toContain('openCavePage(t, sp7aShotQuery(id), ');
+    expect(body).toContain('await caveShot(t, SP7A_SHOTS[id], ');
+    expect(body).not.toContain('cavePageQuery(');
+    const xray = body.indexOf("openCavePage(t, sp7aShotQuery('floodedUnderSea')");
+    expect(xray).toBeGreaterThan(-1);
+    expect(body.indexOf("worldKey(p, 'x', SMOKE_KEYS.xray, 88)", xray)).toBeLessThan(body.indexOf('caveShot(t, SP7A_SHOTS.xrayFlooded)'));
+    expect(body.indexOf("p.click('#map-caves-slice')")).toBeGreaterThan(body.indexOf('caveShot(t, SP7A_SHOTS.xrayFlooded)'));
+    expect(body.indexOf('caveShot(t, SP7A_SHOTS.sliceAquifer)')).toBeGreaterThan(body.indexOf("p.click('#map-caves-slice')"));
+    const tiers = body.indexOf("openCavePage(t, sp7aShotQuery('coastFancy')");
+    expect(body.indexOf("tierHalf(t, 'fast')", tiers)).toBeLessThan(body.indexOf("tierHalf(t, 'fancy')", tiers));
+    expect(body).toContain('t.save(SP7A_SHOTS.fastVsFancy, ');
+    expect(src).toContain("clip: { ...FAST_FANCY_CLIP, scale: 1 }");
+    // runWater takes them after its checks, with --shots only.
+    const run = src.slice(src.indexOf('async function runWater('), src.indexOf('\n}\n', src.indexOf('async function runWater(')));
+    expect(run.indexOf('await waterShots(t);')).toBeGreaterThan(run.indexOf('if (t.shots === null) return;'));
+    expect(run.indexOf('if (t.shots === null) return;')).toBeGreaterThan(run.indexOf("t.check(t.errors.length === errors0, 'water: no page error'"));
+  });
+
+  test('the SP7a spec\'s Exit evidence lists every review link from the committed poses, the fronts with the user\'s Task 47 verdict, and says no truncated spring and no riverMouth was found', () => {
+    const spec = readFileSync(new URL('../../docs/superpowers/specs/2026-11-17-sp7a-water-design.md', import.meta.url), 'utf8');
+    const head = '### The review links and screenshots (Task 51)';
+    const from = spec.indexOf(head);
+    expect(from).toBeGreaterThan(0);
+    const end = spec.indexOf('\n### ', from + head.length);
+    const section = spec.slice(from, end < 0 ? undefined : end);
+    const examples = readExamples();
+    const num = (v: number): string => String(v).replace('-', '−');
+    const voxel = (v: readonly number[]): string => `(${v.map(num).join(', ')})`;
+    const poses = SP7A_POSE_IDS.filter((id) => !(WALL_FRONTS as readonly string[]).includes(id)).map((id) => {
+      const e = examples.poses[id]!;
+      return `| \`${id}\` | ${e.profile} | ${voxel(e.voxel)} | ${e.fall ?? '—'} | ${e.distance.toFixed(1)} | \`${SP7A_SHOTS[id as Sp7aPoseId]}\` | \`${sp7aLink(id)}\` |`;
+    });
+    expect(section).toContain(`| link | profile | voxel | fall | spawn distance | shot | link |\n|---|---|---|---|---|---|---|\n${poses.join('\n')}\n`);
+    const fronts = WALL_FRONTS.map((id) => {
+      const e = examples.poses[id]!;
+      return `| \`${id}\` | ${e.profile} | ${voxel(e.voxel)}, ${e.dry!.join('+')} | ${e.distance.toFixed(1)} | ${e.regionWaterWall!.toFixed(1)} | \`${SP7A_SHOTS[id]}\` | \`${sp7aLink(id)}\` | ${e.verdict} |`;
+    });
+    expect(section).toContain(`| link | profile | front voxel, dry side | spawn distance | the region's \`C7.waterWall\` (per km², quick) | shot | link | the user's verdict |\n|---|---|---|---|---|---|---|---|\n${fronts.join('\n')}\n`);
+    expect(section).toContain('**`truncatedN`: none.**');
+    expect(section).toContain('**`riverMouth`: not found.**');
+    expect(section).toContain(examples.head);
   });
 });

@@ -153,15 +153,15 @@
  *   slice" by cave biome opening the horizontal `biome3d` slice, "Nearest lush cave" moving the camera to its hit;
  *   `?map`'s caveBiome layer on `CAVE_MAP`, its y field drawing the lush colour at the canvas centre; `cave_heavy` in
  *   the map's profile select and New world's preset select, and its world generating;
- * - water (SP7a spec §13.9), at SP7a's review poses (`WATER_POSES`, from the caves runs' `.out/sp7a.examples.json`),
- *   each on its profile's world at RD 4 on batch with the hook: at `coastFancy` G opens the Settings, whose Water row
- *   is in step with the setting (the stored tier, else Fancy), a change of tier is stored and live (the mean of a box
- *   of far water, `WATER_TIER_BOX`, moves by more than 8 with no reload) and the row follows it, both ways
- *   (`waterTierChecks`); in the capture mode, the centre pixel at `underwater` raised 8 blocks (the surface reading),
- *   then at `underwater` (blue channel dominant, the fog on), then after Space raised the eye over the surface (back
- *   within 8 of the surface reading, the fog off; `underwaterChecks`); in the lava pool (`lavaSliceQuery`) X's kinds'
- *   legend and C's biome legend end with Flooded and Lava, and "Cave slice" cuts the pool, its legend listing lava
- *   (`lavaLegendChecks`);
+ * - water (SP7a spec §13.9), at SP7a's review poses (`SP7A_POSES`' `coastFancy`, `underwater` and `lavaPool`, from the
+ *   committed `water.examples.json`), each on its profile's world at RD 4 on batch with the hook: at `coastFancy` G
+ *   opens the Settings, whose Water row is in step with the setting (the stored tier, else Fancy), a change of tier is
+ *   stored and live (the mean of a box of far water, `WATER_TIER_BOX`, moves by more than 8 with no reload) and the row
+ *   follows it, both ways (`waterTierChecks`); in the capture mode, the centre pixel at `underwater` raised 8 blocks
+ *   (the surface reading), then at `underwater` (blue channel dominant, the fog on), then after Space raised the eye
+ *   over the surface (back within 8 of the surface reading, the fog off; `underwaterChecks`); in the lava pool
+ *   (`lavaSliceQuery`) X's kinds' legend and C's biome legend end with Flooded and Lava, and "Cave slice" cuts the pool,
+ *   its legend listing lava (`lavaLegendChecks`);
  * - console: no exception, console error or failed load, except the known favicon.ico 404 and Chrome's notice that it
  *   blocked a world page's `beforeunload` prompt when a step left it (`leaveGuardLog`); every step ran.
  * With --shots DIR it then writes the spec §12 screenshots into DIR, at seed 42 from a newly loaded page (the
@@ -191,7 +191,10 @@
  * spec §10.10, 1400 × 900) close the `caves` step, each at its review pose (`caveShots`); all are committed, in
  * `assets/sp6a/`. SP6b's ten (`SP6B_SHOTS` but the bottom before the floor, SP6b spec §12.8, 1400 × 900) follow them
  * (`caveBiomeShots`, at `SP6B_POSES` on each pose's profile); with the eleventh, from a 441b67d build, all are
- * committed in `assets/sp6b/`.
+ * committed in `assets/sp6b/`. SP7a's twenty (`SP7A_SHOTS`, SP7a spec §13.9, 1400 × 900) close the `water` step
+ * (`waterShots`): one at each review link (`sp7aPose`: its eye at its corner `SP7A_AT` on its profile, at RD 12), the
+ * X-ray at `floodedUnderSea`, the caves slice through its voxel and the two water tiers at `coastFancy`; all are
+ * committed, in `assets/sp7a/`.
  * Every command to a page is bounded (`guardedCdp`, SP6a ruling R16): a page-side wait by its own time plus a minute,
  * any other command by 5 minutes, and every command in flight fails at once when the page's renderer crashes
  * (`Inspector.targetCrashed`), so a dead renderer fails its step with a message instead of hanging the smoke.
@@ -1472,7 +1475,7 @@ export function sp6bPose(id: Sp6bPoseId): CaveExamplePose & { readonly profile: 
 }
 
 /** The world page's hash of seed 42 on `profile` with no patch (`SEED_42_HASH` for the default profile). */
-export function profileHash(profile: 'default' | 'cave_heavy' | 'archipelago'): string {
+export function profileHash(profile: Sp7aProfile): string {
   return `#${mapHash({ ...START, profile })}`;
 }
 
@@ -1521,6 +1524,149 @@ export const SP6B_SHOTS = {
  * origin (−112, 80), 32 × 32 chunks), at a y holding all three biomes (a unit test checks with `caveBiomeIdAt`).
  */
 export const SP6B_MAP = { view: { x: -1536, z: 1536, bpp: 4, layer: 'caveBiome' }, y: -32 } as const;
+
+// ---------------------------------------------------------------- SP7a's review links and screenshots (SP7a spec §13.9, D16)
+
+/** The profiles SP7a's review poses open on, each its own world (`profileHash`). */
+export type Sp7aProfile = 'default' | 'large_biomes' | 'archipelago' | 'amplified' | 'floating_islands' | 'cave_heavy';
+
+/**
+ * SP7a's review poses at seed '42' (spec §13.9, D16), in §13.9's order, each on its own profile, as the harness computed
+ * them: the caves runs' quick-tier `.out/sp7a.examples.<group>.json` merged (rulings P22: per pose the nearest its
+ * profile's spawn over the three groups), committed as `docs/superpowers/specs/assets/sp7a/water.examples.json` (a unit
+ * test keeps every pose equal to it). `waterfall1`-`waterfall3` the three tallest visible falls within 2 km of spawn
+ * (the eye 24 blocks out at the fall's mid-height, facing it); `islandFall`; `lavaFall` and `lavaPool` (the abyss; night
+ * vision suggested); `floodedUnderSea` (opened with the X-ray on: `review-xray-flooded.png`); `dryBelowSea`; `lake`;
+ * `coastFancy`; `underwater` (6 blocks under the sea surface); `spillSlope` (Task 24's); `wallFront1`-`wallFront5`
+ * (§13.9's water-wall fronts, the eye 16 blocks out on the dry side). No group found a `riverMouth`, and no water spring
+ * is counted by `A5.springsTruncated` (no `truncatedN`): the file says so. The water step reads `coastFancy`,
+ * `underwater` and `lavaPool` here (rulings P55); a link opens at `sp7aPose`.
+ */
+export const SP7A_POSES = {
+  waterfall1: { x: -652.5, y: 85, z: -88.5, yaw: 0, pitch: 0, profile: 'amplified' },
+  waterfall2: { x: -510.5, y: 115, z: -114.5, yaw: 90, pitch: 0, profile: 'amplified' },
+  waterfall3: { x: -491.5, y: 164.5, z: -132.5, yaw: 180, pitch: 0, profile: 'amplified' },
+  islandFall: { x: -314.5, y: 165.5, z: 60.5, yaw: 180, pitch: 0, profile: 'floating_islands' },
+  lavaFall: { x: -1424.5, y: -45, z: 1435.5, yaw: 90, pitch: 0, profile: 'default' },
+  lavaPool: { x: -1354.5, y: -49.5, z: 1328.5, yaw: 90, pitch: -30, profile: 'default' },
+  floodedUnderSea: { x: 189.5, y: 38.5, z: -133.5, yaw: 90, pitch: 0, profile: 'archipelago' },
+  dryBelowSea: { x: 13.5, y: 40.5, z: 0.5, yaw: 90, pitch: 0, profile: 'default' },
+  lake: { x: -186.5, y: 131, z: 80.5, yaw: 0, pitch: -45, profile: 'large_biomes' },
+  coastFancy: { x: 199.5, y: 65.5, z: -87.5, yaw: 0, pitch: -10, profile: 'archipelago' },
+  underwater: { x: 208.5, y: 58, z: -90.5, yaw: 0, pitch: 0, profile: 'archipelago' },
+  spillSlope: { x: -441, y: 128, z: 74, yaw: 0, pitch: -26.6, profile: 'amplified' },
+  wallFront1: { x: 41.5, y: 29.5, z: 3.5, yaw: 270, pitch: 0, profile: 'cave_heavy' },
+  wallFront2: { x: 0.5, y: 48.5, z: 14.5, yaw: 180, pitch: 0, profile: 'cave_heavy' },
+  wallFront3: { x: -77.5, y: -36.5, z: -10.5, yaw: 90, pitch: 0, profile: 'default' },
+  wallFront4: { x: -77.5, y: -5.5, z: 13.5, yaw: 270, pitch: 0, profile: 'cave_heavy' },
+  wallFront5: { x: -106.5, y: 62.5, z: -42.5, yaw: 180, pitch: 0, profile: 'cave_heavy' },
+} as const satisfies Record<string, CaveExamplePose & { readonly profile: Sp7aProfile }>;
+export type Sp7aPoseId = keyof typeof SP7A_POSES;
+/** The SP7a poses in §13.9's order. */
+export const SP7A_POSE_IDS = Object.keys(SP7A_POSES) as readonly Sp7aPoseId[];
+
+/**
+ * The eyes a link opens at in place of a computed pose that shows nothing of what it names (the file's `eye` beside
+ * the pose, with why): the fronts at the eyes the controller checked by screenshot and the user visited at Task 47
+ * (§13.9's level pose stood inside rock or faced away for some); `lavaFall` at Task 26's aimed eye (the computed one,
+ * 16 blocks out, is inside rock); `waterfall1` and `lavaPool` at `shots.mjs`' aimed eyes, a clear line of air to the
+ * pose's voxel (the fall's computed eye stands in the lake at its foot, whose water hides it; the pool, one lava voxel
+ * at the foot of a slot right under its computed eye, is out of that view).
+ */
+export const SP7A_EYES = {
+  waterfall1: { x: -632, y: 99.5, z: -100, yaw: 301.4, pitch: -9.5 },
+  lavaFall: { x: -1405, y: -42.5, z: 1447, yaw: 347.7, pitch: -9.6 },
+  lavaPool: { x: -1350, y: -47.5, z: 1329, yaw: 276.3, pitch: -33.5 },
+  wallFront1: { x: 32, y: 39.5, z: -14, yaw: 200.4, pitch: -28.2 },
+  wallFront2: { x: 20, y: 52.5, z: 41, yaw: 298.3, pitch: -10.2 },
+  wallFront3: { x: -65, y: -36.5, z: -13, yaw: 125.5, pitch: 0 },
+  wallFront4: { x: -110, y: 6.5, z: 28, yaw: 48.7, pitch: -28.6 },
+  wallFront5: { x: -128, y: 64.5, z: -23, yaw: 80.8, pitch: -5.2 },
+} as const satisfies Partial<Record<Sp7aPoseId, CaveExamplePose>>;
+
+/**
+ * Where an SP7a link puts its eye (`SP7A_EYES`' where given, else the pose's): `CAVE_AT`'s rule on the eye's voxel
+ * (⌊x⌋, ⌊y⌋, ⌊z⌋), on the pose's own profile (`uiSmoke.test.ts` computes each with `terrainSolidAt`): the first corner
+ * whose four voxels of the eye's row are open, else the first whose rock lies behind the view.
+ */
+export const SP7A_AT = {
+  waterfall1: [-632, -100],
+  waterfall2: [-511, -115],
+  waterfall3: [-492, -133],
+  islandFall: [-315, 60],
+  lavaFall: [-1405, 1447],
+  lavaPool: [-1350, 1329],
+  floodedUnderSea: [190, -134],
+  dryBelowSea: [13, 0],
+  lake: [-187, 80],
+  coastFancy: [199, -88],
+  underwater: [208, -91],
+  spillSlope: [-441, 74],
+  wallFront1: [32, -14],
+  wallFront2: [20, 41],
+  wallFront3: [-65, -13],
+  wallFront4: [-110, 28],
+  wallFront5: [-128, -23],
+} as const satisfies Record<Sp7aPoseId, readonly [number, number]>;
+
+/** An SP7a review pose as its link opens it: its eye (`SP7A_EYES`' or the pose's) at its corner (`SP7A_AT`), its profile. */
+export function sp7aPose(id: Sp7aPoseId): CaveExamplePose & { readonly profile: Sp7aProfile } {
+  const eyes: Partial<Record<Sp7aPoseId, CaveExamplePose>> = SP7A_EYES;
+  const pose = SP7A_POSES[id];
+  return { ...pose, ...eyes[id], at: SP7A_AT[id] };
+}
+
+/** An SP7a review link as the Exit evidence writes it: its pose on its profile's world, in flight at `SHOT_RD`. */
+export function sp7aLink(id: Sp7aPoseId): string {
+  const pose = sp7aPose(id);
+  return `/${caveQuery(pose, `&rd=${SHOT_RD}`, profileHash(pose.profile))}`;
+}
+
+/** The query of an SP7a review shot's page: the link's place at SHOT_RD on batch with the test hook. */
+export function sp7aShotQuery(id: Sp7aPoseId): string {
+  const pose = sp7aPose(id);
+  return caveQuery(pose, `&rd=${SHOT_RD}&renderer=batch&wiTest=1`, profileHash(pose.profile));
+}
+
+/**
+ * The poses shot with night vision: the caves, whose walls read almost black at the light floor (as SP6b's shots). The
+ * abyss's are shot without it, so that its darkness and the lava's light show.
+ */
+export const SP7A_NIGHT_VISION: readonly Sp7aPoseId[] = [
+  'floodedUnderSea', 'dryBelowSea', 'wallFront1', 'wallFront2', 'wallFront3', 'wallFront4', 'wallFront5',
+];
+
+/**
+ * SP7a's review screenshots (spec §13.9), 1400 × 900, committed in `assets/sp7a/`: one per link, `review-` and the
+ * pose's id in kebab case (`spillSlope`'s is `review-spill-slope.png`), then the X-ray at `floodedUnderSea`, the
+ * horizontal caves slice through its voxel (the aquifer's water) and the two water tiers at `coastFancy` (Fast on the
+ * left half, Fancy on the right, each the centre 700 × 900 of its tier's frame: rulings P52).
+ */
+export const SP7A_SHOTS = {
+  waterfall1: 'review-waterfall1.png',
+  waterfall2: 'review-waterfall2.png',
+  waterfall3: 'review-waterfall3.png',
+  islandFall: 'review-island-fall.png',
+  lavaFall: 'review-lava-fall.png',
+  lavaPool: 'review-lava-pool.png',
+  floodedUnderSea: 'review-flooded-under-sea.png',
+  dryBelowSea: 'review-dry-below-sea.png',
+  lake: 'review-lake.png',
+  coastFancy: 'review-coast-fancy.png',
+  underwater: 'review-underwater.png',
+  spillSlope: 'review-spill-slope.png',
+  wallFront1: 'review-wall-front1.png',
+  wallFront2: 'review-wall-front2.png',
+  wallFront3: 'review-wall-front3.png',
+  wallFront4: 'review-wall-front4.png',
+  wallFront5: 'review-wall-front5.png',
+  xrayFlooded: 'review-xray-flooded.png',
+  sliceAquifer: 'review-slice-aquifer.png',
+  fastVsFancy: 'review-fast-vs-fancy.png',
+} as const satisfies Record<Sp7aPoseId, string> & Record<string, string>;
+
+/** Each tier's half of `review-fast-vs-fancy.png`: the centre 700 × 900 of its 1400 × 900 frame (rulings P52). */
+export const FAST_FANCY_CLIP = { x: VIEWPORT.width / 4, y: 0, width: VIEWPORT.width / 2, height: VIEWPORT.height } as const;
 
 // ---------------------------------------------------------------- the caves step's SP6b checks (SP6b spec §12.8)
 
@@ -1639,24 +1785,10 @@ export function caveHeavyQuery(): string {
 // ---------------------------------------------------------------- the water step (SP7a spec §13.9)
 
 /**
- * The water step's review poses at seed '42' (SP7a spec §13.9, D16), mirrored as literals from the caves runs' merged
- * `.out/sp7a.examples.json` (rulings P22: the three groups' records, quick tier): `coastFancy`, a coast at grazing
- * view, and `underwater`, the eye 6 blocks under the sea surface, on archipelago; `lavaPool`, the eye 1.5 blocks above
- * a settled lava voxel on the abyss's floor looking 30° down, in the default profile's biome region. Each opens on its
- * own profile's world (`profileHash`). Task 51 commits the file as `water.examples.json` and points these reads at its
- * `SP7A_POSES` (rulings P55).
- */
-export const WATER_POSES = {
-  coastFancy: { x: 199.5, y: 65.5, z: -87.5, yaw: 0, pitch: -10, profile: 'archipelago' },
-  underwater: { x: 208.5, y: 58, z: -90.5, yaw: 0, pitch: 0, profile: 'archipelago' },
-  lavaPool: { x: -1354.5, y: -49.5, z: 1328.5, yaw: 90, pitch: -30, profile: 'default' },
-} as const satisfies Record<string, CaveExamplePose & { readonly profile: 'default' | 'archipelago' }>;
-
-/**
  * The query of a water step page at `pose` on its profile's world: RD 4, the batch renderer and the test hook, then
  * `extra`.
  */
-export function waterPageQuery(pose: CaveExamplePose & { readonly profile: 'default' | 'archipelago' }, extra = ''): string {
+export function waterPageQuery(pose: CaveExamplePose & { readonly profile: Sp7aProfile }, extra = ''): string {
   return caveQuery(pose, `&rd=${WORLD_RD}&renderer=batch&wiTest=1${extra}`, profileHash(pose.profile));
 }
 
@@ -1711,7 +1843,7 @@ export function blueDominant(rgb: readonly number[]): boolean {
  * blocks under it). The surface reading is taken at the pose raised to it; surfacing rises (Space) until the eye
  * reaches it.
  */
-export const SURFACED_Y = WATER_POSES.underwater.y + 8;
+export const SURFACED_Y = SP7A_POSES.underwater.y + 8;
 
 /** The `caves` slice legend's lava row (SP7a spec §10.2: `cavesLegend`'s label; a unit test compares them). */
 export const SLICE_LAVA = 'lava';
@@ -1720,14 +1852,14 @@ export const SLICE_LAVA = 'lava';
  * The lava pool's y: its voxel's, 1.5 blocks under the lavaPool pose's eye (`a5Examples`' rule,
  * `test/harness/water.ts`).
  */
-export const LAVA_POOL_Y = WATER_POSES.lavaPool.y - 1.5;
+export const LAVA_POOL_Y = SP7A_POSES.lavaPool.y - 1.5;
 
 /**
  * The lava slice's page (SP7a spec §10.2): the lavaPool pose with the eye at the middle of the pool's voxel, so that
  * "Cave slice" (the camera's ⌊y⌋ with the band at all, `caveSliceY`) cuts the pool at `LAVA_POOL_Y`.
  */
 export function lavaSliceQuery(): string {
-  return waterPageQuery({ ...WATER_POSES.lavaPool, y: LAVA_POOL_Y + 0.5 });
+  return waterPageQuery({ ...SP7A_POSES.lavaPool, y: LAVA_POOL_Y + 0.5 });
 }
 
 /** The camera's pose as the hook reads it (`__wiTest.pose()`). */
@@ -2054,6 +2186,8 @@ interface SmokePage {
   mapPixels(sx: number, sy: number, r: number): { rgba: number[]; width: number; cx: number; cy: number };
   /** A PNG (base64) decoded by the browser: its size and its RGBA bytes (base64), unconverted and unpremultiplied. */
   pngRgba(png: string): Promise<{ width: number; height: number; rgba: string }>;
+  /** Two PNGs (base64) drawn side by side, `left` at x 0 and `right` after it, as one PNG (base64). */
+  pngJoin(left: string, right: string): Promise<string>;
 }
 
 /** The slice view's texts (`.sv`): status, histogram, notice, the four axis labels, the controls, readout and canvas size. */
@@ -2200,6 +2334,24 @@ function pageHelpers(): SmokePage {
       let text = '';
       for (let i = 0; i < data.length; i += 0x8000) text += String.fromCharCode(...data.subarray(i, i + 0x8000));
       return { width: bmp.width, height: bmp.height, rgba: btoa(text) };
+    },
+    async pngJoin(left, right) {
+      const bitmap = (png: string) => {
+        const bin = atob(png);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return createImageBitmap(new Blob([bytes], { type: 'image/png' }), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+      };
+      const a = await bitmap(left);
+      const b = await bitmap(right);
+      const c = new OffscreenCanvas(a.width + b.width, Math.max(a.height, b.height));
+      const g = c.getContext('2d')!;
+      g.drawImage(a, 0, 0);
+      g.drawImage(b, a.width, 0);
+      const bytes = new Uint8Array(await (await c.convertToBlob({ type: 'image/png' })).arrayBuffer());
+      let text = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return btoa(text);
     },
   };
 }
@@ -6335,7 +6487,7 @@ async function waterTierTo(t: Smoke, tier: string, what: string): Promise<void> 
  */
 async function waterTierChecks(t: Smoke): Promise<void> {
   const p = t.page;
-  if (!(await openCavePage(t, waterPageQuery(WATER_POSES.coastFancy), 'water: the coastFancy pose'))) return;
+  if (!(await openCavePage(t, waterPageQuery(SP7A_POSES.coastFancy), 'water: the coastFancy pose'))) return;
   const first = await waterRead(t, WATER_TIER_BOX, 'coastFancy');
   const row = await waterRow(t, 'at the open');
   if (row === null) return;
@@ -6360,7 +6512,7 @@ async function waterTierChecks(t: Smoke): Promise<void> {
  */
 async function underwaterChecks(t: Smoke): Promise<void> {
   const p = t.page;
-  const pose = WATER_POSES.underwater;
+  const pose = SP7A_POSES.underwater;
   if (!(await openCavePage(t, waterPageQuery({ ...pose, y: SURFACED_Y }, '&shot=1'), `water: above the underwater pose (y ${SURFACED_Y})`))) return;
   const surface = await waterRead(t, WATER_PIXEL, `y ${SURFACED_Y}, the surface reading`);
   if (!(await openCavePage(t, waterPageQuery(pose, '&shot=1'), 'water: the underwater pose'))) return;
@@ -6416,9 +6568,75 @@ async function lavaLegendChecks(t: Smoke): Promise<void> {
   await p.until(OVERLAY_CLOSED, 'water: M closes the map', 10_000);
 }
 
+/**
+ * A tier's half of `review-fast-vs-fancy.png` at the open `coastFancy` page: G and the Water select set to `tier` (the
+ * stored setting, live), then, once the stream settled at SHOT_RD, the view cleared and three frames drawn, the PNG
+ * (base64) of `FAST_FANCY_CLIP`.
+ */
+async function tierHalf(t: Smoke, tier: string): Promise<string> {
+  const p = t.page;
+  if ((await waterRow(t, `water shots: before ${tier}`)) !== null) await waterTierTo(t, tier, `water shots: ${tier}`);
+  await holds(t, STREAM_SETTLED, `water shots: the stream settled at RD ${SHOT_RD} before the ${tier} half`, STREAM_SETTLED_MS,
+    () => p.eval('[__wiTest.rd(), __wiTest.filled()]'));
+  await sleep(500);
+  await clearShotView(p);
+  await frames(p, 3, `water shots: three frames before the ${tier} half`);
+  const r = await p.cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false, clip: { ...FAST_FANCY_CLIP, scale: 1 } });
+  return String(r['data']);
+}
+
+/**
+ * SP7a's review screenshots (`SP7A_SHOTS`, spec §13.9), with --shots only, each world page at its link's place on its
+ * profile (`sp7aShotQuery`, RD 12), the counts hidden and the notices dismissed: one at each review link, the caves
+ * with night vision (`SP7A_NIGHT_VISION`), the rest without; the X-ray at `floodedUnderSea` (its notice gone);
+ * the horizontal caves slice from its pose ("Cave slice" at its y, the map in full screen, the drawer at its tallest);
+ * night vision off; the two tiers at `coastFancy`, Fast's half left of Fancy's (`tierHalf`, joined in the page), the
+ * stored tier put back.
+ */
+async function waterShots(t: Smoke): Promise<void> {
+  const p = t.page;
+  for (const id of SP7A_POSE_IDS) {
+    if (!(await openCavePage(t, sp7aShotQuery(id), `water shots: ${id}`))) continue;
+    const night = SP7A_NIGHT_VISION.includes(id);
+    await nightVisionTo(t, night);
+    // L's notice ("Night vision on/off") beside the "not saved" one: `clearShotView` dismisses one notice.
+    for (let i = 0; i < 3 && (await p.eval<boolean>(`document.querySelectorAll('.world-notice-dismiss').length > 1`)); i++) await p.click('.world-notice-dismiss');
+    await caveShot(t, SP7A_SHOTS[id], night ? 1600 : 500);
+  }
+
+  if (!(await openCavePage(t, sp7aShotQuery('floodedUnderSea'), 'water shots: the X-ray at floodedUnderSea'))) return;
+  await worldKey(p, 'x', SMOKE_KEYS.xray, 88);
+  await p.until(stripIs(true, XRAY_ALL_TEXT), 'water shots: the X-ray on', 5000);
+  await sleep(6500); // X's first notice (6 s) gone
+  await caveShot(t, SP7A_SHOTS.xrayFlooded);
+  await worldKey(p, 'x', SMOKE_KEYS.xray, 88);
+  // The horizontal caves slice from floodedUnderSea's pose (its y, the band at all), the map in full screen.
+  await pressM(p);
+  await p.until(OVERLAY_SHOWN, 'water shots: the overlay after M', 15_000);
+  if (await p.eval<boolean>(WORLD_SPLIT)) {
+    await p.click('#map-mode-full');
+    await p.until(`!(${WORLD_SPLIT})`, 'water shots: the map in full screen', 5000);
+  }
+  await p.click('#map-tab-caves');
+  await p.click('#map-caves-slice');
+  await tallDrawer(p);
+  await p.until(Page.fresh(128, `document.querySelector(${JSON.stringify(SV_FIELD)}).value === 'caves'`), 'water shots: the caves slice through floodedUnderSea', 60_000);
+  await caveShot(t, SP7A_SHOTS.sliceAquifer);
+  await pressM(p);
+  await p.until(OVERLAY_CLOSED, 'water shots: M closes the map', 10_000);
+  await nightVisionTo(t, false);
+
+  if (!(await openCavePage(t, sp7aShotQuery('coastFancy'), 'water shots: the two tiers at coastFancy'))) return;
+  const stored = await p.eval<string | null>(WATER_STORED);
+  const fast = await tierHalf(t, 'fast');
+  const fancy = await tierHalf(t, 'fancy');
+  t.save(SP7A_SHOTS.fastVsFancy, Buffer.from(await p.eval<string>(`__wiSmoke.pngJoin(${JSON.stringify(fast)}, ${JSON.stringify(fancy)})`), 'base64'));
+  if (stored !== null && stored !== 'fancy' && (await waterRow(t, 'water shots: the stored tier back')) !== null) await waterTierTo(t, stored, 'water shots: the stored tier back');
+}
+
 async function runWater(t: Smoke): Promise<void> {
   const p = t.page;
-  t.step(`water: ${waterPageQuery(WATER_POSES.coastFancy)} (coastFancy): the Water row in step with the setting and live; the underwater fog on at the underwater pose and off after surfacing; the X-ray legends' Flooded and Lava rows and the lava slice's legend in the lava pool`);
+  t.step(`water: ${waterPageQuery(SP7A_POSES.coastFancy)} (coastFancy): the Water row in step with the setting and live; the underwater fog on at the underwater pose and off after surfacing; the X-ray legends' Flooded and Lava rows and the lava slice's legend in the lava pool`);
   const errors0 = t.errors.length;
   await setViewport(p, VIEWPORT.width, VIEWPORT.height);
   for (const [part, run] of [['the Water row', waterTierChecks], ['the underwater fog', underwaterChecks], ['the lava legends', lavaLegendChecks]] as const) {
@@ -6431,6 +6649,17 @@ async function runWater(t: Smoke): Promise<void> {
     }
   }
   t.check(t.errors.length === errors0, 'water: no page error', t.errors.slice(errors0));
+  if (t.shots === null) return;
+  try {
+    await waterShots(t);
+  } catch (e) {
+    t.check(false, `water: the shots stopped: ${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    // The stored night vision is left off for whatever runs next.
+    if (await p.eval<boolean>(`typeof __wiTest === 'object' && ${NIGHT_VISION_STORED}`).catch(() => false)) await nightVisionTo(t, false).catch(() => undefined);
+    await setViewport(p, VIEWPORT.width, VIEWPORT.height);
+  }
+  t.check(t.errors.length === errors0, 'water: no page error during the shots', t.errors.slice(errors0));
 }
 
 // ---------------------------------------------------------------- screenshots (spec §12)
