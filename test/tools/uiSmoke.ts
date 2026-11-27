@@ -6481,9 +6481,26 @@ async function waterTierTo(t: Smoke, tier: string, what: string): Promise<void> 
 }
 
 /**
+ * The stored Water tier back to `tier` after a stop between two changes (the Chrome profile `--shots` reuses keeps the
+ * setting): on a world page whose stored tier differs, the Settings opened with G if hidden, the select set, Esc.
+ */
+async function waterTierBack(t: Smoke, tier: string): Promise<void> {
+  const p = t.page;
+  if (!(await p.eval<boolean>(`typeof __wiTest === 'object' && ${WATER_STORED} !== ${JSON.stringify(tier)}`))) return;
+  if (!(await p.eval<boolean>(SETTINGS_SHOWN))) {
+    await worldKey(p, 'g', SMOKE_KEYS.settings, 71);
+    await p.until(SETTINGS_SHOWN, `water: G opens the Settings (the ${tier} tier restored)`, 5000);
+  }
+  await p.choose(`#${WATER_SETTING.id}`, tier);
+  await p.until(`${WATER_STORED} === ${JSON.stringify(tier)}`, `water: the ${tier} tier restored`, 5000);
+  await p.key('Escape', 'Escape', 27);
+}
+
+/**
  * The Water row (SP7a spec §7, §13.9) at the coastFancy pose: in step with the setting at the open; a change of tier
  * stored and live (`WATER_TIER_BOX`'s mean, on the water ahead, changes by more than `WATER_PIXEL_TOL` with no reload);
- * the row in step with the new tier when the Settings open again; the first tier back, live again.
+ * the row in step with the new tier when the Settings open again; the first tier back, live again. A stop between the
+ * two changes still leaves the first tier stored (`waterTierBack`).
  */
 async function waterTierChecks(t: Smoke): Promise<void> {
   const p = t.page;
@@ -6493,15 +6510,19 @@ async function waterTierChecks(t: Smoke): Promise<void> {
   if (row === null) return;
   const t0 = row.value;
   const t1 = t0 === 'fancy' ? 'fast' : 'fancy';
-  await waterTierTo(t, t1, `${t0} → ${t1}`);
-  const toggled = await waterRead(t, WATER_TIER_BOX, `coastFancy, ${t1}`);
-  t.check(!pixelsWithin(toggled, first, WATER_PIXEL_TOL),
-    `water: ${t0} → ${t1} is live: the mean of the ${WATER_TIER_BOX.width} × ${WATER_TIER_BOX.height} px at (${WATER_TIER_BOX.x}, ${WATER_TIER_BOX.y}) on the water at coastFancy changes by more than ${WATER_PIXEL_TOL} (rgb ${first.join(', ')} → ${toggled.join(', ')})`, { first, toggled });
-  if ((await waterRow(t, `after ${t0} → ${t1}`)) === null) return;
-  await waterTierTo(t, t0, `${t1} → ${t0}`);
-  const back = await waterRead(t, WATER_TIER_BOX, `coastFancy, ${t0} again`);
-  t.check(!pixelsWithin(back, toggled, WATER_PIXEL_TOL),
-    `water: ${t1} → ${t0} is live: the mean changes again by more than ${WATER_PIXEL_TOL} (rgb ${toggled.join(', ')} → ${back.join(', ')})`, { toggled, back });
+  try {
+    await waterTierTo(t, t1, `${t0} → ${t1}`);
+    const toggled = await waterRead(t, WATER_TIER_BOX, `coastFancy, ${t1}`);
+    t.check(!pixelsWithin(toggled, first, WATER_PIXEL_TOL),
+      `water: ${t0} → ${t1} is live: the mean of the ${WATER_TIER_BOX.width} × ${WATER_TIER_BOX.height} px at (${WATER_TIER_BOX.x}, ${WATER_TIER_BOX.y}) on the water at coastFancy changes by more than ${WATER_PIXEL_TOL} (rgb ${first.join(', ')} → ${toggled.join(', ')})`, { first, toggled });
+    if ((await waterRow(t, `after ${t0} → ${t1}`)) === null) return;
+    await waterTierTo(t, t0, `${t1} → ${t0}`);
+    const back = await waterRead(t, WATER_TIER_BOX, `coastFancy, ${t0} again`);
+    t.check(!pixelsWithin(back, toggled, WATER_PIXEL_TOL),
+      `water: ${t1} → ${t0} is live: the mean changes again by more than ${WATER_PIXEL_TOL} (rgb ${toggled.join(', ')} → ${back.join(', ')})`, { toggled, back });
+  } finally {
+    await waterTierBack(t, t0).catch(() => undefined);
+  }
 }
 
 /**

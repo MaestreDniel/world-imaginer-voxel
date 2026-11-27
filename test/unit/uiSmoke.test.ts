@@ -2565,6 +2565,8 @@ describe('UI smoke test: SP7a\'s review links and screenshots (SP7a spec §13.9,
     expect(src).not.toContain('WATER_POSES');
     const step = src.slice(src.indexOf('async function waterTierChecks('), src.indexOf('async function lavaLegendChecks('));
     expect(step).toContain('waterPageQuery(SP7A_POSES.coastFancy)');
+    // A stop between the two tier changes leaves the stored tier as it found it (the profile `--shots` reuses; Task 52f).
+    expect(step).toMatch(/const t0 = row\.value;[^]*try \{[^]*await waterTierTo\(t, t1, [^]*\} finally \{\n *await waterTierBack\(t, t0\)\.catch\(\(\) => undefined\);\n *\}\n\}/);
     expect(step).toContain('const pose = SP7A_POSES.underwater;');
     expect(src).toContain('export const SURFACED_Y = SP7A_POSES.underwater.y + 8;');
     expect(src).toContain('export const LAVA_POOL_Y = SP7A_POSES.lavaPool.y - 1.5;');
