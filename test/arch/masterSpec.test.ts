@@ -3829,6 +3829,9 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(from, 'no §3.14').toBeGreaterThanOrEqual(0);
     const block = lines.slice(from, to).join('\n');
     expect(block).toContain('**Input:** the 3×3 proto fluid (T places the springs, which reach settle as proto sources; SP7a) plus the lava-lake sources from step 1 of D (SP8b).');
+    // The rules as `fluidRules.ts` applies them (`nextLevel`, `nearestDropDirsFor`, `ruleOffers`' new sources; Task 52f).
+    expect(block).toContain('- horizontal spread adds 1 level per block for water (levels 0-7) and 2 for lava (levels 0, 2, 4, 6) (amended by SP7a);\n- flow goes toward the nearest drop within 4 (water) or 2 (lava), the search skipping the fluid\'s own proto sources (amended by SP7a);\n- a new source forms for water only, on a passable dry side between ≥ 2 horizontal proto water sources, over a solid block or a proto water source; lava forms no source (amended by SP7a).');
+    expect(block).not.toContain('adds level+1 per step');
     // The radius argument, the caps, the least fixed point, FLUID_MODE, the two fixed points and the abyss.
     expect(block).toContain('Every fluid-deciding read is the proto\'s, never another front\'s result.');
     expect(block).toContain('the least over the feeders that give the voxel its level (+1 per sideways step, +0 for a fall), never restarted by a new source');
@@ -4036,7 +4039,7 @@ describe('master spec amendments (SP7a §16)', () => {
     const SP7A = '- Received from SP7a (its spec §17; amended by SP7a):';
     // Each phrase is §17's text, so it is checked in §17's bullet too; each line follows the entry's last "Received from".
     const handed: Array<[id: SubProjectId, entry: string, after: string, phrases: readonly string[]]> = [
-      ['SP7b', spEntry('SP7b', 'SP8a'), SP5C, ['the runtime sim on `fluidRules.ts`', 'drains (unsupported flow)', 'reactions (obsidian, cobblestone, stone; `obsidian` appended as a state)', 'truncated fronts wake only on an edit\'s update (bit 6 in the final set', 'if SP7a\'s A2 needed it', '`C7.waterWall`\'s final definition and bound (recorded, not gated, in SP7a, its row `activeFrom` \'SP7b\': the user, ', 'rulings R24 item 1', 'the user\'s verdict on them ("quedan aceptables, anotamos para SP7b", ', 'R5\'s gate (≤ 0.1, recorded, not gated, in SP7a: the user, ', 'rulings R26 item 1', 'and its remaining lever, merging planar sloped tops, plus any light-key change, judged in a shot']],
+      ['SP7b', spEntry('SP7b', 'SP8a'), SP5C, ['the runtime sim on `fluidRules.ts`', 'drains (unsupported flow)', 'reactions (obsidian, cobblestone, stone; `obsidian` appended as a state)', 'truncated fronts wake only on an edit\'s update (bit 6 in the final set', 'if SP7a\'s A2 needed it', '`C7.waterWall`\'s final definition and bound (recorded, not gated, in SP7a, its row `activeFrom` \'SP7b\': the user, ', 'rulings R24 item 1; it moved here from SP12\'s note', 'the user\'s verdict on them ("quedan aceptables, anotamos para SP7b", ', 'R5\'s gate (≤ 0.1, recorded, not gated, in SP7a: the user, ', 'rulings R26 item 1', 'and its remaining lever, merging planar sloped tops, plus any light-key change, judged in a shot']],
       ['SP8a', spEntry('SP8a', 'SP8b'), SP6B, ['water and lava animation frames (Fancy\'s animated texture)', 'lava\'s emissive flag implied by its layer', 'the water tint per biome (`tint` bits, ']],
       ['SP8b', spEntry('SP8b', 'SP8c'), SP6B, ['lava lakes as a D step-1 feature feeding settle', 'freeze_top_layer\'s ice on sky-exposed water (rule 5, S3\'s ice parts)', 'the generated-value layer extended from fluid to blocks', 'plants with `hold`/`displace` in settle', 'seagrass and kelp in flooded caves', 'floors under settle\'s spills re-skinned if wanted', 'the decorate-scope Apply path (springs stay Terrain scope)']],
       ['SP8c', spEntry('SP8c', 'SP9'), SP6B, ['waterfall and lava-fall emitters (the spring list per column, which T can expose in aux B)', 'underwater muffling from `eyeFluid`', 'AU2\'s waterfall and lava scenes on SP7a\'s links']],
@@ -4064,6 +4067,11 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(evidence).toContain('Nothing is handed to SP11 (D37).');
     // SP7a's own entry receives nothing from itself.
     expect(spEntry('SP7a', 'SP7b')).not.toContain(SP7A);
+    // `C7.waterWall` has one owner (Task 52f): SP12's "Received from SP6a" line names it only as handed on to SP7b.
+    const sp12Sp6a = sp12Entry().split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):')) ?? '';
+    const named = sp12Sp6a.split('`C7.waterWall`');
+    expect(named.length - 1, 'SP12\'s "Received from SP6a" line names `C7.waterWall` once').toBe(1);
+    expect(named[1]!.startsWith(' (→ SP7b: the SP7a spec\'s rulings R24 item 1; amended by SP7a)'), 'SP12\'s `C7.waterWall` → SP7b').toBe(true);
   });
 
   test('§7 as measured in SP7a: the rows with their values and gates, the water segment (SP7a spec §16 item 17)', () => {
