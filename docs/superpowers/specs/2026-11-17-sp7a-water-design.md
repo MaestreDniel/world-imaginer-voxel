@@ -472,7 +472,7 @@ Local, after the aquifer, the springs, the settle, the reference and the A parts
 | liveness witnesses | `livenessSp7a.test.ts` in `liveness` (3:24-4:19) | +20-40 s (Task 31r: the water springs' witness search widened from 1,024 to 6,144 examined columns, the bound rulings R22 named, its `tries` witness the 2,871st; that test 33 → 57 s locally) |
 | `A5.waterfalls`' steep-land sample (Task 31; rulings R20: about 3.6 CPU-min, the scan 72 s and the springs 146 s single-threaded on the laptop) | its own file, `test/metrics/waterfalls.metric.ts`, in the metrics-quick `render` shard (2:04 in run 45144707470, the shard with the most slack), read in 4 worker threads; gated on quick and full only (`tiers: ['quick', 'full']`: the sample is the same on every tier), so `npm test` and the metrics-fast shards register only a skipped test | estimated +60-90 s on `render` (measured locally: see Exit evidence, Task 31); measured in CI (a Spec correction, rulings R27 item 2): `render` 2:04 → about 6.5-7.5 min, `waterfalls.metric.ts` 283-320 s in CI (194 s on the generator push's run; Exit evidence, CI after the generator push); no new job |
 
-Expected cold wall 5:40-6:10. **Budget: ≤ 6 min 0 s** on the last two cold runs before the exit commit (the exit commit is docs-only; CI's docs-only path skips the metrics jobs), job count 20 (no new job). **Levers if missed, in order** (no sample reductions, ruling R23; no gate loosened): (0) move `waterfalls.metric.ts` out of `render` into the metrics-quick shard with the most slack, or split its lattice slices across two shards whose counts merge (`mergeSampleAccs`), rulings R27 item 2; (1) rebalance the unit shards by the run's measured file times; (2) B5's lake windows into `caves-biomes-persist`; (3) the caves default group in two column slices with the merge job (the SP6b spec §13's item 1, second half, not taken then); (4) the settle reference's regions cached as dumps beside the T dumps (keyed as today). A miss after them goes to the user. The Exit evidence records each measured run's job table.
+Expected cold wall 5:40-6:10. **Budget: ≤ 6 min 0 s** on the last two cold runs before the exit commit (the exit commit is docs-only; CI's docs-only path skips the metrics jobs), job count 20 (no new job). **Levers if missed, in order** (no sample reductions, ruling R23; no gate loosened): (0) move `waterfalls.metric.ts` out of `render` into the metrics-quick shard with the most slack, or split its lattice slices across two shards whose counts merge (`mergeSampleAccs`), rulings R27 item 2; (1) rebalance the unit shards by the run's measured file times; (2) B5's lake windows into `caves-biomes-persist`; (3) the caves default group in two slices by region (a Spec correction, the plan's 18, rulings P47: the group is made of regions, not columns), with `MERGE` a list of merges (one `{files, env}` per sliced group, each env equal to its slices' beyond `METRICS_SLICE`: `.github/scripts/metricShards.mjs`, checked by `shardLib.mjs`), and one small metrics-quick shard folded into a neighbour in the same commit, named with its measured time, so the job count stays 20; no fold that fits is a STOP for the user (the SP6b spec §13's item 1, second half, not taken then); (4) the settle reference's regions cached as dumps beside the T dumps (keyed as today). A miss after them goes to the user. The Exit evidence records each measured run's job table.
 
 ## 15. Governance
 
@@ -1679,6 +1679,56 @@ What the review found:
 - **`npx --yes bun@1 test/tools/goldensJsc.ts`**: 68/68 match on Bun 1.4.5 (JavaScriptCore).
 - **The smoke** (`node test/tools/uiSmoke.ts --profile-dir "$PROF" --shots "$(mktemp -d /tmp/wi10-shots-XXXX)"`, its own Chrome, profile and port; the GPU conditions and an EC check at 05:14 read first, no cap): 716/716 checks pass, `?selftest=1` "all 68 goldens match" and "IndexedDB contract: 10/10 passed" in Chrome. The shots were not committed (`assets/sp7a/` unchanged).
 - Nothing missed its bound: no lever fires.
+
+### CI at the exit (Task 54)
+
+§19's row: CI ≤ 6 min 0 s on the last two cold runs before the exit commit, 20 jobs. Task 56 Step 0's commit (320080c, master §10 at the exit and its pins) was pushed first; it touches `test/arch/` and the master, not `src/**` or `test/harness/**`, so its run hit the region caches (warm), and the exit commit stays docs-only (§14). Times come from `gh run view <id> [--attempt 2] --json jobs,createdAt,updatedAt,headSha`, as in "CI after the generator push": a job runs from its start to its completion, and the wall runs from the run's creation (for a re-run, the attempt's start) to its last update. Cold or warm is read from the `render` and `metrics-fast (rest)` jobs' region caches (`regions-Linux-<tier>-<shard>-…`, keyed on `src/**`, `test/harness/**` and the lockfile): "Cache not found … saved" is cold, "Cache restored" is warm.
+
+- **The last two cold runs before the exit commit** are those of the last two pushes that changed `src/**` or `test/harness/**`. 7dd0f5a (run 45760011056; the pushes f8ba0c3 and aa81da8 after it changed neither) and 8108144 (run 45927748952; Task 52f's `src/mesh/fluid.ts`, `test/harness/refs.ts` and `test/harness/water.ts`). In both, every region cache missed. No cold re-run was needed, so none was made.
+- **The warm re-run beside each** is attempt #2 of the same run (`gh run rerun`, the same 23 jobs), made today one after the other, with no other run in flight. Both hit every region cache. Beside them are the later pushes' warm runs on the same caches: f8ba0c3 and aa81da8 on 7dd0f5a's, and ae18561 (Task 53) and 320080c (Step 0) on 8108144's.
+- Every run holds 23 jobs: the 20 test jobs, `changes`, `metrics-merge` and `ci-ok` (8-11 s, 12-18 s and 2-5 s, left out below). The job count holds at 20, and every run is green.
+
+| job | 7dd0f5a (45760011056, **cold 1**) | #2 (warm re-run) | f8ba0c3 (45875154988, warm) | aa81da8 (45915825910, warm) | 8108144 (45927748952, **cold 2**) | #2 (warm re-run) | ae18561 (45940815116, warm) | 320080c (45942682469, warm) |
+|---|---|---|---|---|---|---|---|---|
+| **wall** | **7:58** | **5:37** | **7:03** | **7:07** | **8:25** | **8:02** | **6:17** | **7:26** |
+| `check` | 4:18 | 3:19 | 4:29 | 3:05 | 3:50 | 3:07 | 4:17 | 5:29 |
+| `unit (rest)` | 5:02 | 5:08 | 4:58 | 5:03 | 5:45 | 4:08 | 5:11 | 4:58 |
+| `unit (heavy-a)` | 3:07 | 3:05 | 2:45 | 3:45 | 4:09 | 3:10 | 3:10 | 4:20 |
+| `unit (heavy-b)` | 5:20 | 5:15 | 3:44 | 3:01 | 3:04 | 2:57 | 4:03 | 5:20 |
+| `unit (liveness)` | 5:57 | 3:32 | 4:55 | 5:51 | 6:00 | 4:49 | 4:08 | 4:33 |
+| `metrics-fast (rest)` | 4:40 | 4:09 | 4:36 | 6:45 | **8:05** | **7:44** | 6:00 | **7:07** |
+| `metrics-fast (persist)` | 2:22 | 2:13 | 2:50 | 2:12 | 2:47 | 2:51 | 2:46 | 2:17 |
+| `metrics-fast (surface)` | 2:05 | 2:57 | 2:51 | 2:05 | 2:56 | 4:00 | 2:11 | 2:56 |
+| `metrics-fast (terrain-caves)` | 2:56 | 5:16 | 5:26 | 4:11 | 5:11 | 3:34 | 3:34 | 4:13 |
+| `metrics-quick (terrain-surface-default)` | 4:31 | 4:28 | 3:26 | 3:21 | 2:31 | 4:29 | 4:32 | 2:43 |
+| `metrics-quick (terrain-large-slice-0)` | 2:25 | 2:35 | 3:19 | 3:16 | 1:45 | 1:42 | 3:15 | 1:49 |
+| `metrics-quick (terrain-large-slice-1)` | 2:42 | 3:11 | 3:16 | 3:18 | 1:52 | 3:12 | 3:09 | 1:46 |
+| `metrics-quick (surface-large-slice-0)` | 3:15 | 2:00 | 2:30 | 2:32 | 1:44 | 2:33 | 3:21 | 2:34 |
+| `metrics-quick (surface-large-slice-1)` | 2:33 | 2:10 | 3:18 | 3:18 | 2:04 | 1:55 | 3:16 | 2:14 |
+| `metrics-quick (caves)` | 3:06 | 2:47 | 3:28 | 2:00 | 3:19 | 2:42 | 2:35 | 2:10 |
+| `metrics-quick (caves-presets-edit-clipboard)` | 3:33 | 3:50 | 2:53 | 2:16 | 2:54 | 3:03 | 2:08 | 3:58 |
+| `metrics-quick (caves-biomes-persist)` | 2:59 | 4:02 | 3:11 | 2:32 | 3:34 | 2:28 | 4:00 | 2:42 |
+| `metrics-quick (region)` | 2:50 | 3:25 | 4:22 | 4:25 | 3:41 | 2:28 | 3:35 | 2:35 |
+| `metrics-quick (render)` | **7:26** | 5:01 | **6:32** | **6:35** | 4:42 | **7:06** | 3:25 | 4:54 |
+| `metrics-quick (rest)` | 4:42 | 4:39 | 4:05 | 4:38 | 4:30 | 4:35 | 4:38 | 3:32 |
+
+The two long-pole jobs' files, from their logs. vitest runs each job's files in parallel on the 4-CPU runner, so the times overlap. Each cell gives vitest's duration, then the files:
+
+| run | `render`: vitest / `waterfalls` / `light` / `render.metric` / `stream` | `metrics-fast (rest)`: vitest / `params` / `clipboard` / `edit` / `region` |
+|---|---|---|
+| 7dd0f5a (cold 1) | 424 s / 314 / 300 / 284 / 107 | 266 s / 136 / 115 / 65 / 54 |
+| 7dd0f5a #2 (warm re-run) | 277 s / 206 / 197 / 136 / 69 | 238 s / 126 / 93 / 50 / 46 |
+| f8ba0c3 (warm) | 373 s / 283 / 256 / 174 / 87 | 262 s / 137 / 107 / 61 / 52 |
+| aa81da8 (warm) | 376 s / 298 / 261 / 210 / 75 | 391 s / 213 / 158 / 77 / 74 |
+| 8108144 (cold 2) | 264 s / 189 / 190 / 169 / 74 | 463 s / 236 / 197 / 114 / 86 |
+| 8108144 #2 (warm re-run) | 404 s / 307 / 275 / 203 / 94 | 444 s / 237 / 173 / 102 / 84 |
+| ae18561 (warm) | 189 s / 138 / 129 / 90 / 50 | 346 s / 189 / 139 / 75 / 64 |
+| 320080c (warm) | 278 s / 207 / 191 / 130 / 68 | 405 s / 217 / 161 / 84 / 76 |
+
+- **The rule (Step 2): missed.** The two cold runs read **7:58** and **8:25** against ≤ 6:00. Their warm re-runs read 5:37 and 8:02, and the other warm runs 6:17-7:26. §14's levers go to Task 55, lever (0) first. A miss after lever (0) and (1)-(4) goes to the user (rulings R27 item 2).
+- **The long pole moves between two jobs.** On cold 1 it is `metrics-quick (render)` (7:26, `waterfalls.metric.ts` 314 s), which lever (0) targets. On cold 2 it is `metrics-fast (rest)` (8:05), where `params.metric.ts` takes 236 s and `clipboard.metric.ts` 197 s, while `render` read 4:42. On cold 2's warm re-run both run long (7:44 and 7:06). `metrics-fast (rest)` read 4:09-4:40 on 7dd0f5a and f8ba0c3, then 6:00-8:05 on the five runs from aa81da8. Between f8ba0c3 and aa81da8 no metric file, `src/**` or `test/harness/**` changed; only `test/tools/uiSmoke.ts`, `test/unit/uiSmoke.test.ts`, `test/arch/masterSpec.test.ts` and docs did. 7dd0f5a's re-run today read 4:09 (`params` 126 s). So each file in that job grew 1.5-2.3 ×, by about the same factor for all of them. That reads as runner speed (±45 %, the SP6b spec §13), not a code change, but it has held on five runs in a row. None of §14's levers (0)-(4) touches `metrics-fast (rest)`: lever (1) rebalances the unit shards, and (2)-(4) the metrics-quick caves and region jobs. If `metrics-fast (rest)` stays above 6:00 after lever (0), Task 55 has no lever for it, and that goes to the user.
+- **Runner variance** is as large as the cache's effect. The same commit and caches gave `render` 4:42 cold and 7:06 warm (8108144), and 7:26 cold and 5:01 warm (7dd0f5a). Across all eight runs, `waterfalls.metric.ts` read 138-314 s and `params.metric.ts` 126-237 s.
+- **Other jobs** stayed under 6:00 on every run. The closest were `unit (liveness)` at 6:00 (cold 2) and 5:57 (cold 1), `check` at 5:29 (320080c), `unit (rest)` at 5:45 and `metrics-fast (terrain-caves)` at 5:26.
 
 ## Threshold log
 
