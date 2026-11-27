@@ -1730,6 +1730,47 @@ The two long-pole jobs' files, from their logs. vitest runs each job's files in 
 - **Runner variance** is as large as the cache's effect. The same commit and caches gave `render` 4:42 cold and 7:06 warm (8108144), and 7:26 cold and 5:01 warm (7dd0f5a). Across all eight runs, `waterfalls.metric.ts` read 138-314 s and `params.metric.ts` 126-237 s.
 - **Other jobs** stayed under 6:00 on every run. The closest were `unit (liveness)` at 6:00 (cold 2) and 5:57 (cold 1), `check` at 5:29 (320080c), `unit (rest)` at 5:45 and `metrics-fast (terrain-caves)` at 5:26.
 
+### CI levers (Task 55)
+
+Task 54's cold runs missed 6:00 (7:58, 8:25), so §14's levers ran in order, each one commit, pushed and measured: its push run (warm: no lever changed `src/**`, `test/harness/**` or the lockfile, the region caches' key) and two cold re-runs (`gh run rerun`, attempts #2 and #3, each after deleting this branch's `regions-*` caches for the current key; every region cache missed in each, "Cache not found"). Times as in "CI at the exit": a job from its start to its completion, the wall from the attempt's start to its last update. Every run is green and holds 23 jobs (the 20 test jobs, `changes`, `metrics-merge`, `ci-ok`). In bold: each run's long pole.
+
+- **Lever (0)**, 22963e5 (rulings R27 item 2): `waterfalls.metric.ts` off `render`, its sample read in two halves (`METRICS_SLICE`, lattice row slices k, k + 2, …) riding the large profile's terrain slices, renamed `terrain-large-waterfalls-slice-0`, `-1`; `metrics-merge` sums the halves (`mergeSampleAccs`) and gates the whole sample (locally the merged record equals the whole run's, `ms` aside: 41.7 per km², 44 falls on 1.055 km²).
+- **Lever (1)**, 6c6e515: the unit shards rebalanced by each file's median over eight runs: terrainScatter, water, springs, aquifer and simEdits into `heavy-a`; densityFast and carve from `liveness` to `rest` (summed 369 / 571 / 668 / 757 s → 579 / 571 / 610 / 605 s).
+- **Lever (2)**, 3d936c1 (rulings P53): B5's lake windows moved unchanged from `region.metric.ts` into `caves.metric.ts`'s biomes-group block (`caves-biomes-persist` on quick, `terrain-caves` on fast); quick still reads `lakeAirAdjacent` 247.
+
+| job | (0) 22963e5 #1 warm (45951397852) | (0) #2 **cold** | (0) #3 **cold** | (1) 6c6e515 #1 warm (45956577670) | (1) #2 **cold** | (1) #3 **cold** | (2) 3d936c1 #1 warm (45961327599) | (2) #2 **cold** | (2) #3 **cold** |
+|---|---|---|---|---|---|---|---|---|---|
+| **wall** | **5:47** | **8:22** | **6:44** | **8:06** | **6:45** | **6:37** | **7:56** | **7:40** | **6:40** |
+| `check` | 3:59 | 5:36 | 3:57 | 5:03 | 5:10 | 4:27 | 5:30 | 3:56 | 5:30 |
+| `unit (heavy-a)` | 4:21 | 4:25 | 2:26 | 5:05 | 4:03 | 3:04 | 4:37 | 3:14 | 3:46 |
+| `unit (heavy-b)` | 4:42 | 4:14 | 5:16 | 3:42 | 3:16 | 4:13 | 4:07 | 5:07 | 4:16 |
+| `unit (liveness)` | 4:42 | 4:18 | 5:58 | 4:23 | 3:49 | 4:23 | 3:46 | 5:22 | 3:57 |
+| `unit (rest)` | 4:45 | 3:42 | **6:25** | 5:21 | 5:33 | 4:03 | 3:15 | 5:15 | 4:12 |
+| `metrics-fast (persist)` | 1:45 | 2:20 | 2:52 | 2:17 | 2:06 | 2:13 | 2:45 | 2:21 | 2:49 |
+| `metrics-fast (rest)` | 5:20 | **8:02** | 5:34 | **7:46** | **6:18** | **6:16** | **7:32** | **7:13** | **6:21** |
+| `metrics-fast (surface)` | 2:37 | 2:31 | 2:34 | 2:18 | 2:03 | 2:16 | 3:59 | 2:33 | 4:03 |
+| `metrics-fast (terrain-caves)` | **5:26** | 3:10 | 5:24 | 5:25 | 3:47 | 3:54 | 3:51 | 3:03 | 5:48 |
+| `metrics-quick (caves)` | 3:27 | 4:43 | 4:27 | 2:51 | 3:27 | 4:30 | 3:26 | 3:32 | 3:35 |
+| `metrics-quick (caves-biomes-persist)` | 3:29 | 3:35 | 4:24 | 3:51 | 3:26 | 4:25 | 4:16 | 4:50 | 3:04 |
+| `metrics-quick (caves-presets-edit-clipboard)` | 3:54 | 4:21 | 4:33 | 3:59 | 2:28 | 4:48 | 3:12 | 4:24 | 2:43 |
+| `metrics-quick (region)` | 3:28 | 3:49 | 4:48 | 3:15 | 3:50 | 3:51 | 3:06 | 4:19 | 3:47 |
+| `metrics-quick (render)` | 2:13 | 2:53 | 3:42 | 3:01 | 3:19 | 1:58 | 3:05 | 3:16 | 2:51 |
+| `metrics-quick (rest)` | 4:04 | 4:02 | 4:08 | 3:12 | 4:08 | 4:39 | 4:34 | 3:29 | 4:07 |
+| `metrics-quick (surface-large-slice-0)` | 1:55 | 3:24 | 3:21 | 3:09 | 2:29 | 1:46 | 3:15 | 2:37 | 1:49 |
+| `metrics-quick (surface-large-slice-1)` | 3:31 | 2:54 | 2:36 | 2:31 | 2:52 | 3:08 | 3:27 | 1:48 | 3:17 |
+| `metrics-quick (terrain-large-waterfalls-slice-0)` | 3:26 | 5:17 | 3:20 | 3:49 | 5:04 | 3:06 | 5:18 | 2:38 | 3:16 |
+| `metrics-quick (terrain-large-waterfalls-slice-1)` | 4:31 | 5:12 | 4:29 | 2:39 | 5:14 | 3:46 | 2:38 | 4:33 | 3:50 |
+| `metrics-quick (terrain-surface-default)` | 2:36 | 3:54 | 2:27 | 2:48 | 2:37 | 2:31 | 4:28 | 3:04 | 3:30 |
+| `changes` | 0:10 | 0:08 | 0:08 | 0:08 | 0:14 | 0:09 | 0:11 | 0:10 | 0:07 |
+| `metrics-merge` | 0:17 | 0:22 | 0:13 | 0:19 | 0:17 | 0:12 | 0:29 | 0:15 | 0:18 |
+| `ci-ok` | 0:02 | 0:04 | 0:03 | 0:03 | 0:02 | 0:02 | 0:03 | 0:02 | 0:02 |
+
+`metrics-fast (rest)`'s files (vitest runs them in parallel; vitest / `params` / `clipboard` / `edit` / `region`): (0) 300 / 165 / 112 / 66 / 55 s, 467 / 239 / 195 / 113 / 89, 316 / 169 / 128 / 76 / 59; (1) 442 / 237 / 180 / 100 / 85, 364 / 194 / 147 / 87 / 69, 361 / 188 / 146 / 89 / 72; (2) 431 / 237 / 168 / 99 / 69, 413 / 216 / 174 / 103 / 69, 361 / 192 / 147 / 88 / 58. `waterfalls.metric.ts`' halves in the terrain slices: 112-246 s each.
+
+- **Still missed.** The six cold runs read 8:22 and 6:44 (lever 0), 6:45 and 6:37 (lever 1), 7:40 and 6:40 (lever 2); the warm runs 5:47, 8:06 and 7:56.
+- **The long pole is `metrics-fast (rest)`** on seven of the nine runs (6:16-8:02; `params.metric.ts` 165-239 s and `clipboard.metric.ts` 112-195 s), a shard none of §14's levers (0)-(4) touches; the other two were `metrics-fast (terrain-caves)` 5:26 and `unit (rest)` 6:25. `render` fell from 3:25-7:26 to 1:58-3:42 after lever (0). Every metrics-quick job stayed at or under 5:18.
+- **Lever (3) not taken: no fold fits** (§14's STOP, Spec correction 18). The caves default group (`caves`, 2:51-4:43) is not a long pole, and splitting it needs one metrics-quick shard folded into a neighbour. The lightest fold, `render` with `terrain-surface-default`, sums 239-413 s of vitest over these nine runs (over 300 s on seven), a job of about 4:30-7:20 against the ≤ 5:15 a job may take inside 6:00; every other allowed pair's worst run is longer (421 s and more). Lever (4) was not run after the STOP. Both go to the user with these tables.
+
 ## Threshold log
 
 (One line per commit that changes `test/thresholds.lock.json`, and per gate decision that changes no lock.)
