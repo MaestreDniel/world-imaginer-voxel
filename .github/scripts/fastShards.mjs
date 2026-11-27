@@ -26,7 +26,10 @@ export const SHARDS = {
   surface: [`${DIR}/surface.metric.ts`],
   // SP6b Task 58 (ruling U14; spec §13 Stage 2 item 3): E1-E7 and E5's flush part (`persist.metric.ts`) in a shard of
   // its own, out of `rest`, which ran 5:04-6:15 at the exit (vitest 350 s: persist 235 s, clipboard 144 s, params 124 s).
-  persist: [`${DIR}/persist.metric.ts`],
+  // SP7a §14 lever (5) (the user's rulings R28): `clipboard.metric.ts` joins it, out of `rest`, the long pole of 7 of
+  // Task 55's 9 runs (job 5:20-8:02; params 165-239 s, clipboard 112-195 s). Over those runs persist + clipboard sum to
+  // 201-316 s of vitest (this job 1:45-2:52), surface + clipboard to 248-390 s (that job 2:03-4:03): the lower worst case.
+  persist: [`${DIR}/persist.metric.ts`, `${DIR}/clipboard.metric.ts`],
   rest: null,
 };
 

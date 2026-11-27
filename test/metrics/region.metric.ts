@@ -1,6 +1,3 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
 import { fnv1a32, hex64 } from '../../src/core/hash';
 import { canonicalJSON } from '../../src/core/params/canonical';
@@ -9,7 +6,6 @@ import { resolveProfile } from '../../src/core/params/profiles';
 import { SCHEMA, type Params } from '../../src/core/params/schema';
 import { Xoshiro128 } from '../../src/core/rng';
 import { seedFromInput } from '../../src/core/seed';
-import { buildColumnSample, newColumnSample, readLevel } from '../../src/gen/column/columnStage';
 import { createGenContext, type GenContext } from '../../src/gen/context';
 import { cornerValueIndex } from '../../src/gen/density/compile';
 import { createDensityContext } from '../../src/gen/density/context';

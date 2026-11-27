@@ -99,8 +99,9 @@
  *   run 30° down), both in the biome region only, and `spillSlope` (a water spring whose landed spill, its lone front's
  *   voxels below the landing, the bottom of its fall, reaches 4 blocks or more from it horizontally; the eye 12 out
  *   along the spring's direction and 6 above the spill's midpoint, facing it).
- * - **B5** (Task 25, §13.2; `lakeAirAdjacentCount`, `lakeSpillCount`; `region.metric.ts` reads them over T windows around
- *   lake cells, as a unit test cannot import a `.metric.ts` file), over a lake mask the caller builds (1 on a position
+ * - **B5** (Task 25, §13.2; `lakeAirAdjacentCount`, `lakeSpillCount`; `caves.metric.ts`'s biomes group reads them over
+ *   T windows around lake cells since §14's lever (2) (Task 55b: `caves-biomes-persist` on quick, `terrain-caves` on
+ *   fast), as a unit test cannot import a `.metric.ts` file), over a lake mask the caller builds (1 on a position
  *   of the view's region, `(z − 16·cz0)·16w + (x − 16·cx0)`, inside a lake; the metric's positions whose nearest quart
  *   corner holds a finite `lakeLevel`, where D19 puts Lw). A lake source is a voxel of a masked position holding
  *   untagged proto `WATER_SOURCE` in a passable block (sky-open water) under a passable voxel with no fluid: the top of

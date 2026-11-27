@@ -15,7 +15,8 @@
  * merge run) is `terrain-caves` (SP6a's `caves` folded into `terrain` by Task 58), `surface` and Task 58's `persist`,
  * plus `rest`. With `check`, 20 parallel test jobs (SP6b spec §13). SP7a Task 55's lever (0) (spec §14; rulings R27 item 2)
  * moves `waterfalls.metric.ts` off `render`: its sample in two halves riding the large profile's terrain slices
- * (`terrain-large-waterfalls-slice-k`), summed by the merge.
+ * (`terrain-large-waterfalls-slice-k`), summed by the merge. Lever (5) (rulings R28) moves `clipboard.metric.ts` from the
+ * metrics-fast `rest` into `persist`.
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -147,19 +148,20 @@ describe('shardArgs (SP4b spec §1.1)', () => {
     expect(r.stdout).toMatch(/^merge: test\/metrics\/terrain\.metric\.ts test\/metrics\/surface\.metric\.ts test\/metrics\/waterfalls\.metric\.ts \(METRICS_PROFILES=large_biomes METRICS_SLICE=merge\/2\), its slices sound$/m);
   }, 120_000);
 
-  test('the metrics-fast table (SP6b Task 58, ruling U14): terrain with caves, surface and persist, rest excludes the four', () => {
+  test('the metrics-fast table (SP6b Task 58, ruling U14; SP7a §14 lever (5), rulings R28): terrain with caves, surface, persist with clipboard, rest excludes the five', () => {
     expect(FAST_SHARDS).toEqual({
       'terrain-caves': ['test/metrics/terrain.metric.ts', 'test/metrics/caves.metric.ts'],
       surface: ['test/metrics/surface.metric.ts'],
-      persist: ['test/metrics/persist.metric.ts'],
+      persist: ['test/metrics/persist.metric.ts', 'test/metrics/clipboard.metric.ts'],
       rest: null,
     });
     expect(shardArgs(FAST_SHARDS, 'rest')).toEqual([
       '--exclude', 'test/metrics/terrain.metric.ts', '--exclude', 'test/metrics/caves.metric.ts', '--exclude', 'test/metrics/surface.metric.ts',
-      '--exclude', 'test/metrics/persist.metric.ts',
+      '--exclude', 'test/metrics/persist.metric.ts', '--exclude', 'test/metrics/clipboard.metric.ts',
     ]);
     expect(existsSync(`${ROOT}test/metrics/caves.metric.ts`)).toBe(true);
     expect(existsSync(`${ROOT}test/metrics/persist.metric.ts`)).toBe(true);
+    expect(existsSync(`${ROOT}test/metrics/clipboard.metric.ts`)).toBe(true);
   });
 
   test('the metrics-fast table against the .metric.ts files on disk: one catch-all, each named file on disk and in one shard, rest gets the others (a listing simulated from the table, not vitest list)', () => {
@@ -168,7 +170,7 @@ describe('shardArgs (SP4b spec §1.1)', () => {
     const listed = Object.fromEntries(Object.entries(FAST_SHARDS).map(([name, files]) =>
       [name, files ?? onDisk.filter((f) => !named.includes(f))]));
     expect(coverageProblems({ project: 'metrics-fast', shards: FAST_SHARDS, all: onDisk, onDisk, listed })).toEqual([]);
-    expect(listed.rest!.length).toBe(onDisk.length - 4);
+    expect(listed.rest!.length).toBe(onDisk.length - 5);
   });
 });
 
