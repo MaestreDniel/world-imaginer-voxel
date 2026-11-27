@@ -468,9 +468,9 @@ Local, after the aquifer, the springs, the settle, the reference and the A parts
 | R5 water windows, R1 with flowing water | `render` (1:49-2:49) | +15-30 s |
 | unit: rules, aquifer, springs, settle, mesher, fuzz | named into `heavy-a`/`heavy-b` by measured time, never `rest` | +20-40 s spread |
 | liveness witnesses | `livenessSp7a.test.ts` in `liveness` (3:24-4:19) | +20-40 s (Task 31r: the water springs' witness search widened from 1,024 to 6,144 examined columns, the bound rulings R22 named, its `tries` witness the 2,871st; that test 33 → 57 s locally) |
-| `A5.waterfalls`' steep-land sample (Task 31; rulings R20: about 3.6 CPU-min, the scan 72 s and the springs 146 s single-threaded on the laptop) | its own file, `test/metrics/waterfalls.metric.ts`, in the metrics-quick `render` shard (2:04 in run 45144707470, the shard with the most slack), read in 4 worker threads; gated on quick and full only (`tiers: ['quick', 'full']`: the sample is the same on every tier), so `npm test` and the metrics-fast shards register only a skipped test | +60-90 s on `render` (measured locally: see Exit evidence, Task 31); no new job |
+| `A5.waterfalls`' steep-land sample (Task 31; rulings R20: about 3.6 CPU-min, the scan 72 s and the springs 146 s single-threaded on the laptop) | its own file, `test/metrics/waterfalls.metric.ts`, in the metrics-quick `render` shard (2:04 in run 45144707470, the shard with the most slack), read in 4 worker threads; gated on quick and full only (`tiers: ['quick', 'full']`: the sample is the same on every tier), so `npm test` and the metrics-fast shards register only a skipped test | estimated +60-90 s on `render` (measured locally: see Exit evidence, Task 31); measured in CI (a Spec correction, rulings R27 item 2): `render` 2:04 → about 6.5-7.5 min, `waterfalls.metric.ts` 283-320 s in CI (194 s on the generator push's run; Exit evidence, CI after the generator push); no new job |
 
-Expected cold wall 5:40-6:10. **Budget: ≤ 6 min 0 s** on the last two cold runs before the exit commit (the exit commit is docs-only; CI's docs-only path skips the metrics jobs), job count 20 (no new job). **Levers if missed, in order** (no sample reductions, ruling R23; no gate loosened): (1) rebalance the unit shards by the run's measured file times; (2) B5's lake windows into `caves-biomes-persist`; (3) the caves default group in two column slices with the merge job (the SP6b spec §13's item 1, second half, not taken then); (4) the settle reference's regions cached as dumps beside the T dumps (keyed as today). A miss after them goes to the user. The Exit evidence records each measured run's job table.
+Expected cold wall 5:40-6:10. **Budget: ≤ 6 min 0 s** on the last two cold runs before the exit commit (the exit commit is docs-only; CI's docs-only path skips the metrics jobs), job count 20 (no new job). **Levers if missed, in order** (no sample reductions, ruling R23; no gate loosened): (0) move `waterfalls.metric.ts` out of `render` into the metrics-quick shard with the most slack, or split its lattice slices across two shards whose counts merge (`mergeSampleAccs`), rulings R27 item 2; (1) rebalance the unit shards by the run's measured file times; (2) B5's lake windows into `caves-biomes-persist`; (3) the caves default group in two column slices with the merge job (the SP6b spec §13's item 1, second half, not taken then); (4) the settle reference's regions cached as dumps beside the T dumps (keyed as today). A miss after them goes to the user. The Exit evidence records each measured run's job table.
 
 ## 15. Governance
 
@@ -1215,6 +1215,48 @@ The record of the generator push (Tasks 12-32, base `<push base>` 78c48e4), on d
 - **`bench:record`** wrote `test/baselines.json` (killRatio 0.850, was 0.858). Ratios against Task 31r's baselines: `paste.max` ×0.893, `paste.maxLit` ×0.932, `caveBiome.column` ×0.932, every other kernel within 5 % (`terrain.real` ×1.044).
 
 **Tests**: `npm run typecheck`; `npm test -- --maxWorkers=4` (379 files passed, 3 skipped; 7,424 tests passed, 1 expected fail, 17 skipped, 0 failed); `npm run test:metrics -- --maxWorkers=3` (20 files, 106 tests passed, 9 skipped; DT1 `settleReference` and `settleIsolated` 0, the coast window's interior settling 650 voxels as the golden's own count).
+
+### CI after the generator push (Task 32 Step 5; rulings R27 item 2)
+
+Task 32 Step 5's record, owed since the push (rulings R27 item 2): the generator push's run and the later runs, each job's time against §14's estimates. Times from `gh run view <id> --json jobs,createdAt,updatedAt,headSha`: a job from its start to its completion, the wall from the run's creation to its last update. Cold or warm by the `render` job's region cache (`regions-Linux-metrics-quick-render-…`, keyed on `src/**`, `test/harness/**` and the lockfile): missed on 64e8a5c, 0f38043 and 7dd0f5a (cold), hit on f8ba0c3 (warm). Every run holds 23 jobs: the 20 test jobs, `changes`, `metrics-merge` and `ci-ok` (`changes` 7-8 s, `metrics-merge` 12-13 s and `ci-ok` 2-5 s are left out below), so the job count holds. Main's run 44141528461 is §14's "today" column.
+
+| job | main 3264974 (44141528461, cold) | 64e8a5c (45526059806, cold) | 0f38043 (45754217502, cold) | 7dd0f5a (45760011056, cold) | f8ba0c3 (45875154988, warm) | §14's estimate |
+|---|---|---|---|---|---|---|
+| **wall** | **5:24** | **8:23** | **8:04** | **7:58** | **7:03** | 5:40-6:10, budget ≤ 6:00 |
+| `check` | 3:54 | 3:18 | 4:49 | 4:18 | 4:29 | — |
+| `unit (rest)` | 5:01 | 3:46 | 3:32 | 5:02 | 4:58 | none (SP7a files go to heavy-a/heavy-b) |
+| `unit (heavy-a)` | 2:57 | 4:23 | 3:05 | 3:07 | 2:45 | +20-40 s spread (unit) |
+| `unit (heavy-b)` | 2:26 | 4:02 | 5:20 | 5:20 | 3:44 | +20-40 s spread (unit) |
+| `unit (liveness)` | 3:29 | 3:27 | 3:23 | 5:57 | 4:55 | +20-40 s (liveness witnesses) |
+| `metrics-fast (rest)` | 3:55 | 8:02 | 4:36 | 4:40 | 4:36 | — |
+| `metrics-fast (persist)` | 2:06 | 2:53 | 2:19 | 2:22 | 2:50 | — |
+| `metrics-fast (surface)` | 2:15 | 3:57 | 3:36 | 2:05 | 2:51 | +10-25 s (T) |
+| `metrics-fast (terrain-caves)` | 3:01 | 3:46 | 3:46 | 2:56 | 5:26 | +10-25 s (T) |
+| `metrics-quick (terrain-surface-default)` | 2:39 | 3:06 | 3:20 | 4:31 | 3:26 | +10-25 s (T) |
+| `metrics-quick (terrain-large-slice-0)` | 2:21 | 2:19 | 2:31 | 2:25 | 3:19 | +10-25 s (T) |
+| `metrics-quick (terrain-large-slice-1)` | 3:09 | 2:53 | 2:24 | 2:42 | 3:16 | +10-25 s (T) |
+| `metrics-quick (surface-large-slice-0)` | 1:51 | 2:52 | 3:14 | 3:15 | 2:30 | +10-25 s (T) |
+| `metrics-quick (surface-large-slice-1)` | 2:34 | 2:19 | 2:39 | 2:33 | 3:18 | +10-25 s (T) |
+| `metrics-quick (caves)` | 1:46 | 4:29 | 4:24 | 3:06 | 3:28 | +10-25 s (T), +15-40 s (settle reference, A1-A5) |
+| `metrics-quick (caves-presets-edit-clipboard)` | 3:30 | 3:25 | 3:02 | 3:33 | 2:53 | +10-25 s (T), +15-40 s (settle reference, A1-A5) |
+| `metrics-quick (caves-biomes-persist)` | 3:54 | 4:26 | 2:25 | 2:59 | 3:11 | +10-25 s (T), +15-40 s (settle reference, A1-A5) |
+| `metrics-quick (region)` | 2:12 | 4:49 | 2:50 | 2:50 | 4:22 | +10-25 s (T), +40-70 s (DT1 settle, the D key, B5) |
+| `metrics-quick (render)` | 1:43 | 4:57 | 7:35 | 7:26 | 6:32 | +10-25 s (T), +15-30 s (R5, R1), +60-90 s (waterfalls) |
+| `metrics-quick (rest)` | 2:55 | 4:10 | 5:09 | 4:42 | 4:05 | — |
+
+The `render` job's files, from its log (`vitest run --project metrics-quick` over its five files, which run in parallel on the 4-CPU runner, `waterfalls.metric.ts` in 4 worker threads, so the times overlap):
+
+| run | `render` job | vitest | `waterfalls.metric.ts` | `light.metric.ts` | `render.metric.ts` | `stream.metric.ts` | `g1.metric.ts` |
+|---|---|---|---|---|---|---|---|
+| 64e8a5c (45526059806, cold) | 297 s | 278 s | 194 s | 192 s | 89 s | 81 s | 0.1 s |
+| 0f38043 (45754217502, cold) | 455 s | 430 s | 320 s | 310 s | 273 s | 107 s | 0.2 s |
+| 7dd0f5a (45760011056, cold) | 446 s | 424 s | 314 s | 300 s | 284 s | 107 s | 0.2 s |
+| f8ba0c3 (45875154988, warm) | 392 s | 373 s | 283 s | 256 s | 174 s | 87 s | 0.2 s |
+
+- **The budget is missed on every run**: 7:03-8:23 against ≤ 6:00 (the exit's two cold runs are Task 54's).
+- **The long pole is `render`** since 0f38043 (6:32-7:35, against 1:43 on main and §14's 2:04 + 1:25-2:25 of estimates). `waterfalls.metric.ts` alone takes 283-320 s there (194 s on the push's run), against §14's +60-90 s; `render.metric.ts` rose from 89 s to 174-284 s with Task 33's R5 windows (after the push). §14's waterfalls row now states the measured cost, and its lever list gains lever (0), which targets this shard (rulings R27 item 2; none of (1)-(4) touches it).
+- **The push's run** had `metrics-fast (rest)` as its long pole (8:02); the later runs read 4:36-4:40 there, so it is not a standing cost.
+- **Other jobs**, all under the 6:00 budget on the runs since the push: `metrics-quick (caves)` 3:06-4:29 against main's 1:46 (§14: +25-65 s), `region` 2:50-4:49 against 2:12 (+50-95 s), `metrics-quick (rest)` 4:05-5:09 against 2:55 (no SP7a estimate), the T-only shards 2:19-4:31 against 1:51-3:09 (+10-25 s); `unit (heavy-b)` 3:44-5:20 and `unit (liveness)` 3:23-5:57 vary run to run beyond §14's +20-40 s. Lever (1) reads the unit shards from these tables.
 
 ### R5's measuring task (Task 33)
 
