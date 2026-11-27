@@ -1,0 +1,3403 @@
+{
+  "task": "SP7a Task 57: the production check on main 89cbbf2 (Step 0's SP6b world before the merge, Step 1's merge and main CI, Step 2 in Chrome by the agent; Firefox by the user, by hand, pending)",
+  "date": "2026-11-27T23:29:11.026Z",
+  "url": "https://world-imaginer-voxel.vercel.app/",
+  "gitHead": "89cbbf2d834dd5c852655a82d2eedebe09d72081",
+  "servedBundle": "index-C6xAMIYE.js",
+  "localBundle": "index-C6xAMIYE.js",
+  "sameBuild": true,
+  "bundleCompare": {
+    "servedBundle": "index-C6xAMIYE.js",
+    "servedCss": "index-CvFmo4uU.css",
+    "localBundle": "index-C6xAMIYE.js",
+    "indexSha256": "b6524c0ba15f2d3fce3c85643c55d6e1f28ff9b08939938bc688fe8dd920224d",
+    "localIndexHtmlEqual": true,
+    "distDir": "test/metrics/.out/task57/dist-main (vite build of main 89cbbf2)",
+    "distBuiltAt": "2026-11-27T23:22:02.631Z",
+    "assetsCompared": 52,
+    "assetsEqual": 52,
+    "assetsDiffering": []
+  },
+  "ci": {
+    "mainRun": 46082054948,
+    "mainHead": "89cbbf2",
+    "mainConclusion": "success",
+    "jobs": 23,
+    "mainCreated": "2026-11-27T23:21:38Z",
+    "mainLastJobEnd": "2026-11-27T23:27:35.000Z",
+    "mainWall": "5:57",
+    "against": "7:30 on cold runs (rulings R29; the user, 2026-11-27); also within §14's 6:00",
+    "cold": "cold: main held no regions-* cache before this run (only node-cache); the run created main's seven regions-* caches",
+    "longestJobs": [
+      "metrics-fast (rest) 5:37",
+      "check 5:35",
+      "unit (liveness) 5:20",
+      "metrics-quick (caves-biomes-persist) 4:41",
+      "metrics-quick (caves-presets-edit-clipboard) 4:32",
+      "unit (heavy-a) 4:28"
+    ],
+    "deploy": "production served index-C6xAMIYE.js by 2026-11-27T23:22Z (first poll after the push), byte-identical to a local build of main (52/52); the sp7a golden keys in its sp1Goldens chunk"
+  },
+  "ecChecks": {
+    "step0": [
+      "2026-11-28T00:18:24+01:00 load 0.29 0.65 1.29; pkg 52 C; hottest 45 C (TCPU_PCI); AC 1",
+      "  6 threads t=5s: busiest-6 mean 4.10 GHz; all: min 0.40 med 3.30 max 4.10 GHz; pkg 90 C; hottest 90 C (TCPU_PCI)",
+      "  6 threads t=10s: busiest-6 mean 4.10 GHz; all: min 0.40 med 3.47 max 4.10 GHz; pkg 90 C; hottest 90 C (TCPU_PCI)",
+      "  6 threads t=14s: busiest-6 mean 4.10 GHz; all: min 0.40 med 3.19 max 4.10 GHz; pkg 90 C; hottest 90 C (TCPU_PCI)",
+      "  20 threads t=5s: busiest-20 mean 2.32 GHz; all: min 2.20 med 2.40 max 2.50 GHz; pkg 64 C; hottest 64 C (TCPU_PCI)",
+      "  20 threads t=10s: busiest-20 mean 2.32 GHz; all: min 2.19 med 2.40 max 2.50 GHz; pkg 62 C; hottest 62 C (TCPU_PCI)",
+      "  20 threads t=14s: busiest-20 mean 2.32 GHz; all: min 2.18 med 2.40 max 2.40 GHz; pkg 61 C; hottest 61 C (TCPU_PCI)",
+      "2026-11-28T00:19:00+01:00 done; pkg 57 C; hottest 53 C (TCPU_PCI)"
+    ],
+    "step2": [
+      "2026-11-28T00:28:32+01:00 load 0.13 0.58 1.12; pkg 42 C; hottest 43 C (TCPU_PCI); AC 1",
+      "  6 threads t=5s: busiest-6 mean 4.10 GHz; all: min 0.40 med 3.29 max 4.10 GHz; pkg 88 C; hottest 88 C (TCPU_PCI)",
+      "  6 threads t=10s: busiest-6 mean 4.10 GHz; all: min 0.40 med 3.36 max 4.10 GHz; pkg 90 C; hottest 92 C (x86_pkg_temp)",
+      "  6 threads t=14s: busiest-6 mean 4.10 GHz; all: min 0.40 med 3.21 max 4.10 GHz; pkg 90 C; hottest 90 C (TCPU_PCI)",
+      "  20 threads t=5s: busiest-20 mean 2.34 GHz; all: min 2.19 med 2.40 max 2.50 GHz; pkg 62 C; hottest 62 C (TCPU_PCI)",
+      "  20 threads t=10s: busiest-20 mean 2.35 GHz; all: min 2.19 med 2.40 max 2.50 GHz; pkg 59 C; hottest 61 C (TCPU_PCI)",
+      "  20 threads t=14s: busiest-20 mean 2.37 GHz; all: min 2.19 med 2.44 max 2.50 GHz; pkg 60 C; hottest 61 C (TCPU_PCI)",
+      "2026-11-28T00:29:07+01:00 done; pkg 56 C; hottest 52 C (TCPU_PCI)"
+    ],
+    "step2Step6Rerun": [
+      "2026-11-28T00:35:19+01:00 load 2.44 3.04 2.16; pkg 45 C; hottest 48 C (TCPU_PCI); AC 1",
+      "  6 threads t=5s: busiest-6 mean 4.10 GHz; all: min 0.40 med 3.20 max 4.10 GHz; pkg 90 C; hottest 90 C (TCPU_PCI)",
+      "  6 threads t=10s: busiest-6 mean 4.10 GHz; all: min 0.40 med 3.19 max 4.10 GHz; pkg 90 C; hottest 90 C (TCPU_PCI)",
+      "  6 threads t=14s: busiest-6 mean 4.10 GHz; all: min 0.40 med 3.20 max 4.10 GHz; pkg 90 C; hottest 90 C (x86_pkg_temp)",
+      "  20 threads t=5s: busiest-20 mean 2.36 GHz; all: min 2.19 med 2.40 max 2.50 GHz; pkg 64 C; hottest 63 C (TCPU_PCI)",
+      "  20 threads t=10s: busiest-20 mean 2.36 GHz; all: min 2.20 med 2.40 max 2.50 GHz; pkg 62 C; hottest 62 C (TCPU_PCI)",
+      "  20 threads t=14s: busiest-20 mean 2.35 GHz; all: min 2.19 med 2.40 max 2.50 GHz; pkg 62 C; hottest 63 C (TCPU_PCI)",
+      "2026-11-28T00:35:54+01:00 done; pkg 58 C; hottest 55 C (TCPU_PCI)"
+    ],
+    "firstRun": [
+      "2026-11-28T00:09:50+01:00 load 0.22 0.65 1.54; pkg 42 C; hottest 43 C (TCPU_PCI); AC 1",
+      "  6 threads t=5s: busiest-6 mean 4.10 GHz; all: min 0.40 med 3.30 max 4.10 GHz; pkg 89 C; hottest 89 C (TCPU_PCI)",
+      "  6 threads t=10s: busiest-6 mean 4.10 GHz; all: min 0.40 med 3.32 max 4.10 GHz; pkg 92 C; hottest 92 C (TCPU_PCI)",
+      "  6 threads t=14s: busiest-6 mean 4.10 GHz; all: min 0.40 med 3.30 max 4.10 GHz; pkg 92 C; hottest 90 C (TCPU_PCI)",
+      "  20 threads t=5s: busiest-20 mean 2.60 GHz; all: min 2.30 med 2.50 max 2.60 GHz; pkg 67 C; hottest 66 C (TCPU_PCI)",
+      "  20 threads t=10s: busiest-20 mean 2.35 GHz; all: min 2.18 med 2.40 max 2.50 GHz; pkg 63 C; hottest 62 C (TCPU_PCI)",
+      "  20 threads t=14s: busiest-20 mean 2.35 GHz; all: min 2.19 med 2.40 max 2.50 GHz; pkg 62 C; hottest 62 C (x86_pkg_temp)",
+      "2026-11-28T00:10:25+01:00 done; pkg 57 C; hottest 54 C (TCPU_PCI)"
+    ]
+  },
+  "conditions": {
+    "prime": "on-demand",
+    "eDP1": "1920x1080 at 240.00 Hz, primary; the window maximized on it",
+    "hdmi": "HDMI-1-0 connected at 143.60 Hz (the controller's verified conditions; untouched)",
+    "gl": "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)",
+    "chrome": "Chrome/155.0.8059.39",
+    "profile": "one mktemp -d /tmp/wi10-XXXX profile (/tmp/wi10-65A7) from Step 0 through Step 2, MESA_SHADER_CACHE_DISABLE=true in that Chrome's env only; removed after Step 2",
+    "hottestBeforeChrome": {
+      "step0": {
+        "zone": "thermal_zone3",
+        "type": "TCPU_PCI",
+        "c": 46
+      },
+      "step2": {
+        "zone": "thermal_zone3",
+        "type": "TCPU_PCI",
+        "c": 44
+      },
+      "step6Rerun": {
+        "zone": "thermal_zone3",
+        "type": "TCPU_PCI",
+        "c": 46
+      }
+    }
+  },
+  "step0": {
+    "by": "the agent's own headful Chrome over CDP, before the merge, production serving SP6b (index-Ll_IlXGF.js)",
+    "date": "2026-11-27T23:19:04.975Z",
+    "pass": true,
+    "scan": "Review Focus 1's scan on sp7a/water (a scratch vitest run of caveSavedWorld's findFloodedFloor rule over the 9 × 9 columns around (0, 0), plus GV9 dryness: F3.y ≤ top − 14, the pocket under F0 solid, untagged, not bedrock): 994 candidates, the nearest spawn taken after its GV9 geometry was read in production",
+    "steps": [
+      {
+        "step": 0,
+        "name": "pre-checks (read-only: PRIME on-demand, eDP-1 primary at 240 Hz, the session unlocked, load < 1.5, AC online); production still serves SP6b",
+        "notes": [
+          "connected outputs: eDP-1 connected primary; HDMI-1-0 connected 1920x1080+1920+0 (the controller's conditions: eDP-1 at 240 Hz primary, HDMI-1-0 at 143.60 Hz; the window is kept on eDP-1)",
+          "the hottest thermal zone before Chrome: 46 °C (TCPU_PCI)"
+        ],
+        "checks": [
+          {
+            "pass": true,
+            "what": "PRIME is on-demand (prime-select query: on-demand)"
+          },
+          {
+            "pass": true,
+            "what": "eDP-1 is connected, primary, at 240 Hz (1920x1080    240.00*+ 240.00    60.00)",
+            "detail": [
+              "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+              "   1920x1080    240.00*+ 240.00    60.00  "
+            ]
+          },
+          {
+            "pass": true,
+            "what": "the session is active and unlocked (Seat=seat0, Type=x11, Active=yes, LockedHint=no)"
+          },
+          {
+            "pass": true,
+            "what": "the 1-minute load 1.47 is below 1.5"
+          },
+          {
+            "pass": true,
+            "what": "AC online (/sys/class/power_supply/ADP1/online = 1)"
+          },
+          {
+            "pass": true,
+            "what": "production still serves SP6b's build (index-Ll_IlXGF.js; main 3264974's index-Ll_IlXGF.js)"
+          }
+        ],
+        "pass": true,
+        "pre": {
+          "prime": "on-demand",
+          "eDP1": [
+            "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+            "   1920x1080    240.00*+ 240.00    60.00  "
+          ],
+          "eDP1Current": "   1920x1080    240.00*+ 240.00    60.00  ",
+          "connectedOutputs": [
+            "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+            "HDMI-1-0 connected 1920x1080+1920+0 (normal left inverted right x axis y axis) 597mm x 336mm"
+          ],
+          "session": "2",
+          "sessionFrom": "loginctl list-sessions: the seat0 x11 session",
+          "sessionProps": "Seat=seat0\nType=x11\nActive=yes\nLockedHint=no",
+          "acOnline": "1",
+          "thermalZones": [
+            {
+              "zone": "thermal_zone0",
+              "type": "acpitz",
+              "c": 27.8
+            },
+            {
+              "zone": "thermal_zone1",
+              "type": "DGPU",
+              "c": 26.85
+            },
+            {
+              "zone": "thermal_zone2",
+              "type": "INT3400 Thermal",
+              "c": 20
+            },
+            {
+              "zone": "thermal_zone3",
+              "type": "TCPU_PCI",
+              "c": 46
+            },
+            {
+              "zone": "thermal_zone4",
+              "type": "iwlwifi_1",
+              "c": 40
+            },
+            {
+              "zone": "thermal_zone5",
+              "type": "x86_pkg_temp",
+              "c": 45
+            }
+          ],
+          "hottest": {
+            "zone": "thermal_zone3",
+            "type": "TCPU_PCI",
+            "c": 46
+          },
+          "gitBranch": "sp7a/water",
+          "gitHead": "89cbbf2d834dd5c852655a82d2eedebe09d72081",
+          "originMain": "3264974d6b1180f14eac0f4398abf760c13b6a7f",
+          "loadavg": [
+            1.47,
+            1.62,
+            1.61
+          ],
+          "uptime": "00:20:35 up  2:39,  1 user,  load average: 1,47, 1,62, 1,61",
+          "gitStatus": "?? .superpowers/"
+        },
+        "servedBundle": "index-Ll_IlXGF.js",
+        "wallMs": 90645,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 1,
+        "name": "Step 0: New world \"SP6b world\" (default, seed 42) in SP6b's production; in a cave near spawn that is dry at GV9 and flooded at GV10 (Review Focus 1's scan), three voxels dug under its floor (a dry pocket under the water) and stone placed on its floor; the camera's eye left in the pocket",
+        "notes": [
+          "the profile's world settings set to { rd: 12 } (the review links' RD); the profile is this task's own",
+          "GV10 (this branch's scan): F0..F3 (2, 22, -3) … y 25 tagged cave air holding water (fluid 16, 16, 16, 16; the generated layer 16, 16, 16, 16), 109 water voxels within 2 blocks; the column's top y 94, so GV9's water v0 (top − 12 < y ≤ the water level) leaves them dry; the pocket's GV10 blocks gravel, dripstone_block, stone"
+        ],
+        "checks": [
+          {
+            "pass": true,
+            "what": "the fresh profile holds no world ({\"diffs\":0,\"history\":0,\"historySteps\":0,\"meta\":0,\"state\":0,\"worlds\":0})"
+          },
+          {
+            "pass": true,
+            "what": "New world opens"
+          },
+          {
+            "pass": true,
+            "what": "preset default chosen"
+          },
+          {
+            "pass": true,
+            "what": "the form reads {\"name\":\"SP6b world\",\"preset\":\"default\",\"seed\":\"42\"}"
+          },
+          {
+            "pass": true,
+            "what": "Create navigates to /?world=<id> (/?world=323d5d5c-dafb-4b12-b1e1-836bce707296)"
+          },
+          {
+            "pass": true,
+            "what": "the new world reveals (4968 ms from Create)"
+          },
+          {
+            "pass": true,
+            "what": "production honours &wiTest=1: the hook names the world"
+          },
+          {
+            "pass": true,
+            "what": "a candidate whose GV9 geometry matches: F0 (2, 22, -3) (1 tried; GV9 reads F [0,0,0,0], pocket [59,59,1], P 0, under P 59)",
+            "detail": [
+              {
+                "F0": {
+                  "x": 2,
+                  "y": 22,
+                  "z": -3,
+                  "protoFluid": 16,
+                  "generatedFluid": 16,
+                  "cave": 38
+                },
+                "gv9": {
+                  "F": [
+                    0,
+                    0,
+                    0,
+                    0
+                  ],
+                  "pocket": [
+                    59,
+                    59,
+                    1
+                  ],
+                  "P": 0,
+                  "underP": 59
+                },
+                "ok": true
+              }
+            ]
+          },
+          {
+            "pass": true,
+            "what": "the pocket dug under the floor: (2, 21, -3), (2, 20, -3), (2, 19, -3) (ok, ok, ok): air",
+            "detail": {
+              "digs": [
+                {
+                  "at": {
+                    "x": 2,
+                    "y": 21,
+                    "z": -3,
+                    "state": 12,
+                    "key": "gravel"
+                  },
+                  "out": "ok"
+                },
+                {
+                  "at": {
+                    "x": 2,
+                    "y": 20,
+                    "z": -3,
+                    "state": 59,
+                    "key": "dripstone_block"
+                  },
+                  "out": "ok"
+                },
+                {
+                  "at": {
+                    "x": 2,
+                    "y": 19,
+                    "z": -3,
+                    "state": 1,
+                    "key": "stone"
+                  },
+                  "out": "ok"
+                }
+              ],
+              "place": "ok",
+              "after": {
+                "pocket": [
+                  0,
+                  0,
+                  0
+                ],
+                "P": 1
+              },
+              "historyBefore": {
+                "size": 0,
+                "redo": 0
+              },
+              "historyAfter": {
+                "size": 4,
+                "redo": 0
+              }
+            }
+          },
+          {
+            "pass": true,
+            "what": "stone (state 1) placed on the cave's floor at (2, 22, -2): ok",
+            "detail": {
+              "digs": [
+                {
+                  "at": {
+                    "x": 2,
+                    "y": 21,
+                    "z": -3,
+                    "state": 12,
+                    "key": "gravel"
+                  },
+                  "out": "ok"
+                },
+                {
+                  "at": {
+                    "x": 2,
+                    "y": 20,
+                    "z": -3,
+                    "state": 59,
+                    "key": "dripstone_block"
+                  },
+                  "out": "ok"
+                },
+                {
+                  "at": {
+                    "x": 2,
+                    "y": 19,
+                    "z": -3,
+                    "state": 1,
+                    "key": "stone"
+                  },
+                  "out": "ok"
+                }
+              ],
+              "place": "ok",
+              "after": {
+                "pocket": [
+                  0,
+                  0,
+                  0
+                ],
+                "P": 1
+              },
+              "historyBefore": {
+                "size": 0,
+                "redo": 0
+              },
+              "historyAfter": {
+                "size": 4,
+                "redo": 0
+              }
+            }
+          },
+          {
+            "pass": true,
+            "what": "the block history grew by 4"
+          },
+          {
+            "pass": true,
+            "what": "flushNow ok (flushSeq 3)",
+            "detail": {
+              "ok": true,
+              "flushSeq": 3
+            }
+          },
+          {
+            "pass": true,
+            "what": "the camera flown (no collisions) to the eye {\"x\":2.5,\"y\":20.5,\"z\":-2.5} in the pocket: at (2.5, 20.5, -2.5) after 2 holds",
+            "detail": {
+              "ok": true,
+              "pose": {
+                "x": 2.5021493589699495,
+                "y": 20.45049999999917,
+                "z": -2.502149358969951,
+                "yaw": 315,
+                "pitch": -10
+              },
+              "iterations": 3,
+              "speed": 3.150972172286313,
+              "log": [
+                {
+                  "i": 0,
+                  "action": "down",
+                  "ms": 6375,
+                  "err": -76.5,
+                  "moved": 76.55
+                },
+                {
+                  "i": 2,
+                  "action": "right",
+                  "ms": 1123,
+                  "err": 3.54,
+                  "moved": 3.54
+                }
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "worlds[323d5d5c-dafb-4b12-b1e1-836bce707296]: \"SP6b world\", seed \"42\", default, generatorVersion 9 (GV9), schemaVersion 5, genKey 31b0305c6bc6a05f",
+            "detail": {
+              "id": "323d5d5c-dafb-4b12-b1e1-836bce707296",
+              "name": "SP6b world",
+              "seedText": "42",
+              "seed": [
+                42,
+                0
+              ],
+              "profile": "default",
+              "schemaVersion": 5,
+              "paramsHash": "d279182d6db0341b",
+              "generatorVersion": 9,
+              "genKey": "31b0305c6bc6a05f",
+              "created": 1795821640738,
+              "backupOf": null,
+              "stateTableLength": 65,
+              "densityDefsKeys": 2,
+              "densityDefsNames": [
+                "defs",
+                "root"
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "the saved pose is the eye in the pocket: {\"x\":2.5026782245115053,\"y\":20.450499999999167,\"z\":-2.5026782245115067,\"yaw\":324,\"pitch\":-0.09999999999999032,\"mode\":\"fly\",\"speed\":3.1457280000000005}",
+            "detail": {
+              "worldId": "323d5d5c-dafb-4b12-b1e1-836bce707296",
+              "flushSeq": 11,
+              "player": {
+                "x": 2.5026782245115053,
+                "y": 20.450499999999167,
+                "z": -2.5026782245115067,
+                "yaw": 324,
+                "pitch": -0.09999999999999032,
+                "mode": "fly",
+                "speed": 3.1457280000000005
+              }
+            }
+          },
+          {
+            "pass": true,
+            "what": "the edits are stored (historySteps 4, diffs 1)",
+            "detail": {
+              "perWorld": {
+                "323d5d5c-dafb-4b12-b1e1-836bce707296": 1
+              },
+              "keys": [
+                [
+                  "323d5d5c-dafb-4b12-b1e1-836bce707296",
+                  2147516415
+                ]
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "Load world lists \"SP6b world\" (SP6b world · default · seed 42); badges []",
+            "detail": [
+              {
+                "id": "323d5d5c-dafb-4b12-b1e1-836bce707296",
+                "name": "SP6b world",
+                "title": "SP6b world · default · seed 42",
+                "info": [
+                  "Modified 2026-11-28 00:21"
+                ],
+                "badges": []
+              }
+            ]
+          }
+        ],
+        "pass": true,
+        "settingsBefore": null,
+        "settingsSet": "{\"rd\":12}",
+        "form": {
+          "name": "SP6b world",
+          "preset": "default",
+          "seed": "42"
+        },
+        "shotNew": "test/metrics/.out/task57/step0/shots/0-new-world.png",
+        "createToRevealMs": 4968,
+        "shotRevealed": "test/metrics/.out/task57/step0/shots/0-world-revealed.png",
+        "poseAtOpen": {
+          "x": 0,
+          "y": 97,
+          "z": 0,
+          "yaw": 315,
+          "pitch": -10
+        },
+        "rdAtOpen": 12,
+        "pick": {
+          "cx": 0,
+          "cz": -1,
+          "F": [
+            {
+              "x": 2,
+              "y": 22,
+              "z": -3,
+              "protoFluid": 16,
+              "generatedFluid": 16,
+              "cave": 38
+            },
+            {
+              "x": 2,
+              "y": 23,
+              "z": -3,
+              "protoFluid": 16,
+              "generatedFluid": 16,
+              "cave": 38
+            },
+            {
+              "x": 2,
+              "y": 24,
+              "z": -3,
+              "protoFluid": 16,
+              "generatedFluid": 16,
+              "cave": 38
+            },
+            {
+              "x": 2,
+              "y": 25,
+              "z": -3,
+              "protoFluid": 16,
+              "generatedFluid": 16,
+              "cave": 38
+            }
+          ],
+          "pocket": [
+            {
+              "x": 2,
+              "y": 21,
+              "z": -3,
+              "state": 12,
+              "key": "gravel"
+            },
+            {
+              "x": 2,
+              "y": 20,
+              "z": -3,
+              "state": 59,
+              "key": "dripstone_block"
+            },
+            {
+              "x": 2,
+              "y": 19,
+              "z": -3,
+              "state": 1,
+              "key": "stone"
+            }
+          ],
+          "P": {
+            "x": 2,
+            "y": 22,
+            "z": -2,
+            "under": "gravel"
+          },
+          "top": 94,
+          "settled": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "water": 109,
+          "wetTagged": 109,
+          "dist": 3.6055512754639896,
+          "gv9": {
+            "F": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "pocket": [
+              59,
+              59,
+              1
+            ],
+            "P": 0,
+            "underP": 59
+          }
+        },
+        "gv9StatesAround": {
+          "0": 170,
+          "1": 224,
+          "59": 96
+        },
+        "edits": {
+          "digs": [
+            {
+              "at": {
+                "x": 2,
+                "y": 21,
+                "z": -3,
+                "state": 12,
+                "key": "gravel"
+              },
+              "out": "ok"
+            },
+            {
+              "at": {
+                "x": 2,
+                "y": 20,
+                "z": -3,
+                "state": 59,
+                "key": "dripstone_block"
+              },
+              "out": "ok"
+            },
+            {
+              "at": {
+                "x": 2,
+                "y": 19,
+                "z": -3,
+                "state": 1,
+                "key": "stone"
+              },
+              "out": "ok"
+            }
+          ],
+          "place": "ok",
+          "after": {
+            "pocket": [
+              0,
+              0,
+              0
+            ],
+            "P": 1
+          },
+          "historyBefore": {
+            "size": 0,
+            "redo": 0
+          },
+          "historyAfter": {
+            "size": 4,
+            "redo": 0
+          }
+        },
+        "eyeTarget": {
+          "x": 2.5,
+          "y": 20.5,
+          "z": -2.5
+        },
+        "flight": {
+          "ok": true,
+          "pose": {
+            "x": 2.5021493589699495,
+            "y": 20.45049999999917,
+            "z": -2.502149358969951,
+            "yaw": 315,
+            "pitch": -10
+          },
+          "iterations": 3,
+          "speed": 3.150972172286313,
+          "log": [
+            {
+              "i": 0,
+              "action": "down",
+              "ms": 6375,
+              "err": -76.5,
+              "moved": 76.55
+            },
+            {
+              "i": 2,
+              "action": "right",
+              "ms": 1123,
+              "err": 3.54,
+              "moved": 3.54
+            }
+          ]
+        },
+        "shotPocketNv": "test/metrics/.out/task57/step0/shots/0-in-the-pocket-gv9-night-vision.png",
+        "poseSaved": {
+          "x": 2.5026782245115053,
+          "y": 20.450499999999167,
+          "z": -2.5026782245115067,
+          "yaw": 324,
+          "pitch": -0.09999999999999032
+        },
+        "storedWorld": {
+          "id": "323d5d5c-dafb-4b12-b1e1-836bce707296",
+          "name": "SP6b world",
+          "seedText": "42",
+          "seed": [
+            42,
+            0
+          ],
+          "profile": "default",
+          "schemaVersion": 5,
+          "paramsHash": "d279182d6db0341b",
+          "generatorVersion": 9,
+          "genKey": "31b0305c6bc6a05f",
+          "created": 1795821640738,
+          "backupOf": null,
+          "stateTableLength": 65,
+          "densityDefsKeys": 2,
+          "densityDefsNames": [
+            "defs",
+            "root"
+          ]
+        },
+        "storedState": {
+          "worldId": "323d5d5c-dafb-4b12-b1e1-836bce707296",
+          "flushSeq": 11,
+          "player": {
+            "x": 2.5026782245115053,
+            "y": 20.450499999999167,
+            "z": -2.5026782245115067,
+            "yaw": 324,
+            "pitch": -0.09999999999999032,
+            "mode": "fly",
+            "speed": 3.1457280000000005
+          }
+        },
+        "idbAfterEdit": {
+          "counts": {
+            "diffs": 1,
+            "history": 1,
+            "historySteps": 4,
+            "meta": 0,
+            "state": 1,
+            "worlds": 1
+          },
+          "historySteps": {
+            "perWorld": {
+              "323d5d5c-dafb-4b12-b1e1-836bce707296": 4
+            },
+            "steps": [
+              {
+                "key": [
+                  "323d5d5c-dafb-4b12-b1e1-836bce707296",
+                  0
+                ],
+                "edits": [
+                  {
+                    "x": 2,
+                    "y": 21,
+                    "z": -3,
+                    "before": 4294967295,
+                    "after": 0
+                  }
+                ]
+              },
+              {
+                "key": [
+                  "323d5d5c-dafb-4b12-b1e1-836bce707296",
+                  1
+                ],
+                "edits": [
+                  {
+                    "x": 2,
+                    "y": 20,
+                    "z": -3,
+                    "before": 4294967295,
+                    "after": 0
+                  }
+                ]
+              },
+              {
+                "key": [
+                  "323d5d5c-dafb-4b12-b1e1-836bce707296",
+                  2
+                ],
+                "edits": [
+                  {
+                    "x": 2,
+                    "y": 19,
+                    "z": -3,
+                    "before": 4294967295,
+                    "after": 0
+                  }
+                ]
+              },
+              {
+                "key": [
+                  "323d5d5c-dafb-4b12-b1e1-836bce707296",
+                  3
+                ],
+                "edits": [
+                  {
+                    "x": 2,
+                    "y": 22,
+                    "z": -2,
+                    "before": 4294967295,
+                    "after": 256
+                  }
+                ]
+              }
+            ]
+          },
+          "diffs": {
+            "perWorld": {
+              "323d5d5c-dafb-4b12-b1e1-836bce707296": 1
+            },
+            "keys": [
+              [
+                "323d5d5c-dafb-4b12-b1e1-836bce707296",
+                2147516415
+              ]
+            ]
+          }
+        },
+        "loadList": [
+          {
+            "id": "323d5d5c-dafb-4b12-b1e1-836bce707296",
+            "name": "SP6b world",
+            "title": "SP6b world · default · seed 42",
+            "info": [
+              "Modified 2026-11-28 00:21"
+            ],
+            "badges": []
+          }
+        ],
+        "shotLoad": "test/metrics/.out/task57/step0/shots/0-load-world.png",
+        "wallMs": 28430,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 8,
+        "name": "page and console errors",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "no page error (0)",
+            "detail": []
+          },
+          {
+            "pass": true,
+            "what": "no console error (0; 1 benign logs ignored and listed)",
+            "detail": []
+          }
+        ],
+        "pass": true,
+        "pageErrors": 0,
+        "consoleErrors": 0,
+        "ignored": 1,
+        "wallMs": 0,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      }
+    ],
+    "pageErrors": [],
+    "consoleErrors": [],
+    "ignoredLogs": [
+      {
+        "step": "0-pre-checks (read-only: PRIME on-demand, eDP-1 primary at 240 Hz, the session unlocked, load < 1.5, AC online); production still serves SP6b",
+        "source": "log.network",
+        "text": "Failed to load resource: the server responded with a status of 404 ()",
+        "url": "https://world-imaginer-voxel.vercel.app/favicon.ico",
+        "why": "index.html declares no icon, so Chrome asks for /favicon.ico and the host answers 404 (the same ignore as test/tools/cdp.ts ignoredLog and SP5b/SP5c's checks)"
+      }
+    ]
+  },
+  "chrome": {
+    "by": "the agent's own headful Chrome over CDP (Task 57 Step 2, the Chrome part), on the deployed build",
+    "date": "2026-11-27T23:29:11.026Z",
+    "window": {
+      "left": 0,
+      "top": 32,
+      "width": 1756,
+      "height": 956,
+      "windowState": "maximized"
+    },
+    "viewport": {
+      "innerWidth": 1756,
+      "innerHeight": 869,
+      "devicePixelRatio": 1.09375,
+      "hasFocus": false
+    },
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+    "links": {
+      "waterfall1": "https://world-imaginer-voxel.vercel.app/?at=-632,-100&y=99.5&yaw=301.4&pitch=-9.5&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+      "waterfall2": "https://world-imaginer-voxel.vercel.app/?at=-511,-115&y=115&yaw=90.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+      "waterfall3": "https://world-imaginer-voxel.vercel.app/?at=-492,-133&y=164.5&yaw=180.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+      "islandFall": "https://world-imaginer-voxel.vercel.app/?at=-315,60&y=165.5&yaw=180.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJmbG9hdGluZ19pc2xhbmRzIiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "lavaFall": "https://world-imaginer-voxel.vercel.app/?at=-1405,1447&y=-42.5&yaw=347.7&pitch=-9.6&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "lavaPool": "https://world-imaginer-voxel.vercel.app/?at=-1350,1329&y=-47.5&yaw=276.3&pitch=-33.5&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "floodedUnderSea": "https://world-imaginer-voxel.vercel.app/?at=190,-134&y=38.5&yaw=90.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ",
+      "dryBelowSea": "https://world-imaginer-voxel.vercel.app/?at=13,0&y=40.5&yaw=90.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "lake": "https://world-imaginer-voxel.vercel.app/?at=-187,80&y=131&yaw=0.0&pitch=-45.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJsYXJnZV9iaW9tZXMiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+      "coastFancy": "https://world-imaginer-voxel.vercel.app/?at=199,-88&y=65.5&yaw=0.0&pitch=-10.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ",
+      "underwater": "https://world-imaginer-voxel.vercel.app/?at=208,-91&y=58&yaw=0.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ",
+      "spillSlope": "https://world-imaginer-voxel.vercel.app/?at=-441,74&y=128&yaw=0.0&pitch=-26.6&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+      "wallFront1": "https://world-imaginer-voxel.vercel.app/?at=32,-14&y=39.5&yaw=200.4&pitch=-28.2&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "wallFront2": "https://world-imaginer-voxel.vercel.app/?at=20,41&y=52.5&yaw=298.3&pitch=-10.2&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "wallFront3": "https://world-imaginer-voxel.vercel.app/?at=-65,-13&y=-36.5&yaw=125.5&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "wallFront4": "https://world-imaginer-voxel.vercel.app/?at=-110,28&y=6.5&yaw=48.7&pitch=-28.6&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "wallFront5": "https://world-imaginer-voxel.vercel.app/?at=-128,-23&y=64.5&yaw=80.8&pitch=-5.2&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19"
+    },
+    "steps": [
+      {
+        "step": 0,
+        "name": "pre-checks (read-only: PRIME on-demand, eDP-1 primary at 240 Hz, the session unlocked, load < 1.5, AC online) and the bundle compare against a local build of main",
+        "notes": [
+          "connected outputs: eDP-1 connected primary; HDMI-1-0 connected 1920x1080+1920+0 (the controller's conditions: eDP-1 at 240 Hz primary, HDMI-1-0 at 143.60 Hz; the window is kept on eDP-1)",
+          "the hottest thermal zone before Chrome: 44 °C (TCPU_PCI)"
+        ],
+        "checks": [
+          {
+            "pass": true,
+            "what": "PRIME is on-demand (prime-select query: on-demand)"
+          },
+          {
+            "pass": true,
+            "what": "eDP-1 is connected, primary, at 240 Hz (1920x1080    240.00*+ 240.00    60.00)",
+            "detail": [
+              "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+              "   1920x1080    240.00*+ 240.00    60.00  "
+            ]
+          },
+          {
+            "pass": true,
+            "what": "the session is active and unlocked (Seat=seat0, Type=x11, Active=yes, LockedHint=no)"
+          },
+          {
+            "pass": true,
+            "what": "the 1-minute load 1.39 is below 1.5"
+          },
+          {
+            "pass": true,
+            "what": "AC online (/sys/class/power_supply/ADP1/online = 1)"
+          },
+          {
+            "pass": true,
+            "what": "the repo is main at 89cbbf2d834dd5c852655a82d2eedebe09d72081 (= origin/main 89cbbf2d834dd5c852655a82d2eedebe09d72081), the tree clean but for the untracked .superpowers/ (\"?? .superpowers/\")"
+          },
+          {
+            "pass": true,
+            "what": "production serves the local build of main: served index-C6xAMIYE.js, local index-C6xAMIYE.js, index.html equal true, 52/52 files byte-identical",
+            "detail": {
+              "servedBundle": "index-C6xAMIYE.js",
+              "servedCss": "index-CvFmo4uU.css",
+              "localBundle": "index-C6xAMIYE.js",
+              "indexSha256": "b6524c0ba15f2d3fce3c85643c55d6e1f28ff9b08939938bc688fe8dd920224d",
+              "localIndexHtmlEqual": true,
+              "distDir": "/home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/task57/dist-main",
+              "distBuiltAt": "2026-11-27T23:22:02.631Z",
+              "assetsCompared": 52,
+              "assetsEqual": 52,
+              "assetsDiffering": []
+            }
+          }
+        ],
+        "pass": true,
+        "pre": {
+          "prime": "on-demand",
+          "eDP1": [
+            "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+            "   1920x1080    240.00*+ 240.00    60.00  "
+          ],
+          "eDP1Current": "   1920x1080    240.00*+ 240.00    60.00  ",
+          "connectedOutputs": [
+            "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+            "HDMI-1-0 connected 1920x1080+1920+0 (normal left inverted right x axis y axis) 597mm x 336mm"
+          ],
+          "session": "2",
+          "sessionFrom": "loginctl list-sessions: the seat0 x11 session",
+          "sessionProps": "Seat=seat0\nType=x11\nActive=yes\nLockedHint=no",
+          "acOnline": "1",
+          "thermalZones": [
+            {
+              "zone": "thermal_zone0",
+              "type": "acpitz",
+              "c": 27.8
+            },
+            {
+              "zone": "thermal_zone1",
+              "type": "DGPU",
+              "c": 26.85
+            },
+            {
+              "zone": "thermal_zone2",
+              "type": "INT3400 Thermal",
+              "c": 20
+            },
+            {
+              "zone": "thermal_zone3",
+              "type": "TCPU_PCI",
+              "c": 44
+            },
+            {
+              "zone": "thermal_zone4",
+              "type": "iwlwifi_1",
+              "c": 39
+            },
+            {
+              "zone": "thermal_zone5",
+              "type": "x86_pkg_temp",
+              "c": 42
+            }
+          ],
+          "hottest": {
+            "zone": "thermal_zone3",
+            "type": "TCPU_PCI",
+            "c": 44
+          },
+          "gitBranch": "main",
+          "gitHead": "89cbbf2d834dd5c852655a82d2eedebe09d72081",
+          "originMain": "89cbbf2d834dd5c852655a82d2eedebe09d72081",
+          "loadavg": [
+            1.39,
+            1.37,
+            1.38
+          ],
+          "uptime": "00:30:31 up  2:49,  1 user,  load average: 1,39, 1,37, 1,38",
+          "gitStatus": "?? .superpowers/"
+        },
+        "wallMs": 92747,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 1,
+        "name": "Step 0's SP6b world in SP7a: the \"older generator\" badge; it opens with today's terrain (the cave flooded), the edit kept (the pocket (2, 21, -3), (2, 20, -3), (2, 19, -3) dry, the stone at (2, 22, -2)), still water around the pocket",
+        "notes": [
+          "in the unsaved world the edit's voxels read [12,59,1,0] (the pocket's generated blocks, then the water's air at P)",
+          "the unsaved world's eye at F1 (y 23.5): view mean rgb 16, 15, 17 (blue dominant: the fog on)",
+          "after the open the row reads {\"id\":\"323d5d5c-dafb-4b12-b1e1-836bce707296\",\"name\":\"SP6b world\",\"title\":\"SP6b world · default · seed 42\",\"info\":[\"Modified 2026-11-28 00:31\"],\"badges\":[]}: the open wrote today's genKey, so the badge is gone, as designed (SP5b D8)"
+        ],
+        "checks": [
+          {
+            "pass": true,
+            "what": "before opening: worlds[323d5d5c-dafb-4b12-b1e1-836bce707296] is Step 0's record (generatorVersion 9, schemaVersion 5, genKey 31b0305c6bc6a05f)",
+            "detail": {
+              "id": "323d5d5c-dafb-4b12-b1e1-836bce707296",
+              "name": "SP6b world",
+              "seedText": "42",
+              "seed": [
+                42,
+                0
+              ],
+              "profile": "default",
+              "schemaVersion": 5,
+              "paramsHash": "d279182d6db0341b",
+              "generatorVersion": 9,
+              "genKey": "31b0305c6bc6a05f",
+              "created": 1795821640738,
+              "backupOf": null,
+              "stateTableLength": 65,
+              "densityDefsKeys": 2,
+              "densityDefsNames": [
+                "defs",
+                "root"
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "Load world lists \"SP6b world\" with the \"older generator\" badge: badges [\"older generator\"], lines [\"Modified 2026-11-28 00:21\",\"opens with today's terrain; your blocks stay at their coordinates\"]",
+            "detail": {
+              "id": "323d5d5c-dafb-4b12-b1e1-836bce707296",
+              "name": "SP6b world",
+              "title": "SP6b world · default · seed 42",
+              "info": [
+                "Modified 2026-11-28 00:21",
+                "opens with today's terrain; your blocks stay at their coordinates"
+              ],
+              "badges": [
+                "older generator"
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "Play opens /?world=323d5d5c-dafb-4b12-b1e1-836bce707296"
+          },
+          {
+            "pass": true,
+            "what": "the SP6b world reveals after Play (4770 ms)"
+          },
+          {
+            "pass": true,
+            "what": "the notice at open: \"This world was made with an earlier generator version; it opens with today's terrain and your blocks stay at their coordinates. Dismiss\""
+          },
+          {
+            "pass": true,
+            "what": "the hook names the SP6b world"
+          },
+          {
+            "pass": true,
+            "what": "the world opens at the saved eye in the pocket (2.5, 20.5, -2.5)",
+            "detail": {
+              "ps": {
+                "x": 2.5026782245115053,
+                "y": 20.450499999999167,
+                "z": -2.5026782245115067,
+                "yaw": 324,
+                "pitch": -0.09999999999999032
+              },
+              "eye": {
+                "x": 2.5,
+                "y": 20.5,
+                "z": -2.5
+              }
+            }
+          },
+          {
+            "pass": true,
+            "what": "the SP6b world: the stream settled at RD 12 (rd, filled = [12,12], after 1 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "the dug pocket is kept: (2, 21, -3), (2, 20, -3), (2, 19, -3) read [0,0,0] (air)"
+          },
+          {
+            "pass": true,
+            "what": "the placed stone is kept at (2, 22, -2): blockAt 1"
+          },
+          {
+            "pass": true,
+            "what": "the pocket is dry and still water stands around it: in the pocket the view's mean is not blue-dominant (rgb 99, 84, 73); risen to y 23.5 (F1, (2, 23, -3)) the underwater fog is on (rgb 100, 96, 104, blue dominant); back in the pocket off again (rgb 99, 85, 73); looking up from the pocket at the water: rgb 93, 94, 103",
+            "detail": {
+              "pocket": [
+                99,
+                84,
+                73
+              ],
+              "lookingUp": [
+                93,
+                94,
+                103
+              ],
+              "inWater": [
+                100,
+                96,
+                104
+              ],
+              "pocketAgain": [
+                99,
+                85,
+                73
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "after opening: the record carries today's generator (generatorVersion 9 → 10, genKey 31b0305c6bc6a05f → dedb50a04802c821; schemaVersion 5), its edits kept (diffs 1)",
+            "detail": {
+              "id": "323d5d5c-dafb-4b12-b1e1-836bce707296",
+              "name": "SP6b world",
+              "seedText": "42",
+              "seed": [
+                42,
+                0
+              ],
+              "profile": "default",
+              "schemaVersion": 5,
+              "paramsHash": "475b5e716ab03f94",
+              "generatorVersion": 10,
+              "genKey": "dedb50a04802c821",
+              "created": 1795821640738,
+              "backupOf": null,
+              "stateTableLength": 65,
+              "densityDefsKeys": 2,
+              "densityDefsNames": [
+                "defs",
+                "root"
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "the comparison world is unsaved"
+          },
+          {
+            "pass": true,
+            "what": "the SP6b world generates today's terrain: the box [-8,13,10,35,-13,8] (11021 voxels, the edit's 4 left out) hashes 944816ea in the saved world and 944816ea in an unsaved seed-42 default world of this build",
+            "detail": {
+              "saved": {
+                "box": [
+                  -8,
+                  13,
+                  10,
+                  35,
+                  -13,
+                  8
+                ],
+                "voxels": 11021,
+                "unloaded": 0,
+                "air": 580,
+                "hash": "944816ea"
+              },
+              "fresh": {
+                "box": [
+                  -8,
+                  13,
+                  10,
+                  35,
+                  -13,
+                  8
+                ],
+                "voxels": 11021,
+                "unloaded": 0,
+                "air": 580,
+                "hash": "944816ea"
+              }
+            }
+          }
+        ],
+        "pass": true,
+        "recordBefore": {
+          "id": "323d5d5c-dafb-4b12-b1e1-836bce707296",
+          "name": "SP6b world",
+          "seedText": "42",
+          "seed": [
+            42,
+            0
+          ],
+          "profile": "default",
+          "schemaVersion": 5,
+          "paramsHash": "d279182d6db0341b",
+          "generatorVersion": 9,
+          "genKey": "31b0305c6bc6a05f",
+          "created": 1795821640738,
+          "backupOf": null,
+          "stateTableLength": 65,
+          "densityDefsKeys": 2,
+          "densityDefsNames": [
+            "defs",
+            "root"
+          ]
+        },
+        "loadListBefore": [
+          {
+            "id": "323d5d5c-dafb-4b12-b1e1-836bce707296",
+            "name": "SP6b world",
+            "title": "SP6b world · default · seed 42",
+            "info": [
+              "Modified 2026-11-28 00:21",
+              "opens with today's terrain; your blocks stay at their coordinates"
+            ],
+            "badges": [
+              "older generator"
+            ]
+          }
+        ],
+        "shotLoadList": "test/metrics/.out/task57/step2/shots/1-load-world-older-generator.png",
+        "playToRevealMs": 4770,
+        "noticesAtOpen": "This world was made with an earlier generator version; it opens with today's terrain and your blocks stay at their coordinates. Dismiss",
+        "shotOpened": "test/metrics/.out/task57/step2/shots/1-sp6b-world-opened.png",
+        "poseAtOpen": {
+          "x": 2.5026782245115053,
+          "y": 20.450499999999167,
+          "z": -2.5026782245115067,
+          "yaw": 324,
+          "pitch": -0.09999999999999032
+        },
+        "editsRead": {
+          "pocket": [
+            0,
+            0,
+            0
+          ],
+          "P": 1,
+          "F": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        "level": true,
+        "shotPocketLevel": "test/metrics/.out/task57/step2/shots/1-in-the-pocket-level-night-vision.png",
+        "lookUp": true,
+        "shotPocketUp": "test/metrics/.out/task57/step2/shots/1-in-the-pocket-looking-up-at-the-water.png",
+        "rise": {
+          "ok": true,
+          "pose": {
+            "x": 2.5026782245115053,
+            "y": 23.50379782695112,
+            "z": -2.5026782245115067,
+            "yaw": 324.15,
+            "pitch": -0.249999999999996
+          },
+          "holds": 1
+        },
+        "shotInWater": "test/metrics/.out/task57/step2/shots/1-risen-into-the-flooded-cave-night-vision.png",
+        "back": {
+          "ok": true,
+          "pose": {
+            "x": 2.5026782245115053,
+            "y": 20.490648167622815,
+            "z": -2.5026782245115067,
+            "yaw": 324.15,
+            "pitch": -0.249999999999996
+          },
+          "holds": 1
+        },
+        "shotPocketAgain": "test/metrics/.out/task57/step2/shots/1-back-in-the-pocket-night-vision.png",
+        "fog": {
+          "pocket": [
+            99,
+            84,
+            73
+          ],
+          "lookingUp": [
+            93,
+            94,
+            103
+          ],
+          "inWater": [
+            100,
+            96,
+            104
+          ],
+          "pocketAgain": [
+            99,
+            85,
+            73
+          ]
+        },
+        "boxSaved": {
+          "box": [
+            -8,
+            13,
+            10,
+            35,
+            -13,
+            8
+          ],
+          "voxels": 11021,
+          "unloaded": 0,
+          "air": 580,
+          "hash": "944816ea"
+        },
+        "flush": {
+          "ok": true,
+          "flushSeq": 23
+        },
+        "recordAfter": {
+          "id": "323d5d5c-dafb-4b12-b1e1-836bce707296",
+          "name": "SP6b world",
+          "seedText": "42",
+          "seed": [
+            42,
+            0
+          ],
+          "profile": "default",
+          "schemaVersion": 5,
+          "paramsHash": "475b5e716ab03f94",
+          "generatorVersion": 10,
+          "genKey": "dedb50a04802c821",
+          "created": 1795821640738,
+          "backupOf": null,
+          "stateTableLength": 65,
+          "densityDefsKeys": 2,
+          "densityDefsNames": [
+            "defs",
+            "root"
+          ]
+        },
+        "idbAfterOpen": {
+          "counts": {
+            "diffs": 1,
+            "history": 1,
+            "historySteps": 4,
+            "meta": 0,
+            "state": 1,
+            "worlds": 1
+          },
+          "historySteps": {
+            "perWorld": {
+              "323d5d5c-dafb-4b12-b1e1-836bce707296": 4
+            },
+            "steps": [
+              {
+                "key": [
+                  "323d5d5c-dafb-4b12-b1e1-836bce707296",
+                  0
+                ],
+                "edits": [
+                  {
+                    "x": 2,
+                    "y": 21,
+                    "z": -3,
+                    "before": 4294967295,
+                    "after": 0
+                  }
+                ]
+              },
+              {
+                "key": [
+                  "323d5d5c-dafb-4b12-b1e1-836bce707296",
+                  1
+                ],
+                "edits": [
+                  {
+                    "x": 2,
+                    "y": 20,
+                    "z": -3,
+                    "before": 4294967295,
+                    "after": 0
+                  }
+                ]
+              },
+              {
+                "key": [
+                  "323d5d5c-dafb-4b12-b1e1-836bce707296",
+                  2
+                ],
+                "edits": [
+                  {
+                    "x": 2,
+                    "y": 19,
+                    "z": -3,
+                    "before": 4294967295,
+                    "after": 0
+                  }
+                ]
+              },
+              {
+                "key": [
+                  "323d5d5c-dafb-4b12-b1e1-836bce707296",
+                  3
+                ],
+                "edits": [
+                  {
+                    "x": 2,
+                    "y": 22,
+                    "z": -2,
+                    "before": 4294967295,
+                    "after": 256
+                  }
+                ]
+              }
+            ]
+          },
+          "diffs": {
+            "perWorld": {
+              "323d5d5c-dafb-4b12-b1e1-836bce707296": 1
+            },
+            "keys": [
+              [
+                "323d5d5c-dafb-4b12-b1e1-836bce707296",
+                2147516415
+              ]
+            ]
+          }
+        },
+        "boxUnsaved": {
+          "box": [
+            -8,
+            13,
+            10,
+            35,
+            -13,
+            8
+          ],
+          "voxels": 11021,
+          "unloaded": 0,
+          "air": 580,
+          "hash": "944816ea"
+        },
+        "editVoxelsUnsaved": [
+          12,
+          59,
+          1,
+          0
+        ],
+        "unsavedInWater": [
+          16,
+          15,
+          17
+        ],
+        "shotUnsaved": "test/metrics/.out/task57/step2/shots/1-unsaved-seed-42-at-F1.png",
+        "loadListAfter": [
+          {
+            "id": "323d5d5c-dafb-4b12-b1e1-836bce707296",
+            "name": "SP6b world",
+            "title": "SP6b world · default · seed 42",
+            "info": [
+              "Modified 2026-11-28 00:31"
+            ],
+            "badges": []
+          }
+        ],
+        "wallMs": 34601,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 2,
+        "name": "each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "every link in the spec's Exit evidence equals water.examples.json's pose (the eye where given) at uiSmoke's corner",
+            "detail": []
+          },
+          {
+            "pass": true,
+            "what": "waterfall1: the stream settled at RD 12 (rd, filled = [12,12], after 1 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "waterfall1 (amplified): opened in 6598 ms, the eye at (-632, 99.5, -100) in air or water (state 0), the pose's voxel [-653,105,-114] state 0 (recorded), the view drawn (231 colours, mean rgb 101, 88, 81)",
+            "detail": {
+              "openMs": 6598,
+              "pose": {
+                "x": -632,
+                "y": 99.5,
+                "z": -100,
+                "yaw": 301.4,
+                "pitch": -9.5
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": false,
+              "distinctColours": 231,
+              "mean": [
+                101,
+                88,
+                81
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "waterfall2: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "waterfall2 (amplified): opened in 7817 ms, the eye at (-511, 115, -115) in air or water (state 0), the pose's voxel [-486,124,-115] state 0 (recorded), the view drawn (107 colours, mean rgb 97, 101, 109)",
+            "detail": {
+              "openMs": 7817,
+              "pose": {
+                "x": -511,
+                "y": 115,
+                "z": -115,
+                "yaw": 90,
+                "pitch": 0
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": false,
+              "distinctColours": 107,
+              "mean": [
+                97,
+                101,
+                109
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "waterfall3: the stream settled at RD 12 (rd, filled = [12,12], after 1 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "waterfall3 (amplified): opened in 7992 ms, the eye at (-492, 164.5, -133) in air or water (state 0), the pose's voxel [-492,173,-108] state 0 (recorded), the view drawn (126 colours, mean rgb 116, 125, 135)",
+            "detail": {
+              "openMs": 7992,
+              "pose": {
+                "x": -492,
+                "y": 164.5,
+                "z": -133,
+                "yaw": 180,
+                "pitch": 0
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": false,
+              "distinctColours": 126,
+              "mean": [
+                116,
+                125,
+                135
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "islandFall: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "islandFall (floating_islands): opened in 7608 ms, the eye at (-315, 165.5, 60) in air or water (state 0), the pose's voxel [-315,209,85] state 0 (recorded), the view drawn (308 colours, mean rgb 104, 126, 137)",
+            "detail": {
+              "openMs": 7608,
+              "pose": {
+                "x": -315,
+                "y": 165.5,
+                "z": 60,
+                "yaw": 180,
+                "pitch": 0
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": false,
+              "distinctColours": 308,
+              "mean": [
+                104,
+                126,
+                137
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "lavaFall: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "lavaFall (default): opened in 7411 ms, the eye at (-1405, -42.5, 1447) in air or water (state 0), the pose's voxel [-1408,-43,1435] state 0 (recorded), the view drawn (117 colours, mean rgb 16, 13, 11)",
+            "detail": {
+              "openMs": 7411,
+              "pose": {
+                "x": -1405,
+                "y": -42.5,
+                "z": 1447,
+                "yaw": 347.7,
+                "pitch": -9.6
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": false,
+              "distinctColours": 117,
+              "mean": [
+                16,
+                13,
+                11
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "lavaPool: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "lavaPool (default): opened in 7335 ms, the eye at (-1350, -47.5, 1329) in air or water (state 0), the pose's voxel [-1355,-51,1328] state 0 (recorded), the view drawn (98 colours, mean rgb 47, 41, 34)",
+            "detail": {
+              "openMs": 7335,
+              "pose": {
+                "x": -1350,
+                "y": -47.5,
+                "z": 1329,
+                "yaw": 276.3,
+                "pitch": -33.5
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": false,
+              "distinctColours": 98,
+              "mean": [
+                47,
+                41,
+                34
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "floodedUnderSea: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "floodedUnderSea (archipelago): opened in 6434 ms, the eye at (190, 38.5, -134) in air or water (state 0), the pose's voxel [189,38,-134] state 0 (recorded), the view drawn (104 colours, mean rgb 89, 98, 117), night vision",
+            "detail": {
+              "openMs": 6434,
+              "pose": {
+                "x": 190,
+                "y": 38.5,
+                "z": -134,
+                "yaw": 90,
+                "pitch": 0
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": true,
+              "distinctColours": 104,
+              "mean": [
+                89,
+                98,
+                117
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "dryBelowSea: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "dryBelowSea (default): opened in 6525 ms, the eye at (13, 40.5, 0) in air or water (state 0), the pose's voxel [13,40,0] state 0 (recorded), the view drawn (89 colours, mean rgb 105, 104, 103), night vision",
+            "detail": {
+              "openMs": 6525,
+              "pose": {
+                "x": 13,
+                "y": 40.5,
+                "z": 0,
+                "yaw": 90,
+                "pitch": 0
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": true,
+              "distinctColours": 89,
+              "mean": [
+                105,
+                104,
+                103
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "lake: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "lake (large_biomes): opened in 6494 ms, the eye at (-187, 131, 80) in air or water (state 0), the pose's voxel [-187,122,80] state 0 (recorded), the view drawn (297 colours, mean rgb 78, 124, 79)",
+            "detail": {
+              "openMs": 6494,
+              "pose": {
+                "x": -187,
+                "y": 131,
+                "z": 80,
+                "yaw": 0,
+                "pitch": -45
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": false,
+              "distinctColours": 297,
+              "mean": [
+                78,
+                124,
+                79
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "coastFancy: the stream settled at RD 12 (rd, filled = [12,12], after 3 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "coastFancy (archipelago): opened in 6196 ms, the eye at (199, 65.5, -88) in air or water (state 0), the pose's voxel [199,63,-88] state 0 (recorded), the view drawn (311 colours, mean rgb 138, 154, 165)",
+            "detail": {
+              "openMs": 6196,
+              "pose": {
+                "x": 199,
+                "y": 65.5,
+                "z": -88,
+                "yaw": 0,
+                "pitch": -10
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": false,
+              "distinctColours": 311,
+              "mean": [
+                138,
+                154,
+                165
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "underwater: the stream settled at RD 12 (rd, filled = [12,12], after 1 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "underwater (archipelago): opened in 6141 ms, the eye at (208, 58, -91) in air or water (state 0), the pose's voxel [208,58,-91] state 0 (recorded), the view drawn (134 colours, mean rgb 44, 54, 74)",
+            "detail": {
+              "openMs": 6141,
+              "pose": {
+                "x": 208,
+                "y": 58,
+                "z": -91,
+                "yaw": 0,
+                "pitch": 0
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": false,
+              "distinctColours": 134,
+              "mean": [
+                44,
+                54,
+                74
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "spillSlope: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "spillSlope (amplified): opened in 7783 ms, the eye at (-441, 128, 74) in air or water (state 0), the pose's voxel [-444,139,62] state 0 (recorded), the view drawn (158 colours, mean rgb 97, 109, 128)",
+            "detail": {
+              "openMs": 7783,
+              "pose": {
+                "x": -441,
+                "y": 128,
+                "z": 74,
+                "yaw": 0,
+                "pitch": -26.6
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": false,
+              "distinctColours": 158,
+              "mean": [
+                97,
+                109,
+                128
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "wallFront1: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "wallFront1 (cave_heavy): opened in 6731 ms, the eye at (32, 39.5, -14) in air or water (state 0), the pose's voxel [25,29,3] state 0 (recorded), the view drawn (173 colours, mean rgb 118, 99, 84), night vision",
+            "detail": {
+              "openMs": 6731,
+              "pose": {
+                "x": 32,
+                "y": 39.5,
+                "z": -14,
+                "yaw": 200.4,
+                "pitch": -28.2
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": true,
+              "distinctColours": 173,
+              "mean": [
+                118,
+                99,
+                84
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "wallFront2: the stream settled at RD 12 (rd, filled = [12,12], after 1 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "wallFront2 (cave_heavy): opened in 6657 ms, the eye at (20, 52.5, 41) in air or water (state 0), the pose's voxel [0,48,30] state 0 (recorded), the view drawn (167 colours, mean rgb 104, 98, 95), night vision",
+            "detail": {
+              "openMs": 6657,
+              "pose": {
+                "x": 20,
+                "y": 52.5,
+                "z": 41,
+                "yaw": 298.3,
+                "pitch": -10.2
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": true,
+              "distinctColours": 167,
+              "mean": [
+                104,
+                98,
+                95
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "wallFront3: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "wallFront3 (default): opened in 6507 ms, the eye at (-65, -36.5, -13) in air or water (state 0), the pose's voxel [-62,-37,-11] state 0 (recorded), the view drawn (106 colours, mean rgb 59, 60, 65), night vision",
+            "detail": {
+              "openMs": 6507,
+              "pose": {
+                "x": -65,
+                "y": -36.5,
+                "z": -13,
+                "yaw": 125.5,
+                "pitch": 0
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": true,
+              "distinctColours": 106,
+              "mean": [
+                59,
+                60,
+                65
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "wallFront4: the stream settled at RD 12 (rd, filled = [12,12], after 3 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "wallFront4 (cave_heavy): opened in 6856 ms, the eye at (-110, 6.5, 28) in air or water (state 0), the pose's voxel [-94,-6,13] state 0 (recorded), the view drawn (165 colours, mean rgb 74, 90, 121), night vision",
+            "detail": {
+              "openMs": 6856,
+              "pose": {
+                "x": -110,
+                "y": 6.5,
+                "z": 28,
+                "yaw": 48.7,
+                "pitch": -28.6
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": true,
+              "distinctColours": 165,
+              "mean": [
+                74,
+                90,
+                121
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "wallFront5: the stream settled at RD 12 (rd, filled = [12,12], after 1 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "wallFront5 (cave_heavy): opened in 7003 ms, the eye at (-128, 64.5, -23) in air or water (state 0), the pose's voxel [-107,62,-27] state 0 (recorded), the view drawn (134 colours, mean rgb 114, 92, 74), night vision",
+            "detail": {
+              "openMs": 7003,
+              "pose": {
+                "x": -128,
+                "y": 64.5,
+                "z": -23,
+                "yaw": 80.8,
+                "pitch": -5.2
+              },
+              "eyeState": 0,
+              "voxelState": 0,
+              "nightVision": true,
+              "distinctColours": 134,
+              "mean": [
+                114,
+                92,
+                74
+              ]
+            }
+          }
+        ],
+        "pass": true,
+        "links": {
+          "waterfall1": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=-632,-100&y=99.5&yaw=301.4&pitch=-9.5&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+            "computedEqual": true
+          },
+          "waterfall2": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=-511,-115&y=115&yaw=90.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+            "computedEqual": true
+          },
+          "waterfall3": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=-492,-133&y=164.5&yaw=180.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+            "computedEqual": true
+          },
+          "islandFall": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=-315,60&y=165.5&yaw=180.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJmbG9hdGluZ19pc2xhbmRzIiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+            "computedEqual": true
+          },
+          "lavaFall": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=-1405,1447&y=-42.5&yaw=347.7&pitch=-9.6&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+            "computedEqual": true
+          },
+          "lavaPool": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=-1350,1329&y=-47.5&yaw=276.3&pitch=-33.5&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+            "computedEqual": true
+          },
+          "floodedUnderSea": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=190,-134&y=38.5&yaw=90.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ",
+            "computedEqual": true
+          },
+          "dryBelowSea": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=13,0&y=40.5&yaw=90.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+            "computedEqual": true
+          },
+          "lake": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=-187,80&y=131&yaw=0.0&pitch=-45.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJsYXJnZV9iaW9tZXMiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+            "computedEqual": true
+          },
+          "coastFancy": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=199,-88&y=65.5&yaw=0.0&pitch=-10.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ",
+            "computedEqual": true
+          },
+          "underwater": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=208,-91&y=58&yaw=0.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ",
+            "computedEqual": true
+          },
+          "spillSlope": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=-441,74&y=128&yaw=0.0&pitch=-26.6&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+            "computedEqual": true
+          },
+          "wallFront1": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=32,-14&y=39.5&yaw=200.4&pitch=-28.2&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+            "computedEqual": true
+          },
+          "wallFront2": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=20,41&y=52.5&yaw=298.3&pitch=-10.2&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+            "computedEqual": true
+          },
+          "wallFront3": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=-65,-13&y=-36.5&yaw=125.5&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+            "computedEqual": true
+          },
+          "wallFront4": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=-110,28&y=6.5&yaw=48.7&pitch=-28.6&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+            "computedEqual": true
+          },
+          "wallFront5": {
+            "link": "https://world-imaginer-voxel.vercel.app/?at=-128,-23&y=64.5&yaw=80.8&pitch=-5.2&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+            "computedEqual": true
+          }
+        },
+        "shot_waterfall1": "test/metrics/.out/task57/step2/shots/2-waterfall1.png",
+        "shot_waterfall2": "test/metrics/.out/task57/step2/shots/2-waterfall2.png",
+        "shot_waterfall3": "test/metrics/.out/task57/step2/shots/2-waterfall3.png",
+        "shot_islandFall": "test/metrics/.out/task57/step2/shots/2-islandFall.png",
+        "shot_lavaFall": "test/metrics/.out/task57/step2/shots/2-lavaFall.png",
+        "shot_lavaPool": "test/metrics/.out/task57/step2/shots/2-lavaPool.png",
+        "shot_floodedUnderSea": "test/metrics/.out/task57/step2/shots/2-floodedUnderSea.png",
+        "shot_dryBelowSea": "test/metrics/.out/task57/step2/shots/2-dryBelowSea.png",
+        "shot_lake": "test/metrics/.out/task57/step2/shots/2-lake.png",
+        "shot_coastFancy": "test/metrics/.out/task57/step2/shots/2-coastFancy.png",
+        "shot_underwater": "test/metrics/.out/task57/step2/shots/2-underwater.png",
+        "shot_spillSlope": "test/metrics/.out/task57/step2/shots/2-spillSlope.png",
+        "shot_wallFront1": "test/metrics/.out/task57/step2/shots/2-wallFront1.png",
+        "shot_wallFront2": "test/metrics/.out/task57/step2/shots/2-wallFront2.png",
+        "shot_wallFront3": "test/metrics/.out/task57/step2/shots/2-wallFront3.png",
+        "shot_wallFront4": "test/metrics/.out/task57/step2/shots/2-wallFront4.png",
+        "shot_wallFront5": "test/metrics/.out/task57/step2/shots/2-wallFront5.png",
+        "perLink": {
+          "waterfall1": {
+            "openMs": 6598,
+            "pose": {
+              "x": -632,
+              "y": 99.5,
+              "z": -100,
+              "yaw": 301.4,
+              "pitch": -9.5
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": false,
+            "distinctColours": 231,
+            "mean": [
+              101,
+              88,
+              81
+            ]
+          },
+          "waterfall2": {
+            "openMs": 7817,
+            "pose": {
+              "x": -511,
+              "y": 115,
+              "z": -115,
+              "yaw": 90,
+              "pitch": 0
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": false,
+            "distinctColours": 107,
+            "mean": [
+              97,
+              101,
+              109
+            ]
+          },
+          "waterfall3": {
+            "openMs": 7992,
+            "pose": {
+              "x": -492,
+              "y": 164.5,
+              "z": -133,
+              "yaw": 180,
+              "pitch": 0
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": false,
+            "distinctColours": 126,
+            "mean": [
+              116,
+              125,
+              135
+            ]
+          },
+          "islandFall": {
+            "openMs": 7608,
+            "pose": {
+              "x": -315,
+              "y": 165.5,
+              "z": 60,
+              "yaw": 180,
+              "pitch": 0
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": false,
+            "distinctColours": 308,
+            "mean": [
+              104,
+              126,
+              137
+            ]
+          },
+          "lavaFall": {
+            "openMs": 7411,
+            "pose": {
+              "x": -1405,
+              "y": -42.5,
+              "z": 1447,
+              "yaw": 347.7,
+              "pitch": -9.6
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": false,
+            "distinctColours": 117,
+            "mean": [
+              16,
+              13,
+              11
+            ]
+          },
+          "lavaPool": {
+            "openMs": 7335,
+            "pose": {
+              "x": -1350,
+              "y": -47.5,
+              "z": 1329,
+              "yaw": 276.3,
+              "pitch": -33.5
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": false,
+            "distinctColours": 98,
+            "mean": [
+              47,
+              41,
+              34
+            ]
+          },
+          "floodedUnderSea": {
+            "openMs": 6434,
+            "pose": {
+              "x": 190,
+              "y": 38.5,
+              "z": -134,
+              "yaw": 90,
+              "pitch": 0
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": true,
+            "distinctColours": 104,
+            "mean": [
+              89,
+              98,
+              117
+            ]
+          },
+          "dryBelowSea": {
+            "openMs": 6525,
+            "pose": {
+              "x": 13,
+              "y": 40.5,
+              "z": 0,
+              "yaw": 90,
+              "pitch": 0
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": true,
+            "distinctColours": 89,
+            "mean": [
+              105,
+              104,
+              103
+            ]
+          },
+          "lake": {
+            "openMs": 6494,
+            "pose": {
+              "x": -187,
+              "y": 131,
+              "z": 80,
+              "yaw": 0,
+              "pitch": -45
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": false,
+            "distinctColours": 297,
+            "mean": [
+              78,
+              124,
+              79
+            ]
+          },
+          "coastFancy": {
+            "openMs": 6196,
+            "pose": {
+              "x": 199,
+              "y": 65.5,
+              "z": -88,
+              "yaw": 0,
+              "pitch": -10
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": false,
+            "distinctColours": 311,
+            "mean": [
+              138,
+              154,
+              165
+            ]
+          },
+          "underwater": {
+            "openMs": 6141,
+            "pose": {
+              "x": 208,
+              "y": 58,
+              "z": -91,
+              "yaw": 0,
+              "pitch": 0
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": false,
+            "distinctColours": 134,
+            "mean": [
+              44,
+              54,
+              74
+            ]
+          },
+          "spillSlope": {
+            "openMs": 7783,
+            "pose": {
+              "x": -441,
+              "y": 128,
+              "z": 74,
+              "yaw": 0,
+              "pitch": -26.6
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": false,
+            "distinctColours": 158,
+            "mean": [
+              97,
+              109,
+              128
+            ]
+          },
+          "wallFront1": {
+            "openMs": 6731,
+            "pose": {
+              "x": 32,
+              "y": 39.5,
+              "z": -14,
+              "yaw": 200.4,
+              "pitch": -28.2
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": true,
+            "distinctColours": 173,
+            "mean": [
+              118,
+              99,
+              84
+            ]
+          },
+          "wallFront2": {
+            "openMs": 6657,
+            "pose": {
+              "x": 20,
+              "y": 52.5,
+              "z": 41,
+              "yaw": 298.3,
+              "pitch": -10.2
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": true,
+            "distinctColours": 167,
+            "mean": [
+              104,
+              98,
+              95
+            ]
+          },
+          "wallFront3": {
+            "openMs": 6507,
+            "pose": {
+              "x": -65,
+              "y": -36.5,
+              "z": -13,
+              "yaw": 125.5,
+              "pitch": 0
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": true,
+            "distinctColours": 106,
+            "mean": [
+              59,
+              60,
+              65
+            ]
+          },
+          "wallFront4": {
+            "openMs": 6856,
+            "pose": {
+              "x": -110,
+              "y": 6.5,
+              "z": 28,
+              "yaw": 48.7,
+              "pitch": -28.6
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": true,
+            "distinctColours": 165,
+            "mean": [
+              74,
+              90,
+              121
+            ]
+          },
+          "wallFront5": {
+            "openMs": 7003,
+            "pose": {
+              "x": -128,
+              "y": 64.5,
+              "z": -23,
+              "yaw": 80.8,
+              "pitch": -5.2
+            },
+            "eyeState": 0,
+            "voxelState": 0,
+            "nightVision": true,
+            "distinctColours": 134,
+            "mean": [
+              114,
+              92,
+              74
+            ]
+          }
+        },
+        "wallMs": 139684,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 3,
+        "name": "the X-ray on floodedUnderSea: X shows the kinds' legend ending with Flooded and Lava; C the biome legend with them; back",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "floodedUnderSea: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "X: \"X-ray · y −64 … 319 · by cave type\" with the kinds' legend (12, ending Flooded, Lava)",
+            "detail": {
+              "kinds": [
+                "Cheese",
+                "Spaghetti 3D",
+                "Spaghetti 2D",
+                "Noodle",
+                "Entrance",
+                "Worm",
+                "Ravine",
+                "Underground worm",
+                "Other density air",
+                "Surface",
+                "Flooded",
+                "Lava"
+              ],
+              "biomes": null
+            }
+          },
+          {
+            "pass": true,
+            "what": "C: by cave biome with [\"Plain cave\",\"Lush\",\"Dripstone\",\"Abyss\",\"Surface\",\"Flooded\",\"Lava\"]",
+            "detail": {
+              "kinds": null,
+              "biomes": [
+                "Plain cave",
+                "Lush",
+                "Dripstone",
+                "Abyss",
+                "Surface",
+                "Flooded",
+                "Lava"
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "C again: by cave type"
+          },
+          {
+            "pass": true,
+            "what": "X again: the X-ray off"
+          }
+        ],
+        "pass": true,
+        "legendKinds": {
+          "kinds": [
+            "Cheese",
+            "Spaghetti 3D",
+            "Spaghetti 2D",
+            "Noodle",
+            "Entrance",
+            "Worm",
+            "Ravine",
+            "Underground worm",
+            "Other density air",
+            "Surface",
+            "Flooded",
+            "Lava"
+          ],
+          "biomes": null
+        },
+        "shotXray": "test/metrics/.out/task57/step2/shots/3-xray-flooded-under-sea.png",
+        "legendBiomes": {
+          "kinds": null,
+          "biomes": [
+            "Plain cave",
+            "Lush",
+            "Dripstone",
+            "Abyss",
+            "Surface",
+            "Flooded",
+            "Lava"
+          ]
+        },
+        "shotXrayBiome": "test/metrics/.out/task57/step2/shots/3-xray-flooded-under-sea-by-biome.png",
+        "wallMs": 15002,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 4,
+        "name": "the caves slice through the flooded cave at floodedUnderSea: M, the Caves tab, \"Cave slice\": the horizontal caves slice at y 38, its legend lists water",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "floodedUnderSea: the stream settled at RD 12 (rd, filled = [12,12], after 4 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "M opens the map"
+          },
+          {
+            "pass": true,
+            "what": "\"Cave slice\" opens the horizontal caves slice at y 38",
+            "detail": {
+              "field": "caves",
+              "plane": "horizontal",
+              "y": "38"
+            }
+          },
+          {
+            "pass": true,
+            "what": "the slice draws its 128² slice"
+          },
+          {
+            "pass": true,
+            "what": "the slice's legend lists water: [\"Cheese\",\"Spaghetti 3D\",\"Spaghetti 2D\",\"Noodle\",\"Entrance\",\"Worm\",\"Underground worm\",\"water\",\"other solid\",\"open air\"]"
+          },
+          {
+            "pass": true,
+            "what": "M closes the map"
+          }
+        ],
+        "pass": true,
+        "legend": [
+          "Cheese",
+          "Spaghetti 3D",
+          "Spaghetti 2D",
+          "Noodle",
+          "Entrance",
+          "Worm",
+          "Underground worm",
+          "water",
+          "other solid",
+          "open air"
+        ],
+        "shotSlice": "test/metrics/.out/task57/step2/shots/4-caves-slice-flooded.png",
+        "wallMs": 7935,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 5,
+        "name": "the Water toggle at coastFancy (1400 × 900, as the smoke): the row in step with the setting; Fancy ↔ Fast stored and live (the far water's mean changes by more than 8, no reload); back",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "coastFancy: the stream settled at RD 12 (rd, filled = [12,12], after 2 ms)",
+            "detail": [
+              12,
+              12
+            ]
+          },
+          {
+            "pass": true,
+            "what": "G opens the Settings (at the open)"
+          },
+          {
+            "pass": true,
+            "what": "at the open: the Settings' \"Water\" row (fast, fancy) reads fancy (stored)",
+            "detail": {
+              "label": "Water",
+              "value": "fancy",
+              "tiers": [
+                "fast",
+                "fancy"
+              ],
+              "shown": true,
+              "stored": "fancy"
+            }
+          },
+          {
+            "pass": true,
+            "what": "fancy → fast: fast stored"
+          },
+          {
+            "pass": true,
+            "what": "Esc closes the Settings (fancy → fast)"
+          },
+          {
+            "pass": true,
+            "what": "fancy → fast is live: the mean of the 400 × 90 px at (950, 470) changes by more than 8 (rgb 77, 107, 157 → 45, 85, 150)",
+            "detail": {
+              "first": [
+                77,
+                107,
+                157
+              ],
+              "toggled": [
+                45,
+                85,
+                150
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "G opens the Settings (after fancy → fast)"
+          },
+          {
+            "pass": true,
+            "what": "after fancy → fast: the Settings' \"Water\" row (fast, fancy) reads fast (stored)",
+            "detail": {
+              "label": "Water",
+              "value": "fast",
+              "tiers": [
+                "fast",
+                "fancy"
+              ],
+              "shown": true,
+              "stored": "fast"
+            }
+          },
+          {
+            "pass": true,
+            "what": "fast → fancy: fancy stored"
+          },
+          {
+            "pass": true,
+            "what": "Esc closes the Settings (fast → fancy)"
+          },
+          {
+            "pass": true,
+            "what": "fast → fancy is live again (rgb 45, 85, 150 → 79, 109, 159)",
+            "detail": {
+              "toggled": [
+                45,
+                85,
+                150
+              ],
+              "back": [
+                79,
+                109,
+                159
+              ]
+            }
+          },
+          {
+            "pass": true,
+            "what": "no reload: the same document throughout"
+          }
+        ],
+        "pass": true,
+        "shot_fast": "test/metrics/.out/task57/step2/shots/5-coast-fast.png",
+        "shot_fancy": "test/metrics/.out/task57/step2/shots/5-coast-fancy.png",
+        "tiers": {
+          "t0": "fancy",
+          "t1": "fast",
+          "first": [
+            77,
+            107,
+            157
+          ],
+          "toggled": [
+            45,
+            85,
+            150
+          ],
+          "back": [
+            79,
+            109,
+            159
+          ]
+        },
+        "wallMs": 9179,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 6,
+        "name": "swimming at underwater (1400 × 900, the capture mode &shot=1, as the smoke): the surface reading 2 above the sea; at the pose the fog on (the centre pixel blue dominant); Space held rises out of the water: the fog off",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "at the underwater pose (y 58) the fog is on: the centre pixel rgb 7, 24, 63 blue dominant, off the surface reading (rgb 143, 135, 103)",
+            "detail": {
+              "under": [
+                7,
+                24,
+                63
+              ],
+              "surface": [
+                143,
+                135,
+                103
+              ]
+            }
+          },
+          {
+            "pass": false,
+            "what": "Space raises the eye from y 58 to 67.48; the fog off: rgb 159, 150, 115 within 8 of the surface reading",
+            "detail": {
+              "risen": {
+                "x": 208,
+                "y": 67.47884448101345,
+                "z": -91,
+                "yaw": 0,
+                "pitch": 0
+              },
+              "surfaced": [
+                159,
+                150,
+                115
+              ],
+              "surface": [
+                143,
+                135,
+                103
+              ]
+            }
+          }
+        ],
+        "pass": false,
+        "shotSurface": "test/metrics/.out/task57/step2/shots/6-underwater-surface-reading.png",
+        "shotUnder": "test/metrics/.out/task57/step2/shots/6-underwater.png",
+        "shotSurfaced": "test/metrics/.out/task57/step2/shots/6-surfaced.png",
+        "swim": {
+          "surface": [
+            143,
+            135,
+            103
+          ],
+          "under": [
+            7,
+            24,
+            63
+          ],
+          "surfaced": [
+            159,
+            150,
+            115
+          ],
+          "risenY": 67.47884448101345
+        },
+        "wallMs": 14807,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0,
+        "superseded": "by stepsRerun (step 6)"
+      },
+      {
+        "step": 7,
+        "name": "?selftest=1 on production: 68/68 with the sp7a keys and \"IndexedDB contract: 10/10 passed\" (the profile's wi10 untouched)",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "✓ all 68 goldens match (13.7 s) (test/goldens.json holds 68; 68 ✓ rows, 68 of them the repo's keys)",
+            "detail": "✓ all 68 goldens match (13.7 s)"
+          },
+          {
+            "pass": true,
+            "what": "the sp7a keys: [\"✓ sp7a.aquifer.points\",\"✓ sp7a.region.D.water\",\"✓ sp7a.springs\"]"
+          },
+          {
+            "pass": true,
+            "what": "IndexedDB contract: 10/10 passed",
+            "detail": {
+              "kv": "IndexedDB contract: 10/10 passed",
+              "kvFailures": []
+            }
+          },
+          {
+            "pass": true,
+            "what": "the selftest database wi10-selftest is deleted after the run",
+            "detail": [
+              "wi10@2"
+            ]
+          },
+          {
+            "pass": true,
+            "what": "the profile's wi10 is the same before and after the selftest (counts {\"diffs\":1,\"history\":1,\"historySteps\":4,\"meta\":0,\"state\":1,\"worlds\":1})",
+            "detail": {
+              "before": {
+                "diffs": 1,
+                "history": 1,
+                "historySteps": 4,
+                "meta": 0,
+                "state": 1,
+                "worlds": 1
+              },
+              "after": {
+                "diffs": 1,
+                "history": 1,
+                "historySteps": 4,
+                "meta": 0,
+                "state": 1,
+                "worlds": 1
+              }
+            }
+          }
+        ],
+        "pass": true,
+        "summaryMs": 13721,
+        "summary": "✓ all 68 goldens match (13.7 s)",
+        "keyCount": 68,
+        "repoGoldenCount": 68,
+        "equalCount": 68,
+        "matchesRepoGoldens": 68,
+        "sp7aKeys": [
+          "✓ sp7a.aquifer.points",
+          "✓ sp7a.region.D.water",
+          "✓ sp7a.springs"
+        ],
+        "mismatches": [],
+        "kv": "IndexedDB contract: 10/10 passed",
+        "kvFailures": [],
+        "kvMs": 54,
+        "databasesAfter": [
+          "wi10@2"
+        ],
+        "wallMsTotal": 14283,
+        "shot": "test/metrics/.out/task57/step2/shots/7-selftest.png",
+        "wallMs": 15606,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 8,
+        "name": "page and console errors",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "no page error (0)",
+            "detail": []
+          },
+          {
+            "pass": true,
+            "what": "no console error (0; 16 benign logs ignored and listed)",
+            "detail": []
+          }
+        ],
+        "pass": true,
+        "pageErrors": 0,
+        "consoleErrors": 0,
+        "ignored": 16,
+        "wallMs": 0,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      }
+    ],
+    "stepsRerun": [
+      {
+        "step": 0,
+        "name": "pre-checks (read-only: PRIME on-demand, eDP-1 primary at 240 Hz, the session unlocked, load < 1.5, AC online) and the bundle compare against a local build of main",
+        "notes": [
+          "connected outputs: eDP-1 connected primary; HDMI-1-0 connected 1920x1080+1920+0 (the controller's conditions: eDP-1 at 240 Hz primary, HDMI-1-0 at 143.60 Hz; the window is kept on eDP-1)",
+          "the hottest thermal zone before Chrome: 46 °C (TCPU_PCI)"
+        ],
+        "checks": [
+          {
+            "pass": true,
+            "what": "PRIME is on-demand (prime-select query: on-demand)"
+          },
+          {
+            "pass": true,
+            "what": "eDP-1 is connected, primary, at 240 Hz (1920x1080    240.00*+ 240.00    60.00)",
+            "detail": [
+              "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+              "   1920x1080    240.00*+ 240.00    60.00  "
+            ]
+          },
+          {
+            "pass": true,
+            "what": "the session is active and unlocked (Seat=seat0, Type=x11, Active=yes, LockedHint=no)"
+          },
+          {
+            "pass": true,
+            "what": "the 1-minute load 1.47 is below 1.5"
+          },
+          {
+            "pass": true,
+            "what": "AC online (/sys/class/power_supply/ADP1/online = 1)"
+          },
+          {
+            "pass": true,
+            "what": "the repo is main at 89cbbf2d834dd5c852655a82d2eedebe09d72081 (= origin/main 89cbbf2d834dd5c852655a82d2eedebe09d72081), the tree clean but for the untracked .superpowers/ (\"?? .superpowers/\")"
+          },
+          {
+            "pass": true,
+            "what": "production serves the local build of main: served index-C6xAMIYE.js, local index-C6xAMIYE.js, index.html equal true, 52/52 files byte-identical",
+            "detail": {
+              "servedBundle": "index-C6xAMIYE.js",
+              "servedCss": "index-CvFmo4uU.css",
+              "localBundle": "index-C6xAMIYE.js",
+              "indexSha256": "b6524c0ba15f2d3fce3c85643c55d6e1f28ff9b08939938bc688fe8dd920224d",
+              "localIndexHtmlEqual": true,
+              "distDir": "/home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/task57/dist-main",
+              "distBuiltAt": "2026-11-27T23:22:02.631Z",
+              "assetsCompared": 52,
+              "assetsEqual": 52,
+              "assetsDiffering": []
+            }
+          }
+        ],
+        "pass": true,
+        "pre": {
+          "prime": "on-demand",
+          "eDP1": [
+            "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+            "   1920x1080    240.00*+ 240.00    60.00  "
+          ],
+          "eDP1Current": "   1920x1080    240.00*+ 240.00    60.00  ",
+          "connectedOutputs": [
+            "eDP-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 344mm x 194mm",
+            "HDMI-1-0 connected 1920x1080+1920+0 (normal left inverted right x axis y axis) 597mm x 336mm"
+          ],
+          "session": "2",
+          "sessionFrom": "loginctl list-sessions: the seat0 x11 session",
+          "sessionProps": "Seat=seat0\nType=x11\nActive=yes\nLockedHint=no",
+          "acOnline": "1",
+          "thermalZones": [
+            {
+              "zone": "thermal_zone0",
+              "type": "acpitz",
+              "c": 27.8
+            },
+            {
+              "zone": "thermal_zone1",
+              "type": "DGPU",
+              "c": 26.85
+            },
+            {
+              "zone": "thermal_zone2",
+              "type": "INT3400 Thermal",
+              "c": 20
+            },
+            {
+              "zone": "thermal_zone3",
+              "type": "TCPU_PCI",
+              "c": 46
+            },
+            {
+              "zone": "thermal_zone4",
+              "type": "iwlwifi_1",
+              "c": 39
+            },
+            {
+              "zone": "thermal_zone5",
+              "type": "x86_pkg_temp",
+              "c": 44
+            }
+          ],
+          "hottest": {
+            "zone": "thermal_zone3",
+            "type": "TCPU_PCI",
+            "c": 46
+          },
+          "gitBranch": "main",
+          "gitHead": "89cbbf2d834dd5c852655a82d2eedebe09d72081",
+          "originMain": "89cbbf2d834dd5c852655a82d2eedebe09d72081",
+          "loadavg": [
+            1.47,
+            2.96,
+            2.29
+          ],
+          "uptime": "00:37:34 up  2:56,  1 user,  load average: 1,47, 2,96, 2,29",
+          "gitStatus": "?? .superpowers/"
+        },
+        "wallMs": 99278,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 6,
+        "name": "swimming at underwater (1400 × 900, the capture mode &shot=1, as the smoke): the surface reading 2 above the sea; at the pose the fog on (the centre pixel blue dominant); Space held rises out of the water: the fog off",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "at the underwater pose (y 58) the fog is on: the centre pixel rgb 7, 24, 63 blue dominant, off the surface reading (rgb 143, 135, 103)",
+            "detail": {
+              "under": [
+                7,
+                24,
+                63
+              ],
+              "surface": [
+                143,
+                135,
+                103
+              ]
+            }
+          },
+          {
+            "pass": false,
+            "what": "Space raises the eye from y 58 to 67.48 (out of the water), flown back to 65.99; the fog off: rgb 158, 149, 114 within 8 of the surface reading",
+            "detail": {
+              "risen": {
+                "x": 208,
+                "y": 65.99297845609404,
+                "z": -91,
+                "yaw": 0,
+                "pitch": 0
+              },
+              "surfaced": [
+                158,
+                149,
+                114
+              ],
+              "surface": [
+                143,
+                135,
+                103
+              ]
+            }
+          }
+        ],
+        "pass": false,
+        "shotSurface": "test/metrics/.out/task57/step2/shots-step6/6-underwater-surface-reading.png",
+        "shotUnder": "test/metrics/.out/task57/step2/shots-step6/6-underwater.png",
+        "overshoot": {
+          "y": 67.47794814910593,
+          "back": {
+            "ok": true,
+            "y": 65.99297845609404,
+            "holds": 1
+          }
+        },
+        "shotSurfaced": "test/metrics/.out/task57/step2/shots-step6/6-surfaced.png",
+        "swim": {
+          "surface": [
+            143,
+            135,
+            103
+          ],
+          "under": [
+            7,
+            24,
+            63
+          ],
+          "surfaced": [
+            158,
+            149,
+            114
+          ],
+          "risenY": 65.99297845609404
+        },
+        "wallMs": 14923,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      },
+      {
+        "step": 8,
+        "name": "page and console errors",
+        "notes": [],
+        "checks": [
+          {
+            "pass": true,
+            "what": "no page error (0)",
+            "detail": []
+          },
+          {
+            "pass": true,
+            "what": "no console error (0; 2 benign logs ignored and listed)",
+            "detail": []
+          }
+        ],
+        "pass": true,
+        "pageErrors": 0,
+        "consoleErrors": 0,
+        "ignored": 2,
+        "wallMs": 0,
+        "pageErrorsDuring": 0,
+        "consoleErrorsDuring": 0
+      }
+    ],
+    "step6Reading": {
+      "verdict": "pass on the frame, fail on the script's centre-pixel tolerance",
+      "scripted": "the centre pixel (700, 450) after surfacing (and after the eye was flown back to y 65.99 from Space's overshoot to 67.48) read 158, 149, 114 against the surface reading's 143, 135, 103: off by 15 in red, beyond the smoke's 8. That pixel lies on the sea near the horizon, where Fancy's animated ripples move a pixel by tens (the smoke's own note on WATER_TIER_BOX); the smoke reads it on SwiftShader.",
+      "frameMeans": "from the same captures (1400 × 900): whole frame surface reading 105, 136, 174 / underwater 46, 56, 78 / surfaced 106, 136, 174; the sky box (500-900, 40-140) 81, 132, 218 / 26, 50, 98 / 81, 132, 218. The fog is on under water and off after surfacing; the first run read the same (surfaced frame 106, 136, 173)."
+    },
+    "pageErrors": 0,
+    "consoleErrors": 0,
+    "ignoredLogs": [
+      {
+        "step": "0-pre-checks (read-only: PRIME on-demand, eDP-1 primary at 240 Hz, the session unlocked, load < 1.5, AC online) and the bundle compare against a local build of main",
+        "source": "log.network",
+        "text": "Failed to load resource: the server responded with a status of 404 ()",
+        "url": "https://world-imaginer-voxel.vercel.app/favicon.ico",
+        "why": "index.html declares no icon, so Chrome asks for /favicon.ico and the host answers 404 (the same ignore as test/tools/cdp.ts ignoredLog and SP5b/SP5c's checks)"
+      },
+      {
+        "step": "1-Step 0's SP6b world in SP7a: the \"older generator\" badge; it opens with today's terrain (the cave flooded), the edit kept (the pocket (2, 21, -3), (2, 20, -3), (2, 19, -3) dry, the stone at (2, 22, -2)), still water around the pocket",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=2,-3&y=23.5&yaw=324.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=-632,-100&y=99.5&yaw=301.4&pitch=-9.5&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=-511,-115&y=115&yaw=90.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=-492,-133&y=164.5&yaw=180.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=-315,60&y=165.5&yaw=180.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJmbG9hdGluZ19pc2xhbmRzIiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=-1405,1447&y=-42.5&yaw=347.7&pitch=-9.6&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=-1350,1329&y=-47.5&yaw=276.3&pitch=-33.5&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=13,0&y=40.5&yaw=90.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=199,-88&y=65.5&yaw=0.0&pitch=-10.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=208,-91&y=58&yaw=0.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=-441,74&y=128&yaw=0.0&pitch=-26.6&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=20,41&y=52.5&yaw=298.3&pitch=-10.2&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=-65,-13&y=-36.5&yaw=125.5&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=-110,28&y=6.5&yaw=48.7&pitch=-28.6&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "6-swimming at underwater (1400 × 900, the capture mode &shot=1, as the smoke): the surface reading 2 above the sea; at the pose the fog on (the centre pixel blue dominant); Space held rises out of the water: the fog off",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=208,-91&y=66&yaw=0.0&pitch=0.0&rd=12&wiTest=1&shot=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      },
+      {
+        "step": "0-pre-checks (read-only: PRIME on-demand, eDP-1 primary at 240 Hz, the session unlocked, load < 1.5, AC online) and the bundle compare against a local build of main",
+        "source": "log.network",
+        "text": "Failed to load resource: the server responded with a status of 404 ()",
+        "url": "https://world-imaginer-voxel.vercel.app/favicon.ico",
+        "why": "index.html declares no icon, so Chrome asks for /favicon.ico and the host answers 404 (the same ignore as test/tools/cdp.ts ignoredLog and SP5b/SP5c's checks)"
+      },
+      {
+        "step": "6-swimming at underwater (1400 × 900, the capture mode &shot=1, as the smoke): the surface reading 2 above the sea; at the pose the fog on (the centre pixel blue dominant); Space held rises out of the water: the fog off",
+        "source": "log.intervention",
+        "text": "Blocked attempt to show a 'beforeunload' confirmation panel for a frame that never had a user gesture since its load. https://www.chromestatus.com/feature/5082396709879808",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=208,-91&y=66&yaw=0.0&pitch=0.0&rd=12&wiTest=1&shot=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ",
+        "why": "Chrome's own intervention: a beforeunload confirmation asked for by a frame without a user gesture is blocked and logged (SP5a's leave guard, installLeaveGuard in src/ui/world/reload.ts); not a page error (as SP5b/SP5c's checks)"
+      }
+    ],
+    "dialogs": [
+      {
+        "step": "1-Step 0's SP6b world in SP7a: the \"older generator\" badge; it opens with today's terrain (the cave flooded), the edit kept (the pocket (2, 21, -3), (2, 20, -3), (2, 19, -3) dry, the stone at (2, 22, -2)), still water around the pocket",
+        "type": "beforeunload",
+        "message": "",
+        "url": "https://world-imaginer-voxel.vercel.app/?world=323d5d5c-dafb-4b12-b1e1-836bce707296"
+      },
+      {
+        "step": "1-Step 0's SP6b world in SP7a: the \"older generator\" badge; it opens with today's terrain (the cave flooded), the edit kept (the pocket (2, 21, -3), (2, 20, -3), (2, 19, -3) dry, the stone at (2, 22, -2)), still water around the pocket",
+        "type": "beforeunload",
+        "message": "",
+        "url": "https://world-imaginer-voxel.vercel.app/?world=323d5d5c-dafb-4b12-b1e1-836bce707296&wiTest=1"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "type": "beforeunload",
+        "message": "",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=190,-134&y=38.5&yaw=90.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "type": "beforeunload",
+        "message": "",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=-187,80&y=131&yaw=0.0&pitch=-45.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJsYXJnZV9iaW9tZXMiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0"
+      },
+      {
+        "step": "2-each review link of water.examples.json (17: RD 12, seed 42, each on its profile; the caves with night vision, the rest without)",
+        "type": "beforeunload",
+        "message": "",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=32,-14&y=39.5&yaw=200.4&pitch=-28.2&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19"
+      },
+      {
+        "step": "3-the X-ray on floodedUnderSea: X shows the kinds' legend ending with Flooded and Lava; C the biome legend with them; back",
+        "type": "beforeunload",
+        "message": "",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=-128,-23&y=64.5&yaw=80.8&pitch=-5.2&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19"
+      },
+      {
+        "step": "4-the caves slice through the flooded cave at floodedUnderSea: M, the Caves tab, \"Cave slice\": the horizontal caves slice at y 38, its legend lists water",
+        "type": "beforeunload",
+        "message": "",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=190,-134&y=38.5&yaw=90.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ"
+      },
+      {
+        "step": "5-the Water toggle at coastFancy (1400 × 900, as the smoke): the row in step with the setting; Fancy ↔ Fast stored and live (the far water's mean changes by more than 8, no reload); back",
+        "type": "beforeunload",
+        "message": "",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=190,-134&y=38.5&yaw=90.0&pitch=0.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ"
+      },
+      {
+        "step": "6-swimming at underwater (1400 × 900, the capture mode &shot=1, as the smoke): the surface reading 2 above the sea; at the pose the fog on (the centre pixel blue dominant); Space held rises out of the water: the fog off",
+        "type": "beforeunload",
+        "message": "",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=199,-88&y=65.5&yaw=0.0&pitch=-10.0&rd=12&wiTest=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ"
+      },
+      {
+        "step": "7-?selftest=1 on production: 68/68 with the sp7a keys and \"IndexedDB contract: 10/10 passed\" (the profile's wi10 untouched)",
+        "type": "beforeunload",
+        "message": "",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=208,-91&y=58&yaw=0.0&pitch=0.0&rd=12&wiTest=1&shot=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ"
+      },
+      {
+        "step": "6-swimming at underwater (1400 × 900, the capture mode &shot=1, as the smoke): the surface reading 2 above the sea; at the pose the fog on (the centre pixel blue dominant); Space held rises out of the water: the fog off",
+        "type": "beforeunload",
+        "message": "",
+        "url": "https://world-imaginer-voxel.vercel.app/?at=208,-91&y=58&yaw=0.0&pitch=0.0&rd=12&wiTest=1&shot=1#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ"
+      }
+    ],
+    "browserClose": [
+      "exited after Browser.close (code 0, signal null)",
+      "exited after Browser.close (code 0, signal null)",
+      "exited after Browser.close (code 0, signal null)"
+    ],
+    "settingsRestored": {
+      "before": "{\"rd\":12,\"fpsCap\":0,\"fov\":70,\"sensitivity\":1,\"brightness\":0.3,\"mapMode\":\"full\",\"watchLive\":true,\"holdRepeat\":false,\"nightVision\":false}",
+      "end": "{\"rd\":12,\"fpsCap\":0,\"fov\":70,\"sensitivity\":1,\"brightness\":0.3,\"mapMode\":\"full\",\"watchLive\":true,\"holdRepeat\":false,\"nightVision\":false}"
+    }
+  },
+  "firefox": {
+    "status": "pending the user (STOP: in the user's own Firefox on the Iris Xe, by hand)",
+    "links": [
+      "https://world-imaginer-voxel.vercel.app/?at=-632,-100&y=99.5&yaw=301.4&pitch=-9.5&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+      "https://world-imaginer-voxel.vercel.app/?at=-511,-115&y=115&yaw=90.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+      "https://world-imaginer-voxel.vercel.app/?at=-492,-133&y=164.5&yaw=180.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+      "https://world-imaginer-voxel.vercel.app/?at=-315,60&y=165.5&yaw=180.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJmbG9hdGluZ19pc2xhbmRzIiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "https://world-imaginer-voxel.vercel.app/?at=-1405,1447&y=-42.5&yaw=347.7&pitch=-9.6&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "https://world-imaginer-voxel.vercel.app/?at=-1350,1329&y=-47.5&yaw=276.3&pitch=-33.5&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "https://world-imaginer-voxel.vercel.app/?at=190,-134&y=38.5&yaw=90.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ",
+      "https://world-imaginer-voxel.vercel.app/?at=13,0&y=40.5&yaw=90.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "https://world-imaginer-voxel.vercel.app/?at=-187,80&y=131&yaw=0.0&pitch=-45.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJsYXJnZV9iaW9tZXMiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+      "https://world-imaginer-voxel.vercel.app/?at=199,-88&y=65.5&yaw=0.0&pitch=-10.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ",
+      "https://world-imaginer-voxel.vercel.app/?at=208,-91&y=58&yaw=0.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhcmNoaXBlbGFnbyIsInNlZWQiOiI0MiIsInYiOjEsInZpZXciOnsiYnBwIjo2NCwibGF5ZXIiOiJiaW9tZSIsIngiOjAsInoiOjB9fQ",
+      "https://world-imaginer-voxel.vercel.app/?at=-441,74&y=128&yaw=0.0&pitch=-26.6&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
+      "https://world-imaginer-voxel.vercel.app/?at=32,-14&y=39.5&yaw=200.4&pitch=-28.2&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "https://world-imaginer-voxel.vercel.app/?at=20,41&y=52.5&yaw=298.3&pitch=-10.2&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "https://world-imaginer-voxel.vercel.app/?at=-65,-13&y=-36.5&yaw=125.5&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJkZWZhdWx0Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "https://world-imaginer-voxel.vercel.app/?at=-110,28&y=6.5&yaw=48.7&pitch=-28.6&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "https://world-imaginer-voxel.vercel.app/?at=-128,-23&y=64.5&yaw=80.8&pitch=-5.2&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
+      "https://world-imaginer-voxel.vercel.app/?selftest=1"
+    ]
+  },
+  "script": "test/metrics/.out/task57/prodcheck.mjs (git-ignored; Node, no npm dependency; PC_MODE=step0 for Step 0), assemble.mjs for this file; shots in test/metrics/.out/task57/step0/shots, step2/shots, step2/shots-step6"
+}
