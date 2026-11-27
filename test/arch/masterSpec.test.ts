@@ -288,6 +288,13 @@
  * The master pins II (Task 49) land item 3's Default receivers in pre-exit form (§18's four cut-line items after "SP7a
  * vertex waves → SP11", each receiver read from the spec's §18; Task 56 Step 0 words each taken item as delivered) and
  * the describe's last test, which checks that every item of the spec's §16 has a test naming it (SP6b's pattern).
+ * The master at the exit (Task 56 Step 0, before Task 54's CI runs, rulings P49): none of §18's four items was cut, so
+ * item 1's SP7a entry reads as built (its contents; each "Received from SP6a" and "Received from SP6b" item followed by
+ * its outcome in place, "→ SP10" for the slice's aquifer level and status field and the crosshair probe, "not needed"
+ * for the level-field rule, "→ SP9" for `surfaceEst3` caching, the bench's flood scenario "→ SP7b"; the "Received from
+ * SP8b (moved by SP7a)" line as delivered; the Exit as the spec §19; the Cut line §18's wording, saying nothing moved),
+ * item 3's four receivers each read "(delivered in SP7a, so nothing moved)", and SP7b's "Received from SP7a" line names
+ * R5's population since rulings R27 item 3 (the flooded caves' ceiling tops, 70-73 % of R5's top quads, spec §6.5).
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -2147,9 +2154,10 @@ describe('master spec amendments (SP6a §13)', () => {
     for (const [id, line] of [['SP10', receivedOf(spEntry('SP10', 'SP11'))], ['SP12', receivedOf(sp12Entry())]] as const) {
       expect(line, `${id}'s line still reads "if cut"`).not.toMatch(/if (they were )?cut/);
     }
-    // Item 3: SP7's line (SP7a's since the SP7a split) carries §14's text to its last item before the abyss lava (left to SP6b).
+    // Item 3: SP7's line (SP7a's since the SP7a split) carries §14's text to its last item before the abyss lava (left to
+    // SP6b); at SP7a's exit each item is followed by its outcome (the SP7a describe's item 1 pin).
     const sp7Received = spEntry('SP7a', 'SP7b').split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
-    expect(sp7Received, 'SP7a\'s "Received from SP6a" line ends with the bench\'s flood scenario').toMatch(/`dryPitsBelowSea` \(SP3c\); the bench's flood scenario after L13\.$/);
+    expect(sp7Received, 'SP7a\'s "Received from SP6a" line ends with the bench\'s flood scenario').toMatch(/`dryPitsBelowSea` \(SP3c\) \([^)]*\); the bench's flood scenario after L13 \(→ SP7b\)\.$/);
     // Item 3: SP12's line carries ruling R19's hand-off (the SP6a spec §14's SP12 bullet, §10.4), after the summit caps it goes with.
     const sp12Received = sp12Entry().split('\n').find((l) => l.startsWith('- Received from SP6a (its spec §14; amended by SP6a):'));
     expect(sp12Received, 'SP12\'s "Received from SP6a" line carries R19\'s large-island grass').toContain('`islandBranchOnGround` before and after caves; with them, the grass kept under floating_islands\' islands that lies at sky 0 under islands wider than about 30 blocks (ruling R19, the SP6a spec §10.4: S1\'s large-island window, recorded, not pooled); the y mod 16 residue');
@@ -3233,7 +3241,7 @@ describe('master spec amendments (SP6b §15)', () => {
     const SP6B = '- Received from SP6b (its spec §16; amended by SP6b):';
     // Each phrase is §16's text, so it is checked in §16's bullet too.
     const handed: Array<[id: SubProjectId, entry: string, phrases: readonly string[]]> = [
-      ['SP7a', spEntry('SP7a', 'SP7b'), ['lava may appear in the abyss and light it a little', '"y la propia lava que también emite luz"', 'widened by 0.1 depth disables aquifers there', 'clay under cave water in lush and gravel under cave water elsewhere', '`caves.floor.y` by a lava mask', 'and re-checks `C7.bedrockExposed`', 'the cave channel\'s nibble marks flooded caves\' biome too', 'SP7\'s spec reconciles the two.']],
+      ['SP7a', spEntry('SP7a', 'SP7b'), ['lava may appear in the abyss and light it a little', '"y la propia lava que también emite luz"', 'widened by 0.1 depth disables aquifers there', 'clay under cave water in lush and gravel under cave water elsewhere', '`caves.floor.y` by a lava mask', 'and re-checks `C7.bedrockExposed`', 'the cave channel\'s nibble marks flooded caves\' biome too', 'SP7\'s spec reconciles the two']],
       ['SP8a', spEntry('SP8a', 'SP8b'), ['painters for the seven flat-colour blocks', 'the abyss\'s dark albedos re-judged with textures under the light floor', 'the X-ray\'s biome palette stays flat']],
       ['SP8b', spEntry('SP8b', 'SP8c'), ['the abyss\'s faintly glowing crystals or gems, exclusive to the abyss, and its light gothic touch', 'the abyss mineral (O2) placed by the nibble or `caveBiomeQ`', 'reads the scan\'s per-run `floorBiome` and `ceilBiome` and the nibble', '`secondaryDepthRange` if its rules need a noisy depth', 'emitters lift caves above the light floor']],
       ['SP8c', spEntry('SP8c', 'SP9'), ['the abyss silent', '"Oscuro y silencioso"', 'AU3\'s abyss label from the nibble at the eye', 'the `SOUND` group `abyss` now assigned to five blocks (footsteps)']],
@@ -3468,17 +3476,16 @@ describe('master spec amendments (SP7a §16)', () => {
     // The SP7a entry (moved from the SP6a describe: SP7's header pin).
     const sp7a = spEntry('SP7a', 'SP7b').split('\n');
     expect(sp7a[0], 'the SP7a header').toBe('**SP7a — Water in the generated world** (XL; SP6b, SP5a). Spec: `2026-11-17-sp7a-water-design.md`.');
-    expect(sp7a[1], 'the SP7a contents').toBe('- Aquifers (water, lava, barriers, the abyss\'s water off and lava on, fast path); seas, rivers and lakes at their `surfaceWaterLevel`; water springs in mountain faces, island-edge springs and lava springs in the abyss, placed by T; the exact 3 × 3 settle with the distance cap, `FLUID_MODE` and the unsettled flag; the flowing water and lava mesher; water tiers Fast and Fancy; underwater fog and tint; rule 4\'s under-water branches; the X-ray and slice showing flooded caves.');
+    expect(sp7a[1]!.startsWith('- Aquifers (water, lava, barriers, '), 'the SP7a contents (as built: the exit\'s own test)').toBe(true);
     expect(sp7a[2]).toBe('- **Deliverable:** waterfalls from springs on mountains and island edges; translucent oceans, rivers and elevated lakes; flooded caves under the sea, dry caves below sea level under land; deep lava and the abyss\'s lava falls.');
     expect(sp7a[2]).toContain('waterfalls from springs on mountains and island edges');
-    // SP7's "Received from SP6a" and "Received from SP6b" lines stay with SP7a verbatim until the exit (Task 56 Step 0
-    // words them as delivered); the "Received from SP5c" line moved to SP7b.
-    expect(sp7a[3], 'SP7a\'s "Received from SP6a" line').toBe('- Received from SP6a (its spec §14; amended by SP6a): aquifers (§3.9) replace the wet roof for oceans and rivers: SP7 decides whether caves may open under water then, and `caves.limits.waterDepth` with it; `aquifer.fluidAt` per carved voxel (the SP6a spec §2.4); A1-A4 use SP6a\'s 3D components and the tag; the cave channel marks water-filled caves as hollow, so the X-ray shows flooded caves; the map\'s cave slice "plus aquifer fluid" (§5.6): the `caves` slice field shows aquifer fluid in carved voxels; the `wetCover` scan and `C7.waterWall` re-read with aquifers; the level-field −∞ rule only if aquifers need `col` level fields (the SP6a spec D19); `surfaceEst3` caching with its first consumer (§3.7); `dryPitsBelowSea` (SP3c); the bench\'s flood scenario after L13.');
-    expect(sp7a[4], 'SP7a\'s "Received from SP6b" line').toBe('- Received from SP6b (its spec §16; amended by SP6b): lava may appear in the abyss and light it a little (the user: "y la propia lava que también emite luz"; no water there, guess, confirmed); the abyss box (the SP6b spec §1.3) widened by 0.1 depth disables aquifers there (§3.9\'s **Abyss.**); rule 4\'s under-water branches, clay under cave water in lush and gravel under cave water elsewhere (the SP6b spec D21); under SP6b\'s rock floor §3.9\'s "Everything below y −54 is lava" rarely fires, so SP7 places the abyss\'s lava from aquifer cells or lowers the floor locally (`caves.floor.y` by a lava mask), and re-checks `C7.bedrockExposed`; the cave channel\'s nibble marks flooded caves\' biome too; SP7\'s exit "P1: T still ≤ 10 ms" predates ruling R14\'s 13 ms p50 gate (the SP6a spec\'s Threshold log), which SP6b keeps (the SP6b spec D27): SP7\'s spec reconciles the two.');
-    expect(sp7a[5], 'SP7a\'s "Received from SP8b (moved by SP7a)" line').toBe('- Received from SP8b (moved by SP7a): springs and island-edge springs feeding settle (island-edge springs on SP3e\'s islands term, `islandMask` and island runs; SP3e spec §12), placed by T and reaching settle as proto sources (the SP7a spec §3, D21); lava lakes stay SP8b\'s.');
-    // Item 17 (Task 26) names the gates of P1's clause (pinned in its own test).
-    expect(sp7a[6], 'the pre-exit Exit').toBe('- **Exit:** as the SP7a spec §19 (A1-A5; A2 after settle; B2 voxel; B5 with its third part; R5; DT1 with settle; P1 with the gates in force and the aquifer row (`terrain.real` ≤ 13 / 20 ms, `terrain.islands` ≤ 14.5 / 26.5 ms; `aquifer.column` ≤ 1.0 / 2.5 ms (SP7a)); the Chrome legs with the water segment; CI ≤ 6 min on cold runs; the user\'s check).');
-    expect(sp7a[7], 'the pre-exit Cut line, §18\'s items in order').toBe('- **Cut line:** vertex waves (→ SP11); then, in this order, the X-ray\'s fluid tint (and its legend rows, `R1.xrayFluid`) (→ SP10); the slice field\'s aquifer fluid and hover lines (→ SP10); the walk\'s fluid-height rule (→ SP7b); the bench\'s water segment (Fancy\'s 1.2 ms measured) (→ SP11). Each is cut whole.');
+    // SP7's "Received from SP6a" and "Received from SP6b" lines stay with SP7a, each item worded in place at the exit (its
+    // own test); the "Received from SP5c" line moved to SP7b. Then the SP8b line, the Exit and the Cut line (their own tests).
+    expect(sp7a[3]!.startsWith('- Received from SP6a (its spec §14; amended by SP6a): aquifers (§3.9) replace the wet roof for oceans and rivers: '), 'SP7a\'s "Received from SP6a" line').toBe(true);
+    expect(sp7a[4]!.startsWith('- Received from SP6b (its spec §16; amended by SP6b): lava may appear in the abyss and light it a little '), 'SP7a\'s "Received from SP6b" line').toBe(true);
+    expect(sp7a[5]!.startsWith('- Received from SP8b (moved by SP7a): springs and island-edge springs feeding settle '), 'SP7a\'s "Received from SP8b (moved by SP7a)" line').toBe(true);
+    expect(sp7a[6]!.startsWith('- **Exit:** as the SP7a spec §19 ('), 'the Exit').toBe(true);
+    expect(sp7a[7]!.startsWith('- **Cut line:** vertex waves (→ SP11); then, in this order, '), 'the Cut line').toBe(true);
     expect(sp7a.slice(8).join('\n').trim(), 'nothing after the Cut line').toBe('');
     // The SP7b entry.
     const sp7b = spEntry('SP7b', 'SP8a').split('\n');
@@ -3492,6 +3499,89 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(sp7b[6]).toBe('- **Cut line:** lava reactions beyond obsidian and cobblestone (→ SP12).');
     expect(sp7b[7]).toBe('- **MVP line:** after SP7b the app is a complete explorer and editor with caves, entrances and real water.');
     expect(sp7b.slice(8).join('\n').trim(), 'nothing after the MVP line').toBe('');
+  });
+
+  // The exit (Task 56 Step 0, before Task 54's CI runs, rulings P49): none of §18's four items was cut, so item 1's
+  // lines read as built and item 3's receivers as delivered.
+  test('§10\'s SP7a entry at the exit: the contents line as built (SP7a spec §16 item 1)', () => {
+    const lines = spEntry('SP7a', 'SP7b').split('\n');
+    expect(lines[1]).toBe('- Aquifers (water, lava, barriers, the abyss\'s water off and lava on, the bottom lava below `aquifer.lavaLevel` −50, fast path); seas, rivers and lakes at their `surfaceWaterLevel`, caves open under the sea and rivers and lakes sealed by the lake roof; water springs in mountain faces, island-edge springs and lava springs in the abyss, placed by T (water a spring brings may fall into the abyss); the exact 3 × 3 settle in D with the distance cap 12 / 14, `FLUID_MODE`, the unsettled flag and the generated-fluid layer; the flowing water and lava mesher; water tiers Fast and Fancy with the live Water setting; underwater and lava fog and tint; the walk\'s fluid-height rule; rule 4\'s under-water branches; the X-ray\'s fluid tint and the caves slice field showing flooded caves; the bench\'s water segment.');
+    // The values it quotes, from the code.
+    expect(DEFAULTS.aquifer.lavaLevel).toBe(-50);
+    expect([FLUID_CAP_WATER, FLUID_CAP_LAVA]).toEqual([12, 14]);
+    expect(spEntry('SP7a', 'SP7b'), 'the pre-exit contents').not.toContain('the X-ray and slice showing flooded caves.');
+  });
+
+  test('§10\'s SP7a entry at the exit: each "Received from SP6a" and "Received from SP6b" item as delivered or handed on in place (SP7a spec §16 item 1)', () => {
+    const lines = spEntry('SP7a', 'SP7b').split('\n');
+    // [the item as SP6a or SP6b handed it, its outcome right after it], in order; §16 item 1 names the slice field's and
+    // the probe's "→ SP10", the level-field rule's "not needed", `surfaceEst3`'s "→ SP9" and the flood scenario's "→ SP7b".
+    const received: Array<[head: string, items: Array<[item: string, outcome: string]>]> = [
+      ['- Received from SP6a (its spec §14; amended by SP6a):', [
+        ['SP7 decides whether caves may open under water then, and `caves.limits.waterDepth` with it', ' (delivered: caves open under the sea and rivers, lakes stay sealed under the lake roof, `waterDepth` its depth, the SP7a spec §2, D5, D24);'],
+        ['`aquifer.fluidAt` per carved voxel (the SP6a spec §2.4)', ' (delivered: every tagged non-solid voxel asks the aquifer in T, untagged air takes the position\'s `surfaceWaterLevel`, the SP7a spec §1.7, D19);'],
+        ['A1-A4 use SP6a\'s 3D components and the tag', ' (delivered: read after settle, with A5, the SP7a spec §13.1);'],
+        ['so the X-ray shows flooded caves', ' (delivered: flooded tagged voxels keep their tag and nibble, with the X-ray\'s fluid tint, the SP7a spec §10.1);'],
+        ['the `caves` slice field shows aquifer fluid in carved voxels', ' (delivered, with the hover\'s cell status, the SP7a spec §10.2; the slice\'s "aquifer level and status" field and the crosshair probe\'s aquifer cell, level and status → SP10);'],
+        ['the `wetCover` scan and `C7.waterWall` re-read with aquifers', ' (delivered: `wetCover` over lakes; `C7.waterWall` read after settle and recorded, its final definition and bound → SP7b, the SP7a spec\'s rulings R24 item 1);'],
+        ['the level-field −∞ rule only if aquifers need `col` level fields (the SP6a spec D19)', ' (not needed: the aquifer reads the 2D `offset` at its cells\' grid columns, the SP7a spec D18);'],
+        ['`surfaceEst3` caching with its first consumer (§3.7)', ' (→ SP9: the aquifer is not its consumer);'],
+        ['`dryPitsBelowSea` (SP3c)', ' (delivered: re-read after settle and on T);'],
+        ['the bench\'s flood scenario after L13', ' (→ SP7b).'],
+      ]],
+      ['- Received from SP6b (its spec §16; amended by SP6b):', [
+        ['(the user: "y la propia lava que también emite luz"; no water there, guess, confirmed)', ' (delivered: aquifer lava and lava springs in the abyss, L2\'s `abyssLit` recorded; the abyss generates no water, though water a stream brings may fall into it, the SP7a spec\'s rulings R23 item 3);'],
+        ['widened by 0.1 depth disables aquifers there (§3.9\'s **Abyss.**)', ` (delivered: aquifer water becomes air inside the abyss and barrier rock in a margin around it, the depth's 0.1 and \`aquifer.abyssMargin\` ${DEFAULTS.aquifer.abyssMargin} to the sides; lava kept, the SP7a spec §1.6);`],
+        ['clay under cave water in lush and gravel under cave water elsewhere (the SP6b spec D21)', ' (delivered: the SP7a spec §5, D12, D25);'],
+        ['and re-checks `C7.bedrockExposed`', ` (delivered: the abyss's lava from aquifer cells and lava springs, the bottom lava at \`aquifer.lavaLevel\` ${String(DEFAULTS.aquifer.lavaLevel).replace('-', '−')}, the SP7a spec's rulings R23 item 5; \`C7.bedrockExposed\` 0 re-asserted);`],
+        ['the cave channel\'s nibble marks flooded caves\' biome too', ' (delivered: the SP7a spec §1.7);'],
+        ['SP7\'s spec reconciles the two', ` (reconciled: the gates in force, \`terrain.real\` ≤ ${TERRAIN_P50_MAX_MS} / ${TERRAIN_P99_MAX_MS} ms, with the aquifer's own row, the SP7a spec's Point 4, D32).`],
+      ]],
+    ];
+    for (const [head, items] of received) {
+      const line = lines.find((l) => l.startsWith(head)) ?? '';
+      expect(line, `SP7a has no ${head} line`).not.toBe('');
+      let from = 0;
+      for (const [item, outcome] of items) {
+        const at = line.indexOf(item + outcome, from);
+        expect(at, `the item "${item}" followed by "${outcome}", in order`).toBeGreaterThan(-1);
+        from = at + item.length + outcome.length;
+      }
+      expect(line.slice(from), `${head} ends with its last item`).toBe('');
+    }
+    // The SP8b line as delivered: the three spring kinds (spec §3).
+    expect(lines.find((l) => l.startsWith('- Received from SP8b (moved by SP7a):'))).toBe('- Received from SP8b (moved by SP7a): springs and island-edge springs feeding settle (island-edge springs on SP3e\'s islands term, `islandMask` and island runs; SP3e spec §12), placed by T and reaching settle as proto sources (the SP7a spec §3, D21) (delivered: water springs in mountain faces, island-edge springs and lava springs in the abyss); lava lakes stay SP8b\'s.');
+    // The outcomes' cross-references: SP10's and SP9's lines hold the items handed on there.
+    expect(spEntry('SP10', 'SP11')).toContain('the crosshair probe\'s aquifer cell, level and status; the slice\'s "aquifer level and status" field;');
+    expect(spEntry('SP9', 'SP10')).toContain('`surfaceEst3`\'s quart cache if structures need it');
+    expect(spEntry('SP7b', 'SP8a')).toContain('the bench\'s flood scenario (L15)');
+  });
+
+  test('§10\'s SP7a entry at the exit: Exit as the spec §19, the Cut line as taken (SP7a spec §16 item 1)', () => {
+    const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-17-sp7a-water-design.md`, 'utf8');
+    const lines = spEntry('SP7a', 'SP7b').split('\n');
+    expect(lines.filter((l) => l.startsWith('- **Exit')).length, 'one Exit line').toBe(1);
+    // Item 17 (Task 26) names the gates of P1's clause (pinned in its own test); R5 and B5's third part as §19 states them.
+    expect(lines.find((l) => l.startsWith('- **Exit'))).toBe('- **Exit:** as the SP7a spec §19 (A1-A5; A2 after settle; B2 voxel; B5 with its third part (recorded on T); R5 recorded (gated in SP7b: the SP7a spec\'s rulings R26 item 1); DT1 with settle; P1 with the gates in force and the aquifer row (`terrain.real` ≤ 13 / 20 ms, `terrain.islands` ≤ 14.5 / 26.5 ms; `aquifer.column` ≤ 1.0 / 2.5 ms (SP7a)); the Chrome legs with the water segment; CI ≤ 6 min on the last two cold runs before the exit commit; the user\'s check).');
+    const s19 = spec.slice(spec.indexOf('\n## 19. Exit criteria\n'), spec.indexOf('\n## 20. '));
+    for (const phrase of ['R5 recorded on the named water regions (record-only in SP7a, SP7b gates ≤ 0.1: rulings R26 item 1)', 'CI ≤ 6 min 0 s on the last two cold runs before the exit commit, 20 jobs']) {
+      expect(s19, `§19 states ${phrase}`).toContain(phrase);
+    }
+    expect(spec, 'B5\'s third part recorded on T (the Exit evidence, Task 31c)').toContain('B5\'s third part recorded on T');
+    const cut = lines.find((l) => l.startsWith('- **Cut line:** '));
+    expect(cut, 'the SP7a entry has no `- **Cut line:**` line').toBeDefined();
+    expect(lines.indexOf(cut!), 'the Cut line closes the entry, after Exit').toBe(lines.findIndex((l) => l.startsWith('- **Exit:** ')) + 1);
+    expect(cut).toBe('- **Cut line:** vertex waves (→ SP11); then, in this order, the X-ray\'s fluid tint (and its legend rows, `R1.xrayFluid`; flooded caves still show as caves in the X-ray) (→ SP10); the slice field\'s aquifer fluid and hover lines (the blocks field and the Voxels mode still show aquifer water) (→ SP10); the walk\'s fluid-height rule (walking keeps SP5a\'s rule) (→ SP7b); the bench\'s water segment (Fancy\'s 1.2 ms measured) (→ SP11). Each is cut whole. Vertex waves moved to SP11 (Fancy\'s procedural ripples meanwhile); the rest was not taken: the X-ray\'s fluid tint with `R1.xrayFluid`, the caves slice field\'s aquifer fluid with its hover, the walk\'s fluid-height rule and the bench\'s water segment shipped in SP7a, so nothing moved.');
+    // §18's wording: its four items with the same receivers, in order, after vertex waves.
+    const s18 = spec.slice(spec.indexOf('\n## 18. Cut line\n'), spec.indexOf('\n## 19. Exit criteria\n'));
+    const receivers = [...s18.matchAll(/^\d+\. \*\*.*? → (SP\w+)/gm)].map((m) => m[1]);
+    expect([...cut!.matchAll(/\(→ (SP\w+)\)/g)].map((m) => m[1]), 'the Cut line\'s receivers are vertex waves\' and §18\'s').toEqual(['SP11', ...receivers]);
+    for (const phrase of ['Flooded caves still show as caves in the X-ray', 'The blocks field and the Voxels mode still show aquifer water', 'Walking keeps SP5a\'s rule', 'Fancy\'s 1.2 ms measured', 'Each is cut whole.']) {
+      expect(s18, `§18 words ${phrase}`).toContain(phrase);
+      expect(cut!.toLowerCase(), `the Cut line words ${phrase}`).toContain(phrase.toLowerCase());
+    }
+    // None of the four was cut (the Exit evidence, Task 49).
+    expect(spec).toContain('**The cut line so far:** none of §18\'s four items was cut.');
   });
 
   test('§10\'s SP8a, SP8b, SP8c and SP12 read SP7a or SP7b (SP7a spec §16 item 2)', () => {
@@ -4039,7 +4129,7 @@ describe('master spec amendments (SP7a §16)', () => {
     const SP7A = '- Received from SP7a (its spec §17; amended by SP7a):';
     // Each phrase is §17's text, so it is checked in §17's bullet too; each line follows the entry's last "Received from".
     const handed: Array<[id: SubProjectId, entry: string, after: string, phrases: readonly string[]]> = [
-      ['SP7b', spEntry('SP7b', 'SP8a'), SP5C, ['the runtime sim on `fluidRules.ts`', 'drains (unsupported flow)', 'reactions (obsidian, cobblestone, stone; `obsidian` appended as a state)', 'truncated fronts wake only on an edit\'s update (bit 6 in the final set', 'if SP7a\'s A2 needed it', '`C7.waterWall`\'s final definition and bound (recorded, not gated, in SP7a, its row `activeFrom` \'SP7b\': the user, ', 'rulings R24 item 1; it moved here from SP12\'s note', 'the user\'s verdict on them ("quedan aceptables, anotamos para SP7b", ', 'R5\'s gate (≤ 0.1, recorded, not gated, in SP7a: the user, ', 'rulings R26 item 1', 'and its remaining lever, merging planar sloped tops, plus any light-key change, judged in a shot']],
+      ['SP7b', spEntry('SP7b', 'SP8a'), SP5C, ['the runtime sim on `fluidRules.ts`', 'drains (unsupported flow)', 'reactions (obsidian, cobblestone, stone; `obsidian` appended as a state)', 'truncated fronts wake only on an edit\'s update (bit 6 in the final set', 'if SP7a\'s A2 needed it', '`C7.waterWall`\'s final definition and bound (recorded, not gated, in SP7a, its row `activeFrom` \'SP7b\': the user, ', 'rulings R24 item 1; it moved here from SP12\'s note', 'the user\'s verdict on them ("quedan aceptables, anotamos para SP7b", ', 'R5\'s gate (≤ 0.1, recorded, not gated, in SP7a: the user, ', 'rulings R26 item 1', 'on its population since rulings R27 item 3, which counts the lowered water tops under flooded caves\' ceilings', 'and its remaining lever, merging planar sloped tops, plus any light-key change, judged in a shot']],
       ['SP8a', spEntry('SP8a', 'SP8b'), SP6B, ['water and lava animation frames (Fancy\'s animated texture)', 'lava\'s emissive flag implied by its layer', 'the water tint per biome (`tint` bits, ']],
       ['SP8b', spEntry('SP8b', 'SP8c'), SP6B, ['lava lakes as a D step-1 feature feeding settle', 'freeze_top_layer\'s ice on sky-exposed water (rule 5, S3\'s ice parts)', 'the generated-value layer extended from fluid to blocks', 'plants with `hold`/`displace` in settle', 'seagrass and kelp in flooded caves', 'floors under settle\'s spills re-skinned if wanted', 'the decorate-scope Apply path (springs stay Terrain scope)']],
       ['SP8c', spEntry('SP8c', 'SP9'), SP6B, ['waterfall and lava-fall emitters (the spring list per column, which T can expose in aux B)', 'underwater muffling from `eyeFluid`', 'AU2\'s waterfall and lava scenes on SP7a\'s links']],
@@ -4060,6 +4150,14 @@ describe('master spec amendments (SP7a §16)', () => {
         expect(lines[at], `${id}'s "Received from SP7a" line`).toContain(phrase);
         expect(bullet, `the SP7a spec §17's ${id} bullet`).toContain(phrase);
       }
+    }
+    // SP7b's R5 gate inherits its population since rulings R27 item 3 (Task 53's measure, §6.5): the surfaces of
+    // aquifer-flooded caves under their rock ceilings, 70.3 % (quick) and 73.0 % (full) of R5's top quads.
+    const sp7bLine = spEntry('SP7b', 'SP8a').split('\n').find((l) => l.startsWith(SP7A)) ?? '';
+    expect(sp7bLine).toContain('R5\'s gate (≤ 0.1, recorded, not gated, in SP7a: the user, the SP7a spec\'s rulings R26 item 1; on its population since rulings R27 item 3, which counts the lowered water tops under flooded caves\' ceilings: the surfaces of aquifer-flooded caves under their rock ceilings, 70-73 % of R5\'s top quads on quick and full, the SP7a spec §6.5) and its remaining lever,');
+    const s65 = spec.slice(spec.indexOf('\n### 6.5 R5 (D27)\n'), spec.indexOf('\n### 6.6 '));
+    for (const phrase of ['the surfaces of aquifer-flooded caves under their rock ceilings', 'These tops hold 70.3 % (quick) and 73.0 % (full) of R5\'s top quads', 'SP7b\'s ≤ 0.1 gate inherits this population, cave-ceiling tops included']) {
+      expect(s65, `§6.5 states ${phrase}`).toContain(phrase);
     }
     // SP11 does not receive the per-section sort: the user saw no visible problem at §6.6's Firefox check (Task 47).
     const evidence = spec.slice(spec.indexOf('## Exit evidence'), spec.indexOf('## Threshold log'));
@@ -4140,17 +4238,19 @@ describe('master spec amendments (SP7a §16)', () => {
     expect(r10).toContain('policy B needs SP7b');
   });
 
-  test('the Default receivers name SP7a\'s cut-line items (SP7a spec §16 item 3)', () => {
-    // §18's four items in order, each with its receiver, in pre-exit form; Task 56 Step 0 appends "(delivered in SP7a,
-    // so nothing moved)" to each item taken.
+  test('the Default receivers name SP7a\'s cut-line items as delivered (SP7a spec §16 item 3)', () => {
+    // §18's four items in order, each with its receiver; at the exit (Task 56 Step 0) each reads "(delivered in SP7a, so
+    // nothing moved)": none was cut (the Exit evidence, Task 49; item 1's Cut line pin).
     const spec = readFileSync(`${ROOT_DIR}docs/superpowers/specs/2026-11-17-sp7a-water-design.md`, 'utf8');
     const s18 = spec.slice(spec.indexOf('\n## 18. Cut line\n'), spec.indexOf('\n## 19. Exit criteria\n'));
     const cut = [...s18.matchAll(/^\d+\. \*\*.*? → (SP\w+)/gm)].map((m) => m[1]!);
     expect(cut, 'the SP7a spec §18\'s four items and their receivers').toEqual(['SP10', 'SP10', 'SP7b', 'SP11']);
     const receivers = text.split('\n').find((l) => l.startsWith('**Cut lines.**'));
     expect(receivers, 'no Cut lines paragraph in §10').toBeDefined();
-    const entries = ['SP7a X-ray fluid tint', 'SP7a slice aquifer fluid', 'SP7a walk fluid height', 'SP7a bench water segment'].map((item, i) => `${item} → ${cut[i]}`);
+    const entries = ['SP7a X-ray fluid tint', 'SP7a slice aquifer fluid', 'SP7a walk fluid height', 'SP7a bench water segment'].map((item, i) => `${item} → ${cut[i]} (delivered in SP7a, so nothing moved)`);
     expect(receivers, 'the four entries after SP7a vertex waves').toContain(`SP7a vertex waves → SP11; ${entries.join('; ')}; SP8a animation frames → SP11;`);
+    expect(receivers!.split('SP7a ').length - 1, 'SP7a\'s entries in the receivers').toBe(5);
+    expect(spec).toContain('**The cut line so far:** none of §18\'s four items was cut.');
   });
 
   /**
