@@ -4164,6 +4164,28 @@ describe('master spec amendments (SP7a §16)', () => {
         expect(bullet, `the SP7a spec §17's ${id} bullet`).toContain(phrase);
       }
     }
+    // The user's check on production (Task 58): the verdict, verbatim, in the Exit evidence; its hand-offs in §17 and in
+    // the receivers' lines (SP7b: the shore water at a coast, wallFront5's early stop, a larger flooded-cave example, a
+    // riverMouth link; SP11: the underwater fog under night vision), with the user's two screenshots committed.
+    const verdict = 'La mayoría lo veo bien, solo me falla un poco la parte de coastFancy, donde a menudo el agua no rellena del todo el contorno de la costa (paso un par de capturas de ejemplo), y en el wallFront5 todavía se nota que el agua se corta demasiado pronto cuando esperaría que siguiese fluyendo hacia abajo. Pero hemos progresado lo suficiente como para dejarlo apuntado para luego y seguir avanzando.';
+    const checked = spec.slice(spec.indexOf('\n### The user\'s check (Task 58)\n'), spec.indexOf('\n## Threshold log\n'));
+    expect(checked.startsWith('\n### The user\'s check (Task 58)\n'), 'the Exit evidence has "The user\'s check (Task 58)"').toBe(true);
+    expect(checked).toContain(verdict);
+    const late: Array<[id: SubProjectId, entry: string, phrases: readonly string[]]> = [
+      ['SP7b', spEntry('SP7b', 'SP8a'), ['the user\'s later observation at SP7a\'s check on production that at `wallFront5` the water still stops too early where it should keep flowing down', 'the shore water\'s surface at a coast (`coastFancy`: the water\'s lowered and sloped edge tops leave gaps and slivers against the sand contour', '`assets/sp7a/user-coastFancy-gaps-1.png` and `user-coastFancy-gaps-2.png`', 'a larger flooded-cave review example than `floodedUnderSea`\'s pocket one or two voxels high', 'a `riverMouth` review link (none was found in SP7a\'s seed-\'42\' regions)']],
+      ['SP11', spEntry('SP11', 'SP12'), ['the underwater fog under night vision: in a dark flooded cave with night vision on (L) the underwater fog and tint read grey and hazy rather than blue', 'judged with the light floor, night vision and the night fog\'s tuning that SP11 receives from SP6a']],
+    ];
+    for (const [id, entry, phrases] of late) {
+      const line = entry.split('\n').find((l) => l.startsWith(SP7A)) ?? '';
+      const bullet = s17.split('\n').find((l) => l.startsWith(`- **${id}:** `)) ?? '';
+      for (const phrase of phrases) {
+        expect(line, `${id}'s "Received from SP7a" line`).toContain(phrase);
+        expect(bullet, `the SP7a spec §17's ${id} bullet`).toContain(phrase);
+      }
+    }
+    for (const png of ['user-coastFancy-gaps-1.png', 'user-coastFancy-gaps-2.png']) {
+      expect(existsSync(`${ROOT_DIR}docs/superpowers/specs/assets/sp7a/${png}`), `assets/sp7a/${png}`).toBe(true);
+    }
     // SP7b's R5 gate inherits its population since rulings R27 item 3 (Task 53's measure, §6.5): the surfaces of
     // aquifer-flooded caves under their rock ceilings, 70.3 % (quick) and 73.0 % (full) of R5's top quads.
     const sp7bLine = spEntry('SP7b', 'SP8a').split('\n').find((l) => l.startsWith(SP7A)) ?? '';

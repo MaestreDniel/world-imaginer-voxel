@@ -1,5 +1,5 @@
 {
-  "task": "SP7a Task 57: the production check on main 89cbbf2 (Step 0's SP6b world before the merge, Step 1's merge and main CI, Step 2 in Chrome by the agent; Firefox by the user, by hand, pending)",
+  "task": "SP7a Task 57: the production check on main 89cbbf2 (Step 0's SP6b world before the merge, Step 1's merge and main CI, Step 2 in Chrome by the agent); Firefox by the user, by hand, on 2026-11-28 (Task 58 Step 1, with the user's check)",
   "date": "2026-11-27T23:29:11.026Z",
   "url": "https://world-imaginer-voxel.vercel.app/",
   "gitHead": "89cbbf2d834dd5c852655a82d2eedebe09d72081",
@@ -222,7 +222,8 @@
         "name": "Step 0: New world \"SP6b world\" (default, seed 42) in SP6b's production; in a cave near spawn that is dry at GV9 and flooded at GV10 (Review Focus 1's scan), three voxels dug under its floor (a dry pocket under the water) and stone placed on its floor; the camera's eye left in the pocket",
         "notes": [
           "the profile's world settings set to { rd: 12 } (the review links' RD); the profile is this task's own",
-          "GV10 (this branch's scan): F0..F3 (2, 22, -3) … y 25 tagged cave air holding water (fluid 16, 16, 16, 16; the generated layer 16, 16, 16, 16), 109 water voxels within 2 blocks; the column's top y 94, so GV9's water v0 (top − 12 < y ≤ the water level) leaves them dry; the pocket's GV10 blocks gravel, dripstone_block, stone"
+          "GV10 (this branch's scan): F0..F3 (2, 22, -3) … y 25 tagged cave air holding water (fluid 16, 16, 16, 16; the generated layer 16, 16, 16, 16), 109 water voxels within 2 blocks; the column's top y 94, so GV9's water v0 (top − 12 < y ≤ the water level) leaves them dry; the pocket's GV10 blocks gravel, dripstone_block, stone",
+          "the edit, exactly: three solid voxels dug under the flooded cave's floor (GV10 gravel, dripstone_block, stone under F0; GV9 the same solid blocks), not voxels of the cave itself, which were already air and cannot be dug; the diff has the same shape (air with fluid 0 under the water GV10 places), and stone placed at the floor voxel P (2, 22, -2) (Task 57's review, Minor 2)"
         ],
         "checks": [
           {
@@ -979,7 +980,7 @@
               "localBundle": "index-C6xAMIYE.js",
               "indexSha256": "b6524c0ba15f2d3fce3c85643c55d6e1f28ff9b08939938bc688fe8dd920224d",
               "localIndexHtmlEqual": true,
-              "distDir": "/home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/task57/dist-main",
+              "distDir": "test/metrics/.out/task57/dist-main",
               "distBuiltAt": "2026-11-27T23:22:02.631Z",
               "assetsCompared": 52,
               "assetsEqual": 52,
@@ -2983,7 +2984,7 @@
               "localBundle": "index-C6xAMIYE.js",
               "indexSha256": "b6524c0ba15f2d3fce3c85643c55d6e1f28ff9b08939938bc688fe8dd920224d",
               "localIndexHtmlEqual": true,
-              "distDir": "/home/maestre/Proyectos/world-imaginer-voxel/test/metrics/.out/task57/dist-main",
+              "distDir": "test/metrics/.out/task57/dist-main",
               "distBuiltAt": "2026-11-27T23:22:02.631Z",
               "assetsCompared": 52,
               "assetsEqual": 52,
@@ -3166,7 +3167,11 @@
     "step6Reading": {
       "verdict": "pass on the frame, fail on the script's centre-pixel tolerance",
       "scripted": "the centre pixel (700, 450) after surfacing (and after the eye was flown back to y 65.99 from Space's overshoot to 67.48) read 158, 149, 114 against the surface reading's 143, 135, 103: off by 15 in red, beyond the smoke's 8. That pixel lies on the sea near the horizon, where Fancy's animated ripples move a pixel by tens (the smoke's own note on WATER_TIER_BOX); the smoke reads it on SwiftShader.",
-      "frameMeans": "from the same captures (1400 × 900): whole frame surface reading 105, 136, 174 / underwater 46, 56, 78 / surfaced 106, 136, 174; the sky box (500-900, 40-140) 81, 132, 218 / 26, 50, 98 / 81, 132, 218. The fog is on under water and off after surfacing; the first run read the same (surfaced frame 106, 136, 173)."
+      "frameMeans": "from the same captures (1400 × 900): whole frame surface reading 105, 136, 174 / underwater 46, 56, 78 / surfaced 106, 136, 174; the sky box (500-900, 40-140) 81, 132, 218 / 26, 50, 98 / 81, 132, 218. The fog is on under water and off after surfacing; the first run read the same (surfaced frame 106, 136, 173).",
+      "accepted": {
+        "by": "the controller (Task 57's review, concern 1), after the user's verdict to proceed (Task 58)",
+        "verdict": "passed: the fog is on under water and off after surfacing by the frame means (whole frame 105,136,174 surface reading / 46,56,78 under water / 106,136,174 surfaced; the sky box 81,132,218 / 26,50,98 / 81,132,218); the scripted centre pixel (700, 450) read 15 off in red against the smoke's tolerance of 8 (a SwiftShader tolerance) on a horizon-sea pixel where Fancy's animated ripples move a pixel by tens; the steps' pass: false is the script's pixel check, kept as measured"
+      }
     },
     "pageErrors": 0,
     "consoleErrors": 0,
@@ -3377,7 +3382,9 @@
     }
   },
   "firefox": {
-    "status": "pending the user (STOP: in the user's own Firefox on the Iris Xe, by hand)",
+    "status": "done",
+    "by": "the user, by hand, in the user's own Firefox 161 on production (Iris Xe), 2026-11-28 (Task 58 Step 1); the shader cache not controlled; no frame timings (by hand)",
+    "userAgent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:161.0) Gecko/20100101 Firefox/161.0",
     "links": [
       "https://world-imaginer-voxel.vercel.app/?at=-632,-100&y=99.5&yaw=301.4&pitch=-9.5&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
       "https://world-imaginer-voxel.vercel.app/?at=-511,-115&y=115&yaw=90.0&pitch=0.0&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJhbXBsaWZpZWQiLCJzZWVkIjoiNDIiLCJ2IjoxLCJ2aWV3Ijp7ImJwcCI6NjQsImxheWVyIjoiYmlvbWUiLCJ4IjowLCJ6IjowfX0",
@@ -3397,7 +3404,49 @@
       "https://world-imaginer-voxel.vercel.app/?at=-110,28&y=6.5&yaw=48.7&pitch=-28.6&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
       "https://world-imaginer-voxel.vercel.app/?at=-128,-23&y=64.5&yaw=80.8&pitch=-5.2&rd=12#eyJwYXRjaCI6e30sInByb2ZpbGUiOiJjYXZlX2hlYXZ5Iiwic2VlZCI6IjQyIiwidiI6MSwidmlldyI6eyJicHAiOjY0LCJsYXllciI6ImJpb21lIiwieCI6MCwieiI6MH19",
       "https://world-imaginer-voxel.vercel.app/?selftest=1"
-    ]
+    ],
+    "selftest": {
+      "goldens": "68/68",
+      "everyExpectedEqualsActual": true,
+      "file": "identical to assets/sp7a/selftest-firefox.json (Task 47's run of the same build's generator, GENERATOR_VERSION 10, 68 keys), so the file is not duplicated",
+      "indexedDb": "10/10 passed"
+    },
+    "linksVisited": 17,
+    "linksNote": "the 17 review links above (the 18th is ?selftest=1); riverMouth has no link (none found, water.examples.json's missing) and there is no truncatedN link (none since Task 31r)",
+    "perLink": {
+      "waterfall1": "visited; covered by \"La mayoría lo veo bien\" (most of it looks fine)",
+      "waterfall2": "visited; covered by \"La mayoría lo veo bien\" (most of it looks fine)",
+      "waterfall3": "visited; covered by \"La mayoría lo veo bien\" (most of it looks fine)",
+      "islandFall": "visited; covered by \"La mayoría lo veo bien\" (most of it looks fine)",
+      "lavaFall": "visited; covered by \"La mayoría lo veo bien\" (most of it looks fine)",
+      "lavaPool": "visited; covered by \"La mayoría lo veo bien\" (most of it looks fine)",
+      "floodedUnderSea": "visited; covered by \"La mayoría lo veo bien\" (most of it looks fine)",
+      "dryBelowSea": "visited; covered by \"La mayoría lo veo bien\" (most of it looks fine)",
+      "lake": "visited; covered by \"La mayoría lo veo bien\" (most of it looks fine)",
+      "coastFancy": "visited; noted for later: the shore water often does not fully fill the coast's contour (the user's screenshots user-coastFancy-gaps-1.png and -2.png) → SP7b",
+      "underwater": "visited; covered by \"La mayoría lo veo bien\" (most of it looks fine)",
+      "spillSlope": "visited; covered by \"La mayoría lo veo bien\" (most of it looks fine)",
+      "wallFront1": "visited; covered by \"La mayoría lo veo bien\" (most of it looks fine)",
+      "wallFront2": "visited; covered by \"La mayoría lo veo bien\" (most of it looks fine)",
+      "wallFront3": "visited; covered by \"La mayoría lo veo bien\" (most of it looks fine)",
+      "wallFront4": "visited; covered by \"La mayoría lo veo bien\" (most of it looks fine)",
+      "wallFront5": "visited; noted for later: the water still stops too early where the user expects it to keep flowing down → SP7b, with C7.waterWall"
+    },
+    "verdict": "La mayoría lo veo bien, solo me falla un poco la parte de coastFancy, donde a menudo el agua no rellena del todo el contorno de la costa (paso un par de capturas de ejemplo), y en el wallFront5 todavía se nota que el agua se corta demasiado pronto cuando esperaría que siguiese fluyendo hacia abajo. Pero hemos progresado lo suficiente como para dejarlo apuntado para luego y seguir avanzando.",
+    "verdictEnglish": "Most of it looks fine to me; only the coastFancy part fails me a little, where the water often does not fully fill the coast's contour (I am sending a couple of example screenshots), and in wallFront5 you can still tell that the water cuts off too early where I would expect it to keep flowing down. But we have progressed enough to note it for later and keep moving.",
+    "screenshots": [
+      {
+        "file": "user-coastFancy-gaps-1.png",
+        "where": "archipelago, seed 42, Fly x 432.8 y 72.7 z 13.3 (the F3 line), RD 12",
+        "what": "the water's lowered and sloped edge tops leave gaps and slivers against the sand contour at the coast"
+      },
+      {
+        "file": "user-coastFancy-gaps-2.png",
+        "where": "archipelago, seed 42, Fly x 209.2 y 65.6 z -76.3 (the F3 line), RD 12",
+        "what": "the same at a beach seen at a grazing angle: sand-coloured gaps between the shore water's sloped tops and the sand"
+      }
+    ],
+    "outcome": "no finding fixed in SP7a and no retune (GENERATOR_VERSION stays 10): the user chose to note both observations for later and move on; the hand-offs are in the SP7a spec's Exit evidence (\"The user's check (Task 58)\") and master §10"
   },
   "script": "test/metrics/.out/task57/prodcheck.mjs (git-ignored; Node, no npm dependency; PC_MODE=step0 for Step 0), assemble.mjs for this file; shots in test/metrics/.out/task57/step0/shots, step2/shots, step2/shots-step6"
 }
